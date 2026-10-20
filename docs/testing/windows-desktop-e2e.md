@@ -66,6 +66,112 @@ then built both packages, published only staging, and passed its served size
 and SHA-256 checks. The x64 package used for the live retest additionally
 matched its manifest hash after download.
 
+## Windows shortcuts
+
+Status: **8/8 delegated live checks passed using composed source-specific evidence; local repair not merged or published**,
+20 October 2026. This is the acceptance record for the [Windows shortcut design](../superpowers/specs/2026-10-20-windows-shortcuts-design.md)
+for CI/live candidate `38dde786ec6aecc2b071390d068b07f3e8116513` and local image-paste
+repair `9fcc9f769fba61399430d412e75d4654b25649af` on `feat/windows-desktop`. The earlier
+C5.2 results cover their recorded builds; they do not validate this shortcut change.
+
+Mac evidence is composed across the reviewed source change:
+
+- At frozen `c420c1bac63df3788d6239f04d4affd5f2ae748e`, the full VM suite passed
+  uninterrupted: **7,533 passed, 41 skipped, 0 failed**, all 644 selected VM files,
+  no loader failures or retries, in 855.811 seconds. Full analyze exited 1 with the
+  same 46 baseline diagnostics (5 warnings, 41 infos, 0 errors), zero new normalized
+  diagnostics and no warnings/errors in changed files. Analyze is a known failing
+  baseline, not a passing check. The baseline at `87779178e` had 7,463 passes and
+  the same 41 skips and 46 diagnostics.
+- The reviewed correction from `c420c1bac` to `38dde786e` has **336 passing cases
+  across 17 affected files**, composed of 250 passing cases in 14 unchanged files
+  plus 86 passing cases in three corrected files. The first broad invocation had
+  334 passes and four invalid Ctrl+K test assumptions; after correcting those
+  tests, the three amended files passed. Production source stayed unchanged
+  between those invocations. This is completed-file coverage, not one uninterrupted
+  passing invocation. Final analysis of all 11 changed files reported no issues.
+- Both Mac scopes used Flutter 3.47.5 / Dart 3.13.4 and the unchanged dependency
+  lockfile. The integrated correction's file and log hashes were verified, and
+  independent review approved all five Important fixes and the evidence composition.
+  The full suite was not rerun on `38dde786e`; its unchanged coverage is reused
+  with the scoped correction checks. VM tests do not establish physical Windows
+  keyboard, IME, clipboard, or live-agent acceptance.
+
+Exactly one dedicated [Windows Desktop run 39398347220](https://github.com/autonomous-ai/openharness/actions/runs/39398347220)
+was dispatched at `38dde786e` and completed with **SUCCESS**. Both x64 and arm64
+`build-test` jobs succeeded, including their final installer steps.
+Both completed full VM test artifacts were downloaded and their SHA-256 digests
+verified. Each architecture reports **6,473 passed, 99 skipped, and 170 recorded
+known failures** (115 errors and 55 failures), with **zero new failures** against
+`desktop/test/windows_known_failures.txt` and zero must-pass failures. All 150 cases
+in the six affected shortcut, keymap editing/focus, clipboard, composer, and Edit
+menu files passed on each architecture. Workflow success includes the recorded
+known-failure baseline; it does not mean every VM test passed. Release jobs remain
+**SKIPPED**, and no staging release is part of this shortcut record. This CI receipt
+covers `38dde786e` only; it does not cover the later local image-paste repair.
+
+Live screenshot paste failed on that CI build. Local correction `9fcc9f769` adds
+native Windows local panes to the existing guarded clipboard-PNG/session image
+route. The existing CLI fallback saves the PNG and pastes its file path when a
+Windows clipboard writer is unavailable; no CLI or engine-specific change was
+made. Scoped verification passed **105 cases across four files on macOS** and
+**105 cases across the same four files on Windows**, with no Windows skips or
+errors. The Windows scope used Flutter 3.47.2 / Dart 3.13.2 x64 under ARM64 emulation
+with verified source hashes and the unchanged lockfile. Fresh analysis of the two
+changed files reported no issues, and independent review approved the correction.
+The changed-source local Windows x64 release build also **PASSED** with
+`flutter build windows --release --no-pub`; its PE header confirms x64. This build
+used the same x64 toolchain under ARM64 emulation. The running repaired release
+bundle's executable, native DLL, and `app.so` hashes matched that completed build.
+Actual Ctrl+V then showed an image attachment, and genuine Claude identified the
+controlled screenshot's text and red rectangle. This live image retest **PASSED**
+on `9fcc9f769`. The single full CI receipt remains limited to `38dde786e`.
+
+The owner delegated live checks in Windows 11 ARM64 under UTM using this run's
+exact x64 CI build under emulation. Initial checks used a separate standard-user
+profile: cases 3 and 8 passed. Cases 1, 2, 4, and 7 also have passing receipts
+from administrative-profile testing. The real remote-composer check also passed
+on `38dde786e`. The image case passed on local repair `9fcc9f769`, bringing live
+acceptance to 8/8. At the owner's request, live
+testing has resumed in an existing administrative profile; the standard test
+session was preserved. The exact x64 bundle was copied to a dedicated task folder
+and its hashes matched the CI artifact. The owner completed fresh Harness login
+in this profile; the exact candidate has a usable local workspace. Existing
+provider sessions are used in place through their normal clients; credentials are
+not copied. A genuine Claude Code session produced an actual text response.
+Screenshot Ctrl+V produced no attachment on the CI build; that failure remains
+recorded at `38dde786e`. Its retest passed on the verified local `9fcc9f769` bundle.
+In the real remote Claude composer, Ctrl+W deleted a word and Ctrl+T opened a
+persistent new tab with a free slot. The earlier unsuccessful attempt matched the
+existing New Tab menu behavior; freeing an owned idle test tab allowed Ctrl+T to
+create the tab. This checks the terminal composer, without substituting New Harness.
+No native physical-x64 live acceptance is claimed;
+the occupied physical PC console and its existing session remain undisturbed.
+Keep machine addresses, accounts, private clipboard content, and screenshots with
+private content out of this record.
+
+Live acceptance combines cases 1–4 and 6–8 from `38dde786e` with the corrected
+image case from `9fcc9f769`; it is not a full eight-case rerun on the later source.
+The local repair has not been pushed, merged, or released. Merge and publication
+remain outside this acceptance record.
+
+| # | Delegated live check | Result | Driver |
+| --- | --- | --- | --- |
+| 1 | From the sidebar or New Harness composer, Ctrl+T opens a tab, Ctrl+W closes it, and Ctrl+N opens New Harness. | PASS — standard-profile Ctrl+T/W plus administrative-profile find-field Ctrl+N opened the New Harness form | Agent (owner delegated) |
+| 2 | Inside the terminal view, Ctrl+R, Ctrl+W, and Ctrl+U reach the shell or agent. | PASS — Ctrl+R/W/U reached a real local PTY program | Agent (owner delegated) |
+| 3 | Inside the terminal view, Ctrl+Shift+T opens a tab. | PASS — standard profile: from the real Claude Code terminal at provider onboarding, Ctrl+Shift+T opened a tab | Agent (owner delegated) |
+| 4 | Ctrl+C with a terminal selection copies; without a selection it interrupts. | PASS — selected text copied without interrupt; unselected Ctrl+C interrupted actual Claude generation | Agent (owner delegated) |
+| 5 | Ctrl+V pastes text, and a pasted screenshot reaches the agent. | PASS at9fcc — earlier source38 text response retained; repaired image attached and genuine Claude correctly described its controlled text/red rectangle; source38 image failure retained | Agent (owner delegated) |
+| 6 | In the terminal composer, Ctrl+T opens a tab and Ctrl+W deletes a word. | PASS at source38 — real remote composer Ctrl+W deleted a word; with a free slot, Ctrl+T opened a persistent new tab | Agent (owner delegated) |
+| 7 | The Edit menu's Cut, Copy, Paste, and Select All work in a text field; in a terminal, Cut is disabled and Copy, Paste, and Select All work. | PASS — all four field actions worked; terminal Cut disabled and Select All/Copy/Paste worked | Agent (owner delegated) |
+| 8 | Holding Ctrl shows the tab numbers. | PASS — standard profile: holding physical Ctrl showed tab-number hints in UTM | Agent (owner delegated) |
+
+Two reviewed limits remain explicit: the spec's Ctrl+backslash sidebar example is
+excluded because no existing catalog command owns it, and removing an editor while
+its Edit menu stays open can briefly leave enabled rows visible. Invoking such a
+row revalidates the target and does nothing; reopening the menu updates availability.
+That display issue is an accepted deferred Minor, not an unvalidated stale edit.
+
 ## Setup and evidence
 
 The ARM64 Windows 11 VM was exercised in a dedicated standard-user desktop
