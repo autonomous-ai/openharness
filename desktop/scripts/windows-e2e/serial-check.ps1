@@ -98,9 +98,22 @@ try {
   }
   $stayedOpen = $opened -and -not $eof -and -not $p.HasExited -and $clock.Elapsed.TotalSeconds -ge $Seconds
   $p.StandardInput.Close()
-  $ended = $p.WaitForExit(5000)
+  # E1.3 must inspect the pending read and trailing bytes, including a banner split across stdin EOF.
+  # Drain while the helper exits so a full stdout pipe cannot prevent its bounded shutdown.
+  $shutdown = [Diagnostics.Stopwatch]::StartNew()
+  while (-not $eof -and $shutdown.ElapsedMilliseconds -lt 5000) {
+    if (-not $read.Wait([int][Math]::Max(1, 5000 - $shutdown.ElapsedMilliseconds))) { break }
+    if ($read.Result -eq 0) { $eof = $true; break }
+    $bytes += $read.Result
+    $text = $tail + [Text.Encoding]::ASCII.GetString($buffer, 0, $read.Result)
+    $banner = $banner -or $text.Contains('ESP-ROM:')
+    $tail = $text.Substring([Math]::Max(0, $text.Length - 7))
+    $read = $stream.ReadAsync($buffer, 0, $buffer.Length)
+  }
+  $ended = $p.WaitForExit([int][Math]::Max(1, 5000 - $shutdown.ElapsedMilliseconds))
   $exitCode = if ($ended) { $p.ExitCode } else { 'did not end' }
   if (-not $ended) { $p.Kill(); if (-not $p.WaitForExit(5000)) { throw 'open did not stop' } }
+  if (-not $eof) { throw 'open stdout deadline exceeded' }
   if (-not $rest.Wait(5000)) { throw 'open stderr deadline exceeded' }
   $quietExit = [string]::IsNullOrWhiteSpace($rest.Result)
   Stop-Serial $p

@@ -52,10 +52,15 @@ public class SerialFixture {
         if (mode == "banner") {
             Console.Write("ESP-"); Console.Out.Flush(); Thread.Sleep(100);
             Console.Write("ROM:");
-        } else Console.Write("dial bytes");
+        } else if (mode == "shutdown-banner") Console.Write("ESP-");
+        else Console.Write("dial bytes");
         Console.Out.Flush();
         if (mode == "noisy-error") { Console.Error.WriteLine(serial); Console.Error.Flush(); }
         Console.In.ReadToEnd();
+        if (mode == "shutdown-banner") { Console.Write("ROM:"); Console.Out.Flush(); }
+        if (mode == "shutdown-burst-banner") {
+            Console.Write(new string('x', 131072) + "ESP-ROM:"); Console.Out.Flush();
+        }
         if (mode == "open-exit-timeout") Thread.Sleep(30000);
         return mode == "bad-exit" ? 5 : 0;
     }
@@ -129,6 +134,16 @@ class SerialCheckTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(result.stdout.splitlines(), ['session: 1', 'console session: False'])
         self.assertEqual(events, ['watch'])
+
+    def test_shutdown_drains_pending_and_multiple_reads_before_accepting_no_banner(self):
+        for mode, count in (('shutdown-banner', 8), ('shutdown-burst-banner', 131090)):
+            with self.subTest(mode=mode):
+                result, events = self.check(mode)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn('ESP-ROM banner seen: True', result.stdout)
+                self.assertIn(f'bytes read: {count}', result.stdout)
+                self.assertIn('exit at end of stdin: 0', result.stdout)
+                self.assertEqual(events, ['watch', 'open', 'watch'])
 
     def test_watch_only_redacts_a_serial_embedded_in_the_session(self):
         result, events = self.check('serial-session', args=['-WatchOnly'])
