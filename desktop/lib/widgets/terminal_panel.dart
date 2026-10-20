@@ -1739,16 +1739,18 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// text at all, so a naive body finds `null` and returns, silently: the single
   /// most common thing anyone pastes into a coding agent did nothing, with no
   /// error and nothing in a log. [NativeClipboard] closes that gap with a native
-  /// platform-channel read for an actual image (macOS/Linux only; see its doc).
+  /// platform-channel read for an actual image (see its doc).
   ///
   /// The engines running in these panes read the system clipboard THEMSELVES —
-  /// Claude Code attaches an image on Ctrl+V — so on a LOCAL pane that is already
+  /// Claude Code attaches an image on Ctrl+V on macOS/Linux — so on a LOCAL pane that is already
   /// true with zero help from us: a bare Ctrl+V is all that ever ran here, before
   /// native image paste existed, and it still works because the engine and this
   /// app share the exact same OS clipboard. The wire-based `pasteImage` (chunked
   /// upload, daemon writes the far side's OS clipboard, daemon replays Ctrl+V) is
-  /// reserved for a genuinely REMOTE pane, whose engine reads a DIFFERENT
-  /// clipboard than this one — see `MachineState.isLocalMachine`.
+  /// used for a genuinely REMOTE pane, whose engine reads a DIFFERENT
+  /// clipboard than this one — see `MachineState.isLocalMachine`. Native Windows
+  /// also uses that path: an engine's image shortcut can differ (Claude uses
+  /// Alt+V), and its process may not share the desktop's interactive clipboard.
   Future<void> _paste() async {
     final target = widget.session;
     final streamId = target.streamId;
@@ -1793,11 +1795,13 @@ class _TerminalPanelState extends State<TerminalPanel>
     final machine = widget.notifier.stateOf(target.machineId);
     // A local engine reads its own clipboard on Ctrl-V — except under WSL,
     // where WSLg leaves a Windows screenshot there as BMP or not at all, and
-    // Codex/Claude Code find no image (openharness#107). There the app reads
-    // the image itself and hands it to the daemon like a remote paste; the
-    // daemon, knowing it is on WSL too, pastes the saved file's path.
+    // Codex/Claude Code find no image (openharness#107). WSL and native Windows
+    // read the image here and hand it to the daemon like a remote paste. Without
+    // a clipboard writer there, the daemon pastes the saved image's file path,
+    // avoiding assumptions about an engine's clipboard shortcut or OS session.
+    final windows = !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
     if (machine != null &&
-        (!machine.isLocalMachine || RuntimePlatform.isWsl) &&
+        (!machine.isLocalMachine || RuntimePlatform.isWsl || windows) &&
         machine.terminalImagePasteAvailable) {
       final imageBytes = await NativeClipboard.readImagePng();
       if (!stillOwnsPaste()) return;
