@@ -23,6 +23,16 @@ fi
 '''
 
 
+# cryptsetup's stand-in: `open --test-passphrase --key-file=- DISK` with the password on stdin, and
+# what it was asked kept for the test to read. Only "right horse" is the disk's.
+CRYPTSETUP = '''#!/bin/sh
+printf '%s' "$*" > "$ROOT/tested-args"
+password=$(cat)
+printf '%s' "$password" > "$ROOT/tested"
+[ "$password" = 'right horse' ]
+'''
+
+
 class Unlock(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
@@ -35,12 +45,16 @@ class Unlock(unittest.TestCase):
         reply = self.root / 'reply'
         reply.write_text(REPLY)
         reply.chmod(0o755)
+        cryptsetup = self.root / 'cryptsetup'
+        cryptsetup.write_text(CRYPTSETUP)
+        cryptsetup.chmod(0o755)
         self.ask()
         self.env = dict(os.environ, ROOT=str(self.root), HARNESS_UNLOCK_STATE=str(self.root / 'state'),
                         HARNESS_UNLOCK_ASK=str(self.root / 'ask'), HARNESS_UNLOCK_REPLY=str(reply),
                         HARNESS_UNLOCK_MAPPER=str(self.root / 'mapper'), HARNESS_UNLOCK_OPENS='3',
                         HARNESS_UNLOCK_BY_PHONE=str(self.root / 'run/unlocked-by-phone'),
-                        HARNESS_UNLOCK_SETUP=str(self.root / 'run/phone-setup.json'))
+                        HARNESS_UNLOCK_SETUP=str(self.root / 'run/phone-setup.json'),
+                        HARNESS_UNLOCK_CRYPTSETUP=str(cryptsetup))
 
     def ask(self):
         (self.root / 'ask/ask.first').write_text(
@@ -62,8 +76,25 @@ class Unlock(unittest.TestCase):
 
     def test_the_phone_is_told_the_computer_is_locked(self):
         self.assertEqual(self.request('GET', '/setup'),
-                         (200, dict(protocol=2, hotspot='Harness-BD19', locked=True, wait=0)))
+                         (200, dict(protocol=3, hotspot='Harness-BD19', locked=True, wait=0)))
         self.assertEqual(self.request('GET', '/elsewhere')[0], 404)
+
+    def test_a_password_is_checked_first_and_nothing_opens(self):
+        self.assertEqual(self.request('POST', '/setup/check', b'right horse'), (200, dict(state='right')))
+        self.assertEqual((self.root / 'tested').read_text(), 'right horse')
+        self.assertEqual((self.root / 'tested-args').read_text(),
+                         'open --test-passphrase --key-file=- /dev/nvme0n1p3')
+        # Only checked: the disk's question is not answered, and it is still asked.
+        self.assertFalse((self.root / 'given').exists())
+        self.assertFalse((self.root / 'mapper/cryptroot').exists())
+        self.assertTrue((self.root / 'ask/ask.first').exists())
+
+    def test_wrong_ones_may_be_checked_as_often_as_the_person_likes(self):
+        for attempt in range(8):
+            status, body = self.request('POST', '/setup/check', b'wrong one')
+            self.assertEqual((status, body['error']), (401, 'WRONG_PASSWORD'), attempt)
+        self.assertEqual(self.request('POST', '/setup/check', b'right horse'), (200, dict(state='right')))
+        self.assertEqual(self.request('GET', '/setup')[1]['wait'], 0)
 
     def test_the_wifi_around_is_the_startups_scan(self):
         self.assertEqual(self.request('GET', '/setup/networks'), (200, dict(networks=[])))

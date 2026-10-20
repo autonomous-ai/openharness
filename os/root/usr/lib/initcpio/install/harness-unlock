@@ -23,6 +23,7 @@ build() {
         '/usr/bin/wpa_supplicant' \
         '/usr/bin/dnsmasq' \
         '/usr/bin/iw' \
+        '/usr/bin/cryptsetup' \
         '/usr/lib/systemd/systemd-reply-password'
 
     add_file "$unlock/run" "$unlock/run" 755

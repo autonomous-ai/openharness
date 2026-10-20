@@ -4,6 +4,10 @@
 #   GET  /setup             {protocol, hotspot, locked: true, wait}: the phone asks for the password
 #   GET  /setup/networks    the Wi-Fi around ({networks: [...]}, `networks`), from the startup's scan,
 #                           or with ?rescan=1 scanned now on the hotspot's card where it allows that
+#   POST /setup/check       the computer's password, as the body, only checked against the disk
+#                           (cryptsetup --test-passphrase): 200 {state: "right"}, 401 WRONG_PASSWORD.
+#                           Nothing opens; the phone asks it first, then the Wi-Fi, then unlocks. As
+#                           many tries as the person likes (protocol 3).
 #   POST /setup/unlock      the computer's password, as the body: it answers the disk's question
 #                           (systemd's ask-password, the one the screen answers), then says whether the
 #                           disk opened: 200, 401 WRONG_PASSWORD, 429 WAIT after many wrong ones, 409 BUSY
@@ -24,6 +28,7 @@ MAPPER=${HARNESS_UNLOCK_MAPPER:-/dev/mapper}
 OPENS=${HARNESS_UNLOCK_OPENS:-40}
 BY_PHONE=${HARNESS_UNLOCK_BY_PHONE:-/run/harness-os/unlocked-by-phone}
 SETUP=${HARNESS_UNLOCK_SETUP:-/run/harness-os/phone-setup.json}
+CRYPTSETUP=${HARNESS_UNLOCK_CRYPTSETUP:-/usr/bin/cryptsetup}
 HERE=$(dirname "$0")
 # Wrong ones before the page makes the phone wait, and the first wait; it doubles after each.
 FREE_TRIES=5
@@ -84,7 +89,7 @@ name=$(cat "$STATE/name" 2>/dev/null || echo Harness-Setup)
 
 case "$method $target" in
     'GET /setup')
-        reply '200 OK' "{\"protocol\":2,\"hotspot\":\"$name\",\"locked\":true,\"wait\":$(wait_left)}"
+        reply '200 OK' "{\"protocol\":3,\"hotspot\":\"$name\",\"locked\":true,\"wait\":$(wait_left)}"
         ;;
     'GET /setup/networks')
         # Asked again (the phone's Rescan): scanned now, beside the hotspot, where the card allows it.
@@ -93,6 +98,24 @@ case "$method $target" in
                 printf '%s\n' "$fresh" > "$STATE/networks.json"
         fi
         reply '200 OK' "$(cat "$STATE/networks.json" 2>/dev/null || echo '{"networks":[]}')"
+        ;;
+    'POST /setup/check')
+        [ "$length" -ge 1 ] && [ "$length" -le 512 ] || reply '400 Bad Request' '{"error":"BAD_REQUEST","message":"Enter the computer'"'"'s password."}'
+        password=$(dd bs=1 count="$length" 2>/dev/null)
+        opened && reply '200 OK' '{"state":"right"}'
+        asked=$(question) || reply '503 Service Unavailable' '{"error":"NOT_ASKING","message":"The computer is not asking for its password yet. Try again in a moment."}'
+        # The disk the question is about: "Id=cryptsetup:/dev/nvme0n1p3".
+        disk=$(sed -n 's/^Id=cryptsetup://p' "$asked")
+        [ -n "$disk" ] || reply '503 Service Unavailable' '{"error":"NOT_ASKING","message":"The computer is not asking for its password yet. Try again in a moment."}'
+        mkdir "$STATE/busy" 2>/dev/null || reply '409 Conflict' '{"error":"BUSY","message":"Already trying a password."}'
+        trap 'rmdir "$STATE/busy" 2>/dev/null' EXIT
+        # Checked only: the key slot is tried, nothing is opened. The password on stdin, as it is.
+        if printf '%s' "$password" | "$CRYPTSETUP" open --test-passphrase --key-file=- "$disk" >/dev/null 2>&1; then
+            password=
+            reply '200 OK' '{"state":"right"}'
+        fi
+        password=
+        reply '401 Unauthorized' '{"error":"WRONG_PASSWORD","message":"That is not this computer'"'"'s password. It is the one set when it was installed."}'
         ;;
     'POST /setup/unlock')
         ;;
