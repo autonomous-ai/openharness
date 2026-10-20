@@ -21,7 +21,7 @@ record.
 | 3 | Notifications, tray, links, paste and font | Partial: tray/links/font and local x64 composer paste observed. One N1 hidden-app Kilo turn stalled while the backend was offline, so completed-turn toast/click and full tray working row remain unverified. | Visual automation, Script |
 | 4 | Staging updates and broken-build rollback | Partial: real 1.0.0 → 1.0.1 GUI update passed on both VMs. The 1.0.1 → 1.0.2 update kept the ARM counter rising and repaired Settings `DisplayVersion` on both VMs. Fake-CDN broken-build rollback remains unverified. | Script, visual automation |
 | 5 | Uninstall through Windows Settings | Passed on 1.0.3 after a 1.0.2 timing failure was fixed: holding the final dialog open over three minutes did not start cleanup early; after OK, the app folder and registrations disappeared while CLI, daemon and agents stayed. | UI Automation |
-| 6 | x64 desktop on ARM64 | Partial: published x64 1.0.3 installed and rendered under emulation; tray and Settings uninstall passed. Add Phone returned 502 while the backend was offline, so its HTTP 200 criterion remains unverified. | Script, visual automation, UI Automation |
+| 6 | x64 desktop on ARM64 | Passed across two runs of published x64 1.0.3: install, rendered window, tray and Settings uninstall passed; a later isolated x64 runtime returned HTTP 200 for Add Phone while the backend was connected. The installed ARM app and seven agents were restored afterward. | Script, visual automation, UI Automation |
 | 7 | Install desktop by one PowerShell command | Partial: the staging one-liner installed ARM64 1.0.3 with no observed SmartScreen prompt or downloaded-file markers, and Settings uninstall preserved the CLI and agents. Its first-run client area was white; rendered UI and full console completion copy remain unverified. | Script, visual automation, UI Automation |
 | — | Windows PC controlled from the Mac desktop | Pending owner check. | Person |
 
@@ -277,12 +277,24 @@ the daemon reported backend offline and connection resets. No HTTP 200 was
 observed, so this does not prove the x64 FFI/pipe handoff criterion. A later
 read-only check still found 30-second `ECONNRESET` retries, while DNS, TCP 443
 and unauthenticated TLS/HTTP to the backend succeeded; the authenticated
-WebSocket path remained unhealthy. Settings
+WebSocket path remained unhealthy at that time. Settings
 then uninstalled the app through its final dialog. The install root, registry
 entries, shortcut and app state disappeared; no desktop process remained. The
 CLI stayed signed in with the same seven agents and unchanged daemon/core/worker
-and PTY host PIDs; the owned counter advanced to `COUNT_12973`. Scenario 6 is
-partial, with its cleanup criterion passed.
+and PTY host PIDs; the owned counter advanced to `COUNT_12973`.
+
+After the backend recovered, the same published x64 1.0.3 runtime was copied
+to an isolated folder outside the launcher's self-install layout. Its
+executable hash matched the published ZIP. The installed ARM app quit, and
+the x64 app ran as the sole desktop process under emulation, rendered the
+signed-in UI, and opened Add Phone. One real Add Phone click produced
+`POST /api/auth/handoff → 200` in its app log in **664 ms**. No QR image was
+retained. The x64 app then quit, and the installed ARM 1.0.3 app was restored
+as the sole desktop process with its registration and version pointer intact.
+The same seven agent IDs, daemon/core/worker/PTY PIDs and process start times
+remained; the owned counter continued rising through `COUNT_18687`. Together,
+the two runs satisfy Scenario 6's x64 emulation, pipe handoff, tray and cleanup
+criteria. The earlier 502 was a backend outage, not an x64 FFI failure.
 
 The staging `desktop/install.ps1` served the staging manifest base and enabled
 app installation. Its real `irm …/staging/desktop/install.ps1 | iex` command ran
