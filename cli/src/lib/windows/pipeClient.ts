@@ -4,6 +4,8 @@
  * why callers first check that the daemon in the record is not proven gone (daemonPipe.ts `daemonPipe`).
  */
 import http, { type IncomingHttpHeaders } from 'node:http'
+import net from 'node:net'
+import { WebSocket } from 'ws'
 import { newPipeNonce, PIPE_AUTH_HEADER, pipeAuthValue, pipeProven } from './pipeAuth.js'
 
 export interface PipeTarget { pipe: string; token: Buffer }
@@ -67,4 +69,24 @@ export function pipeRequest(target: PipeTarget, request: PipeRequest): Promise<P
     outgoing.on('error', reject)
     outgoing.end(request.body)
   })
+}
+
+/**
+ * The daemon's local WebSocket over its Windows pipe, for every client that talks frames to it (the agent verbs'
+ * agentClient/daemon.ts `connectSocket`, `harness send`'s messages/rpc.ts). It carries the pipe auth and no local
+ * credential: on Windows that credential never goes to a port, whose listener may be another OS user's or a stale
+ * daemon's.
+ */
+export function pipeWebSocket(target: PipeTarget, path = '/api/local-ws'): WebSocket {
+  const nonce = newPipeNonce(target.pipe)
+  const socket = new WebSocket(`ws://localhost${path}`, {
+    createConnection: () => net.connect(target.pipe),
+    headers: { [PIPE_AUTH_HEADER]: pipeAuthValue(target.token, nonce) },
+  })
+  // A squatter can accept the upgrade after the recorded daemon died. Its 101 is rejected before WebSocket's
+  // `open`, so a caller that sends its first frame on `open` sends it nothing.
+  socket.on('upgrade', (response) => {
+    if (!pipeProven(response.headers, target.token, nonce)) socket.terminate()
+  })
+  return socket
 }

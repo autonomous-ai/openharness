@@ -6,11 +6,16 @@ function fake(overrides: Partial<UninstallDeps> = {}) {
   const calls: string[] = []
   const out: string[] = []
   const err: string[] = []
+  /** The uninstall marker's writes, each said with the step it came after: their order against the steps is the point. */
+  const marks: string[] = []
+  const after = (what: string) => marks.push(calls.length ? `${what} after ${calls.at(-1)}` : `${what} first`)
   let running = true
   const deps: UninstallDeps = {
     platform: 'darwin', cwd: '/Users/u/code', root: '/Users/u/.harness', home: '/Users/u',
     cliDir: '/Users/u/.harness/cli', dataDir: '/Users/u/.harness/cli/data', authDir: '/Users/u/.harness/auth',
-    isTTY: false, harnessOs: false,
+    isTTY: false, harnessOs: false, pane: null,
+    markUninstalling: () => { after('mark') },
+    unmarkUninstalling: () => { after('unmark') },
     ask: async () => { calls.push('ask'); return 'n' },
     daemonPid: () => (running ? 4242 : null),
     alive: (pid) => running && pid === 4242,
@@ -33,7 +38,7 @@ function fake(overrides: Partial<UninstallDeps> = {}) {
     tildify: (path) => path.replace('/Users/u', '~').replace('C:\\Users\\u', '~'),
     ...overrides,
   }
-  return { deps, calls, out, err }
+  return { deps, calls, out, err, marks }
 }
 
 /** This computer's Windows layout, as the fakes above see it. */
@@ -126,6 +131,55 @@ describe('harness uninstall', () => {
     expect(t.calls).toContain('final 2 +root')
     expect(t.out).toContain('✓ removed ~\\.harness\\bin from your PATH')
     expect(t.out).toContain('✓ ~\\.harness goes once this command has exited (anything left is listed in C:\\T\\h.log)')
+  })
+
+  // Stopping the harnesses, then the daemon and the terminal host, ends the pane this command runs in, and the command
+  // with it: partway, with no summary, and the desktop then starts the daemon again.
+  it('refuses inside a Harness terminal, on every OS, before it touches anything', async () => {
+    for (const pane of ['%3', 'p1:%3']) {
+      for (const platform of [{}, win]) {
+        const t = fake({ ...platform, pane, isTTY: true, ask: async () => 'y' })
+        expect(await uninstallCommand(['--yes'], t.deps)).toBe(1)
+        expect(t.calls).toEqual([])
+        expect(t.marks).toEqual([])
+        expect(t.err).toEqual(['✗ This terminal is one of Harness\'s, which the uninstall closes before it has finished. Run harness uninstall from a terminal outside Harness.'])
+      }
+    }
+  })
+
+  // The desktop app starts a daemon that has gone quiet (local_cli_discovery.dart `startSupervising`): between the daemon
+  // stopping and the files going it would start one again, which then holds the files the removal is taking.
+  it('marks the uninstall before it stops anything, and leaves the mark to the step that removes the files last', async () => {
+    const t = fake()
+    expect(await uninstallCommand(['--yes'], t.deps)).toBe(0)
+    // removeNow takes the mark itself, after the rest and before the root; the CLI's own removal finds it gone.
+    expect(t.marks).toEqual(['mark first', 'unmark after afterword'])
+    const windows = fake({ ...win })
+    expect(await uninstallCommand(['--yes'], windows.deps)).toBe(0)
+    // The cmd.exe that removes the files once this process has exited removes the mark after them.
+    expect(windows.marks).toEqual(['mark first'])
+    const asked = fake({ isTTY: true })
+    asked.deps.ask = async () => { asked.calls.push('ask'); return 'y' }
+    await uninstallCommand([], asked.deps)
+    expect(asked.marks[0]).toBe('mark after ask')
+    const no = fake({ isTTY: true })
+    await uninstallCommand([], no.deps)
+    expect(no.marks).toEqual([])
+  })
+
+  it('takes the mark away on every way out that leaves Harness to start again', async () => {
+    const service = fake({ service: { name: 'systemd', present: () => true, unregister: () => ({ ok: false, detail: 'exit 1' }) } })
+    expect(await uninstallCommand(['--yes'], service.deps)).toBe(1)
+    expect(service.marks).toEqual(['mark first', 'unmark after lock'])
+    const busy = fake({ withLock: async () => { throw new UninstallLockBusy('busy', 'Harness is being updated by process 51') } })
+    expect(await uninstallCommand(['--yes'], busy.deps)).toBe(1)
+    expect(busy.marks).toEqual(['mark first', 'unmark after agents'])
+    const unscheduled = fake({ ...win, scheduleFinalRemoval: () => ({ ok: false, reason: 'Windows did not start it.', manual: 'Delete it.', detail: 'WMI' }) })
+    expect(await uninstallCommand(['--yes'], unscheduled.deps)).toBe(1)
+    expect(unscheduled.marks).toEqual(['mark first', 'unmark after afterword'])
+    const thrown = fake({ stopAgents: async () => { throw new Error('boom') }, stopDaemon: async () => { throw new Error('no stop') } })
+    expect(await uninstallCommand(['--yes'], thrown.deps)).toBe(1)
+    expect(thrown.marks).toEqual(['mark first', 'unmark after service'])
   })
 
   it('prints its usage', async () => {

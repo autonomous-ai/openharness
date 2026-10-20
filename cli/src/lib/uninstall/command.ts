@@ -124,6 +124,14 @@ export interface UninstallDeps {
   isTTY: boolean
   /** Harness OS: its package owns the CLI (lib/platformDaemon.ts osDaemonUnit). */
   harnessOs: boolean
+  /** The Harness terminal pane this command was typed in (HARNESS_PANE on Windows, TMUX_PANE elsewhere), if any. */
+  pane: string | null
+  /**
+   * Writes the uninstall marker (removal.ts UNINSTALL_MARKER): the desktop app starts no daemon while it is there.
+   * The step that removes the files removes it last; [unmarkUninstalling] does on every other way out.
+   */
+  markUninstalling(): void
+  unmarkUninstalling(): void
   ask(question: string): Promise<string>
   daemonPid(): number | null
   alive(pid: number): boolean
@@ -257,8 +265,11 @@ function reportPath(deps: UninstallDeps, path: PathStep, problems: string[]): vo
   }
 }
 
-/** The files. Returns false when they were not removed nor set to be: the uninstall is then only partly done. */
-function removeFiles(deps: UninstallDeps, keepData: boolean, problems: string[]): boolean {
+/**
+ * The files. Returns false when they were not removed nor set to be: the uninstall is then only partly done.
+ * [handover.done] is set once the Windows last step has them, and the uninstall marker with them.
+ */
+function removeFiles(deps: UninstallDeps, keepData: boolean, problems: string[], handover: { done: boolean }): boolean {
   const windows = deps.platform === 'win32'
   const root = deps.tildify(deps.root)
   let plan: RemovalPlan
@@ -273,6 +284,7 @@ function removeFiles(deps: UninstallDeps, keepData: boolean, problems: string[])
       const final = deps.scheduleFinalRemoval(plan)
       // What Windows said, in brackets, for a bug report; the sentence around it is the person's.
       if (!final.ok) { problems.push(`${final.reason} (${final.detail}) ${final.manual}`); return false }
+      handover.done = true
       deps.out(`✓ ${what} goes once this command has exited (anything left is listed in ${final.log})`)
     } else {
       const left = deps.removeNow(plan)
@@ -311,6 +323,12 @@ export async function uninstallCommand(argv: readonly string[], deps: UninstallD
   const keepData = argv.includes('--keep-data')
   const windows = deps.platform === 'win32'
   if (deps.harnessOs) { deps.err('✗ Harness is part of this Harness operating system, which keeps it installed. Nothing was removed.'); return 1 }
+  // Stopping the harnesses, then the daemon and the terminal host, ends this pane and the command in it: before
+  // anything is removed, or with the service and the daemon gone and the hooks and files still there, and no summary.
+  if (deps.pane) {
+    deps.err('✗ This terminal is one of Harness\'s, which the uninstall closes before it has finished. Run harness uninstall from a terminal outside Harness.')
+    return 1
+  }
   if (windows && inside(deps.root, deps.cwd, true)) {
     deps.err(`✗ This terminal is in ${deps.tildify(deps.cwd)}, which the uninstall removes, and Windows cannot delete a folder a terminal is in. Run \`cd ~\`, then run it again.`)
     return 1
@@ -332,6 +350,20 @@ export async function uninstallCommand(argv: readonly string[], deps: UninstallD
     else deps.err(`✗ harness uninstall could not start (${clause(message(error))}). Nothing was removed.`)
     return 1
   }
+  // From here the daemon goes, and a desktop app that is open would start it again: on the files being removed, which it
+  // then holds until a reboot. The marker stops it until the files are gone.
+  deps.markUninstalling()
+  const handover = { done: false }
+  try {
+    return await removeHarness(deps, daemon, keepData, handover)
+  } finally {
+    if (!handover.done) { try { deps.unmarkUninstalling() } catch { /* a marker left behind stops counting on its own */ } }
+  }
+}
+
+/** Everything after the question: the steps in the order the comment at the top gives. */
+async function removeHarness(deps: UninstallDeps, daemon: number | null, keepData: boolean, handover: { done: boolean }): Promise<number> {
+  const windows = deps.platform === 'win32'
   const problems: string[] = []
   const notDeleted = 'None of Harness\'s files were deleted.'
 
@@ -402,7 +434,7 @@ export async function uninstallCommand(argv: readonly string[], deps: UninstallD
   await step(problems, (detail) => `Harness could not take itself off your PATH (${detail}): remove its entry yourself`,
     () => reportPath(deps, deps.removePathEntry(), problems))
 
-  const filesDone = removeFiles(deps, keepData, problems)
+  const filesDone = removeFiles(deps, keepData, problems, handover)
   if (!keepData) {
     const root = deps.tildify(deps.root)
     for (const dir of [deps.dataDir, deps.authDir]) {

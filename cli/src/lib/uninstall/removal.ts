@@ -32,6 +32,14 @@ export const DESKTOP_STATE = /^desktop-app/
 export const PROGRAM = new Set(['bin', 'runtime', 'pty'])
 /** The only folder name a removal root may have. */
 export const ROOT_NAME = '.harness'
+/**
+ * `harness uninstall` at work, in the root: while it is there (and fresh) the desktop app does not start the daemon
+ * again (desktop/lib/core/uninstall_marker.dart), which would hold the files being removed and undo the uninstall. It
+ * is in no plan: it goes after every other path (removeNow, finalRemovalScript), and before the root, whatever
+ * --keep-data keeps. Its text is the time it was written, in seconds: one that outlived an uninstall killed half way
+ * stops counting on its own.
+ */
+export const UNINSTALL_MARKER = 'uninstalling'
 
 export interface PlanInput {
   platform: NodeJS.Platform
@@ -131,6 +139,7 @@ export function removalPlan(o: PlanInput): RemovalPlan {
   const home = o.home ?? defaultHome(o.platform)
   checkRoot(o.platform, o.root, home)
   for (const entry of o.entries) checkName(o.platform, o.root, entry.name)
+  o = { ...o, entries: o.entries.filter((e) => e.name !== UNINSTALL_MARKER) }
   const at = (dir: string) => (entry: RootEntry): RemovalTarget => ({ path: p.join(dir, entry.name), dir: entry.dir, ...(entry.link ? { link: true as const } : {}) })
   const done = (plan: RemovalPlan): RemovalPlan => { checkPlan(o.platform, plan, home); return plan }
   if (!o.keepData) {
@@ -232,6 +241,9 @@ export function removeNow(plan: RemovalPlan, o: { platform?: NodeJS.Platform; ho
       try { if (!isLink(target.path)) { writable(target.path); rmSync(target.path, { recursive: true, force: true }) } } catch { /* reported below */ }
     }
   }
+  // Last of all but the root, so the desktop app starts no daemon while anything else is still going. A folder of that
+  // name is not the marker: rmSync without recursive leaves it, and the root with it.
+  try { rmSync(pathsFor(platform).join(root, UNINSTALL_MARKER), { force: true }) } catch { /* the marker is only believed while fresh */ }
   // The root only once empty, never with something the plan did not name (an entry that arrived since).
   if (plan.removeRoot) { try { rmdirSync(plan.root) } catch { /* reported below */ } }
   return [...plan.remove.map((t) => t.path), ...(plan.removeRoot ? [plan.root] : [])].filter(present)
@@ -261,7 +273,9 @@ export function finalRemovalScript(o: { pid: number; plan: RemovalPlan; log: str
   checkPathText('win32', o.log)
   checkPathText('win32', o.systemRoot)
   const tool = (name: string) => quoted(win32.join(o.systemRoot, 'System32', name))
-  const targets = [...o.plan.remove, ...(o.plan.removeRoot ? [{ path: o.plan.root, dir: true, root: true }] : [])]
+  const rootTarget = o.plan.removeRoot ? [{ path: o.plan.root, dir: true, root: true }] : []
+  const targets = [...o.plan.remove, ...rootTarget]
+  const marker = win32.join(root, UNINSTALL_MARKER)
   const guarded = [root, ...new Set(o.plan.remove.flatMap((t) => between('win32', root, t.path)))]
   const remove = (t: { path: string; dir: boolean; root?: boolean }): string[] => {
     if (t.root) return [`rmdir ${quoted(t.path)} 2>nul`]
@@ -287,21 +301,30 @@ export function finalRemovalScript(o: { pid: number; plan: RemovalPlan; log: str
     ...guarded.flatMap((dir) => ['set "attr=-"', `for %%A in (${quoted(dir)}) do set "attr=-%%~aA"`, 'if not "%attr%"=="%attr:l=%" goto refused']),
     'set pass=0',
     ':again',
-    ...targets.flatMap(remove),
+    ...o.plan.remove.flatMap(remove),
     // `if exist` follows a link: a link whose far side is gone reads as removed even when it is still there, and is
     // neither retried nor listed in the log. Accepted (B5.4 review): what stays is a dangling link inside the root,
     // which points nowhere and which a later uninstall or a person deleting the folder takes.
     'set left=0',
-    ...targets.map((t) => `if exist ${quoted(t.path)} set left=1`),
-    'if %left%==0 goto done',
+    ...o.plan.remove.map((t) => `if exist ${quoted(t.path)} set left=1`),
+    'if %left%==0 goto last',
     'set /a pass+=1',
-    `if %pass% GEQ ${REMOVE_PASSES} goto report`,
+    `if %pass% GEQ ${REMOVE_PASSES} goto last`,
     `${tool('PING.EXE')} -n 3 127.0.0.1 >nul`,
     'goto again',
-    ':report',
+    // The uninstall marker once every other path is gone or has had its last try: until then the desktop app starts
+    // no daemon, which would hold what is still being removed. Then the root, which the marker kept from being empty.
+    ':last',
+    // `del` only when it is not a folder (a junction of that name is not the marker), as for any file.
+    `if not exist ${quoted(`${marker}\\*`)} del /f /q ${quoted(marker)} 2>nul`,
+    ...rootTarget.flatMap(remove),
+    'set left=0',
+    ...targets.map((t) => `if exist ${quoted(t.path)} set left=1`),
+    'if %left%==0 goto done',
     `>${quoted(o.log)} echo Harness could not remove these after harness uninstall (a program still had them open):`,
     ...targets.map((t) => `if exist ${quoted(t.path)} >>${quoted(o.log)} echo ${echoed(t.path)}`),
     'goto done',
+    // Nothing is removed, the marker neither: it would be removed through the link. It stops counting on its own.
     ':refused',
     `>${quoted(o.log)} echo Harness did not remove ${echoed(root)} because it, or a folder in it, has become a link to another folder.`,
     ':done',

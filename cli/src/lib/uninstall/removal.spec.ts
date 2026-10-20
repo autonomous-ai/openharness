@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { checkRemovable, finalRemovalScript, listEntries, removalPlan, removeNow, scheduleFinalRemoval, type FinalRemovalDeps, type PlanInput, type RemovalPlan, type RootEntry } from './removal.js'
+import { checkRemovable, finalRemovalScript, listEntries, removalPlan, removeNow, scheduleFinalRemoval, UNINSTALL_MARKER, type FinalRemovalDeps, type PlanInput, type RemovalPlan, type RootEntry } from './removal.js'
 
 const d = (name: string): RootEntry => ({ name, dir: true })
 const f = (name: string): RootEntry => ({ name, dir: false })
@@ -46,6 +46,16 @@ describe('removalPlan', () => {
       'C:\\Users\\u\\.harness\\cli\\0.5.2', 'C:\\Users\\u\\.harness\\cli\\current', 'C:\\Users\\u\\.harness\\cli\\notify.mjs',
     ])
     expect(plan.kept).toEqual(['cli\\data'])
+  })
+
+  // The uninstall's own marker goes after everything else (removeNow, finalRemovalScript), whatever --keep-data keeps.
+  it('leaves the uninstall marker out of what it removes and of what it keeps', () => {
+    for (const keepData of [false, true]) {
+      const plan = removalPlan({ ...mac, entries: [...entries.filter((e) => e.name !== 'desktop-app-v2'), f(UNINSTALL_MARKER)], cliEntries, keepData })
+      expect(plan.remove.map((t) => t.path)).not.toContain(`/u/.harness/${UNINSTALL_MARKER}`)
+      expect(plan.kept).not.toContain(UNINSTALL_MARKER)
+      expect(plan.removeRoot).toBe(!keepData)
+    }
   })
 
   it('leaves a CLI folder that is not the product root\'s (ADAPTER_CLI_DIR set elsewhere)', () => {
@@ -171,6 +181,18 @@ describe('removeNow', () => {
     expect(() => checkRemovable({ root: linked, remove: [], kept: [], removeRoot: true })).toThrow(`Harness will not remove "${linked}": it is a link to another folder.`)
     expect(() => checkRemovable({ ...plan, remove: [{ path: join(base, 'x'), dir: true }] })).toThrow(/is not inside/)
     expect(existsSync(elsewhere) && existsSync(join(root, 'cli'))).toBe(true)
+  })
+
+  it('removes the uninstall marker after the plan, then the root; with --keep-data the marker still goes', () => {
+    for (const keepData of [false, true]) {
+      const root = join(home(), '.harness')
+      mkdirSync(join(root, 'cli', 'data'), { recursive: true })
+      writeFileSync(join(root, 'cli', 'cli.js'), '')
+      writeFileSync(join(root, UNINSTALL_MARKER), '1\n')
+      expect(removeNow(planOf(root, keepData))).toEqual([])
+      expect(existsSync(join(root, UNINSTALL_MARKER))).toBe(false)
+      expect(existsSync(root)).toBe(keepData)
+    }
   })
 
   it('removes the plan and the root, and says what is left', () => {
@@ -328,6 +350,23 @@ describe('finalRemovalScript', () => {
     expect(lines).toContain('rmdir "C:\\Users\\u 100%%\\.harness" 2>nul')
     expect(lines.filter((line) => line.startsWith('rmdir /s'))).toEqual(['rmdir /s /q "C:\\Users\\u 100%%\\.harness\\bin" 2>nul'])
     expect(lines.indexOf(':remove')).toBeGreaterThan(lines.indexOf(':wait'))
+  })
+
+  // The desktop app does not start the daemon while the marker is there: it goes once every other path is gone or has
+  // been tried for the last time, and before the root, which it would otherwise keep from being empty.
+  it('removes the uninstall marker after every other path, retries included, then the root', () => {
+    const lines = script.split('\r\n')
+    const marker = `if not exist "C:\\Users\\u 100%%\\.harness\\${UNINSTALL_MARKER}\\*" del /f /q "C:\\Users\\u 100%%\\.harness\\${UNINSTALL_MARKER}" 2>nul`
+    const at = lines.indexOf(marker)
+    expect(at).toBeGreaterThan(lines.lastIndexOf('goto again'))
+    expect(at).toBeGreaterThan(lines.indexOf('rmdir /s /q "C:\\Users\\u 100%%\\.harness\\bin" 2>nul'))
+    expect(at).toBeLessThan(lines.indexOf('rmdir "C:\\Users\\u 100%%\\.harness" 2>nul'))
+    // Once in the script: before it, a busy path is retried with the marker still there.
+    expect(lines.filter((line) => line === marker)).toHaveLength(1)
+    expect(lines.filter((line) => line === 'rmdir "C:\\Users\\u 100%%\\.harness" 2>nul')).toHaveLength(1)
+    const kept = finalRemovalScript({ pid: 4321, plan: { ...plan, removeRoot: false }, log: 'C:\\T\\l.log', systemRoot: 'C:\\Windows' }).split('\r\n')
+    expect(kept).toContain(marker)
+    expect(kept).not.toContain('rmdir "C:\\Users\\u 100%%\\.harness" 2>nul')
   })
 
   it('waits a bounded time, with delayed expansion off', () => {

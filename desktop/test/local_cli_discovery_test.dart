@@ -663,6 +663,35 @@ void main() {
     expect(running, isTrue);
   });
 
+  // `harness uninstall` stops the daemon, then removes its files (on Windows after it has exited): a daemon
+  // started in between holds them and undoes the uninstall.
+  test(
+    'startSupervising starts no daemon while harness uninstall is at work',
+    () async {
+      var uninstalling = true;
+      var spawnCount = 0;
+      final discovery = _SupervisionProbe(
+        readProbe: () async =>
+            const LocalCliProbe.down('fixture daemon is down'),
+        spawnCommand: () async => spawnCount++,
+      );
+      final timer = discovery.startSupervising(
+        checkInterval: const Duration(milliseconds: 20),
+        graceStep: const Duration(milliseconds: 10),
+        graceWindow: const Duration(milliseconds: 20),
+        uninstalling: () => uninstalling,
+      );
+      addTearDown(timer.cancel);
+
+      await Future.delayed(const Duration(milliseconds: 150));
+      expect(spawnCount, 0);
+
+      uninstalling = false;
+      await Future.delayed(const Duration(milliseconds: 150));
+      expect(spawnCount, greaterThan(0));
+    },
+  );
+
   test('startSupervising spawns harness start while down, and stops once discovery succeeds', () async {
     const computerId = '0123456789abcdef0123456789abcdef';
     var running = false;

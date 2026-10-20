@@ -6,7 +6,6 @@
  * the paired relay (`machine_select` naming it).
  */
 import { randomUUID } from 'node:crypto'
-import net from 'node:net'
 import { localCredentialHeaders } from '../lib/localCredential.js'
 import { existsSync } from 'node:fs'
 import { WebSocket } from 'ws'
@@ -14,7 +13,7 @@ import { env } from '../config/env.js'
 import { readAuthSession } from '../lib/authSession.js'
 import { savedDaemonPort } from '../lib/daemonEndpoint.js'
 import { daemonPipe, type LocalDaemonOptions } from '../lib/windows/daemonPipe.js'
-import { newPipeNonce, PIPE_AUTH_HEADER, pipeAuthValue, pipeProven } from '../lib/windows/pipeAuth.js'
+import { pipeWebSocket } from '../lib/windows/pipeClient.js'
 import { computerId, daemonUnreachableText } from '../lib/daemonState.js'
 import { unixSocketPath } from '../lib/localSocket.js'
 import { paneOwner, sendPane } from '../messages/command.js'
@@ -69,17 +68,7 @@ export async function connectSocket(where: Where, options: LocalDaemonOptions = 
   if ((options.platform ?? process.platform) === 'win32') {
     const target = await (options.pipe ?? daemonPipe)(where.dataDir, where.port)
     if (!target) throw new AgentClientError('DAEMON_UNREACHABLE', daemonUnreachableText(null, where.dataDir))
-    const nonce = newPipeNonce(target.pipe)
-    const socket = new WebSocket('ws://localhost/api/local-ws', {
-      createConnection: () => net.connect(target.pipe),
-      headers: { [PIPE_AUTH_HEADER]: pipeAuthValue(target.token, nonce) },
-    })
-    // A squatter can accept the upgrade after the recorded daemon died. It never gets a TCP credential,
-    // and its 101 is rejected before WebSocket's `open` lets the agent send machine_select.
-    socket.on('upgrade', (response) => {
-      if (!pipeProven(response.headers, target.token, nonce)) socket.terminate()
-    })
-    return socket
+    return pipeWebSocket(target)
   }
   const path = unixSocketPath(where.dataDir, where.port)
   return path && existsSync(path)

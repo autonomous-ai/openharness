@@ -4,7 +4,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
-import { finalRemovalDeps, finalRemovalScript, listEntries, removalPlan, removeNow, scheduleFinalRemoval } from './removal.js'
+import { finalRemovalDeps, finalRemovalScript, listEntries, removalPlan, removeNow, scheduleFinalRemoval, UNINSTALL_MARKER } from './removal.js'
 
 // The real last step, on Windows only: a cmd.exe that waits for a process (a node.exe standing in for the CLI, holding
 // a file open in the tree) to exit, then removes the tree and itself. Every root here is a throwaway one under the
@@ -69,6 +69,22 @@ describe.runIf(process.platform === 'win32')('the last step of harness uninstall
     expect(cli.exitCode).toBe(null)
     expect(existsSync(join(root, 'cli', 'current'))).toBe(true)
     cli.kill()
+    await until(() => !existsSync(root))
+    expect(existsSync(root)).toBe(false)
+    await new Promise((r) => setTimeout(r, 1000))
+    expect(leftovers(cli.pid!)).toEqual([])
+  }, 40_000)
+
+  // The desktop app starts no daemon while the marker is there: cmd.exe removes it after the rest, then the root.
+  it('removes the uninstall marker after the rest, and the root after it', async () => {
+    const { root } = throwaway()
+    mkdirSync(join(root, 'cli'), { recursive: true })
+    writeFileSync(join(root, 'cli', 'cli.js'), '')
+    writeFileSync(join(root, UNINSTALL_MARKER), `${Math.floor(Date.now() / 1000)}\n`)
+    const p = plan(root)
+    expect(p.remove.map((t) => t.path)).not.toContain(join(root, UNINSTALL_MARKER))
+    const cli = holder(500)
+    expect(scheduleFinalRemoval(p, { ...finalRemovalDeps(), pid: cli.pid! })).toMatchObject({ ok: true })
     await until(() => !existsSync(root))
     expect(existsSync(root)).toBe(false)
     await new Promise((r) => setTimeout(r, 1000))

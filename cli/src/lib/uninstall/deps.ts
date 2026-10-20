@@ -1,5 +1,5 @@
 /** This computer's side of `harness uninstall` (command.ts): every module it needs, loaded only when it runs. */
-import { existsSync, rmSync, writeSync } from 'node:fs'
+import { existsSync, rmSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, win32 } from 'node:path'
 import { env } from '../../config/env.js'
@@ -16,7 +16,7 @@ import { stopEveryAgent } from './agents.js'
 import { labelHookRemoval, lockHolder, UninstallLockBusy, type UninstallDeps } from './command.js'
 import { endPtyHosts, ptyHostsDeps } from './ptyHosts.js'
 import { filesWithHarnessPathLines, removeHarnessPathLines } from './rcFiles.js'
-import { checkRemovable, finalRemovalDeps, listEntries, removeNow, scheduleFinalRemoval } from './removal.js'
+import { checkRemovable, finalRemovalDeps, listEntries, removeNow, scheduleFinalRemoval, UNINSTALL_MARKER } from './removal.js'
 import { removeUserPathEntry } from './windowsPath.js'
 
 const SERVICE_NAMES: Record<string, string> = { launchd: 'launchd', systemd: 'systemd', taskscheduler: 'Task Scheduler' }
@@ -36,11 +36,18 @@ export async function uninstallDeps(options: { tildify: (path: string) => string
   const platform = platformDaemonDeps()
   const service = platform.service
   const out = (text: string) => line(1, text)
+  const marker = join(root, UNINSTALL_MARKER)
   return {
     platform: process.platform, cwd: process.cwd(), home, root,
     cliDir: env.ADAPTER_CLI_DIR, dataDir: env.ADAPTER_DATA_DIR, authDir: AUTH_DIR,
     isTTY: process.stdin.isTTY === true && process.stdout.isTTY === true,
     harnessOs: service?.os === true,
+    // messages/command.ts `sendPane` reads the same two: a Windows terminal's pane is HARNESS_PANE, a tmux one TMUX_PANE.
+    pane: process.env.HARNESS_PANE || process.env.TMUX_PANE || null,
+    // Best effort: an uninstall that cannot write it still runs, as it did before the marker. A root that is gone has
+    // no files left for a daemon to hold.
+    markUninstalling: () => { try { writeFileSync(marker, `${Math.floor(Date.now() / 1000)}\n`) } catch { /* see above */ } },
+    unmarkUninstalling: () => { rmSync(marker, { force: true }) },
     ask: options.ask,
     daemonPid: () => { const pid = readPid(); return pid !== null && isAlive(pid) ? pid : null },
     alive: isAlive,
