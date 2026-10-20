@@ -755,8 +755,9 @@ pub struct App {
     /// Each machine's agent accounts' rate limits (usage_read), and when they were last asked.
     pub usage: HashMap<String, Vec<fleet::Usage>>,
     pub usage_checked: Option<Instant>,
-    /// When each machine was last asked its usage (read_usage: at most once a minute).
-    pub usage_asked: HashMap<String, Instant>,
+    /// When each machine was last asked its usage, and on which connection (read_usage: at most once a
+    /// minute per connection; a reconnect is asked its own).
+    pub usage_asked: HashMap<String, (u64, Instant)>,
     pub key_name: Option<String>,
     pub key_run: Option<String>,
     pub cfg_finished: bool,
@@ -6324,23 +6325,31 @@ impl App {
     /// minute: when it connects, when Models opens, and on enrich's five-minute timer. On a machine
     /// shared with this account they are its owner's, the plans a harness there runs on. False when
     /// it has no link to ask.
+    ///
+    /// The minute is the connection's: a read's reply is dropped once its connection is gone, so a
+    /// machine that drops and connects again is asked again rather than waiting for the timer.
     pub fn read_usage(&mut self, machine: &str) -> bool {
-        if self.usage_asked.get(machine).is_some_and(|t| t.elapsed() < Duration::from_secs(60)) { return true }
         let Some(link) = self.link(machine) else { return false };
-        self.usage_asked.insert(machine.to_string(), Instant::now());
-        let (id, generation) = (machine.to_string(), link.generation);
-        self.spawn(async move { link.rpc("usage_read", json!({}), Duration::from_secs(30)).await }, move |app, reply| {
-            if app.connection_generation(&id) != Some(generation) { return }
-            // A first read that failed is asked again on the timer's half-minute retry (enrich).
-            let Ok(reply) = reply else {
-                app.usage_asked.remove(&id);
-                if !app.usage.contains_key(&id) { app.usage_checked = Instant::now().checked_sub(Duration::from_secs(270)) }
-                return;
-            };
-            let readings: Vec<fleet::Usage> = reply.get("providers").and_then(Value::as_array).map(|p| p.iter().filter_map(fleet::usage_from).collect()).unwrap_or_default();
-            app.usage.insert(id, readings);
-        });
+        let generation = link.generation;
+        if self.usage_asked.get(machine).is_some_and(|&(asked_on, at)| asked_on == generation && at.elapsed() < Duration::from_secs(60)) { return true }
+        self.usage_asked.insert(machine.to_string(), (generation, Instant::now()));
+        let id = machine.to_string();
+        self.spawn(async move { link.rpc("usage_read", json!({}), Duration::from_secs(30)).await }, move |app, reply| app.usage_replied(id, generation, reply));
         true
+    }
+
+    /// A usage_read's answer from [machine]'s connection [generation]: nothing once that connection
+    /// is gone (the next one asks its own).
+    fn usage_replied(&mut self, machine: String, generation: u64, reply: Result<Value, RpcError>) {
+        if self.connection_generation(&machine) != Some(generation) { return }
+        // A first read that failed is asked again on the timer's half-minute retry (enrich).
+        let Ok(reply) = reply else {
+            self.usage_asked.remove(&machine);
+            if !self.usage.contains_key(&machine) { self.usage_checked = Instant::now().checked_sub(Duration::from_secs(270)) }
+            return;
+        };
+        let readings: Vec<fleet::Usage> = reply.get("providers").and_then(Value::as_array).map(|p| p.iter().filter_map(fleet::usage_from).collect()).unwrap_or_default();
+        self.usage.insert(machine, readings);
     }
 
     /// What the daemons know of each harness beyond its row, asked a few at a time, the focused
@@ -7419,6 +7428,23 @@ mod recovery_tests {
         let asked = *app.usage_asked.get("test-peer").expect("usage_read sent on connect");
         app.read_usage("test-peer");
         assert_eq!(app.usage_asked["test-peer"], asked, "not again within the minute");
+
+        // It dropped and connected again within the minute: the first connection's read is never
+        // answered here (its reply is that connection's), so the new one is asked its own.
+        app.links["test-peer"].link.as_ref().unwrap().close();
+        app.links.insert("test-peer".into(), LinkState { link: Some(Link::spawn(app.port, "test-peer", 2, app.sink.clone())), generation: 2, attempts: 0, retry_at: None });
+        app.on_machine("test-peer".into(), 2, MachineEvent::Connected);
+        assert_ne!(app.usage_asked["test-peer"], asked, "asked again on the new connection");
+        let again = app.usage_asked["test-peer"];
+
+        // The first connection's answer, arriving now, is not this one's: neither a failure nor plans.
+        app.usage_replied("test-peer".into(), 1, Err(RpcError::new("DISCONNECTED", "")));
+        app.usage_replied("test-peer".into(), 1, Ok(json!({ "providers": [] })));
+        assert_eq!(app.usage_asked["test-peer"], again);
+        assert!(!app.usage.contains_key("test-peer"));
+        // This connection's read failed: it may be asked again at once.
+        app.usage_replied("test-peer".into(), 2, Err(RpcError::new("TIMEOUT", "")));
+        assert!(!app.usage_asked.contains_key("test-peer"));
         app.links["test-peer"].link.as_ref().unwrap().close();
     }
 

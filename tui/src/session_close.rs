@@ -257,7 +257,8 @@ fn received(app: &mut App, id: &str, index: usize, mode: &str, reply: Result<Val
     if op.id != id || op.at != index { return }
     if mode == "inspect" && !showing(app, id) { app.session_close.operation = None; return }
     let mut identity = op.targets[index].identity.clone();
-    let removed_before_ack = mode != "inspect" && identity.connection_matches(app)
+    // Closed and its row already gone: an inspect can answer that too, when it was closed elsewhere first.
+    let removed_before_ack = identity.connection_matches(app)
         && app.fleet.agent(&identity.machine, &identity.agent).is_none() && reply.as_ref().is_ok_and(|r| r["closed"] == true);
     if !identity.continues(app) && !removed_before_ack { fail(app, "The session or connection changed. No replacement was stopped.".into()); return }
     // From here on, the conversation it bound since the review (if it did): the views and other clients know that one.
@@ -646,6 +647,26 @@ mod tests {
         assert!(!app.panes.contains_key(&1)); assert!(app.panes.contains_key(&2));
         assert_eq!(app.fleet.agent("local", "a1").unwrap().status, "stopped");
         assert!(app.modal.is_none());
+    }
+
+    #[tokio::test]
+    async fn inspecting_a_harness_already_closed_and_gone_from_the_list_finishes_the_close() {
+        // Closed elsewhere, and its row removed before the inspect's answer: closed, not "changed".
+        let mut app = app();
+        pane(&mut app, 1);
+        app.fleet.agents.remove(&("local".into(), "a1".into()));
+        answer(&mut app, "inspect", json!({"closed":true}));
+        assert_eq!(modes(&app), ["inspect"], "nothing left to stop");
+        assert!(app.session_close.operation.is_none());
+        assert!(!app.panes.contains_key(&1)); assert!(app.panes.contains_key(&2));
+        assert!(app.toast.as_ref().is_none_or(|t| !t.0.contains("changed")));
+        // A row gone with an inspect answering what it is doing is still a change.
+        let mut app = self::app();
+        pane(&mut app, 1);
+        app.fleet.agents.remove(&("local".into(), "a1".into()));
+        answer(&mut app, "inspect", json!({"activity":"idle"}));
+        assert!(app.panes.contains_key(&1));
+        assert!(app.session_close.operation.as_ref().is_some_and(|op| op.stage == Stage::Failed));
     }
 
     #[tokio::test]
