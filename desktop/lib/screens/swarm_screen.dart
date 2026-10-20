@@ -1968,6 +1968,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           ],
         },
       'footerCovered':
+          app.activeSwarm.isSuperTab ||
           (!_routeIsCurrent && !_footerPreviewCurrent) ||
           (_newHarnessOverlay != null && !_newHarnessHidden) ||
           _searchOverlay != null,
@@ -8019,14 +8020,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
                         ],
                       ),
                     ),
-                    MediaQuery.withNoTextScaling(
-                      child: _native
-                          ? SizedBox(
-                              key: const ValueKey('workspace-status-bar'),
-                              height: _statusBarHeight,
-                            )
-                          : _statusBar(),
-                    ),
+                    if (!app.activeSwarm.isSuperTab)
+                      MediaQuery.withNoTextScaling(
+                        child: _native
+                            ? SizedBox(
+                                key: const ValueKey('workspace-status-bar'),
+                                height: _statusBarHeight,
+                              )
+                            : _statusBar(),
+                      ),
                   ],
                 ),
               ),
@@ -8137,8 +8139,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
   // Include the pane's former bottom gutter in this row, so its controls sit
   // halfway between the pane edge and window bottom. Pane height is unchanged.
   // Keep inventory controls discoverable on the first, empty welcome screen.
-  double get _statusBarHeight =>
-      workspaceBarControlHeight(context) + kWorkspaceInset;
+  double get _statusBarHeight => app.activeSwarm.isSuperTab
+      ? 0
+      : workspaceBarControlHeight(context) + kWorkspaceInset;
 
   Widget _statusBar() {
     final compactFooter = widget.chrome?.compactFooter;

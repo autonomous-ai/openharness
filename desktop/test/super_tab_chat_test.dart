@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -271,6 +272,43 @@ void main() {
       expect(find.text('Image: Local image'), findsOneWidget);
       expect(find.text('Image: Remote image'), findsOneWidget);
       expect(find.byType(Image), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'messages wrap code without nested scrolling and link only known workgroups outside code',
+    (tester) async {
+      final opened = <String>[];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SelectionArea(
+              child: SizedBox(
+                width: 260,
+                child: SuperTabMessageText(
+                  'See #12 and #99.\n\n`#12`\n\n```txt\n#12 long_code_that_must_wrap_without_a_second_scrollbar_abcdefghijklmnopqrstuvwxyz\n```',
+                  references: const {12: 'work-id'},
+                  onOpenGroup: opened.add,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(Scrollable), findsNothing);
+      final links = <TextSpan>[];
+      for (final text in tester.widgetList<RichText>(find.byType(RichText))) {
+        text.text.visitChildren((span) {
+          if (span is TextSpan && span.recognizer is TapGestureRecognizer)
+            links.add(span);
+          return true;
+        });
+      }
+      expect(links.map((s) => s.text), ['#12']);
+      (links.single.recognizer as TapGestureRecognizer).onTap!();
+      expect(opened, ['work-id']);
       expect(tester.takeException(), isNull);
     },
   );

@@ -1,5 +1,23 @@
 # Super Tab review build — 19 October 2026
 
+## Review polish
+
+The next internal build keeps the approved layout and removes extra controls:
+
+- Chat, terminals and PRs use icon buttons with an explicit selected state. Click the workgroup title for details, rename or archive.
+- Workgroups have stable tab-local numbers (`#1`, `#2`, …), shown in navigation and linked in messages. Renaming or archiving a group preserves its number. Lead stays unnumbered.
+- The terminal view shows every group member, including stopped or unavailable agents. Clicking a member focuses it within the group. Individual close and zoom controls are absent; changing to Chat does not stop a harness.
+- Messages share the conversation's scroll area. Code wraps; paragraphs do not create their own scrolling surfaces.
+- The global footer is hidden inside Super Tab. Roster headings are simply Leads, Humans, Agents and Machines. Humans, Agents and Machines each have a `+` for their own action.
+- Machine cards use three left-aligned lines: name, owner and active agent count; available CPU/GPU and free RAM/SSD; engine icons and remaining allowance. Details and reset information remain behind the machine/allowance hover or detail view. Unknown readings remain `—`.
+- **Add machine** asks only which owned machine to use. Harness reuses the lead's local project or prepares its GitHub repository on another machine, discovers installed engines (including Pi when installed), and sets a resource-based concurrency ceiling. Actual starts still pass capacity admission. It does not install or sign in to engines automatically.
+
+Machine setup uses a polled operation receipt so a slow clone does not block other daemon requests or repeat after a timeout. No agent starts until the owner submits the contribution. Project URLs with embedded credentials are excluded. A project without a clonable repository can be contributed on its existing machine; another machine needs a shared repository first.
+
+Validation for this update includes scoped TypeScript checks, Super Tab unit/widget tests, disposable backend replica-set integration, a two-account machine preparation/execution test using isolated daemon homes, and a native macOS fixture with screenshots of chat, the one-field machine form and four group panes. CI and the official signed internal build identify the final source revision in the PR. The delivery record below describes the preceding build until that next package is installed.
+
+## Preceding installed build
+
 The review build is installed and running on this Mac at:
 
 `/Users/ab/Applications/Harness SuperTab Oct19.app`

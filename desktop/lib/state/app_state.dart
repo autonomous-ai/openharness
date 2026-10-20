@@ -3084,6 +3084,7 @@ class AppNotifier extends ChangeNotifier {
 
   Future<void> requestClosePane(int paneId) {
     final tab = activeSwarm;
+    if (tab.isSuperTab && tab.superTabId != null) return Future.value();
     final pane = tab.panes.where((p) => p.id == paneId).firstOrNull;
     if (pane == null) return Future.value();
     if (tab.isCompanions || tab.isDevices) return requestCloseSwarm(tab.id);
@@ -16508,8 +16509,43 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// Put an agent into a specific tile, or into a NEW tile when [paneId] is
-  /// null — which is what a drop on the empty slot means.
+  /// Keep a group member visible while its terminal is unavailable.
+  void reserveSuperTabPane(String swarmId, String machineId, String harnessId) {
+    final tab = swarms
+        .where((s) => s.id == swarmId && s.superTabId != null)
+        .firstOrNull;
+    if (tab == null || _disposed) return;
+    final existing = tab.panes
+        .where((p) => p.machineId == machineId && p.agentId == harnessId)
+        .firstOrNull;
+    if (existing != null) {
+      existing.inputContext = null;
+      existing.watchOnly = true;
+      existing.session?.stageInputContext(null, watchOnly: true);
+      unawaited(existing.session?.setInputContext(null, watchOnly: true));
+      return;
+    }
+    if (tab.panes.length >= maxPanes) return;
+    final controller = superTabs.peek(tab.superTabId!);
+    if (controller?.snapshot?.agents.any(
+          (a) => a.machineId == machineId && a.harnessId == harnessId,
+        ) !=
+        true) {
+      return;
+    }
+    tab.panes.add(
+      TerminalPane(id: _nextPaneId++, machineId: machineId, agentId: harnessId)
+        ..watchOnly = true,
+    );
+    tab.presets.remove(tab.panes.length);
+    tab.paneSizes.removeWhere(
+      (key, _) => key.startsWith('${tab.panes.length}:'),
+    );
+    tab.arranged = null;
+    tab.arrangedKey = null;
+    notifyListeners();
+  }
+
   Future<void> assignAgentToPane(
     int? paneId,
     String machineId,
@@ -16572,6 +16608,9 @@ class AppNotifier extends ChangeNotifier {
         inputContext,
         watchOnly: watchOnly,
       );
+      if (existing.session == null && target == activeSwarm) {
+        await _attachSession(existing, intent: intent);
+      }
       if (focus && target == activeSwarm) focusPane(existing.id);
       // A pane a refused share_add left unshared: a person's retry shares it.
       if (intent == AttachIntent.person) {
@@ -17223,6 +17262,7 @@ class AppNotifier extends ChangeNotifier {
   set zoomedPaneId(int? value) => activeSwarm.zoomedPaneId = value;
 
   void toggleZoomPane() {
+    if (activeSwarm.isSuperTab) return;
     final id = focusedPaneId;
     if (id == null || panes.length < 2) return;
     zoomedPaneId = zoomedPaneId == id ? null : id;
@@ -17458,16 +17498,6 @@ class AppNotifier extends ChangeNotifier {
     if (tab == null) return;
     final pane = tab.panes.where((p) => p.id == paneId).firstOrNull;
     if (pane == null) return;
-    if (tab.superTabId case final superTabId?) {
-      final controller = superTabs.peek(superTabId);
-      if (pane.agentId case final agentId?) {
-        controller?.hideTerminal(
-          controller.selectedId,
-          pane.machineId,
-          agentId,
-        );
-      }
-    }
     if (tab.isCompanions || tab.isDevices) {
       await closeSwarm(tab.id, persist: persist);
       return;

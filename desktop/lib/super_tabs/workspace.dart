@@ -41,6 +41,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
   (String, String)? _resumeRequest;
   Future<void> _terminalChange = Future.value();
   final _nativePanes = <TerminalPane>[];
+  final _failures = <(String, String?), String>{};
   final _nativeHeartbeats = <Timer>[];
 
   void _clearNativeContext() {
@@ -52,14 +53,14 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
     _nativePanes.clear();
     _readyRequest = null;
     for (final pane in panes) {
-      if (pane.inputContext == null && !pane.watchOnly) continue;
+      if (pane.inputContext == null && pane.watchOnly) continue;
       pane.inputContext = null;
-      pane.watchOnly = false;
+      pane.watchOnly = true;
       final session = pane.session;
-      session?.stageInputContext(null);
+      session?.stageInputContext(null, watchOnly: true);
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (pane.inputContext == null && !pane.watchOnly) {
-          unawaited(session?.setInputContext(null));
+        if (pane.inputContext == null && pane.watchOnly) {
+          unawaited(session?.setInputContext(null, watchOnly: true));
         }
       });
     }
@@ -76,12 +77,23 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
     final request = (
       swarmId,
       controller.selectedId,
-      agents.isEmpty ? null : agents.map((a) => a.id).join(','),
+      agents.isEmpty
+          ? null
+          : agents
+                .map((a) {
+                  final machine = app.stateOf(a.machineId);
+                  final native = machine?.agents
+                      .where((n) => n.id == a.harnessId)
+                      .firstOrNull;
+                  return '${a.id}:${native?.isStopped}:${machine?.connectionStatus}:${native != null}';
+                })
+                .join(','),
       controller.accountId,
       controller.canWrite,
     );
     if (_terminalRequest == request) return;
     _clearNativeContext();
+    _failures.clear();
     _terminalRequest = request;
     final resume = _resumeRequest;
     _resumeRequest = null;
@@ -120,8 +132,18 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
         }
         if (current()) {
           if (tab != null) tab.zoomedPaneId = null;
-          if (agents.length == 1) {
-            if (tab?.panes.firstOrNull case final pane?) {
+          final focused = agents.where((a) => a.id == resume?.$2).firstOrNull;
+          if (focused != null || agents.length == 1) {
+            if ((focused == null
+                    ? tab?.panes.firstOrNull
+                    : tab?.panes
+                          .where(
+                            (p) =>
+                                p.machineId == focused.machineId &&
+                                p.agentId == focused.harnessId,
+                          )
+                          .firstOrNull)
+                case final pane?) {
               app.focusPane(pane.id);
               pane.session?.focusInput();
             }
@@ -164,18 +186,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
             .where((a) => a.id == agent.harnessId)
             .firstOrNull
             ?.isStopped;
-        if (stopped == true) {
-          if (!resume) {
-            controller.hideTerminal(
-              conversationId,
-              agent.machineId,
-              agent.harnessId,
-            );
-            return;
-          }
-          // Older idle cleanup may already have stopped a contributed harness.
-          // Open its saved conversation through the existing resume receipt
-          // before issuing a native context, so a failed resume leaves none.
+        if (stopped == true && resume) {
           final resumeError = await app.resumeStoppedSession(
             agent.machineId,
             agent.harnessId,
@@ -185,35 +196,37 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
             throw SuperTabFailure('TERMINAL_UNAVAILABLE', resumeError);
           }
         }
-        final issued = await controller.request(
-          'POST',
-          '/api/super-tabs/${controller.tabId}/native',
-          body: {
-            'operationId': superTabOperationId(),
-            'conversationId': conversationId,
-            'agentId': agent.id,
-          },
-        );
-        if (!current()) return;
-        inputContext = issued['contextId'] as String?;
-        if (inputContext == null ||
-            !RegExp(r'^[A-Za-z0-9_-]{16,160}$').hasMatch(inputContext)) {
-          throw const SuperTabFailure(
-            'NATIVE_UNAVAILABLE',
-            'Could not prepare terminal sharing. Try opening it again.',
+        if (stopped != true || resume) {
+          final issued = await controller.request(
+            'POST',
+            '/api/super-tabs/${controller.tabId}/native',
+            body: {
+              'operationId': superTabOperationId(),
+              'conversationId': conversationId,
+              'agentId': agent.id,
+            },
           );
-        }
-        final prepared = await app.superTabMachineRequest(agent.machineId, {
-          'action': 'prepareNative',
-          'tabId': controller.tabId,
-          'contextId': inputContext,
-        });
-        if (!current()) return;
-        if (prepared['inputContext'] != inputContext) {
-          throw const SuperTabFailure(
-            'NATIVE_UNAVAILABLE',
-            'This machine could not confirm terminal sharing.',
-          );
+          if (!current()) return;
+          inputContext = issued['contextId'] as String?;
+          if (inputContext == null ||
+              !RegExp(r'^[A-Za-z0-9_-]{16,160}$').hasMatch(inputContext)) {
+            throw const SuperTabFailure(
+              'NATIVE_UNAVAILABLE',
+              'Could not prepare terminal sharing. Try opening it again.',
+            );
+          }
+          final prepared = await app.superTabMachineRequest(agent.machineId, {
+            'action': 'prepareNative',
+            'tabId': controller.tabId,
+            'contextId': inputContext,
+          });
+          if (!current()) return;
+          if (prepared['inputContext'] != inputContext) {
+            throw const SuperTabFailure(
+              'NATIVE_UNAVAILABLE',
+              'This machine could not confirm terminal sharing.',
+            );
+          }
         }
       }
       await app.assignAgentToPane(
@@ -256,14 +269,24 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
               });
             } catch (failure) {
               if (mounted && current()) {
-                controller.hideTerminal(
-                  conversationId,
-                  agent.machineId,
-                  agent.harnessId,
-                );
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Terminal sharing paused. $failure')),
-                );
+                _failures[(agent.machineId, agent.harnessId)] =
+                    'Terminal sharing paused. $failure';
+                final pane = tab.panes
+                    .where(
+                      (p) =>
+                          p.machineId == agent.machineId &&
+                          p.agentId == agent.harnessId,
+                    )
+                    .firstOrNull;
+                pane?.session?.stageInputContext(null, watchOnly: true);
+                if (pane != null) {
+                  pane.inputContext = null;
+                  pane.watchOnly = true;
+                  unawaited(
+                    pane.session?.setInputContext(null, watchOnly: true),
+                  );
+                }
+                setState(() {});
               }
               timer.cancel();
             } finally {
@@ -274,13 +297,9 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
       }
     } catch (failure) {
       if (mounted && current()) {
-        controller.hideTerminal(
-          conversationId,
-          agent.machineId,
-          agent.harnessId,
-        );
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(failure.toString())));
+        _failures[(agent.machineId, agent.harnessId)] = failure.toString();
+        app.reserveSuperTabPane(swarmId, agent.machineId, agent.harnessId);
+        setState(() {});
       }
     }
   }
@@ -325,14 +344,20 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
             final lead = controller.snapshot?.agents
                 .where((a) => controller.snapshot!.isLead(a.id))
                 .firstOrNull;
-            final terminal = lead == null
-                ? canvas
-                : SuperPane(
-                    machineId: lead.machineId,
-                    harnessId: lead.harnessId,
-                    title: 'Lead',
-                    child: canvas,
-                  );
+            final terminal = SuperPane(
+              machineId: lead?.machineId ?? '',
+              harnessId: lead?.harnessId ?? '',
+              title: 'Lead',
+              titles: {
+                for (final a in agents)
+                  (a.machineId, a.harnessId): controller.snapshot!.agentName(
+                    a.id,
+                  ),
+              },
+              failures: Map.of(_failures),
+              onRetry: () => setState(() => _terminalRequest = null),
+              child: canvas,
+            );
             return Stack(
               fit: StackFit.expand,
               children: [

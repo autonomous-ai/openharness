@@ -228,18 +228,25 @@ void main() {
         reviews++;
         return false;
       };
-      await tester.tap(find.byType(PaneCloseButton));
-      await tester.pumpAndSettle();
-      expect(f.app.activeSwarm.panes, isEmpty);
-      expect(c.terminalAgent('lead'), isNull);
-      expect(find.byType(TerminalPanel), findsNothing);
+      expect(find.byType(PaneCloseButton), findsNothing);
+      await f.app.requestClosePane(f.app.activeSwarm.panes.single.id);
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(f.app.activeSwarm.panes, hasLength(1));
+      expect(c.terminalAgent('lead'), isNotNull);
       expect(reviews, 0);
       expect(
         f.connection.calls.where((call) => call.$1 == 'agent_close'),
         isEmpty,
       );
-      expect(c.snapshot!.agents, hasLength(1));
-      await shot('hidden-terminal');
+      await tester.tap(find.byTooltip('Chat'));
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.tap(find.byTooltip('Add machine'));
+      await tester.pumpAndSettle();
+      expect(find.text('Choose project folder'), findsNothing);
+      expect(find.text('Maximum agents at once'), findsNothing);
+      await shot('add-machine');
+      Navigator.of(tester.element(find.byType(AlertDialog))).pop();
+      await tester.pumpAndSettle();
       // An earlier app/daemon may already have cleaned up this member. Reopening
       // must resume its exact saved conversation before preparing recording.
       f.connection.native = {
@@ -288,6 +295,42 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
       expect(find.byType(TerminalPanel), findsOneWidget);
       await shot('resumed-terminal');
+      final group = (server.state['conversations'] as List)[1] as Map;
+      group['number'] = 1;
+      group['agentIds'] = ['lead-agent', 'worker-a', 'worker-b', 'worker-c'];
+      group['leadId'] = 'lead-agent';
+      for (final name in ['a', 'b', 'c']) {
+        (server.state['agents'] as List).add({
+          'id': 'worker-$name',
+          'name': 'Builder $name',
+          'machineId': 'm',
+          'harnessId': 'native-$name',
+          'contributorId': 'owner',
+          'configuration': {'engine': name == 'b' ? 'pi' : 'codex'},
+        });
+        f.app.machineStates['m']!.agents.add(
+          Agent.fromJson({
+            'id': 'native-$name',
+            'name': 'Builder $name',
+            'engine': name == 'b' ? 'pi' : 'codex',
+            'status': 'stopped',
+            'terminal': {'available': false},
+          }),
+        );
+      }
+      await c.refresh();
+      c.select('offline');
+      c.selectGroupTerminals('offline');
+      for (var i = 0; i < 120 && f.app.activeSwarm.panes.length != 4; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(f.app.activeSwarm.panes, hasLength(4));
+      expect(find.byType(PaneCloseButton), findsNothing);
+      expect(find.text('#1 Offline editing'), findsWidgets);
+      expect(tester.takeException(), isNull);
+      await shot('group-terminals');
+
       await tester.pumpWidget(const SizedBox());
       await c.flush();
       f.app.superTabs.dispose();

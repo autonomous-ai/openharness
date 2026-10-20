@@ -409,7 +409,7 @@ class _SuperTabViewState extends State<SuperTabView> {
                                   for (final group in groups)
                                     ListTile(
                                       title: Text(
-                                        group.title,
+                                        group.label,
                                         style: DesktopChrome.control(),
                                       ),
                                       onTap: () =>
@@ -463,7 +463,7 @@ class _SuperTabViewState extends State<SuperTabView> {
                         selected: c.selectedId == group.id,
                         selectedTileColor: DesktopChrome.activeSelection,
                         title: Text(
-                          group.title,
+                          group.label,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: DesktopChrome.control(
@@ -572,20 +572,86 @@ class _SuperTabViewState extends State<SuperTabView> {
             onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
           ),
         Expanded(
-          child: Text(
-            group?.title ?? 'Loading conversation…',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: DesktopChrome.text(medium: true),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: group == null
+                ? Text('Loading conversation…', style: DesktopChrome.text())
+                : PopupMenuButton<String>(
+                    key: const ValueKey('super-group-options'),
+                    tooltip: 'Workgroup options',
+                    position: PopupMenuPosition.under,
+                    onSelected: (action) =>
+                        unawaited(_groupAction(action, group)),
+                    itemBuilder: (_) => [
+                      const PopupMenuItem(
+                        value: 'work',
+                        child: Text('Work details'),
+                      ),
+                      if (c.snapshot?.conversations.any((g) => g.archived) ==
+                          true)
+                        const PopupMenuItem(
+                          value: 'archived',
+                          child: Text('Archived conversations'),
+                        ),
+                      if (c.canWrite && !c.hasPendingAction && !c.saving) ...[
+                        const PopupMenuItem(
+                          value: 'rename',
+                          child: Text('Rename'),
+                        ),
+                        if (group.id != 'lead')
+                          PopupMenuItem(
+                            value: 'archive',
+                            enabled:
+                                group.assignment == null ||
+                                const [
+                                  'done',
+                                  'stopped',
+                                ].contains(group.assignment!['status']),
+                            child: Text(
+                              group.archived
+                                  ? 'Reopen conversation'
+                                  : 'Archive',
+                            ),
+                          ),
+                      ],
+                    ],
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 8,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              group.label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: DesktopChrome.text(medium: true),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Icon(
+                            AppIcons.chevronDown,
+                            size: 16,
+                            color: DesktopChrome.muted,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
           ),
         ),
-        TextButton(
+        AppIconButton(
           key: const ValueKey('super-chat'),
-          style: TextButton.styleFrom(
-            foregroundColor: !_terminalsVisible && !_showPullRequests
-                ? DesktopChrome.accent
-                : DesktopChrome.muted,
-          ),
+          icon: AppIcons.messageSquareText,
+          size: 20,
+          tooltip: 'Chat',
+          selected: !_terminalsVisible && !_showPullRequests,
+          color: !_terminalsVisible && !_showPullRequests
+              ? DesktopChrome.accent
+              : DesktopChrome.muted,
           onPressed: () {
             setState(() => _showPullRequests = false);
             widget.onCloseTerminal?.call();
@@ -593,11 +659,14 @@ class _SuperTabViewState extends State<SuperTabView> {
               if (mounted) _focus.requestFocus();
             });
           },
-          child: const Text('Chat'),
         ),
+        const SizedBox(width: 4),
         AppIconButton(
+          key: const ValueKey('super-terminals'),
           icon: AppIcons.terminal,
+          size: 20,
           tooltip: 'Group terminals (${group?.agentIds.length ?? 0})',
+          selected: _terminalsVisible,
           color: _terminalsVisible ? DesktopChrome.accent : DesktopChrome.muted,
           onPressed: group?.agentIds.isNotEmpty == true
               ? () {
@@ -606,53 +675,27 @@ class _SuperTabViewState extends State<SuperTabView> {
                 }
               : null,
         ),
-        TextButton(
-          style: TextButton.styleFrom(
-            foregroundColor: _showPullRequests
-                ? DesktopChrome.accent
-                : DesktopChrome.muted,
-          ),
+        const SizedBox(width: 4),
+        AppIconButton(
+          key: const ValueKey('super-pull-requests'),
+          icon: AppIcons.gitPullRequest,
+          size: 20,
+          tooltip: 'Pull requests',
+          selected: !_terminalsVisible && _showPullRequests,
+          color: !_terminalsVisible && _showPullRequests
+              ? DesktopChrome.accent
+              : DesktopChrome.muted,
           onPressed: () {
             widget.onCloseTerminal?.call();
             setState(() => _showPullRequests = true);
           },
-          child: const Text('PRs'),
         ),
         if (!showRoster)
           AppIconButton(
             icon: AppIcons.users,
             tooltip: 'Members and machines',
+            selected: _rosterOpen,
             onPressed: () => setState(() => _rosterOpen = !_rosterOpen),
-          ),
-        if (group != null)
-          PopupMenuButton<String>(
-            tooltip: 'Conversation options',
-            icon: const Icon(AppIcons.ellipsis, size: 18),
-            onSelected: (action) => unawaited(_groupAction(action, group)),
-            itemBuilder: (_) => [
-              const PopupMenuItem(value: 'work', child: Text('Work details')),
-              if (c.snapshot?.conversations.any((g) => g.archived) == true)
-                const PopupMenuItem(
-                  value: 'archived',
-                  child: Text('Archived conversations'),
-                ),
-              if (c.canWrite && !c.hasPendingAction && !c.saving) ...[
-                const PopupMenuItem(value: 'rename', child: Text('Rename')),
-                if (group.id != 'lead')
-                  PopupMenuItem(
-                    value: 'archive',
-                    enabled:
-                        group.assignment == null ||
-                        const [
-                          'done',
-                          'stopped',
-                        ].contains(group.assignment!['status']),
-                    child: Text(
-                      group.archived ? 'Reopen conversation' : 'Archive',
-                    ),
-                  ),
-              ],
-            ],
           ),
       ],
     ),
@@ -778,6 +821,15 @@ class _SuperTabViewState extends State<SuperTabView> {
       author: message.authorId == c.accountId && !message.fromAgent
           ? 'You'
           : _authorName(message),
+      references: {
+        for (final g in c.snapshot?.conversations ?? <SuperTabConversation>[])
+          if (g.number != null) g.number!: g.id,
+      },
+      onOpenGroup: (id) {
+        setState(() => _showPullRequests = false);
+        c.select(id);
+        c.selectTerminal(id, null);
+      },
       agent: agent,
       onOpenAgent: agent == null ? null : () => _openAgent(agent),
       machineName: agent == null ? null : widget.machineName(agent.machineId),
@@ -907,46 +959,48 @@ class _SuperTabViewState extends State<SuperTabView> {
                         }
                         return false;
                       },
-                      child: ListView.builder(
-                        controller: _scroll[c.selectedId],
-                        key: PageStorageKey(
-                          'super-messages-${c.tabId}-${c.selectedId}',
+                      child: SelectionArea(
+                        child: ListView.builder(
+                          controller: _scroll[c.selectedId],
+                          key: PageStorageKey(
+                            'super-messages-${c.tabId}-${c.selectedId}',
+                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          itemCount: messages.length + 1,
+                          itemBuilder: (context, index) {
+                            if (index == 0) {
+                              return c.hasOlder(c.selectedId)
+                                  ? Align(
+                                      child: TextButton(
+                                        onPressed: () => unawaited(_earlier()),
+                                        child: const Text('Earlier messages'),
+                                      ),
+                                    )
+                                  : const SizedBox.shrink();
+                            }
+                            final message = messages[index - 1];
+                            final previous = index > 1
+                                ? messages[index - 2]
+                                : null;
+                            final time = message.createdAt;
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                if (time != null &&
+                                    !DateUtils.isSameDay(
+                                      time.toLocal(),
+                                      previous?.createdAt?.toLocal(),
+                                    ))
+                                  _date(time),
+                                _message(
+                                  message,
+                                  grouped.contains(message.id),
+                                  byId,
+                                ),
+                              ],
+                            );
+                          },
                         ),
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        itemCount: messages.length + 1,
-                        itemBuilder: (context, index) {
-                          if (index == 0) {
-                            return c.hasOlder(c.selectedId)
-                                ? Align(
-                                    child: TextButton(
-                                      onPressed: () => unawaited(_earlier()),
-                                      child: const Text('Earlier messages'),
-                                    ),
-                                  )
-                                : const SizedBox.shrink();
-                          }
-                          final message = messages[index - 1];
-                          final previous = index > 1
-                              ? messages[index - 2]
-                              : null;
-                          final time = message.createdAt;
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              if (time != null &&
-                                  !DateUtils.isSameDay(
-                                    time.toLocal(),
-                                    previous?.createdAt?.toLocal(),
-                                  ))
-                                _date(time),
-                              _message(
-                                message,
-                                grouped.contains(message.id),
-                                byId,
-                              ),
-                            ],
-                          );
-                        },
                       ),
                     ),
                     if (newCount > 0)

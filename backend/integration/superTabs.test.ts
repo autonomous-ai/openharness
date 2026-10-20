@@ -772,3 +772,13 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await expect(run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)).rejects.toMatchObject({ code: 'RATE_LIMITED', status: 429 })
   })
 })
+
+it('allocates workgroup numbers transactionally and replays the same number after a lost reply', async () => {
+  const tab = (await store.create(owner, randomUUID(), 'Numbered work')).id
+  const operations = [randomUUID(), randomUUID(), randomUUID()]
+  const command: Command = { type: 'conversation.create', title: 'Work', brief: '', checks: [] }
+  const results = await Promise.all(operations.map(id => run(tab, command, owner, undefined, id)))
+  expect(results.map(r => r.result.number).sort()).toEqual([1, 2, 3])
+  expect((await run(tab, command, owner, undefined, operations[0])).result).toEqual(results[0]!.result)
+  expect((await store.read(owner, tab)).state.conversations.map(c => c.number)).toEqual([undefined, 1, 2, 3])
+})

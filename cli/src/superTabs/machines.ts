@@ -49,7 +49,7 @@ export class ContributedMachines {
             deviceType: typeof resources.deviceType === 'string' ? resources.deviceType : null,
             chip: typeof resources.chip === 'string' ? resources.chip : null, os: typeof resources.os === 'string' ? resources.os : null,
             gpuPercent: gpus.length ? Math.max(...gpus) : null },
-          quotas: (Array.isArray(pool.engines) ? pool.engines : []).filter((e): e is string => e === 'claude' || e === 'codex').map(engine => {
+          quotas: (Array.isArray(pool.engines) ? pool.engines : []).filter((e): e is string => typeof e === 'string').map(engine => {
             const q = quotaOf(usage, engine, false)
             return { engine, known: q.known, windows: q.windows }
           }), runningHarnessIds: ids.filter(id => !!this.core.agents.byAgent(id) && !stopped.includes(id)), stoppedHarnessIds: stopped }

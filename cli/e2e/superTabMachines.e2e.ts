@@ -57,7 +57,7 @@ it('queues a teammate start without granting general machine access and resumes 
     }
     if (path.includes('/hosts/')) return { data: path.endsWith('/assignments') ? [] : agents.filter(a => a.machineId === caller.machineId).map(agent => ({ tabId: 'pool-tab', agent, observers: [] })) }
     if (path.includes('/machines/')) { expect(caller.account).toBe('member'); expect(body.generation).toBe(generation); observations++; return { data: { revision: observations } } }
-    if (path === '/api/super-tabs/pool-tab') return { data: { state: { id: 'pool-tab', agents }, revision: observations } }
+    if (path === '/api/super-tabs/pool-tab') return { data: { state: { id: 'pool-tab', agents, project: { machineId: memberMachine.machineId, cwd: project, repositoryUrl: null } }, revision: observations } }
     if (path.includes('/starts/')) return { data: starts.get(path.split('/').at(-1)!) }
     if (path.endsWith('/commands')) {
       const c = body.command
@@ -77,6 +77,18 @@ it('queues a teammate start without granting general machine access and resumes 
   await Promise.all(daemons.map(d => d.start()))
   await until('both fixture accounts connected', () => backend.nodeUp(leadMachine.machineId) && backend.nodeUp(memberMachine.machineId), 30000)
   const onA = await LocalClient.connect(a, { machineId: leadMachine.machineId }), onB = await LocalClient.connect(b, { machineId: memberMachine.machineId }); clients.push(onA, onB)
+  const setup = { action: 'prepareContribution', tabId: 'pool-tab', operationId: 'fixture-setup' }
+  const prepared = await until('one-field machine preparation', async () => {
+    const value = await onB.request('super_tabs', setup, 30000)
+    expect(value.error, JSON.stringify(value)).toBeUndefined()
+    return value.state === 'ready' ? value : null
+  }, 45000, 250)
+  expect(prepared.cwd).toBe(project)
+  expect(prepared.engines).toEqual(expect.arrayContaining(['claude', 'codex']))
+  expect(prepared.maxAgents).toBeGreaterThan(0)
+  expect((await onB.request('agents_list')).agents).toHaveLength(0)
+  const { requestId: _requestId, ...receipt } = prepared
+  expect(await onB.request('super_tabs', setup)).toMatchObject(receipt)
   const lead = await onA.request('agent_create', { engine: 'claude', cwd: a.projectsDir }, 90000)
   expect(lead.error, JSON.stringify(lead)).toBeUndefined()
   const leadId = id(leadMachine.machineId, lead.agent.id)

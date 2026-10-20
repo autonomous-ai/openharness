@@ -2,19 +2,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/super_tabs/pane.dart';
 import 'package:harness/super_tabs/workspace.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 
 void main() {
   testWidgets(
-    'group terminals show both members and closing one preserves the other',
+    'group terminals keep all members when opening one and ignore pane close',
     (tester) async {
       final f = SuperTabLaunchFixture();
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
       final state = f.connection.server.state;
       state['agents'] = [
-        for (final id in ['a', 'b'])
+        for (final id in ['a', 'b', 'c', 'd'])
           {
             'id': id,
             'name': id,
@@ -24,14 +25,17 @@ void main() {
             'configuration': {'engine': 'codex'},
           },
       ];
-      (state['conversations'] as List)[1]['agentIds'] = ['a', 'b'];
+      (state['conversations'] as List)[1]['agentIds'] = ['a', 'b', 'c', 'd'];
       f.app.machineStates['m']!.agents = [
-        for (final id in ['a', 'b'])
+        for (final id in ['a', 'b', 'c', 'd'])
           Agent.fromJson({
             'id': 'native-$id',
             'name': id,
             'engine': 'codex',
-            'terminal': {'available': true},
+            'status': ['c', 'd'].contains(id) ? 'stopped' : 'working',
+            'terminal': {
+              'available': !['c', 'd'].contains(id),
+            },
           }),
       ];
       final c = await f.app.superTabs.open(tabId);
@@ -70,7 +74,10 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('b needs you').first);
       await tester.pumpAndSettle();
-      expect(f.app.activeSwarm.panes.single.agentId, 'native-b');
+      expect(
+        f.app.activeSwarm.panes.map((p) => p.agentId),
+        unorderedEquals(['native-a', 'native-b', 'native-c', 'native-d']),
+      );
       await f.app.handleMachineEventForTest('m', {
         'type': 'commander_question_close',
         'agentId': 'native-b',
@@ -84,14 +91,23 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         f.app.activeSwarm.panes.map((p) => p.agentId),
-        unorderedEquals(['native-a', 'native-b']),
+        unorderedEquals(['native-a', 'native-b', 'native-c', 'native-d']),
       );
       await f.app.requestClosePane(
         f.app.activeSwarm.panes.firstWhere((p) => p.agentId == 'native-a').id,
       );
       await tester.pumpAndSettle();
-      expect(f.app.activeSwarm.panes.single.agentId, 'native-b');
-      expect(c.terminalAgents('offline').single.id, 'b');
+      expect(
+        f.app.activeSwarm.panes.map((p) => p.agentId),
+        unorderedEquals(['native-a', 'native-b', 'native-c', 'native-d']),
+      );
+      expect(c.terminalAgents('offline').map((a) => a.id), [
+        'a',
+        'b',
+        'c',
+        'd',
+      ]);
+      expect(f.connection.calls.where((c) => c.$1 == 'agent_resume'), isEmpty);
       expect(
         f.connection.calls.where(
           (c) => c.$1 == 'agent_close' || c.$1 == 'agent_create',
@@ -169,8 +185,8 @@ void main() {
         c.selectTerminal('offline', 'worker');
         await tester.pumpAndSettle();
         expect(calls.where((call) => call.$1 == 'agent_resume'), isEmpty);
-        expect(c.terminalAgent('offline'), isNull);
-        expect(f.app.activeSwarm.panes, isEmpty);
+        expect(c.terminalAgent('offline')?.id, 'worker');
+        expect(f.app.activeSwarm.panes.single.agentId, 'native-worker');
       }
       await openTerminal();
       expect(calls.where((call) => call.$1 == 'agent_create'), isEmpty);
@@ -179,7 +195,7 @@ void main() {
         hasLength(scenario.viewer ? 0 : 1),
       );
       if (scenario.fail) {
-        expect(c.terminalAgent('offline'), isNull);
+        expect(c.terminalAgent('offline')?.id, 'worker');
         expect(
           calls.where((call) => call.$2['action'] == 'prepareNative'),
           isEmpty,
@@ -191,7 +207,7 @@ void main() {
           ),
           isEmpty,
         );
-        expect(find.textContaining('did not come back'), findsOneWidget);
+        expect(f.app.activeSwarm.panes.single.watchOnly, isTrue);
       } else {
         expect(f.app.activeSwarm.panes.single.agentId, 'native-worker');
         expect(
@@ -300,13 +316,13 @@ void main() {
       await c.refresh();
       await tester.pumpAndSettle();
       expect(f.app.activeSwarm.panes.single.watchOnly, isFalse);
-      // Native pane Close and the narrow Back action have the same personal state.
+      // Individual pane close is disabled; membership owns the pane list.
       await f.app.requestClosePane(f.app.activeSwarm.panes.single.id);
       await tester.pumpAndSettle();
       await c.refresh();
       await tester.pumpAndSettle();
-      expect(c.terminalAgent('lead'), isNull);
-      expect(f.app.activeSwarm.panes, isEmpty);
+      expect(c.terminalAgent('lead')?.id, 'a');
+      expect(f.app.activeSwarm.panes.single.agentId, 'native-a');
       final scopes = f.connection.calls
           .where(
             (call) => (call.$2['path'] as String?)?.endsWith('/native') == true,
@@ -380,9 +396,18 @@ void main() {
       f.connection.failNative = true;
       await tester.pump(const Duration(seconds: 21));
       await tester.pumpAndSettle();
-      expect(c.terminalAgent('lead'), isNull);
-      expect(f.app.activeSwarm.panes, isEmpty);
-      expect(find.textContaining('Terminal sharing paused'), findsOneWidget);
+      expect(c.terminalAgent('lead')?.id, 'a');
+      expect(f.app.activeSwarm.panes.single.agentId, 'native-a');
+      expect(
+        tester.widget<SuperPane>(find.byType(SuperPane)).failures[(
+          'm',
+          'native-a',
+        )],
+        contains('Terminal sharing paused'),
+      );
+      expect(f.app.activeSwarm.panes.single.watchOnly, isTrue);
+      await tester.tap(find.byTooltip('Chat'));
+      await tester.pumpAndSettle();
       expect(
         find.byKey(const ValueKey('super-message-composer')),
         findsOneWidget,

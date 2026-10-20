@@ -207,10 +207,10 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     return ListView(
       padding: const EdgeInsets.only(bottom: 12),
       children: [
-        _heading('Leads · ${leads.length}'),
+        _heading('Leads'),
         for (final agent in leads) _agent(agent),
         _heading(
-          'Humans · ${state?.people.length ?? 0}',
+          'Humans',
           add: c.isOwner ? widget.onInvite : null,
           tooltip: 'Invite people',
         ),
@@ -249,7 +249,13 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
               ),
             ),
           ),
-        _heading('Agents · ${agents.length}'),
+        _heading(
+          'Agents',
+          add: c.canWrite && c.selected != null
+              ? () => widget.onAddAgent(c.selected!)
+              : null,
+          tooltip: 'Add agent',
+        ),
         for (final agent in agents) _agent(agent),
       ],
     );

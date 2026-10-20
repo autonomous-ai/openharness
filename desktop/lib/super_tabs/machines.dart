@@ -13,7 +13,7 @@ import '../state/app_state.dart';
 import '../usage/models_menu_controller.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
-import '../widgets/remote_folder_picker.dart';
+import '../shared/widgets/app_select_field.dart';
 import '../widgets/workspace_subscription_usage.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
@@ -125,242 +125,182 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   Future<void> _contribute({Map<String, dynamic>? existing}) async {
     final app = widget.app;
     if (app == null) return;
-    existing ??= c.pendingCommand?['type'] == 'machine.contribute'
-        ? c.pendingCommand
-        : null;
     final choices = app.machineStates.values
         .where(
           (m) =>
               !m.machine.isShared &&
               !m.machine.isSharedMachine &&
               !m.needsLink &&
-              (m.nodeOnline != false ||
-                  m.machine.machineId == existing?['machineId']),
+              m.nodeOnline != false,
         )
         .toList();
     String? machineId =
         existing?['machineId'] as String? ??
+        choices.where((m) => m.isLocalMachine).firstOrNull?.machine.machineId ??
         choices.firstOrNull?.machine.machineId;
-    String? folder = existing?['cwd'] as String?;
-    var limit = (existing?['maxAgents'] as num?)?.toInt() ?? 2;
-    final engines = {
-      ...(existing?['engines'] as List? ?? const <String>[]).cast<String>(),
-    };
     String? error;
     var busy = false;
-    if (machineId != null) await app.probeEngines(machineId);
-    if (!mounted) return;
+    String? setupId;
     await showAppDialog<void>(
       context: context,
       builder: (context) => SuperTabDialogScope(
         controller: c,
         child: StatefulBuilder(
           builder: (context, update) {
-            final recovering =
-                c.pendingCommand?['type'] == 'machine.contribute';
-            final locked = busy || recovering;
-            final machine = app.stateOf(machineId ?? '');
-            final installed = [
-              'claude',
-              'codex',
-            ].where((e) => machine?.engines[e]?.installed == true).toList();
             Future<void> save() async {
-              if (busy ||
-                  machineId == null ||
-                  folder == null ||
-                  engines.isEmpty) {
-                return;
-              }
+              if (busy || machineId == null) return;
+              final selected = machineId!;
               update(() {
                 busy = true;
                 error = null;
               });
               try {
-                final capability = await app.superTabMachineRequest(
-                  machineId!,
-                  {
-                    'action': 'capacity',
-                    'cwd': folder,
-                    'tools': ['git'],
-                    'devices': [],
-                  },
-                );
-                if (capability['ok'] != true ||
-                    (capability['resources']
-                            as Map?)?['projectDiskFreeBytes'] ==
-                        null) {
-                  throw const SuperTabFailure(
-                    'PROJECT_UNAVAILABLE',
-                    'Choose an available project folder on this machine.',
-                  );
+                // Older tabs can record the project already chosen for their lead.
+                // No folder is inferred across machines from a matching path.
+                if (c.snapshot?.project == null) {
+                  final lead = c.snapshot?.agents
+                      .where((a) => c.snapshot!.isLead(a.id))
+                      .firstOrNull;
+                  final host = lead == null
+                      ? null
+                      : app.stateOf(lead.machineId);
+                  final native = host?.agents
+                      .where((a) => a.id == lead?.harnessId)
+                      .firstOrNull;
+                  final project = native == null
+                      ? null
+                      : host?.projectOf(native);
+                  if (project != null && c.isOwner) {
+                    final recorded = await c.command({
+                      'type': 'tab.project',
+                      'machineId': lead!.machineId,
+                      'project': {
+                        'cwd': project.root ?? project.cwd,
+                        'repositoryUrl': superTabRepositoryUrl(project.remote),
+                      },
+                    });
+                    if (recorded == null) {
+                      throw SuperTabFailure(
+                        'PROJECT_UNAVAILABLE',
+                        c.operationError ??
+                            'Could not read the lead’s project.',
+                      );
+                    }
+                  }
                 }
+                setupId ??= superTabOperationId();
+                final deadline = DateTime.now().add(const Duration(minutes: 5));
+                Map<String, dynamic> prepared;
+                while (true) {
+                  if (!context.mounted || !c.canWrite) return;
+                  prepared = await app.superTabMachineRequest(selected, {
+                    'action': 'prepareContribution',
+                    'tabId': c.tabId,
+                    'operationId': setupId,
+                  });
+                  if (prepared['state'] == 'ready') break;
+                  if (prepared['state'] != 'preparing') {
+                    throw const SuperTabFailure(
+                      'UPDATE_REQUIRED',
+                      'Update Harness on this machine, then try again.',
+                    );
+                  }
+                  if (DateTime.now().isAfter(deadline)) {
+                    throw const SuperTabFailure(
+                      'SETUP_PENDING',
+                      'Project setup is still running. Try again to check its progress.',
+                    );
+                  }
+                  await Future<void>.delayed(const Duration(seconds: 1));
+                }
+                if (!context.mounted || !c.canWrite) return;
+                final machine = app.stateOf(selected);
                 final result = c.pendingCommand?['type'] == 'machine.contribute'
                     ? await c.retry()
                     : await c.command({
                         'type': 'machine.contribute',
-                        'machineId': machineId,
+                        'machineId': selected,
                         'name': machine!.machine.displayName,
-                        'cwd': folder,
-                        'engines': engines.toList()..sort(),
-                        'maxAgents': limit,
+                        'cwd': prepared['cwd'],
+                        'engines': prepared['engines'],
+                        'maxAgents': prepared['maxAgents'],
                       });
                 if (result == null) {
                   throw SuperTabFailure(
                     'CONTRIBUTION_FAILED',
-                    c.operationError ?? 'Could not contribute this machine.',
+                    c.operationError ?? 'Could not add this machine.',
                   );
                 }
-                await app.wakeSuperTabHost(machineId!);
+                await app.wakeSuperTabHost(selected);
                 if (context.mounted) Navigator.pop(context);
               } catch (failure) {
                 if (context.mounted) {
                   update(() {
                     busy = false;
                     error = failure.toString();
+                    if (failure is! SuperTabFailure ||
+                        failure.code != 'SETUP_PENDING') {
+                      setupId = null;
+                    }
                   });
                 }
               }
             }
 
             return AlertDialog(
-              title: const Text('Contribute a machine'),
+              title: const Text('Add machine'),
               content: SizedBox(
-                width: 400,
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (choices.isEmpty)
-                        const Text(
-                          'Connect a computer to Harness first. You can then contribute it here.',
-                        )
-                      else
-                        DropdownButtonFormField<String>(
-                          initialValue: machineId,
-                          decoration: const InputDecoration(
-                            labelText: 'Machine',
-                          ),
-                          items: [
+                width: 360,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (choices.isEmpty)
+                      Text(
+                        'Connect a computer to Harness first.',
+                        style: DesktopChrome.text(),
+                      )
+                    else
+                      AbsorbPointer(
+                        absorbing: busy,
+                        child: AppSelectField<String>(
+                          value: machineId!,
+                          semanticLabel: 'Machine',
+                          options: [
                             for (final m in choices)
-                              DropdownMenuItem(
+                              SelectOption(
                                 value: m.machine.machineId,
-                                child: Text(m.machine.displayName),
+                                label: m.isLocalMachine
+                                    ? 'This Mac'
+                                    : m.machine.displayName,
                               ),
                           ],
-                          onChanged: locked
-                              ? null
-                              : (id) async {
-                                  update(() {
-                                    machineId = id;
-                                    folder = null;
-                                    engines.clear();
-                                  });
-                                  if (id != null) await app.probeEngines(id);
-                                  if (context.mounted) update(() {});
-                                },
+                          onChanged: (id) {
+                            if (busy) return;
+                            update(() {
+                              machineId = id;
+                              setupId = null;
+                              error = null;
+                            });
+                          },
                         ),
-                      const SizedBox(height: 16),
-                      OutlinedButton.icon(
-                        icon: const Icon(AppIcons.folder, size: 16),
-                        label: Text(
-                          folder ?? 'Choose project folder',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        onPressed: locked || machineId == null
-                            ? null
-                            : () async {
-                                final picked = await showRemoteFolderPicker(
-                                  context,
-                                  notifier: app,
-                                  machineId: machineId!,
-                                  initialPath: folder,
-                                  desktop: true,
-                                );
-                                if (context.mounted && picked != null) {
-                                  update(() => folder = picked);
-                                }
-                              },
                       ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Let the lead run agents here using this machine’s signed-in accounts.',
+                      style: DesktopChrome.text(),
+                    ),
+                    if (error != null) ...[
                       const SizedBox(height: 12),
-                      Text(
-                        'Allow the lead to start agents with',
-                        style: DesktopChrome.control(medium: true),
-                      ),
-                      for (final engine in installed)
-                        CheckboxListTile(
-                          contentPadding: EdgeInsets.zero,
-                          dense: true,
-                          title: Row(
-                            children: [
-                              EngineMark(engine: engine, size: 18),
-                              const SizedBox(width: 8),
-                              Text(engineIdentity(engine).label),
-                            ],
-                          ),
-                          subtitle: const Text(
-                            'Account signed in on this machine',
-                          ),
-                          value: engines.contains(engine),
-                          onChanged: locked
-                              ? null
-                              : (value) => update(() {
-                                  if (value == true) {
-                                    engines.add(engine);
-                                  } else {
-                                    engines.remove(engine);
-                                  }
-                                }),
-                        ),
-                      if (installed.isEmpty)
-                        Text(
-                          'No supported engines reported by this machine.',
-                          style: DesktopChrome.metadata(),
-                        ),
-                      const SizedBox(height: 12),
-                      DropdownButtonFormField<int>(
-                        initialValue: limit,
-                        decoration: const InputDecoration(
-                          labelText: 'Maximum agents at once',
-                        ),
-                        items: [
-                          for (final n in [1, 2, 3, 4, 6, 8, 12, 16])
-                            DropdownMenuItem(value: n, child: Text('$n')),
-                        ],
-                        onChanged: locked
-                            ? null
-                            : (n) => update(() => limit = n ?? limit),
-                      ),
-                      if (error != null)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 12),
-                          child: Text(error!),
-                        ),
+                      Text(error!, style: DesktopChrome.metadata()),
                     ],
-                  ),
+                  ],
                 ),
               ),
               actions: [
-                TextButton(
-                  onPressed: busy ? null : () => Navigator.pop(context),
-                  child: const Text('Cancel'),
-                ),
                 FilledButton(
-                  onPressed:
-                      busy ||
-                          machineId == null ||
-                          folder == null ||
-                          engines.isEmpty
-                      ? null
-                      : save,
-                  child: Text(
-                    busy
-                        ? 'Contributing…'
-                        : recovering
-                        ? 'Check contribution'
-                        : 'Contribute',
-                  ),
+                  onPressed: busy || machineId == null ? null : save,
+                  child: Text(busy ? 'Preparing…' : 'Add machine'),
                 ),
               ],
             );
@@ -412,25 +352,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         : minutes < 1440
         ? '${minutes ~/ 60}h ${minutes % 60}m'
         : '${minutes ~/ 1440}d';
-  }
-
-  String? _resetSummary(String detail) {
-    final lines = detail.split('\n');
-    final limiting = lines
-        .where((l) => l.startsWith('Limiting window: '))
-        .firstOrNull
-        ?.substring(17);
-    final line = lines
-        .where(
-          (l) =>
-              l.contains('resets in') &&
-              (limiting == null || l.contains(limiting)),
-        )
-        .firstOrNull;
-    final reset = line == null
-        ? null
-        : RegExp(r'resets in ([^·\n]+)').firstMatch(line)?.group(1)?.trim();
-    return reset == null ? null : 'Resets in $reset';
   }
 
   Widget _machine(String id) {
@@ -518,9 +439,20 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     final diskFree = value?.projectDiskTotalBytes == null
         ? value?.diskFreeBytes
         : value?.projectDiskFreeBytes;
-    final disk = diskTotal == null || diskTotal <= 0 || diskFree == null
+    final memoryFree =
+        value?.memoryTotalBytes == null || value?.memoryUsedBytes == null
         ? null
-        : (1 - diskFree / diskTotal) * 100;
+        : (value!.memoryTotalBytes! - value.memoryUsedBytes!).clamp(
+            0,
+            value.memoryTotalBytes!,
+          );
+    String available(double? used) =>
+        resourcePercent(used == null ? null : (100 - used).clamp(0, 100));
+    String compactBytes(num? bytes) =>
+        resourceBytes(bytes?.toDouble())
+            .replaceAll(' GB', 'G')
+            .replaceAll(' TB', 'T')
+            .replaceAll(' MB', 'M');
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
       child: Column(
@@ -541,6 +473,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                         : online
                         ? 'Online'
                         : 'Offline',
+                    if (value?.deviceType != null) value!.deviceType!,
+                    if (value?.chip != null) value!.chip!,
+                    if (value?.os != null) value!.os!,
                     if (shared?['cwd'] != null) shared!['cwd'] as String,
                     if (allowed != null) 'Engines: ${allowed.join(', ')}',
                     'RAM: ${resourceBytes(value?.memoryTotalBytes)}',
@@ -595,91 +530,31 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 ],
               ),
             ),
-            child: Row(
-              children: [
-                Icon(
-                  AppIcons.monitor,
-                  size: 15,
-                  color: online
-                      ? DesktopChrome.foreground
-                      : DesktopChrome.muted,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: DesktopChrome.control(medium: true),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  paused
-                      ? 'Paused'
-                      : !online
-                      ? 'Offline'
-                      : shared == null
-                      ? '$running ${running == 1 ? 'agent' : 'agents'}'
-                      : '$running/${shared['maxAgents']}',
-                  style: DesktopChrome.metadata(),
-                ),
-              ],
+            child: Text(
+              [
+                name,
+                if (person != null) superTabPersonName(person.email),
+                paused
+                    ? 'Paused'
+                    : !online
+                    ? 'Offline'
+                    : '$running ${running == 1 ? 'agent' : 'agents'}',
+              ].join('  '),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.control(medium: true),
             ),
           ),
-          if (person != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                superTabPersonName(person.email),
-                style: DesktopChrome.metadata(),
-              ),
+          const SizedBox(height: 4),
+          Tooltip(
+            message:
+                'Available capacity\nCPU and GPU: idle percentage at the latest reading\nRAM: ${resourceBytes(memoryFree?.toDouble())} free of ${resourceBytes(value?.memoryTotalBytes)}\nSSD: ${resourceBytes(diskFree)} free of ${resourceBytes(diskTotal)}',
+            child: Text(
+              'CPU ${available(value?.cpuPercent)}  GPU ${available(value?.busiestGpu?.utilizationPercent)}  RAM ${compactBytes(memoryFree)}  SSD ${compactBytes(diskFree)}',
+              style: DesktopChrome.metadata(),
             ),
-          if (value != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                [
-                  if (value.deviceType != null) value.deviceType!,
-                  if (value.chip != null) value.chip!,
-                  if (value.os != null) value.os!,
-                  '${resourceBytes(value.memoryTotalBytes)} RAM',
-                ].join(' · '),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: DesktopChrome.metadata(),
-              ),
-            ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              for (final metric in [
-                ('CPU', value?.cpuPercent),
-                ('GPU', value?.busiestGpu?.utilizationPercent),
-                ('RAM', value?.memoryPercent),
-                ('Disk', disk),
-              ])
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(metric.$1, style: DesktopChrome.metadata()),
-                      Text(
-                        resourcePercent(metric.$2),
-                        style: DesktopChrome.text(medium: true),
-                      ),
-                    ],
-                  ),
-                ),
-            ],
           ),
-          const SizedBox(height: 6),
-          Text(
-            'Available: ${resourceBytes(value?.memoryTotalBytes == null ? null : value!.memoryTotalBytes! - value.memoryUsedBytes!)} RAM · ${resourceBytes(value?.projectDiskFreeBytes ?? value?.diskFreeBytes)} disk',
-            style: DesktopChrome.metadata(),
-          ),
-          const SizedBox(height: 10),
-          Text('Subscription remaining', style: DesktopChrome.metadata()),
+          const SizedBox(height: 4),
           if (usage.accounts.isEmpty)
             Text('—', style: DesktopChrome.control())
           else
@@ -690,29 +565,20 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 for (final account in usage.accounts)
                   Tooltip(
                     message: account.detail,
-                    child: Column(
+                    child: Row(
                       mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            EngineMark(engine: account.engine, size: 16),
-                            const SizedBox(width: 6),
-                            Text(
-                              account.figure,
-                              style: DesktopChrome.control(
-                                medium: true,
-                                color:
-                                    account.tone == WorkspaceUsageTone.exhausted
-                                    ? grid.AppPalette.warn
-                                    : null,
-                              ),
-                            ),
-                          ],
+                        EngineMark(engine: account.engine, size: 16),
+                        const SizedBox(width: 6),
+                        Text(
+                          account.figure,
+                          style: DesktopChrome.control(
+                            medium: true,
+                            color: account.tone == WorkspaceUsageTone.exhausted
+                                ? grid.AppPalette.warn
+                                : null,
+                          ),
                         ),
-                        if (_resetSummary(account.detail) case final reset?)
-                          Text(reset, style: DesktopChrome.metadata()),
                       ],
                     ),
                   ),
@@ -732,7 +598,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           children: [
             Expanded(
               child: Text(
-                'Machines · ${_ids.length}',
+                'Machines',
                 style: DesktopChrome.metadata().copyWith(
                   fontWeight: FontWeight.w600,
                 ),
@@ -741,7 +607,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             if (c.canWrite && widget.app != null)
               AppIconButton(
                 icon: AppIcons.plus,
-                tooltip: 'Contribute a machine',
+                tooltip: 'Add machine',
                 onPressed: () => unawaited(_contribute()),
               ),
           ],
@@ -753,7 +619,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Text(
-                    'Contribute a machine so the lead can start agents.',
+                    'Add a machine for the lead to use.',
                     textAlign: TextAlign.center,
                     style: DesktopChrome.metadata(),
                   ),

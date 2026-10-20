@@ -23,13 +23,13 @@ const resource = z.object({
   deviceType: z.string().max(120).nullable(), chip: z.string().max(120).nullable(), os: z.string().max(120).nullable(),
   gpuPercent: percent,
 }).strict()
-const quota = z.object({ engine: z.enum(['claude', 'codex']), known: z.boolean(),
+const quota = z.object({ engine: z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), known: z.boolean(),
   windows: z.array(z.object({ name: z.string().max(80), usedPercent: z.number().min(0).max(100),
     resetsAt: z.union([z.string().max(80), z.number().finite(), z.null()]) }).strict()).max(10),
 }).strict()
 export const machineObservationSchema = z.object({ generation: z.string().max(160), resources: resource,
   tools: z.record(z.string().max(80), z.boolean()).refine(v => Object.keys(v).length <= 20),
-  quotas: z.array(quota).max(2), runningHarnessIds: z.array(z.string().max(160)).max(1000),
+  quotas: z.array(quota).max(32), runningHarnessIds: z.array(z.string().max(160)).max(1000),
   stoppedHarnessIds: z.array(z.string().max(160)).max(1000),
 }).strict()
 export type MachineObservation = z.infer<typeof machineObservationSchema>

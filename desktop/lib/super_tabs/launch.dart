@@ -174,6 +174,7 @@ class SuperTabLaunch {
         'Waiting for the new harness to appear on its machine.',
       );
     }
+    final project = native.project ?? app.stateOf(machine)?.projectOf(native);
     saved['command'] ??= {
       'type': 'agent.add',
       'conversationId': saved['conversationId'],
@@ -181,6 +182,11 @@ class SuperTabLaunch {
       'harnessId': harnessId,
       'name': saved['lead'] == true ? 'Lead' : native.displayName,
       'lead': saved['lead'],
+      if (saved['lead'] == true && project != null)
+        'project': {
+          'cwd': project.root ?? project.cwd,
+          'repositoryUrl': superTabRepositoryUrl(project.remote),
+        },
       'configuration': {
         'engine': native.engine ?? '',
         'model': native.modelName,

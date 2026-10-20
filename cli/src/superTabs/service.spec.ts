@@ -10,7 +10,7 @@ vi.mock('../lib/jev/jevClient.js', async importOriginal => ({ ...await importOri
 const createJev = vi.mocked(createJevDecide)
 
 const owner = { local: true, owner: true }, visitor = { local: false, owner: false }
-function setup(options: { jev?: () => JevDecide } = {}) {
+function setup(options: { jev?: () => JevDecide; prepareContribution?: typeof import('./contribution.js').prepareContribution } = {}) {
   const agentId = createHash('sha256').update(JSON.stringify(['machine-1', 'native'])).digest('hex').slice(0, 24)
   const agent = { id: agentId, machineId: 'machine-1', harnessId: 'native' }
   const call = vi.fn(async () => ({ status: 200, body: { success: true, data: { state: { agents: [agent] } } } }))
@@ -283,4 +283,19 @@ it('refuses routing to anyone but the group Lead, and past 30 decisions in the r
   routing(t, { not: 'a list' } as never)
   expect(await ask('g1')).toMatchObject({ ok: true })
   expect(decide).toHaveBeenCalledTimes(2)
+})
+
+it('prepares machines only for their owner and clears setup receipts on disconnect', async () => {
+  const prepareContribution = vi.fn(async () => ({ ok: true, state: 'ready' }))
+  const t = setup({ prepareContribution })
+  const request = { action: 'prepareContribution', tabId: 'tab', operationId: 'setup' }
+  expect(await t.ask(request, visitor)).toEqual({ error: 'OWNER_REQUIRED' })
+  expect(await t.ask(request, { local: false, owner: true, accountOwner: false })).toEqual({ error: 'OWNER_REQUIRED' })
+  expect(prepareContribution).not.toHaveBeenCalled()
+  expect(await t.ask(request, owner)).toMatchObject({ state: 'preparing' })
+  expect(await t.ask(request, owner)).toMatchObject({ state: 'ready' })
+  expect(prepareContribution).toHaveBeenCalledOnce()
+  t.port.disconnected()
+  await t.ask(request, owner)
+  expect(prepareContribution).toHaveBeenCalledTimes(2)
 })

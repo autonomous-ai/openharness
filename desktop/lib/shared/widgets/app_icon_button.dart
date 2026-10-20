@@ -18,9 +18,13 @@ class AppIconButton extends StatefulWidget {
     this.destructive = false,
     this.spinning = false,
     this.focusNode,
+    this.selected,
   });
 
   final IconData icon;
+
+  /// Navigation controls keep a visible well and selected semantics.
+  final bool? selected;
   final VoidCallback? onPressed;
   final String? tooltip;
 
@@ -166,6 +170,7 @@ class _AppIconButtonState extends State<AppIconButton>
 
     return Semantics(
       value: widget.spinning ? 'Working' : null,
+      selected: widget.selected,
       child: IconButton(
         focusNode: widget.focusNode,
         tooltip: widget.tooltip,
@@ -208,7 +213,11 @@ class _AppIconButtonState extends State<AppIconButton>
                 ? active
                 : resting;
           }),
-          backgroundColor: const WidgetStatePropertyAll(Colors.transparent),
+          backgroundColor: WidgetStatePropertyAll(
+            widget.selected == true
+                ? AppSurface.selectedFill
+                : Colors.transparent,
+          ),
           overlayColor: WidgetStateProperty.resolveWith((states) {
             if (states.contains(WidgetState.disabled)) {
               return Colors.transparent;

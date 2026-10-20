@@ -5,6 +5,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/super_tabs/roster.dart';
+import 'package:harness/shared/widgets/app_icon_button.dart';
 
 import 'support/super_tab_fixture.dart';
 
@@ -80,7 +81,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
-    await tester.tap(find.byTooltip('Conversation options'));
+    await tester.tap(find.byTooltip('Workgroup options'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Archived conversations'));
     await tester.pumpAndSettle();
@@ -102,7 +103,7 @@ void main() {
           .enabled,
       isFalse,
     );
-    await tester.tap(find.byTooltip('Conversation options'));
+    await tester.tap(find.byTooltip('Workgroup options'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Reopen conversation'));
     await tester.pumpAndSettle();
@@ -278,7 +279,7 @@ void main() {
         );
         await tester.pumpAndSettle();
         if (rename) {
-          await tester.tap(find.byTooltip('Conversation options'));
+          await tester.tap(find.byTooltip('Workgroup options'));
           await tester.pumpAndSettle();
           await tester.tap(find.text('Rename'));
         } else {
@@ -354,7 +355,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('Humans · 20'), findsOneWidget);
+      expect(find.text('Humans'), findsOneWidget);
       final member = find.byKey(const ValueKey('super-member-agent-0'));
       await tester.scrollUntilVisible(
         member,
@@ -407,10 +408,33 @@ void main() {
       expect(find.text('Review this result.'), findsNothing);
       expect(find.byKey(const ValueKey('super-group-lead')), findsOneWidget);
       expect(find.byType(SuperTabRoster), findsOneWidget);
+      expect(
+        tester
+            .widget<AppIconButton>(
+              find.byKey(const ValueKey('super-terminals')),
+            )
+            .selected,
+        isTrue,
+      );
+      expect(
+        tester
+            .widget<AppIconButton>(find.byKey(const ValueKey('super-chat')))
+            .selected,
+        isFalse,
+      );
+      expect(
+        tester
+            .widget<AppIconButton>(
+              find.byKey(const ValueKey('super-pull-requests')),
+            )
+            .selected,
+        isFalse,
+      );
+      expect(find.byTooltip('Conversation options'), findsNothing);
       await tester.binding.setSurfaceSize(const Size(800, 700));
       await tester.pumpAndSettle();
       expect(find.text('Native terminal fixture'), findsOneWidget);
-      await tester.tap(find.text('Chat'));
+      await tester.tap(find.byTooltip('Chat'));
       expect(closed, isTrue);
       expect(
         server.posts,

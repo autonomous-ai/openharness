@@ -26,9 +26,13 @@ class SuperTabMessageRow extends StatefulWidget {
     this.grouped = false,
     this.onReply,
     this.onOpenAgent,
+    this.references = const {},
+    this.onOpenGroup,
   });
 
   final SuperTabMessage message;
+  final Map<int, String> references;
+  final ValueChanged<String>? onOpenGroup;
   final String author;
   final SuperTabAgent? agent;
   final String? machineName;
@@ -269,7 +273,11 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     style: DesktopChrome.metadata(),
                                   ),
                                 ),
-                              SuperTabMessageText(message.text),
+                              SuperTabMessageText(
+                                message.text,
+                                references: widget.references,
+                                onOpenGroup: widget.onOpenGroup,
+                              ),
                               SuperTabPullRequestLinks(message.text),
                               ...widget.receipts,
                             ],

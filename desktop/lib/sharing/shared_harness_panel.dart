@@ -39,7 +39,7 @@ class SharedHarnessPanel extends StatefulWidget {
   final TerminalPane pane;
   final SharedHarness grant;
   final bool hasAccess, visible;
-  final VoidCallback onClose;
+  final VoidCallback? onClose;
   final bool link;
   final String? linkEnvironment;
   final VoidCallback? onSignIn;
