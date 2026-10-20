@@ -5911,8 +5911,12 @@ impl App {
             let local = self.fleet.local_id.clone();
             let own_work = self.tabs.iter().flat_map(|t| t.panes())
                 .any(|id| self.panes.get(&id).is_some_and(|p| p.machine_id == local));
+            // The welcome waits for this computer's daemon to be up, not only linked: a sign-in
+            // restarts it, and a shell asked for meanwhile went to hn's own local shells
+            // (`shell_machine`) — OpenCode then ran where no phone or desktop could see it.
+            let daemon_ready = self.link(&self.fleet.local_id).is_some() && !self.daemon_down;
             if (self.os_live || self.os_first_use) && self.tabs.len() == 1 && self.tabs[0].root.is_none() {
-                if self.link(&self.fleet.local_id).is_none() { return }
+                if !daemon_ready { return }
                 self.shell_asked = true;
                 // The welcome reply may arrive after another terminal is requested.
                 // Fill its original tab instead of whichever tab is now active.
@@ -5922,7 +5926,7 @@ impl App {
                 // Asked again every tick until the Wi-Fi form gives the tab back.
             } else if self.os_first_use && !self.os_live && !own_work {
                 // Only other computers' tabs on the desk: the welcome still comes, in a tab of its own.
-                if self.link(&self.fleet.local_id).is_none() { return }
+                if !daemon_ready { return }
                 self.shell_asked = true;
                 crate::input::new_shell_from(self, None, Placement::Tab, None, Some("/usr/bin/hn-os welcome".into()));
             } else {
@@ -6823,6 +6827,29 @@ mod scroll_settle_tests {
 #[cfg(test)]
 mod recovery_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn os_welcome_waits_out_a_daemon_restarting_after_the_sign_in() {
+        // Signed in at the screen: the daemon restarts, and a welcome asked for meanwhile ran in
+        // hn's own local shells, where no phone or desktop could see its OpenCode.
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19791, sink, (80, 24));
+        app.handed_over = true;
+        app.os_session = true;
+        app.os_first_use = true;
+        app.desk_answered = true;
+        app.fleet.local_id = "this-computer".into();
+        app.fleet.machines.push(Machine { shared: false, id: "this-computer".into(), name: "me".into(), local: true, status: "running".into(), reach: Reach::Ready });
+        let link = Link::spawn(app.port, "this-computer", 1, app.sink.clone());
+        app.links.insert("this-computer".into(), LinkState { link: Some(link), generation: 1, attempts: 0, retry_at: None });
+        app.daemon_down = true;
+        app.maybe_start_shell();
+        assert!(!app.shell_asked, "not while its daemon is down");
+        app.daemon_down = false;
+        app.maybe_start_shell();
+        assert!(app.shell_asked, "once it is back");
+        app.links["this-computer"].link.as_ref().unwrap().close();
+    }
 
     #[tokio::test]
     async fn os_first_use_skips_its_welcome_only_for_work_of_this_computer() {
