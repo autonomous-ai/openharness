@@ -1,4 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:xterm/xterm.dart';
+import 'package:harness/widgets/terminal_panel.dart';
+import 'package:harness/terminal/terminal_binary.dart';
+
+import 'terminal_clipboard_test.dart' show liveSession;
+import 'swarm_state_test.dart' show createApp;
+
 import 'package:flutter/foundation.dart';
 import 'package:harness/shortcuts/keymap.dart';
 import 'package:harness/shortcuts/keymap_commands.dart';
@@ -49,7 +56,7 @@ void main() {
     swarmMenuBus.send('keymapState', {'contexts': {}});
   });
 
-  Future<void> pumpBar(WidgetTester tester) async {
+  Future<void> pumpBar(WidgetTester tester, {Widget? body}) async {
     tester.view.physicalSize = const Size(900 * 2, 700 * 2);
     tester.view.devicePixelRatio = 2;
     addTearDown(tester.view.reset);
@@ -64,7 +71,7 @@ void main() {
                 onAction: (action) async => appActions.add(action),
                 visible: true,
               ),
-              const Expanded(child: SizedBox.shrink()),
+              Expanded(child: body ?? const SizedBox.shrink()),
             ],
           ),
         ),
@@ -96,6 +103,241 @@ void main() {
     }
     fail('no tappable widget for $key');
   }
+
+  String? clipboard;
+  setUp(() {
+    clipboard = 'paste me';
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+          if (call.method == 'Clipboard.getData') return {'text': clipboard};
+          if (call.method == 'Clipboard.hasStrings') return {'value': true};
+          if (call.method == 'Clipboard.setData') {
+            clipboard = (call.arguments as Map)['text'] as String?;
+          }
+          return null;
+        });
+  });
+  tearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, null);
+  });
+
+  for (final command in ['copy', 'cut', 'paste', 'select-all']) {
+    testWidgets('Windows Edit $command edits the original real TextField', (
+      tester,
+    ) async {
+      final controller = TextEditingController(text: 'hello world');
+      addTearDown(controller.dispose);
+      await pumpBar(tester, body: TextField(controller: controller));
+      await tester.tap(find.byType(TextField));
+      controller.selection = const TextSelection(
+        baseOffset: 0,
+        extentOffset: 5,
+      );
+      await tester.pump();
+      await tap(tester, 'menu-bar-edit');
+      for (final entry in {
+        'cut': 'Ctrl+X',
+        'copy': 'Ctrl+C',
+        'paste': 'Ctrl+V',
+        'select-all': 'Ctrl+A',
+      }.entries) {
+        expect(
+          find.descendant(
+            of: find.byKey(Key('menu-bar-${entry.key}')),
+            matching: find.text(entry.value),
+          ),
+          findsOneWidget,
+        );
+      }
+      // Keyboard navigation can move primary focus into the overlay too.
+      final originalFocus = FocusManager.instance.primaryFocus;
+      Focus.of(
+        tester.element(
+          find.text(
+            command == 'select-all'
+                ? 'Select All'
+                : '${command[0].toUpperCase()}${command.substring(1)}',
+          ),
+        ),
+      ).requestFocus();
+      await tester.pump();
+      expect(FocusManager.instance.primaryFocus, isNot(same(originalFocus)));
+      await tap(tester, 'menu-bar-$command');
+      if (command == 'select-all') {
+        expect(
+          controller.selection,
+          const TextSelection(baseOffset: 0, extentOffset: 11),
+        );
+      } else {
+        expect(
+          controller.text,
+          command == 'cut'
+              ? ' world'
+              : command == 'paste'
+              ? 'paste me world'
+              : 'hello world',
+        );
+        if (command == 'cut' || command == 'copy') expect(clipboard, 'hello');
+      }
+    }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
+  }
+
+  testWidgets('Windows Edit targets the real terminal clipboard paths', (
+    tester,
+  ) async {
+    final app = createApp();
+    app.stateOf('m')!.terminalPasteRawAvailable = true;
+    final frames = <TerminalBinaryFrame>[];
+    final session = liveSession('a0', frames);
+    session.terminal.write('terminal selection');
+    await pumpBar(
+      tester,
+      body: TerminalPanel(notifier: app, session: session, focused: true),
+    );
+    await tester.pump();
+    final view = tester.widget<TerminalView>(find.byType(TerminalView));
+    view.focusNode!.requestFocus();
+    view.controller!.setSelection(
+      session.terminal.buffer.createAnchor(0, 0),
+      session.terminal.buffer.createAnchor(8, 0),
+    );
+    await tester.pump();
+    await tap(tester, 'menu-bar-edit');
+    expect(find.byKey(const Key('menu-bar-cut')), findsOneWidget);
+    expect(
+      tester.widget(find.byKey(const Key('menu-bar-cut'))),
+      isNot(isA<AppMenuItem>()),
+    );
+    for (final entry in {
+      'copy': 'Ctrl+C',
+      'paste': 'Ctrl+V',
+      'select-all': 'Ctrl+Shift+A',
+    }.entries) {
+      expect(
+        find.descendant(
+          of: find.byKey(Key('menu-bar-${entry.key}')),
+          matching: find.text(entry.value),
+        ),
+        findsOneWidget,
+      );
+    }
+    await tap(tester, 'menu-bar-copy');
+    expect(clipboard, 'terminal');
+    expect(view.controller!.selection, isNull);
+    expect(frames, isEmpty);
+    view.focusNode!.requestFocus();
+    await tester.pump();
+    await tap(tester, 'menu-bar-edit');
+    await tap(tester, 'menu-bar-select-all');
+    expect(view.controller!.selection, isNotNull);
+    view.focusNode!.requestFocus();
+    await tester.pump();
+    await tap(tester, 'menu-bar-edit');
+    await tap(tester, 'menu-bar-paste');
+    expect(frames.single.kind, TerminalBinaryKind.paste);
+    expect(frames.single.bytes, 'terminal'.codeUnits);
+    await tester.pumpWidget(const SizedBox());
+    session.dispose();
+    app.dispose();
+  }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
+
+  testWidgets('Windows Edit disables every edit row without editing focus', (
+    tester,
+  ) async {
+    await pumpBar(tester);
+    await tap(tester, 'menu-bar-edit');
+    for (final command in ['cut', 'copy', 'paste', 'select-all']) {
+      final row = find.byKey(Key('menu-bar-$command'));
+      expect(row, findsOneWidget);
+      expect(tester.widget(row), isNot(isA<AppMenuItem>()));
+    }
+  }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
+
+  for (final removeEditor in [false, true]) {
+    testWidgets(
+      'Windows Edit clears its target when ${removeEditor ? 'the editor is removed' : 'focus leaves editing'}',
+      (tester) async {
+        final visible = ValueNotifier(true);
+        final elsewhere = FocusNode();
+        addTearDown(visible.dispose);
+        addTearDown(elsewhere.dispose);
+        await pumpBar(
+          tester,
+          body: Column(
+            children: [
+              ValueListenableBuilder<bool>(
+                valueListenable: visible,
+                builder: (_, show, _) =>
+                    show ? const TextField() : const SizedBox(),
+              ),
+              Focus(focusNode: elsewhere, child: const SizedBox()),
+            ],
+          ),
+        );
+        await tester.tap(find.byType(TextField));
+        await tester.pump();
+        await tap(tester, 'menu-bar-edit');
+        expect(
+          tester.widget(find.byKey(const Key('menu-bar-copy'))),
+          isA<AppMenuItem>(),
+        );
+        if (removeEditor) {
+          visible.value = false;
+        } else {
+          elsewhere.requestFocus();
+        }
+        await tester.pumpAndSettle();
+        for (final command in ['cut', 'copy', 'paste', 'select-all']) {
+          expect(
+            tester.widget(find.byKey(Key('menu-bar-$command'))),
+            isNot(isA<AppMenuItem>()),
+          );
+        }
+        expect(tester.takeException(), isNull);
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+    );
+  }
+
+  testWidgets('Windows Edit ignores a disposed editor after overlay focus', (
+    tester,
+  ) async {
+    final visible = ValueNotifier(true);
+    final controller = TextEditingController(text: 'old target');
+    addTearDown(visible.dispose);
+    addTearDown(controller.dispose);
+    await pumpBar(
+      tester,
+      body: ValueListenableBuilder<bool>(
+        valueListenable: visible,
+        builder: (_, show, _) =>
+            show ? TextField(controller: controller) : const SizedBox(),
+      ),
+    );
+    await tester.tap(find.byType(TextField));
+    controller.selection = const TextSelection(baseOffset: 0, extentOffset: 3);
+    await tester.pump();
+    await tap(tester, 'menu-bar-edit');
+    Focus.of(tester.element(find.text('Copy'))).requestFocus();
+    await tester.pump();
+    visible.value = false;
+    await tester.pumpAndSettle();
+    await tap(tester, 'menu-bar-copy');
+    expect(clipboard, 'paste me');
+    expect(tester.takeException(), isNull);
+    await tap(tester, 'menu-bar-edit');
+    expect(
+      tester.widget(find.byKey(const Key('menu-bar-copy'))),
+      isNot(isA<AppMenuItem>()),
+    );
+  }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
+
+  testWidgets('Linux Edit keeps its existing rows', (tester) async {
+    await pumpBar(tester);
+    await tap(tester, 'menu-bar-edit');
+    expect(find.byKey(const Key('menu-bar-cut')), findsNothing);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 
   testWidgets('Settings remains reachable before the workspace is enabled', (
     tester,
@@ -407,40 +649,41 @@ void main() {
     expect(swarmCalls.last.method, 'commands');
   });
 
-  testWidgets('File offers Make Leader or Remove Leader only where the pane can take it', (
-    tester,
-  ) async {
-    // Prose: the row is absent without an offer; with one its title says which.
-    swarmMenuBus.send('update', {
-      'enabled': true,
-      'paneActions': {'toggleLeader': false},
-    });
-    await pumpBar(tester);
-    await tap(tester, 'menu-bar-file');
-    expect(find.byKey(const Key('menu-bar-toggle-leader')), findsNothing);
-    await tap(tester, 'menu-bar-file');
+  testWidgets(
+    'File offers Make Leader or Remove Leader only where the pane can take it',
+    (tester) async {
+      // Prose: the row is absent without an offer; with one its title says which.
+      swarmMenuBus.send('update', {
+        'enabled': true,
+        'paneActions': {'toggleLeader': false},
+      });
+      await pumpBar(tester);
+      await tap(tester, 'menu-bar-file');
+      expect(find.byKey(const Key('menu-bar-toggle-leader')), findsNothing);
+      await tap(tester, 'menu-bar-file');
 
-    swarmMenuBus.send('update', {
-      'enabled': true,
-      'paneActions': {'toggleLeader': true},
-      'leaderAction': 'make',
-    });
-    await tester.pump();
-    await tap(tester, 'menu-bar-file');
-    expect(find.text('Make Leader'), findsOneWidget);
-    await tap(tester, 'menu-bar-toggle-leader');
-    expect(swarmCalls.last.method, 'toggleLeader');
+      swarmMenuBus.send('update', {
+        'enabled': true,
+        'paneActions': {'toggleLeader': true},
+        'leaderAction': 'make',
+      });
+      await tester.pump();
+      await tap(tester, 'menu-bar-file');
+      expect(find.text('Make Leader'), findsOneWidget);
+      await tap(tester, 'menu-bar-toggle-leader');
+      expect(swarmCalls.last.method, 'toggleLeader');
 
-    swarmMenuBus.send('update', {
-      'enabled': true,
-      'paneActions': {'toggleLeader': true},
-      'leaderAction': 'remove',
-    });
-    await tester.pump();
-    await tap(tester, 'menu-bar-file');
-    expect(find.text('Remove Leader'), findsOneWidget);
-    expect(find.text('Make Leader'), findsNothing);
-  });
+      swarmMenuBus.send('update', {
+        'enabled': true,
+        'paneActions': {'toggleLeader': true},
+        'leaderAction': 'remove',
+      });
+      await tester.pump();
+      await tap(tester, 'menu-bar-file');
+      expect(find.text('Remove Leader'), findsOneWidget);
+      expect(find.text('Make Leader'), findsNothing);
+    },
+  );
 
   testWidgets('Windows New Tab menu hint uses the everywhere key', (
     tester,

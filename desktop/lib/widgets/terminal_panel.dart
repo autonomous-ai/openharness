@@ -25,6 +25,7 @@ import 'agent_drag.dart';
 import 'box_chrome.dart';
 import 'rename_agent_dialog.dart';
 import 'terminal_composer.dart';
+import 'terminal_edit_actions.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import 'terminal_find_bar.dart';
@@ -1707,6 +1708,14 @@ class _TerminalPanelState extends State<TerminalPanel>
   }
 
   Future<void> _copyOrPaste() async {
+    if (_controller.selection != null) {
+      await _copySelection();
+    } else {
+      await _paste();
+    }
+  }
+
+  Future<void> _copySelection() async {
     final terminal = widget.session.terminal;
     final selection = _controller.selection;
     if (selection != null) {
@@ -1715,7 +1724,6 @@ class _TerminalPanelState extends State<TerminalPanel>
       await Clipboard.setData(ClipboardData(text: text));
       return;
     }
-    await _paste();
   }
 
   /// Paste — including the kinds of clipboard this app cannot fully read.
@@ -1878,7 +1886,7 @@ class _TerminalPanelState extends State<TerminalPanel>
         !keyboard.isAltPressed &&
         !keyboard.isMetaPressed &&
         _controller.selection != null) {
-      unawaited(_copyOrPaste());
+      unawaited(_copySelection());
       return KeyEventResult.handled;
     }
     if (event.logicalKey != LogicalKeyboardKey.keyV || keyboard.isAltPressed) {
@@ -2283,54 +2291,59 @@ class _TerminalPanelState extends State<TerminalPanel>
                                       as RenderBox?,
                               repaint: _scrollController,
                             ),
-                            child: TerminalView(
-                              session.terminal,
-                              key: _terminalViewKey,
-                              controller: _controller,
-                              autoResize: widget.visible && !session.readOnly,
-                              resizeBuffer: false,
-                              renderingEnabled: widget.visible,
-                              outputRepaintInterval:
-                                  widget.outputRepaintInterval,
-                              scrollController: _scrollController,
+                            child: TerminalEditActions(
                               focusNode: _focusNode,
-                              autofocus: widget.focused && !showComposer,
-                              readOnly:
-                                  widget.readOnly || !session.acceptsInput,
-                              theme: terminalScreenThemeFor(
-                                grid.AppTheme.palette.value,
-                                terminalThemeStore.value,
-                              ),
-                              padding: const EdgeInsets.all(10),
-                              backgroundOpacity: paneOpacity,
-                              textStyle: terminalFontStore.value,
-                              // The chosen point size already sizes each terminal cell.
-                              // Applying the OS text scale again would change rows/cols
-                              // and resize the remote terminal unexpectedly.
-                              textScaler: TextScaler.noScaling,
-                              onKeyEvent: _onTerminalKey,
-                              onTapDown: _onLinkTapDown,
-                              onTapUp: _onLinkTapUp,
-                              mouseCursor:
-                                  _hoveredLink != null && _linkModifierPressed
-                                  ? SystemMouseCursors.click
-                                  // An I-beam invites typing; a blocked pane does not.
-                                  : _inputBlocked
-                                  ? SystemMouseCursors.basic
-                                  : SystemMouseCursors.text,
-                              onSecondaryTapDown: (_, _) => _copyOrPaste(),
-                              deleteDetection: isTouchBrowser,
-                              // A <textarea>, not an <input>: iOS Safari hangs
-                              // its AutoFill bar (passwords, cards, places)
-                              // over the keyboard for every <input>. Return
-                              // still submits: see CustomTextEdit's action echo.
-                              keyboardType: isIOSBrowser
-                                  ? TextInputType.multiline
-                                  : TextInputType.text,
+                              copy: _copySelection,
+                              paste: _paste,
+                              child: TerminalView(
+                                session.terminal,
+                                key: _terminalViewKey,
+                                controller: _controller,
+                                autoResize: widget.visible && !session.readOnly,
+                                resizeBuffer: false,
+                                renderingEnabled: widget.visible,
+                                outputRepaintInterval:
+                                    widget.outputRepaintInterval,
+                                scrollController: _scrollController,
+                                focusNode: _focusNode,
+                                autofocus: widget.focused && !showComposer,
+                                readOnly:
+                                    widget.readOnly || !session.acceptsInput,
+                                theme: terminalScreenThemeFor(
+                                  grid.AppTheme.palette.value,
+                                  terminalThemeStore.value,
+                                ),
+                                padding: const EdgeInsets.all(10),
+                                backgroundOpacity: paneOpacity,
+                                textStyle: terminalFontStore.value,
+                                // The chosen point size already sizes each terminal cell.
+                                // Applying the OS text scale again would change rows/cols
+                                // and resize the remote terminal unexpectedly.
+                                textScaler: TextScaler.noScaling,
+                                onKeyEvent: _onTerminalKey,
+                                onTapDown: _onLinkTapDown,
+                                onTapUp: _onLinkTapUp,
+                                mouseCursor:
+                                    _hoveredLink != null && _linkModifierPressed
+                                    ? SystemMouseCursors.click
+                                    // An I-beam invites typing; a blocked pane does not.
+                                    : _inputBlocked
+                                    ? SystemMouseCursors.basic
+                                    : SystemMouseCursors.text,
+                                onSecondaryTapDown: (_, _) => _copyOrPaste(),
+                                deleteDetection: isTouchBrowser,
+                                // A <textarea>, not an <input>: iOS Safari hangs
+                                // its AutoFill bar (passwords, cards, places)
+                                // over the keyboard for every <input>. Return
+                                // still submits: see CustomTextEdit's action echo.
+                                keyboardType: isIOSBrowser
+                                    ? TextInputType.multiline
+                                    : TextInputType.text,
 
-                              onAltBufferScroll: session.scrollViaTmuxCopyMode
-                                  ? (up) => session.sendScrollCommand(up, 1)
-                                  : null,
+                                onAltBufferScroll: session.scrollViaTmuxCopyMode
+                                    ? (up) => session.sendScrollCommand(up, 1)
+                                    : null,
+                              ),
                             ),
                           ),
                         ),
