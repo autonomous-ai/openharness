@@ -70,8 +70,10 @@ class Flasher {
     this.cancelDirectory,
     this.killAfter = const Duration(seconds: 15),
     Future<void> Function(int pid)? killTree,
+    Future<ProcessResult> Function(String, List<String>) runProcess =
+        Process.run,
   }) : _windows = windows ?? RuntimePlatform.isWindows,
-       _killTree = killTree ?? _taskkillTree;
+       _killTree = killTree ?? ((pid) => _taskkillTree(pid, runProcess));
 
   /// Overridden in tests.
   final Future<Process> Function(List<String> arguments) startProcess;
@@ -85,12 +87,25 @@ class Flasher {
   final Future<void> Function(int pid) _killTree;
   Timer? _killTimer;
 
-  static Future<void> _taskkillTree(int pid) async {
+  static Future<void> _taskkillTree(
+    int pid,
+    Future<ProcessResult> Function(String, List<String>) runProcess,
+  ) async {
     // `harness flash` runs PowerShell, which runs esptool; killing only the parent leaves writers alive.
-    await Process.run('taskkill', ['/PID', '$pid', '/T', '/F']);
+    final arguments = ['/PID', '$pid', '/T', '/F'];
+    final result = await runProcess('taskkill', arguments);
+    if (result.exitCode != 0) {
+      throw ProcessException(
+        'taskkill',
+        arguments,
+        result.stderr.toString().trim(),
+        result.exitCode,
+      );
+    }
   }
 
   Process? _running;
+  void Function(FlashLine)? _onLine;
   bool _cancelled = false;
 
   bool get isRunning => _running != null;
@@ -173,8 +188,24 @@ class Flasher {
     }
     _killTimer?.cancel();
     _killTimer = Timer(killAfter, () {
-      if (identical(_running, process)) unawaited(_killTree(process.pid));
+      if (identical(_running, process)) unawaited(_endTree(process));
     });
+  }
+
+  Future<void> _endTree(Process process) async {
+    try {
+      await _killTree(process.pid);
+    } catch (error) {
+      // A failed kill leaves the writer alive: report it without releasing its serial lease.
+      if (identical(_running, process)) {
+        _onLine?.call(
+          FlashLine(
+            'error: could not stop the flash: $error',
+            FlashLineKind.error,
+          ),
+        );
+      }
+    }
   }
 
   Future<int> _run(
@@ -185,6 +216,7 @@ class Flasher {
     _cancelled = false;
     final process = await startProcess(command);
     _running = process;
+    _onLine = onLine;
     try {
       final pumps = <Future<void>>[
         _pump(process.stdout, onLine, stderr: false),
@@ -198,6 +230,7 @@ class Flasher {
     } finally {
       _killTimer?.cancel();
       _killTimer = null;
+      _onLine = null;
       _running = null;
     }
   }

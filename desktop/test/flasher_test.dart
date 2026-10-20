@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/serial_port_lease.dart';
 import 'package:harness/flash/flasher.dart';
 
 /// A process whose output is a script, so the parsing rules can be exercised
@@ -259,6 +260,87 @@ void main() {
       expect(killed, [spawned.pid]);
       spawned.kill();
       expect((await run).cancelled, isTrue);
+    },
+  );
+
+  test('a failed Windows tree kill is logged while the flash still holds its lease', () async {
+    final dir = Directory.systemTemp.createTempSync('flasher-cancel-');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final spawned = _FakeProcess(out: const [], code: 130, waitForKill: true);
+    final lines = <FlashLine>[];
+    var finished = false;
+    final flasher = Flasher(
+      windows: true,
+      cancelDirectory: dir.path,
+      killAfter: const Duration(milliseconds: 10),
+      killTree: (_) async => throw StateError('tree termination failed'),
+      startProcess: (_) async => spawned,
+    );
+    final run = flasher.flash(onLine: lines.add).then((result) {
+      finished = true;
+      return result;
+    });
+    await Future<void>.delayed(Duration.zero);
+    try {
+      flasher.cancel();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      final errors = lines.where((line) => line.kind == FlashLineKind.error);
+      expect(errors, hasLength(1));
+      expect(errors.single.text, contains('tree termination failed'));
+      expect(flasher.isRunning, isTrue);
+      expect(SerialPortLease.held, isTrue);
+      expect(finished, isFalse);
+      expect(spawned.signals, isEmpty);
+    } finally {
+      spawned.kill();
+      await run;
+    }
+    expect(SerialPortLease.held, isFalse);
+  });
+
+  test(
+    'a nonzero taskkill exit is logged and does not release a live flash',
+    () async {
+      final dir = Directory.systemTemp.createTempSync('flasher-cancel-');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final spawned = _FakeProcess(out: const [], code: 130, waitForKill: true);
+      final lines = <FlashLine>[];
+      String? executable;
+      List<String>? arguments;
+      var finished = false;
+      final flasher = Flasher(
+        windows: true,
+        cancelDirectory: dir.path,
+        killAfter: const Duration(milliseconds: 10),
+        runProcess: (command, args) async {
+          executable = command;
+          arguments = args;
+          return ProcessResult(7, 5, '', 'Access is denied.');
+        },
+        startProcess: (_) async => spawned,
+      );
+      final run = flasher.flash(onLine: lines.add).then((result) {
+        finished = true;
+        return result;
+      });
+      await Future<void>.delayed(Duration.zero);
+      try {
+        flasher.cancel();
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        expect(executable, 'taskkill');
+        expect(arguments, ['/PID', '${spawned.pid}', '/T', '/F']);
+        final errors = lines.where((line) => line.kind == FlashLineKind.error);
+        expect(errors, hasLength(1));
+        expect(errors.single.text, contains('Access is denied.'));
+        expect(flasher.isRunning, isTrue);
+        expect(SerialPortLease.held, isTrue);
+        expect(finished, isFalse);
+        expect(spawned.signals, isEmpty);
+      } finally {
+        spawned.kill();
+        await run;
+      }
+      expect(SerialPortLease.held, isFalse);
     },
   );
 
