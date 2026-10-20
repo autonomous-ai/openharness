@@ -5,8 +5,8 @@ name: Windows
 # Called by release.yml with `release: true`: build the release payload only, stamped with the CLI's version
 # (HARNESS_PTY_VERSION, pty/src/cli.rs), for the staging publish. A release is not a test suite
 # (docs/validation-and-release.md); the staging E2E is the gate before production.
-# The payload is the five files install.ps1 ($HarnessPtyFiles) installs: harness-pty.exe, harness-launch.exe,
-# harness.exe (the `harness` command, pty/src/command.rs), conpty.dll and OpenConsole.exe.
+# The payload is six files: harness-pty.exe, harness-launch.exe, harness.exe (the `harness` command,
+# pty/src/command.rs), conpty.dll, OpenConsole.exe and harness-serial.exe (serial/, the dial's serial port).
 on:
   workflow_dispatch:
     # The same inputs as workflow_call, so a staging payload can be built by hand (Actions -> Windows -> Run workflow).
@@ -23,7 +23,7 @@ on:
         default: false
   # TEMPORARY: remove before merging (workflow_dispatch needs the file on main)
   push:
-    branches: [feat/windows-native-cli]
+    branches: [feat/windows-native-cli, feat/windows-desktop, feat/windows-dial]
   workflow_call:
     inputs:
       version:
@@ -86,6 +86,16 @@ jobs:
         if: ${{ !inputs.release }}
         working-directory: pty
         run: cargo test --locked --target ${{ matrix.target }}
+      # harness-serial (serial/, sub-project E): the dial's serial port. Tested on each architecture.
+      - name: 'Serial: Rust tests'
+        if: ${{ !inputs.release }}
+        working-directory: serial
+        run: cargo test --locked --target ${{ matrix.target }}
+      - name: 'Serial: build release'
+        working-directory: serial
+        env:
+          HARNESS_PTY_VERSION: ${{ inputs.version }}
+        run: cargo build --locked --release --target ${{ matrix.target }}
       # Every bin of the crate: harness-pty.exe, harness-launch.exe and harness.exe.
       - name: Build release
         working-directory: pty
@@ -100,6 +110,7 @@ jobs:
         run: |
           $release = "pty/target/${{ matrix.target }}/release"
           Copy-Item "pty/vendor/conpty/${{ matrix.arch }}/conpty.dll", "pty/vendor/conpty/${{ matrix.arch }}/OpenConsole.exe" $release
+          Copy-Item "serial/target/${{ matrix.target }}/release/harness-serial.exe" $release
           Get-ChildItem $release -Filter '*.dll'
           Get-ChildItem $release -Filter 'OpenConsole.exe'
       - name: Check the release payload
@@ -111,6 +122,8 @@ jobs:
           $release = "pty/target/${{ matrix.target }}/release"
           $said = & "$release/harness-pty.exe" version
           if ($said -notmatch ('"version":"' + [regex]::Escape($env:VERSION) + '"')) { throw "harness-pty.exe says $said, not $env:VERSION" }
+          $serial = & "$release/harness-serial.exe" version
+          if ($serial -notmatch ('"version":"' + [regex]::Escape($env:VERSION) + '"')) { throw "harness-serial.exe says $serial, not $env:VERSION" }
           # A command line without `--` is a usage error (exit 2): the launcher runs, and it is a GUI-subsystem program.
           $launch = Start-Process -FilePath "$release/harness-launch.exe" -ArgumentList 'version' -Wait -PassThru
           if ($launch.ExitCode -ne 2) { throw "harness-launch.exe exited $($launch.ExitCode), not 2" }
@@ -141,7 +154,7 @@ jobs:
         run: |
           $release = "pty/target/${{ matrix.target }}/release"
           New-Item -ItemType Directory -Force payload | Out-Null
-          Copy-Item "$release/harness-pty.exe", "$release/harness-launch.exe", "$release/harness.exe", "$release/conpty.dll", "$release/OpenConsole.exe" payload/
+          Copy-Item "$release/harness-pty.exe", "$release/harness-launch.exe", "$release/harness.exe", "$release/conpty.dll", "$release/OpenConsole.exe", "$release/harness-serial.exe" payload/
           Get-ChildItem payload
       - uses: actions/upload-artifact@v4
         with:
