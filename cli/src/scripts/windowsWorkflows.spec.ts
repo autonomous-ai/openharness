@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -74,6 +74,14 @@ describe('the Windows release workflows', () => {
     expect(desktop).not.toContain('feat/windows-desktop')
     expect(desktop).not.toContain('TEMPORARY')
     expect(desktop).not.toContain('head_commit')
+  })
+
+  it('runs the Windows PTY workflow on demand or from the release only, with no branch-only workflow left', () => {
+    const pty = read('windows.yml')
+    expect(pty).not.toMatch(/^\s+push:/m)
+    expect(pty).not.toContain('TEMPORARY')
+    expect(pty).not.toMatch(/feat\/windows-/)
+    expect(existsSync(join(workflows, 'windows-cli-staging-c.yml'))).toBe(false)
   })
 
   // Installer spec §2.4 and §4.2.

@@ -21,9 +21,6 @@ on:
         type: boolean
         required: false
         default: false
-  # TEMPORARY: remove before merging (workflow_dispatch needs the file on main)
-  push:
-    branches: [feat/windows-native-cli, feat/windows-desktop, feat/windows-dial]
   workflow_call:
     inputs:
       version:

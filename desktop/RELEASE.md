@@ -592,13 +592,9 @@ it does not describe the live manifest's unrelated keys. A live staging publicat
 owner's explicit approval, then merges the two keys into the observed staging manifest generation:
 
 ```bash
-# After the workflow is available on main, and only after approval for this staging publish:
+# Only after approval for this staging publish:
 gh workflow run windows-desktop.yml -f release=true -f version=<version> -f dry_run=false
 ```
-
-Until then, the temporary branch push trigger recognizes a head-commit subject of
-`ci(windows): desktop staging release <version>` for an approved staging publish, or
-`ci(windows): desktop staging dry run <version>` for a no-upload run.
 
 ```
 gs://s3-autonomous-upgrade-3/harness/staging/desktop/metadata.json
