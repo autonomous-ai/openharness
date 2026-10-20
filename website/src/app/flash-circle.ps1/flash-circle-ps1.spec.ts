@@ -5,7 +5,7 @@ import { join } from "path";
 import { describe, expect, it } from "vitest";
 
 const app = join(process.cwd(), "src", "app");
-const bash = readFileSync(join(app, "flash-circle.sh", "flash-circle.sh"), "utf8");
+const bash = normalizeBash(readFileSync(join(app, "flash-circle.sh", "flash-circle.sh"), "utf8"));
 const ps1Bytes = readFileSync(join(app, "flash-circle.ps1", "flash-circle.ps1"));
 const ps1 = ps1Bytes.toString("utf8");
 
@@ -21,6 +21,25 @@ function inPs1(name: string): string {
   const match = new RegExp(`\\$${name} = (?:\\[int\\]\\()?(?:EnvOr '[A-Z_]+' )?'([^']*)'`, "m").exec(ps1);
   if (!match) throw new Error(`flash-circle.ps1 does not set ${name}`);
   return match[1];
+}
+
+// Git on Windows can check out the bash source as CRLF; command parity is independent of checkout EOLs.
+function normalizeBash(source: string): string { return source.replace(/\r\n/g, "\n"); }
+
+function assertResetParity(bashSource: string, ps1Source: string) {
+  for (const [inBashForm, inPs1Form] of [
+    ["--before default_reset --after hard_reset --connect-attempts 1 --no-stub chip_id",
+      "'--before', 'default_reset', '--after', 'hard_reset', '--connect-attempts', '1', '--no-stub', 'chip_id'"],
+    ['--before default_reset --after no_reset \\\n      erase_region "$OTADATA_OFFSET" "$OTADATA_SIZE"',
+      "'--before', 'default_reset', '--after', 'no_reset', 'erase_region', $OTADATA_OFFSET, $OTADATA_SIZE"],
+    ['--before default_reset --after no_reset \\\n        erase_region "$NVS_OFFSET" "$NVS_SIZE"',
+      "'--before', 'default_reset', '--after', 'no_reset', 'erase_region', $NVS_OFFSET, $NVS_SIZE"],
+    ['-b 460800 --before default_reset --after hard_reset \\\n      write_flash --flash_mode "$FLASH_MODE" --flash_size "$FLASH_SIZE" --flash_freq "$FLASH_FREQ"',
+      "'-b', '460800', '--before', 'default_reset', '--after', 'hard_reset', 'write_flash', '--flash_mode', $FLASH_MODE, '--flash_size', $FLASH_SIZE, '--flash_freq', $FLASH_FREQ"],
+  ]) {
+    expect(normalizeBash(bashSource), inBashForm).toContain(inBashForm);
+    expect(ps1Source, inPs1Form).toContain(inPs1Form);
+  }
 }
 
 // Cleanup contracts supplement the Windows behavioral cases below on non-Windows hosts.
@@ -194,19 +213,19 @@ describe("/flash-circle.ps1, the Windows flasher", () => {
     }
   });
 
-  it("runs esptool with the bash flasher's reset and speed choices", () => {
-    for (const [inBashForm, inPs1Form] of [
-      ["--before default_reset --after hard_reset --connect-attempts 1 --no-stub chip_id",
-        "'--before', 'default_reset', '--after', 'hard_reset', '--connect-attempts', '1', '--no-stub', 'chip_id'"],
-      ['--before default_reset --after no_reset \\\n      erase_region "$OTADATA_OFFSET" "$OTADATA_SIZE"',
-        "'--before', 'default_reset', '--after', 'no_reset', 'erase_region', $OTADATA_OFFSET, $OTADATA_SIZE"],
-      ['erase_region "$NVS_OFFSET" "$NVS_SIZE"', "'erase_region', $NVS_OFFSET, $NVS_SIZE"],
-      ['-b 460800 --before default_reset --after hard_reset \\\n      write_flash --flash_mode "$FLASH_MODE" --flash_size "$FLASH_SIZE" --flash_freq "$FLASH_FREQ"',
-        "'-b', '460800', '--before', 'default_reset', '--after', 'hard_reset', 'write_flash', '--flash_mode', $FLASH_MODE, '--flash_size', $FLASH_SIZE, '--flash_freq', $FLASH_FREQ"],
-    ]) {
-      expect(bash, inBashForm).toContain(inBashForm);
-      expect(ps1, inPs1Form).toContain(inPs1Form);
-    }
+  it.each(["LF", "CRLF"])("matches reset and speed choices with a %s bash checkout", (lineEnding) => {
+    const checkout = bash.replace(/\r?\n/g, lineEnding === "CRLF" ? "\r\n" : "\n");
+    assertResetParity(checkout, ps1);
+  });
+
+  it.each([
+    ["before", "'--before', 'no_reset', '--after', 'no_reset'"],
+    ["after", "'--before', 'default_reset', '--after', 'hard_reset'"],
+  ])("rejects a change to the NVS %s reset choice", (_flag, replacement) => {
+    const command = "'--before', 'default_reset', '--after', 'no_reset', 'erase_region', $NVS_OFFSET, $NVS_SIZE";
+    expect(ps1).toContain(command);
+    const changed = ps1.replace(command, `${replacement}, 'erase_region', $NVS_OFFSET, $NVS_SIZE`);
+    expect(() => assertResetParity(bash, changed)).toThrow();
   });
 
   it("pins the Windows esptool by the vendor's own digest", () => {
