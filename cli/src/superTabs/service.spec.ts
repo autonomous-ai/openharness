@@ -59,7 +59,7 @@ it('resolves a native caller to its exact contribution and rechecks it before ev
   expect(await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'op', command }, owner)).toMatchObject({ ok: true, operationId: 'op' })
   expect(t.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'op', command, asAgentId: t.agentId })
   expect(await t.ask({ action: 'message', tabId: 'tab', agentId: t.agentId, conversationId: 'lead', messageId: 'old-question' }, owner)).toMatchObject({ ok: true })
-  expect(t.call).toHaveBeenLastCalledWith('GET', `/api/super-tabs/tab/conversations/lead/messages?asAgentId=${t.agentId}&messageId=old-question`, undefined)
+  expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/conversations/lead/messages?asAgentId=${t.agentId}&messageId=old-question`, undefined)
   t.agent.machineId = 'another-machine'
   expect(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).toMatchObject({ error: 'AGENT_UNAVAILABLE' })
   t.agent.machineId = 'machine-1'; vi.mocked(t.core.agents.byAgent).mockReturnValue(undefined)
@@ -298,4 +298,55 @@ it('prepares machines only for their owner and clears setup receipts on disconne
   t.port.disconnected()
   await t.ask(request, owner)
   expect(prepareContribution).toHaveBeenCalledTimes(2)
+})
+
+describe('which messages still need an answer', () => {
+  const person = { kind: 'person', id: 'p1', name: 'sam@example.com' }
+  const rows = (agentId: string) => [
+    { id: 'm1', sequence: 1, author: person, recipientIds: [agentId], replyTo: null },
+    { id: 'm2', sequence: 2, author: person, recipientIds: [agentId], replyTo: null },
+    { id: 'm3', sequence: 3, author: person, recipientIds: ['someone-else'], replyTo: null },
+    { id: 'm4', sequence: 4, author: { kind: 'agent', id: agentId, name: 'Lead' }, recipientIds: [], replyTo: 'm1' },
+    { id: 'm5', sequence: 5, author: { kind: 'agent', id: 'someone-else', name: 'Other' }, recipientIds: [agentId], replyTo: 'm2' },
+  ]
+  it('marks messages addressed to the caller as answered or not, and leaves the rest unmarked', async () => {
+    const t = setup()
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true,
+      data: path.includes('/messages') ? { messages: rows(t.agentId), next: null } : { state: { agents: [t.agent] } } } }))
+    const value = (await t.ask({ action: 'messages', tabId: 'tab', agentId: t.agentId, conversationId: 'lead' }, owner) as { value: { messages: Record<string, unknown>[] } }).value
+    expect(value.messages.map(m => m.answered)).toEqual([true, false, undefined, undefined, false])
+    // A person's email is passed as the backend sent it.
+    expect((value.messages[0]!.author as { name: string }).name).toBe('sam@example.com')
+  })
+  it('reads the later messages of one exact message to tell whether it was answered', async () => {
+    const t = setup()
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => {
+      const all = rows(t.agentId)
+      const data = path.includes('messageId=m1') ? { messages: [all[0]] } : path.includes('after=1') ? { messages: all.slice(1) } : { state: { agents: [t.agent] } }
+      return { status: 200, body: { success: true, data } }
+    })
+    const value = (await t.ask({ action: 'message', tabId: 'tab', agentId: t.agentId, conversationId: 'lead', messageId: 'm1' }, owner) as { value: { messages: Record<string, unknown>[] } }).value
+    expect(value.messages).toHaveLength(1)
+    expect(value.messages[0]!.answered).toBe(true)
+  })
+  it('skips the extra read for a message not addressed to the caller, and survives its failure', async () => {
+    const t = setup()
+    const reads: string[] = []
+    let failAfter = false
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => {
+      reads.push(path)
+      const all = rows(t.agentId)
+      if (path.includes('after=') && failAfter) return { status: 500, body: { success: false, error: { code: 'DOWN', message: 'down' } } }
+      const data = path.includes('messageId=m3') ? { messages: [all[2]] } : path.includes('messageId=m1') ? { messages: [all[0]] }
+        : path.includes('after=') ? { messages: all.slice(1) } : { state: { agents: [t.agent] } }
+      return { status: 200, body: { success: true, data } }
+    })
+    const ask = (messageId: string) => t.ask({ action: 'message', tabId: 'tab', agentId: t.agentId, conversationId: 'lead', messageId }, owner) as Promise<{ ok?: boolean; value: { messages: Record<string, unknown>[] } }>
+    expect((await ask('m3')).value.messages[0]).not.toHaveProperty('answered')
+    expect(reads.some(path => path.includes('after='))).toBe(false)
+    failAfter = true
+    const failed = await ask('m1')
+    expect(failed.ok).toBe(true)
+    expect(failed.value.messages[0]).not.toHaveProperty('answered')
+  })
 })

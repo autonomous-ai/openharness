@@ -58,3 +58,11 @@ it('routes through the caller and prints the decision, or the parse failure as a
   expect(await superTabCommand(['--tab', 'tab', 'route', 'g1', '{nope'], deps)).toBe(1)
   expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toMatch(/JSON/)
 })
+it('posts a reply to one message with --reply-to, and rejects a bad id', () => {
+  expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', '--reply-to', 'msg-1'], where).payload.command)
+    .toMatchObject({ type: 'message.send', conversationId: 'lead', text: 'Ready', replyTo: 'msg-1' })
+  expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1'], where).payload.command).toMatchObject({ replyTo: null })
+  for (const tail of [['--reply-to'], ['--reply-to', '../x'], ['--reply-to', ''], ['--reply-to', 'a', 'b'], ['--reply', 'a']]) {
+    expect(() => parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', ...tail], where)).toThrow('harness super-tab')
+  }
+})

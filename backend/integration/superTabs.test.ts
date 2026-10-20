@@ -368,6 +368,35 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await expect(store.read({ ...owner, autonomousEnv: 'stag' }, tab)).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
 
+  it('closes the replying agent\'s own deliveries of a message as answered, and nobody else\'s', async () => {
+    const { tab, lead } = await fixture()
+    const helper = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Helper', configuration: config, lead: false })).result.agentId as string
+    await invite(tab)
+    const asked = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'What is the status?', replyTo: null,
+      recipientIds: [lead, helper] }, peer)
+    const messageId = asked.result.messageId as string
+    const held = (await store.deliveries(host, tab, lead))[0]!
+    const claimId = randomUUID()
+    // A claimed delivery closes too, not only a queued one.
+    await store.delivery(host, tab, lead, held.id, { type: 'claim', claimId })
+    const other = (await store.deliveries(host, tab, helper))[0]!
+    // A person's reply closes nothing.
+    await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Also, soon please.', replyTo: messageId, recipientIds: [] })
+    expect(await store.deliveryReceipt(host, tab, lead, held.id)).toEqual({ id: held.id, status: 'claimed' })
+    await run(tab, { type: 'message.send', conversationId: 'lead', text: 'It is done.', replyTo: messageId, recipientIds: [] }, host, lead)
+    expect(await store.deliveryReceipt(host, tab, lead, held.id)).toEqual({ id: held.id, status: 'answered' })
+    expect((await store.deliveries(host, tab, lead)).map(d => d.messageId)).not.toContain(messageId)
+    expect(await store.deliveryReceipt(host, tab, helper, other.id)).toEqual({ id: other.id, status: 'queued' })
+    await expect(store.delivery(host, tab, lead, held.id, { type: 'claim', claimId })).rejects.toMatchObject({ code: 'DELIVERY_RESOLVED' })
+    await expect(store.delivery(host, tab, lead, held.id, { type: 'ack', claimId, receipt: 'late', uncertain: false }))
+      .rejects.toMatchObject({ code: 'DELIVERY_RESOLVED' })
+    const next = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'And the tests?', replyTo: null, recipientIds: [lead] }, peer)
+    const queued = (await store.deliveries(host, tab, lead)).find(d => d.messageId === next.result.messageId)!
+    await run(tab, { type: 'message.send', conversationId: 'lead', text: 'They pass.', replyTo: next.result.messageId as string, recipientIds: [] }, host, lead)
+    expect(await store.deliveryReceipt(host, tab, lead, queued.id)).toEqual({ id: queued.id, status: 'answered' })
+  })
+
   it('durably resumes a claim, never steals it on timeout, and does not resurrect revoked messages on rejoin', async () => {
     const { tab, lead } = await fixture()
     await invite(tab)

@@ -113,6 +113,78 @@ describe('Super Tab native delivery handoff', () => {
     expect(t.saved().entries).toEqual({})
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
   })
+  it('never types a held delivery that was answered meanwhile, and retires its journal entry', async () => {
+    const t = setup(), host = t.open()
+    await host.tick(); t.event('rejected', 'team_waiting_busy')
+    expect(t.saved().entries.delivery.stage).toBe('prepared')
+    // The Lead read the question during its turn and replied; the backend now lists nothing and says answered.
+    const original = vi.mocked(t.core.account.backend).getMockImplementation()!
+    vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+      if (path.endsWith('/deliveries/delivery')) return { status: 200, body: { success: true, data: { id: 'delivery', status: 'answered' } } }
+      if (path.endsWith('/deliveries')) return { status: 200, body: { success: true, data: [] } }
+      return original(method, path, body)
+    })
+    await host.tick(); await host.reconcileReceipts()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.saved().entries).toEqual({})
+  })
+  it('drops the lease of a held delivery answered while its lease was being granted', async () => {
+    const t = setup(), host = t.open()
+    await host.tick(); t.event('rejected', 'team_waiting_busy')
+    const original = vi.mocked(t.core.account.backend).getMockImplementation()!
+    vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+      if (method === 'GET' && path.endsWith('/deliveries/delivery')) return { status: 200, body: { success: true, data: { id: 'delivery', status: 'answered' } } }
+      return original(method, path, body)
+    })
+    vi.mocked(t.core.turns.leaseDeliveries).mockImplementationOnce(async () => { await host.reconcileReceipts(); return true })
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.saved().entries).toEqual({})
+    // A kept lease id would count toward the core's limit until the host restarts.
+    expect(vi.mocked(t.core.turns.leaseDeliveries).mock.lastCall?.[1]).toEqual({})
+  })
+  it('retires an entry quietly when its claim is refused as answered, and still delivers the next one', async () => {
+    const t = setup(), host = t.open()
+    const original = vi.mocked(t.core.account.backend).getMockImplementation()!
+    vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+      if (method === 'GET' && path.endsWith('/deliveries')) {
+        return { status: 200, body: { success: true, data: [{ id: 'delivery', claimId: null, status: 'queued' }, { id: 'second', claimId: null, status: 'queued' }] } }
+      }
+      if (method === 'POST' && path.endsWith('/deliveries/delivery')) {
+        return { status: 409, body: { success: false, error: { code: 'DELIVERY_RESOLVED', message: 'This message was already answered.' } } }
+      }
+      if (method === 'POST') return { status: 200, body: { success: true, data: { delivery: { id: 'second' }, message: { id: 'message', conversationId: 'lead', text: 'Next.', author: { name: 'Collaborator' } } } } }
+      return original(method, path, body)
+    })
+    await host.tick()
+    expect(Object.keys(t.saved().entries)).toEqual(['second'])
+    expect(t.saved().entries.second.stage).toBe('submitting')
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.core.turns.deliver).toHaveBeenCalledWith('harness', expect.any(String), 'team:service:superTabs:second')
+    expect(t.core.turns.cancelDelivery).not.toHaveBeenCalled()
+  })
+  it('keeps a held delivery that is still open when its receipt is checked', async () => {
+    const t = setup(), host = t.open()
+    await host.tick(); t.event('rejected', 'team_waiting_busy')
+    const original = vi.mocked(t.core.account.backend).getMockImplementation()!
+    vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+      if (path.endsWith('/deliveries/delivery') && method === 'GET') return { status: 200, body: { success: true, data: { id: 'delivery', status: 'claimed' } } }
+      return original(method, path, body)
+    })
+    await host.reconcileReceipts()
+    expect(Object.keys(t.saved().entries)).toEqual(['delivery'])
+  })
+  it('tells the agent how to reply to this exact message, in short plain words', async () => {
+    const t = setup({ author: { kind: 'person', id: 'p1', name: 'sam@example.com' }, text: 'How is it going?' })
+    await t.open().tick()
+    const prompt = vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string
+    expect(prompt).toContain('Message message from sam@example.com:\nHow is it going?')
+    expect(prompt).toContain("post 'lead' 'your message' UNIQUE_OPERATION_ID --reply-to 'message'")
+    expect(prompt).toContain('Ask questions and post results in this conversation.')
+    expect(prompt).toContain('Answer each message once')
+    expect(prompt).not.toContain('email addresses')
+    expect(prompt).not.toContain('Report exact revisions')
+  })
   it('persists before typing, keeps one native delivery during polls, and acknowledges the exact receipt', async () => {
     const t = setup(), host = t.open()
     vi.mocked(t.core.turns.deliver).mockImplementation(() => expect(t.saved().entries.delivery.stage).toBe('submitting'))

@@ -308,6 +308,12 @@ export class SuperTabStore {
         await closeAssignment(tx, tabId, command.assignmentId, command.status, context.now)
       }
       await this.writeMessages(tx, tabId, effects.state, effects.messages, revision)
+      // On 2026-10-20 a Lead answered a message it had already read, then answered it again when the held
+      // delivery was finally typed. An agent's reply settles that agent's own deliveries of the message.
+      if (command.type === 'message.send' && command.replyTo && actor.kind === 'agent') {
+        await tx.superTabDelivery.updateMany({ where: { tabId, messageId: command.replyTo, agentId: actor.agentId,
+          status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'answered' } })
+      }
       const revoked = [
         ...original.people.filter(p => !effects.state.people.some(n => n.id === p.id && n.generation === p.generation))
           .map(p => ({ authorKind: 'person', authorId: p.id, authorGeneration: p.generation })),
@@ -567,6 +573,7 @@ export class SuperTabStore {
       const delivery = await tx.superTabDelivery.findFirst({ where: { id: deliveryId, tabId, agentId } })
       if (!delivery || !this.deliveryAllowed(state, delivery) || delivery.status === 'cancelled' ||
           !await this.senderAllowed(tx, state, delivery)) fail('DELIVERY_REVOKED', 'This instruction is no longer authorized.', 403)
+      if (delivery.status === 'answered') fail('DELIVERY_RESOLVED', 'This message was already answered.')
       if (delivery.status === 'confirmed' || delivery.status === 'superseded') {
         fail('DELIVERY_RESOLVED', 'A person has already resolved this delivery.')
       }
