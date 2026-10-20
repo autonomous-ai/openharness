@@ -39,6 +39,9 @@ class SuperTabController extends ChangeNotifier {
     this.pollInterval = const Duration(seconds: 3),
   }) {
     if (initial['tabId'] == tabId && initial['accountId'] == accountId) {
+      expandedProjects.addAll(
+        (initial['expandedProjects'] as List? ?? const []).whereType<String>(),
+      );
       selectedId = initial['selectedId'] as String? ?? 'lead';
       final drafts = initial['drafts'];
       if (drafts is Map) {
@@ -107,6 +110,13 @@ class SuperTabController extends ChangeNotifier {
   final _messages = <String, List<SuperTabMessage>>{};
   final _before = <String, int?>{};
   final _reading = <String>{};
+  final expandedProjects = <String>{};
+
+  void toggleProject(String id) {
+    if (!expandedProjects.remove(id)) expandedProjects.add(id);
+    _saveSoon();
+    _changed();
+  }
 
   String get _path => '/api/super-tabs/${Uri.encodeComponent(tabId)}';
   SuperTabConversation? get selected => snapshot?.conversation(selectedId);
@@ -164,8 +174,11 @@ class SuperTabController extends ChangeNotifier {
     _changed();
   }
 
-  List<SuperTabMessage> messages(String id) =>
-      List.unmodifiable(_messages[id] ?? const []);
+  List<SuperTabMessage> messages(String id) => List.unmodifiable(
+    (_messages[id] ?? const <SuperTabMessage>[]).where(
+      (m) => m.source['kind'] != 'update-request',
+    ),
+  );
   bool hasOlder(String id) => _before[id] != null;
   bool unread(SuperTabConversation group) =>
       group.lastMessageSequence > (_readAt[group.id] ?? 0);
@@ -199,6 +212,7 @@ class SuperTabController extends ChangeNotifier {
     'tabId': tabId,
     'accountId': accountId,
     'selectedId': selectedId,
+    'expandedProjects': expandedProjects.toList(),
     'drafts': Map<String, String>.of(_drafts),
     'terminals': Map<String, String>.of(_terminals),
 
@@ -256,6 +270,9 @@ class SuperTabController extends ChangeNotifier {
 
   void select(String id) {
     if (snapshot?.conversation(id) == null || id == selectedId) return;
+    if (!snapshot!.isProjectLead(id)) {
+      expandedProjects.add(snapshot!.conversation(id)!.projectId);
+    }
     selectedId = id;
     _saveSoon();
     _changed();
@@ -287,13 +304,37 @@ class SuperTabController extends ChangeNotifier {
       final nextRevision = (answer['revision'] as num).toInt();
       final next = SuperTabSnapshot.fromJson(superTabMap(answer['state']));
       if (next.id != tabId) {
-        throw const FormatException('A different Super Tab was returned.');
+        throw const FormatException('A different Swarm was returned.');
       }
       if (nextRevision >= revision) {
         snapshot = next;
-        if (next.conversation(selectedId) == null) selectedId = 'lead';
+        final allowed = next.conversations.map((c) => c.id).toSet();
+        final localAccessChanged =
+            !allowed.contains(selectedId) ||
+            [
+              ..._drafts.keys,
+              ..._terminals.keys,
+              ..._mentions.keys,
+              ..._readAt.keys,
+            ].any((id) => !allowed.contains(id)) ||
+            expandedProjects.any(
+              (id) => !next.projects.any((project) => project.id == id),
+            );
+        _messages.removeWhere((id, _) => !allowed.contains(id));
+        _drafts.removeWhere((id, _) => !allowed.contains(id));
+        _terminals.removeWhere((id, _) => !allowed.contains(id));
+        _mentions.removeWhere((id, _) => !allowed.contains(id));
+        _before.removeWhere((id, _) => !allowed.contains(id));
+        _readAt.removeWhere((id, _) => !allowed.contains(id));
+        expandedProjects.removeWhere(
+          (id) => !next.projects.any((project) => project.id == id),
+        );
+        if (!allowed.contains(selectedId)) {
+          selectedId = next.projects.firstOrNull?.leadConversationId ?? 'lead';
+        }
         revision = nextRevision;
         error = null;
+        if (localAccessChanged) _saveSoon();
       }
       await loadMessages(selectedId);
     } catch (failure) {
@@ -304,12 +345,13 @@ class SuperTabController extends ChangeNotifier {
     }
   }
 
-  void _readFailure(Object failure) {
+  void _readFailure(Object failure, {bool revokeTab = true}) {
     if (_disposed) return;
     error = failure is SuperTabFailure
         ? failure.message
         : 'Could not refresh this conversation. Try again.';
-    if (failure is SuperTabFailure &&
+    if (revokeTab &&
+        failure is SuperTabFailure &&
         const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
       accessRevoked = true;
       snapshot = null;
@@ -351,7 +393,9 @@ class SuperTabController extends ChangeNotifier {
           '$_path/conversations/${Uri.encodeComponent(id)}/messages?before=${tail + 1}',
         );
       }
-      if (_disposed || accessRevoked) return;
+      if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+        return;
+      }
       final incoming = (answer['messages'] as List)
           .map((m) => SuperTabMessage.fromJson(superTabMap(m)))
           .toList();
@@ -369,7 +413,12 @@ class SuperTabController extends ChangeNotifier {
       }
       _changed();
     } catch (failure) {
-      _readFailure(failure);
+      _readFailure(failure, revokeTab: false);
+      if (failure is SuperTabFailure &&
+          const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
+        _messages.remove(id);
+        unawaited(refresh());
+      }
       _changed();
     } finally {
       _reading.remove(id);

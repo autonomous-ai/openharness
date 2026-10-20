@@ -41,6 +41,10 @@ class SuperTabClient {
   final _loaded = <String, SuperTabController>{};
   SuperTabController? peek(String id) => _loaded[id];
 
+  /// The tabs closed on this computer. Only discovery says which of them the
+  /// account still belongs to.
+  Set<String> get hiddenIds => Set.unmodifiable(_hidden);
+
   void bind(String? account) {
     if (_account == account) return;
     _account = account;
@@ -53,9 +57,7 @@ class SuperTabClient {
     _visibility.clear();
     discoveryError = null;
     for (final controller in _loaded.values) {
-      controller.revokeAccess(
-        'The account changed. Open this Super Tab again.',
-      );
+      controller.revokeAccess('The account changed. Open this Swarm again.');
     }
     for (final future in _controllers.values) {
       unawaited(
@@ -183,14 +185,14 @@ class SuperTabClient {
     Map<String, dynamic>? body,
   }) async {
     if (_account == null) {
-      throw const SuperTabFailure('SIGNED_OUT', 'Sign in to use Super Tab.');
+      throw const SuperTabFailure('SIGNED_OUT', 'Sign in to use Swarm.');
     }
     final generation = _generation;
     final result = await transport(method, path, body: body);
     if (generation != _generation) {
       throw const SuperTabFailure(
         'ACCOUNT_CHANGED',
-        'The account changed. Open this Super Tab again.',
+        'The account changed. Open this Swarm again.',
       );
     }
     return result;
@@ -215,7 +217,7 @@ class SuperTabClient {
     final account = _account;
     final generation = _generation;
     if (account == null) {
-      throw const SuperTabFailure('SIGNED_OUT', 'Sign in to use Super Tab.');
+      throw const SuperTabFailure('SIGNED_OUT', 'Sign in to use Swarm.');
     }
     final key = 'super_tab.$account.$id';
     final raw = await storage.read(key);

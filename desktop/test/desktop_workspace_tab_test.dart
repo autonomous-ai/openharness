@@ -315,10 +315,10 @@ void main() {
           find.descendant(of: _close('Desktop'), matching: find.byType(Icon)),
         );
         expect(icon.icon, AppIcons.close);
-        expect(icon.size, 12);
+        expect(icon.size, AppIcons.closeSize);
         expect(
           tester.getSize(_close('Desktop')),
-          const Size(DesktopWorkspaceTab.closeWidth, 32),
+          const Size.square(DesktopWorkspaceTab.closeWidth),
         );
         await _capture(
           tester,

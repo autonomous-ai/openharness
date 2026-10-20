@@ -310,12 +310,16 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      // Only Settings leaves the tab row live (`stripEnabled`); any other
+      // covering route takes the row with menus and shortcuts.
       expect(updates().last['enabled'], isFalse);
+      expect(updates().last['stripEnabled'], isFalse);
       calls.clear();
       app.renameSwarm(app.activeSwarmId, 'Changed while covered');
       app.announce();
       await tester.idle();
       expect(updates().single['enabled'], isFalse);
+      expect(updates().single['stripEnabled'], isFalse);
       expect(
         (updates().single['tabs'] as List).single['name'],
         'Changed while covered',
@@ -323,6 +327,7 @@ void main() {
       navigator.pop();
       await tester.pumpAndSettle();
       expect(updates().last['enabled'], isTrue);
+      expect(updates().last['stripEnabled'], isTrue);
       await tester.pumpWidget(const SizedBox());
     },
   );

@@ -116,7 +116,9 @@ export function createAgentClosing({
       if (!cleanupTabs.isHidden(s)) continue
       const target = { agentId: s.agentId, sessionId: s.sessionId, createdAt: new Date(s.registeredAt).toISOString() }
       const inspected = await closeAgentService.request({ ...target, mode: 'inspect' })
-      if (inspected.error) continue // A changing session is never added to a reviewed batch.
+      // A changing session is never added to a reviewed batch, nor one that stopped while the others were read: it
+      // has nothing left to close.
+      if (inspected.error || inspected.closed) continue
       agents.push({ ...target, name: projectDisplayName(s), engine: s.engine, activity: inspected.activity ?? 'unknown' })
     }
     return { version: 1, agents, kept: sessions.length - agents.length }

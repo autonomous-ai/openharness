@@ -72,5 +72,11 @@ void main() {
         .icon;
     expect(mark('spec.pdf'), AppIcons.fileText);
     expect(mark('main.dart'), AppIcons.fileCode);
+    // Its remove mark keeps the chip's small size: it is not a workspace close
+    // mark (AppIcons.closeSize, which follows the 13-point text of tabs and
+    // pane headers).
+    final remove = tester.widgetList<Icon>(find.byIcon(AppIcons.close));
+    expect(remove, hasLength(2));
+    expect(remove.map((icon) => icon.size), everyElement(12));
   });
 }

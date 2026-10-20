@@ -908,7 +908,7 @@ void main() {
                   'agent.open' => '⌘O',
                   'pane.split_right' => '⌘R',
                   'machines.list' => '⌘M',
-                  'app.store' => '⌘S',
+                  'app.store' => '⌃⌘S',
                   'harnesses.list' => '⌘P',
                   _ => null,
                 },

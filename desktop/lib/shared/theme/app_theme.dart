@@ -1441,7 +1441,12 @@ abstract final class AppDesktop {
   static const double tabRadius = 10;
   static const double tabShoulder = 8;
   static const double tabTopInset = 6;
-  static const double tabCloseInset = 8;
+
+  /// A tab's ×: the pane close button's 28pt square target, centred on the
+  /// tab's body (the 40pt row less [tabTopInset]) with one 3pt gap above,
+  /// below, and to the body's straight right side, [tabShoulder] in.
+  static const double tabCloseSize = 28;
+  static const double tabCloseInset = tabShoulder + 3;
   static const double tabMinWidth = 128;
   static const double tabMaxWidth = 256;
   static const double tabBarTrailingInset = 12;

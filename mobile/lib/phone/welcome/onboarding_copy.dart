@@ -8,7 +8,7 @@
 ///                  QR code → the camera: How to get the QR code, its steps
 /// ② Your computer  On your computer, go to   [autonomous.ai/go ⇪]
 ///                  under the picture: Looking for your computer▌
-///                  under the link: (1) Install Harness  (2) Sign in, Use you@…
+///                  under the link: (1) Download and install Harness  (2) Sign in, Use you@…
 ///                  under the account: Not you? Sign out
 ///   The Mac joins  MacBook Pro is ready.
 /// ③ The session    by the mic, once: Send it, or say anything.
@@ -60,10 +60,10 @@ abstract final class OnboardingCopy {
   /// ② Under the picture, while the laptop breathes.
   static const looking = 'Looking for your computer';
 
-  /// ② The first step under the link: installing Harness — the link above it is the download, so
-  /// the step need not say so (`set_up_computer.dart`'s [goToSteps]; the second is signing in with
-  /// this account). Under the camera, the note under the first step's address.
-  static const installStep = 'Install Harness';
+  /// ② The first step under the link: getting Harness from it — the link is the download, and the
+  /// step says so (owner, 2026-10-19) (`set_up_computer.dart`'s [goToSteps]; the second is signing
+  /// in with this account). Under the camera, the note under the first step's address.
+  static const installStep = 'Download and install Harness';
 
   /// ② Right under the account the steps name, at home: the question, and the way out after it.
   static const notYou = 'Not you?';

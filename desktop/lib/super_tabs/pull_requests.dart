@@ -63,9 +63,15 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
   int _revision = 0;
   Timer? _timer;
   SuperTabController get c => widget.controller;
+  bool get _projectScope =>
+      _all || c.snapshot?.isProjectLead(c.selectedId) == true;
   List<SuperTabConversation> get _groups =>
       c.snapshot?.conversations
-          .where((g) => _all || g.id == c.selectedId)
+          .where(
+            (g) => _projectScope
+                ? g.projectId == c.selected?.projectId
+                : g.id == c.selectedId,
+          )
           .toList() ??
       const [];
 
@@ -88,7 +94,8 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
   }
 
   void _changed() {
-    final scope = '${c.accountId}:${c.tabId}:${_all ? '*' : c.selectedId}';
+    final scope =
+        '${c.accountId}:${c.tabId}:${c.selected?.projectId}:${_projectScope ? '*' : c.selectedId}';
     if (scope != _scope) {
       _scope = scope;
       _observed.clear();
@@ -103,7 +110,7 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
     _timer?.cancel();
     setState(() => _loading = true);
     final groups = _groups;
-    if (_all) {
+    if (_projectScope) {
       // The controller owns paging and caches; this never changes selection.
       for (final group in groups) {
         if (!mounted || revision != _revision) return;
@@ -191,19 +198,22 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
                   style: DesktopChrome.text(medium: true),
                 ),
               ),
-              DropdownButton<bool>(
-                value: _all,
-                underline: const SizedBox.shrink(),
-                items: const [
-                  DropdownMenuItem(value: false, child: Text('This group')),
-                  DropdownMenuItem(value: true, child: Text('All groups')),
-                ],
-                onChanged: (value) {
-                  if (value == null) return;
-                  setState(() => _all = value);
-                  _changed();
-                },
-              ),
+              if (c.snapshot?.isProjectLead(c.selectedId) == true)
+                Text('This project', style: DesktopChrome.metadata())
+              else
+                DropdownButton<bool>(
+                  value: _all,
+                  underline: const SizedBox.shrink(),
+                  items: const [
+                    DropdownMenuItem(value: false, child: Text('This group')),
+                    DropdownMenuItem(value: true, child: Text('This project')),
+                  ],
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() => _all = value);
+                    _changed();
+                  },
+                ),
             ],
           ),
         ),
@@ -239,7 +249,7 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
                       ),
                       subtitle: Text(
                         [
-                          if (_all) pr.groups.join(' · '),
+                          if (_projectScope) pr.groups.join('  '),
                           pr.state ?? 'View status on GitHub',
                         ].join('\n'),
                         style: DesktopChrome.metadata(),

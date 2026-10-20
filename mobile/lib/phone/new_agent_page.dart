@@ -47,6 +47,7 @@ class NewAgentPage extends StatefulWidget {
     required this.machineId,
     this.folder,
     this.deskTabId,
+    this.newDeskTab = false,
     this.voice,
   });
 
@@ -64,6 +65,10 @@ class NewAgentPage extends StatefulWidget {
   /// The desk tab the new harness joins — the tab Find was narrowed to when New Harness was tapped.
   /// Null joins the tab the phone is in. See `PhoneDesk.adopt`.
   final String? deskTabId;
+
+  /// The new harness opens a desk tab of its own — the `+` at the end of Find's tab chips, the
+  /// desktop's New Tab. Wins over [deskTabId]. See `PhoneDesk.adopt`.
+  final bool newDeskTab;
 
   @override
   State<NewAgentPage> createState() => _NewAgentPageState();
@@ -838,6 +843,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
         // The folder chosen, or none for home — never [_project], which a terminal cannot make.
         folder: _folder,
         deskTabId: widget.deskTabId,
+        newDeskTab: widget.newDeskTab,
         attempt: creation,
       );
       _answered(creation, engine, error);
@@ -940,6 +946,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
       codexHome: _showsCodexProfile ? _codexProfile?.path : null,
       model: _model,
       deskTabId: widget.deskTabId,
+      newDeskTab: widget.newDeskTab,
       attempt: creation,
       prompt: task.isEmpty || files.isNotEmpty ? null : task,
       // Whenever a first task is sent, the harness is called by its words until the engine titles

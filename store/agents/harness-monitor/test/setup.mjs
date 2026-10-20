@@ -14,6 +14,8 @@ const root = mkdtempSync(join(tmpdir(), 'harness-monitor-test-'))
 process.env.HARNESS_MONITOR_CONFIG = join(root, 'config', 'policy.jsonc')
 process.env.HARNESS_MONITOR_STATE = join(root, 'state')
 process.env.HARNESS_MONITOR_TEST_ROOT = root
+// The daemon's local credential lives in its data folder: a test must never read the person's.
+process.env.ADAPTER_DATA_DIR = join(root, 'harness-data')
 
 const real = [join(homedir(), '.config', 'harness'), join(homedir(), '.harness', 'monitor')]
 export function assertNotReal(path) {

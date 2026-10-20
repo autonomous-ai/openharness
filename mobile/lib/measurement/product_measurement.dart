@@ -96,6 +96,11 @@ class ProductMeasurement extends ChangeNotifier {
   /// Done once the kept choice is read: until then nothing is counted signed out.
   late final Future<void> setupChoiceReady;
 
+  /// Kept in [setupStorage] once this install's first launch has been counted ([noteFirstOpen]): a yes,
+  /// never sent.
+  static const firstOpenKey = 'product_first_open_counted';
+  bool _firstOpenPending = false;
+
   /// Done once the latest choice is written.
   Future<void> get setupChoiceSaved => _setupSave ?? Future<void>.value();
   Future<void>? _setupSave;
@@ -229,6 +234,7 @@ class ProductMeasurement extends ChangeNotifier {
     _clear('ui');
     if (scope != null && automatic) unawaited(flush());
     _schedule();
+    _countFirstOpen();
   }
 
   /// A saved switch applies immediately in this app, even while a report is in flight. [explicit]: the
@@ -265,7 +271,54 @@ class ProductMeasurement extends ChangeNotifier {
       _clear('setup');
       _setup.clear();
     }
+    _countFirstOpen();
     notifyListeners();
+  }
+
+  /// This install's first launch, counted once: `setup_phone_first_open` signed out — the usual first
+  /// launch, after a store's download — or `ui_phone_first_open` on an account that shares, if it opens
+  /// signed in. The step between the download and a sign-in, which nothing else counts.
+  ///
+  /// The flag is written before anything is counted, so a first launch that may not count it (sharing
+  /// off) never has a later launch counted as the first. Nothing without [setupStorage] (a test, the
+  /// sample), and nothing on the web.
+  Future<void> noteFirstOpen() async {
+    final storage = setupStorage;
+    if (storage == null || surface != 'phone') return;
+    await setupChoiceReady;
+    if (_disposed) return;
+    try {
+      if (await storage.read(firstOpenKey) != null) return;
+      await storage.write(firstOpenKey, '1');
+    } catch (_) {
+      return;
+    }
+    if (_disposed) return;
+    _firstOpenPending = true;
+    _countFirstOpen();
+  }
+
+  /// [noteFirstOpen]'s count, on whichever channel may take it first; dropped once neither ever will.
+  void _countFirstOpen() {
+    if (!_firstOpenPending || _disposed) return;
+    final channel = _account == null && _setupAllowed
+        ? 'setup'
+        : sharing
+        ? 'ui'
+        : null;
+    if (channel == null) {
+      // Off signed out, or the account's choice read off: this launch is not counted, now or later.
+      if (_account == null ? choiceLoaded && !signedOutSharing : declined) {
+        _firstOpenPending = false;
+      }
+      return;
+    }
+    _firstOpenPending = false;
+    _count(
+      channel,
+      _now().toUtc().toIso8601String().substring(0, 10),
+      '${channel}_${surface}_first_open',
+    );
   }
 
   void _clear(String channel) {
@@ -288,6 +341,39 @@ class ProductMeasurement extends ChangeNotifier {
       try {
         await flush().timeout(within - watch.elapsed);
       } on TimeoutException {
+        return;
+      }
+    }
+  }
+
+  /// Sends what is queued on either channel, at most [within]: the app is leaving the screen, where iOS
+  /// suspends it within seconds and may end it unannounced, and every count still in RAM goes with it.
+  /// On 2026-10-19 the phone's signed-out screen counted 17 sign-ins that went through and the
+  /// accounts counted 9; counts lost this way are the likely gap, since a sign-in is often followed
+  /// by leaving for the computer to install Harness, before the minute's report. An account whose
+  /// sharing choice is still unread is asked first, which also counts what waits on that answer
+  /// (`OnboardingMeasurement`).
+  Future<void> sendBeforeBackground({
+    Duration within = const Duration(seconds: 2),
+  }) async {
+    final watch = Stopwatch()..start();
+    for (var round = 0; round < 3; round++) {
+      final unread =
+          round == 0 &&
+          _account != null &&
+          _readChoice != null &&
+          _enabled == null;
+      final queued =
+          (sharing && _queued('ui')) || (_setupAllowed && _queued('setup'));
+      if (_disposed || !(unread || queued) || watch.elapsed >= within) return;
+      try {
+        await flush().timeout(within - watch.elapsed);
+      } on TimeoutException {
+        return;
+      }
+      // A report a flush leaves pending was refused or lost: it waits for the next timer, which
+      // keeps retries to one a minute, rather than going again at once.
+      if (_pending.isNotEmpty) {
         return;
       }
     }

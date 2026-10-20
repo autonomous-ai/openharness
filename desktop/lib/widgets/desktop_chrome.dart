@@ -55,12 +55,19 @@ class DesktopChrome extends InheritedWidget {
         side: BorderSide(color: rim),
       );
 
+  /// For a transparent [Dialog] that only places a surface drawing its own
+  /// frame ([DesktopDialogSurface], [TerminalBox]). The theme's dialog shape
+  /// still paints its radius-20 rim on a transparent Dialog, a second arc at
+  /// each corner of a surface with another radius.
+  static const bareDialogShape = RoundedRectangleBorder();
+
   @override
   bool updateShouldNotify(DesktopChrome oldWidget) => false;
 }
 
 /// Shared by creation, search, and their child choosers. A visible frame keeps
 /// the modal distinct from the workspace without turning it into another page.
+/// A [Dialog] around it takes [DesktopChrome.bareDialogShape].
 class DesktopDialogSurface extends StatelessWidget {
   const DesktopDialogSurface({
     super.key,

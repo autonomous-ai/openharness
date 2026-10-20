@@ -26,6 +26,7 @@ void main() {
           },
       ];
       (state['conversations'] as List)[1]['agentIds'] = ['a', 'b', 'c', 'd'];
+      (state['conversations'] as List)[0]['agentIds'] = ['b'];
       f.app.machineStates['m']!.agents = [
         for (final id in ['a', 'b', 'c', 'd'])
           Agent.fromJson({
@@ -114,6 +115,26 @@ void main() {
         ),
         isEmpty,
       );
+      // The global roster asks for context when a session belongs to more
+      // than one workgroup. The needs-human action above already knew its
+      // group and opened the waiting pane directly.
+      tester
+          .widget<SuperTabView>(find.byType(SuperTabView))
+          .onChooseAgentTerminal!(c.snapshot!.agent('b')!);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('super-agent-group-lead')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('super-agent-group-offline')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const ValueKey('super-agent-group-lead')));
+      await tester.pumpAndSettle();
+      expect(c.selectedId, 'lead');
+      expect(f.app.activeSwarm.panes.single.agentId, 'native-b');
+      expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
       await tester.pumpWidget(const SizedBox());
       await c.flush();
       f.app.superTabs.dispose();

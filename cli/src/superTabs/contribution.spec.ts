@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import { ContributionPreparations, prepareContribution } from './contribution.js'
+import { mkdtemp, rm, stat } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const GiB = 1024 ** 3
 function fixture() {
@@ -23,6 +26,20 @@ function fixture() {
   return { run, state, deps, core, request, close }
 }
 describe('one-field machine preparation', () => {
+  it('contributes a swarm workspace without asking for a project or cloning one', async () => {
+    const f = fixture()
+    const dataDir = await mkdtemp(join(tmpdir(), 'harness-swarm-contribution-'))
+    try {
+      delete f.state.project
+      const core = fakeCore({ dataDir })
+      const result = await prepareContribution(core, { tabId: 'tab', scope: 'swarm' }, f.deps as never)
+      const cwd = join(dataDir, 'swarm-projects', 'tab')
+      expect(result).toMatchObject({ scope: 'swarm', cwd, engines: ['claude', 'pi'] })
+      expect((await stat(cwd)).isDirectory()).toBe(true)
+      expect(f.deps.prepare).not.toHaveBeenCalled()
+      expect(f.deps.capacity).toHaveBeenCalledWith({ cwd, tools: ['git'], devices: [] })
+    } finally { await rm(dataDir, { recursive: true, force: true }) }
+  })
   it('uses the lead project on its host and probes all engines without inventing authentication', async () => {
     const f = fixture()
     expect(await f.run()).toEqual({ ok: true, state: 'ready', cwd: '/repo', engines: ['claude', 'pi'], maxAgents: 4 })

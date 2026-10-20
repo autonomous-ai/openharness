@@ -1,4 +1,5 @@
-import { productObservation, productUsageIntent, productUsageLaunch, productUsageRequest, productUsageSource } from './lib/productUsageSignals.js'
+import { messageReceipt, productObservation, productUsageIntent, productUsageLaunch, productUsageRequest, productUsageSource } from './lib/productUsageSignals.js'
+import type { MessageReceipt } from './lib/sessionInput.js'
 import { isLocalOnly, withoutUpdate } from './lib/cardUpdate.js'
 import type { PurgeAgentService } from './lib/purgeAgentService.js'
 import { MESSAGES_REQUESTS, SHARE_REQUESTS, type Asker, type LocalWindows, type WindowSurface, type BackendNotice, type GatewayEvents, type GatewayPort, type ModelsPort, type RemoteClient, type RemoteRole, type RemoteTransport, type TabFrame } from './core/api.js'
@@ -240,8 +241,9 @@ export class BackendSocket {
   /** Called when the web/device sends chat input to an agent terminal. */
   onMessage: ((sessionId: string, content: string, deliveryId?: string) => void) | null = null
   /** Takes a `message` frame: text a person typed for an agent, into its pane (cli.ts binds core/input.ts).
-   *  Agent Messages and the orchestrator deliver through `onMessage` above. */
-  messageProvider: ((payload: Record<string, unknown>) => void) | null = null
+   *  Agent Messages and the orchestrator deliver through `onMessage` above. [receipt]: what became of it, for
+   *  its request's measurement (lib/productUsageSignals.ts `messageReceipt`). */
+  messageProvider: ((payload: Record<string, unknown>, receipt?: MessageReceipt) => void) | null = null
   /** Answers `agent_update` through its last argument, before the windows hear of the change: a rename, a
    *  model and effort, or an app opening the agent (cli.ts binds core/agents/update.ts). */
   agentUpdateProvider: ((payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
@@ -1220,7 +1222,7 @@ export class BackendSocket {
 
         // Text typed for an agent, into its pane (core/input.ts, bound by cli.ts).
         case 'message':
-          if (this.messageProvider) this.messageProvider(payload)
+          if (this.messageProvider) this.messageProvider(payload, messageReceipt(measured))
           else console.warn('[backend] message handler is not wired; terminal input was not dispatched')
           return
 

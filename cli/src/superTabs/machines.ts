@@ -4,6 +4,7 @@ import { backend } from './host.js'
 import { identifier, object } from './wire.js'
 import { readCapabilities, quotaOf } from './capacity.js'
 import { startAgent, type ScopedRequest } from './start.js'
+import { prepareSwarmProject } from './projectFolder.js'
 
 const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
@@ -16,7 +17,9 @@ export class ContributedMachines {
   private next = 0
   private readonly cursors = new Map<string, number>()
   constructor(private readonly core: CoreApi, private readonly machineId: string,
-    private readonly deps = { backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }) {}
+    private readonly deps: { backend: typeof backend; open: typeof openDaemon; capabilities: typeof readCapabilities;
+      start: typeof startAgent; now: () => number; prepare?: typeof prepareSwarmProject } =
+      { backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }) {}
   stop() { this.stopped = true }
   tick(): Promise<void> {
     if (this.stopped || this.deps.now() < this.next) return Promise.resolve()
@@ -67,6 +70,15 @@ export class ContributedMachines {
             input.action === 'startStatus' ? 'GET' : 'POST', path,
             input.action === 'startStatus' ? undefined : { operationId: input.operationId, command: input.command }) })
           try {
+            if (pool.scope === 'swarm' && !start.dispatched) {
+              try { await (this.deps.prepare ?? prepareSwarmProject)(this.core, row, start) }
+              catch (error) {
+                await scoped({ action: 'command', operationId: `prepare-failed-${start.id}`,
+                  command: { type: 'agent.startFailed', startId: start.id,
+                    error: error instanceof Error ? error.message : 'Could not prepare this project on the machine.' } })
+                continue
+              }
+            }
             const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true }, scoped, where, this.deps.open)
             if (result.ok === true && identifier(result.harnessId)) await scoped({ action: 'command', operationId: `settled-${start.id}`,
               command: { type: 'agent.startSettled', startId: start.id, warning: result.modelWarning ?? null } })

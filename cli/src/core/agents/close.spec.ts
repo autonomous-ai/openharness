@@ -190,6 +190,23 @@ describe('closing agents no window shows', () => {
       expect(request).toHaveBeenCalledTimes(3)
     })
 
+    it('leaves out an agent closed while the preview was reading the others', async () => {
+      // An inspect of an agent already closed answers { closed: true }: it has nothing left to close, and once
+      // entered the reviewed batch as activity 'unknown'.
+      const stopped = row({ agentId: 'stopped' })
+      const quiet = row({ agentId: 'quiet', sessionId: 's2' })
+      const { deps, closing } = setup({}, [stopped, quiet])
+      vi.mocked(deps.cleanupTabs.isHidden).mockReturnValue(true)
+      vi.spyOn(closing.closeAgentService, 'request')
+        .mockResolvedValueOnce({ closed: true })
+        .mockResolvedValueOnce({ activity: 'idle' })
+      expect(await closing.cleanupPreview()).toEqual({
+        version: 1,
+        agents: [{ agentId: 'quiet', sessionId: 's2', createdAt: new Date(0).toISOString(), name: projectDisplayName(quiet), engine: 'claude', activity: 'idle' }],
+        kept: 1,
+      })
+    })
+
     it('a close asked for while the preview is reading the agent is carried out, not answered with the reading', async () => {
       // The preview inspects every hidden agent; a window's close of one of them arriving meanwhile was
       // once answered with that inspect's `{ activity }`, and the agent left running (e2e/windows.e2e.ts).

@@ -94,7 +94,7 @@ class SuperTabMessageRow extends StatefulWidget {
 }
 
 class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
-  final _focus = FocusNode(debugLabel: 'Super Tab message actions');
+  final _focus = FocusNode(debugLabel: 'Swarm message actions');
   bool _hovered = false, _focused = false;
 
   @override

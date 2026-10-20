@@ -17,7 +17,7 @@ import { adaptSlashCommand } from '../lib/goalCommand.js'
 import { sid } from '../lib/log.js'
 import type { LiveEvent } from '../engines/kit/events.js'
 import type { RegisteredSession } from '../lib/registry.js'
-import { SessionInputController, type SessionInputDelivery, type SessionInputDeps } from '../lib/sessionInput.js'
+import { SessionInputController, type MessageReceipt, type SessionInputDelivery, type SessionInputDeps } from '../lib/sessionInput.js'
 import { passingHold } from '../lib/messageHolds.js'
 import type { ScreenReader } from '../lib/screenReader.js'
 import type { SubmissionReader } from '../lib/submissionReader.js'
@@ -215,7 +215,7 @@ export function createInput(deps: InputDeps) {
       releaseInput()
     }
   }
-  const submitAgent = (id: string, content: string, deliveryId?: string, inputContext?: string): void => {
+  const submitAgent = (id: string, content: string, deliveryId?: string, inputContext?: string, receipt?: MessageReceipt): void => {
     const record = resolve(id)
     const sessionId = record?.sessionId ?? id
     const engine = record?.engine ?? 'claude'
@@ -229,10 +229,11 @@ export function createInput(deps: InputDeps) {
     }
     console.log(`[msg] ${sid(sessionId)} recv · engine=${engine} · bytes=${Buffer.byteLength(adapted, 'utf8')}`)
     const target = record?.agentId ?? sessionId
-    if (inputContext) input.submit(target, adapted, deliveryId, inputContext)
+    if (receipt) input.submit(target, adapted, deliveryId, inputContext, receipt)
+    else if (inputContext) input.submit(target, adapted, deliveryId, inputContext)
     else input.submit(target, adapted, deliveryId)
   }
-  const messageRequest = createMessageRequest((id, content, context) => submitAgent(id, content, undefined, context), deps.typed)
+  const messageRequest = createMessageRequest((id, content, context, receipt) => submitAgent(id, content, undefined, context, receipt), deps.typed)
   return { input, deviceInput, acquireTerminalControl, submitAgent, messageRequest }
 }
 
@@ -243,18 +244,20 @@ export function createInput(deps: InputDeps) {
  *
  * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md).
  */
-export function createMessageRequest(submit: (id: string, content: string, inputContext?: string) => void, typed?: (id: string) => void) {
-  return (payload: Record<string, unknown>): void => {
+export function createMessageRequest(submit: (id: string, content: string, inputContext?: string, receipt?: MessageReceipt) => void, typed?: (id: string) => void) {
+  // [receipt]: what became of it, for the request's measurement (lib/sessionInput.ts `MessageReceipt`).
+  return (payload: Record<string, unknown>, receipt?: MessageReceipt): void => {
     const content = payload.content as string | undefined
     const target = (payload.agentId as string | undefined) || (payload.sessionId as string | undefined)
-    if (!content || !target) return
+    if (!content || !target) { receipt?.('invalid'); return }
     // A `message` frame is a person's: the windows' and the phone's composer. Agents and experiments deliver theirs
     // under a delivery id (`turns.deliver`), which never comes this way.
     typed?.(target)
     // From the relay this is only reached sealed: text typed into an agent is never taken from the relay
     // in the clear.
     const context = inputContextIn(payload.inputContext)
-    if (context) submit(target, content, context)
+    if (receipt) submit(target, content, context ?? undefined, receipt)
+    else if (context) submit(target, content, context)
     else submit(target, content)
   }
 }

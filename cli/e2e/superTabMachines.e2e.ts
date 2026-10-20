@@ -18,7 +18,7 @@ afterEach(async () => {
   await relay?.close(); relay = undefined
 })
 
-it('queues a teammate start without granting general machine access and resumes the same native receipt', async () => {
+it.each(['project', 'swarm'])('queues a teammate start with %s capacity and resumes the same native receipt', async scope => {
   const backend = await FakeBackend.start(); relay = backend
   const specs = [
     { machineId: 'd1'.repeat(16), computerId: 'pool-lead-fixture', name: 'Lead fixture', token: 'fixture-lead-token', account: 'lead', email: 'lead@example.com' },
@@ -34,13 +34,17 @@ it('queues a teammate start without granting general machine access and resumes 
   const project = join(b.projectsDir, 'contributed'); mkdirSync(project, { recursive: true })
   const agents: Array<Record<string, any>> = [], starts = new Map<string, Record<string, any>>()
   let generation = 'grant-1', observations = 0
-  const pool = { machineId: memberMachine.machineId, generation, cwd: project, engines: ['codex'], maxAgents: 2, paused: false }
+  const pool = { machineId: memberMachine.machineId, generation,
+    cwd: scope === 'swarm' ? join(b.dataDir, 'swarm-projects', 'pool-tab') : project,
+    ...(scope === 'swarm' ? { scope } : {}), engines: ['codex'], maxAgents: 2, paused: false }
+  const projects = scope === 'swarm' ? [{ id: 'lead', conversationIds: ['lead'],
+    repository: { machineId: memberMachine.machineId, cwd: project, repositoryUrl: null } }] : undefined
   const id = (machine: string, harness: string) => createHash('sha256').update(JSON.stringify([machine, harness])).digest('hex').slice(0, 24)
   backend.superTabs = async (method, raw, body, caller) => {
     const path = new URL(raw, backend.httpUrl).pathname
     if (path.endsWith('/pools')) {
       expect(path.split('/')[4]).toBe(caller.machineId)
-      return { data: caller.machineId === memberMachine.machineId && generation ? [{ tabId: 'pool-tab', machine: pool, starts: [...starts.values()].filter(s => !s.harnessId || !s.poolSettled), harnessIds: agents.filter(a => a.machineId === caller.machineId).map(a => a.harnessId) }] : [] }
+      return { data: caller.machineId === memberMachine.machineId && generation ? [{ tabId: 'pool-tab', machine: pool, projects, starts: [...starts.values()].filter(s => !s.harnessId || !s.poolSettled), harnessIds: agents.filter(a => a.machineId === caller.machineId).map(a => a.harnessId) }] : [] }
     }
     if (path.includes('/hosts/') && path.includes('/starts/')) {
       expect(caller.account).toBe('member')
@@ -57,7 +61,7 @@ it('queues a teammate start without granting general machine access and resumes 
     }
     if (path.includes('/hosts/')) return { data: path.endsWith('/assignments') ? [] : agents.filter(a => a.machineId === caller.machineId).map(agent => ({ tabId: 'pool-tab', agent, observers: [] })) }
     if (path.includes('/machines/')) { expect(caller.account).toBe('member'); expect(body.generation).toBe(generation); observations++; return { data: { revision: observations } } }
-    if (path === '/api/super-tabs/pool-tab') return { data: { state: { id: 'pool-tab', agents, project: { machineId: memberMachine.machineId, cwd: project, repositoryUrl: null } }, revision: observations } }
+    if (path === '/api/super-tabs/pool-tab') return { data: { state: { id: 'pool-tab', agents, projects, project: { machineId: memberMachine.machineId, cwd: project, repositoryUrl: null } }, revision: observations } }
     if (path.includes('/starts/')) return { data: starts.get(path.split('/').at(-1)!) }
     if (path.endsWith('/commands')) {
       const c = body.command
@@ -77,13 +81,14 @@ it('queues a teammate start without granting general machine access and resumes 
   await Promise.all(daemons.map(d => d.start()))
   await until('both fixture accounts connected', () => backend.nodeUp(leadMachine.machineId) && backend.nodeUp(memberMachine.machineId), 30000)
   const onA = await LocalClient.connect(a, { machineId: leadMachine.machineId }), onB = await LocalClient.connect(b, { machineId: memberMachine.machineId }); clients.push(onA, onB)
-  const setup = { action: 'prepareContribution', tabId: 'pool-tab', operationId: 'fixture-setup' }
+  const setup = { action: 'prepareContribution', tabId: 'pool-tab', operationId: 'fixture-setup', ...(scope === 'swarm' ? { scope } : {}) }
   const prepared = await until('one-field machine preparation', async () => {
     const value = await onB.request('super_tabs', setup, 30000)
     expect(value.error, JSON.stringify(value)).toBeUndefined()
     return value.state === 'ready' ? value : null
   }, 45000, 250)
-  expect(prepared.cwd).toBe(project)
+  expect(prepared.cwd).toBe(pool.cwd)
+  if (scope === 'swarm') expect(prepared.scope).toBe('swarm')
   expect(prepared.engines).toEqual(expect.arrayContaining(['claude', 'codex']))
   expect(prepared.maxAgents).toBeGreaterThan(0)
   expect((await onB.request('agents_list')).agents).toHaveLength(0)

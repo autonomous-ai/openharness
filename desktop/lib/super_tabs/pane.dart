@@ -1,6 +1,6 @@
 import 'package:flutter/widgets.dart';
 
-/// A Super Tab's view of an existing terminal. The renderer and session stay
+/// A Swarm's view of an existing terminal. The renderer and session stay
 /// shared with ordinary panes; presentation belongs to this placement only.
 /// Group membership owns the visible panes; individual panes cannot be closed.
 class SuperPane extends InheritedWidget {

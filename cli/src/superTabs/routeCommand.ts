@@ -111,6 +111,8 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const group = conversations.find(c => c.id === input.conversationId)
   if (!group) return { error: 'NOT_FOUND', detail: 'No such group in this Super Tab.' }
   if (group.leadId !== value.agentId) return { error: 'LEAD_REQUIRED', detail: 'Only the Lead of this group routes its work.' }
+  const projectId = String(group.projectId ?? 'lead')
+  const project = list(state.projects).find(p => p.id === projectId)
   // The group's Lead and the tab Lead coordinate; neither is a worker candidate even when idle.
   const busy = new Set([String(group.leadId), String(conversations.find(c => c.id === 'lead')?.leadId),
     ...conversations.filter(c => active(c.assignment)).map(c => String(object(c.assignment).agentId))])
@@ -122,7 +124,17 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // The Lead's own machine is the account's even when the list could not be read.
   if (!machines.has(where.machineId)) machines.set(where.machineId, { name: where.machineId, status: 'unknown', account: true })
   for (const m of members) if (!machines.has(String(m.machineId))) machines.set(String(m.machineId), { name: String(m.machineId), status: 'unknown', account: false })
-  for (const pool of list(state.machines)) machines.set(String(pool.machineId), { name: String(pool.name), status: 'contributed', account: false, pool })
+  for (const original of list(state.machines)) {
+    const repository = object(project?.repository)
+    const pool: Json = { ...original,
+      ...(original.scope === 'swarm' ? { cwd: repository.machineId === original.machineId
+        ? repository.cwd : `${String(original.cwd).replace(/\/+$/, '')}/${projectId}` } : {}),
+      ...(original.scope !== 'swarm' && projectId !== 'lead' ? { projectUnavailable: true } : {}),
+      ...(original.scope === 'swarm' && repository.machineId !== original.machineId && typeof repository.repositoryUrl !== 'string'
+        ? { repositoryUnavailable: true } : {}),
+    }
+    machines.set(String(pool.machineId), { name: String(pool.name), status: 'contributed', account: false, pool })
+  }
   const enabled = policy.models.filter(m => m.enabled)
 
   // The probes do not wait for the context reads: the machines, the task's folder and the group's talk and log are read
@@ -206,6 +218,8 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     const blocked = [...(!fresh ? [OFFLINE] : []), ...(pool.paused ? ['New work is paused on this machine.'] : [])]
     const needs = startRequirements(a.needs), tools = object(observed.tools)
     const newReasons = [...blocked,
+      ...(pool.projectUnavailable === true ? ['Its owner must add this machine to the swarm again to support other projects.'] : []),
+      ...(pool.repositoryUnavailable === true ? ['Share a repository for this project before starting agents on this machine.'] : []),
       ...(pool.availableSlots === 0 ? ['This machine has no available agent slots.'] : []),
       ...(!finite(resources.projectDiskFreeBytes) || resources.projectDiskFreeBytes < needs.diskBytes ? ['The project has insufficient measured free disk.'] : []),
       ...(!finite(resources.memoryTotalBytes) || !finite(resources.memoryUsedBytes) || resources.memoryTotalBytes - resources.memoryUsedBytes < needs.memoryBytes ? ['Insufficient measured free memory.'] : []),

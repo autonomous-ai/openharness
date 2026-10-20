@@ -337,7 +337,7 @@ void main() {
     expect(f.connection.joins.single['command'], containsPair('lead', false));
     expect(f.app.swarms, hasLength(1));
     expect(f.app.panes, isEmpty);
-    // A successful join clears its journal; it was never a new Super Tab.
+    // A successful join clears its journal; it was never a new Swarm.
     expect(
       f.store.values.entries
           .where((entry) => entry.key.startsWith('super_tab.launch.'))

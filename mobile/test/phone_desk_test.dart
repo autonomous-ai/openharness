@@ -221,6 +221,75 @@ void main() {
     },
   );
 
+  // Find's `+` after the last tab chip: the desktop's New Tab.
+  test(
+    'an agent made from the + after the tabs opens a tab of its own, and the phone is in it',
+    () async {
+      await join();
+      desk.note('t1');
+
+      desk.adopt(
+        (machineId: 'm', agentId: 'new'),
+        name: 'Fix login',
+        newTab: true,
+      );
+
+      expect([for (final tab in desk.tabs) tab.name], [
+        'Desktop',
+        'Docker',
+        'Fix login',
+      ]);
+      final made = desk.tabs.last;
+      expect(_agentsOf(desk, made.id), ['new']);
+      expect(made.nameIsCustom, isFalse);
+      expect(_agentsOf(desk, 't1'), ['a', 'b']);
+      expect(desk.activeTabId, made.id);
+      await pumpEventQueue();
+      expect(backend.received.map((op) => op['op']), [
+        'tab.create',
+        'pane.add',
+      ]);
+      expect(backend.received.last['agentId'], 'new');
+    },
+  );
+
+  test('a tab of its own wins over a tab picked by hand', () async {
+    await join();
+    desk.note('t1');
+
+    desk.adopt((machineId: 'm', agentId: 'new'), tabId: 't2', newTab: true);
+    await pumpEventQueue();
+
+    expect(desk.tabs, hasLength(3));
+    expect(_agentsOf(desk, 't2'), ['c']);
+    expect(_agentsOf(desk, desk.tabs.last.id), ['new']);
+    expect(desk.activeTabId, desk.tabs.last.id);
+  });
+
+  test('a tab of its own is for that agent alone, not the next', () async {
+    await join();
+    desk.note('t2');
+
+    desk.adopt((machineId: 'm', agentId: 'new'), newTab: true);
+    final made = desk.tabs.last.id;
+    // The next agent made on the phone — a fork, a form opened later — joins the tab the phone
+    // is in, which is the new one now.
+    desk.adopt((machineId: 'm', agentId: 'next'));
+    await pumpEventQueue();
+
+    expect(desk.tabs, hasLength(3));
+    expect(_agentsOf(desk, made), ['new', 'next']);
+  });
+
+  test('a phone with no desk makes no tab for a new agent', () async {
+    // Never joined: the desk has not answered, so nothing can be written.
+    desk.adopt((machineId: 'm', agentId: 'new'), newTab: true);
+    await pumpEventQueue();
+
+    expect(desk.tabs, isEmpty);
+    expect(backend.received, isEmpty);
+  });
+
   test('a tab picked by hand counts with the phone in no tab too', () async {
     await join();
     desk.note(null);

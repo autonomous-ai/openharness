@@ -53,7 +53,9 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **A harness** in the workspace | A running agent session with its own conversation and working context. | Start three Codex harnesses. |
 | **A harness** in the Store | A reusable setup containing agent instructions, tools, and an optional viewer. | Install the Blender harness. |
 | **Tab** | A workspace group of harnesses. | Frontend and Backend tabs. |
-| **Super Tab** | A collaborative tab with a lead, member agents and shared conversations. | Discuss the plan with the lead, then follow work in its group conversations. |
+| **Swarm** | An invite-only collaborative tab containing projects, people, agents and contributed machines. | Open your company Swarm beside your regular tabs. |
+| **Project in a Swarm** | An initiative with its own lead, repository, sharing and workgroups. | Discuss Lamp OS with its lead; expand it to follow a workgroup. |
+| **Workgroup** | A numbered conversation for an independently assignable outcome within a project. | Follow #12 Offline editing. |
 | **Pane** | A visible view of a harness, terminal, or viewer. | Split right; close pane. |
 | **Terminal** | A shell for entering commands. | New terminal. |
 | **Project** | The files and working context for the work, on a particular computer. | Choose the website project. |
@@ -79,11 +81,16 @@ no CLI keeps its maker's name (Fo).
 
 A pane is a view, so closing a pane or tab closes views. **Stop Harness** ends the
 running harness. Adding harnesses to a tab groups them without a separate team
-setup. **Super Tab** adds shared conversations and coordination across explicitly contributed agents;
-people and agents participate in the same flat conversation list. Its creation flow is experimental
-and hidden during initial validation. Existing tabs keep their behavior. The older **Agent Messages**
-protocol (`harness send`) and stored account settings remain compatible, while Super Tab owns its
-coordination controls. The word *tab* can also name the keyboard key or a browser tab; context
+setup. A **Swarm** occupies one tab in that same tab bar. A person can belong to several Swarms.
+Its project names open their lead chats; a separate chevron reveals each project's workgroups.
+People, agents and machines belong to the Swarm. A project's **Public** visibility means everyone
+in that Swarm; **Private** means its owner and explicitly invited project members. Swarms themselves
+are invite-only. Public communities and a compute marketplace are outside this version.
+Cmd-S opens the existing lead creation form for a new Swarm and its first project; **+ Project**
+reuses that form inside the current Swarm. Store uses Cmd-Control-S. Existing ordinary tabs keep
+their behavior. The internal `superTab` identifiers, `harness super-tab` protocol and stored account
+settings remain compatible; the older internal `Swarm` layout class still represents an ordinary
+workspace tab. The word *tab* can also name the keyboard key or a browser tab; context
 distinguishes them.
 
 A project belongs to a computer; identical paths on different computers do not

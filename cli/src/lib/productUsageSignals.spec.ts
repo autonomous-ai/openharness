@@ -2,9 +2,10 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expect, it, vi } from 'vitest'
-import { failureKind, launchErrorCode, productObservation, productUsageIntent, productUsageLaunch, productUsageRequest, productUsageSource } from './productUsageSignals.js'
-import { LAUNCH_ERROR_CODES, PRODUCT_USAGE_FLOWS, PRODUCT_USAGE_METRICS, PRODUCT_USAGE_SETUP_METRICS } from './productUsageContract.js'
-import { HEALTH_MEASURES } from './productHealthContract.js'
+import { failureKind, launchErrorCode, messageReceipt, productObservation, productUsageIntent, productUsageLaunch, productUsageRequest, productUsageSource } from './productUsageSignals.js'
+import type { MessageOutcome } from './sessionInput.js'
+import { LAUNCH_ERROR_CODES, PRODUCT_USAGE_AUTOMATIC_ACTIONS, PRODUCT_USAGE_FLOWS, PRODUCT_USAGE_METRICS, PRODUCT_USAGE_SETUP_METRICS } from './productUsageContract.js'
+import { AUTOMATIC_POLL_ACTIONS, HEALTH_MEASURES } from './productHealthContract.js'
 
 it('separates automated polling, tool and app RPCs without inspecting error objects or content', () => {
   const emit = vi.fn()
@@ -39,6 +40,11 @@ it('counts what a person on the phone asked for as the phone\'s, and its polls a
     'request_phone_resume_error_other', 'request_phone_resume_reason_busy',
     'request_automatic_history_ok', 'request_automatic_model_list_ok']))
   expect(names).not.toContain('request_phone_history_ok')
+  // One list of the fixed polls, as the feature counts name them.
+  expect([...AUTOMATIC_POLL_ACTIONS]).toEqual([...PRODUCT_USAGE_AUTOMATIC_ACTIONS])
+  // The phone's polls again, apart from every app's `automatic`; nothing else of the phone's.
+  expect(names.filter(name => name.startsWith('request_phone_automatic_'))).toEqual(['request_phone_automatic_history_started',
+    'request_phone_automatic_history_ok', 'request_phone_automatic_model_list_started', 'request_phone_automatic_model_list_ok'])
   for (const name of names) expect(PRODUCT_USAGE_METRICS).toContain(name)
   const work = vi.fn()
   productUsageIntent('message', 'interactive', 'agent', 'phone', work)
@@ -110,14 +116,96 @@ it('counts the code of an `other` create or resume refusal beside its kind, so e
   productUsageRequest('agent_resume', emit, () => 0, 'app')('SESSION_NOT_FOUND', 'failed', false)
   productUsageRequest('agent_resume', emit, () => 0, 'app')(undefined, undefined, false, false)
   // Other actions keep their kinds only.
-  productUsageRequest('agent_restart', emit, () => 0, 'app')('RESTART_FAILED', 'failed', false)
+  productUsageRequest('agent_fork', emit, () => 0, 'app')('PRIVATE_FORK_ERROR', 'failed', false)
   const names: string[] = emit.mock.calls.flat()
   const family = (prefix: string) => names.filter(name => name.startsWith(prefix)).sort()
   expect(family('create_error_code_')).toEqual(['create_error_code_none', 'create_error_code_prompt_too_long', 'create_error_code_unlisted'])
   expect(names.filter(name => name === 'create_error_other')).toHaveLength(3)
   expect(family('resume_error_code_')).toEqual(['resume_error_code_none', 'resume_error_code_session_not_found'])
   expect(names.filter(name => name === 'resume_error_other')).toHaveLength(2)
-  expect(names.some(name => name.startsWith('restart_error_code_'))).toBe(false)
+  expect(names.some(name => name.startsWith('fork_error_code_'))).toBe(false)
+  for (const name of names) expect(PRODUCT_USAGE_METRICS).toContain(name)
+  expect(JSON.stringify(names)).not.toContain('PRIVATE_')
+})
+
+it('measures a person\'s message by what became of it, under its source, once', () => {
+  const said = (outcome: MessageOutcome, source: 'phone' | 'app' = 'phone') => {
+    const emit = vi.fn()
+    const receipt = messageReceipt(productUsageRequest('message', emit, () => 0, source))
+    receipt(outcome)
+    receipt('started')
+    return emit.mock.calls.flat().filter(name => name !== `request_${source}_message_started`)
+  }
+  expect(said('started')).toEqual(['request_phone_message_ok'])
+  expect(said('taken', 'app')).toEqual(['request_app_message_ok'])
+  expect(said('agent_gone')).toEqual(['request_phone_message_failed', 'request_phone_message_error_not_found'])
+  expect(said('runtime_gone')).toEqual(['request_phone_message_failed', 'request_phone_message_error_unavailable'])
+  for (const busy of ['held', 'withheld', 'queue_full'] as const) {
+    expect(said(busy)).toEqual(['request_phone_message_failed', 'request_phone_message_error_conflict'])
+  }
+  for (const late of ['not_submitted', 'queue_expired'] as const) {
+    expect(said(late)).toEqual(['request_phone_message_failed', 'request_phone_message_error_timeout'])
+  }
+  expect(said('invalid')).toEqual(['request_phone_message_failed', 'request_phone_message_error_invalid'])
+  expect(said('paste_failed')).toEqual(['request_phone_message_failed', 'request_phone_message_error_other'])
+  for (const unsure of ['ambiguous', 'prompt_mismatch', 'turn_ended'] as const) {
+    expect(said(unsure)).toEqual(['request_phone_message_unknown'])
+  }
+  expect(said('cancelled')).toEqual(['request_phone_message_cancelled'])
+  // The message's own name is never a product counter, nor its time: as before, only its request's.
+  const every = (['started', 'agent_gone', 'cancelled', 'ambiguous'] as const).flatMap(outcome => said(outcome))
+  for (const name of every) {
+    expect(name).toMatch(/^request_phone_message_/)
+    expect(PRODUCT_USAGE_METRICS).toContain(name)
+  }
+})
+
+it('names a stop the machine could not confirm, rather than unlisted', () => {
+  // lib/stopAgentService.ts: `agent_delete` is Stop, and STOP_UNCONFIRMED is its own refusal.
+  const emit = vi.fn()
+  productUsageRequest('agent_delete', emit, () => 0, 'phone')('STOP_UNCONFIRMED', undefined, false)
+  const names: string[] = emit.mock.calls.flat()
+  expect(names).toContain('delete_error_code_stop_unconfirmed')
+  expect(names).toContain('phone_delete_error_code_stop_unconfirmed')
+  expect(names.filter(name => name.endsWith('_unlisted'))).toEqual([])
+  for (const name of names.filter(name => name.includes('error_code_'))) expect(PRODUCT_USAGE_METRICS).toContain(name)
+})
+
+it('counts every delete or restart refusal by its code, whatever its kind, so each family adds up to `_failed`', () => {
+  const emit = vi.fn()
+  productUsageRequest('agent_delete', emit, () => 0, 'phone')('DELETE_FAILED', undefined, false)
+  productUsageRequest('agent_delete', emit, () => 0, 'phone')('PRIVATE_ERROR_WITH_PATH', 'failed', false)
+  productUsageRequest('agent_delete', emit, () => 0, 'phone')({ message: 'PRIVATE_OBJECT' }, undefined, false)
+  productUsageRequest('agent_delete', emit, () => 0, 'phone')('DELETE_IN_PROGRESS', undefined, false)
+  productUsageRequest('agent_restart', emit, () => 0, 'phone')('SPAWN_FAILED', undefined, false)
+  productUsageRequest('agent_restart', emit, () => 0, 'phone')('TMUX_UNAVAILABLE', 'failed', false)
+  productUsageRequest('agent_restart', emit, () => 0, 'phone')('RESTART_FAILED', 'failed', false)
+  // Another client's: in the totals, never in the phone's own families.
+  productUsageRequest('agent_delete', emit, () => 0, 'app')('DELETE_FAILED', undefined, false)
+  productUsageRequest('agent_restart', emit, () => 0, 'tool')('SPAWN_FAILED', undefined, false)
+  // Answered without a refusal: no code.
+  productUsageRequest('agent_delete', emit, () => 0, 'phone')(undefined, undefined, false)
+  productUsageRequest('agent_restart', emit, () => 0, 'phone')(undefined, 'created', true)
+  const names: string[] = emit.mock.calls.flat()
+  const family = (prefix: string) => names.filter(name => name.startsWith(prefix)).sort()
+  expect(family('delete_error_code_')).toEqual(['delete_error_code_delete_failed', 'delete_error_code_delete_failed',
+    'delete_error_code_delete_in_progress', 'delete_error_code_none', 'delete_error_code_unlisted'])
+  expect(names.filter(name => name === 'delete_failed')).toHaveLength(5)
+  expect(family('restart_error_code_')).toEqual(['restart_error_code_restart_failed', 'restart_error_code_spawn_failed',
+    'restart_error_code_spawn_failed', 'restart_error_code_tmux_unavailable'])
+  expect(names.filter(name => name === 'restart_failed')).toHaveLength(4)
+  // The phone's own: its four delete and three restart refusals, nobody else's.
+  expect(family('phone_delete_error_code_')).toEqual(['phone_delete_error_code_delete_failed',
+    'phone_delete_error_code_delete_in_progress', 'phone_delete_error_code_none', 'phone_delete_error_code_unlisted'])
+  expect(family('phone_restart_error_code_')).toEqual(['phone_restart_error_code_restart_failed',
+    'phone_restart_error_code_spawn_failed', 'phone_restart_error_code_tmux_unavailable'])
+  expect(names.filter(name => name === 'restart_error_setup')).toHaveLength(3)
+  // The phone's own split is kept beside them.
+  expect(names.filter(name => name === 'request_phone_delete_error_other')).toHaveLength(3)
+  expect(names).toContain('request_phone_delete_error_conflict')
+  expect(names.filter(name => name === 'request_phone_restart_error_setup')).toHaveLength(2)
+  expect(names).toContain('delete_ok')
+  expect(names).toContain('restart_ok')
   for (const name of names) expect(PRODUCT_USAGE_METRICS).toContain(name)
   expect(JSON.stringify(names)).not.toContain('PRIVATE_')
 })

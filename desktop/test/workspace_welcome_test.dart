@@ -107,7 +107,7 @@ void main() {
       expect(find.text('Harness like a boss.'), findsOneWidget);
       expect(find.text('✓'), findsNothing);
       expect(find.text('○'), findsNothing);
-      for (final hint in ['⌘N', '⌘P', '⌘I', '⌘M', '⌘S']) {
+      for (final hint in ['⌘N', '⌘P', '⌘I', '⌘M', '⌃⌘S']) {
         expect(find.text(hint), findsOneWidget);
       }
       expect(find.text('⌘O'), findsNothing);

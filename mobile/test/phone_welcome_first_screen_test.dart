@@ -351,8 +351,8 @@ void main() {
       );
     }
     // The first step is ②'s words (owner, 2026-10-15): "On your computer, go to", the address,
-    // then "Install Harness" — all above the sign-in. The address is words in the step, not ②'s
-    // green button, which outweighed the camera.
+    // then "Download and install Harness" — all above the sign-in. The address is words in the
+    // step, not ②'s green button, which outweighed the camera.
     final address = find.byKey(const ValueKey('go-address'));
     final install = find.text(OnboardingCopy.installStep);
     expect(address, findsOneWidget);
@@ -420,6 +420,8 @@ void main() {
     final first = computerSteps(null).first;
     expect(first.title, OnboardingCopy.goToHeadline);
     expect(first.note, OnboardingCopy.installStep);
+    // The step says the link is the download (owner, 2026-10-19).
+    expect(first.note, 'Download and install Harness');
     expect(first.note, goToSteps(null).first.title);
   });
 

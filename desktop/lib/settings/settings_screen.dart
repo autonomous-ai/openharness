@@ -43,12 +43,16 @@ Future<void> showSettingsScreen(
     PageRouteBuilder<SettingsSection>(
       // Opaque: it covers the window, and letting the shell show through would
       // mean compositing four live terminals under it for nothing.
-      pageBuilder: (context, animation, _) => SettingsScreen(
-        notifier: notifier,
-        initialSection: initialSection,
-        experimentalFeatures: experimentalFeatures,
-        source: source,
-        compactBelow: compactBelow,
+      // From whichever door opened it, Settings says when it is on top: the
+      // title-bar row stays live over it and closes it before acting.
+      pageBuilder: (context, animation, _) => _OnTop(
+        child: SettingsScreen(
+          notifier: notifier,
+          initialSection: initialSection,
+          experimentalFeatures: experimentalFeatures,
+          source: source,
+          compactBelow: compactBelow,
+        ),
       ),
       transitionDuration: Duration.zero,
       reverseTransitionDuration: Duration.zero,
@@ -59,6 +63,48 @@ Future<void> showSettingsScreen(
   if (action == SettingsSection.customize && context.mounted) {
     await (onCustomize?.call() ?? showHarnessCustomizePane(context));
   }
+}
+
+/// The Settings page while it is the current route, nothing over it; null
+/// otherwise. A page, not a dialog: the workspace keeps its title-bar row live
+/// over it, and a click there pops it ([ModalRoute.navigator]) before acting.
+final settingsPageOnTop = ValueNotifier<ModalRoute<Object?>?>(null);
+
+class _OnTop extends StatefulWidget {
+  const _OnTop({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_OnTop> createState() => _OnTopState();
+}
+
+class _OnTopState extends State<_OnTop> {
+  ModalRoute<Object?>? _route;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _route = ModalRoute.of(context);
+    if (ModalRoute.isCurrentOf(context) ?? false) {
+      settingsPageOnTop.value = _route;
+    } else {
+      _leave();
+    }
+  }
+
+  void _leave() {
+    if (settingsPageOnTop.value == _route) settingsPageOnTop.value = null;
+  }
+
+  @override
+  void dispose() {
+    _leave();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 /// Settings: pick on the left, work on the right.

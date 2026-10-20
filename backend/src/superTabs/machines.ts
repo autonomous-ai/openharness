@@ -1,5 +1,7 @@
 import { z } from 'zod'
 import { fail, person, type AgentStart, type AgentStartRequest, type SuperTabState } from './model.js'
+import { groupProject } from './projects.js'
+import { conversation } from './model.js'
 
 /** An explicit grant for this tab and project. It never creates a MachineShare. */
 export interface ContributedMachine {
@@ -9,6 +11,7 @@ export interface ContributedMachine {
   membershipGeneration: string
   generation: string
   cwd: string
+  scope?: 'swarm'
   engines: string[]
   maxAgents: number
   paused: boolean
@@ -63,7 +66,12 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   if (!pool) return null
   if (start && start.poolGeneration !== pool.generation) fail('CONTRIBUTION_REVOKED', 'This machine contribution changed. Reconcile the original start.', 403)
   if (pool.paused) fail('MACHINE_PAUSED', 'New work is paused on this machine.')
-  if (request.cwd !== pool.cwd || !pool.engines.includes(request.engine)
+  const project = groupProject(state, conversation(state, request.conversationId))
+  if (!pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
+  const cwd = pool.scope === 'swarm'
+    ? project.repository?.machineId === pool.machineId ? project.repository.cwd : `${pool.cwd.replace(/\/+$/, '')}/${project.id}`
+    : pool.cwd
+  if (request.cwd !== cwd || !pool.engines.includes(request.engine)
     || request.codexHome || request.gridModel || request.gridName || request.permissionMode) {
     fail('OUTSIDE_CONTRIBUTION', 'Use the contributed project, engine and default account settings.', 403)
   }

@@ -127,7 +127,7 @@ class _TabInvitesSectionState extends State<TabInvitesSection> {
               if (_loadingSuper) const LinearProgressIndicator(),
               if (_superError != null)
                 SettingRow(
-                  title: 'Could not load Super Tabs',
+                  title: 'Could not load Swarms',
                   detail: _superError,
                   control: TextButton(
                     onPressed: _refreshSuper,
@@ -138,7 +138,7 @@ class _TabInvitesSectionState extends State<TabInvitesSection> {
                 SettingRow(
                   title: invite['name'] as String,
                   detail:
-                      'Super Tab · ${invite['role'] == 'viewer' ? 'Can view' : 'Can collaborate'}',
+                      'Swarm · ${invite['role'] == 'viewer' ? 'Can view' : 'Can collaborate'}',
                   control: FilledButton(
                     onPressed: _accepting == null
                         ? () => _acceptSuper(invite)
@@ -151,7 +151,7 @@ class _TabInvitesSectionState extends State<TabInvitesSection> {
               for (final tab in _superTabs)
                 SettingRow(
                   title: tab['name'] as String,
-                  detail: 'Super Tab',
+                  detail: 'Swarm',
                   control: TextButton(
                     onPressed: () {
                       widget.notifier.openSuperTab(

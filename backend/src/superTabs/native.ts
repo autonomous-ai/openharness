@@ -4,6 +4,8 @@ import { z } from 'zod'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { activeWork, agent, author, conversation, fail, stableId, SuperTabError,
   type Actor, type Agent, type Author, type SuperTabState } from './model.js'
+import { canReadProject, groupProject, readConversation } from './projects.js'
+import { noteProjectReports } from './projectUpdates.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 export const openNativeSchema = z.object({ operationId: id, conversationId: id, agentId: id }).strict()
@@ -38,7 +40,7 @@ export class SuperTabNativeStore {
     const binding = record.binding as unknown as Binding
     const operator = author(state, { kind: 'person', userId: binding.operator.id, email: binding.operator.name }, true)
     const target = agent(state, record.agentId)
-    const group = conversation(state, record.conversationId)
+    const group = readConversation(state, { kind: 'person', userId: binding.operator.id, email: binding.operator.name }, record.conversationId)
     if (operator.membershipGeneration !== binding.operator.membershipGeneration || group.archived || !group.agentIds.includes(target.id)
       || target.harnessId !== binding.harnessId || target.machineId !== binding.machineId || target.machineOwnerId !== binding.machineOwnerId
       || target.contributorId !== binding.contributorId || target.membershipGeneration !== binding.contributionGeneration
@@ -62,7 +64,8 @@ export class SuperTabNativeStore {
     return this.deps.transaction(async tx => {
       const { state } = await this.deps.row(tx, user, tabId)
       const operator = author(state, { kind: 'person', userId: user.sub, email: user.email }, true)
-      const target = agent(state, request.agentId), group = conversation(state, request.conversationId)
+      const target = agent(state, request.agentId)
+      const group = readConversation(state, { kind: 'person', userId: user.sub, email: user.email }, request.conversationId)
       if (group.archived || !group.agentIds.includes(target.id)) fail('AGENT_UNAVAILABLE', 'Choose an agent in this conversation.')
       await this.deps.agentGrant(tx, state, target)
       const grant = await this.deps.contribution(tx, state, { kind: 'person', userId: user.sub, email: user.email }, target)
@@ -141,6 +144,8 @@ export class SuperTabNativeStore {
           membershipGeneration: lead.membershipGeneration, authorKind: 'person', authorId: binding.operator.id,
           authorGeneration: binding.operator.membershipGeneration } })
       }
+      noteProjectReports(state, [{ id: eventId, conversationId: group.id, author: observedBy, text,
+        replyTo: null, recipients }], revision, Date.now())
       await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: { revision, state: json(state) } })
       await tx.superTabNativeContext.update({ where: { id: contextId }, data: { lastEventId: eventId } })
       const result = { eventId, revision }
@@ -162,6 +167,11 @@ export async function revokeNativeContexts(tx: Transaction, before: SuperTabStat
     const current = after.conversations.find(c => c.id === group.id)
     if (!current || current.archived) conditions.push({ conversationId: group.id })
     else {
+      for (const member of after.people) {
+        if (!canReadProject(after, { kind: 'person', userId: member.id, email: member.email }, groupProject(after, current))) {
+          conditions.push({ conversationId: group.id, userId: member.id })
+        }
+      }
       const removed = group.agentIds.filter(id => !current.agentIds.includes(id))
       if (removed.length) conditions.push({ conversationId: group.id, agentId: { in: removed } })
     }

@@ -142,6 +142,9 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
 
   Widget _agent(SuperTabAgent agent) {
     final name = c.snapshot!.agentName(agent.id), activity = _activity(agent);
+    final project = c.snapshot!.projects
+        .where((p) => p.id == agent.projectId)
+        .firstOrNull;
     final waiting = activity == 'Needs you';
     return GestureDetector(
       onSecondaryTapUp: (event) async {
@@ -183,7 +186,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           ],
         ),
         subtitle: Text(
-          activity,
+          '${project?.name ?? ''}  $activity'.trim(),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: DesktopChrome.metadata(
@@ -207,8 +210,6 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     return ListView(
       padding: const EdgeInsets.only(bottom: 12),
       children: [
-        _heading('Leads'),
-        for (final agent in leads) _agent(agent),
         _heading(
           'Humans',
           add: c.isOwner ? widget.onInvite : null,
@@ -256,7 +257,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
               : null,
           tooltip: 'Add agent',
         ),
-        for (final agent in agents) _agent(agent),
+        for (final agent in [...leads, ...agents]) _agent(agent),
       ],
     );
   }
@@ -284,12 +285,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
                         (_membersFraction + event.delta.dy / size.maxHeight)
                             .clamp(.25, .75),
                   ),
-                  child: SizedBox(
-                    height: 9,
-                    child: Center(
-                      child: Divider(height: 1, color: DesktopChrome.rim),
-                    ),
-                  ),
+                  child: const SizedBox(height: 9),
                 ),
               ),
             ),

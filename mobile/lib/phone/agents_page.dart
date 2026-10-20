@@ -283,13 +283,15 @@ Future<void> showAgentActions(
 /// (see `terminal_page.dart`). Callers that do not care can ignore it.
 ///
 /// [deskTabId] is the tab the new agent joins, for a door that picked one — see
-/// [NewAgentPage.deskTabId].
+/// [NewAgentPage.deskTabId]. [newDeskTab] gives it a tab of its own — see
+/// [NewAgentPage.newDeskTab].
 Future<void> openNewAgent(
   BuildContext context,
   AppNotifier notifier,
   String machineId, {
   String? folder,
   String? deskTabId,
+  bool newDeskTab = false,
   VoiceInputController? voice,
 }) => Navigator.of(context).push(
   phoneRoute(
@@ -298,6 +300,7 @@ Future<void> openNewAgent(
       machineId: machineId,
       folder: folder,
       deskTabId: deskTabId,
+      newDeskTab: newDeskTab,
       voice: voice,
     ),
   ),

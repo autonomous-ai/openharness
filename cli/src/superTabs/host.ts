@@ -54,6 +54,15 @@ const writeJournal = (file: string, journal: Journal) => {
   renameSync(temporary, file)
 }
 
+/** The same rules the launch prompt gives (desktop/lib/super_tabs/launch.dart). On 2026-10-20 a Lead answered one
+ * question twice, once in a long technical report. */
+const SUPER_TAB_REPLY_STYLE = 'Write to the people in this tab like a helpful colleague. Answer first, in plain words and in the language they used. '
+  + 'Keep it short: a few sentences, under about 150 words, unless they ask for detail. '
+  + 'Do not show commands, message or sequence ids, field names or error codes. '
+  + 'Do not describe your own tools or permission prompts unless that blocks what they asked. '
+  + 'Answer each message once: post with --reply-to MESSAGE_ID. If you have already answered a message, do not post again. '
+  + 'When you hand over finished work, give the result with the revision and links they need.'
+
 /** Owns only the handoff between a durable backend claim and the core's native input.
  * A process restart never interprets a lost acknowledgement as permission to type twice. */
 export class SuperTabHost {
@@ -192,14 +201,18 @@ export class SuperTabHost {
     }).finally(() => { this.receiptsRunning = null; this.nextReceiptsAt = this.now() + 5_000 })
   }
   private async checkReceipts(): Promise<void> {
-    const pending = Object.values(this.journal.entries).filter(e => e.stage === 'uncertain' || e.stage === 'delivered')
+    // A held entry (the terminal was busy) is also checked: if the agent answered the message meanwhile, it is not typed.
+    const pending = Object.values(this.journal.entries).filter(e => e.stage === 'uncertain' || e.stage === 'delivered'
+      || (e.stage === 'prepared' && !this.active.has(typedId(e))))
     for (let i = 0; i < Math.min(pending.length, 20); i++) {
       if (this.stopped) return
       const entry = pending[(this.receiptCursor++) % pending.length]
       try {
         const result = object(await backend(this.core, 'GET', `/api/super-tabs/${entry.tabId}/agents/${entry.agentId}/deliveries/${entry.deliveryId}`))
         if (this.stopped) return
-        if (result.id !== entry.deliveryId || !['delivered', 'confirmed', 'superseded', 'cancelled'].includes(String(result.status))) continue
+        // Held input is retired only by an answer. A cancelled one leaves the roster, so the claim path never sees it again; it stays in the journal.
+        const terminal = entry.stage === 'prepared' ? ['answered'] : ['delivered', 'confirmed', 'superseded', 'cancelled', 'answered']
+        if (result.id !== entry.deliveryId || !terminal.includes(String(result.status))) continue
         if (this.journal.entries[entry.deliveryId] !== entry || this.active.has(typedId(entry))) continue
         delete this.journal.entries[entry.deliveryId]
         this.persist()
@@ -251,7 +264,12 @@ export class SuperTabHost {
           const delivery = object(item)
           if (!identifier(delivery.id)) continue
           seen.add(delivery.id)
-          await this.accept(target, delivery, path)
+          try { await this.accept(target, delivery, path) } catch (error) {
+            // Answered (or resolved by a person) between the roster read and this call: nothing is owed, and the
+            // agent's other deliveries go on.
+            if (!(error instanceof SuperTabHostError) || error.code !== 'DELIVERY_RESOLVED') throw error
+            this.retire(delivery.id as string)
+          }
         }
       } catch (error) {
         // Authority checks and network failures both withhold input. A later fresh read may grant it again.
@@ -272,6 +290,16 @@ export class SuperTabHost {
       }
     }
     await this.leases()
+  }
+
+  private retire(deliveryId: string): void {
+    const entry = this.journal.entries[deliveryId]
+    if (!entry) return
+    const id = typedId(entry)
+    delete this.journal.entries[deliveryId]
+    this.authorized.delete(id)
+    if (this.active.delete(id)) this.core.turns.cancelDelivery(id)
+    this.persist()
   }
 
   private async accept(target: HostAgent, delivery: Json, path: string): Promise<void> {
@@ -312,12 +340,14 @@ export class SuperTabHost {
       return
     }
     const result = object(await backend(this.core, 'POST', `${path}/${deliveryId}`, { type: 'claim', claimId: entry.claimId }))
-    if (this.stopped) return
+    // The receipt check may have retired this held entry while the claim was in flight.
+    if (this.stopped || this.journal.entries[deliveryId] !== entry) return
     const message = object(result.message)
     if (typeof message.text !== 'string' || !identifier(message.conversationId)) throw new Error('The delivery has no message.')
     this.authorized.set(id, this.now() + 2_500)
     if (!(await this.leases()) || this.stopped) { this.authorized.delete(id); return }
     if (this.active.has(id)) return
+    if (this.journal.entries[deliveryId] !== entry) { this.authorized.delete(id); return }
     // The durable intent must exist before the core can write. A thrown disk write must not deliver.
     entry.stage = 'submitting'
     this.persist()
@@ -349,9 +379,9 @@ export class SuperTabHost {
       : ''
     return `You are participating in a shared Super Tab conversation (${group}). Other humans and agents see messages posted there.\n`
       + `Read its state: ${command} status\nRead this conversation: ${command} messages ${shellQuote(group)}\n`
-      + `Reply there: ${command} post ${shellQuote(group)} 'your message' UNIQUE_OPERATION_ID\n`
+      + `Reply there: ${command} post ${shellQuote(group)} 'your message' UNIQUE_OPERATION_ID --reply-to ${shellQuote(String(message.id))}\n`
       + `Manage agreed work and delegation: ${command} help. Leads: route before starting or assigning: ${command} route GROUP JSON. Use independently verifiable outcomes; local helper subagents need no separate group.\n`
-      + `Ask questions and post results in this conversation. Include the exact revision, evidence and usable output links. Replies to these delivered instructions must be posted here explicitly.\n\n`
+      + `Ask questions and post results in this conversation. ${SUPER_TAB_REPLY_STYLE} Replies to these delivered instructions must be posted here explicitly.\n\n`
       + native + reply + `Message ${String(message.id)} from ${String(object(message.author).name ?? 'a collaborator')}:\n${message.text}`
   }
 
