@@ -79,7 +79,8 @@ describe('check-install.ps1', () => {
         const script = `
 $ErrorActionPreference = 'Stop'
 $root = '${root.replace(/'/g, "''")}'
-$script:rows = @(ConvertFrom-Json -InputObject ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${rows}'))))
+# Windows PowerShell 5.1 emits the JSON array as one object; @() would nest the process rows.
+$script:rows = ConvertFrom-Json -InputObject ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${rows}')))
 function Processes([string]$filter) { $script:rows }
 function Fail([string]$message) { Write-Output "FAIL $message"; exit 1 }
 $script:clock = 0
