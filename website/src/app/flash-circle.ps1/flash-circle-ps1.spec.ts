@@ -101,9 +101,10 @@ Set-Content -LiteralPath $child -Encoding ascii -Value '[Console]::OutputEncodin
 $values = @("C:\\Nguy$([char]0x1EC5)n V$([char]0x0103)n A' & 100%\\firmware.bin", 'a"b', 'with space\\', '')
 $result = Invoke-Esptool (@('-NoProfile', '-File', $child) + $values) 5 'none'
 if ($result.Code -ne 0) { throw "echo child exited $($result.Code): $($result.Text)" }
-$seen = @($result.Text | ConvertFrom-Json)
-if ($seen.Count -ne $values.Count) { throw "expected $($values.Count) arguments, got $($seen.Count)" }
-for ($i = 0; $i -lt $values.Count; $i++) { if ($seen[$i] -cne $values[$i]) { throw "changed argument $i" } }
+# Windows PowerShell 5.1 emits a JSON array as one pipeline object; @() would nest it.
+$seen = ConvertFrom-Json -InputObject $result.Text
+if ($seen.Count -ne $values.Count) { throw "expected $($values.Count) arguments, got $($seen.Count); JSON: $($result.Text)" }
+for ($i = 0; $i -lt $values.Count; $i++) { if ($seen[$i] -cne $values[$i]) { throw "changed argument $i; JSON: $($result.Text)" } }
 `);
   }, 25_000);
 
