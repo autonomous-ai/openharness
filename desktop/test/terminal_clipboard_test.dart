@@ -102,7 +102,11 @@ void main() {
         .setMockMethodCallHandler(SystemChannels.platform, null);
   });
 
-  for (final platform in [TargetPlatform.macOS, TargetPlatform.linux, TargetPlatform.windows]) {
+  for (final platform in [
+    TargetPlatform.macOS,
+    TargetPlatform.linux,
+    TargetPlatform.windows,
+  ]) {
     onPlatform(
       platform,
       '$platform preserves shell control keys and pastes only on the clipboard chord',
@@ -118,13 +122,21 @@ void main() {
           LogicalKeyboardKey.keyC,
           LogicalKeyboardKey.keyD,
           LogicalKeyboardKey.keyR,
-          LogicalKeyboardKey.keyV,
+          if (platform != TargetPlatform.windows) LogicalKeyboardKey.keyV,
           LogicalKeyboardKey.keyZ,
         ]) {
           await key(tester, letter, ctrl: true);
         }
         await tester.pump(const Duration(milliseconds: 20));
-        expect(input(frames).codeUnits, [1, 2, 3, 4, 18, 22, 26]);
+        expect(input(frames).codeUnits, [
+          1,
+          2,
+          3,
+          4,
+          18,
+          if (platform != TargetPlatform.windows) 22,
+          26,
+        ]);
         expect(
           reads,
           0,
@@ -154,6 +166,177 @@ void main() {
       },
     );
   }
+
+  for (final selection in [
+    (
+      name: 'a selection',
+      output: 'hello world',
+      endX: 5,
+      endY: 0,
+      text: 'hello',
+    ),
+    (
+      name: 'only spaces selected',
+      output: '   ',
+      endX: 3,
+      endY: 0,
+      text: '   ',
+    ),
+    (
+      name: 'a selection ending on an empty line',
+      output: 'hello\r\n',
+      endX: 0,
+      endY: 1,
+      text: 'hello\n',
+    ),
+  ]) {
+    onPlatform(
+      TargetPlatform.windows,
+      'Ctrl+C with ${selection.name} copies and sends nothing',
+      (tester) async {
+        final app = createApp();
+        final frames = <TerminalBinaryFrame>[];
+        final session = liveSession('a0', frames);
+        session.terminal.write(selection.output);
+        await mount(tester, app, session);
+        final controller = tester
+            .widget<TerminalView>(find.byType(TerminalView))
+            .controller!;
+        controller.setSelection(
+          session.terminal.buffer.createAnchor(0, 0),
+          session.terminal.buffer.createAnchor(selection.endX, selection.endY),
+        );
+        await key(tester, LogicalKeyboardKey.keyC, ctrl: true);
+        await tester.pump(const Duration(milliseconds: 20));
+        expect(clipboard, selection.text);
+        expect(controller.selection, isNull);
+        expect(frames, isEmpty);
+        await tester.pumpWidget(const SizedBox());
+        session.dispose();
+        app.dispose();
+      },
+    );
+  }
+
+  onPlatform(TargetPlatform.windows, 'Ctrl+C without a selection sends ^C', (
+    tester,
+  ) async {
+    final app = createApp();
+    final frames = <TerminalBinaryFrame>[];
+    final session = liveSession('a0', frames);
+    await mount(tester, app, session);
+    await key(tester, LogicalKeyboardKey.keyC, ctrl: true);
+    await tester.pump(const Duration(milliseconds: 20));
+    expect(input(frames), '\x03');
+    expect(clipboard, 'clipboard text');
+    expect(reads, 0);
+    await tester.pumpWidget(const SizedBox());
+    session.dispose();
+    app.dispose();
+  });
+
+  onPlatform(
+    TargetPlatform.windows,
+    'Ctrl+V pastes text as Ctrl+Shift+V does',
+    (tester) async {
+      final app = createApp();
+      app.stateOf('m')!.terminalPasteRawAvailable = true;
+      final frames = <TerminalBinaryFrame>[];
+      final session = liveSession('a0', frames);
+      await mount(tester, app, session);
+      for (final shift in [false, true]) {
+        frames.clear();
+        clipboard = 'first line\nsecond line\tλ';
+        await key(tester, LogicalKeyboardKey.keyV, ctrl: true, shift: shift);
+        await tester.pump(const Duration(milliseconds: 20));
+        expect(frames, hasLength(1));
+        expect(frames.single.kind, TerminalBinaryKind.paste);
+        expect(utf8.decode(frames.single.bytes), 'first line\nsecond line\tλ');
+        expect(frames.single.streamId, session.streamId);
+        expect(input(frames), isEmpty);
+      }
+      expect(reads, 2);
+      await tester.pumpWidget(const SizedBox());
+      session.dispose();
+      app.dispose();
+    },
+  );
+
+  onPlatform(
+    TargetPlatform.windows,
+    'a pane this window does not control: Ctrl+C copies a selection, Ctrl+V behaves as Ctrl+Shift+V does',
+    (tester) async {
+      final app = createApp();
+      final frames = <TerminalBinaryFrame>[];
+      final controls = <String>[];
+      final session = liveSession('a0', frames, controls: controls);
+      session.terminal.write('hello world');
+      session.status = TerminalSessionStatus.takenOver;
+      await mount(tester, app, session);
+      expect(find.widgetWithText(FilledButton, 'Take control'), findsOneWidget);
+      final controller = tester
+          .widget<TerminalView>(find.byType(TerminalView))
+          .controller!;
+      controller.setSelection(
+        session.terminal.buffer.createAnchor(0, 0),
+        session.terminal.buffer.createAnchor(5, 0),
+      );
+      await key(tester, LogicalKeyboardKey.keyC, ctrl: true);
+      expect(clipboard, 'hello');
+      expect(controller.selection, isNull);
+      for (final shift in [false, true]) {
+        await key(tester, LogicalKeyboardKey.keyV, ctrl: true, shift: shift);
+      }
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(
+        reads,
+        0,
+        reason: 'A pane controlled elsewhere cannot initiate paste',
+      );
+      expect(frames, isEmpty);
+      expect(controls, isNot(contains('terminal_open')));
+      expect(session.status, TerminalSessionStatus.takenOver);
+      await tester.pumpWidget(const SizedBox());
+      session.dispose();
+      app.dispose();
+    },
+  );
+
+  onPlatform(
+    TargetPlatform.macOS,
+    'macOS keeps Command copy and paste and sends Ctrl+V to the program',
+    (tester) async {
+      final app = createApp();
+      app.stateOf('m')!.terminalPasteRawAvailable = true;
+      final frames = <TerminalBinaryFrame>[];
+      final session = liveSession('a0', frames);
+      session.terminal.write('hello world');
+      await mount(tester, app, session);
+      final controller = tester
+          .widget<TerminalView>(find.byType(TerminalView))
+          .controller!;
+      controller.setSelection(
+        session.terminal.buffer.createAnchor(0, 0),
+        session.terminal.buffer.createAnchor(5, 0),
+      );
+      await key(tester, LogicalKeyboardKey.keyC, cmd: true);
+      expect(clipboard, 'hello');
+      expect(frames, isEmpty);
+      clipboard = 'Mac paste';
+      await key(tester, LogicalKeyboardKey.keyV, cmd: true);
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(frames.single.kind, TerminalBinaryKind.paste);
+      expect(utf8.decode(frames.single.bytes), 'Mac paste');
+      frames.clear();
+      await key(tester, LogicalKeyboardKey.keyV, ctrl: true);
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(input(frames), '\x16');
+      expect(reads, 1);
+      await tester.pumpWidget(const SizedBox());
+      session.dispose();
+      app.dispose();
+    },
+  );
 
   onPlatform(
     TargetPlatform.macOS,
@@ -231,7 +414,11 @@ void main() {
     );
   }
 
-  for (final platform in [TargetPlatform.macOS, TargetPlatform.linux, TargetPlatform.windows]) {
+  for (final platform in [
+    TargetPlatform.macOS,
+    TargetPlatform.linux,
+    TargetPlatform.windows,
+  ]) {
     onPlatform(
       platform,
       '$platform copies selected output even in a read-only pane',
@@ -446,44 +633,50 @@ void main() {
     },
   );
 
-  onPlatform(
-    TargetPlatform.linux,
-    'Linux clipboard chord preserves remote image upload',
-    (tester) async {
-      final app = createApp();
-      app.stateOf('m')!.terminalImagePasteAvailable = true;
-      final frames = <TerminalBinaryFrame>[];
-      final controls = <String>[];
-      final session = liveSession(
-        'a0',
-        frames,
-        engine: 'claude',
-        controls: controls,
-      );
-      final png = Uint8List.fromList([137, 80, 78, 71]);
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(imageChannel, (_) async => png);
-      clipboard = null;
-      await mount(tester, app, session);
-      await key(tester, LogicalKeyboardKey.keyV, ctrl: true, shift: true);
-      expect(controls, contains('terminal_chunked_upload_begin'));
-      await session.handleFrame('terminal_chunked_upload_begin_result', {
-        'streamId': session.streamId,
-        'accepted': true,
-      });
-      await tester.pump();
-      expect(frames, hasLength(1));
-      expect(frames.single.kind, TerminalBinaryKind.imagePaste);
-      expect(frames.single.bytes, png);
-      await session.handleFrame('terminal_paste_image_result', {
-        'streamId': session.streamId,
-        'outcome': 'clipboard',
-      });
-      await tester.pump();
-      expect(session.uploadProgress, isNull);
-      await tester.pumpWidget(const SizedBox());
-      session.dispose();
-      app.dispose();
-    },
-  );
+  for (final (platform, shift) in [
+    (TargetPlatform.linux, true),
+    (TargetPlatform.windows, false),
+    (TargetPlatform.windows, true),
+  ]) {
+    onPlatform(
+      platform,
+      '$platform clipboard chord (Shift=$shift) preserves remote image upload',
+      (tester) async {
+        final app = createApp();
+        app.stateOf('m')!.terminalImagePasteAvailable = true;
+        final frames = <TerminalBinaryFrame>[];
+        final controls = <String>[];
+        final session = liveSession(
+          'a0',
+          frames,
+          engine: 'claude',
+          controls: controls,
+        );
+        final png = Uint8List.fromList([137, 80, 78, 71]);
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(imageChannel, (_) async => png);
+        clipboard = null;
+        await mount(tester, app, session);
+        await key(tester, LogicalKeyboardKey.keyV, ctrl: true, shift: shift);
+        expect(controls, contains('terminal_chunked_upload_begin'));
+        await session.handleFrame('terminal_chunked_upload_begin_result', {
+          'streamId': session.streamId,
+          'accepted': true,
+        });
+        await tester.pump();
+        expect(frames, hasLength(1));
+        expect(frames.single.kind, TerminalBinaryKind.imagePaste);
+        expect(frames.single.bytes, png);
+        await session.handleFrame('terminal_paste_image_result', {
+          'streamId': session.streamId,
+          'outcome': 'clipboard',
+        });
+        await tester.pump();
+        expect(session.uploadProgress, isNull);
+        await tester.pumpWidget(const SizedBox());
+        session.dispose();
+        app.dispose();
+      },
+    );
+  }
 }

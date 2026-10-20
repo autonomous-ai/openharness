@@ -308,6 +308,22 @@ void main() {
     ]);
   });
 
+  test(
+    'Windows terminal clipboard keys include selection copy and plain paste',
+    () {
+      expect(
+        kTerminalOwnedKeys.map((key) => '${key.chord.join('+')} ${key.label}'),
+        containsAll([
+          'Ctrl+C Copy the selection, or interrupt',
+          'Ctrl+V Paste',
+          'Ctrl+Shift+C Copy',
+          'Ctrl+Shift+V Paste',
+          'Ctrl+Shift+A Select all',
+        ]),
+      );
+    },
+  );
+
   test('Windows spells its keys out, and its logo key is Win', () {
     expect(spellsModifierKeys, isTrue);
     expect(workspaceKeyLabel, 'Ctrl');

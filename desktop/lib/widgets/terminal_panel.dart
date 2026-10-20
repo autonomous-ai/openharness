@@ -1836,8 +1836,8 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// xterm binds paste itself, but only ever to its text-only action. `onKeyEvent`
   /// is the one hook that runs BEFORE its shortcut map (terminal_view.dart), so
   /// this is where the binding has to be replaced rather than added. The chord taken is the
-  /// platform's exact one: Linux and Windows reserve Ctrl-V for the terminal program and paste with
-  /// Ctrl-Shift-V.
+  /// platform's exact one: Linux pastes with Ctrl-Shift-V; native Windows also accepts Ctrl-V and
+  /// copies Ctrl-C only when output is selected.
   KeyEventResult _onTerminalKey(FocusNode node, KeyEvent event) {
     if (_passageId != null && event.logicalKey == LogicalKeyboardKey.escape) {
       if (event is KeyDownEvent) _closePassage();
@@ -1869,10 +1869,21 @@ class _TerminalPanelState extends State<TerminalPanel>
         event.logicalKey == LogicalKeyboardKey.backspace) {
       return _onDeleteToLineStart();
     }
-    if (event is! KeyDownEvent || event.logicalKey != LogicalKeyboardKey.keyV) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final windows = !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+    if (windows &&
+        event.logicalKey == LogicalKeyboardKey.keyC &&
+        keyboard.isControlPressed &&
+        !keyboard.isShiftPressed &&
+        !keyboard.isAltPressed &&
+        !keyboard.isMetaPressed &&
+        _controller.selection != null) {
+      unawaited(_copyOrPaste());
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey != LogicalKeyboardKey.keyV || keyboard.isAltPressed) {
       return KeyEventResult.ignored;
     }
-    if (keyboard.isAltPressed) return KeyEventResult.ignored;
     final apple =
         defaultTargetPlatform == TargetPlatform.macOS ||
         defaultTargetPlatform == TargetPlatform.iOS;
@@ -1882,10 +1893,9 @@ class _TerminalPanelState extends State<TerminalPanel>
               !keyboard.isShiftPressed
         : keyboard.isControlPressed &&
               !keyboard.isMetaPressed &&
-              keyboard.isShiftPressed ==
-                  (defaultTargetPlatform == TargetPlatform.linux ||
-                      (!kIsWeb &&
-                          defaultTargetPlatform == TargetPlatform.windows));
+              (windows ||
+                  keyboard.isShiftPressed ==
+                      (defaultTargetPlatform == TargetPlatform.linux));
     if (!pasting) return KeyEventResult.ignored;
     unawaited(_paste());
     return KeyEventResult.handled;
