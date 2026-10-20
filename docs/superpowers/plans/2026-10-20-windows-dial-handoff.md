@@ -21,8 +21,8 @@ name this branch. Older copies in `amber-heron` still say `feat/windows-desktop`
 |---|---|
 | Worktree | `~/harnesses/worktrees/openharness/windows-dial` |
 | Branch | `feat/windows-dial`, cut from `feat/windows-desktop` at `8fb220f15`, not pushed yet |
-| Merges into | `feat/windows-desktop`, when E5.3 is done and the owner agrees |
-| Ships in | One PR with A, B, C and F (the owner ships Windows as one piece; never merge E alone to `main`) |
+| Merges into | `main` through E's own PR, only after the Windows PR lands on `main`; never merge `feat/windows-dial` into `feat/windows-desktop` |
+| Ships in | A later, separate E PR. Per the owner's 2026-10-20 decision, Windows ships A+B+C+F first; E continues on `feat/windows-dial` and does not enter the Windows PR |
 
 Other work on the same line, which you must not touch:
 
@@ -32,7 +32,9 @@ Other work on the same line, which you must not touch:
 - **F** (`harness-install.exe`, Windows in the desktop release) is in the worktree `windows-installer`, branch
   `feat/windows-installer`, uncommitted. It also edits `desktop/scripts/windows-e2e/README.md`,
   `desktop-e2e.sh` and `cli/src/scripts/windowsWorkflows.spec.ts`. In the README, E's `VM_ADMIN` paragraph comes
-  first and F's `install-state.ps1` paragraph follows it; F rebases onto E, not the other way round.
+  first and F's `install-state.ps1` paragraph follows it. F cherry-picks only E1.3's test-tooling kit commit
+  `7ee856dd9`; preserve that immutable, test-tooling-only commit. No rebase onto E is assumed, and no other E
+  changes enter the Windows PR.
 
 ## First steps
 
@@ -114,4 +116,5 @@ Other work on the same line, which you must not touch:
   - every `Ruling:` line with its cost if wrong;
   - every deferred minor;
   - what is still open.
-- E is not merged into `feat/windows-desktop` until the owner says so.
+- E is merged and shipped through its own PR only after the A+B+C+F Windows PR lands on `main`.
+  Never merge `feat/windows-dial` into `feat/windows-desktop`.

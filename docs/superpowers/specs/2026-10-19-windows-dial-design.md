@@ -24,11 +24,14 @@ it works today. Linux is not touched.
 | B | CLI on Windows (done; merge pending) | A |
 | C | Desktop on Windows (in progress) | B |
 | D | Code signing, winget (later; not in this PR) | A–C, F |
-| **E** | The dial on Windows (this spec) | B, C |
+| **E** | The dial on Windows (this spec; separate PR after the Windows PR lands) | B, C |
 | F | `harness-install.exe`, Windows in the desktop release, the website's Windows download | C |
 
-E is built on `feat/windows-dial`, cut from `feat/windows-desktop` after C5.3 and merged back into it, and ships in the same PR as A, B and C. B's spec listed "serial/USB
-cables (planned separately)" as out of scope: this is that plan.
+E continues on `feat/windows-dial`, cut from `feat/windows-desktop` at `8fb220f15` after C5.3. Per the owner's
+2026-10-20 decision, Windows ships A+B+C+F first; E does not enter that Windows PR. E merges into `main` and ships
+later through its own PR, only after the Windows PR lands on `main`. Never merge `feat/windows-dial` into
+`feat/windows-desktop`. F cherry-picks only E1.3's immutable, test-tooling-only kit commit `7ee856dd9`; no rebase onto
+E is assumed. B's spec listed "serial/USB cables (planned separately)" as out of scope: this is that plan.
 
 ## Current state
 
@@ -297,9 +300,12 @@ the PC (`WEB_URL=http://127.0.0.1:<port>`), so no website deploy is needed. Resu
 
 ## Release
 
-In the Windows PR, with A, B and C. After the merge, at the owner's go, each:
+Windows ships A+B+C+F first. E ships through its own later PR only after the Windows PR lands on `main`;
+`feat/windows-dial` never merges into `feat/windows-desktop`. F's cherry-pick of only E1.3's immutable,
+test-tooling-only kit commit `7ee856dd9` does not include E in the Windows release. After E's own PR merges, at
+the owner's go, each:
 
-1. nothing new for the CLI: the payload carries `harness-serial.exe`, and B's production steps promote it;
+1. promote E's CLI payload carrying `harness-serial.exe` through the CLI's production steps;
 2. a website deploy, so `/flash-circle.ps1` is live;
 3. optionally, `upload-flasher.sh --mirror-esptool` for the Windows esptool zip (without it, the script takes the
    vendor's release, checked against its pin).

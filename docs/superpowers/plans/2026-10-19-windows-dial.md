@@ -18,7 +18,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-19-windows-dial-design.md`. It builds on sub-project B (`docs/superpowers/specs/2026-10-16-windows-native-cli-design.md`) and C (`docs/superpowers/specs/2026-10-18-windows-desktop-design.md`), whose code is on this branch.
 
-**Where and when.** On `feat/windows-dial`, cut from `feat/windows-desktop` at `8fb220f15` (C through C5.3 landed; C5.2's last live checks still run there), and merged back into `feat/windows-desktop` when E5.3 is done. It ships in the same PR as A, B, C and F (the owner ships Windows as one piece). Commits and pushes of `feat/windows-dial` are authorized; never `feat/windows-desktop` or `main`, never force-push. The handoff is `docs/superpowers/plans/2026-10-20-windows-dial-handoff.md`.
+**Where and when.** E continues on `feat/windows-dial`, cut from `feat/windows-desktop` at `8fb220f15` (C through C5.3 landed; C5.2's last live checks still run there). Per the owner's 2026-10-20 decision, Windows ships A+B+C+F first; E does not enter that Windows PR. E merges into `main` and ships later through its own PR, only after the Windows PR lands on `main`. Never merge `feat/windows-dial` into `feat/windows-desktop`. F cherry-picks only E1.3's immutable, test-tooling-only kit commit `7ee856dd9`; no rebase onto E is assumed. Commits and pushes of `feat/windows-dial` are authorized; never `feat/windows-desktop` or `main`, never force-push. The handoff is `docs/superpowers/plans/2026-10-20-windows-dial-handoff.md`.
 
 ## Global Constraints
 
@@ -3749,7 +3749,7 @@ git commit -m "test(windows): the dial on Windows, eleven scenarios on the x64 t
 
 - [ ] **Step 1: Write it**
 
-- Spec: `Status: implemented on feat/windows-desktop; E2E in docs/testing/windows-dial-e2e.md`. Under Known limits, add each limit E5 found that was not fixed, one line each.
+- Spec: `Status: implemented on feat/windows-dial; E2E in docs/testing/windows-dial-e2e.md; separate E PR after the Windows PR lands on main`. Under Known limits, add each limit E5 found that was not fixed, one line each.
 - `cli/AGENTS.md`, the processes table's `devices` row, the Runs column: "…, the Wi-Fi device; on Windows the dial's port through `harness-serial.exe` (`cable/windowsSerial.ts`)".
 
 - [ ] **Step 2: Commit**
@@ -3761,7 +3761,8 @@ git commit -m "docs(windows): the dial on Windows is implemented; its E2E and li
 
 ## After E
 
-E is the last sub-project before the Windows PR. The handoff's "Shipping Windows" applies unchanged, with E included:
-- remove both TEMPORARY `push:` triggers, B's (`windows.yml`, now naming both branches) and C's;
-- the final whole-branch review weighs E's seams: `serial.ts` ↔ `windowsSerial.ts` ↔ `harness-serial`, the payload's sixth file, and `flash-circle.ps1` ↔ `flash-circle.sh`;
-- after the merge, at the owner's go: the website deploy (so `/flash-circle.ps1` is live), and optionally `upload-flasher.sh` for the Windows esptool zip. The CLI's production steps carry `harness-serial.exe` in the payload with no new step.
+Windows ships A+B+C+F first. E continues on `feat/windows-dial`, outside that Windows PR, and merges and ships through its own PR only after the Windows PR lands on `main`. Never merge `feat/windows-dial` into `feat/windows-desktop`. F takes only E1.3's immutable, test-tooling-only kit commit `7ee856dd9` by cherry-pick; no rebase onto E is assumed.
+
+- The Windows PR owns its TEMPORARY trigger cleanup under its handoff's "Shipping Windows" instructions; E's later PR reviews its own workflow triggers against the state then on `main`.
+- The final whole-branch review for E's own PR weighs E's seams: `serial.ts` ↔ `windowsSerial.ts` ↔ `harness-serial`, the payload's sixth file, and `flash-circle.ps1` ↔ `flash-circle.sh`.
+- After E's own PR merges, at the owner's go: promote E's CLI payload carrying `harness-serial.exe`, deploy the website (so `/flash-circle.ps1` is live), and optionally run `upload-flasher.sh` for the Windows esptool zip. These are E's later release steps, separate from the initial Windows release.
