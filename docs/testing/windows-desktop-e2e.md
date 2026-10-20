@@ -17,9 +17,9 @@ record.
 
 | # | Scenario | Result at this snapshot | Driver |
 | --- | --- | --- | --- |
-| 1 | First install, sign-in, same-version launch | Partial: N installed and same-version launch converged to one installed window. Mark-of-the-Web launch and SmartScreen behavior unresolved. | Script, visual automation; sign-in authorized through existing account session |
+| 1 | First install, sign-in, same-version launch | Partial: N installed and same-version launch converged to one installed window. Published x64 1.0.3 launched from an Internet-marked ZIP in a Vietnamese/metacharacter path after its Unknown Publisher warning; the installed app rendered. SmartScreen More info did not appear. | Script, visual automation; sign-in authorized through existing account session |
 | 2 | This computer, terminal, Add Phone, remote Mac | Partial: owned terminal creation, `WIN_42` output, HTTP 200 handoffs on ARM and real DELL x64, and remote row observed. Published x64 1.0.3 and PTY 0.4.19 passed GUI ping/Ctrl+C and synthetic text copy/paste. Duplicate cursor replies caused a new terminal to lose its first key. The source fix passed clean x64 Debug GUI and passive PTY checks; published staging retest is pending. The owner Mac check is pending. | Visual automation, Script |
-| 3 | Notifications, tray, links, paste and font | Partial: tray/links/font and local x64 composer paste observed. A later hidden-app ARM 1.0.3 Kilo turn completed and the app logged its done event, but no visible toast was captured; toast click and full tray working row remain unverified. | Visual automation, Script |
+| 3 | Notifications, tray, links, paste and font | Partial: tray/links/font and local x64 composer paste observed. On published x64 1.0.3, a completed Kilo turn posted a native Finished notification; clicking its card restored the correct harness. The live tray menu also showed the working Kilo row, Open Harness and Quit; transient banner remains unverified. | Visual automation, Script |
 | 4 | Staging updates and broken-build rollback | Passed on real x64: real 1.0.0 → 1.0.1 GUI update passed on both VMs. The 1.0.1 → 1.0.2 update kept the ARM counter rising and repaired Settings `DisplayVersion` on both VMs; DELL x64 then updated from 1.0.2 → 1.0.3 through the GUI and rendered signed in. Private fake-CDN truncated/no-executable packages were refused; a no-first-frame package rolled back to 1.0.3 after two failed starts. Counter and daemon/PTY processes survived. | Script, visual automation |
 | 5 | Uninstall through Windows Settings | Passed on 1.0.3 after a 1.0.2 timing failure was fixed: holding the final dialog open over three minutes did not start cleanup early; after OK, the app folder and registrations disappeared while CLI, daemon and agents stayed. | UI Automation |
 | 6 | x64 desktop on ARM64 | Passed across two runs of published x64 1.0.3: install, rendered window, tray and Settings uninstall passed; a later isolated x64 runtime returned HTTP 200 for Add Phone while the backend was connected. The installed ARM app and seven agents were restored afterward. | Script, visual automation, UI Automation |
@@ -56,7 +56,10 @@ commits through `50cefaace` changed only the Desktop workflow trigger, its
 focused test and this E2E record. The trigger removal passed its focused
 Vitest test and `actionlint`. The later cursor-report fix `f6bceb53d` changes
 runtime Dart code; its [Windows validation run](https://github.com/autonomous-ai/openharness/actions/runs/39369450568)
-is in progress, so the earlier CI receipt does not cover that fix.
+passed both architectures, including their builds, native integrations and
+46/46 installer specs. Each full Flutter result contained 6,359 passes,
+170 recorded baseline failures and zero new or mandatory-case failures.
+The downloaded test artifacts matched their API SHA-256 digests.
 
 ## Setup and evidence
 
@@ -95,6 +98,19 @@ but the existing installed process and launcher log did not change, and no
 SmartScreen prompt was visible. Execution of that marked launcher is therefore
 unproved. The first cold start also showed a temporary computer-check timeout;
 the later signed-in state does not establish a clean first-run sign-in path.
+
+A later published x64 1.0.3 ZIP matched the verified staging SHA-256. A
+separate copy of the ZIP and all nine extracted `.exe`/`.dll` files were
+marked `ZoneId=3`, in a folder containing Vietnamese letters, spaces, an
+apostrophe, `&`, `%` and `!`. Shell launch displayed **Open File – Security
+Warning**, **Unknown Publisher**, **Run** and **Cancel**. After a
+screenshot-grounded click on Run, one installed 1.0.3 process opened and
+rendered its existing workspace without a focus or resize workaround. The
+“More info / Run anyway” SmartScreen screen did not appear. No trust or
+SmartScreen settings were changed. The helper initially misread the Unicode
+path until its PowerShell 5 script was encoded with a UTF-8 BOM; its launch
+wait also timed out while the warning awaited input. These helper failures
+are retained separately from the subsequent successful marked launch.
 
 ### 2. This computer
 
@@ -147,7 +163,8 @@ renderer duplicate while preserving other replies. Its regression first failed
 with unwanted input frames; 153 related Mac Flutter tests, 129 Windows x64
 tests, targeted analysis and independent review then passed. A GUI-created fresh terminal on the clean x64 Debug build then accepted
 its first physical `a`; a passive PTY screen independently confirmed the
-character. Windows CI and the published staging retest are still pending.
+character. The full Windows CI subsequently passed both architectures; the
+published staging retest is still pending.
 
 ### 3. Native Windows behavior
 
@@ -169,12 +186,12 @@ pre-existing clipboard formats were not proved restorable.
 An owned Kilo turn on hidden staging N1 also did not complete: the backend
 was offline before the turn and then reset the connection. The counter pane
 continued to advance, and the N1 window restored from its tray icon without
-changing app, daemon or PTY PIDs. The product's completed-turn toast and its
-click target remain unverified. An
+changing app, daemon or PTY PIDs. At that point, the product's completed-turn
+toast and its click target remained unverified. An
 interactive native probe showed that Windows could post a generic toast, but
 the product's permission check had returned HRESULT `0x80070490` earlier;
-the probe is not product-toast evidence. The working-agent tray row was also
-not demonstrated. These findings keep the scenario partial.
+the probe is not product-toast evidence. The working-agent tray row had also
+not been demonstrated; later x64 receipts below cover both paths.
 
 With the backend connected, a later native ARM64 1.0.3 app had Desktop
 Notifications enabled and was hidden while one owned Kilo turn ran. Its pane
@@ -182,9 +199,30 @@ returned the requested answer in **9.4 seconds**, and the app log received a
 `turn_summary` notification with `kind=done`. A toast check about 46 seconds
 later and a masked screenshot about 74 seconds later found no visible toast.
 The toast may have expired before observation; its appearance and click target
-are still unverified. The test Kilo agent was deleted, the original seven
-agents and rising counter remained available, and the native 1.0.3 window was
+were unverified in that ARM run. The test Kilo agent was deleted, the
+original seven agents and rising counter remained available, and the native 1.0.3 window was
 restored. Desktop Notifications remained enabled.
+
+On published x64 1.0.3, a subsequent owned Kilo turn completed with Desktop
+Notifications enabled and the app hidden. A native C++ WinRT history probe
+returned `Setting=Enabled` and the product's own **C52 toast probe → Finished**
+notification, including its protocol URL for the correct owned harness.
+At **2026-10-20 05:16 UTC**, a same-session GUI worker opened Notification
+Center and captured that card while Harness remained hidden. After reviewing
+the screenshot, automation clicked the card with guards requiring unchanged
+foreground and input state. The sole installed app process restored with
+the correct Kilo harness focused; the app log independently recorded that
+harness opening and becoming terminal-ready. This verifies native notification
+delivery, visible Notification Center presentation and the product click path.
+The short-lived banner was not captured. UI Automation did not expose the
+notification card on this Windows build, so its earlier absence from an
+automation search was insufficient evidence of missing delivery.
+
+At **05:22 UTC**, a further real turn on that owned Kilo harness produced
+a native tray menu showing **Working (1)**, **C52 toast probe** with **5s**
+elapsed, **Open Harness** and **Quit** in the captured screenshot. The tray
+selector excluded taskbar app buttons before opening the actual notification
+area icon. This verifies the live working-row criterion.
 
 ### 4. Update and rollback
 
@@ -439,7 +477,7 @@ CLI, daemon or `~/.harness`.
 | G1 | ARM RC1 GUI Ctrl+C did not interrupt an owned PowerShell child. | Isolated PTY host inherited Ctrl+C ignore from its process group. A Windows regression failed before the host fix and passed after it; the full Windows PTY suite passed. Local x64 Release and staging N1 passed GUI Ctrl+C with the patched test host. A later real x64 1.0.3 GUI check passed Ctrl+C through published PTY 0.4.19 after a guarded same-session host setup. ARM still serves its live agents from 0.4.18 despite having 0.4.19 installed; no host replacement was attempted. |
 | G2 | Printable terminal input depended on launch/relaunch state. | ARM RC1 failed early input attempts, then `WIN_42` passed after relaunch. An isolated published-host experiment proved a duplicate cursor-position reply causes the lost first key. Fix `f6bceb53d` suppresses only the renderer duplicate, preserving user input and other queries; 153 related Mac tests, 129 x64 Windows tests and independent review passed. The clean x64 Debug GUI accepted its first physical `a` in a fresh terminal; a passive PTY screen confirmed the character. Published staging retest is pending. |
 | G3 | The ARM client area turned black/white during RC1, N and one-command 1.0.3 sessions. | The process stayed responsive at the OS level. N did not repaint after one app restart, but one scoped window-size change restored its UI; the surface went black again after the CLI restart and another scoped size change restored it. The GPU accepted D3D feature level 12_1. N1, N2 and x64-on-ARM 1.0.3 rendered in other launches; the one-command ARM64 1.0.3 first-run capture was white. A later direct ARM64 ZIP launch rendered after focus without a resize. The cause and first-render reliability remain unproved. |
-| G4 | Notification permission gate reported unavailable while a native probe could post a toast. | The first-toast `Setting()` error is handled in N1 source, but no completed agent turn occurred on the hidden staging N1 app because the backend was offline/reset. Product completion toast and click remain unverified. |
+| G4 | Notification permission gate reported unavailable while a native probe could post a toast. | The first-toast `Setting()` error is handled in N1 source. Published x64 1.0.3 subsequently posted its own Finished notification, displayed it in Notification Center, and restored the correct harness when clicked. Transient banner presentation remains unverified. |
 | G5 | Published N footer joined its words and counts. | Staging N1 on both x64 and ARM64 visibly separates the words and counts. |
 | G6 | Windows Settings uninstall entry kept the old version after a successful in-app update. | Both staging 1.0.0 → 1.0.1 updates left `DisplayVersion=1.0.0` while About showed 1.0.1. Launcher fix `147ca03bd` has a failing-then-passing regression; live 1.0.1 → 1.0.2 updates on both VMs now show `DisplayVersion=1.0.2`. |
 | G7 | An x64 owned terminal reported `offline ready` after the staging CLI upgrade. | The old PowerShell and test-only PTY host stayed alive, while the restarted daemon saw the host and reopened its stream. A new owned terminal worked on the same host. Exact cause and recovery of the old agent remain unproved. |
