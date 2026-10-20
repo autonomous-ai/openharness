@@ -161,6 +161,8 @@ Machine:
   harness help agents          the agent commands, states, exit codes and rules on one screen
   harness settings [<name> on|off]  what agents may do (agents-start-agents, pull-request-line, agent-messages): your account's experiments in Settings ▸ Experimental, each off by default
   harness machines delete <id> remove ANOTHER machine (refuses this one; use \`harness logout\`)
+  harness e2e plan             which coding tools have a new version out (the grid-switch e2e trigger)
+  harness e2e grid-switch      move a fresh agent subscription -> grid -> back home with its tool + MCP; leaves a review bundle
   harness remote               from a Harness terminal tile: open a terminal on another of your machines and move this tile to it
   harness version              print the installed version (v${VERSION})
   harness update [--force]     update to the latest build now (it also self-updates in the background;
@@ -2749,6 +2751,20 @@ switch (cmd) {
       error: (line) => console.error(line),
       color: process.stdout.isTTY === true,
     })
+    break
+  case 'e2e':
+    // The grid-switch e2e: a fresh agent moved subscription -> grid -> back home with the person's
+    // tool + MCP, leaving a review bundle. Env-driven (see src/e2e/runGridSwitchTrace.ts); the
+    // relay-side reviewer (opencode `e2e-watchdog`) lives with the relay, in autonomous-grid-cli.
+    // Shipped with the CLI, so it is always the daemon's own version that drives the daemon.
+    if (args[0] === 'grid-switch') {
+      import('./e2e/runGridSwitchTrace.js')
+        .then(({ runGridSwitch }) => runGridSwitch())
+        .then((r) => { process.exitCode = r.error || r.stuck ? 1 : 0 })
+        .catch(onError)
+    } else if (args[0] === 'plan') {
+      import('./e2e/plan.js').then(({ planCommand }) => planCommand(flags.includes('--json'))).catch(onError)
+    } else { console.error(`Unknown command: e2e ${args[0] ?? ''} (grid-switch | plan)`); usage(1) }
     break
   case 'machines':
     if (!args[0]) machinesListCommand(flags.includes('--json')).catch(onError)
