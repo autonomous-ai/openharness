@@ -147,6 +147,7 @@ void main() {
     // is the only thing that restarts the daemon the script stopped.
     late _FakeProcess spawned;
     final flasher = Flasher(
+      windows: false,
       startProcess: (_) async {
         spawned = _FakeProcess(
           out: ['>> flashing…'],
@@ -165,6 +166,109 @@ void main() {
     expect(result.cancelled, isTrue);
     expect(result.ok, isFalse);
   });
+
+  test('Windows cancellation writes a file before ending an unresponsive tree', () async {
+    final dir = Directory.systemTemp.createTempSync('flasher-cancel-');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    late _FakeProcess spawned;
+    final killed = <int>[];
+    final flasher = Flasher(
+      windows: true,
+      cancelDirectory: dir.path,
+      killAfter: const Duration(milliseconds: 50),
+      killTree: (pid) async => killed.add(pid),
+      startProcess: (_) async {
+        spawned = _FakeProcess(
+          out: ['>> flashing…'],
+          code: 130,
+          waitForKill: true,
+        );
+        return spawned;
+      },
+    );
+    final run = flasher.flash();
+    await Future<void>.delayed(Duration.zero);
+    flasher.cancel();
+
+    expect(spawned.signals, isEmpty);
+    expect(
+      File('${dir.path}${Platform.pathSeparator}cancel').existsSync(),
+      isTrue,
+    );
+    expect(killed, isEmpty);
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    expect(killed, [spawned.pid]);
+    spawned
+        .kill(); // Simulates the process tree ending, without running taskkill.
+    final result = await run;
+    expect(result.cancelled, isTrue);
+    expect(result.ok, isFalse);
+  });
+
+  test('a Windows script that stops in time is not killed', () async {
+    final dir = Directory.systemTemp.createTempSync('flasher-cancel-');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    late _FakeProcess spawned;
+    final killed = <int>[];
+    final flasher = Flasher(
+      windows: true,
+      cancelDirectory: dir.path,
+      killAfter: const Duration(milliseconds: 50),
+      killTree: (pid) async => killed.add(pid),
+      startProcess: (_) async {
+        spawned = _FakeProcess(out: const [], code: 130, waitForKill: true);
+        return spawned;
+      },
+    );
+    final run = flasher.flash();
+    await Future<void>.delayed(Duration.zero);
+    flasher.cancel();
+    expect(spawned.signals, isEmpty);
+    spawned.kill(); // Simulates the script seeing the file and exiting itself.
+    final result = await run;
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    expect(killed, isEmpty);
+    expect(result.cancelled, isTrue);
+  });
+
+  test(
+    'a Windows cancel-file error still allows the grace period before killing',
+    () async {
+      final dir = Directory.systemTemp.createTempSync('flasher-cancel-');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final blocked = File('${dir.path}${Platform.pathSeparator}file')
+        ..writeAsStringSync('');
+      late _FakeProcess spawned;
+      final killed = <int>[];
+      final flasher = Flasher(
+        windows: true,
+        cancelDirectory: blocked.path,
+        killAfter: const Duration(milliseconds: 50),
+        killTree: (pid) async => killed.add(pid),
+        startProcess: (_) async {
+          spawned = _FakeProcess(out: const [], code: 130, waitForKill: true);
+          return spawned;
+        },
+      );
+      final run = flasher.flash();
+      await Future<void>.delayed(Duration.zero);
+      flasher.cancel();
+      expect(spawned.signals, isEmpty);
+      expect(killed, isEmpty);
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      expect(killed, [spawned.pid]);
+      spawned.kill();
+      expect((await run).cancelled, isTrue);
+    },
+  );
+
+  test(
+    'the dialog names this computer on Windows and keeps this Mac elsewhere',
+    () {
+      expect(flashHostName(windows: true), 'this computer');
+      expect(flashHostName(windows: false), 'this Mac');
+    },
+  );
 
   test('a port stays one literal argv value', () async {
     List<String>? seen;

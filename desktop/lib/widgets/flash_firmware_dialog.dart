@@ -188,7 +188,7 @@ class _FlashDialogState extends State<_FlashDialog> {
         null,
         grid.AppPalette.accentOnSurface,
         'Looking for the dial…',
-        'Checking the USB ports on this Mac.',
+        'Checking the USB ports on ${flashHostName()}.',
       ),
       _Phase.ready => (
         AppIcons.zap,
@@ -201,7 +201,7 @@ class _FlashDialogState extends State<_FlashDialog> {
         grid.AppPalette.warn,
         'No dial found',
         _problem ??
-            'Plug the dial into this Mac with a USB cable, then look '
+            'Plug the dial into ${flashHostName()} with a USB cable, then look '
                 'again.',
       ),
       _Phase.flashing => (

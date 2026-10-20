@@ -29,6 +29,17 @@ abstract final class SerialPortLease {
   /// fault than the one this prevents, and a silent one.
   static const _staleAfter = Duration(minutes: 10);
 
+  /// Where the flasher keeps downloads, its `flashing` flag and the Windows `cancel` file.
+  /// Honours the script's override so both sides look in the same folder.
+  static String flasherDirectory({Map<String, String>? environment}) {
+    final env = environment ?? Platform.environment;
+    return env['HARNESS_FLASHER_CACHE'] ??
+        HarnessFileStore.defaultDirectoryPath(
+          environment: environment,
+          name: 'flasher',
+        );
+  }
+
   /// Whether a flash started OUTSIDE this app is holding the port.
   ///
   /// The in-process counter only knows about flashes this app started. Someone running
@@ -39,15 +50,7 @@ abstract final class SerialPortLease {
   /// The flasher writes this file before it stops the daemon and removes it when it starts it again.
   static bool heldByAnotherProcess({Map<String, String>? environment}) {
     try {
-      // Honours the same override the flasher script reads, so the two sides cannot end up looking
-      // in different places.
-      final env = environment ?? Platform.environment;
-      final dir =
-          env['HARNESS_FLASHER_CACHE'] ??
-          HarnessFileStore.defaultDirectoryPath(
-            environment: environment,
-            name: 'flasher',
-          );
+      final dir = flasherDirectory(environment: environment);
       final file = File('$dir/flashing');
       if (!file.existsSync()) return false;
       final started = int.tryParse(file.readAsStringSync().trim());

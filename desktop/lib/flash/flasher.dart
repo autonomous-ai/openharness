@@ -3,7 +3,12 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../core/harness_cli_runner.dart';
+import '../core/runtime_platform.dart';
 import '../core/serial_port_lease.dart';
+
+/// How the flash dialog names the computer the dial is plugged into.
+String flashHostName({bool? windows}) =>
+    (windows ?? RuntimePlatform.isWindows) ? 'this computer' : 'this Mac';
 
 /// What a line of flasher output is.
 ///
@@ -59,10 +64,31 @@ class FlashProbe {
 /// class owns one thing: turning that command's output into something a window
 /// can draw.
 class Flasher {
-  Flasher({this.startProcess = harnessCliStart});
+  Flasher({
+    this.startProcess = harnessCliStart,
+    bool? windows,
+    this.cancelDirectory,
+    this.killAfter = const Duration(seconds: 15),
+    Future<void> Function(int pid)? killTree,
+  }) : _windows = windows ?? RuntimePlatform.isWindows,
+       _killTree = killTree ?? _taskkillTree;
 
   /// Overridden in tests.
   final Future<Process> Function(List<String> arguments) startProcess;
+
+  /// How long a cancelled Windows flash has to stop before its process tree is ended.
+  final Duration killAfter;
+
+  /// Where the Windows cancel file goes; defaults to the flasher's folder.
+  final String? cancelDirectory;
+  final bool _windows;
+  final Future<void> Function(int pid) _killTree;
+  Timer? _killTimer;
+
+  static Future<void> _taskkillTree(int pid) async {
+    // `harness flash` runs PowerShell, which runs esptool; killing only the parent leaves writers alive.
+    await Process.run('taskkill', ['/PID', '$pid', '/T', '/F']);
+  }
 
   Process? _running;
   bool _cancelled = false;
@@ -124,11 +150,31 @@ class Flasher {
   /// thing that brings the Harness daemon back after the script stopped it to
   /// free the serial port. Killing it outright leaves the computer with no
   /// daemon and the dial dark — worse than never having flashed at all.
+  ///
+  /// Windows Process.kill skips flash-circle.ps1's `finally`, its one way of starting Harness
+  /// again. Ask by file so the script can unwind, then end its tree only after [killAfter].
+  /// Releasing the lease lets this app's supervision start the daemon on its next tick.
   void cancel() {
     final process = _running;
     if (process == null) return;
     _cancelled = true;
-    process.kill(ProcessSignal.sigterm);
+    if (!_windows) {
+      process.kill(ProcessSignal.sigterm);
+      return;
+    }
+    try {
+      final dir = Directory(
+        cancelDirectory ?? SerialPortLease.flasherDirectory(),
+      )..createSync(recursive: true);
+      File('${dir.path}${Platform.pathSeparator}cancel')
+          .writeAsStringSync('${DateTime.now().millisecondsSinceEpoch}');
+    } catch (_) {
+      // A filesystem failure must not skip the script's chance to finish and restart Harness.
+    }
+    _killTimer?.cancel();
+    _killTimer = Timer(killAfter, () {
+      if (identical(_running, process)) unawaited(_killTree(process.pid));
+    });
   }
 
   Future<int> _run(
@@ -150,6 +196,8 @@ class Flasher {
       await Future.wait(pumps);
       return code;
     } finally {
+      _killTimer?.cancel();
+      _killTimer = null;
       _running = null;
     }
   }

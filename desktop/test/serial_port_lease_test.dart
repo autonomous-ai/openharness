@@ -2,11 +2,37 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/harness_file_store.dart';
 import 'package:harness/core/serial_port_lease.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
 
 void main() {
+  test(
+    'the flasher folder uses HARNESS_FLASHER_CACHE, else the Harness home',
+    () {
+      expect(
+        SerialPortLease.flasherDirectory(
+          environment: {
+            'HARNESS_FLASHER_CACHE': '/x/f',
+            'HOME': '/h',
+            'USERPROFILE': '/h',
+          },
+        ),
+        '/x/f',
+      );
+      expect(
+        SerialPortLease.flasherDirectory(
+          environment: {'HOME': '/h', 'USERPROFILE': '/h'},
+        ),
+        HarnessFileStore.defaultDirectoryPath(
+          environment: {'HOME': '/h', 'USERPROFILE': '/h'},
+          name: 'flasher',
+        ),
+      );
+    },
+  );
+
   test('the lease is released even when the work throws', () async {
     expect(SerialPortLease.held, isFalse);
     await expectLater(
