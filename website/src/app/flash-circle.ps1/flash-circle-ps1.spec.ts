@@ -108,7 +108,20 @@ function Resolve-Release { $script:FW_VER = 'fixture' }
 function Get-Firmware { }
 function Confirm-Flash { }
 function Invoke-Flash { $script:Steps.Add('write') }
-function Confirm-Running { $script:Steps.Add('verify') }
+# Keep the real version reader/parser. Only its serial transport is a fixture, and a read exception
+# after one chunk bounds the loop through the same nonfatal catch as a disconnected real port.
+$script:RealConfirmRunning = \${function:Confirm-Running}
+$script:BootLog = "App version: fixture"
+$script:FakePort = [PSCustomObject]@{ ReadTimeout = 0 }
+$script:FakePort | Add-Member -MemberType ScriptMethod -Name Open -Value { }
+$script:FakePort | Add-Member -MemberType ScriptMethod -Name ReadExisting -Value { return $script:BootLog }
+$script:FakePort | Add-Member -MemberType ScriptMethod -Name Dispose -Value { }
+function New-Object([string]$TypeName, [object[]]$ArgumentList) {
+  if ($TypeName -eq 'System.IO.Ports.SerialPort') { return $script:FakePort }
+  Microsoft.PowerShell.Utility\\New-Object @PSBoundParameters
+}
+function Start-Sleep { throw 'fixture boot read completed' }
+function Confirm-Running { $script:Steps.Add('verify'); return (& $script:RealConfirmRunning) }
 function Invoke-Harness([string]$Verb) {
   if ($Verb -ne 'start') { throw 'unexpected Harness command' }
   if (Test-Path -LiteralPath (Join-Path $CACHE_DIR 'completed')) { $script:Steps.Add('complete') }
@@ -124,6 +137,15 @@ $env:HARNESS_FLASH_RECOVERY_ARGS = ConvertTo-Json -InputObject @('-NoProfile', '
     expectFixture(`${recoveryFixture}
 try { Invoke-FlashCircle @('--yes') } finally { Start-HarnessAfterFlash }
 if (($script:Steps -join ',') -ne 'stop,write,verify,complete,start') { throw ('wrong recovery order: ' + ($script:Steps -join ',')) }
+`);
+  }, 25_000);
+
+  windowsIt.each(["no-verify", "missing-version", "mismatched-version"])("preserves the verdict after a write with %s", (mode) => {
+    expectFixture(`${recoveryFixture}
+${mode === "missing-version" ? "$script:BootLog = ''" : mode === "mismatched-version" ? "$script:BootLog = 'App version: other'" : ""}
+try { Invoke-FlashCircle @('--yes'${mode === "no-verify" ? ", '--no-verify'" : ""}) } finally { Start-HarnessAfterFlash }
+if (($script:Steps -join ',') -ne 'stop,write,verify,start') { throw 'unconfirmed firmware cleared the verdict' }
+if ($script:ExitCode -ne 0) { throw 'nonfatal version verification changed the exit status' }
 `);
   }, 25_000);
 

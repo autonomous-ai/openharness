@@ -460,7 +460,7 @@ function Invoke-Flash {
 }
 
 function Confirm-Running {
-  if ($script:NO_VERIFY) { return }
+  if ($script:NO_VERIFY) { return $false }
   Say ">> confirming the running version$Ellipsis"
   $text = New-Object Text.StringBuilder
   $port = $null
@@ -485,10 +485,12 @@ function Confirm-Running {
     Warn "   could not read a version from the boot log (not fatal $Dash power-cycle and check the screen)"
   } elseif ($seen -eq $script:FW_VER) {
     Say "   running $seen $Check"
+    return $true
   } else {
     Warn "   running $seen but $($script:FW_VER) was flashed $Dash the board did not boot what we wrote"
     Warn '   (if this repeats, the app may be rolling back; report it with this output)'
   }
+  return $false
 }
 
 function Invoke-FlashCircle([object[]]$Given) {
@@ -513,8 +515,8 @@ function Invoke-FlashCircle([object[]]$Given) {
   Confirm-Flash
   Test-Cancel
   Invoke-Flash
-  Confirm-Running
-  Complete-HarnessFlash
+  # A completed write alone does not prove that this board booted the dial firmware.
+  if (Confirm-Running) { Complete-HarnessFlash }
   Say ''
   Say "Done. $OTA_KEY $($script:FW_VER) is on $($script:PORT)."
   if ($script:ERASE_NVS) { Say "NVS was erased $Dash the device will ask to be set up again." }
