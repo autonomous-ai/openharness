@@ -11,7 +11,7 @@ describe('the Windows release workflows', () => {
     expect(pty).toMatch(/workflow_call:\n\s+inputs:\n\s+version:/)
     expect(pty).toContain('HARNESS_PTY_VERSION: ${{ inputs.version }}')
     expect(pty).toContain("if: ${{ !inputs.release }}")
-    for (const file of ['harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe']) expect(pty).toContain(file)
+    for (const file of ['harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe']) expect(pty).toContain(file)
     expect(pty).toContain('src/scripts/installPs1.spec.ts')
     // The target-specific build is not where installPs1.spec.ts looks by default (pty/target/<profile>/).
     expect(pty).toContain('HARNESS_EXE_BIN:')

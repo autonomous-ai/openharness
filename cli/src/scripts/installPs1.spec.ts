@@ -34,7 +34,7 @@ describe('install.ps1, as written', () => {
 
   it('installs harness.exe, a program, as the harness command: no batch file re-parses the arguments', () => {
     expect(source).not.toMatch(/@echo off|%\*/i)
-    expect(source).toContain("$HarnessPtyFiles = @('harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe')")
+    expect(source).toContain("$HarnessPtyFiles = @('harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe')")
     expect(source).toContain("$command = Join-Path $bin 'harness.exe'")
     // An earlier install's harness.cmd is removed, not left beside it.
     expect(source).toContain("$old = Join-Path $bin 'harness.cmd'")
@@ -264,9 +264,9 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
     writeFileSync(join(dir, 'src', archiveRoot, 'node.exe'), readFileSync(process.execPath))
     spawnSync(tar, ['-a', '-cf', join(dir, 'node.zip'), '-C', join(dir, 'src'), archiveRoot])
     mkdirSync(join(dir, 'payload'))
-    for (const name of ['harness-pty.exe', 'harness-launch.exe', 'conpty.dll', 'OpenConsole.exe']) writeFileSync(join(dir, 'payload', name), name)
+    for (const name of ['harness-pty.exe', 'harness-launch.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe']) writeFileSync(join(dir, 'payload', name), name)
     writeFileSync(join(dir, 'payload', 'harness.exe'), Buffer.concat([harnessExe(), Buffer.from(overrides.exeSuffix ?? '')]))
-    spawnSync(tar, ['-a', '-cf', join(dir, 'pty.zip'), '-C', join(dir, 'payload'), 'harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe'])
+    spawnSync(tar, ['-a', '-cf', join(dir, 'pty.zip'), '-C', join(dir, 'payload'), 'harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe'])
     writeFileSync(join(dir, 'cli.js'), [
       "import { existsSync } from 'node:fs'",
       'const a = process.argv.slice(2)',
@@ -356,7 +356,7 @@ describe.runIf(windows)('install.ps1, installing for real from a local manifest'
     expect(readFileSync(join(root, 'bin', 'harness-launch.exe'), 'utf8')).toBe('harness-launch.exe')
     expect(readFileSync(join(root, 'bin', 'harness.exe')).equals(harnessExe())).toBe(true)
     expect(existsSync(join(root, 'bin', 'harness.cmd'))).toBe(false)
-    for (const name of ['harness-pty.exe', 'conpty.dll', 'OpenConsole.exe']) expect(readFileSync(join(root, 'runtime', 'pty', '9.8.7', name), 'utf8')).toBe(name)
+    for (const name of ['harness-pty.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe']) expect(readFileSync(join(root, 'runtime', 'pty', '9.8.7', name), 'utf8')).toBe(name)
 
     // By its full path, whose folder has a space, an `&` and letters outside the ANSI code page: from PowerShell,
     // and from cmd, with the exit code passed back both ways.

@@ -108,6 +108,14 @@ function Processes([string]$filter) {
 # shells) passed the check for this one on the VM (task B5.14). Another user's process shows no ExecutablePath here.
 do { $hosts = @(Processes "Name='harness-pty.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith("$root\", 'OrdinalIgnoreCase') }); if ($hosts.Count) { break }; Start-Sleep 1 } while ((Get-Date) -lt $deadline)
 if (-not $hosts.Count) { Fail "no harness-pty.exe from $root runs after creating a terminal" }
+# The dial's watch (sub-project E): with no dial plugged in, the daemon still runs one harness-serial.exe watch from
+# this install's host folder, the same way a dial would be found. Only this install's: another user's has no
+# ExecutablePath here.
+$deadline = (Get-Date).AddSeconds(30)
+do { $watch = @(Processes "Name='harness-serial.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith("$root\", 'OrdinalIgnoreCase') }); if ($watch.Count) { break }; Start-Sleep 1 } while ((Get-Date) -lt $deadline)
+if (-not $watch.Count) { Fail "no harness-serial.exe from $root runs 30 s after the daemon started" }
+if ($watch.Count -ne 1) { Fail "$($watch.Count) harness-serial.exe from $root run; one watch was expected" }
+Write-Host "ok   the dial watch runs: $($watch[0].CommandLine)"
 # The PowerShell the terminal runs, a child of the host: what the install promises, so none is a failure.
 $deadline = (Get-Date).AddSeconds(30)
 do {

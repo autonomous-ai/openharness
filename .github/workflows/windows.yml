@@ -5,7 +5,7 @@ name: Windows
 # Called by release.yml with `release: true`: build the release payload only, stamped with the CLI's version
 # (HARNESS_PTY_VERSION, pty/src/cli.rs), for the staging publish. A release is not a test suite
 # (docs/validation-and-release.md); the staging E2E is the gate before production.
-# The payload is six files: harness-pty.exe, harness-launch.exe, harness.exe (the `harness` command,
+# The payload is the six files install.ps1 ($HarnessPtyFiles) installs: harness-pty.exe, harness-launch.exe, harness.exe (the `harness` command,
 # pty/src/command.rs), conpty.dll, OpenConsole.exe and harness-serial.exe (serial/, the dial's serial port).
 on:
   workflow_dispatch:

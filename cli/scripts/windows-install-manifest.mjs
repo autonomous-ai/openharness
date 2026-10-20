@@ -2,7 +2,7 @@
 /**
  * An install manifest for `install.ps1 -Manifest`, made from a local build. Its inputs:
  * - the CLI bundle (dist/cli.js, dist/notify.mjs);
- * - a pty payload folder (harness-pty.exe, harness-launch.exe, harness.exe, conpty.dll, OpenConsole.exe);
+ * - a pty payload folder (harness-pty.exe, harness-launch.exe, harness.exe, conpty.dll, OpenConsole.exe, harness-serial.exe);
  * - nodejs.org's Windows zip, as downloaded.
  * It writes <out>/install-manifest.json and puts every file it names beside it, by relative name, so the folder can
  * be copied to a Windows computer as it is. It is used by the VM checks and by the Windows workflow's install job
@@ -19,7 +19,7 @@ import { parseArgs } from 'node:util'
 import { pathToFileURL } from 'node:url'
 
 /** The payload's files, as install.ps1 ($HarnessPtyFiles) and publish-pty-payload.sh (FILES) name them. */
-export const PTY_FILES = ['harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe']
+export const PTY_FILES = ['harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe']
 const NODE_ZIP = /^node-(v\d+\.\d+\.\d+)-win-(x64|arm64)\.zip$/
 /** What ptyHost/launch.ts currentPtyVersion accepts as a version folder. */
 const PTY_VERSION = /^\d+(\.\d+)*$/
