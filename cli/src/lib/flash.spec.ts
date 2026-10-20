@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { flashCommand, scriptUrl, type FlashDeps } from './flash.js'
+import { flashCommand, flasherScript, scriptUrl, type FlashDeps } from './flash.js'
 
 /**
  * `harness flash` owns three things — which script, how to get it, and handing the user's flags over
@@ -13,16 +13,17 @@ import { flashCommand, scriptUrl, type FlashDeps } from './flash.js'
 const SCRIPT = '#!/usr/bin/env bash\necho flasher\n'
 
 function harness(over: Partial<FlashDeps> & { cache?: string | null } = {}) {
-  const calls: { args: string[][]; written: string[]; logs: string[]; warns: string[] } =
-    { args: [], written: [], logs: [], warns: [] }
+  const calls: { paths: string[]; args: string[][]; written: string[]; logs: string[]; warns: string[] } =
+    { paths: [], args: [], written: [], logs: [], warns: [] }
   let cache = over.cache ?? null
   const deps: Partial<FlashDeps> = {
     fetchScript: over.fetchScript ?? (async () => SCRIPT),
     readCache: over.readCache ?? (() => cache),
     writeCache: over.writeCache ?? ((body) => { cache = body; calls.written.push(body) }),
-    run: over.run ?? (async (_p, args) => { calls.args.push(args); return 0 }),
+    run: over.run ?? (async (path, args) => { calls.paths.push(path); calls.args.push(args); return 0 }),
     log: (l) => calls.logs.push(l),
     warn: (l) => calls.warns.push(l),
+    platform: over.platform ?? 'darwin',
   }
   return { deps, calls }
 }
@@ -35,7 +36,7 @@ describe('harness flash — getting the script', () => {
     expect(calls.written).toEqual([SCRIPT])
     // Says which copy it ran. A flasher that silently ran something other than the newest is exactly
     // what the server's `no-store` header exists to prevent.
-    expect(calls.logs.join('\n')).toContain(scriptUrl())
+    expect(calls.logs.join('\n')).toContain(scriptUrl('darwin'))
     expect(calls.warns).toEqual([])
   })
 
@@ -70,7 +71,7 @@ describe('harness flash — getting the script', () => {
    */
   it('treats a non-script response as a failure', async () => {
     const { deps, calls } = harness({
-      fetchScript: async () => { throw new Error('response is not a shell script (proxy or error page?)') },
+      fetchScript: async () => '<html>captive portal</html>',
       cache: null,
     })
 
@@ -120,7 +121,12 @@ describe('harness flash — handing over the flags', () => {
       run: async () => { throw Object.assign(new Error('spawn bash ENOENT'), { code: 'ENOENT' }) },
     })
 
-    await expect(flashCommand([], deps)).rejects.toThrow(/bash was not found/)
+    await expect(flashCommand([], deps)).rejects.toThrow(
+      'bash was not found on PATH, and the flasher is a bash script.\n'
+      + 'Install bash, or run it yourself on a machine that has one:\n'
+      + `  curl -fsSL ${scriptUrl('darwin')} -o flash-circle.sh\n`
+      + '  bash flash-circle.sh',
+    )
   })
 })
 
@@ -128,6 +134,110 @@ describe('harness flash — where it points', () => {
   it('builds the URL from WEB_URL, so a local web app is used in dev', () => {
     // WEB_URL already falls back to loopback when BACKEND_WS_URL is local (config/env.ts), which is
     // why this command needs no environment variable of its own.
-    expect(scriptUrl()).toMatch(/^https?:\/\/.+\/flash-circle\.sh$/)
+    expect(scriptUrl('darwin')).toMatch(/^https?:\/\/.+\/flash-circle\.sh$/)
+    expect(scriptUrl('linux')).toBe(scriptUrl('darwin'))
+  })
+})
+
+describe('harness flash — on Windows', () => {
+  const PS1 = '# flash-circle.ps1\r\nWrite-Output flasher\r\n'
+
+  it('fetches the PowerShell flasher and runs its own cache filename', async () => {
+    const urls: string[] = []
+    const { deps, calls } = harness({ fetchScript: async (url) => { urls.push(url); return PS1 } })
+
+    expect(await flashCommand(['--detect-only'], { ...deps, platform: 'win32' })).toBe(0)
+    expect(urls).toEqual([scriptUrl('win32')])
+    expect(scriptUrl('win32')).toMatch(/\/flash-circle\.ps1$/)
+    expect(calls.written).toEqual([PS1])
+    expect(calls.paths[0]).toMatch(/[/\\]flash-circle\.ps1$/)
+    expect(calls.args[0]).toEqual(['--yes', '--detect-only'])
+    expect(calls.warns).toEqual([])
+  })
+
+  it.each(['\n', '\r\n'])('accepts the exact marker with %j line endings', async (newline) => {
+    const body = `# flash-circle.ps1${newline}Write-Output flasher${newline}`
+    const { deps, calls } = harness({ fetchScript: async () => body })
+
+    expect(await flashCommand([], { ...deps, platform: 'win32' })).toBe(0)
+    expect(calls.written).toEqual([body])
+    expect(calls.args).toEqual([['--yes']])
+  })
+
+  it.each([
+    '<html>captive portal</html>',
+    '# flash-circle.ps1 trailing text\nWrite-Output flasher\n',
+    '# flash-circle.ps1-malicious\r\nWrite-Output flasher\r\n',
+    '# flash-circle.ps1 \r\nWrite-Output flasher\r\n',
+    '\n# flash-circle.ps1\nWrite-Output flasher\n',
+    '# flash-circle.ps1\rWrite-Output flasher\r',
+    '#!/usr/bin/env bash\necho flasher\n',
+  ])('rejects a nonmatching first line and loudly uses the cache: %j', async (body) => {
+    const { deps, calls } = harness({ fetchScript: async () => body, cache: PS1 })
+
+    expect(await flashCommand([], { ...deps, platform: 'win32' })).toBe(0)
+    expect(calls.written).toEqual([])
+    expect(calls.warns.join('\n')).toContain('not the PowerShell flasher')
+    expect(calls.warns.join('\n')).toContain('CACHED')
+    expect(calls.warns.join('\n')).toContain('flash-circle.ps1')
+    expect(calls.paths[0]).toMatch(/[/\\]flash-circle\.ps1$/)
+    expect(calls.args).toEqual([['--yes']])
+  })
+
+  it('runs Windows PowerShell with the path and arguments untouched and no profile or prompt', () => {
+    const path = "C:\\Users\\Nguyễn Văn A' & 100%\\.harness\\flasher\\flash-circle.ps1"
+    const args = ['--yes', '--port', 'COM3', '--unknown', "x y' & 100%"]
+
+    expect(flasherScript('win32').command(path, args)).toEqual({
+      file: 'powershell.exe',
+      args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path, ...args],
+    })
+    expect(flasherScript('darwin').command('/x/flash-circle.sh', ['--yes'])).toEqual({
+      file: 'bash', args: ['/x/flash-circle.sh', '--yes'],
+    })
+    expect(flasherScript('linux').command('/x/flash-circle.sh', ['--yes'])).toEqual({
+      file: 'bash', args: ['/x/flash-circle.sh', '--yes'],
+    })
+  })
+
+  it('gives manual PowerShell commands when offline with no cache', async () => {
+    const { deps, calls } = harness({ fetchScript: async () => { throw new Error('offline') } })
+
+    await expect(flashCommand([], { ...deps, platform: 'win32' })).rejects.toThrow(
+      `could not download the flasher from ${scriptUrl('win32')} (offline), and no cached copy exists.\n`
+      + 'With a working connection you can always run it by hand:\n'
+      + `  irm ${scriptUrl('win32')} -OutFile flash-circle.ps1\n`
+      + '  powershell -NoProfile -ExecutionPolicy Bypass -File flash-circle.ps1',
+    )
+    expect(calls.args).toEqual([])
+    expect(calls.written).toEqual([])
+  })
+
+  it('explains how to run manually when Windows PowerShell is missing', async () => {
+    const { deps } = harness({
+      fetchScript: async () => PS1,
+      run: async () => { throw Object.assign(new Error('spawn powershell.exe ENOENT'), { code: 'ENOENT' }) },
+    })
+
+    await expect(flashCommand([], { ...deps, platform: 'win32' })).rejects.toThrow(
+      'Windows PowerShell (powershell.exe) was not found, and the flasher is a PowerShell script.\n'
+      + 'Run it yourself from a PowerShell window:\n'
+      + `  irm ${scriptUrl('win32')} -OutFile flash-circle.ps1\n`
+      + '  powershell -NoProfile -ExecutionPolicy Bypass -File flash-circle.ps1',
+    )
+  })
+
+  it('preserves Windows exit codes and leaves unknown flags in order after --yes', async () => {
+    const args = ['--port', 'COM10', '--new-flag', "x y' & 100%"]
+    const paths: string[] = []
+    const received: string[][] = []
+    const { deps } = harness({
+      fetchScript: async () => PS1,
+      run: async (path, flags) => { paths.push(path); received.push(flags); return 130 },
+    })
+
+    expect(await flashCommand(args, { ...deps, platform: 'win32' })).toBe(130)
+    expect(paths[0]).toMatch(/[/\\]flash-circle\.ps1$/)
+    expect(received).toEqual([['--yes', ...args]])
   })
 })
