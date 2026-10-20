@@ -127,11 +127,15 @@ Exit codes: 0 at end of stdin; 2 when enumeration itself fails (the line `error:
   `fBinary`, no parity check, no XON/XOFF, no CTS/DSR flow control, `fAbortOnError` off. `COMMTIMEOUTS` so a read
   returns as soon as any byte is there (`ReadIntervalTimeout = MAXDWORD`, `ReadTotalTimeoutMultiplier = MAXDWORD`,
   `ReadTotalTimeoutConstant` 1000 ms, then reads again).
-- **DTR and RTS must not reset the dial.** On ESP32-S3 USB-Serial/JTAG, RTS asserted while DTR is not resets the
-  chip. A CDC `SET_CONTROL_LINE_STATE` request carries both lines at once, so `open` sets both in the one
-  `SetCommState` call (`DTR_CONTROL_ENABLE`, `RTS_CONTROL_ENABLE`): both asserted, as a macOS open leaves them, and
-  never one without the other. It changes them at no other time. This is **measured on the test PC before anything
-  is built on it** (plan E1.3): opening a running dial must leave its `session` unchanged and its link up.
+- **DTR and RTS must not reset the dial.** `open` releases both in one `SetCommState` call
+  (`DTR_CONTROL_DISABLE`, `RTS_CONTROL_DISABLE`, `DCB_RAW=1`) and changes them at no other time: the E1.3 Step 5
+  fallback. On the test PC (2026-10-20), both asserted-lines attempts received an ESP-ROM banner. The first
+  released-lines read also contained one; the next three were banner-free, including the final consecutive pair
+  (3822 and 1975 bytes). Every open held for 10 s, exited 0 at stdin EOF and kept the USB attachment session.
+  The final pair passes E1.3's automated gate; the controller defers Person screen observation and heartbeat
+  verification to E5. The exact reset edge and the initial banner's origin remain unproven: an unchanged USB
+  session does not itself prove no reboot. Full measurements and cleanup are recorded in
+  `desktop/scripts/windows-e2e/evidence/dial-e1.3-serial-check.log`.
 - Then copies bytes both ways: port → stdout, stdin → port, writing each chunk whole before the next. No framing:
   the cable protocol's frames pass through untouched.
 - Ends: end of stdin → close the port, exit 0. The port fails (unplug: `ERROR_GRACEFUL_DISCONNECT`,

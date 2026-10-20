@@ -151,9 +151,10 @@ pub fn open_failure(code: u32) -> OpenFailure {
 
 /// DCB's bit field for the dial: fBinary only; DTR_CONTROL_DISABLE and RTS_CONTROL_DISABLE release both lines.
 ///
-/// With both asserted (0x1011), repeat E1.3 measurements on 2026-10-20 received an ESP-ROM boot banner even though
-/// the USB attachment session stayed unchanged. Releasing both is the plan's fallback and cannot put RTS asserted
-/// without DTR. The released-lines configuration still needs the test PC's non-reset measurement before E2.
+/// E1.3 on the test PC (2026-10-20): asserted lines (0x1011) received ESP-ROM on two opens. The first released-lines
+/// read also contained ESP-ROM; the next three did not, including the final consecutive pair. All held 10 s and
+/// kept their USB attachment session. These observations select the planned fallback without identifying the
+/// reset edge or the first banner's origin; screen observation and heartbeat checks remain for E5.
 pub const DCB_RAW: u32 = 1;
 
 #[cfg(test)]
