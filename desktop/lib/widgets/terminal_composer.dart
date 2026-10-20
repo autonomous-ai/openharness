@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
+import '../shortcuts/app_shortcuts.dart' show ctrlWorkspacePrefix;
 import '../theme/app_theme.dart';
 import '../terminal/terminal_font_store.dart';
 import '../terminal/terminal_session.dart';
@@ -24,11 +25,13 @@ class TerminalComposer extends StatefulWidget {
     required this.session,
     required this.focusNode,
     this.inputEnabled = true,
+    this.onPasteNonText,
   });
 
   final TerminalSession session;
   final FocusNode focusNode;
   final bool inputEnabled;
+  final Future<void> Function()? onPasteNonText;
 
   @override
   State<TerminalComposer> createState() => _TerminalComposerState();
@@ -134,6 +137,49 @@ class _TerminalComposerState extends State<TerminalComposer> {
     );
   }
 
+  Future<void> _pasteClipboard() async {
+    final target = widget.session;
+    final streamId = target.streamId;
+    final focusNode = widget.focusNode;
+    final onPasteNonText = widget.onPasteNonText;
+    bool stillOwnsPaste() =>
+        mounted &&
+        identical(widget.session, target) &&
+        target.streamId == streamId &&
+        widget.inputEnabled &&
+        target.acceptsInput &&
+        identical(widget.focusNode, focusNode) &&
+        focusNode.hasFocus;
+    if (!stillOwnsPaste()) return;
+
+    final bool hasText;
+    try {
+      hasText = await Clipboard.hasStrings();
+    } on PlatformException {
+      if (mounted && stillOwnsPaste()) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(
+            content: Text('Could not read the clipboard. Try Paste again.'),
+          ),
+        );
+      }
+      return;
+    }
+    // The platform check may finish after focus, control, or the pane's agent changed.
+    if (!mounted || !stillOwnsPaste()) return;
+    if (hasText) {
+      final fieldContext = focusNode.context;
+      if (fieldContext != null && fieldContext.mounted) {
+        Actions.maybeInvoke(
+          fieldContext,
+          const PasteTextIntent(SelectionChangedCause.keyboard),
+        );
+      }
+    } else {
+      await onPasteNonText?.call();
+    }
+  }
+
   /// Enter sends; ⌥⏎ and Shift+Enter compose another line.
   ///
   /// ⌥⏎ is the one the muscle memory comes with — it is how Claude Code and Codex take a second
@@ -145,6 +191,15 @@ class _TerminalComposerState extends State<TerminalComposer> {
   KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
+    }
+    if (ctrlWorkspacePrefix &&
+        event.logicalKey == LogicalKeyboardKey.keyV &&
+        HardwareKeyboard.instance.isControlPressed &&
+        !HardwareKeyboard.instance.isAltPressed &&
+        !HardwareKeyboard.instance.isMetaPressed &&
+        !HardwareKeyboard.instance.isShiftPressed) {
+      unawaited(_pasteClipboard());
+      return KeyEventResult.handled;
     }
     final isEnter =
         event.logicalKey == LogicalKeyboardKey.enter ||

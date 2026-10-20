@@ -2423,6 +2423,7 @@ class _TerminalPanelState extends State<TerminalPanel>
                   session: session,
                   focusNode: _composerFocus,
                   inputEnabled: !widget.readOnly && !session.readOnly,
+                  onPasteNonText: _paste,
                 ),
               ),
           ],

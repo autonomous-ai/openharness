@@ -47,6 +47,7 @@ Future<void> mount(
   AppNotifier app,
   TerminalSession session, {
   bool readOnly = false,
+  bool composerVisible = false,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -56,6 +57,8 @@ Future<void> mount(
           session: session,
           focused: true,
           readOnly: readOnly,
+          composerVisible: composerVisible,
+          onToggleComposer: composerVisible ? () {} : null,
         ),
       ),
     ),
@@ -84,6 +87,8 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(SystemChannels.platform, (call) async {
           switch (call.method) {
+            case 'Clipboard.hasStrings':
+              return {'value': clipboard?.isNotEmpty ?? false};
             case 'Clipboard.getData':
               reads++;
               return readClipboard == null
@@ -101,6 +106,52 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(SystemChannels.platform, null);
   });
+
+  onPlatform(
+    TargetPlatform.windows,
+    'composer Ctrl+V uploads an image without changing the draft',
+    (tester) async {
+      final app = createApp();
+      app.stateOf('m')!.terminalImagePasteAvailable = true;
+      final frames = <TerminalBinaryFrame>[];
+      final controls = <String>[];
+      final session = liveSession(
+        'a0',
+        frames,
+        engine: 'claude',
+        controls: controls,
+      );
+      final png = Uint8List.fromList([137, 80, 78, 71]);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(imageChannel, (_) async => png);
+      clipboard = null;
+      await mount(tester, app, session, composerVisible: true);
+      await tester.enterText(find.byType(TextField), 'draft with an image');
+      await key(tester, LogicalKeyboardKey.keyV, ctrl: true);
+      expect(controls, contains('terminal_chunked_upload_begin'));
+      await session.handleFrame('terminal_chunked_upload_begin_result', {
+        'streamId': session.streamId,
+        'accepted': true,
+      });
+      await tester.pump();
+      expect(frames, hasLength(1));
+      expect(frames.single.kind, TerminalBinaryKind.imagePaste);
+      expect(frames.single.bytes, png);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        'draft with an image',
+      );
+      await session.handleFrame('terminal_paste_image_result', {
+        'streamId': session.streamId,
+        'outcome': 'clipboard',
+      });
+      await tester.pump();
+      expect(session.uploadProgress, isNull);
+      await tester.pumpWidget(const SizedBox());
+      session.dispose();
+      app.dispose();
+    },
+  );
 
   for (final platform in [
     TargetPlatform.macOS,
