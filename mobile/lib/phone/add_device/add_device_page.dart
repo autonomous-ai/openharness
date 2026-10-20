@@ -98,6 +98,14 @@ class _AddDevicePageState extends State<AddDevicePage> {
   /// Asked for by Look again on a locked device's list: scanned again beside its hotspot.
   bool _rescan = false;
 
+  /// A locked device that checks the computer's password on its own (protocol 3): the password is
+  /// asked first and checked — nothing opens — then the Wi-Fi, then both go in one unlock.
+  bool _checkFirst = false;
+
+  /// The computer's password once the device said it is the right one: kept in memory only, for the
+  /// unlock that follows the Wi-Fi.
+  String? _checked;
+
   /// The device found online after a locked setup: it said no computer id while locked, so it is told
   /// apart in the account instead — new there, or offline when the password was sent ([_sentAt]).
   Machine? _found;
@@ -277,20 +285,17 @@ class _AddDevicePageState extends State<AddDevicePage> {
       _retrying = false;
       if (info['locked'] == true) {
         _secret.clear();
-        if (((info['protocol'] as num?)?.toInt() ?? 1) >= 2) {
-          // The whole setup while it is locked: its Wi-Fi first, from its startup's list.
+        final protocol = (info['protocol'] as num?)?.toInt() ?? 1;
+        if (protocol >= 2) {
+          // The whole setup while it is locked. Protocol 3: the computer's password first, checked,
+          // then its Wi-Fi; protocol 2: its Wi-Fi first.
           _lockedSetup = true;
-          setState(() => _progress = _Progress.reading);
-          final rescan = _rescan;
-          _rescan = false;
-          final networks = await _hotspot.networks(rescan: rescan);
-          if (!mounted) return;
-          setState(() {
-            _networks = networks;
-            _step = _Step.networks;
-            _error = '';
-            _busy = false;
-          });
+          _checkFirst = protocol >= 3;
+          if (_checkFirst && _checked == null) {
+            _show(_Step.unlock);
+            return;
+          }
+          await _lockedNetworks();
           return;
         }
         _show(_Step.unlock);
@@ -331,6 +336,21 @@ class _AddDevicePageState extends State<AddDevicePage> {
     }
   }
 
+  /// A locked device's Wi-Fi: the list its startup scanned, or scanned again beside its hotspot.
+  Future<void> _lockedNetworks() async {
+    setState(() => _progress = _Progress.reading);
+    final rescan = _rescan;
+    _rescan = false;
+    final networks = await _hotspot.networks(rescan: rescan);
+    if (!mounted) return;
+    setState(() {
+      _networks = networks;
+      _step = _Step.networks;
+      _error = '';
+      _busy = false;
+    });
+  }
+
   // -- 2b. a device locked as it starts: the computer's password --
 
   Future<void> _unlock() async {
@@ -339,6 +359,34 @@ class _AddDevicePageState extends State<AddDevicePage> {
       _show(_Step.unlock, error: 'Enter the computer\'s password.');
       return;
     }
+    setState(() => _busy = true);
+    if (_checkFirst) {
+      // Only checked: right, then the Wi-Fi; wrong, said now — before any Wi-Fi is chosen.
+      final String? why;
+      try {
+        why = await _hotspot.check(secret);
+      } on SetupException catch (e) {
+        _show(_Step.unlock, error: e.message);
+        return;
+      }
+      if (why != null) {
+        _show(_Step.unlock, error: why);
+        return;
+      }
+      _checked = secret;
+      _secret.clear();
+      try {
+        await _lockedNetworks();
+      } on SetupException catch (e) {
+        _show(_Step.join, error: e.message);
+      }
+      return;
+    }
+    await _unlockWith(secret);
+  }
+
+  /// The disk opened with [secret] — and, for a locked setup, the Wi-Fi and the sign-in sent with it.
+  Future<void> _unlockWith(String secret) async {
     setState(() => _busy = true);
     // The whole setup with it: a new ticket for a try after one that was handed over already.
     if (_lockedSetup && _ticketSent && !await _freshTicket()) return;
@@ -355,18 +403,21 @@ class _AddDevicePageState extends State<AddDevicePage> {
         : null;
     // The account as it is now: the device is told apart in it once online, having given no id.
     _sentAt = {for (final m in _app.machines) m.machineId: m.status ?? ''};
+    // Checked first: a failure now is said beside the Wi-Fi password, where the button was.
+    final failedAt = _checkFirst ? _Step.password : _Step.unlock;
     final String? why;
     try {
       why = await _hotspot.unlock(secret, setup: setup);
     } on SetupException catch (e) {
-      _show(_Step.unlock, error: e.message);
+      _show(failedAt, error: e.message);
       return;
     }
     _secret.clear();
     if (why != null) {
-      _show(_Step.unlock, error: why);
+      _show(failedAt, error: why);
       return;
     }
+    _checked = null;
     if (_lockedSetup) {
       // Opened, with its Wi-Fi and ticket: it joins and signs in as it starts. No second hotspot.
       _ticketSent = true;
@@ -479,7 +530,13 @@ class _AddDevicePageState extends State<AddDevicePage> {
       return;
     }
     if (_lockedSetup) {
-      // Still locked: the computer's password next, and the Wi-Fi goes with it.
+      // Its password checked already: unlocked now, the Wi-Fi with it. Not yet (protocol 2): the
+      // computer's password next.
+      final checked = _checked;
+      if (_checkFirst && checked != null) {
+        await _unlockWith(checked);
+        return;
+      }
       _secret.clear();
       _show(_Step.unlock);
       return;
@@ -744,7 +801,10 @@ class _AddDevicePageState extends State<AddDevicePage> {
       case _Step.unlock:
         return [
           say(
-            _lockedSetup
+            _checkFirst
+                ? '$name is locked. Enter the computer\'s password — the one set when it was '
+                      'installed. It is checked first; then you choose its Wi-Fi.'
+                : _lockedSetup
                 ? 'Last, the computer\'s password — the one set when it was installed. $name '
                       'starts with it, joins "${_ssid.text.trim()}" and signs in to your account.'
                 : '$name is locked. Enter the computer\'s password — the one set when it was '
@@ -914,12 +974,16 @@ class _AddDevicePageState extends State<AddDevicePage> {
         return [
           TtyPrimaryButton(
             key: const Key('add-device-unlock'),
-            label: _lockedSetup ? 'Unlock and set up' : 'Unlock',
+            label: _checkFirst
+                ? 'Next'
+                : _lockedSetup
+                ? 'Unlock and set up'
+                : 'Unlock',
             busy: _busy,
-            busyLabel: 'Unlocking…',
+            busyLabel: _checkFirst ? 'Checking…' : 'Unlocking…',
             onPressed: () => unawaited(_unlock()),
           ),
-          if (_lockedSetup)
+          if (_lockedSetup && !_checkFirst)
             TtyTextButton(
               key: const Key('add-device-unlock-back'),
               label: 'Choose another Wi-Fi',
@@ -942,9 +1006,13 @@ class _AddDevicePageState extends State<AddDevicePage> {
         return [
           TtyPrimaryButton(
             key: const Key('add-device-connect'),
-            label: _lockedSetup ? 'Next' : 'Connect',
+            label: _checkFirst
+                ? 'Unlock and set up'
+                : _lockedSetup
+                ? 'Next'
+                : 'Connect',
             busy: _busy,
-            busyLabel: 'Sending…',
+            busyLabel: _checkFirst ? 'Unlocking…' : 'Sending…',
             onPressed: () => unawaited(_send()),
           ),
           TtyTextButton(

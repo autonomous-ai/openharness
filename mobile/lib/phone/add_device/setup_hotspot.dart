@@ -103,6 +103,31 @@ class SetupHotspot {
     ];
   }
 
+  /// The computer's password only checked, nothing opened (protocol 3): null when it is the disk's,
+  /// otherwise why not. The phone asks it first, then the Wi-Fi, then [unlock]s with both.
+  Future<String?> check(String password) async {
+    final Response<dynamic> res;
+    try {
+      res = await _dio.post(
+        '/setup/check',
+        data: password,
+        options: Options(
+          contentType: 'text/plain; charset=utf-8',
+          // Checked slowly on purpose, as the disk's password is.
+          receiveTimeout: const Duration(seconds: 50),
+        ),
+      );
+    } on DioException {
+      throw const SetupException(
+        'Lost the device\'s Wi-Fi. Stay close to it and try again.',
+      );
+    }
+    if (res.statusCode == 200) return null;
+    final body = res.data is Map ? res.data as Map : const {};
+    return body['message'] as String? ??
+        'The device said no (${res.statusCode}).';
+  }
+
   /// The computer's password, for a device still locked as it starts: its disk opens with it, and
   /// it goes on starting. Null when it opened; otherwise why not (a wrong password, too many tries).
   ///
