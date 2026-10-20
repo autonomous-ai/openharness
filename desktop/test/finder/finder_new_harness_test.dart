@@ -62,11 +62,12 @@ void main() {
     addTearDown(app.dispose);
   });
 
-  NewHarnessController box({String? folder = '/work/repo'}) {
+  NewHarnessController box({String? folder = '/work/repo', String? engine}) {
     final box = NewHarnessController(
       app,
       machineId: 'm',
-      engine: 'finder',
+      harnessId: 'finder',
+      engine: engine,
       folder: folder,
     );
     addTearDown(box.dispose);
@@ -77,13 +78,13 @@ void main() {
     final finder = box();
     await pumpEventQueue();
     expect(finder.isFinder, isTrue);
-    expect(finder.fields, isNot(contains(NewHarnessField.model)));
+    expect(finder.harnessId, 'finder');
     expect(finder.isGitProject, isFalse, reason: 'no worktree: same folder');
     finder.task = 'Explain this repo';
 
     expect(await finder.create(), NewHarnessOutcome.created);
     final create = connection.creates.single;
-    expect(create['engine'], finder.finderChat);
+    expect(create['engine'], finder.engine);
     expect(create['cwd'], '/work/repo');
     expect(create['prompt'], 'Explain this repo');
 
@@ -109,10 +110,68 @@ void main() {
     expect(app.allPanes.where((p) => p.isFinder), isEmpty);
   });
 
-  test('a Finder is not remembered as the next box\'s agent', () async {
+  test('the chat is chosen like a harness\'s agent, with model and mode', () {
+    final finder = box(engine: 'codex');
+    expect(finder.engine, 'codex');
+    expect(finder.launchAgentLabel, 'Finder · Codex');
+    expect(finder.fields, contains(NewHarnessField.model));
+    expect(finder.hasModes, isTrue);
+
+    finder.focusField(NewHarnessField.agent);
+    final ids = [for (final option in finder.options) option.id];
+    expect(ids, containsAll(['claude', 'codex']));
+    expect(ids, isNot(anyOf(contains('finder'), contains('terminal'))));
+    finder.applyOption(finder.options.firstWhere((o) => o.id == 'claude'));
+    expect(finder.engine, 'claude');
+    expect(finder.isFinder, isTrue);
+  });
+
+  test('picking Finder in the Harness list keeps the agent as its chat', () {
+    final picker = NewHarnessController(
+      app,
+      machineId: 'm',
+      engine: 'codex',
+      folder: '/work/repo',
+    );
+    addTearDown(picker.dispose);
+    picker.focusField(NewHarnessField.harness);
+    picker.applyOption(picker.options.firstWhere((o) => o.id == 'finder'));
+    expect(picker.isFinder, isTrue);
+    expect(picker.engine, 'codex');
+    expect(picker.draft.harnessId, 'finder');
+
+    picker.focusField(NewHarnessField.harness);
+    picker.applyOption(picker.options.firstWhere((o) => o.id == 'claude'));
+    expect(picker.isFinder, isFalse);
+  });
+
+  test('a shell cannot be a Finder\'s chat', () {
+    expect(box(engine: 'terminal').engine, isNot('terminal'));
+  });
+
+  test('a chat shown again brings its Finder back, until closed', () async {
     expect(await box().create(), NewHarnessOutcome.created);
-    await pumpEventQueue();
-    expect(app.agentPreference.successfulLaunch?.engine, isNot('finder'));
+    final tab = app.activeSwarm;
+    Future<void> synced() => app.handleEventForTest('m', {
+      'type': 'agent_synced',
+      'payload': {
+        'agent': {
+          'id': 'chat',
+          'name': 'Chat',
+          'engine': 'claude',
+          'terminalAvailable': true,
+        },
+      },
+    });
+    // A restart restores the chat alone: viewers are never saved.
+    tab.remove(tab.panes.firstWhere((p) => p.isFinder));
+    await synced();
+    expect(tab.panes.first.finderRoot, '/work/repo');
+    expect(tab.panes, hasLength(2));
+
+    await app.closePane(tab.panes.first.id);
+    await synced();
+    expect(tab.panes.where((p) => p.isFinder), isEmpty);
   });
 
   test('Finder needs a folder', () async {

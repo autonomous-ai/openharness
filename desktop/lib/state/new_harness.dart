@@ -454,19 +454,25 @@ class NewHarnessController extends ChangeNotifier {
         draft != null || engine != null || harnessId != null;
     _rememberedAgent = !explicitSelection;
     engine = draft?.engine ?? engine;
-    _harnessId =
-        draft?.harnessId ??
-        harnessId ??
-        (isHarnessId(engine)
-            ? engine
-            : explicitSelection
-            ? null
-            : app.agentPreference.harness);
-    _engine = draft != null && !isHarnessId(draft.engine)
-        ? draft.engine
+    // A Finder is chosen as a harness is: by itself, or with its chat's agent.
+    _finder =
+        isFinderEngine(draft?.harnessId ?? harnessId) || isFinderEngine(engine);
+    if (isFinderEngine(engine)) engine = null;
+    _harnessId = _finder
+        ? null
+        : draft?.harnessId ??
+              harnessId ??
+              (isHarnessId(engine)
+                  ? engine
+                  : explicitSelection
+                  ? null
+                  : app.agentPreference.harness);
+    _engine = draft != null && engine != null && !isHarnessId(engine)
+        ? engine
         : harnessId != null && engine != null && !isHarnessId(engine)
         ? engine
         : _initialEngine(isHarnessId(engine) ? null : engine);
+    if (_finder) _engine = _finderChat(_engine);
     _restorePermissionMode();
     _model = _noAgentSetup ? null : draft?.model;
     _modelUsage = modelUsage;
@@ -596,7 +602,10 @@ class NewHarnessController extends ChangeNotifier {
 
   late String _engine;
   String? _harnessId;
-  String? get harnessId => _harnessId;
+
+  /// What the Harness row answers: a Store harness, the Finder, or null for
+  /// an agent on its own. Both of the first two run on [engine].
+  String? get harnessId => _finder ? kFinderEngine : _harnessId;
 
   /// The harness this form is installing, or failed to install, on its way to
   /// starting — so the form can show the machine's own narration of it.
@@ -618,7 +627,7 @@ class NewHarnessController extends ChangeNotifier {
     return entry != null && !entry.isViewerPackage;
   }
 
-  String get harnessLabel => _harnessId == null ? 'Code' : labelOf(_harnessId!);
+  String get harnessLabel => harnessId == null ? 'Code' : labelOf(harnessId!);
   bool advancedOpen = false;
   bool _selectionTouched = false;
   bool _rememberedAgent = false;
@@ -658,8 +667,9 @@ class NewHarnessController extends ChangeNotifier {
   void _startAsGuest() {
     _project = const NewHarnessProject.fresh();
     // An agent a guest cannot start there (OpenCode, a Store harness) gives way to Claude Code.
-    if (_harnessId != null || !compatibleEngines.contains(_engine)) {
+    if (_harnessId != null || _finder || !compatibleEngines.contains(_engine)) {
       _harnessId = null;
+      _finder = false;
       _engine = compatibleEngines.first;
       _restorePermissionMode();
     }
@@ -694,11 +704,14 @@ class NewHarnessController extends ChangeNotifier {
 
   List<String> get compatibleEngines => asGuest
       ? const ['claude', 'codex']
+      // A Finder's chat runs beside it on this computer: an agent, never
+      // the cloud or a bare shell.
+      : _finder
+      ? [for (final engine in allEngines) engine.id]
       : _harnessId == null
       ? [
           for (final engine in allEngines) engine.id,
           for (final agent in cloudAgents) agent.id,
-          kFinderEngine,
           kTerminalEngine,
         ]
       : selectedHarness?.supportedEngines ??
@@ -811,7 +824,7 @@ class NewHarnessController extends ChangeNotifier {
   bool refreshingBranches = false;
   String? branchRefreshError;
   DateTime? _branchesCheckedAt;
-  bool get isGitProject => _gitProject.isGit && !_noAgentSetup && !isCloud;
+  bool get isGitProject => _gitProject.isGit && !_noGitSetup && !isCloud;
 
   /// A worktree the person picked: the harness works in it, on its branch.
   bool get inWorktree => _project.exact && _gitProject.mainFolder != null;
@@ -939,7 +952,7 @@ class NewHarnessController extends ChangeNotifier {
   }
 
   void retryGitProject() {
-    if (locked || checkingGit || _project.folder == null || _noAgentSetup) {
+    if (locked || checkingGit || _project.folder == null || _noGitSetup) {
       return;
     }
     error = null;
@@ -996,7 +1009,7 @@ class NewHarnessController extends ChangeNotifier {
   }
 
   void _syncGitProject() {
-    final key = (_machineId, _project.folder, _noAgentSetup);
+    final key = (_machineId, _project.folder, _noGitSetup);
     if (_gitKey == key) return;
     if (_gitKey != null) {
       _worktree = null;
@@ -1245,7 +1258,7 @@ class NewHarnessController extends ChangeNotifier {
   NewHarnessDraft get draft => NewHarnessDraft(
     machineId: _machineId,
     engine: _engine,
-    harnessId: _harnessId,
+    harnessId: harnessId,
     model: _model,
     advancedOpen: advancedOpen,
     project: _project,
@@ -1359,7 +1372,7 @@ class NewHarnessController extends ChangeNotifier {
             knownHarnessBase[canonicalHarnessId(engine)] ??
             'claude'
       : engine;
-  String get _base => isFinder ? finderChat : _engine;
+  String get _base => _engine;
 
   // Browsing previews an engine without changing the launch draft. Keep that
   // engine while its settings are open in a child picker.
@@ -1491,22 +1504,16 @@ class NewHarnessController extends ChangeNotifier {
   MachineState? get _machine => app.stateOf(_machineId);
   bool get isTerminal => isTerminalEngine(_engine);
 
-  /// A Finder: the folder to browse, with a [finderChat] beside it.
-  bool get isFinder => isFinderEngine(_engine);
+  /// A Finder: the folder to browse, with a chat on [engine] beside it.
+  bool _finder = false;
+  bool get isFinder => _finder;
 
-  /// The agent a Finder's chat runs: the one this person last launched, else
-  /// the one they are signed in to here, else the product default — the
-  /// same order [_initialEngine] opens the box on.
-  String get finderChat {
-    final last = app.agentPreference.successfulLaunch?.engine;
-    if (allEngines.any((engine) => engine.id == last)) return last!;
-    return _accountAgent() ?? defaultHarnessEngine;
-  }
+  /// The plain shell: no model or permission mode to set up.
+  bool get _noAgentSetup => isTerminal;
 
-  /// A choice with no agent to set up — no model, permission mode or branch:
-  /// the plain shell, and the Finder, whose chat starts on its defaults in
-  /// exactly the folder the Finder shows.
-  bool get _noAgentSetup => isTerminal || isFinder;
+  /// No branch or worktree: the plain shell, and a Finder, whose chat works
+  /// in exactly the folder the Finder shows.
+  bool get _noGitSetup => isTerminal || isFinder;
 
   /// A cloud agent (Fo, Devin Cloud, Cursor Cloud): it runs on its maker's
   /// servers, so it takes no folder, model, approvals or branch here — a coding
@@ -1596,7 +1603,7 @@ class NewHarnessController extends ChangeNotifier {
             // binary) is as unavailable as a remembered one.
             (_engineRemembered || !engineState!.installable))) {
       return (
-        field: _harnessId == null
+        field: harnessId == null
             ? NewHarnessField.harness
             : NewHarnessField.agent,
         message: '$agentLabel is unavailable. Choose an agent.',
@@ -1641,7 +1648,7 @@ class NewHarnessController extends ChangeNotifier {
 
   String get agentLabel => labelOf(_engine);
   String get launchAgentLabel =>
-      _harnessId == null ? agentLabel : '$harnessLabel · $agentLabel';
+      harnessId == null ? agentLabel : '$harnessLabel · $agentLabel';
   String get launchProjectLabel =>
       '$machineLabel:${needsProject ? "Choose project" : projectLabel}';
   String labelOf(String id) => currentHarnessName(
@@ -1934,7 +1941,7 @@ class NewHarnessController extends ChangeNotifier {
   /// wears the ✓, as the current folder and branch do in an editor's pickers.
   bool isCurrent(NewHarnessOption option) => switch (field) {
     NewHarnessField.launch || NewHarnessField.task => false,
-    NewHarnessField.harness => option.id == (_harnessId ?? _engine),
+    NewHarnessField.harness => option.id == (harnessId ?? _engine),
     NewHarnessField.agent => option.id == _engine,
     NewHarnessField.model =>
       option.id == (_model == null ? defaultModelId : _modelId(_model!)),
@@ -2201,7 +2208,9 @@ class NewHarnessController extends ChangeNotifier {
   void _apply(NewHarnessOption option) {
     switch (field) {
       case NewHarnessField.harness:
-        if (isHarnessId(option.id) && option.id != codingId) {
+        if (isFinderEngine(option.id)) {
+          _selectFinder();
+        } else if (isHarnessId(option.id) && option.id != codingId) {
           _selectHarness(option.id);
         } else {
           _selectHarness(null);
@@ -2280,6 +2289,7 @@ class NewHarnessController extends ChangeNotifier {
   void _selectHarness(String? id) {
     _selectionTouched = true;
     _harnessId = id;
+    _finder = false;
     _installing = null;
     _selectEngine(
       _desktopChoices
@@ -2291,6 +2301,24 @@ class NewHarnessController extends ChangeNotifier {
       unawaited(_refreshGeneratedProject());
     }
   }
+
+  /// The Finder keeps the agent already chosen as its chat when it can run
+  /// one; otherwise the box's own first choice.
+  void _selectFinder() {
+    _selectionTouched = true;
+    _harnessId = null;
+    _installing = null;
+    _finder = true;
+    if (!compatibleEngines.contains(_engine)) {
+      _selectEngine(_finderChat(_initialEngine(null)));
+    }
+  }
+
+  /// [candidate] when a Finder's chat can run it — an agent, not the cloud or
+  /// a bare shell — else the agent signed in here, else the product default.
+  String _finderChat(String candidate) => compatibleEngines.contains(candidate)
+      ? candidate
+      : _accountAgent() ?? defaultHarnessEngine;
 
   void _selectMachine(String id) {
     _installing = null;
@@ -2327,7 +2355,7 @@ class NewHarnessController extends ChangeNotifier {
 
   NewHarnessProject _generatedProject() => NewHarnessProject.generated(
     ProjectFolderRequest.generated(
-      label: _harnessId == null ? engineIdentity(_engine).label : harnessLabel,
+      label: harnessId == null ? engineIdentity(_engine).label : harnessLabel,
       at: _now(),
       // Only a task the agent will actually be sent names the project.
       task: takesTask ? task : null,
@@ -3138,15 +3166,14 @@ class NewHarnessController extends ChangeNotifier {
       if (!isHarnessId(id) && compatibleEngines.contains(id)) _engineOption(id),
   ]);
 
-  /// An agent's row. The Finder names the chat it opens with, and reads this
-  /// computer's disk, so on any other machine its row says so instead.
+  /// An agent's row. The Finder reads this computer's disk, so on any other
+  /// machine its row says so instead of opening.
   NewHarnessOption _engineOption(String id) {
     final finderElsewhere = isFinderEngine(id) && !canOpenFinderOn(_machine);
     return NewHarnessOption(
       id: id,
       title: labelOf(id),
       engine: id,
-      detail: isFinderEngine(id) ? 'With a ${labelOf(finderChat)} chat' : '',
       enabled: !finderElsewhere,
       why: finderElsewhere ? kFinderElsewhere : null,
     );
@@ -3996,8 +4023,8 @@ class NewHarnessController extends ChangeNotifier {
     }
     // Creation can replace an embedded form before this future returns. Save
     // the confirmed choices even if that form has already been disposed. A
-    // Finder is not remembered as the agent: the next box would open on it.
-    if (failure == null && attempt.agentId != null && !isFinder) {
+    // Finder's chat is remembered as its agent; the Finder itself is not.
+    if (failure == null && attempt.agentId != null) {
       unawaited(
         app.agentPreference.remember(
           choice,
@@ -4019,7 +4046,7 @@ class NewHarnessController extends ChangeNotifier {
           // A picked worktree prepared in place is still the one picked.
           exact: _project.exact && attempt.preparedFolder == _project.folder,
         );
-        _gitKey = (_machineId, _project.folder, _noAgentSetup);
+        _gitKey = (_machineId, _project.folder, _noGitSetup);
         _worktree = false;
         _branchRef = null;
         _gitProject = const GitProjectInfo();
