@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { applyOpencodeSessionModel, parseOpencodeModelId, opencodeMajorVersion, opencodeV2TurnOpen } from '../../engines/launchControl.js'
 import { isOpencodeV2 } from '../../engines/launchControl.js'
 import { binaryOnPath } from '../../lib/binaryOnPath.js'
+import { builtinSqlite } from '../../lib/sqliteBuiltin.js'
 import { validateLaunchOverrides } from '../../lib/launchOverrides.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { AgentRestartCoordinator, bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
@@ -28,6 +29,7 @@ vi.mock('../../engines/inProcess.js', async (real) => {
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
 })
 vi.mock('../../lib/binaryOnPath.js', () => ({ binaryOnPath: vi.fn(() => true) }))
+vi.mock('../../lib/sqliteBuiltin.js', async (real) => ({ ...await real<object>(), builtinSqlite: vi.fn(() => null) }))
 vi.mock('../../lib/gatewayRuntime.js', async (real) => ({ ...await real<object>(), probeGatewayRuntime: vi.fn(async () => ({ kind: 'none' })) }))
 vi.mock('../../lib/gridLaunchWire.js', async (real) => ({ ...await real<object>(), describeGridLaunch: vi.fn(() => 'claude on Home'), gridEnvVarNames: vi.fn(() => ['ANTHROPIC_BASE_URL']) }))
 vi.mock('../../lib/launchOverrides.js', async (real) => ({ ...await real<object>(), validateLaunchOverrides: vi.fn(async () => ({ ok: true })) }))
@@ -264,6 +266,10 @@ describe('retargeting an agent', () => {
       expect(await setup().retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'GRID_ENGINE_UNSUPPORTED', detail: 'no' })
       vi.mocked(binaryOnPath).mockReturnValueOnce(false)
       expect(await setup(agent({ engine: 'opencode' } as Partial<RegisteredSession>)).retarget({ agentId: 'a1', grid })).toMatchObject({ error: 'OPENCODE_SQLITE_MISSING' })
+      // Windows has no sqlite3 CLI, but node:sqlite rewrites the store just as well.
+      vi.mocked(binaryOnPath).mockReturnValueOnce(false)
+      vi.mocked(builtinSqlite).mockReturnValueOnce((class {}) as never)
+      expect(await setup(agent({ engine: 'opencode' } as Partial<RegisteredSession>)).retarget({ agentId: 'a1', grid })).not.toMatchObject({ error: 'OPENCODE_SQLITE_MISSING' })
       vi.mocked(workspaceMissing).mockReturnValueOnce({ ok: false, error: 'CWD_NOT_FOUND', detail: 'gone' } as never)
       expect(await setup().retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'CWD_NOT_FOUND', detail: 'gone' })
     })

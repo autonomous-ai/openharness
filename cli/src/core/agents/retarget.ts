@@ -14,6 +14,7 @@
 import type { BackendSocket } from '../../backendSocket.js'
 import * as opencodeLaunch from '../../engines/launchControl.js'
 import { binaryOnPath } from '../../lib/binaryOnPath.js'
+import { builtinSqlite } from '../../lib/sqliteBuiltin.js'
 import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
 import { describeGridLaunch, gridEnvVarNames } from '../../lib/gridLaunchWire.js'
 import { validateLaunchOverrides, type LaunchOverridesDeps, type LaunchSource } from '../../lib/launchOverrides.js'
@@ -163,11 +164,11 @@ export function createAgentRetargeter({
     const opencode = session.engine === 'opencode' ? opencodeLaunch : null
     const opencodeMajor = native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null
     if (!current()) return changed()
-    if (rewritesOpencodeSession && opencode && !opencode.isOpencodeV2(opencodeMajor) && !binaryOnPath('sqlite3')) {
+    if (rewritesOpencodeSession && opencode && !opencode.isOpencodeV2(opencodeMajor) && !builtinSqlite() && !binaryOnPath('sqlite3')) {
       return {
         ok: false,
         error: 'OPENCODE_SQLITE_MISSING',
-        detail: 'the sqlite3 CLI is not on PATH, and a resumed opencode session keeps its model unless its store is rewritten — install sqlite3 and retry',
+        detail: 'this Node has no node:sqlite and the sqlite3 CLI is not on PATH, and a resumed opencode session keeps its model unless its store is rewritten — install sqlite3 and retry',
       }
     }
     // The replacement enters the row's folder before it execs: a folder that is gone is refused here,
