@@ -182,7 +182,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
               child: Stack(
                 children: [
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 6, 20, 6),
+                    padding: const EdgeInsets.fromLTRB(24, 6, 24, 6),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -273,10 +273,15 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     style: DesktopChrome.metadata(),
                                   ),
                                 ),
-                              SuperTabMessageText(
-                                message.text,
-                                references: widget.references,
-                                onOpenGroup: widget.onOpenGroup,
+                              ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  maxWidth: 960,
+                                ),
+                                child: SuperTabMessageText(
+                                  message.text,
+                                  references: widget.references,
+                                  onOpenGroup: widget.onOpenGroup,
+                                ),
                               ),
                               SuperTabPullRequestLinks(message.text),
                               ...widget.receipts,

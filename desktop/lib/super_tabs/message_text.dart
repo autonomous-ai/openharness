@@ -37,8 +37,9 @@ class SuperTabMessageText extends StatelessWidget {
       data: text,
       selectable: false,
       softLineBreak: true,
-      inlineSyntaxes: [_WorkgroupReference(references)],
+      inlineSyntaxes: [_WebAutolink(), _WorkgroupReference(references)],
       builders: {'pre': _WrappedCode()},
+      paddingBuilders: {'a': _CompactLinkLabel()},
       styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
         p: body,
         a: TextStyle(
@@ -101,6 +102,63 @@ class SuperTabMessageText extends StatelessWidget {
         style: DesktopChrome.metadata(),
       ),
     );
+  }
+}
+
+/// GFM encodes '%' again in bare URLs. Keep the original URL, including encoded
+/// query parameters, while using its parser for punctuation and parentheses.
+/// This syntax never runs on Markdown link destinations or inside code.
+class _WebAutolink extends md.AutolinkExtensionSyntax {
+  @override
+  bool onMatch(md.InlineParser parser, Match match) {
+    final source = match[0]!;
+    if (!source.toLowerCase().startsWith('http')) {
+      return super.onMatch(parser, match);
+    }
+    final nodes = md.Document(
+      extensionSet: md.ExtensionSet.gitHubFlavored,
+      encodeHtml: false,
+    ).parseInline(source);
+    final anchor = nodes.firstOrNull;
+    if (anchor is! md.Element ||
+        anchor.tag != 'a' ||
+        SuperTabMessageText.webLink(anchor.textContent) == null) {
+      return super.onMatch(parser, match);
+    }
+    anchor.attributes['href'] = anchor.textContent;
+    parser
+      ..addNode(anchor)
+      ..consume(anchor.textContent.length);
+    return true;
+  }
+}
+
+/// Use the pre-render hook without replacing Markdown's link renderer: selection,
+/// the full destination and link handling keep their standard behavior.
+class _CompactLinkLabel extends MarkdownPaddingBuilder {
+  @override
+  void visitElementBefore(md.Element element) {
+    final label = element.textContent;
+    final href = element.attributes['href'];
+    final uri = SuperTabMessageText.webLink(href);
+    if (uri == null ||
+        label.length <= 96 ||
+        (label != href && Uri.encodeFull(label) != href)) {
+      return;
+    }
+    final path = uri.path.length > 64
+        ? '${uri.path.substring(0, 56)}…'
+        : uri.path;
+    final port = uri.hasPort ? ':${uri.port}' : '';
+    element.children!
+      ..clear()
+      ..add(
+        md.Text(
+          '${uri.host}$port$path'
+          '${uri.hasQuery ? '?…' : ''}'
+          '${uri.hasFragment ? '#…' : ''}',
+        ),
+      );
   }
 }
 

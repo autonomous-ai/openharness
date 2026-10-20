@@ -62,6 +62,10 @@ void main() {
       await mount(tester, c, onNewProject: () => creations++);
       expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
       expect(find.byIcon(AppIcons.lock), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('super-project-expand-design')),
+        findsNothing,
+      );
       expect(find.text('Leads'), findsNothing);
       expect(find.text('Humans'), findsOneWidget);
       expect(find.text('Agents'), findsOneWidget);
@@ -198,6 +202,10 @@ void main() {
       expect(visibility, 'private');
       expect(find.text('Private'), findsOneWidget);
       expect(find.byIcon(AppIcons.lock), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('super-project-expand-design')),
+        findsNothing,
+      );
     },
   );
 
