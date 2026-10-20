@@ -1895,10 +1895,14 @@ impl App {
                 if let Some(taken) = payload.get("takenBy") {
                     let who = taken.get("name").and_then(Value::as_str).unwrap_or("another window").to_string();
                     pane.phase = Phase::Watching(who);
-                    // Still worth seeing: watch it until someone types here.
+                    // Watched until someone types here — the watcher is what hears `terminal_free`
+                    // — but frozen: its frames come at the taker's size (a phone's), and drawn
+                    // here they shrank the screen's pane. Its last frame stays, as the desktop's.
+                    pane.frozen = true;
                     let id = pane.id;
                     self.open_stream(id, false);
                 } else {
+                    pane.frozen = false;
                     let id = pane.id;
                     let reason = payload.get("reason").and_then(Value::as_str).unwrap_or("the terminal closed");
                     if matches!(reason, "heartbeat timeout" | "backend disconnected") {
@@ -1919,6 +1923,14 @@ impl App {
                     }
                 }
             }
+            // The view that had the keyboard of a pane watched here left (a phone closed it): one on
+            // screen takes it back, at this window's size. Otherwise the agent kept the size of the
+            // one that left — a phone's, in a corner of a full screen — until someone typed here.
+            "terminal_free" => {
+                let stream = payload.get("streamId").and_then(Value::as_str).and_then(|s| Uuid::parse_str(s).ok());
+                let Some(id) = self.panes.values().find(|p| p.stream.is_some() && p.stream == stream).map(|p| p.id) else { return };
+                if self.rects.iter().any(|(pane, _)| *pane == id) { self.take_if_watching(id) }
+            }
             // ── models: the daemon's picture of the grids changed — the whole list, pushed ──
             "grid_models_changed" => crate::models::on_push(self, machine_id, &payload),
             _ => {}
@@ -1937,6 +1949,8 @@ impl App {
         pane.last_seq = Some(pane.last_seq.map(|s| s.max(frame.seq)).unwrap_or(frame.seq));
         pane.ack_due = true;
         if frame.kind == Kind::Sync { return }
+        // Taken by another client: acknowledged above, never drawn — see [Pane::frozen].
+        if pane.frozen { return }
         let bytes = if frame.compressed { match pane::inflate(&frame.bytes) { Some(b) => b, None => return } } else { frame.bytes };
         if let Ok(path) = std::env::var("HARNESS_TUI_TRACE") {
             use std::io::Write;
@@ -2102,6 +2116,7 @@ impl App {
             }
             return;
         }
+        let headless = self.headless;
         let Some(pane) = self.panes.get_mut(&pane_id) else { return };
         pane.opening = false;
         let takeover_requested = std::mem::take(&mut pane.takeover_pending);
@@ -2116,6 +2131,11 @@ impl App {
                 pane.phase = if pane.read_only {
                     Phase::Watching(payload.get("heldBy").and_then(|h| h.get("name")).and_then(Value::as_str).unwrap_or("another window").to_string())
                 } else { Phase::Live };
+                // Held here: its frames come at this side's size, so they are drawn. Held by another
+                // client (a phone that opened it first, its Start): its frames come at that one's
+                // size and are not drawn here — the screen's pane says who has it, at its own size,
+                // until a key takes it. hn with no terminal reads them all the same: it has no size.
+                pane.frozen = pane.read_only && !headless;
                 let retake = takeover_requested && pane.read_only;
                 let queued = if retake { Vec::new() } else { std::mem::take(&mut pane.queued) };
                 let read_only = pane.read_only;
@@ -4209,7 +4229,8 @@ impl App {
         // size the agent to its 80x24 layout under the window someone is using.
         if self.headless { return }
         let Some(p) = self.panes.get(&pane) else { return };
-        if matches!(p.phase, Phase::Watching(_)) && !p.read_only && !p.opening { self.open_stream(pane, true) }
+        // A watcher is read-only (the daemon's `readOnly`): that is what there is to take.
+        if matches!(p.phase, Phase::Watching(_)) && !p.opening { self.open_stream(pane, true) }
     }
 
     /// A machine's first roster since hn started, read against when you last looked at each of
@@ -5884,8 +5905,18 @@ impl App {
         // The OS opens on the agent launcher. An explicit `hn new ...` still gets
         // its requested shell; reconnecting to existing work is handled by the desk.
         if self.os_session && self.start_session.is_none() {
+            // Work of this computer's own on the desk: the "code" tab a phone's Start made. Tabs of
+            // other computers do not count — the account's desk can hold those of one since removed
+            // (this very computer before a reinstall), "Connecting…" for ever.
+            let local = self.fleet.local_id.clone();
+            let own_work = self.tabs.iter().flat_map(|t| t.panes())
+                .any(|id| self.panes.get(&id).is_some_and(|p| p.machine_id == local));
+            // The welcome waits for this computer's daemon to be up, not only linked: a sign-in
+            // restarts it, and a shell asked for meanwhile went to hn's own local shells
+            // (`shell_machine`) — OpenCode then ran where no phone or desktop could see it.
+            let daemon_ready = self.link(&self.fleet.local_id).is_some() && !self.daemon_down;
             if (self.os_live || self.os_first_use) && self.tabs.len() == 1 && self.tabs[0].root.is_none() {
-                if self.link(&self.fleet.local_id).is_none() { return }
+                if !daemon_ready { return }
                 self.shell_asked = true;
                 // The welcome reply may arrive after another terminal is requested.
                 // Fill its original tab instead of whichever tab is now active.
@@ -5893,7 +5924,26 @@ impl App {
                 crate::input::new_shell_from(self, None, Placement::Fill(tab), None, Some("/usr/bin/hn-os welcome".into()));
             } else if (self.os_live || self.os_first_use) && crate::os_welcome::welcome_waits_on_wifi(self) {
                 // Asked again every tick until the Wi-Fi form gives the tab back.
-            } else { self.shell_asked = true; }
+            } else if self.os_first_use && !self.os_live && !own_work {
+                // Only other computers' tabs on the desk: the welcome still comes, in a tab of its own.
+                if !daemon_ready { return }
+                self.shell_asked = true;
+                crate::input::new_shell_from(self, None, Placement::Tab, None, Some("/usr/bin/hn-os welcome".into()));
+            } else {
+                self.shell_asked = true;
+                // The desk already had work for this screen — the "code" tab a phone's Start made
+                // after setting this computer up — so it opens on that instead of a welcome with
+                // an OpenCode of its own. Its first use is over all the same: the welcome is what
+                // marks that (onboarding.py), and without the mark every boot is a first one.
+                if self.os_first_use && !self.os_live && own_work {
+                    self.os_first_use = false;
+                    // Not from a test: it would mark the developer's own home.
+                    if let Some(home) = std::env::var_os("HOME").filter(|_| !cfg!(test)) {
+                        let state = std::path::Path::new(&home).join(".local/state/harness-os");
+                        let _ = std::fs::create_dir_all(&state).and_then(|_| std::fs::File::create(state.join("onboarded")));
+                    }
+                }
+            }
             return;
         }
         // `hn new -s work` (a session besides the desk's): made here, with its shell.
@@ -6779,6 +6829,53 @@ mod recovery_tests {
     use super::*;
 
     #[tokio::test]
+    async fn os_welcome_waits_out_a_daemon_restarting_after_the_sign_in() {
+        // Signed in at the screen: the daemon restarts, and a welcome asked for meanwhile ran in
+        // hn's own local shells, where no phone or desktop could see its OpenCode.
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19791, sink, (80, 24));
+        app.handed_over = true;
+        app.os_session = true;
+        app.os_first_use = true;
+        app.desk_answered = true;
+        app.fleet.local_id = "this-computer".into();
+        app.fleet.machines.push(Machine { shared: false, id: "this-computer".into(), name: "me".into(), local: true, status: "running".into(), reach: Reach::Ready });
+        let link = Link::spawn(app.port, "this-computer", 1, app.sink.clone());
+        app.links.insert("this-computer".into(), LinkState { link: Some(link), generation: 1, attempts: 0, retry_at: None });
+        app.daemon_down = true;
+        app.maybe_start_shell();
+        assert!(!app.shell_asked, "not while its daemon is down");
+        app.daemon_down = false;
+        app.maybe_start_shell();
+        assert!(app.shell_asked, "once it is back");
+        app.links["this-computer"].link.as_ref().unwrap().close();
+    }
+
+    #[tokio::test]
+    async fn os_first_use_skips_its_welcome_only_for_work_of_this_computer() {
+        let first_use = |machine: &str| {
+            let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+            let mut app = App::new(19790, sink, (80, 24));
+            app.handed_over = true;
+            app.os_session = true;
+            app.os_first_use = true;
+            app.desk_answered = true;
+            app.fleet.local_id = "this-computer".into();
+            app.new_tab();
+            app.open_agent(machine, "a", Placement::Auto(None));
+            app.maybe_start_shell();
+            app
+        };
+        // A desk tab of another computer — one since removed, "Connecting…" for ever: the welcome
+        // still comes (it waits here only for this computer's daemon).
+        let app = first_use("removed-computer");
+        assert!(app.os_first_use && !app.shell_asked);
+        // A tab of its own (the "code" tab a phone's Start made): that, and its first use is done.
+        let app = first_use("this-computer");
+        assert!(!app.os_first_use && app.shell_asked);
+    }
+
+    #[tokio::test]
     async fn os_first_workspace_waits_while_the_wifi_form_holds_the_tabs() {
         let (sink, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(19789, sink, (80, 24));
@@ -7555,7 +7652,8 @@ mod recovery_tests {
         let pane = app.panes.get_mut(&1).unwrap();
         // Taken over (`takenBy`), watching until someone comes to it.
         pane.phase = Phase::Watching("Mac Auto terminal".into());
-        pane.read_only = false;
+        // Watching, as the daemon answers a watcher.
+        pane.read_only = true;
         app.headless = true;
         app.take_if_watching(1);
         assert!(!app.panes[&1].opening);
@@ -7564,6 +7662,49 @@ mod recovery_tests {
         app.headless = false;
         app.take_if_watching(1);
         assert!(app.panes[&1].opening);
+        app.links["test-peer"].link.as_ref().unwrap().close();
+    }
+
+    #[tokio::test]
+    async fn a_pane_on_screen_takes_back_what_a_phone_left() {
+        // A phone opened this agent and took it at its own size; this screen watched. The phone left.
+        let mut app = fixture();
+        let (on_screen, hidden) = (1, 2);
+        app.rects = vec![(on_screen, Rect::new(0, 0, 80, 24))];
+        for id in [on_screen, hidden] {
+            let pane = app.panes.get_mut(&id).unwrap();
+            pane.phase = Phase::Watching("Pixel 8 Pro".into());
+            pane.read_only = true;
+        }
+        for id in [on_screen, hidden] {
+            let stream = app.panes[&id].stream.unwrap().to_string();
+            app.on_machine("test-peer".into(), 1, MachineEvent::Frame { ty: "terminal_free".into(), payload: json!({"streamId": stream}) });
+        }
+        assert!(app.panes[&on_screen].opening, "the pane on screen takes it back");
+        assert!(!app.panes[&hidden].opening, "one out of sight stays a watcher until someone comes to it");
+        app.links["test-peer"].link.as_ref().unwrap().close();
+    }
+
+    #[tokio::test]
+    async fn a_phone_taking_a_pane_does_not_shrink_it_here() {
+        // The phone took the terminal at its own size; this screen watches it frozen, as the
+        // desktop keeps its tile: the phone-sized frames are not drawn here.
+        let mut app = fixture();
+        app.rects = vec![(1, Rect::new(0, 0, 80, 24))];
+        let before = (app.panes[&1].cols, app.panes[&1].rows);
+        let stream = app.panes[&1].stream.unwrap().to_string();
+        app.on_machine("test-peer".into(), 1, MachineEvent::Frame {
+            ty: "terminal_closed".into(),
+            payload: json!({"streamId": stream, "code": "TERMINAL_TAKEN_OVER", "takenBy": {"name": "Pixel 8 Pro"}}),
+        });
+        let pane = app.panes.get_mut(&1).unwrap();
+        assert!(pane.frozen);
+        assert!(matches!(&pane.phase, Phase::Watching(who) if who == "Pixel 8 Pro"));
+        let watcher = Uuid::new_v4();
+        pane.stream = Some(watcher);
+        pane.read_only = true;
+        app.on_terminal(proto::Frame { kind: Kind::Keyframe, stream: watcher, seq: 1, bytes: b"phone".to_vec(), compressed: false, size: Some((45, 30)) });
+        assert_eq!((app.panes[&1].cols, app.panes[&1].rows), before, "the phone's size is not this screen's");
         app.links["test-peer"].link.as_ref().unwrap().close();
     }
 

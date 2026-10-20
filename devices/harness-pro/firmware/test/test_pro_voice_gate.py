@@ -272,7 +272,7 @@ static void booting(void) {   // no machines.end yet: the gate does not wait for
 }
 static void question_agent_says_why(void) {
     situation(); to_agent(1);
-    pro_app_question("a2", "Which one?");
+    pro_app_question("a2", "r1", "Which one?");
     render();
     CHECK(!hit(POD_A_TALK, 0));
     press_stale();

@@ -123,6 +123,9 @@ class SuperTabFixtureConnection extends WsConn {
     }
     if (type == 'super_tabs') {
       if (payload['action'] == 'wake') return {'ok': true};
+      if (payload['action'] == 'prepareContribution') {
+        return {'ok': true, 'state': 'ready', 'cwd': '/work/project', 'engines': ['claude', 'codex', 'pi'], 'maxAgents': 4};
+      }
       if (payload['action'] == 'prepareNative' ||
           payload['action'] == 'renewNative') {
         if (native?['status'] == 'stopped') {

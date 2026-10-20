@@ -86,9 +86,12 @@ typedef struct {
 #define POD_UNREAD_MAX  16
 #define POD_UNREAD_TEXT 240
 #define POD_TOKEN_MAX   64
+#define POD_UNREAD_TTL_MS    (6u * 3600u * 1000u)   // an entry lives 6 h from receipt (the device's monotonic ms, uint32-wrap safe)
+#define POD_BEEP_COALESCE_MS 30000                  // at most one beep per this long
 typedef enum { POD_UNREAD_FINISHED, POD_UNREAD_FAILED } pod_unread_kind_t;
 typedef struct {
     char agent[ID_MAX], name[CABLE_NAME_MAX], token[POD_TOKEN_MAX], text[POD_UNREAD_TEXT];
+    bool ask;                            // filed by a question (not a finished turn): it goes when the question closes
     pod_unread_kind_t kind;              // FAILED when the agent's last turn ended in an error
     uint32_t at_ms;
     int32_t elapsed_s;                   // the turn's length, -1 unknown
@@ -195,5 +198,7 @@ bool pod_model_unread_read(pod_model_t *, const char *agent);
 const pod_unread_t *pod_model_unread_find(const pod_model_t *, const char *agent);
 // How many notices Pets lists (the Notices screen and Home's Notices card): the asking agents, then the unread entries of agents that are not asking.
 int pod_notice_count(const pod_model_t *);
+// The entry of a question that was just asked (the toast needs one): like pod_model_unread_add, marked `ask`.
+void pod_model_unread_ask(pod_model_t *, const char *agent, const char *name, const char *text, uint32_t now_ms);
 // Take the queued notif.read frames (at most max); returns the count.
 int pod_model_take_reads(pod_model_t *, pod_read_out_t out[], int max);

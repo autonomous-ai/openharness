@@ -267,6 +267,7 @@ import type { VisitCommand, VisitResult } from './windowVisit.js'
 import type { FormCommand, FormResult } from './windowForm.js'
 import { deriveLongRecap, extendShortRecap } from '../lib/deviceRecap.js'
 import type { TurnStatsFields } from './turnStats.js'
+import type { Tier } from '../lib/notifyTier.js'
 
 export interface RouteDecision {
   agentId: string
@@ -2816,22 +2817,19 @@ export class CableSession {
   /**
    * A finished turn's recap.
    *
-   * `quiet` means the window already has this agent on screen: draw the tile,
-   * skip the notification drawer (the beep still sounds). `silent` means the
-   * turn was a sub-agent's: draw the tile, skip the beep AND the drawer — the
-   * main agent's own end is the one the person is waiting for. Extra fields
-   * rather than different frames, so firmware that predates them simply
-   * notifies as it always did instead of losing the recap.
+   * `tier` is how loudly to tell (lib/notifyTier.ts): `alert` beeps and wakes; `list` is a drawer entry only (`quiet`);
+   * `silent` draws the tile only (`silent`). `quiet`/`silent` ride along as well as
+   * `tier`, so firmware that predates `tier` still behaves. `subagent`: a sub-agent's end is not its main agent's.
    */
-  async summary(agentId: string, recap: string, text: string, quiet = false, silent = false, fullText?: string): Promise<void> {
-    if (!silent) this.liveTurns.delete(agentId)   // a sub-agent's end is not its main agent's
+  async summary(agentId: string, recap: string, text: string, tier: Tier = 'alert', fullText?: string, subagent = false): Promise<void> {
+    if (!subagent) this.liveTurns.delete(agentId)   // a sub-agent's end is not its main agent's
     this.activityReads.delete(agentId)
     this.activityEndedAt.set(agentId, Date.now())
     recap = extendShortRecap(recap, text)
     const who = this.whoIs(agentId)
     // The card carries the answer; the host is asked only when it did not, and not for long.
     const full = this.fullField(this.longRecap ? fullText ?? await this.storedFullText(agentId, text) : undefined)
-    await this.send(this.withinCap({ t: 'summary', agentId, ...who, recap, text, ...full, ...(quiet ? { quiet: true } : {}), ...(silent ? { silent: true } : {}) }))
+    await this.send(this.withinCap({ t: 'summary', agentId, ...who, recap, text, ...full, tier, ...(tier === 'list' ? { quiet: true } : {}), ...(tier === 'silent' ? { silent: true } : {}) }))
   }
 
   /**

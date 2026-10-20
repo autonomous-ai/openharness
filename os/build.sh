@@ -75,6 +75,11 @@ if [[ $PLATFORM == pc ]]; then
     --output "$PROFILE/airootfs/usr/share/harness-os/hardware/nvidia"
 fi
 cp -a live/. "$PROFILE/airootfs/"
+# A testing USB: what it installs keeps its logs on disk across restarts (installer.py KEEP_LOGS).
+if [[ ${HARNESS_OS_KEEP_LOGS:-} == 1 ]]; then
+    mkdir -p "$PROFILE/airootfs/etc/harness-os"
+    touch "$PROFILE/airootfs/etc/harness-os/keep-logs"
+fi
 mkdir -p "$PROFILE/airootfs/root" "$PROFILE/airootfs/etc/pacman.d/hooks"
 cp tools/customize-live.sh "$PROFILE/airootfs/root/setup-live.sh"
 cat > "$PROFILE/airootfs/etc/pacman.d/hooks/99-harness-live.hook" <<'EOF'

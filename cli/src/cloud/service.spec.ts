@@ -104,12 +104,21 @@ describe('a cloud harness', () => {
     expect(saved.harnesses[0]).toMatchObject({ remote: { id: 'devin-1' }, harness: { agentId: harness.agentId } })
   })
 
+  it('starts Devin Cloud with no repository, as Devin\'s API allows (#1444)', async () => {
+    const devin = maker()
+    const service = start({ 'devin-cloud': devin })
+    expect(await service.port.create({ engine: 'devin-cloud', prompt: 'reply to the release thread' })).toMatchObject({ ok: true })
+    expect(devin.start).toHaveBeenCalledWith({ task: 'reply to the release thread', repository: null, options: { acuLimit: undefined, model: undefined } })
+  })
+
   it('refuses what it cannot start, in words a person reads', async () => {
     const devin = maker({ start: vi.fn(async () => { throw new CloudError('NOT_CONNECTED', 'Add your Devin API key') }) })
     const service = start({ 'devin-cloud': devin, fo: maker({ id: 'fo', start: vi.fn(async () => { throw new Error('boom') }) }) })
     expect(await service.port.create({ engine: 'claude', prompt: 'x' })).toMatchObject({ ok: false, error: 'INVALID_ENGINE' })
     expect(await service.port.create({ engine: 'devin-cloud', prompt: '  ' })).toMatchObject({ ok: false, error: 'INVALID_REQUEST' })
-    expect(await service.port.create({ engine: 'devin-cloud', prompt: 'x' })).toMatchObject({ ok: false, detail: expect.stringContaining('GitHub repository') })
+    expect(await service.port.create({ engine: 'cursor-cloud', prompt: 'x' })).toMatchObject({ ok: false, detail: expect.stringContaining('GitHub repository') })
+    expect(await service.port.create({ engine: 'devin-cloud', prompt: 'x', repositoryUrl: 'https://gitlab.com/acme/api' })).toMatchObject({ ok: false, error: 'INVALID_REQUEST', detail: expect.stringContaining('not a GitHub repository') })
+    expect(devin.start).not.toHaveBeenCalled()
     expect(await service.port.create({ engine: 'devin-cloud', prompt: 'x', repository: 'acme/api' })).toEqual({ ok: false, error: 'NOT_CONNECTED', detail: 'Add your Devin API key' })
     expect(await service.port.create({ engine: 'fo', prompt: 'x' })).toEqual({ ok: false, error: 'CLOUD_FAILED', detail: 'Fo could not be reached. Try again.' })
     expect(doors.publish).not.toHaveBeenCalled()

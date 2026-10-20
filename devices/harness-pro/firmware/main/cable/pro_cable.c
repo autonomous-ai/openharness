@@ -600,13 +600,23 @@ static void handle_turn_stats(const char *id, const cJSON *p)
 
 static bool flag(const cJSON *p, const char *key) { return cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, key)); }
 
-// restore is history filled back in, quiet is "the desktop already shows this agent", silent is a sub-agent's turn: the
-// recap is applied for all three, but none is news (no entry, no banner, no beep). Absent flags are false.
+// The recap is always applied; how loud the end is comes from `tier` (alert / list / silent). restore is history filled back
+// in: never news. A summary with no (or an unknown) tier is from an older daemon: quiet ("the desktop already shows this agent")
+// and silent (a sub-agent's turn) drop the entry as before, anything else is an alert. Absent flags are false.
+static pod_tier_t tier_of(const cJSON *p)
+{
+    if (flag(p, "restore")) return POD_TIER_SILENT;
+    const char *tier = str_of(p, "tier");
+    if (tier && !strcmp(tier, "alert")) return POD_TIER_ALERT;
+    if (tier && !strcmp(tier, "list")) return POD_TIER_LIST;
+    if (tier && !strcmp(tier, "silent")) return POD_TIER_SILENT;
+    return flag(p, "quiet") || flag(p, "silent") ? POD_TIER_SILENT : POD_TIER_ALERT;
+}
+
 static void handle_summary(const char *id, const cJSON *p)
 {
-    const bool restore = flag(p, "restore");
     pro_app_summary(id, cut_of(p, "text", s_text, sizeof s_text), cut_of(p, "recap", s_recap, sizeof s_recap),
-                    cut_of(p, "full", s_full, sizeof s_full), restore, !restore && !flag(p, "quiet") && !flag(p, "silent"));
+                    cut_of(p, "full", s_full, sizeof s_full), flag(p, "restore"), tier_of(p));
 }
 
 // The fixed field the daemon sizes a readToken by: [A-Za-z0-9_-]{1,63}. Anything else is not a token.
@@ -659,11 +669,12 @@ static void handle_notif_seen(const cJSON *p)
 
 static void handle_question(const char *id, const cJSON *p)
 {
-    if (!str_of(p, "id")) return;   // the request this question belongs to
+    const char *request = str_of(p, "id");   // the request this question belongs to
+    if (!request) return;
     const cJSON *questions = cJSON_GetObjectItemCaseSensitive(p, "questions");
     const char *prompt = str_of(cJSON_GetArrayItem(questions, 0), "q");
     copy_cut(s_text, PRO_QUESTION_BYTES, prompt ? prompt : "Needs your answer");
-    pro_app_question(id, s_text);
+    pro_app_question(id, request, s_text);
 }
 
 static void handle_question_close(const char *id, const cJSON *p)
@@ -891,7 +902,11 @@ static void handle_message(const cJSON *root)
         }
         if (!strcmp(t, "turn.activity")) { handle_turn_activity(agent_id, p); return; }
         if (!strcmp(t, "turn.done")) { pro_app_turn(agent_id, "done", "", 0); return; }
-        if (!strcmp(t, "turn.error")) { pro_app_turn(agent_id, "error", "", 0); return; }
+        if (!strcmp(t, "turn.error")) {
+            const char *message = cut_of(p, "message", s_text, sizeof s_text);
+            pro_app_turn(agent_id, "error", message ? message : "", 0);
+            return;
+        }
         if (!strcmp(t, "turn.stats")) { handle_turn_stats(agent_id, p); return; }
         if (!strcmp(t, "summary")) { handle_summary(agent_id, p); return; }
         if (!strcmp(t, "question")) { handle_question(agent_id, p); return; }

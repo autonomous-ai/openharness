@@ -214,6 +214,7 @@ static EXT_RAM_BSS_ATTR struct {
     uint32_t notice_revision, notice_frame;
     int notice_count;
     uint32_t notice_sequence;
+    uint32_t error_until;   // when the turn-error view clears itself (ms() clock), 0 = not a timed one
     question_t q;
     char message[256], title[80], pending_focus[ID_MAX], opening_notice[ID_MAX];
     char voice_target[CABLE_NAME_MAX];
@@ -560,6 +561,7 @@ static void view(view_t v)
     input_cancel();
     s.voice_retry_until = 0;
     s.view = v;
+    s.error_until = 0;   // a timed error view belongs to ui_turn_error alone; any move off or onto MESSAGE ends it
     s.offset = 0;
     s.pressed = -1;
     change();
@@ -982,9 +984,16 @@ static uint32_t status_wake_ms(uint32_t now)
     return (ht_shimmer_wake_ms(now * speed) + speed - 1) / speed;
 }
 static void dispatch(action_t a);   // the hold below acts at once; defined with the other actions
+static void notice_expire(uint32_t now);
 static void surface_tick(uint32_t now)
 {
     notice_flush_reads(now);
+    notice_expire(now);
+    if (s.error_until && (s.view != MESSAGE || (int32_t)(now - s.error_until) >= 0)) {
+        if (s.view == MESSAGE) view(HOME);
+        s.error_until = 0;
+        change();
+    }
     if (companion_celebrating && (now-celebration_began>=2400 || s.view!=HOME || s.quiet || !follow_companion || display_is_asleep() || character_mood()==HT_CHARACTER_ATTENTION)) {
         companion_celebrating=false; select_companion(); change();
     }
@@ -4183,25 +4192,83 @@ static void notice_add(const char *id, const char *name, const char *machine, co
     n->read_on_dial = notice_was_read(n);
     if (!++s.notice_revision) ++s.notice_revision;
     n->display_revision = s.notice_revision;
+    n->received_ms = ms();
     notice_restore_selection(selected);
     notice_sync_view();
 }
-void ui_notify_task_done(const char *id, const char *name, const char *machine, const char *recap)
+// Rows are news, and news goes stale: a drawer row left alone for 6 h goes away. A question stays until
+// it is answered. The signed difference keeps the 49-day ms() wrap harmless.
+#define NOTICE_TTL_MS 21600000u
+#define ERROR_VIEW_MS 8000u
+static void notice_expire(uint32_t now)
 {
-    if (!id || !*id || strnlen(id, ID_MAX) >= ID_MAX) return;
+    bool gone = false;
+    for (int i = s.notice_count - 1; i >= 0; i--)
+        if (!s.notice[i].question && (int32_t)(now - s.notice[i].received_ms) >= (int32_t)NOTICE_TTL_MS) {
+            notice_remove(s.notice[i].agent_id, false);
+            gone = true;
+        }
+    if (gone) { notice_sync_view(); change(); }
+}
+// The pane whose face is on the glass already shows its own news.
+static bool on_face(const char *id)
+{
+    const agent_t *a = active();
+    return a && !strcmp(a->id, id) && (s.view == HOME || s.view == AGENT) && !s.nap && !display_is_asleep();
+}
+static void notice_read_now(const char *id)
+{
+    for (int i = 0; i < s.notice_count; i++)
+        if (!strcmp(s.notice[i].agent_id, id)) notice_mark_read(&s.notice[i]);
+}
+bool ui_notify_summary(const char *id, const char *name, const char *machine, const char *recap,
+                       const char *tier, bool quiet, bool silent)
+{
+    if (!id || !*id || strnlen(id, ID_MAX) >= ID_MAX) return false;
+    // 0 silent, 1 list, 2 alert. An old daemon sends no tier but does send the flags.
+    int level = tier && !strcmp(tier, "silent") ? 0 : tier && !strcmp(tier, "list") ? 1 :
+        tier && !strcmp(tier, "alert") ? 2 : silent ? 0 : quiet ? 1 : 2;
+    if (!level) return false;
     display_lock();
+    bool face = on_face(id);
     notice_forget_read(id); // A fresh completion is new even if its words repeat.
     notice_add(id, name, machine, recap, false, false);
+    if (face) notice_read_now(id);
     s.notice_sequence++;
+    bool alert = level == 2 && !face;
     uint32_t now = ms();
-    if (!waiting() && !s.nap && !s.quiet && (!s.last_celebration || now - s.last_celebration >= 20000)) {
+    if (alert && !waiting() && !s.nap && !s.quiet && (!s.last_celebration || now - s.last_celebration >= 20000)) {
         s.pet_pose = 3;
         s.pet_until = now + 2000;
         s.last_celebration = now;
     }
     change();
-    display_wake();
+    if (alert) display_wake();
     display_unlock();
+    return alert;
+}
+bool ui_turn_error(const char *id, const char *message)
+{
+    if (!id || !*id || strnlen(id, ID_MAX) >= ID_MAX) { ui_cable_toast(message); return false; }
+    if (!message || !*message) message = "The turn failed";
+    display_lock();
+    bool face = on_face(id);
+    int known = find(id);
+    notice_forget_read(id);
+    notice_add(id, known >= 0 ? s.agents[known].name : NULL, NULL, message, false, true);
+    if (face) notice_read_now(id);
+    s.notice_sequence++;
+    // Like any toast, never over a live recording or the person's own question; the drawer row still keeps the failure.
+    if (!s.voice_open && !question_view(s.view)) {
+        COPY(s.title, "Harness");
+        COPY(s.message, message);
+        view(MESSAGE);
+        if (s.view == MESSAGE) { s.error_until = ms() + ERROR_VIEW_MS; if (!s.error_until) s.error_until = 1; }
+    }
+    change();
+    if (!face) display_wake();
+    display_unlock();
+    return !face;
 }
 void ui_notif_seen(const char *id)
 {
@@ -4306,15 +4373,17 @@ static void question_load(const cJSON *questions)
     }
     s.q.valid=s.q.count>0;
 }
-void ui_question_show(const char *id, const char *name, const char *machine, const char *request,
+bool ui_question_show(const char *id, const char *name, const char *machine, const char *request,
                       const cJSON *questions)
 {
-    if (!id || !request) return;
+    if (!id || !request) return false;
     display_lock();
+    bool face = on_face(id);
     const cJSON *first=cJSON_GetArrayItem(questions,0);
     const cJSON *prompt=cJSON_GetObjectItemCaseSensitive(first,"q");
     notice_forget_read(id);
     notice_add(id,name,machine,cJSON_IsString(prompt) ? prompt->valuestring : "Needs your answer",true,false);
+    if (face) notice_read_now(id);   // already on the glass: shown in place, read at once
     s.notice_sequence++;
     // A different agent's alert cannot replace the question being read.
     if (s.q.valid && !strcmp(s.q.agent,id) && strcmp(s.q.request,request)) {
@@ -4324,8 +4393,9 @@ void ui_question_show(const char *id, const char *name, const char *machine, con
     // The question is shown on the home face, in the recap's place (render_home): no screen opens
     // for it. The display wakes so a person glancing over sees it.
     change();
-    display_wake();
+    if (!face) display_wake();
     display_unlock();
+    return !face;
 }
 void ui_question_state(const cJSON *p)
 {

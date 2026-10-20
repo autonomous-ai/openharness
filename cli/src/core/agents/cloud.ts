@@ -71,7 +71,7 @@ export function createCloudAgents({ port, clients, openQuestions, deviceInput, l
     if (recap && harness.said !== told.get(harness.agentId)) {
       told.set(harness.agentId, harness.said!)
       // Waiting on the person, its question rings instead (lib/agentNotifications.ts keeps the same rule).
-      card(harness, { kind: 'summary', ...recap, notification: harness.state === 'needs_input' ? null : { id: `${harness.agentId}:${harness.messages}`, kind: 'done' } })
+      card(harness, { kind: 'summary', ...recap, ...(harness.state === 'failed' ? { failed: true } : {}), notification: harness.state === 'needs_input' ? null : { id: `${harness.agentId}:${harness.messages}`, kind: 'done' } })
     } else if (busy(before)) {
       card(harness, harness.state === 'failed' ? { kind: 'error', text: harness.activity ?? 'It stopped with an error.' } : { kind: 'done', text: 'done' })
     }

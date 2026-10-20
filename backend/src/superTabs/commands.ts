@@ -1,6 +1,7 @@
+import { admitMachineStart, machineContribution } from './machines.js'
 import { z } from 'zod'
 import {
-  activeWork, actorKey, agent, author, conversation, fail, person, stableId,
+  activeWork, actorKey, agent, author, conversation, fail, person, stableId, numberConversations,
   type Actor, type Agent, type Author, type CommandEffects, type SuperTabState,
 } from './model.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
@@ -16,6 +17,15 @@ const configuration = z.object({
   engineVersion: z.string().max(160).nullable(),
 }).strict()
 const path = z.string().min(1).max(4096).regex(/^\//).refine(value => !/[\x00-\x1f\x7f]/.test(value))
+const project = z.object({ cwd: path, repositoryUrl: z.string().max(4096).refine(value => {
+  if (/[\x00-\x20\x7f]/.test(value)) return false
+  if (/^git@[^/@:]+:[^@]+$/.test(value)) return true
+  try {
+    const uri = new URL(value)
+    return ['https:', 'http:', 'ssh:', 'git:'].includes(uri.protocol) && !!uri.hostname && !uri.password &&
+      (!uri.username || (uri.protocol === 'ssh:' && uri.username === 'git'))
+  } catch { return false }
+}, 'Share a repository URL without credentials.').nullable() }).strict()
 export const startRequestSchema = z.object({
   conversationId: id, machineId: id, engine: z.string().min(1).max(80), name: title, cwd: path,
   worktree: z.boolean(), branchRef: z.string().max(1024).regex(/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/).optional(),
@@ -29,16 +39,20 @@ export const startRequestSchema = z.object({
 const check = z.object({ description: z.string().trim().min(1).max(1000), independent: z.boolean() }).strict()
 
 export const commandSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('machine.contribute'), machineId: id, name: title, cwd: path, engines: z.array(z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/)).min(1).max(32), maxAgents: z.number().int().min(1).max(16) }).strict(),
+  z.object({ type: z.literal('machine.pause'), machineId: id, paused: z.boolean() }).strict(),
   z.object({ type: z.literal('tab.rename'), name: title }).strict(),
+  z.object({ type: z.literal('tab.project'), machineId: id, project }).strict(),
   z.object({ type: z.literal('tab.pause'), paused: z.boolean() }).strict(),
   z.object({ type: z.literal('tab.routingPolicy'), policy: routingOverrideSchema.nullable() }).strict(),
   z.object({ type: z.literal('conversation.create'), title, brief: z.string().trim().max(8000), checks: z.array(check).max(40) }).strict(),
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
-  z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), initialMessage: text.optional() }).strict(),
+  z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), project: project.optional(), initialMessage: text.optional() }).strict(),
   z.object({ type: z.literal('agent.start'), request: startRequestSchema, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
   z.object({ type: z.literal('agent.started'), startId: id, harnessId: id, configuration }).strict(),
+  z.object({ type: z.literal('agent.startSettled'), startId: id, warning: z.string().max(2000).nullable() }).strict(),
   z.object({ type: z.literal('agent.startFailed'), startId: id, error: text }).strict(),
   z.object({ type: z.literal('agent.remove'), agentId: id }).strict(),
   z.object({ type: z.literal('agent.configuration'), previousVersion: id.nullable(), configuration }).strict(),
@@ -96,6 +110,7 @@ function open(state: SuperTabState, conversationId: string) {
 export function applyCommand(original: SuperTabState, actor: Actor, input: Command, context: CommandContext): CommandEffects {
   const command = commandSchema.parse(input)
   const state = structuredClone(original)
+  numberConversations(state)
   const result: Record<string, unknown> = {}
   const effects: CommandEffects = { state, messages: [], cancelledAgents: [], previousAttempts: [], routeDecisions: [], result }
   const operationId = stableId(state.id, actorKey(actor), context.operationId)
@@ -156,6 +171,30 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   }
 
   switch (command.type) {
+    case 'tab.project': {
+      controls(state, actor)
+      if (actor.kind === 'person') owner(state, actor)
+      if (state.project) fail('PROJECT_SET', 'This Super Tab already has a project.')
+      state.project = { machineId: command.machineId, ...command.project }
+      break
+    }
+    case 'machine.contribute': {
+      if (actor.kind !== 'person' || context.contribution?.machineOwnerId !== actor.userId) fail('OWNER_REQUIRED', 'Only the machine owner can contribute it.', 403)
+      const contributor = person(state, actor.userId)
+      state.machines ??= []
+      if (!state.machines.some(m => m.machineId === command.machineId) && state.machines.length >= 32) fail('MACHINES_FULL', 'A Super Tab can have up to 32 contributed machines.')
+      if (state.starts?.some(s => s.request.machineId === command.machineId && (!s.harnessId || (s.poolGeneration && !s.poolSettled)) && !s.error)) fail('STARTS_PENDING', 'Reconcile pending starts before changing this contribution.')
+      state.machines = state.machines.filter(m => m.machineId !== command.machineId)
+      state.machines.push({ machineId: command.machineId, name: command.name, cwd: command.cwd, engines: [...new Set(command.engines)], maxAgents: command.maxAgents,
+        contributorId: actor.userId, membershipGeneration: contributor.generation, generation: operationId, paused: false })
+      break
+    }
+    case 'machine.pause': {
+      const pool = machineContribution(state, command.machineId) ?? fail('NOT_FOUND', 'This machine has not been contributed.', 404)
+      if (actor.kind !== 'person' || actor.userId !== pool.contributorId) fail('OWNER_REQUIRED', 'Only its contributor can change this machine.', 403)
+      pool.paused = command.paused
+      break
+    }
     case 'tab.rename':
       controls(state, actor)
       state.name = command.name
@@ -176,11 +215,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('BRIEF_REQUIRED', 'Delegated work needs a brief and acceptance checks.', 400)
       }
       const leadId = conversation(state, 'lead').leadId
-      state.conversations.push({ id: operationId, title: command.title, leadId, agentIds: leadId ? [leadId] : [],
+      const number = Math.max(0, ...state.conversations.map(c => c.number ?? 0)) + 1
+      state.conversations.push({ id: operationId, number, title: command.title, leadId, agentIds: leadId ? [leadId] : [],
         archived: false, brief: command.brief, assignment: null, lastMessageSequence: 0,
         checks: command.checks.map((c, i) => ({ ...c, id: stableId(operationId, String(i)), evidence: null, passedBy: null })),
       })
       result.conversationId = operationId
+      result.number = number
       if (command.brief) message(operationId, command.brief)
       break
     }
@@ -199,6 +240,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'agent.add': {
       controls(state, actor, command.conversationId)
       const group = open(state, command.conversationId)
+      if (group.id === 'lead' && command.lead && command.project && !state.project) {
+        state.project = { machineId: command.machineId, ...command.project }
+      }
       const grant = context.contribution ?? fail('HOST_REQUIRED', 'This session must be explicitly shared by an authorized contributor.', 403)
       const contributor = person(state, grant.contributorId)
       if (contributor.role === 'viewer') fail('READ_ONLY', 'A viewer cannot contribute agents.', 403)
@@ -240,7 +284,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) {
         fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')
       }
-      state.starts.push({ id: operationId, creationId: `super-${operationId}`, actorKey: actorKey(actor),
+      const pool = admitMachineStart(state, command.request, context.now)
+      state.starts.push({ ...(pool ? { poolGeneration: pool.generation } : {}), ...(command.routeDecisionId ? { routeDecisionId: command.routeDecisionId } : {}), id: operationId, creationId: `super-${operationId}`, actorKey: actorKey(actor),
         contributorId: contributor.id, membershipGeneration: contributor.generation, machineOwnerId: grant.machineOwnerId,
         hostGrant: grant.hostGrant ?? null, request: command.request, harnessId: null, dispatched: false, error: null })
       result.startId = operationId
@@ -257,6 +302,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     case 'agent.startDispatch':
     case 'agent.started':
+    case 'agent.startSettled':
     case 'agent.startFailed': {
       const start = state.starts?.find(s => s.id === command.startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
       if (start.actorKey !== actorKey(actor)) fail('FORBIDDEN', 'Only the initiating lead can complete this start.', 403)
@@ -269,8 +315,17 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (grant.machineOwnerId !== start.machineOwnerId || (grant.hostGrant ?? null) !== start.hostGrant) {
           fail('CONTRIBUTION_REVOKED', 'The original machine grant was revoked.', 403)
         }
+        admitMachineStart(state, start.request, context.now, start)
         if (start.dispatched || start.error || start.harnessId) fail('START_CLAIMED', 'This native start was already requested. Read its creation status; do not start another.')
         start.dispatched = true
+        break
+      }
+      if (command.type === 'agent.startSettled') {
+        if (!start.poolGeneration || !start.harnessId || start.error) fail('START_PENDING', 'This contributed start is not ready to settle.')
+        if (!start.poolSettled) message(start.request.conversationId, command.warning
+          ? `${start.request.name}: ${command.warning}`
+          : `${start.request.name} is ready for an assignment.`)
+        start.poolSettled = true
         break
       }
       if (command.type === 'agent.startFailed') {
@@ -293,7 +348,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       group.agentIds.push(agentId)
       start.harnessId = command.harnessId
       result.agentId = agentId
-      message(group.id, `${start.request.name} joined. Ready for an assignment.`)
+      message(group.id, start.poolGeneration
+        ? `${start.request.name} joined. Preparing its model.`
+        : `${start.request.name} joined. Ready for an assignment.`)
       break
     }
     case 'agent.configuration': {
@@ -357,6 +414,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.userId === state.ownerId) fail('OWNER_REQUIRED', 'The owner cannot leave their Super Tab.')
       const member = person(state, command.userId)
       for (const target of state.agents.filter(a => a.contributorId === member.id)) removeAgent(target)
+      state.machines = state.machines?.filter(m => m.contributorId !== member.id)
       state.people = state.people.filter(p => p.id !== member.id)
       state.invitations = state.invitations.filter(i => i.email !== member.email)
       result.removedUserId = member.id
@@ -456,6 +514,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     }
     case 'work.assign': {
+      const target = agent(state, command.agentId)
+      if (state.starts?.some(s => s.poolGeneration && !s.poolSettled && s.request.machineId === target.machineId && s.harnessId === target.harnessId)) {
+        fail('START_PENDING', 'Wait for the host to finish this agent’s launch and model selection.')
+      }
       controls(state, actor, command.conversationId)
       const group = open(state, command.conversationId)
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')

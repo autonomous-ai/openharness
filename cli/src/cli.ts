@@ -166,12 +166,15 @@ Machine:
   harness show <name>          a harness's state and last turn: what it was asked and what it answered
   harness wait <name>[,<name>] wait until they stop working (--any, --timeout 30m); exit 3 = needs the person
   harness close <name> [--now] save a harness's screen and stop it; an agent closes only what it started
-                               new, ps, show, wait and close take --machine <name> for another of your
+  harness reply <name> -- <w>  say words to a cloud harness (Devin Cloud, Cursor Cloud, Fo): its answer or what next
+                               new, ps, show, wait, reply and close take --machine <name> for another of your
                                machines: \`harness show --machine office x\`
   harness mcp                  the agent verbs as an MCP server on stdin/stdout, for agents that use MCP
   harness help agents          the agent commands, states, exit codes and rules on one screen
   harness settings [<name> on|off]  what agents may do (agents-start-agents, pull-request-line, agent-messages): your account's experiments in Settings ▸ Experimental, each off by default
   harness machines delete <id> remove ANOTHER machine (refuses this one; use \`harness logout\`)
+  harness e2e plan             which coding tools have a new version out (the grid-switch e2e trigger)
+  harness e2e grid-switch      move a fresh agent subscription -> grid -> back home with its tool + MCP; leaves a review bundle
   harness remote               from a Harness terminal tile: open a terminal on another of your machines and move this tile to it
   harness version              print the installed version (v${VERSION})
   harness update [--force]     update to the latest build now (it also self-updates in the background;
@@ -2626,7 +2629,7 @@ async function logsExportCommand(json: boolean): Promise<void> {
 import { orchestratorCommand } from './orchestrator/command.js'
 import { superTabCommand } from './superTabs/command.js'
 import { paneOwner, sendCommand } from './messages/command.js'
-import { agentOrigin, closeCommand, psCommand, showCommand, waitCommand, whoamiCommand } from './agentClient/commands.js'
+import { agentOrigin, closeCommand, psCommand, replyCommand, showCommand, waitCommand, whoamiCommand } from './agentClient/commands.js'
 import { agentsHelp, helpFor } from './agentClient/help.js'
 import { openUrlCommand } from './agentClient/openUrl.js'
 import { harnessRunner, mcpCommand } from './agentClient/mcp.js'
@@ -2686,6 +2689,9 @@ switch (cmd) {
   }
   case 'show':
     showCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
+    break
+  case 'reply':
+    replyCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'wait':
     waitCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
@@ -2841,6 +2847,20 @@ switch (cmd) {
       error: (line) => console.error(line),
       color: process.stdout.isTTY === true,
     })
+    break
+  case 'e2e':
+    // The grid-switch e2e: a fresh agent moved subscription -> grid -> back home with the person's
+    // tool + MCP, leaving a review bundle. Env-driven (see src/e2e/runGridSwitchTrace.ts); the
+    // relay-side reviewer (opencode `e2e-watchdog`) lives with the relay, in autonomous-grid-cli.
+    // Shipped with the CLI, so it is always the daemon's own version that drives the daemon.
+    if (args[0] === 'grid-switch') {
+      import('./e2e/runGridSwitchTrace.js')
+        .then(({ runGridSwitch }) => runGridSwitch())
+        .then((r) => { process.exitCode = r.error || r.stuck ? 1 : 0 })
+        .catch(onError)
+    } else if (args[0] === 'plan') {
+      import('./e2e/plan.js').then(({ planCommand }) => planCommand(flags.includes('--json'))).catch(onError)
+    } else { console.error(`Unknown command: e2e ${args[0] ?? ''} (grid-switch | plan)`); usage(1) }
     break
   case 'machines':
     if (!args[0]) machinesListCommand(flags.includes('--json')).catch(onError)

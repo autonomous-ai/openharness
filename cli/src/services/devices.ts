@@ -35,6 +35,8 @@ import { WindowVisit } from '../cable/windowVisit.js'
 import { MachineListCache } from '../device/machineList.js'
 import { harnessDevicesRequest } from '../lib/harnessDevices.js'
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
+import { createJevDecide } from '../lib/jev/jevClient.js'
+import { createTally, createTierDecider, type Tier, type TierDecision, type TierInput } from '../lib/notifyTier.js'
 import { createPartGuard } from './devicesGuard.js'
 import { FLEET_FALLBACKS, startFleet, type Fleet } from './fleet.js'
 
@@ -55,6 +57,8 @@ export interface DevicesDeps {
   /** `HARNESSD_TEST_FAULTS`: parts to fail, for the end-to-end suite. */
   faults?: ReadonlySet<string>
   log?: (line: string) => void
+  /** How loudly a finished turn tells the devices. Defaults to rules plus Jev (off with `HARNESS_NOTIFY_SMART=0`). */
+  decideTier?: (input: TierInput) => Promise<TierDecision>
   /** A monotonic clock in ms (default `performance.now`), for the reply throttle: a wall-clock step must not stall or burst it. */
   now?: () => number
   /** How the voice router's worker is stopped when the process exits: an engine process of its own. */
@@ -78,6 +82,12 @@ const sid = (id: string): string => id.slice(0, 8)
 export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps): ServiceRequests {
   const log = deps.log ?? ((line: string) => console.log(line))
   const monotonic = deps.now ?? (() => performance.now())
+  const tally = createTally((line) => log(`[cable] ${line}`))
+  const tierOf = deps.decideTier ?? createTierDecider({
+    tally,
+    jev: process.env.HARNESS_NOTIFY_SMART === '0' ? null : createJevDecide({ backend: (method, path, body) => core.account.backend(method, path, body) }),
+    log: (line) => log(`[cable] ${line}`),
+  })
   const part = createPartGuard({ log, faults: deps.faults })
 
   // What the windows on this computer last said: the desk the dial walks and whether it is in front, and
@@ -237,6 +247,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   type Reading = { input?: number; cached?: number; output?: number } | null
   /** Each agent's reading from when its turn started, until the turn ends. */
   const starts = new Map<string, Promise<Reading>>()
+  /** When each agent's turn began (the first `processing`), for the summary's duration. */
+  const began = new Map<string, number>()
+  /** The turn that just ended, kept for the `summary` that follows its `done`. */
+  const ended = new Map<string, { durationS: number | null; stats: TierInput['stats'] }>()
   const TOKENS_WAIT_MS = 2000
   const MAX_TOKENS = 50_000_000
   const settle = (p: Promise<Reading>): Promise<Reading> => p.catch(() => null)
@@ -267,9 +281,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (event.kind === 'processing') {
       if (event.update) latestUpdate.set(event.agentId, event.update)
       else latestUpdate.delete(event.agentId)
+      if (!began.has(event.agentId)) began.set(event.agentId, Date.now())
       void cable.turnStarted(event.agentId, event.text, event.update)
     } else if (event.kind === 'done') {
       const fields = stats.take(event.agentId)
+      const at = began.get(event.agentId)
+      began.delete(event.agentId)
+      ended.set(event.agentId, { durationS: at === undefined ? null : Math.round((Date.now() - at) / 1000),
+        stats: { testsPassed: fields.testsPassed, testsFailed: fields.testsFailed, commits: fields.commits } })
       const start = starts.get(event.agentId)
       starts.delete(event.agentId)
       const finish = (tokens: Pick<TurnStatsFields, 'tokensIn' | 'tokensOut'>): void => {
@@ -280,12 +299,30 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (!start || !cable.wantsStats()) return finish({})
       return turnTokens(event.agentId, start).then(finish)
     }
-    // Quiet when the window already has this agent on screen; silent when the turn was a sub-agent's. The
-    // tile still updates — the recap is what it draws — only the beep and the drawer entry are withheld.
-    else if (event.kind === 'summary') void cable.summary(event.agentId, event.recap || event.text, event.text, alreadyOnScreen(event.agentId), event.subagent, ...(event.fullText ? [event.fullText] : []))
+    // On screen or a sub-agent's: silent, Jev is not asked. Otherwise the tier decides how loudly the dial tells. The
+    // tile still updates either way — the recap is what it draws.
+    else if (event.kind === 'summary') {
+      const { agentId } = event
+      const recap = event.recap || event.text
+      const onScreen = alreadyOnScreen(agentId)
+      const noted = (tier: Tier, rule: string): void => tally(cableHost.describe(agentId)?.name ?? '', tier, `rule:${rule}`, rule, 0)
+      if (onScreen || event.subagent) { noted('silent', event.subagent ? 'subagent' : 'onScreen'); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, event.subagent); return }
+      // No device attached (or the serial side disabled): nobody to tell, so the recap never leaves the machine.
+      if (!cable.isConnected) { ended.delete(agentId); void cable.summary(agentId, recap, event.text, 'silent', event.fullText, false); return }
+      const turn = ended.get(agentId) // a sub-agent's summary leaves the main turn's numbers alone
+      ended.delete(agentId)
+      const who = cableHost.describe(agentId)
+      // Returned, so the agent's next card waits behind this one (inOrder): a late recap must not follow turn.started.
+      return tierOf({ agent: who?.name ?? '', engine: who?.engine ?? '', recap, durationS: turn?.durationS ?? null,
+        stats: turn?.stats ?? {}, subagent: false, onScreen: false, failed: event.failed === true })
+        .then((d) => d.tier, () => 'list' as const)
+        .then((tier) => { void cable.summary(agentId, recap, event.text, tier, event.fullText, false) })
+    }
     else {
+      began.delete(event.agentId); ended.delete(event.agentId)
       stats.take(event.agentId) // a failed turn's sums must not leak into the next turn
       starts.delete(event.agentId)
+      tally(cableHost.describe(event.agentId)?.name ?? '', 'alert', 'rule:failed', 'turn.error', 0)
       void cable.turnError(event.agentId, event.text)
     }
   }
@@ -350,7 +387,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // "Working…" looks like from the outside.
     if (event.kind === 'state') { void cable.syncMachines(); return }
     if (event.kind === 'questionClosed') { inOrder(event.agentId, () => { void cable.questionClose(event.agentId, event.requestId) }); return }
-    if (event.kind === 'question') { inOrder(event.agentId, () => { void cable.question(event.agentId, event.requestId, event.questions) }); return }
+    if (event.kind === 'question') { tally(cableHost.describe(event.agentId)?.name ?? '', 'alert', 'rule:question', 'question', 0); inOrder(event.agentId, () => { void cable.question(event.agentId, event.requestId, event.questions) }); return }
     toDial({ ...event, subagent: event.subagent === true })
   }))
 
@@ -365,7 +402,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       const close = cableQuestionCloseFor(frame as Parameters<typeof cableQuestionCloseFor>[0])
       if (close) { inOrder(close.agentId, () => { void cable.questionClose(close.agentId, close.requestId) }); return }
       const question = cableQuestionFor(frame as Parameters<typeof cableQuestionFor>[0])
-      if (question) { inOrder(question.agentId, () => { void cable.question(question.agentId, question.requestId, question.questions) }); return }
+      if (question) { tally(cableHost.describe(question.agentId)?.name ?? '', 'alert', 'rule:question', 'question', 0); inOrder(question.agentId, () => { void cable.question(question.agentId, question.requestId, question.questions) }); return }
       // A shell result is only the stats' input: the dial is told the sums when the turn ends.
       const ran = frame as { type?: string; agentId?: string; payload?: { kind?: string; id?: string; command?: string; isError?: boolean; outputTail?: string } }
       if (ran.payload?.kind === 'reply_text' && ran.agentId) {
@@ -385,7 +422,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       }
       // A tool card is a step for a `steps-v1` device and nothing for any other: the session drops it.
       const gone = (frame as { type?: string; payload?: { agentId?: unknown } })
-      if (gone.type === 'agent_deleted' && typeof gone.payload?.agentId === 'string') { latestUpdate.delete(gone.payload.agentId); endReplies(gone.payload.agentId, false) }
+      if (gone.type === 'agent_deleted' && typeof gone.payload?.agentId === 'string') { latestUpdate.delete(gone.payload.agentId); began.delete(gone.payload.agentId); ended.delete(gone.payload.agentId); endReplies(gone.payload.agentId, false) }
       const step = cableStepFor(frame as Parameters<typeof cableStepFor>[0])
       if (step) { inOrder(step.agentId, () => { void cable.turnStep(step.agentId, step.step) }); return }
       const event = cableEventFor(frame as Parameters<typeof cableEventFor>[0])

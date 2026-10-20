@@ -25,7 +25,7 @@ automatically proven improvement. Changes still need review, tests and a deliber
 | Does Desktop's Add Phone card get used, and where else is Add Phone opened? | The card's flow (`ui_desktop_phone_offer_*`): started once it is on screen, `ok` by its Add Phone, `cancelled` by its ×, `unknown` when it went another way (Add Phone opened from elsewhere, a sign-out); every Add Phone opening by its way in (`ui_desktop_add_phone_<offer\|titlebar\|menu\|account\|machines\|command>`) | The card is offered once per computer, so its starts are computers, not people, and it has no 15-minute bound: started minus outcomes is an app closed with the card still up. An opening is the dialog shown, not a phone paired. `menu` includes a key bound to Harness ▸ Add Phone… on macOS; `command` is `> add phone` or a key bound to it elsewhere. The browser counts none. Vocabulary 3: counted from the start, but sent only once the local CLI has answered that it forwards them, so a Desktop on an older CLI sends none. |
 | Is measurement losing coverage? | Updated collector installation-days, pruned queues, full observation maps, unmatched app starts | Loss signals warrant caution. No signal does not prove complete collection. |
 | How many people use Harness, and do they come back? | People active / working / new per day and per app, and D1/D2/D3/D7 returns (backend rollup of 10-day pseudonymous marks) | Sharing accounts only, staff excluded; an app open across midnight counts on both days, so prefer working returns. Not available before `PRODUCT_USAGE_SUBJECT_KEY` is set. |
-| What do people do on the Hub? | Page views by page and signed-out/signed-in reader, the first page of a tab's visit by where it came from (direct, search, social, internal, other; classified in the browser, the referrer is never sent), clicks and submits (search, sort, like, comment, share, fork, follow, report, sign-in prompt, publish), and how long a harness page stayed visible (under 10 s, 10 s–1 min, over 1 min) | Unlinked daily totals of views, entries, clicks and dwell buckets: not people, not a funnel. Public counts that can be fabricated; directional only. Browsers sending Global Privacy Control or Do Not Track, and signed-in readers who turned sharing off, are not counted. The website's server strips cookies and auth before forwarding. |
+| What do people do on the Hub? | Page views by page and signed-out/signed-in reader, the first page of a tab's visit by where it came from (direct, search, social, internal, other; classified in the browser, the referrer is never sent), clicks and submits (search, sort, like, comment, share, fork, follow, report, sign-in prompt, publish), and how long a harness page stayed visible (under 10 s, 10 s–1 min, over 1 min). A shared link (`/s/:id`, the web app) counts the same way: the page drawn by reader, what it showed (live, owner offline, private, no access, failed), how long a live harness stayed visible, and its clicks (comments, comment posted, sign-in, retry, Download app, product page), plus once when its live viewer draws | Unlinked daily totals of views, entries, clicks and dwell buckets: not people, not a funnel. Public counts that can be fabricated; directional only. Browsers sending Global Privacy Control or Do Not Track, and signed-in readers who turned sharing off, are not counted. The website's server strips cookies and auth before forwarding. |
 
 Desktop setup and sign-in counts are enabled by default, with no onboarding checkbox. Desktop has
 one “Share product usage data” switch in Experimental, with no separate Privacy page or feedback
@@ -45,7 +45,7 @@ account preference is remembered for the next signed-out launch. With nowhere to
 Setup state already visible when sharing becomes enabled can start an observation; duration then
 begins at that observation, not necessarily at installation start. The web app's pre-sign-in setup
 collection stays disabled because a browser request to the backend cannot guarantee omitted cookies.
-The Hub's counters are the one web exception: the browser sends them to the website's own server,
+The Hub's counters, shared links' included, are the one web exception: the browser sends them to the website's own server,
 which forwards them to the backend without cookies or auth, so the backend never sees a browser
 credential (see the Hub endpoint below). These untrusted setup counts are
 a separate population from signed-in app/daemon reports; older clients and opt-outs affect coverage. They
@@ -78,7 +78,7 @@ excluded from release/platform margins so a return's release cannot be mistaken 
 `health` in `usage:daily` reports consented setup/workspace/first-work/first-response milestones,
 coarse waits, request-source reconciliation, explicit composer-work D1/D7/D28 cohorts, weekly work-day
 bins, process health, and collector loss/rejection/late-report signals. `hub` reports the Hub's
-daily views by page and reader, entries, clicks and dwell buckets, with fork clicks per harness view
+daily views by page and reader, entries, clicks and dwell buckets, shared links' outcomes and dwell, with fork clicks per harness view
 and sign-in prompt clicks per prompt shown as numerator, denominator and ratio; a day without Hub
 reports is null, not zero. These are visits and clicks, not people. Milestones describe local
 app episodes, can cross UTC days, and do not establish a joined signup conversion rate. First-work
@@ -205,14 +205,18 @@ fabrication; they are directional diagnostics, not trusted account acquisition m
 
 `POST /api/product-usage/hub` takes only the Hub vocabulary: no setup, app or daemon counter, and
 no Hub counter through those routes. It carries a random receipt, the UTC day (today or yesterday)
-and at most 48 counters of 1–1,000 each, nothing else: no URL, page id, referrer, harness, creator,
-search text or identifier. The website's server forwards it with cookies and auth stripped; the
+and at most one of each Hub counter, 1–1,000 each, nothing else: no URL, page id, referrer, harness, creator,
+search text, shared link, its key or identifier. The website's server forwards it with cookies and auth stripped; the
 backend rejects auth/cookie headers, limits bodies to 4 KiB and admits at most 240 writes/minute and
 four concurrent writes per server process, a budget of its own so Hub traffic cannot starve setup
 or sign-in measurement. The browser skips counting under Global Privacy Control or Do Not Track; the
 website's server drops a signed-in reader's counts when that account's sharing is off. A view is a
 page drawn, once per navigation; an entry is the first Hub page of a tab's visit; dwell is counted
-once per harness view. The same totals can come from one visitor or many.
+once per harness view. A shared link counts each outcome at most once per page, so an offline owner's
+automatic reconnects add nothing, and its dwell runs from the first live answer until the page goes;
+it counts no entry. The web app (`desktop/lib/measurement/hub_usage.dart`) sends through the same
+website route, without cookies, only in a release browser build and never for a staging link or
+account. The same totals can come from one visitor or many.
 
 Both ingestion paths atomically add only UTC-day/metric totals plus an unlinked random retry receipt.
 Fast database write conflicts retry that complete transaction up to three times with short jitter,
@@ -297,7 +301,8 @@ the historical reporting command will no longer be a current-usage source.
 
 Hub counters roll out backend first, then website: an older backend has no `/api/product-usage/hub`
 route and loses whatever the website sends it, and a backend that does not know a Hub counter
-refuses the whole report, so a new Hub counter also ships backend first. Then check that a browser
+refuses the whole report, so a new Hub counter also ships backend first (shared-link counters: backend,
+then the web app's release). Then check that a browser
 with Global Privacy Control and a signed-in reader with sharing off send nothing.
 
 People counts roll out in this order: deploy the backend without `PRODUCT_USAGE_SUBJECT_KEY` (no marks

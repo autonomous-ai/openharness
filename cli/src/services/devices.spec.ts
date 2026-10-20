@@ -57,6 +57,8 @@ vi.mock('../cable/cableFleet.js', async (real) => {
     turnError = recorder('turnError')
     petsChanged = recorder('petsChanged')
     wants = true
+    connected = true
+    get isConnected() { return this.connected }
     wantsStats() { return this.wants }
     petDial = () => ({ supported: false, held: [] as string[], sending: null })
     setSettings = vi.fn(async (id: string, _patch: unknown) => (id === 'usb' ? { ok: true } : { ok: false, error: 'That device is not plugged into this computer.' }))
@@ -118,6 +120,9 @@ vi.mock('../lib/voiceRouter.js', () => ({
   routeVoiceTask: vi.fn(),
 }))
 
+const jevMade = vi.hoisted(() => vi.fn())
+vi.mock('../lib/jev/jevClient.js', async (orig) => ({ ...(await orig<object>()), createJevDecide: (...a: unknown[]) => { jevMade(...a); return async () => { throw new Error('no jev here') } } }))
+
 const { startDevices } = await import('./devices.js')
 
 let dataDir: string
@@ -134,7 +139,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const ports: CorePorts = emptyPorts()
   const onExit = vi.fn()
@@ -146,6 +151,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     cableDisabled: over.cableDisabled,
     readUsage: over.readUsage,
     now: over.now,
+    decideTier: over.decideTier === null ? undefined : over.decideTier ?? (async () => ({ tier: 'alert', by: 'test', detail: '', ms: 0 })),
     faults: new Set(over.faults ?? []),
     log: (line) => { logs.push(line) },
     onExit,
@@ -368,7 +374,106 @@ describe('what the windows say, reaching the dial', () => {
     port.desk(['a2', 'a1'], false)
     port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'done' } })
     port.card({ type: 'commander_event', agentId: 'a9', payload: { kind: 'summary', text: 'done', subagent: true } })
-    expect(calls('summary')).toEqual([['a1', 'fixed it', 'done', true, false], ['a1', 'done', 'done', false, false], ['a9', 'done', 'done', false, true]])
+    await vi.waitFor(() => expect(calls('summary')).toHaveLength(3))
+    // The one that asked the decider lands last: the other two never wait.
+    expect(calls('summary')).toEqual([['a1', 'fixed it', 'done', 'silent', undefined, false], ['a9', 'done', 'done', 'silent', undefined, true], ['a1', 'done', 'done', 'alert', undefined, false]])
+  })
+
+  describe('a summary\'s tier', () => {
+    afterEach(() => { delete process.env.HARNESS_NOTIFY_SMART })
+    it('builds the default decider without Jev when HARNESS_NOTIFY_SMART is 0, and with it otherwise', () => {
+      process.env.HARNESS_NOTIFY_SMART = '0'
+      start({ decideTier: null })
+      expect(jevMade).not.toHaveBeenCalled()
+      delete process.env.HARNESS_NOTIFY_SMART
+      start({ decideTier: null })
+      expect(jevMade).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps the next turn behind a recap still waiting on the decider', async () => {
+      vi.useFakeTimers()
+      try {
+        const decideTier = vi.fn(() => new Promise<{ tier: 'alert'; by: string; detail: string; ms: number }>((r) => setTimeout(() => r({ tier: 'alert', by: 't', detail: '', ms: 0 }), 500)))
+        const { port } = start({ decideTier })
+        port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'done', text: 'done' } })
+        port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'done', recap: 'r' } })
+        port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'processing', text: 'next' } })
+        await vi.advanceTimersByTimeAsync(100)
+        expect(seen.cable.calls.map(([n]) => n).filter((n) => n === 'summary' || n === 'turnStarted')).toEqual([])
+        await vi.advanceTimersByTimeAsync(600)
+        expect(seen.cable.calls.map(([n]) => n).filter((n) => n === 'summary' || n === 'turnStarted')).toEqual(['summary', 'turnStarted'])
+      } finally { vi.useRealTimers() }
+    })
+
+    it('does not let a sub-agent\'s summary use up the main turn\'s numbers, and times a restarted turn afresh', async () => {
+      const decideTier = vi.fn(async (_i: { durationS: number | null }) => ({ tier: 'alert' as const, by: 't', detail: '', ms: 0 }))
+      const { port } = start({ decideTier })
+      const card = (kind: string, extra = {}) => port.card({ type: 'commander_event', agentId: 'a1', payload: { kind, text: 'x', ...extra } })
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        vi.setSystemTime(0); card('processing')
+        vi.setSystemTime(60_000); card('done')
+        card('summary', { subagent: true })
+        card('summary', { recap: 'first' })
+        await vi.waitFor(() => expect(calls('summary')).toHaveLength(2))
+        vi.setSystemTime(100_000); card('processing')
+        await vi.waitFor(() => expect(calls('turnStarted')).toHaveLength(2))
+        vi.setSystemTime(110_000); card('done')
+        await vi.waitFor(() => expect(calls('turnDone')).toHaveLength(2))
+        card('summary', { recap: 'second' })
+        await vi.waitFor(() => expect(decideTier).toHaveBeenCalledTimes(2))
+      } finally { vi.useRealTimers() }
+      expect(decideTier.mock.calls.map(([i]) => i.durationS)).toEqual([60, 10])
+    })
+
+    const summaryCalls = () => calls('summary')
+    it('is silent without asking Jev when the agent is on screen or the turn was a sub-agent\'s', () => {
+      const decideTier = vi.fn()
+      const { port } = start({ decideTier })
+      port.desk(['a1'], true)
+      port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'done' } })
+      port.card({ type: 'commander_event', agentId: 'a9', payload: { kind: 'summary', text: 'done', subagent: true } })
+      expect(summaryCalls()).toEqual([['a1', 'done', 'done', 'silent', undefined, false], ['a9', 'done', 'done', 'silent', undefined, true]])
+      expect(decideTier).not.toHaveBeenCalled()
+    })
+
+    it('never asks the decider while no device is connected, and still draws the tile', () => {
+      const decideTier = vi.fn()
+      const { port } = start({ decideTier })
+      ;(seen.cable as unknown as { connected: boolean }).connected = false
+      port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'done', recap: 'fixed it' } })
+      expect(decideTier).not.toHaveBeenCalled()
+      expect(summaryCalls()).toEqual([['a1', 'fixed it', 'done', 'silent', undefined, false]])
+    })
+
+    it('tells the decider a failed cloud summary failed, and logs rule decisions with the day\'s count', async () => {
+      const decideTier = vi.fn(async () => ({ tier: 'alert' as const, by: 't', detail: '', ms: 0 }))
+      const { port } = start({ decideTier })
+      port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'x', recap: 'r', failed: true } })
+      await vi.waitFor(() => expect(decideTier).toHaveBeenCalledWith(expect.objectContaining({ failed: true })))
+      port.desk(['a2'], true)
+      port.card({ type: 'commander_event', agentId: 'a2', payload: { kind: 'summary', text: 'x' } })
+      port.card({ type: 'commander_event', agentId: 'a2', payload: { kind: 'error', text: 'boom' } })
+      expect(logs.some((l) => /notify · .* · silent · rule:onScreen · onScreen · 0ms/.test(l))).toBe(true)
+      expect(logs.some((l) => /notify · .* · alert · rule:failed/.test(l))).toBe(true)
+      expect(logs.some((l) => /notify · day \d{4}-\d\d-\d\d · alert 1 · list 0 · silent 1/.test(l))).toBe(true)
+    })
+
+    it('is the decider\'s, asked with the duration and stats of the turn that just ended', async () => {
+      const decideTier = vi.fn(async () => ({ tier: 'list' as const, by: 'test', detail: '', ms: 0 }))
+      const { port } = start({ decideTier })
+      vi.useFakeTimers()
+      try {
+        vi.setSystemTime(1_000_000)
+        port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'processing', text: 'go' } })
+        vi.setSystemTime(1_000_000 + 95_000)
+        port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'done', text: 'done' } })
+      } finally { vi.useRealTimers() }
+      port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'done', recap: 'fixed it' } })
+      await vi.waitFor(() => expect(summaryCalls()).toHaveLength(1))
+      expect(decideTier).toHaveBeenCalledWith(expect.objectContaining({ recap: 'fixed it', durationS: 95, onScreen: false, subagent: false }))
+      expect(summaryCalls()[0].slice(0, 4)).toEqual(['a1', 'fixed it', 'done', 'list'])
+    })
   })
 
   it('passes the tabs, the unread rows, the window\'s focus and what it saw', () => {
@@ -694,10 +799,11 @@ describe('what the windows say, reaching the dial', () => {
     expect(calls('turnStats')).toEqual([])
   })
 
-  it('hands the dial the whole answer a summary card carries', () => {
+  it('hands the dial the whole answer a summary card carries', async () => {
     const { port } = start()
     port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'b', recap: 'r', fullText: 'the whole answer' } })
-    expect(seen.cable.calls.slice(1)).toEqual([['summary', ['a1', 'r', 'b', false, false, 'the whole answer']]])
+    await vi.waitFor(() => expect(calls('summary')).toHaveLength(1))
+    expect(seen.cable.calls.slice(1)).toEqual([['summary', ['a1', 'r', 'b', 'alert', 'the whole answer', false]]])
   })
 
   it('forgets an agent\'s latest sentence when its processing card has none, and when the agent goes', async () => {
@@ -746,7 +852,7 @@ describe('what the windows say, reaching the dial', () => {
 })
 
 describe('the other machines\' cards', () => {
-  it('reach the dial through the same calls as this computer\'s', () => {
+  it('reach the dial through the same calls as this computer\'s', async () => {
     start()
     const tell = seen.fleet!.events!
     tell({ machineId: 'm2', kind: 'state', state: 'ready' })
@@ -755,8 +861,9 @@ describe('the other machines\' cards', () => {
     tell({ machineId: 'm2', kind: 'processing', agentId: 'b1', text: 'go', recap: '' })
     tell({ machineId: 'm2', kind: 'summary', agentId: 'b1', text: 'done', recap: 'fixed', subagent: true })
     tell({ machineId: 'm2', kind: 'summary', agentId: 'b1', text: 'done', recap: '' })
+    await vi.waitFor(() => expect(calls('summary')).toHaveLength(2))
     expect(seen.cable.calls.map(([name]) => name)).toEqual(['start', 'syncMachines', 'questionClose', 'question', 'turnStarted', 'summary', 'summary'])
-    expect(calls('summary')).toEqual([['b1', 'fixed', 'done', false, true], ['b1', 'done', 'done', false, false]])
+    expect(calls('summary')).toEqual([['b1', 'fixed', 'done', 'silent', undefined, true], ['b1', 'done', 'done', 'alert', undefined, false]])
   })
 })
 

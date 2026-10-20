@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import * as backend from '../../../../backend/src/lib/hubMetricsContract';
-import { dwellBucket, entrySource, hubActions, hubDwell, hubEntrySources, hubReportMaxValue, hubViewPages } from './hubMetrics';
+import { dwellBucket, entrySource, hubActions, hubDwell, hubEntrySources, hubReportMaxValue, hubSharedOpens, hubViewPages } from './hubMetrics';
 
 describe('the Hub usage counters', () => {
   it('are the ones the backend accepts', () => {
@@ -9,6 +9,7 @@ describe('the Hub usage counters', () => {
     expect([...hubEntrySources]).toEqual([...backend.HUB_ENTRY_SOURCES]);
     expect([...hubDwell]).toEqual([...backend.HUB_DWELL]);
     expect([...hubActions]).toEqual([...backend.HUB_ACTIONS]);
+    expect([...hubSharedOpens]).toEqual([...backend.HUB_SHARED_OPENS]);
     expect(hubReportMaxValue).toBe(backend.HUB_REPORT_MAX_VALUE);
   });
   it('class a visit by its referrer’s host alone', () => {

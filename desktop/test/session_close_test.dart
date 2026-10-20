@@ -101,7 +101,7 @@ void main() {
 
   for (final wholeTab in [false, true]) {
     test(
-      'closing a Super Tab ${wholeTab ? 'tab' : 'pane'} hides working agents without a stop review',
+      'Super Tab ${wholeTab ? 'tab close hides' : 'pane close preserves'} working agents without a stop review',
       () async {
         final tab = app.activeSwarm;
         app.bindSuperTab(tab.id, 'shared-tab', 'Pilot');
@@ -118,7 +118,7 @@ void main() {
         } else {
           await app.requestClosePane(pane.id);
           expect(app.swarms, contains(tab));
-          expect(tab.panes, isEmpty);
+          expect(tab.panes, [pane]);
         }
         expect(reviews, 0);
         expect(connection.closes, isEmpty);

@@ -27,8 +27,9 @@ if [ "${1:-}" = rollback ]; then
     exec /usr/bin/python3 /usr/lib/harness-os/runtime_update.py rollback "$@"
 fi
 if [ "${1:-}" = factory-reset ]; then
-    # As just flashed: signed out, no harnesses, Wi-Fi forgotten (--keep-wifi keeps it), the setup
-    # hotspot open for a phone. The same as the reset button. Not `harness reset`, the CLI's own.
+    # As just flashed: signed out, no harnesses, hn's tabs and panes gone, here and on the account's
+    # desk (--keep-workspace keeps them), Wi-Fi forgotten (--keep-wifi keeps it), the setup hotspot
+    # open for a phone. The same as the reset button. Not `harness reset`, the CLI's own.
     shift
     [ "$(id -u)" = 0 ] && exec /usr/bin/python3 /usr/lib/harness-os/setup.py reset "$@"
     exec sudo /usr/bin/python3 /usr/lib/harness-os/setup.py reset "$@"

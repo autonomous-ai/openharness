@@ -390,7 +390,13 @@ void ui_voice_quota_exceeded(void);
 // A turn finished for this agent → record it in the drawer, badge, and wake the screen if it was off.
 // `name`, `machine` and `recap` come from the frame: the dial holds one tab, and the agent may be on
 // another — the row has nobody else to ask. Any may be NULL; a held tile's own model wins when present.
-void ui_notify_task_done(const char *project_id, const char *name, const char *machine, const char *recap);
+// A live `summary`. TIER is the wire's "alert" | "list" | "silent"; NULL or unknown falls back to the old
+// flags (silent, then quiet, else alert). Returns true when the caller should beep: an alert, and not
+// for the pane already on the face. A list entry is a drawer row only; silent files nothing.
+bool ui_notify_summary(const char *project_id, const char *name, const char *machine, const char *recap,
+                       const char *tier, bool quiet, bool silent);
+// A failed turn: an alert. Files a drawer row, shows the error for 8 s. True when the caller should beep.
+bool ui_turn_error(const char *project_id, const char *message);
 // The WINDOW looked at this agent → drop its FINISHED-turn row here, as a tap on that row does.
 //
 // The two screens take a notification away on different gestures — a tap here, a tab coming to the
@@ -441,7 +447,8 @@ void ui_project_set_agents(const char *project_id, const struct cJSON *agents);
 // Also records it behind the bell: a blocked agent is counted, and stays counted until the question is
 // ANSWERED rather than until somebody looks at it. Not gated on the window having the agent on screen —
 // showing a question asks the window to bring it forward, so that gate could never open.
-void ui_question_show(const char *project_id, const char *agent_name, const char *machine, const char *request_id, const struct cJSON *questions);
+// True when the caller should beep: not for the pane already on the face.
+bool ui_question_show(const char *project_id, const char *agent_name, const char *machine, const char *request_id, const struct cJSON *questions);
 // That question was answered somewhere else (the app, or the pane by hand) — leave the screen instead of
 // waiting for an answer that can no longer be delivered. No-op unless THIS request is the one on screen.
 void ui_question_close(const char *project_id, const char *request_id);

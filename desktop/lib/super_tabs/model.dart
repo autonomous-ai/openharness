@@ -37,6 +37,7 @@ class SuperTabAgent {
 class SuperTabConversation {
   SuperTabConversation.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
+      number = (row['number'] as num?)?.toInt(),
       title = _text(row, 'title'),
       leadId = row['leadId'] as String?,
       agentIds = List.unmodifiable((row['agentIds'] as List).cast<String>()),
@@ -51,6 +52,8 @@ class SuperTabConversation {
           ? null
           : Map.unmodifiable(superTabMap(row['assignment']));
   final String id, title, brief;
+  final int? number;
+  String get label => number == null ? title : '#$number $title';
   final String? leadId;
   final List<String> agentIds;
   final bool archived;
@@ -65,8 +68,15 @@ class SuperTabSnapshot {
       name = _text(row, 'name'),
       ownerId = _text(row, 'ownerId'),
       paused = row['paused'] == true,
+      project = row['project'] == null
+          ? null
+          : Map.unmodifiable(superTabMap(row['project'])),
       people = _list(row['people'], SuperTabPerson.fromJson),
       agents = _list(row['agents'], SuperTabAgent.fromJson),
+      machines = _list(
+        row['machines'] ?? const [],
+        (m) => Map<String, dynamic>.unmodifiable(m),
+      ),
       conversations = _list(
         row['conversations'],
         SuperTabConversation.fromJson,
@@ -80,9 +90,11 @@ class SuperTabSnapshot {
     }
   }
   final String id, name, ownerId;
+  final Map<String, dynamic>? project;
   final bool paused;
   final List<SuperTabPerson> people;
   final List<SuperTabAgent> agents;
+  final List<Map<String, dynamic>> machines;
   final List<SuperTabConversation> conversations;
   final List<Map<String, dynamic>> invitations;
   SuperTabConversation? conversation(String id) =>
@@ -200,4 +212,21 @@ class SuperTabMessage {
     (d) => d['status'] == 'queued' || d['status'] == 'claimed',
   );
   bool get uncertain => deliveries.any((d) => d['status'] == 'uncertain');
+}
+
+/// A remote may contain a developer's embedded credential. Never share it.
+String? superTabRepositoryUrl(String? remote) {
+  if (remote == null || remote.isEmpty) return null;
+  if (remote.startsWith('git@') && !remote.contains('://')) return remote;
+  final uri = Uri.tryParse(remote);
+  if (uri == null ||
+      uri.host.isEmpty ||
+      !['https', 'http', 'ssh', 'git'].contains(uri.scheme)) {
+    return null;
+  }
+  if (uri.userInfo.isNotEmpty &&
+      !(uri.scheme == 'ssh' && uri.userInfo == 'git')) {
+    return null;
+  }
+  return remote;
 }

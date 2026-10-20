@@ -864,6 +864,44 @@ static void pod_model_test_offline_members(void) {
     pod_model_agents_end(&M);
 }
 
+// Entries live 6 h from receipt, by a signed difference, so they survive the uint32 wrap of the device clock.
+static void pod_model_test_unread_expiry(void) {
+    fresh();
+    pod_model_unread_add(&M, "a1", "Alpha", "first", 1, 1000);
+    pod_model_clock(&M, 1000 + POD_UNREAD_TTL_MS - 1);   // 5 h 59 m 59.999 s
+    CHECK(M.unread_count == 1);
+    pod_model_clock(&M, 1000 + POD_UNREAD_TTL_MS);
+    CHECK(M.unread_count == 0);
+    // Across the wrap: received 1 s before it, the clock a little past 6 h later.
+    fresh();
+    pod_model_unread_add(&M, "a1", "Alpha", "first", 1, 0xFFFFFC00u);
+    pod_model_unread_add(&M, "a2", "Beta", "second", 1, 0xFFFFFC00u + 3600000u);   // 1 h later, past the wrap
+    pod_model_clock(&M, 0xFFFFFC00u + POD_UNREAD_TTL_MS - 1);
+    CHECK(M.unread_count == 2);
+    pod_model_clock(&M, 0xFFFFFC00u + POD_UNREAD_TTL_MS);
+    CHECK(M.unread_count == 1 && !strcmp(M.unread[0].agent, "a2"));
+    // A newer entry of the same agent restarts its clock; an asking agent's entry goes when its question closes.
+    fresh();
+    pod_model_unread_add(&M, "a1", "Alpha", "first", 1, 1000);
+    pod_model_unread_add(&M, "a1", "Alpha", "again", 1, 5000);
+    CHECK(M.unread_count == 1);
+    pod_model_clock(&M, 1000 + POD_UNREAD_TTL_MS);
+    CHECK(M.unread_count == 1);
+    pod_model_clock(&M, 5000 + POD_UNREAD_TTL_MS);
+    CHECK(M.unread_count == 0);
+    fresh();
+    pod_model_unread_add(&M, "a1", "Alpha", "a finished one", 1, 100);
+    pod_model_question(&M, "a1", "Which?");
+    pod_model_unread_ask(&M, "a1", "Alpha", "Which?", 200);
+    CHECK(M.unread_count == 1 && M.unread[0].ask && !strcmp(M.unread[0].text, "Which?"));
+    pod_model_question_close(&M, "a1");
+    CHECK(M.unread_count == 0);
+    pod_model_unread_add(&M, "a1", "Alpha", "a finished one", 1, 300);   // not a question's: it stays
+    pod_model_question(&M, "a1", "Which?");
+    pod_model_question_close(&M, "a1");
+    CHECK(M.unread_count == 1);
+}
+
 static void pod_model_test_unread(void) {
     fresh();
     CHECK(M.unread_count == 0);
@@ -1104,6 +1142,7 @@ int main(void) {
     pod_model_test_recent();
     pod_model_test_offline_members();
     pod_model_test_unread();
+    pod_model_test_unread_expiry();
     pod_model_test_console_data();
     pod_model_test_step_total_and_fresh();
     printf("Pod model: PASS (%d checks)\n", checks);

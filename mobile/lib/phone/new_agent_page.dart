@@ -211,6 +211,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
 
   @override
   void dispose() {
+    _holdCheck?.cancel();
     _keepDraft();
     _task.dispose();
     _attachments.dispose();
@@ -955,6 +956,8 @@ class _NewAgentPageState extends State<NewAgentPage> {
   Future<void> _cancelPending() async {
     final creation = _creation;
     if (creation == null || _creating || creation.cancelling) return;
+    // Called off: no more asking by itself; whatever comes of the cancel, the person checks.
+    _holdCheck?.cancel();
     setState(() {});
     final problem = await widget.notifier.cancelAgentCreation(creation);
     if (!mounted) return;
@@ -964,6 +967,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
           ?.showSnackBar(const SnackBar(content: Text('Creation cancelled.')));
     }
     setState(() {
+      _held = null;
       _error = problem;
       _failure = null;
     });
@@ -977,6 +981,8 @@ class _NewAgentPageState extends State<NewAgentPage> {
     // own, made from the rows as they read then.
     if (!creation.awaitingConfirmation) _creation = null;
     if (error == null) {
+      _held = null;
+      _holdCheck?.cancel();
       // The harness exists: the draft that described it would be a second one waiting to be made
       // by accident. See [NewAgentDraft].
       newAgentDraft = null;
@@ -985,12 +991,39 @@ class _NewAgentPageState extends State<NewAgentPage> {
       _open(creation.agentId);
       return;
     }
+    // Held before anything started — an engine the machine is installing, a model waking: not a
+    // failure. Said as a wait, not in red, and asked again by itself until the harness starts, is
+    // refused, or is called off; Cancel request stays.
+    if (creation.canCancelPending) {
+      setState(() {
+        _creating = false;
+        _error = null;
+        _failure = null;
+        _held = error;
+      });
+      _holdCheck?.cancel();
+      _holdCheck = Timer(const Duration(seconds: 4), () {
+        if (mounted &&
+            identical(_creation, creation) &&
+            !_creating &&
+            !creation.cancelling &&
+            _held != null) {
+          unawaited(_start());
+        }
+      });
+      return;
+    }
     setState(() {
       _creating = false;
+      _held = null;
       _error = error;
       _failure = error;
     });
   }
+
+  /// What the machine holds the request on, while it does (an engine installing): shown as a wait.
+  String? _held;
+  Timer? _holdCheck;
 
   /// The files [creation] is to be handed once it exists, and the task that follows them — kept
   /// beside [_creation] so a Check status that finds it started still hands them over.
@@ -1468,6 +1501,32 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                         ),
                                       ),
                                   ],
+                                  if (_held != null && _error == null)
+                                    Padding(
+                                      key: const ValueKey('new-agent-held'),
+                                      padding: const EdgeInsets.only(top: 8),
+                                      child: Row(
+                                        children: [
+                                          SizedBox.square(
+                                            dimension: 12,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 1.6,
+                                              color: tty.dim,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: Text(
+                                              _held!,
+                                              style: tty.style(
+                                                color: tty.dim,
+                                                size: TtySize.meta,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
                                   if (_error != null)
                                     Padding(
                                       padding: const EdgeInsets.only(top: 8),

@@ -8,6 +8,7 @@ import { createJevDecide, type JevDecide } from '../lib/jev/jevClient.js'
 import { machineChoices } from '../lib/newCommand.js'
 import { START_REQUIREMENTS } from './capacity.js'
 import { CapacityReservations, type ReservationBook } from './reservations.js'
+import { ContributionPreparations, prepareContribution } from './contribution.js'
 
 const HELP = {
   status: 'Read the shared tab roster and work.',
@@ -36,6 +37,7 @@ const HELP = {
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
 
 export interface SuperTabServiceOptions {
+  prepareContribution?: typeof prepareContribution
   capacity?: typeof readCapabilities
   host?: (core: CoreApi, machineId: string) => SuperTabHost
   reservations?: (core: CoreApi, machineId: string) => ReservationBook
@@ -43,6 +45,7 @@ export interface SuperTabServiceOptions {
   jev?: (core: CoreApi) => JevDecide
 }
 export function superTabService(core: CoreApi, options: SuperTabServiceOptions = {}): { requests: ServiceRequests; port: SuperTabsPort } {
+  const preparations = new ContributionPreparations(input => (options.prepareContribution ?? prepareContribution)(core, input))
   let host: SuperTabHost | null = null
   let book: ReservationBook | null = null, bookMachine: string | null = null
   const reservations = () => {
@@ -58,7 +61,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     host.start()
     return host
   }
-  const disconnect = () => { host?.stop(); host = null; book?.stop(); book = null; bookMachine = null }
+  const disconnect = () => { preparations.clear(); host?.stop(); host = null; book?.stop(); book = null; bookMachine = null }
   const port = {
     connected: () => {
       if (identifier(core.daemon.machineId()) && existsSync(hostJournalFile(core.dataDir, core.daemon.machineId()))) wake()
@@ -83,6 +86,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           return await wake().prepareNative(payload.tabId, payload.contextId, payload.action === 'renewNative', closed)
         }
         if (!asker.owner || (!asker.local && asker.accountOwner !== true)) return { error: 'OWNER_REQUIRED' }
+        if (payload.action === 'prepareContribution') return preparations.read(payload)
         if (payload.action === 'backend') {
           const { method, path } = payload
           if (!['GET', 'POST'].includes(String(method)) || typeof path !== 'string'

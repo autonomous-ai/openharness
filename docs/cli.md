@@ -109,6 +109,12 @@ auto|ask|plan|full`, `--name`, `--new [name]` and `--json` are the rest. There i
 harness on another of your machines: `harness new claude --machine office --name check -- …`, then
 `harness wait --machine office check` and `harness show --machine office check`.
 
+A cloud agent starts the same way: `harness new devin-cloud --machine office --repo acme/api -- <task>`.
+`--repo` takes `owner/name` or a GitHub address; Cursor Cloud needs one, Devin Cloud works without.
+`--acu-limit <n>` caps Devin Cloud's spend (5 when left out). `show` and `wait` read it from the cloud: its
+state, what it said after the last thing it was told, and its links (`links` in JSON). `harness reply <name> --
+<words>` says the person's answer, or what to do next, to a cloud harness; an agent does not.
+
 `harness whoami` says, for an agent, where it is and what it may do before it acts (`--json` gives the same as
 `context`); the top of an agent's `harness ps` begins with it, and `harness mcp` puts it in its instructions:
 
