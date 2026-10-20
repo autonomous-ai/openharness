@@ -131,6 +131,9 @@ and repeated retry clicks cannot advance it. The response also has `under_1m`, `
 `over_5m` buckets, measured from first arrival after sign-in. All stages are attributed to the
 episode's start UTC day, for at most 24 hours and only while the same app run and sharing choice
 remain active. The machine/agent pair stays in RAM and never enters a report.
+If the account preference is still loading, enrollment waits for its initial confirmation;
+work and responses before that confirmation are not collected. An opt-out discards the
+pending eligibility, and preference loading never cancels the user's harness.
 
 The daily report's `health.daily[].firstRun.responsePercent` is
 `100 × first_run_response / first_run_started`. Show the numerator and denominator alongside it,

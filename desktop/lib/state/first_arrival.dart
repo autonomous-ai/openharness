@@ -154,13 +154,13 @@ class FirstArrival {
   }) async {
     _running = true;
     final state = _state!;
-    final generation = app.productMeasurement.observationGeneration;
+    final generation = app.accountGeneration;
     var opened = false;
     String? tab;
     bool current() =>
         _state != 'done' &&
         app.signedIn &&
-        app.productMeasurement.observationGeneration == generation &&
+        app.accountGeneration == generation &&
         (stillCurrent?.call() ?? true) &&
         (tab == null || app.activeSwarmId == tab);
     bool fail(String message) {

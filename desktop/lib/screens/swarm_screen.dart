@@ -627,7 +627,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 _search == null &&
                 !_pickingFolder,
           );
-          // Says "Opening your agents…" while it works.
+          // Says "Opening your harness…" while it works.
           if (mounted) setState(() {});
           if (await arriving) return;
           if (!_canShowWelcomeComposer || app.activeSwarmId != tab) return;

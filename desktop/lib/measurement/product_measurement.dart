@@ -139,6 +139,7 @@ class ProductMeasurement extends ChangeNotifier {
   final _funnelSeen = <String, Set<ProductHealthMeasure>>{};
   final _funnelStarted = <String, DateTime>{};
   DateTime? _firstRunAt;
+  bool _firstRunRequested = false;
   (String, String)? _firstRunTarget;
   final _firstRunStages = <String>{};
   bool _setupShown = false;
@@ -289,6 +290,10 @@ class ProductMeasurement extends ChangeNotifier {
       _enabled = null;
       return;
     }
+    // Initial preference loading must not omit an eligible first arrival.
+    // Keep only its eligibility/current harness, never pre-consent work or responses.
+    final firstRunPending = _revision < 0 && _firstRunRequested;
+    final firstRunTarget = firstRunPending ? _firstRunTarget : null;
     if (revision != _revision || !enabled) {
       _accountEpoch++;
       _clear('ui');
@@ -318,6 +323,12 @@ class ProductMeasurement extends ChangeNotifier {
       _setup.clear();
       _setupMissing.clear();
     }
+    if (firstRunPending && sharing) {
+      firstRunStarted();
+      if (firstRunTarget case final target?) {
+        firstRunReady(target.$1, target.$2);
+      }
+    }
     notifyListeners();
   }
 
@@ -336,6 +347,7 @@ class ProductMeasurement extends ChangeNotifier {
       _coverageDay = null;
       _countedOn.clear();
       _firstRunAt = null;
+      _firstRunRequested = false;
       _firstRunTarget = null;
       _firstRunStages.clear();
     }
@@ -514,7 +526,19 @@ class ProductMeasurement extends ChangeNotifier {
   /// One first-arrival episode in this app run. Retries share its denominator;
   /// routine launches never call this. Targets stay in RAM and are never reported.
   void firstRunStarted() {
-    if (!healthEnabled || !sharing || _disposed || _firstRunAt != null) return;
+    if (!healthEnabled ||
+        _disposed ||
+        _account == null ||
+        _firstRunAt != null ||
+        accountOptOutPending) {
+      return;
+    }
+    if (_enabled == null && _revision < 0) {
+      _firstRunRequested = true;
+      return;
+    }
+    if (!sharing) return;
+    _firstRunRequested = false;
     _firstRunAt = _now().toUtc();
     _firstRunStage('started');
   }
@@ -532,7 +556,7 @@ class ProductMeasurement extends ChangeNotifier {
   }
 
   void firstRunReady(String machineId, String? agentId) {
-    if (_firstRunAt == null || agentId == null) return;
+    if ((_firstRunAt == null && !_firstRunRequested) || agentId == null) return;
     _firstRunTarget = (machineId, agentId);
     _firstRunStage('ready');
   }

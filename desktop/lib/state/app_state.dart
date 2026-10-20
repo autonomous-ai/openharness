@@ -1106,6 +1106,8 @@ class AppNotifier extends ChangeNotifier {
   // Account and inventory replies belong to the session that requested them.
   // Signing out invalidates them before asynchronous connection cleanup.
   int _authRevision = 0;
+  /// Cancels work across account changes, independently of measurement preferences.
+  int get accountGeneration => _authRevision;
   Future<void>? _profileInFlight;
 
   bool _authWorkCurrent(int revision) =>
@@ -1199,7 +1201,7 @@ class AppNotifier extends ChangeNotifier {
       readiness.plan.any((item) => item.requiresTerminal);
 
   /// A computer new to Harness builds its first workspace behind the welcome tour, once signed in
-  /// and ready, so the agents have started and OpenCode's task is typed by the time the tour hands
+  /// and ready, so one harness and its editable task are ready when the tour hands
   /// over: OpenCode's own first start took about 12 s after the tour had ended (fresh macOS VM,
   /// 2026-10-09). The workspace joins this run when it appears ([FirstArrival.run]).
   ///

@@ -63,6 +63,37 @@ void main() {
     return all;
   }
 
+  test('a first arrival waits for initial consent without observing earlier work', () async {
+    usage.firstRunStarted();
+    usage.firstRunReady('m', 'a');
+    usage.firstRunWork('m', 'a');
+    usage.firstRunResponse('m', 'a');
+    await usage.flush();
+    usage.proxyVocabulary = 4;
+    await usage.flush();
+    expect(totals()['health_desktop_first_run_started'], 1);
+    expect(totals()['health_desktop_first_run_ready'], 1);
+    expect(totals()['health_desktop_first_run_response'], isNull);
+    usage.firstRunWork('m', 'a');
+    usage.firstRunResponse('m', 'a');
+    await usage.flush();
+    expect(totals()['health_desktop_first_run_response'], 1);
+  });
+
+  test('an initial opt-out discards pending first-arrival eligibility', () async {
+    usage.firstRunStarted();
+    usage.firstRunReady('m', 'a');
+    choice = {'enabled': false, 'revision': 0};
+    await usage.flush();
+    choice = {'enabled': true, 'revision': 1};
+    await usage.flush();
+    usage.proxyVocabulary = 4;
+    usage.firstRunWork('m', 'a');
+    usage.firstRunResponse('m', 'a');
+    await usage.flush();
+    expect(totals().keys.where((name) => name.contains('first_run')), isEmpty);
+  });
+
   test('first-run response follows only the opened harness and never counts retries twice', () async {
     await usage.flush();
     usage.proxyVocabulary = 4;

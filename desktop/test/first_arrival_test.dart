@@ -34,6 +34,9 @@ class _PreparingApp extends AppNotifier {
       );
 
   final engineCheck = Completer<void>();
+  int generation = 0;
+  @override
+  int get accountGeneration => generation;
   bool probing = false;
   final local = MachineState(
     const Machine(
@@ -257,6 +260,37 @@ void main() {
   });
 
   group('FirstArrival', () {
+    test('an account change during preparation prevents the launch', () async {
+      final app = _OpeningApp();
+      addTearDown(app.dispose);
+      final arrival = _PreparingArrival(_MemoryStore())
+        ..begin(downloads: false);
+      await arrival.restore();
+      final opening = arrival.run(app);
+      await Future<void>.delayed(Duration.zero);
+      app.generation++;
+      arrival.index.complete([]);
+      expect(await opening, isFalse);
+      expect(app.starts, isEmpty);
+    });
+
+    test(
+      'loading the initial sharing preference does not cancel onboarding',
+      () async {
+        final app = _OpeningApp();
+        addTearDown(app.dispose);
+        final arrival = _PreparingArrival(_MemoryStore())
+          ..begin(downloads: false);
+        await arrival.restore();
+        final opening = arrival.run(app);
+        await Future<void>.delayed(Duration.zero);
+        app.productMeasurement.savedChoice({'enabled': true, 'revision': 0});
+        arrival.index.complete([]);
+        expect(await opening, isTrue);
+        expect(app.starts, hasLength(1));
+      },
+    );
+
     test(
       'opens one fresh harness with a local draft and no submitted prompt',
       () async {
