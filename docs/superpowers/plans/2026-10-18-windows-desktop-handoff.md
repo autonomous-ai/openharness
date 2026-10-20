@@ -10,9 +10,22 @@ start.
   first.
 - **A** (terminal host) and **B** (the Harness CLI on native Windows) are finished, reviewed and green on CI. They live
   on `feat/windows-native-cli`, and `feat/windows-desktop` is built on top of it.
-- **C** (the Harness desktop app on native Windows) has an approved spec and a stitched plan of 28 tasks. Nothing of C
+- **C** (the Harness desktop app on native Windows) has an approved spec and a stitched plan of 29 tasks. Nothing of C
   is implemented yet. Your job is to execute the C plan, task by task, on `feat/windows-desktop`. That branch becomes
   the one PR that ships Windows.
+
+- **E** (the Harness dial on Windows: the daemon talks to a USB dial, and `harness flash` re-flashes it) was added on
+  2026-10-19, at the owner's request: spec `docs/superpowers/specs/2026-10-19-windows-dial-design.md`, plan
+  `docs/superpowers/plans/2026-10-19-windows-dial.md` (11 tasks, E1.1–E5.3). It is built in parallel on its own branch,
+  `feat/windows-dial` (worktree `windows-dial`), and **ships later, in its own PR** after the Windows PR (owner's
+  decision, 2026-10-20). It has its own test PC (a real x64 machine with a dial on COM3): take its address,
+  account and password from the owner, and never write them into the repo.
+
+- **F** (`harness-install.exe`, a download that installs the app, and Windows in every `make release-desktop`) was
+  added on 2026-10-19, at the owner's request: spec `docs/superpowers/specs/2026-10-19-windows-installer-design.md`,
+  plan `docs/superpowers/plans/2026-10-19-windows-installer.md` (12 tasks, F1.1–F4.4). It is built on `feat/windows-installer`
+  (worktree `windows-installer`), merged into `feat/windows-desktop` after C5.3, and ships in the Windows PR. The build is not code-signed: there is no signing service, and the owner chose
+  to ship unsigned. D keeps only signing and winget, for later.
 
 ## Where things are
 
@@ -21,7 +34,7 @@ start.
 | Branch | `feat/windows-native-cli`, pushed | `feat/windows-desktop`, created from B's head `338e589bc`, not pushed |
 | Worktree | `~/harnesses/worktrees/openharness/bold-finch` | `~/harnesses/worktrees/openharness/amber-heron` |
 | Spec | `docs/superpowers/specs/2026-10-16-windows-native-cli-design.md` | `docs/superpowers/specs/2026-10-18-windows-desktop-design.md` (untracked) |
-| Plan | `docs/superpowers/plans/2026-10-16-windows-native-cli.md` | `docs/superpowers/plans/2026-10-18-windows-desktop.md` (untracked, 28 tasks) |
+| Plan | `docs/superpowers/plans/2026-10-16-windows-native-cli.md` | `docs/superpowers/plans/2026-10-18-windows-desktop.md` (untracked, 29 tasks) |
 | Other | E2E results `docs/testing/windows-cli-e2e.md` | Reconcile report `docs/superpowers/plans/2026-10-18-windows-desktop-reconcile-report.md` (seams, rulings, spec coverage map) |
 
 C's spec and plan are **not committed**. Commit them as the first commit on `feat/windows-desktop` (`docs: Windows
@@ -30,9 +43,12 @@ desktop spec and plan`), together with this handoff and the reconcile report, be
 ## How to execute the C plan
 
 **Order.**
-- Run the tasks in plan order: C1.1–C1.6, C2.1–C2.4, C3.1–C3.7, C4.1–C4.8, C5.1–C5.3.
+- Run the tasks in plan order: C1.1–C1.6, C2.1–C2.4, C3.1–C3.7, C4.1–C4.9, C5.1–C5.3; then F's plan, F1.1–F4.4. E runs in parallel and ships after.
 - C4.8 (install by one command, `irm …/desktop/install.ps1 | iex`) was added after stitching, at the owner's
   request. It changes B's `install.ps1` and `upload-install-ps1.sh`, so B's own `installPs1` cases must stay green.
+- C4.9 (Windows terminal default font) was added after the owner's VM screenshot showed Linux's missing default
+  face falling through to ugly, widely spaced text. Finish it before the next C5.2 staging candidate and recheck
+  the terminal on the VM. E now runs in parallel in its own worktree (`windows-dial`) and never touches this branch.
 - Each task is TDD, with full code in the plan: write the failing test, see it fail, implement, see it pass, commit.
 - Every task's requirements include the plan's **Global Constraints**.
 - Read the plan's **Review Focus** before each phase. Each item names the task whose test pins it.
@@ -157,7 +173,7 @@ CI discipline (repo `AGENTS.md`):
    Reuse earlier evidence only where the merge did not touch its inputs.
 2. **Remove both TEMPORARY `push:` triggers:** B's in `.github/workflows/windows.yml` (`feat/windows-native-cli`) and
    C's in `.github/workflows/windows-desktop.yml` (C5.3 removes C's).
-3. **Final whole-branch review** of everything A + B + C adds over `main`. B's parts were reviewed, so weigh C and the
+3. **Final whole-branch review** of everything A + B + C + F adds over `main`. B's parts were reviewed, so weigh C and the
    A/B ↔ C seams.
 4. **One PR** from `feat/windows-desktop`: let `ci/required` run, then merge with
    `make merge-pr ARGS="N --reviewed-head SHA --reviewed-base SHA --merge"`. No `--queue`.

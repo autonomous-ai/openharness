@@ -114,9 +114,15 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('0 agents · 1 person'));
+    if (find.byTooltip('Members and machines').evaluate().isNotEmpty) {
+      await tester.tap(find.byTooltip('Members and machines'));
+      await tester.pumpAndSettle();
+    }
+    await tester.tap(
+      find.byKey(const ValueKey('super-machine-teammate-machine')),
+    );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Add agent'));
+    await tester.tap(find.text('Attach running agent'));
     await tester.pumpAndSettle();
     return f;
   }

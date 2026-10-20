@@ -101,6 +101,10 @@ pub struct Pane {
     /// A user requested app-wide control while this pane's passive open was in flight.
     pub takeover_pending: bool,
     pub read_only: bool,
+    /// Taken by another client (`terminal_closed.takenBy`): its last frame stays at this side's size
+    /// and the watcher's frames — at the taker's size — are not drawn, as the desktop app keeps its
+    /// tile, until this side takes it back.
+    pub frozen: bool,
     pub last_alive: Instant,
     pub dirty: bool,
     pub bell: bool,
@@ -472,6 +476,7 @@ impl Pane {
             input_off: false,
             opening: false,
             takeover_pending: false,
+            frozen: false,
             far_sized: false,
             read_only: false,
             last_alive: Instant::now(),

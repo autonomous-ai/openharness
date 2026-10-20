@@ -100,7 +100,7 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
   return {
     deps, create, fork, resume, restart, replies, requests,
     ask: async (payload: Record<string, unknown>, local = true) => { await requests.create(payload, { local }, reply); return replies.at(-1) },
-    status: async (payload: Record<string, unknown>) => { await requests.createStatus(payload, reply); return replies.at(-1) },
+    status: async (payload: Record<string, unknown>) => { await requests.createStatus(payload, { local: true }, reply); return replies.at(-1) },
     relaunch: async (type: string, payload: Record<string, unknown>) => { await requests.relaunch(type, payload, reply); return replies.at(-1) },
     forkAsk: async (payload: Record<string, unknown>) => { await requests.fork(payload, reply); return replies.at(-1) },
   }
@@ -470,7 +470,7 @@ describe('agent_create with a receipt', () => {
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ cwd, prompt: 'Keep this task', grid: target }))
     expect(preTrustClaudeProject).not.toHaveBeenCalled()
     const answer = vi.fn()
-    await recovered.createStatus({ creationId: CREATION }, answer)
+    await recovered.createStatus({ creationId: CREATION }, { local: true }, answer)
     expect(answer).toHaveBeenCalledWith({ creationId: CREATION, state: 'created', agent: { id: 'new-agent' } })
     await recovered.recover()
     expect(create).toHaveBeenCalledOnce()
@@ -483,7 +483,7 @@ describe('agent_create with a receipt', () => {
     await ask({ engine: 'claude', cwd: '/fixture/work', creationId: CREATION })
     await vi.waitFor(() => expect(replies).toHaveLength(1))
     const answer = vi.fn()
-    await requests.cancelCreate({ creationId: CREATION }, answer)
+    await requests.cancelCreate({ creationId: CREATION }, { local: true }, answer)
     expect(answer).toHaveBeenLastCalledWith({ creationId: CREATION, state: 'cancelled' })
     resolveNewAgentModel.mockResolvedValue({ networkId: 'fixture-grid' } as never)
     requests.open(); await requests.recover()
@@ -791,9 +791,9 @@ describe('agent_create with a receipt', () => {
   })
 
   it('says why a receipt could not be kept, and answers INTERNAL when the answer cannot be put together', async () => {
-    const storage = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
+    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
     expect(await storage.ask({ engine: 'claude', cwd: '/w', creationId: CREATION })).toStrictEqual({ error: 'CREATION_STORAGE_FAILED' })
-    const broken = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
+    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
     expect(await broken.ask({ engine: 'claude', cwd: '/w', creationId: CREATION })).toStrictEqual({ error: 'INTERNAL' })
     const frameless = setup({ toProject: vi.fn(async () => { throw new Error('no frame') }) })
     await frameless.ask({ engine: 'claude', cwd: '/w', creationId: CREATION })
@@ -870,14 +870,14 @@ describe('durable model request validation', () => {
   it('rejects invalid cancellation IDs and reports storage uncertainty without acknowledging cancellation', async () => {
     const { deps, requests } = setup()
     const answer = vi.fn()
-    await requests.cancelCreate({ creationId: '../invalid' }, answer)
+    await requests.cancelCreate({ creationId: '../invalid' }, { local: true }, answer)
     expect(answer).toHaveBeenLastCalledWith({ error: 'INVALID_CREATION_ID' })
     const cancel = vi.spyOn(deps.receipts, 'cancelIntent')
     cancel.mockImplementationOnce(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') })
-    await requests.cancelCreate({ creationId: CREATION }, answer)
+    await requests.cancelCreate({ creationId: CREATION }, { local: true }, answer)
     expect(answer).toHaveBeenLastCalledWith({ error: 'CREATION_STORAGE_FAILED' })
     cancel.mockImplementationOnce(() => { throw new Error('unknown') })
-    await requests.cancelCreate({ creationId: CREATION }, answer)
+    await requests.cancelCreate({ creationId: CREATION }, { local: true }, answer)
     expect(answer).toHaveBeenLastCalledWith({ error: 'INTERNAL' })
   })
 })
@@ -901,9 +901,9 @@ describe('agent_create_status', () => {
   })
 
   it('says why a receipt could not be read', async () => {
-    const storage = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
+    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
     expect(await storage.status({ creationId: CREATION })).toStrictEqual({ error: 'CREATION_STORAGE_FAILED' })
-    const broken = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new Error('bug') }) } })
+    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), run: vi.fn(), status: vi.fn(() => { throw new Error('bug') }) } })
     expect(await broken.status({ creationId: CREATION })).toStrictEqual({ error: 'INTERNAL' })
   })
 })
@@ -958,9 +958,9 @@ describe('agent_resume and agent_restart', () => {
   })
 
   it('say why a receipt could not be kept, and INTERNAL when the answer cannot be put together', async () => {
-    const storage = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
+    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }) } })
     expect(await storage.relaunch('agent_restart', { agentId: 'a1', creationId: CREATION })).toStrictEqual({ error: 'CREATION_STORAGE_FAILED' })
-    const broken = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
+    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
     expect(await broken.relaunch('agent_restart', { agentId: 'a1', creationId: CREATION })).toStrictEqual({ error: 'INTERNAL' })
     const frameless = setup({ toProject: vi.fn(async () => { throw new Error('no frame') }) })
     await frameless.relaunch('agent_restart', { agentId: 'a1', creationId: CREATION })
@@ -1016,9 +1016,9 @@ describe('agent_fork', () => {
   })
 
   it('says why a receipt could not be kept, and INTERNAL when the answer cannot be put together', async () => {
-    const storage = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_CONFLICT') }) } })
+    const storage = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new AgentCreationReceiptError('CREATION_CONFLICT') }) } })
     expect(await storage.forkAsk({ agentId: 'a1', creationId: CREATION })).toStrictEqual({ error: 'CREATION_CONFLICT' })
-    const broken = setup({ receipts: { has: vi.fn(() => false), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
+    const broken = setup({ receipts: { has: vi.fn(() => false), creator: vi.fn(), runIntent: vi.fn(), pendingIntents: vi.fn(), pendingIntent: vi.fn(), cancelIntent: vi.fn(), status: vi.fn(), run: vi.fn(() => { throw new Error('bug') }) } })
     expect(await broken.forkAsk({ agentId: 'a1', creationId: CREATION })).toStrictEqual({ error: 'INTERNAL' })
     const frameless = setup({ toProject: vi.fn(async () => { throw new Error('no frame') }) })
     await frameless.forkAsk({ agentId: 'a1', creationId: CREATION })
@@ -1090,5 +1090,126 @@ describe('agent_create, from a guest', () => {
     vi.spyOn(unbuilt.deps.receipts, 'run').mockResolvedValue({ state: 'created', agentId: 'guest-agent' })
     await guestAsk(unbuilt, { creationId: CREATION, engine: 'claude' })
     await vi.waitFor(() => expect(unbuilt.replies.at(-1)).toEqual({ error: 'INTERNAL' }))
+  })
+})
+
+describe('agent_create_status and agent_create_cancel, by who created the launch', () => {
+  // A guest sees and cancels only its own creations; for anyone else's id it hears what an unknown id gets.
+  const KIM = 'kim@acme.io', LEE = 'lee@acme.io'
+  const OTHER = 'creation-fedcba9876543210'
+  const guestCreate = () => vi.fn(async () => ({ ok: true as const, session: session('guest-agent', { guest: KIM }) }))
+  const as = (run: ReturnType<typeof setup>, guest?: string) => ({
+    status: async (creationId: string) => { const answer = vi.fn(); await run.requests.createStatus({ creationId }, guest ? { local: false, guest } : { local: true }, answer); return answer.mock.calls.at(-1)![0] },
+    cancel: async (creationId: string) => { const answer = vi.fn(); await run.requests.cancelCreate({ creationId }, guest ? { local: false, guest } : { local: true }, answer); return answer.mock.calls.at(-1)![0] },
+  })
+  const ownerHeld = async (run: ReturnType<typeof setup>, id = CREATION) => {
+    vi.mocked(parseNewAgentModel).mockReturnValue({ state: 'ok', selection: { model: 'fixture-model', grid: 'fixture-grid' } })
+    resolveNewAgentModel.mockResolvedValue(null)
+    await run.ask({ engine: 'claude', cwd: '/fixture/work', creationId: id })
+    await vi.waitFor(() => expect(run.replies.at(-1)).toMatchObject({ state: 'pending' }))
+  }
+  const guestMade = async (run: ReturnType<typeof setup>, guest = KIM, id = CREATION) => {
+    await run.requests.create({ creationId: id, engine: 'claude' }, { local: false, guest }, (result) => { run.replies.push(result) })
+    await vi.waitFor(() => expect(run.replies.at(-1)).toMatchObject({ creationId: id, state: 'created' }))
+  }
+  const withGuests = () => setup({ guestCreate: guestCreate, byAgent: (id) => id === 'guest-agent' || id === 'new-agent' ? session(id) : undefined })
+
+  it('answers a guest for the owner\'s pending creation exactly as for an unknown id, and cancels nothing', async () => {
+    const run = withGuests()
+    await ownerHeld(run)
+    const unknown = await as(run, KIM).status(OTHER)
+    expect(unknown).toEqual({ creationId: OTHER, state: 'missing' })
+    expect(await as(run, KIM).status(CREATION)).toEqual({ ...unknown, creationId: CREATION })
+    expect(await as(run, KIM).cancel(CREATION)).toEqual({ creationId: CREATION, state: 'missing' })
+    expect(await as(run, KIM).cancel(OTHER)).toEqual({ creationId: OTHER, state: 'missing' })
+    expect(await as(run).status(CREATION)).toMatchObject({ state: 'pending' })
+    // The guest's cancel of an unknown id wrote nothing: no cancelled mark, no receipt file.
+    expect(await as(run).status(OTHER)).toEqual({ creationId: OTHER, state: 'missing' })
+    expect(existsSync(join(dir, `receipts-${stores}`, `${OTHER}.json`))).toBe(false)
+  })
+
+  it('answers a guest for the owner\'s finished creation as for an unknown id, and a cancel leaves it', async () => {
+    const run = withGuests()
+    await run.ask({ engine: 'claude', cwd: '/fixture/work', creationId: CREATION })
+    await vi.waitFor(() => expect(run.replies.at(-1)).toMatchObject({ state: 'created' }))
+    expect(await as(run, KIM).status(CREATION)).toEqual({ creationId: CREATION, state: 'missing' })
+    expect(await as(run, KIM).cancel(CREATION)).toEqual({ creationId: CREATION, state: 'missing' })
+    expect(await as(run).status(CREATION)).toMatchObject({ state: 'created', agent: { id: 'new-agent' } })
+  })
+
+  it('keeps one guest\'s creation from another, and shows a guest its own', async () => {
+    const run = withGuests()
+    await guestMade(run, KIM)
+    expect(await as(run, LEE).status(CREATION)).toEqual({ creationId: CREATION, state: 'missing' })
+    expect(await as(run, LEE).cancel(CREATION)).toEqual({ creationId: CREATION, state: 'missing' })
+    expect(await as(run, KIM).status(CREATION)).toEqual({ creationId: CREATION, state: 'created', agent: { id: 'guest-agent' } })
+    expect(await as(run, KIM).cancel(CREATION)).toMatchObject({ creationId: CREATION, state: 'created' })
+  })
+
+  it('lets the owner read and cancel its own creations and a guest\'s', async () => {
+    const run = withGuests()
+    await guestMade(run, KIM)
+    expect(await as(run).status(CREATION)).toMatchObject({ state: 'created', agent: { id: 'guest-agent' } })
+    await ownerHeld(run, OTHER)
+    expect(await as(run).status(OTHER)).toMatchObject({ state: 'pending' })
+    expect(await as(run).cancel(OTHER)).toEqual({ creationId: OTHER, state: 'cancelled' })
+    expect(await as(run).cancel(CREATION)).toMatchObject({ state: 'created' })
+  })
+
+  it('treats a receipt written before creators were recorded as the owner\'s, and keeps a guest\'s across a restart', async () => {
+    const run = withGuests()
+    await guestMade(run, KIM)
+    const reloaded = createLaunchRequests({ ...run.deps, receipts: new AgentCreationReceipts(join(dir, `receipts-${stores}`)) })
+    stopRequests.push(reloaded.stop)
+    const reread = async (guest: string | undefined, id: string) => {
+      const answer = vi.fn(); await reloaded.createStatus({ creationId: id }, guest ? { local: false, guest } : { local: true }, answer); return answer.mock.calls.at(-1)![0]
+    }
+    expect(await reread(KIM, CREATION)).toMatchObject({ state: 'created' })
+    expect(await reread(LEE, CREATION)).toEqual({ creationId: CREATION, state: 'missing' })
+    writeFileSync(join(dir, `receipts-${stores}`, `${OTHER}.json`),
+      JSON.stringify({ version: 1, fingerprint: creationFingerprint({ old: true }), outcome: { state: 'created', agentId: 'new-agent' } }), { mode: 0o600 })
+    expect(await reread(KIM, OTHER)).toEqual({ creationId: OTHER, state: 'missing' })
+    expect(await reread(undefined, OTHER)).toMatchObject({ state: 'created' })
+  })
+
+  it('refuses a guest that reuses the owner\'s creation id, without telling what became of it', async () => {
+    const run = withGuests()
+    await run.ask({ engine: 'claude', cwd: '/fixture/work', creationId: CREATION })
+    await vi.waitFor(() => expect(run.replies.at(-1)).toMatchObject({ state: 'created' }))
+    run.replies.length = 0
+    await run.requests.create({ creationId: CREATION, engine: 'claude' }, { local: false, guest: KIM }, (result) => { run.replies.push(result) })
+    expect(run.replies).toEqual([{ error: 'CREATION_CONFLICT' }])
+    await ownerHeld(run, OTHER)
+    run.replies.length = 0
+    await run.requests.create({ creationId: OTHER, engine: 'claude' }, { local: false, guest: KIM }, (result) => { run.replies.push(result) })
+    expect(run.replies).toEqual([{ error: 'CREATION_CONFLICT' }])
+  })
+
+  it('lets a guest repeat its own create and still get its receipt', async () => {
+    const run = withGuests()
+    await guestMade(run, KIM)
+    run.replies.length = 0
+    await run.requests.create({ creationId: CREATION, engine: 'claude' }, { local: false, guest: KIM }, (result) => { run.replies.push(result) })
+    await vi.waitFor(() => expect(run.replies).toEqual([{ creationId: CREATION, state: 'created', agent: { id: 'guest-agent' } }]))
+  })
+
+  it('refuses an invalid id to a guest as to anyone, and hides damaged evidence from a guest but not from the owner', async () => {
+    const run = withGuests()
+    expect(await as(run, KIM).status('short')).toEqual({ error: 'INVALID_CREATION_ID' })
+    expect(await as(run, KIM).cancel('short')).toEqual({ error: 'INVALID_CREATION_ID' })
+    const damaged = () => { throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED') }
+    vi.spyOn(run.deps.receipts, 'creator').mockImplementation(damaged)
+    expect(await as(run, KIM).status(CREATION)).toEqual({ creationId: CREATION, state: 'missing' })
+    expect(await as(run, KIM).cancel(CREATION)).toEqual({ creationId: CREATION, state: 'missing' })
+    vi.spyOn(run.deps.receipts, 'status').mockImplementation(damaged)
+    vi.spyOn(run.deps.receipts, 'cancelIntent').mockImplementation(damaged)
+    expect(await as(run).status(CREATION)).toEqual({ error: 'CREATION_STORAGE_FAILED' })
+    expect(await as(run).cancel(CREATION)).toEqual({ error: 'CREATION_STORAGE_FAILED' })
+  })
+
+  it('answers INTERNAL, not missing, when a guest\'s creator lookup fails for another reason', async () => {
+    const run = withGuests()
+    vi.spyOn(run.deps.receipts, 'creator').mockImplementation(() => { throw new Error('bug') })
+    expect(await as(run, KIM).status(CREATION)).toEqual({ error: 'INTERNAL' })
   })
 })

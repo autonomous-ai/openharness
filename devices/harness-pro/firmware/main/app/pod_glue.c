@@ -760,28 +760,42 @@ bool pod_ui_start(pod_ui_t *u, uint32_t now_ms)
 
 // ---- notifications -----------------------------------------------------------------------------------------
 
-bool pod_ui_notify(pod_ui_t *u, const char *agent_id, bool awake, uint32_t now_ms)
+bool pod_ui_notify(pod_ui_t *u, const char *agent_id, pod_tier_t tier, bool awake, uint32_t now_ms)
+{
+    return pod_ui_notify_text(u, agent_id, tier, NULL, false, awake, now_ms);
+}
+
+bool pod_ui_notify_text(pod_ui_t *u, const char *agent_id, pod_tier_t tier, const char *text, bool question, bool awake, uint32_t now_ms)
 {
     pod_model_clock(&u->model, now_ms);
     const pod_agent_t *a = pod_model_find(&u->model, agent_id);
-    if (!a) return false;
+    if (!a || tier == POD_TIER_SILENT) return false;
     const pod_frame_t *t = top(u);
     const bool looking = awake && t && (t->view == POD_V_AGENT || t->view == POD_V_RECAP) && !strcmp(t->agent, a->id);
-    char text[POD_UNREAD_TEXT];
-    size_t pos = 0;
-    text[0] = 0;
-    for (int i = 0; i < a->recap_lines && pos + 1 < sizeof text; i++) {   // the recap's sentences, joined
-        const char *l = a->recap + a->line_at[i];
-        if (!*l) continue;
-        int n = snprintf(text + pos, sizeof text - pos, "%s%s", pos ? " " : "", l);
-        if (n < 0) break;
-        pos += (size_t)n < sizeof text - pos ? (size_t)n : sizeof text - pos - 1;
+    char joined[POD_UNREAD_TEXT];
+    if (!text) {
+        size_t pos = 0;
+        joined[0] = 0;
+        for (int i = 0; i < a->recap_lines && pos + 1 < sizeof joined; i++) {   // the recap's sentences, joined
+            const char *l = a->recap + a->line_at[i];
+            if (!*l) continue;
+            int n = snprintf(joined + pos, sizeof joined - pos, "%s%s", pos ? " " : "", l);
+            if (n < 0) break;
+            pos += (size_t)n < sizeof joined - pos ? (size_t)n : sizeof joined - pos - 1;
+        }
+        pod_utf8_trim(joined);
+        text = joined;
     }
-    pod_utf8_trim(text);
-    pod_model_unread_add(&u->model, a->id, a->name, text, (int32_t)pod_agent_secs(a, now_ms), now_ms);
-    // The toast: none over the update, nor over the bubble that says the same. It shows only over a room, never for
-    // the agent it is (looking or not: its recap is already there), and not over Home, Notices or Talk; a toast raised for the next notice replaces this one.
-    if (!pod_ui_talking(u) && !u->ota && !looking) {
+    if (question) pod_model_unread_ask(&u->model, a->id, a->name, text, now_ms);
+    else pod_model_unread_add(&u->model, a->id, a->name, text, (int32_t)pod_agent_secs(a, now_ms), now_ms);
+    u->dirty = true;
+    if (looking) {   // its own room is on screen: shown in place, read at once, no sound, no wake, no toast
+        pod_model_unread_read(&u->model, a->id);
+        return false;
+    }
+    // The toast (alert only): none over the update, nor over the bubble that says the same. It shows only over a room, never for
+    // the agent it is, and not over Home, Notices or Talk; a toast raised for the next notice replaces this one.
+    if (tier == POD_TIER_ALERT && !pod_ui_talking(u) && !u->ota) {
         const bool room = t && (t->view == POD_V_AGENT || t->view == POD_V_RECAP);
         if (room && strcmp(t->agent, a->id)) {
             pod_copy_str(u->ban_agent, sizeof u->ban_agent, a->id);
@@ -789,8 +803,7 @@ bool pod_ui_notify(pod_ui_t *u, const char *agent_id, bool awake, uint32_t now_m
             u->ban_on = true;
         }
     }
-    u->dirty = true;
-    return true;
+    return tier == POD_TIER_ALERT;
 }
 
 void pod_ui_notif_begin(pod_ui_t *u) { pod_model_unread_clear(&u->model); }

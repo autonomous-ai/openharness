@@ -445,3 +445,36 @@ describe('decisions linked to work', () => {
     expect(effects.routeDecisions[0]).toMatchObject({ op: 'final', final, override: { by: 'lead', reason: 'The opus agent is already warm.' } })
   })
 })
+
+it('assigns stable workgroup numbers through old snapshots, rename, archive and new groups', () => {
+  const f = fixture(), first = f.group(), second = f.group()
+  expect(f.state.conversations.map(c => c.number)).toEqual([undefined, 1, 2])
+  delete f.state.conversations[1]!.number
+  delete f.state.conversations[2]!.number
+  expect(visibleState(f.state, owner).conversations.map(c => c.number)).toEqual([undefined, 1, 2])
+  expect(f.state.conversations[1]!.number).toBeUndefined()
+  f.run({ type: 'conversation.rename', conversationId: first, title: 'Renamed' })
+  f.run({ type: 'conversation.archive', conversationId: second, archived: true })
+  const third = f.group()
+  expect(f.state.conversations.map(c => [c.id, c.number])).toEqual([['lead', undefined], [first, 1], [second, 2], [third, 3]])
+})
+it('records the lead project once and accepts installed engines beyond Claude and Codex', () => {
+  const f = fixture(), project = { cwd: '/repo', repositoryUrl: 'https://github.com/example/project' }
+  f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'lead', name: 'Lead', configuration: config, lead: true, project }, owner,
+    { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
+  expect(f.state.project).toEqual({ machineId: 'host', ...project })
+  expect(() => f.run({ type: 'tab.project', machineId: 'host', project })).toThrow('already has a project')
+  const command = commandSchema.parse({ type: 'machine.contribute', machineId: 'host', name: 'Workstation', cwd: '/repo', engines: ['claude', 'codex', 'pi', 'opencode'], maxAgents: 4 })
+  f.run(command, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
+  expect(f.state.machines![0]!.engines).toEqual(['claude', 'codex', 'pi', 'opencode'])
+})
+it('restricts recording a legacy project to the owner or controlling lead', () => {
+  const f = fixture(); f.invite()
+  const command: Command = { type: 'tab.project', machineId: 'host', project: { cwd: '/repo', repositoryUrl: null } }
+  expect(() => f.run(command, peer)).toThrow()
+  f.run(command)
+  expect(f.state.project).toMatchObject({ machineId: 'host', cwd: '/repo' })
+})
+it('rejects embedded credentials in shared project metadata', () => {
+  expect(commandSchema.safeParse({ type: 'tab.project', machineId: 'host', project: { cwd: '/repo', repositoryUrl: 'https://token@github.com/example/project' } }).success).toBe(false)
+})

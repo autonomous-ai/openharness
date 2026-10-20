@@ -14,7 +14,7 @@ import { randomBytes } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CloudCore, CloudPort, CloudResult, ServiceRequests } from '../core/api.js'
-import { CLOUD_AGENT_IDS, CLOUD_AGENTS, SAID_MAX, cloudAgentFrame, isCloudAgent, type CloudAgentId, type CloudHarness } from '../lib/cloudAgents.js'
+import { CLOUD_AGENT_IDS, CLOUD_AGENTS, SAID_MAX, cloudAgentFrame, isCloudAgent, type CloudAgentId, type CloudAgentInfo, type CloudHarness } from '../lib/cloudAgents.js'
 import { connectionFor, connectionsBridge, type Bridge } from './bridge.js'
 import { cursorAdapter } from './cursor.js'
 import { devinAdapter } from './devin.js'
@@ -244,7 +244,10 @@ export function startCloudService(options: CloudServiceOptions) {
     const task = typeof request.prompt === 'string' ? request.prompt.trim() : ''
     if (!task) return { ok: false, error: 'INVALID_REQUEST', detail: `Tell ${CLOUD_AGENTS[agent].name} what to do.` }
     const repository = repositoryOf(request.repositoryUrl) ?? repositoryOf(request.repository)
-    if (CLOUD_AGENTS[agent].kind === 'coding' && !repository) return { ok: false, error: 'INVALID_REQUEST', detail: `Choose a GitHub repository for ${CLOUD_AGENTS[agent].name}.` }
+    // A repository given but not read (a GitLab address, a typo) is refused: started without it, the agent would work blind.
+    if (!repository && (request.repositoryUrl || request.repository)) return { ok: false, error: 'INVALID_REQUEST', detail: 'That is not a GitHub repository: give owner/name or https://github.com/owner/name.' }
+    const info: CloudAgentInfo = CLOUD_AGENTS[agent]
+    if (info.kind === 'coding' && !info.repositoryOptional && !repository) return { ok: false, error: 'INVALID_REQUEST', detail: `Choose a GitHub repository for ${CLOUD_AGENTS[agent].name}.` }
     const acuLimit = typeof request.acuLimit === 'number' && Number.isInteger(request.acuLimit) && request.acuLimit > 0 && request.acuLimit <= 1000 ? request.acuLimit : undefined
     const model = typeof request.model === 'string' && request.model ? request.model.slice(0, 120) : undefined
     let started: Awaited<ReturnType<CloudAdapter['start']>>

@@ -141,7 +141,9 @@ function linuxControl(pids: readonly number[], parent: number, budget: NativeEvi
     if (!parent) return []
     const tasks = entries(`/proc/${parent}/task`, 128), ids: number[] = []
     if (!tasks.length) return nativeUnavailable('the native task pool is empty')
-    for (const task of tasks) {
+    // In thread order, as /proc lists them: a directory read elsewhere (a test's tmpfs, a hashed ext4) lists in
+    // its own order, and the children came back in it (CI, 2026-10-20: [44, 43] for [43, 44]).
+    for (const task of [...tasks].sort((a, b) => Number(a) - Number(b))) {
       const text = bytes(`/proc/${parent}/task/${task}/children`, 1024)
       if (!/^(?:\d+\s+)*$/.test(text)) return nativeUnavailable('the native child pool is malformed')
       for (const value of text.trim().split(/\s+/).filter(Boolean)) {

@@ -11,6 +11,13 @@ logo.SetPosition(Window.GetX() + (Window.GetWidth() - logo_image.GetWidth()) / 2
                  Window.GetY() + Window.GetHeight() / 2 - logo_image.GetHeight() - 24, 1);
 label = Sprite();
 entry = Sprite();
+# The startup's own setup hotspot (initramfs harness-unlock), for a phone to unlock with: its
+# badge blinks while the password is asked, its name under it. Told by `plymouth display-message`.
+badge = Sprite();
+phone = Sprite();
+hotspot = "";
+asking = 0;
+tick = 0;
 
 fun display_password(prompt, bullets) {
     label_image = Image.Text("Enter your password", 0.86, 0.86, 0.86, 1, "monospace 16", "center");
@@ -26,12 +33,51 @@ fun display_password(prompt, bullets) {
                       Window.GetY() + Window.GetHeight() / 2 + 56, 1);
     label.SetOpacity(1);
     entry.SetOpacity(1);
+    asking = 1;
+    show_hotspot();
 }
 
 fun display_normal() {
     label.SetOpacity(0);
     entry.SetOpacity(0);
+    asking = 0;
+    badge.SetOpacity(0);
+    phone.SetOpacity(0);
+}
+
+fun show_hotspot() {
+    if (hotspot == "" || asking == 0) return;
+    badge_image = Image.Text(" PHONE UNLOCK ON ", 0.85, 0.78, 0.1, 1, "monospace 16", "center");
+    badge.SetImage(badge_image);
+    badge.SetPosition(Window.GetX() + (Window.GetWidth() - badge_image.GetWidth()) / 2,
+                      Window.GetY() + Window.GetHeight() / 2 + 120, 1);
+    # The app first, and in general words: it finds this computer's Wi-Fi itself, and its screens
+    # change faster than an installed computer's startup can be. Only the Wi-Fi's name is fixed.
+    phone_image = Image.Text("Or set it up from the Harness app on your phone.\n" +
+                             "This computer's Wi-Fi: " + hotspot,
+                             0.86, 0.86, 0.86, 1, "monospace 14", "center");
+    phone.SetImage(phone_image);
+    phone.SetPosition(Window.GetX() + (Window.GetWidth() - phone_image.GetWidth()) / 2,
+                      Window.GetY() + Window.GetHeight() / 2 + 160, 1);
+    badge.SetOpacity(1);
+    phone.SetOpacity(1);
+}
+
+fun display_message(text) {
+    if (text.SubString(0, 8) != "hotspot:") return;
+    hotspot = text.SubString(8, text.Length());
+    show_hotspot();
+}
+
+# The badge blinks, about once a second, while the hotspot is up and the password asked.
+fun refresh() {
+    if (hotspot == "" || asking == 0) return;
+    tick++;
+    if (tick % 50 == 0) badge.SetOpacity(1);
+    if (tick % 50 == 25) badge.SetOpacity(0);
 }
 
 Plymouth.SetDisplayPasswordFunction(display_password);
 Plymouth.SetDisplayNormalFunction(display_normal);
+Plymouth.SetMessageFunction(display_message);
+Plymouth.SetRefreshFunction(refresh);

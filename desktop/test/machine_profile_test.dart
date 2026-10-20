@@ -18,6 +18,12 @@ Swarm tab(
 }
 
 void main() {
+  test('Super Tabs stay visible when their terminals run on another computer', () {
+    final shared = tab('shared', ['m2'], kind: 'superTab');
+    expect(swarmsForMachineProfile([tab('local', ['m1']), shared], 'm1'),
+        contains(shared));
+  });
+
   test('no profile shows every tab', () {
     final tabs = [tab('local', ['m1']), tab('remote', ['m2'])];
     expect(swarmsForMachineProfile(tabs, null).map((s) => s.id), ['local', 'remote']);

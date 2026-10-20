@@ -7,7 +7,7 @@ import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/foundation.dart';
-import 'package:xterm/xterm.dart' show TerminalTargetPlatform;
+import 'package:xterm/xterm.dart' show Terminal, TerminalTargetPlatform;
 
 void main() {
   const streamId = '00112233-4455-6677-8899-aabbccddeeff';
@@ -359,6 +359,47 @@ void main() {
       expect(ack.payload['lastSeq'], 2);
     },
   );
+
+  test('standalone terminal keeps query replies on its output callback', () {
+    final emitted = <String>[];
+    final terminal = Terminal(onOutput: emitted.add)..resize(80, 24);
+    terminal.write('\x1b[6n\x1b[5n\x1b[c\x1b[>c\x1b[=c\x1b[18t');
+    expect(emitted, hasLength(6));
+    expect(emitted.first, '\x1b[0;0R');
+  });
+
+  test(
+    'remote cursor queries do not inject replies before the first key',
+    () async {
+      await ready();
+      await session.handleBinary(
+        output(0, utf8.encode('PS> '), keyframe: true, cols: 80, rows: 24),
+      );
+      // The host emulator has already answered these. A second cursor reply
+      // makes Windows PowerShell/PSReadLine swallow the first printable key.
+      await session.handleBinary(output(1, utf8.encode('\x1b[6n')));
+      await Future<void>.delayed(const Duration(milliseconds: 12));
+      expect(binarySent, isEmpty);
+
+      session.terminal.textInput('a');
+      await Future<void>.delayed(const Duration(milliseconds: 12));
+      expect(binarySent, hasLength(1));
+      expect(utf8.decode(binarySent.single.bytes), 'a');
+      expect(binarySent.single.seq, 0);
+    },
+  );
+
+  test('remote terminals preserve other query responses', () async {
+    await ready();
+    await session.handleBinary(
+      output(0, utf8.encode('PS> '), keyframe: true, cols: 80, rows: 24),
+    );
+    // DA3 is not answered by every host emulator; keep its existing behavior.
+    await session.handleBinary(output(1, utf8.encode('\x1b[=c')));
+    await Future<void>.delayed(const Duration(milliseconds: 12));
+    expect(binarySent, hasLength(1));
+    expect(utf8.decode(binarySent.single.bytes), '\x1bP!|00000000\x1b\\');
+  });
 
   test(
     'terminal input batches, preserves Enter boundary and is never retried',
@@ -2110,7 +2151,6 @@ void main() {
       local.dispose();
     }
   });
-
 }
 
 class _RecordingLog implements AppLog {

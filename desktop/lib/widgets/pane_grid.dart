@@ -1,3 +1,4 @@
+import '../super_tabs/pane.dart';
 import '../sharing/shared_harness_panel.dart';
 
 import 'dart:async';
@@ -1547,11 +1548,25 @@ class _PaneContent extends StatelessWidget {
     TerminalFontScope.watch(context);
     final machine = notifier.stateOf(pane.machineId);
     final swarmId = notifier.activeSwarmId;
-    void close() {
+    void closeView() {
       // A tab switch can precede the frame that replaces this callback. Shared
       // panes keep their identity, so the pane id alone cannot identify its tab.
       if (notifier.activeSwarmId != swarmId) return;
       unawaited(notifier.requestClosePane(pane.id));
+    }
+
+    final superPane = SuperPane.maybeOf(context);
+    final VoidCallback? close = superPane == null ? closeView : null;
+    final failure = superPane?.failures[(pane.machineId, pane.agentId)];
+    if (failure != null) {
+      return _PaneStatus(
+        title:
+            superPane?.titleFor(pane.machineId, pane.agentId ?? '') ?? 'Agent',
+        icon: AppIcons.terminal,
+        message: failure,
+        actionLabel: 'Retry',
+        onAction: superPane?.onRetry,
+      );
     }
 
     VoidCallback? split(PaneResizeAxis axis) =>
@@ -1600,7 +1615,10 @@ class _PaneContent extends StatelessWidget {
         onClose: close,
         compactHeader: swarmMode,
         zoomed: notifier.zoomedPaneId == pane.id,
-        onToggleZoom: swarmMode && (!single || notifier.zoomedPaneId == pane.id)
+        onToggleZoom:
+            superPane == null &&
+                swarmMode &&
+                (!single || notifier.zoomedPaneId == pane.id)
             ? () {
                 notifier.focusPane(pane.id);
                 notifier.toggleZoomPane();
@@ -1798,8 +1816,13 @@ class _PaneContent extends StatelessWidget {
         notice = null;
       }
       // Joining a shared tab: dimmed until the tab's owner's computer answers.
-      final joining = wantedAgentId != null &&
-          sharedPaneChipState(notifier, pane.machineId, wantedAgentId).joining !=
+      final joining =
+          wantedAgentId != null &&
+          sharedPaneChipState(
+                notifier,
+                pane.machineId,
+                wantedAgentId,
+              ).joining !=
               null;
       final panel = LayoutBuilder(
         builder: (context, constraints) => TerminalPanel(
@@ -1858,7 +1881,9 @@ class _PaneContent extends StatelessWidget {
                 ),
           zoomed: notifier.zoomedPaneId == pane.id,
           onToggleZoom:
-              swarmMode && (!single || notifier.zoomedPaneId == pane.id)
+              superPane == null &&
+                  swarmMode &&
+                  (!single || notifier.zoomedPaneId == pane.id)
               ? () {
                   notifier.focusPane(pane.id);
                   notifier.toggleZoomPane();
@@ -2416,7 +2441,7 @@ class _Guide extends StatelessWidget {
   });
 
   final bool single;
-  final VoidCallback onClose;
+  final VoidCallback? onClose;
   final String title;
   final Widget? activity;
   final String compactMessage;

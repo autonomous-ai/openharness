@@ -1408,6 +1408,7 @@ export class TerminalStreamManager {
     state.flushTimer = null
     state.stallTimer = null
     this.streams.delete(state.streamId)
+    const controlled = this.controllerByPlacement.get(state.placementKey) === state.ownerId
     if (this.controllerByAgent.get(state.agentId) === state.ownerId) this.controllerByAgent.delete(state.agentId)
     if (this.controllerByPlacement.get(state.placementKey) === state.ownerId) this.controllerByPlacement.delete(state.placementKey)
     if (state.outputPaused) await state.handle.resumeOutput().catch(() => { /* best effort */ })
@@ -1419,6 +1420,21 @@ export class TerminalStreamManager {
       ...(code ? { code } : {}),
       ...(takenBy ? { takenBy } : {}),
     })
+    // The controller left (a phone closed it, or went away) rather than handing it to another view:
+    // the views watching it are told, so one on screen can take it back at its own size. Without
+    // this the terminal kept the size of the one that left until someone typed in a watcher.
+    if (controlled && code !== 'TERMINAL_TAKEN_OVER') this.notifyFree(state)
+  }
+
+  private notifyFree(closed: ActiveStream): void {
+    for (const watcher of this.streams.values()) {
+      if (watcher.closing || watcher.ownerId === closed.ownerId) continue
+      if (watcher.agentId !== closed.agentId && watcher.placementKey !== closed.placementKey) continue
+      this.deps.sendTarget(watcher.connId, 'terminal_free', {
+        protocolVersion: PROTOCOL_VERSION,
+        streamId: watcher.streamId,
+      })
+    }
   }
 
   /**

@@ -46,7 +46,7 @@ export async function readCapabilities(input: Json, deps = {
     probeTools(),
     Promise.all(devices.map(async d => [d, await deps.device(d).catch(() => false)] as const)),
   ])
-  return { ok: true, sampledAt: Date.now(), resources: { ...resources, projectDiskFreeBytes: disk?.freeBytes ?? null,
+  return { ok: true, sampledAt: Date.now(), resources: { ...resources, projectDiskFreeBytes: disk?.freeBytes ?? null, projectDiskTotalBytes: disk?.totalBytes ?? null,
     projectDiskVolume: disk?.volume ?? null, projectDiskPath: disk?.path ?? null },
     tools: Object.fromEntries(toolValues), devices: Object.fromEntries(deviceValues),
     // A daemon from before the launch flags leaves this out, and a start then switches the model after it.

@@ -1681,6 +1681,41 @@ class AppNotifier extends ChangeNotifier {
 
   late final superTabs = SuperTabClient(
     storage: localStore ?? HarnessFileStore.shared,
+    discoveryInterval: kUnderTest ? Duration.zero : const Duration(seconds: 15),
+    onTabs: (tabs, hidden) {
+      // The browser can learn its account before the saved layout finishes
+      // loading. Discovery must not persist over that workspace during boot.
+      if (_disposed ||
+          status != AppStatus.authenticated ||
+          currentUser?.id == null) {
+        return;
+      }
+      var changed = false;
+      for (final tab in tabs) {
+        final existing = swarms.where((s) => s.superTabId == tab.id).firstOrNull;
+        if (existing != null) {
+          if (existing.name != tab.name || !existing.nameIsCustom) {
+            existing.name = tab.name;
+            existing.nameIsCustom = true;
+            changed = true;
+          }
+        } else if (!hidden.contains(tab.id)) {
+          swarms.add(
+            Swarm(
+              id: newDeskId(),
+              name: tab.name,
+              nameIsCustom: true,
+              kind: 'superTab',
+            )..superTabId = tab.id,
+          );
+          changed = true;
+        }
+      }
+      if (changed) {
+        _persistLayout();
+        notifyListeners();
+      }
+    },
     onSnapshot: (controller) {
       if (_disposed || controller.accountId != currentUser?.id) return;
       var shown = false;
@@ -1745,16 +1780,29 @@ class AppNotifier extends ChangeNotifier {
   void bindSuperTab(String swarmId, String tabId, String name) {
     final swarm = swarms.where((s) => s.id == swarmId).firstOrNull;
     if (swarm == null) return;
+    // A discovery response can beat the creation response back to this
+    // computer. Keep the lead form's tab and retain any already-open panes.
+    for (final duplicate in swarms
+        .where((s) => s.id != swarmId && s.superTabId == tabId)
+        .toList()) {
+      for (final pane in duplicate.panes) {
+        if (!swarm.panes.contains(pane)) swarm.panes.add(pane);
+      }
+      if (_activeSwarmId == duplicate.id) _activeSwarmId = swarm.id;
+      swarms.remove(duplicate);
+    }
     swarm.kind = 'superTab';
     swarm.superTabId = tabId;
     swarm.name = name;
     swarm.nameIsCustom = true;
     swarm.isNewTabPage = false;
+    _rememberSuperTabVisibility(tabId, true);
     _persistLayout();
     notifyListeners();
   }
 
   void openSuperTab(String tabId, String name) {
+    _rememberSuperTabVisibility(tabId, true);
     final existing = swarms.where((s) => s.superTabId == tabId).firstOrNull;
     if (existing != null) {
       selectSwarm(existing.id);
@@ -1762,6 +1810,13 @@ class AppNotifier extends ChangeNotifier {
     }
     newSwarm(newTabPage: true);
     bindSuperTab(activeSwarmId, tabId, name);
+  }
+
+  void _rememberSuperTabVisibility(String tabId, bool visible) {
+    if (localStore == null) return;
+    unawaited(superTabs.setTabVisible(tabId, visible).catchError((Object error) {
+      appLog.warn('super-tab', 'Could not save tab visibility: $error');
+    }));
   }
 
   void markSuperTabDraft(String swarmId) {
@@ -3028,6 +3083,9 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     final removed = swarms.removeAt(index);
+    if (removed.superTabId case final tabId?) {
+      _rememberSuperTabVisibility(tabId, false);
+    }
     Swarm? replacement;
     if (swarms.isEmpty) {
       replacement = Swarm(id: 'swarm-${_nextSwarmId++}');
@@ -3111,6 +3169,7 @@ class AppNotifier extends ChangeNotifier {
 
   Future<void> requestClosePane(int paneId) {
     final tab = activeSwarm;
+    if (tab.isSuperTab && tab.superTabId != null) return Future.value();
     final pane = tab.panes.where((p) => p.id == paneId).firstOrNull;
     if (pane == null) return Future.value();
     if (tab.isCompanions || tab.isDevices) return requestCloseSwarm(tab.id);
@@ -3361,6 +3420,9 @@ class AppNotifier extends ChangeNotifier {
     final saved = _closedHistory[index] as ClosedSwarm;
     if (!_canReopenSwarm(saved)) return;
     _closedHistory.removeAt(index);
+    if (saved.superTabId case final tabId?) {
+      _rememberSuperTabVisibility(tabId, true);
+    }
     if (swarms.length == 1 && saved.replacesUntouchedWelcome(swarms.single)) {
       swarms.clear();
     }
@@ -16623,8 +16685,43 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// Put an agent into a specific tile, or into a NEW tile when [paneId] is
-  /// null — which is what a drop on the empty slot means.
+  /// Keep a group member visible while its terminal is unavailable.
+  void reserveSuperTabPane(String swarmId, String machineId, String harnessId) {
+    final tab = swarms
+        .where((s) => s.id == swarmId && s.superTabId != null)
+        .firstOrNull;
+    if (tab == null || _disposed) return;
+    final existing = tab.panes
+        .where((p) => p.machineId == machineId && p.agentId == harnessId)
+        .firstOrNull;
+    if (existing != null) {
+      existing.inputContext = null;
+      existing.watchOnly = true;
+      existing.session?.stageInputContext(null, watchOnly: true);
+      unawaited(existing.session?.setInputContext(null, watchOnly: true));
+      return;
+    }
+    if (tab.panes.length >= maxPanes) return;
+    final controller = superTabs.peek(tab.superTabId!);
+    if (controller?.snapshot?.agents.any(
+          (a) => a.machineId == machineId && a.harnessId == harnessId,
+        ) !=
+        true) {
+      return;
+    }
+    tab.panes.add(
+      TerminalPane(id: _nextPaneId++, machineId: machineId, agentId: harnessId)
+        ..watchOnly = true,
+    );
+    tab.presets.remove(tab.panes.length);
+    tab.paneSizes.removeWhere(
+      (key, _) => key.startsWith('${tab.panes.length}:'),
+    );
+    tab.arranged = null;
+    tab.arrangedKey = null;
+    notifyListeners();
+  }
+
   Future<void> assignAgentToPane(
     int? paneId,
     String machineId,
@@ -16687,6 +16784,9 @@ class AppNotifier extends ChangeNotifier {
         inputContext,
         watchOnly: watchOnly,
       );
+      if (existing.session == null && target == activeSwarm) {
+        await _attachSession(existing, intent: intent);
+      }
       if (focus && target == activeSwarm) focusPane(existing.id);
       // A pane a refused share_add left unshared: a person's retry shares it.
       if (intent == AttachIntent.person) {
@@ -17338,6 +17438,7 @@ class AppNotifier extends ChangeNotifier {
   set zoomedPaneId(int? value) => activeSwarm.zoomedPaneId = value;
 
   void toggleZoomPane() {
+    if (activeSwarm.isSuperTab) return;
     final id = focusedPaneId;
     if (id == null || panes.length < 2) return;
     zoomedPaneId = zoomedPaneId == id ? null : id;
@@ -17573,15 +17674,6 @@ class AppNotifier extends ChangeNotifier {
     if (tab == null) return;
     final pane = tab.panes.where((p) => p.id == paneId).firstOrNull;
     if (pane == null) return;
-    if (tab.superTabId case final superTabId?) {
-      final controller = superTabs.peek(superTabId);
-      final selected = controller?.terminalAgent(controller.selectedId);
-      if (selected != null &&
-          selected.machineId == pane.machineId &&
-          selected.harnessId == pane.agentId) {
-        controller!.selectTerminal(controller.selectedId, null);
-      }
-    }
     if (tab.isCompanions || tab.isDevices) {
       await closeSwarm(tab.id, persist: persist);
       return;

@@ -575,3 +575,48 @@ describe('the context routeTask gives Jev', () => {
     expect(recorded(s).command.decision).not.toHaveProperty('context')
   })
 })
+
+
+describe('routing contributed capacity', () => {
+  const healthy = () => ({ machineId: 'm1', name: 'Contributed laptop', cwd: '/owner/project', engines: ['claude'], paused: false,
+    observation: { receivedAt: Date.now(), resources: { memoryTotalBytes: 32e9, memoryUsedBytes: 2e9, projectDiskFreeBytes: 200e9 },
+      tools: { git: true }, runningHarnessIds: [], quotas: [{ engine: 'claude', known: true, windows: [{ name: '5-hour', usedPercent: 20, resetsAt: Date.now() + 3600000 }] }] } })
+  async function runPool(pool: Record<string, any>, members = false, needs: Record<string, unknown> = {}) {
+    const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: members ? agents : [agents[1]], conversations: conversations(), machines: [pool] } }, policy: { policy, warnings: [] }, machines: [] } } })
+    const open = opener()
+    const answer = await routeTask({ ...input, assessment: { ...input.assessment, needs } }, s, where, open)
+    expect(open).not.toHaveBeenCalled()
+    return { answer, s }
+  }
+  it('routes using owner measurements and the contributed project without opening that machine', async () => {
+    const { answer } = await runPool(healthy())
+    expect(answer.ok).toBe(true)
+    expect(answer.next).toContain('/owner/project')
+    const member = await runPool(healthy(), true)
+    expect(member.answer.ok).toBe(true)
+  })
+  it.each([
+    ['stale', (p: any) => { p.observation.receivedAt = 0 }],
+    ['paused', (p: any) => { p.paused = true }],
+    ['full', (p: any) => { p.availableSlots = 0 }],
+    ['low disk', (p: any) => { p.observation.resources.projectDiskFreeBytes = 1 }],
+    ['unknown memory', (p: any) => { delete p.observation.resources.memoryUsedBytes }],
+    ['exhausted', (p: any) => { p.observation.quotas[0].windows[0].usedPercent = 100 }],
+    ['no engines', (p: any) => { delete p.engines }],
+  ])('withholds new starts when %s', async (_, change) => {
+    const p = healthy(); change(p)
+    const { answer } = await runPool(p)
+    expect(answer.ok).not.toBe(true)
+  })
+  it('keeps unknown allowance and load distinct from zero', async () => {
+    const p = healthy(); delete (p.observation.quotas[0].windows[0] as any).name
+    expect((await runPool(p)).answer.ok).toBe(true)
+    p.observation.quotas = []
+    delete (p.observation as any).runningHarnessIds
+    expect((await runPool(p)).answer.ok).toBe(true)
+    expect((await runPool({ ...p, observation: {} }, true)).answer.ok).not.toBe(true)
+  })
+  it('refuses unobserved tools and devices, without probing arbitrary paths on a teammate computer', async () => {
+    expect((await runPool(healthy(), false, { tools: ['docker'], devices: ['/dev/fixture'] })).answer.ok).not.toBe(true)
+  })
+})

@@ -68,10 +68,15 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
   }
   if (!identifier(startId)) throw new Error('The start has no durable receipt. Do not create an agent without it.')
   const start = requireSuccess(await scoped({ action: 'startStatus', startId }))
+  routed ??= start.routeDecisionId
   const request = object(start.request), creationId = start.creationId
   if (!identifier(request.machineId) || !identifier(creationId)) throw new Error('This start receipt is invalid.')
   if (start.error) return { error: 'START_FAILED', startId, detail: start.error }
-  if (start.harnessId) return { ok: true, startId, machineId: request.machineId, harnessId: start.harnessId }
+  if (start.harnessId && (!start.poolGeneration || start.poolSettled)) return { ok: true, startId, machineId: request.machineId, harnessId: start.harnessId }
+  // Contributed capacity is executed by its owner. A collaborator receives no
+  // machine credentials and cannot issue arbitrary commands to that computer.
+  if (start.poolGeneration && input.hostDispatch !== true) return { ok: true, queued: true, startId, machineId: request.machineId,
+    detail: 'Queued on the contributed machine. Resume this start ID to read its receipt.' }
   const target = await open(where, request.machineId)
   /** What the agent runs now, as its frame says; null when the frame cannot say. */
   const ranNow = async (agentId: string, engine: string) => {
@@ -174,7 +179,7 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
     const matched = profile && profile.sessionId === nativeId && profile.engine === frame.engine ? profile : null
     const configuration = { engine: text(frame.engine) ?? String(request.engine), model: matched?.model ?? null, effort: matched?.effort ?? null,
       contextWindow: number(frame.contextWindow), engineVersion: text(frame.engineVersion) }
-    const joined = requireSuccess(await scoped({ action: 'command', operationId: `joined-${startId}`,
+    const joined = start.harnessId ? { result: {} } : requireSuccess(await scoped({ action: 'command', operationId: `joined-${startId}`,
       command: { type: 'agent.started', startId, harnessId: nativeId, configuration } }))
     await target.request('super_tabs', { action: 'wake' }).catch(() => {})
     await target.request('harness_share_rosters', {}).catch(() => {})

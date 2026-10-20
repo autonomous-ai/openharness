@@ -1071,6 +1071,9 @@ class TerminalSession extends ChangeNotifier {
 
   void _bindTerminal(Terminal result) {
     result.onOutput = _onTerminalOutput;
+    // tmux/the PTY host owns cursor-position replies. Sending the renderer's
+    // duplicate cursor reply to ConPTY makes PSReadLine eat the first key.
+    result.onCursorPositionReport = (_) {};
     result.onResize = (width, height, _, _) => resize(width, height);
   }
 

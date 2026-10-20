@@ -12,6 +12,7 @@ import { readdir, rmdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute } from 'node:path'
 import type { BackendSocket } from '../../backendSocket.js'
+import type { Asker } from '../api.js'
 import { installedDsh } from '../../dsh/installed.js'
 import { DSH_ID_RE, dshSupportedEngines } from '../../dsh/manifest.js'
 import { folderTrust } from '../../engines/launchPrep.js'
@@ -54,7 +55,7 @@ export type ResumeAgent = (agentId: string, permissionMode?: string) => ReturnTy
 
 export interface LaunchRequestDeps {
   /** The receipts of launches asked for with a `creationId`. */
-  receipts: Pick<AgentCreationReceipts, 'run' | 'status' | 'has' | 'runIntent' | 'pendingIntents' | 'pendingIntent' | 'cancelIntent'>
+  receipts: Pick<AgentCreationReceipts, 'run' | 'status' | 'creator' | 'has' | 'runIntent' | 'pendingIntents' | 'pendingIntent' | 'cancelIntent'>
   /** Each launch, read when a request comes in: null on a machine that cannot launch agents. */
   createAgent: () => CreateAgent | null
   prepareCreate?: (input: Parameters<CreateAgent>[0], authority: LaunchAuthority, context?: { local: boolean }) => Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>>
@@ -251,11 +252,21 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     return status
   }
 
+  /** A guest sees only its own creations. For anyone else's id it hears what an unknown id gets, so the
+   *  answer does not tell whether the id exists. The owner administers the machine and sees them all. */
+  const hiddenFrom = (asker: Pick<Asker, 'local' | 'guest'>, creationId: string): boolean => {
+    if (asker.guest === undefined) return false
+    // Damaged evidence for this id is hidden the same way; the guest's own retry still meets it in `run`.
+    try { return receipts.creator(creationId) !== asker.guest }
+    catch (error) { if (error instanceof AgentCreationReceiptError) return true; throw error }
+  }
+
   /** Answers `agent_create_status`: what became of the launch a `creationId` names. */
-  const createStatus = async (payload: Record<string, unknown>, reply: Reply): Promise<void> => {
+  const createStatus = async (payload: Record<string, unknown>, asker: Pick<Asker, 'local' | 'guest'>, reply: Reply): Promise<void> => {
     const creationId = payload.creationId
     if (!validCreationId(creationId)) { reply({ error: 'INVALID_CREATION_ID' }); return }
     try {
+      if (hiddenFrom(asker, creationId)) { reply({ creationId, state: 'missing' }); return }
       reply({ creationId, ...await creationStatusPayload(receipts.status(creationId)) })
     } catch (error) {
       reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' })
@@ -280,7 +291,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
         const result = await launch(payload, guest)
         return result.ok ? { state: 'created', agentId: result.session.agentId }
           : { state: 'failed', error: result.error, ...(result.detail ? { detail: result.detail } : {}) }
-      }).then(async (status) => {
+      }, guest).then(async (status) => {
         reply({ creationId, ...await creationStatusPayload(status) })
       }).catch(() => reply({ error: 'INTERNAL' }))
     } catch (error) {
@@ -290,7 +301,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
 
   /** Answers `agent_create`. `asker.local` says the frame came from this machine; `asker.guest`, that a guest
    *  of a machine shared with them asks (core/guestPolicy.ts). */
-  const create = async (payload: Record<string, unknown>, asker: { local: boolean; guest?: string }, reply: Reply): Promise<void> => {
+  const create = async (payload: Record<string, unknown>, asker: Pick<Asker, 'local' | 'guest'>, reply: Reply): Promise<void> => {
     if (asker.guest !== undefined) { await createForGuest(payload, asker.guest, reply); return }
     const engine = payload.engine as AgentEngine | undefined
     const cwd = payload.cwd
@@ -587,9 +598,13 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     reply({ agent: await toProject(result.session), level: result.level })
   }
 
-  const cancelCreate = async (payload: Record<string, unknown>, reply: Reply): Promise<void> => {
+  const cancelCreate = async (payload: Record<string, unknown>, asker: Pick<Asker, 'local' | 'guest'>, reply: Reply): Promise<void> => {
     if (!validCreationId(payload.creationId)) { reply({ error: 'INVALID_CREATION_ID' }); return }
-    try { reply({ creationId: payload.creationId, ...await creationStatusPayload(receipts.cancelIntent(payload.creationId)) }) }
+    try {
+      // A guest cancels nothing of another's, and leaves no cancelled mark for an id that is not its own.
+      if (hiddenFrom(asker, payload.creationId)) { reply({ creationId: payload.creationId, state: 'missing' }); return }
+      reply({ creationId: payload.creationId, ...await creationStatusPayload(receipts.cancelIntent(payload.creationId)) })
+    }
     catch (error) { reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' }) }
   }
 

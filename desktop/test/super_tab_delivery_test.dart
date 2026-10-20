@@ -146,7 +146,11 @@ void main() {
         }
 
         await shot('conversation');
-        await tester.tap(find.byTooltip('1 agent · 20 people'));
+        if (find.byTooltip('Members and machines').evaluate().isNotEmpty) {
+          await tester.tap(find.byTooltip('Members and machines'));
+          await tester.pumpAndSettle();
+        }
+        await tester.tap(find.byTooltip('Invite people'));
         await tester.pumpAndSettle();
         expect(
           tester
@@ -163,32 +167,12 @@ void main() {
           isTrue,
         );
         await shot('people');
-        await tester.tap(find.byTooltip('Close participants'));
-        await tester.pumpAndSettle();
-        if (find.byTooltip('Conversations').evaluate().isNotEmpty) {
-          await tester.tap(find.byTooltip('Conversations'));
-          await tester.pumpAndSettle();
-        }
-        await tester.tap(find.text('Invite'));
-        await tester.pumpAndSettle();
-        expect(
-          tester
-              .widget<EditableText>(
-                find
-                    .descendant(
-                      of: find.byType(Dialog),
-                      matching: find.byType(EditableText),
-                    )
-                    .first,
-              )
-              .focusNode
-              .hasFocus,
-          isTrue,
-        );
-        await shot('invite');
-        expect(tester.takeException(), isNull);
         await tester.tap(find.byTooltip('Close'));
         await tester.pumpAndSettle();
+        if (find.byTooltip('Members and machines').evaluate().isNotEmpty) {
+          await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+          await tester.pumpAndSettle();
+        }
         await tester.tap(find.text('Check delivery to Lead'));
         await tester.pumpAndSettle();
         await shot('delivery');

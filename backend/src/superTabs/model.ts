@@ -40,6 +40,9 @@ export interface AgentStartRequest {
   requirements: { memoryBytes: number; diskBytes: number; maxCpuPercent: number; tools: string[]; devices: string[]; quotaRequired: boolean }
 }
 export interface AgentStart {
+  poolGeneration?: string
+  poolSettled?: boolean
+  routeDecisionId?: string
   id: string
   creationId: string
   actorKey: string
@@ -70,6 +73,8 @@ export interface Assignment {
 }
 export interface Conversation {
   id: string
+  /** Stable, tab-local workgroup reference. Lead has no number. */
+  number?: number
   title: string
   leadId: string | null
   agentIds: string[]
@@ -90,6 +95,7 @@ export interface SuperTabState {
   version: 1
   id: string
   name: string
+  project?: { machineId: string; cwd: string; repositoryUrl: string | null }
   ownerId: string
   environment: string
   /** Fields this tab overrides from its owner's account routing policy (routingPolicy.ts). */
@@ -100,6 +106,7 @@ export interface SuperTabState {
   conversations: Conversation[]
   invitations: Invitation[]
   starts?: AgentStart[]
+  machines?: import('./machines.js').ContributedMachine[]
 }
 export type Actor =
   | { kind: 'person'; userId: string; email: string }
@@ -148,6 +155,15 @@ export function agent(state: SuperTabState, id: string): Agent {
 export function conversation(state: SuperTabState, id: string): Conversation {
   return state.conversations.find(c => c.id === id) ?? fail('NOT_FOUND', 'This conversation is unavailable.', 404)
 }
+
+/** Legacy groups keep their append order, including archived groups. Persisted
+ * numbers are never reassigned; the store serializes concurrent additions. */
+export function numberConversations(state: SuperTabState): void {
+  let next = Math.max(0, ...state.conversations.map(c => c.number ?? 0)) + 1
+  for (const group of state.conversations) {
+    if (group.id !== 'lead' && group.number == null) group.number = next++
+  }
+}
 export function author(state: SuperTabState, actor: Actor, write = false): Author {
   if (actor.kind === 'person') {
     const member = person(state, actor.userId)
@@ -173,6 +189,7 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
 export function visibleState(state: SuperTabState, actor: Actor): SuperTabState {
   author(state, actor)
   const visible = structuredClone(state)
+  numberConversations(visible)
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) visible.invitations = []
   return visible
 }

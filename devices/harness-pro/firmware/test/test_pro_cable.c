@@ -92,9 +92,9 @@ void pro_app_turn_stats(const char *id, int passed, int failed, int commits, int
 {
     ev_t *e = add(EV_STATS, id); e->n1 = passed; e->n2 = failed; e->n3 = commits; e->n4 = tokens_in; e->n5 = tokens_out;
 }
-void pro_app_summary(const char *id, const char *text, const char *recap, const char *full, bool restore, bool notify)
+void pro_app_summary(const char *id, const char *text, const char *recap, const char *full, bool restore, pod_tier_t tier)
 {
-    ev_t *e = add(EV_SUMMARY, id); put(e->a, text); put(e->b, recap); put(e->c, full); e->n1 = restore; e->n2 = notify;
+    ev_t *e = add(EV_SUMMARY, id); put(e->a, text); put(e->b, recap); put(e->c, full); e->n1 = restore; e->n2 = tier;
 }
 void pro_app_notif_replace(const pro_notif_row_t *rows, int n)
 {
@@ -106,7 +106,7 @@ void pro_app_notif_seen(const char *id, const char *token)
 {
     ev_t *e = add(EV_NSEEN, id); put(e->a, token ? token : "(none)");
 }
-void pro_app_question(const char *id, const char *text) { put(add(EV_QUESTION, id)->a, text); }
+void pro_app_question(const char *id, const char *request, const char *text) { (void)request; put(add(EV_QUESTION, id)->a, text); }
 void pro_app_question_close(const char *id) { add(EV_QCLOSE, id); }
 void pro_app_focus(const char *id) { add(EV_FOCUS, id); }
 void pro_app_voice_result(int kind, const char *text) { ev_t *e = add(EV_VOICE, NULL); e->n1 = kind; put(e->a, text); }
@@ -800,13 +800,30 @@ static void test_notifications(void)
     welcome();
     reset();
     feed("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"t\",\"recap\":\"r\"}");
-    CHECK(nev == 1 && evs[0].kind == EV_SUMMARY && evs[0].n1 == 0 && evs[0].n2 == 1);          // plain: notify
+    CHECK(nev == 1 && evs[0].kind == EV_SUMMARY && evs[0].n1 == 0 && evs[0].n2 == POD_TIER_ALERT);   // plain, no tier (an old daemon): an alert
     reset();
     feed("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"t\",\"quiet\":true}");
     feed("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"t\",\"silent\":true}");
     feed("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"t\",\"restore\":true}");
     feed("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"t\",\"quiet\":false,\"silent\":false,\"restore\":false}");
-    CHECK(nev == 4 && evs[0].n2 == 0 && evs[1].n2 == 0 && evs[2].n2 == 0 && evs[2].n1 == 1 && evs[3].n2 == 1);
+    CHECK(nev == 4 && evs[0].n2 == POD_TIER_SILENT && evs[1].n2 == POD_TIER_SILENT && evs[2].n2 == POD_TIER_SILENT && evs[2].n1 == 1 &&
+          evs[3].n2 == POD_TIER_ALERT);
+
+    // tier: it wins over the old flags (a new daemon sends quiet with list, silent with silent); an unknown one is no tier.
+    reset();
+    feed("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"t\",\"tier\":\"alert\"}");
+    feed("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"t\",\"tier\":\"list\",\"quiet\":true}");
+    feed("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"t\",\"tier\":\"silent\",\"silent\":true}");
+    feed("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"t\",\"tier\":\"list\",\"restore\":true}");
+    feed("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"t\",\"tier\":\"loud\",\"quiet\":true}");
+    feed("{\"t\":\"summary\",\"agentId\":\"a\",\"text\":\"t\",\"tier\":7}");
+    CHECK(nev == 6 && evs[0].n2 == POD_TIER_ALERT && evs[1].n2 == POD_TIER_LIST && evs[2].n2 == POD_TIER_SILENT &&
+          evs[3].n2 == POD_TIER_SILENT && evs[3].n1 == 1 && evs[4].n2 == POD_TIER_SILENT && evs[5].n2 == POD_TIER_ALERT);
+
+    // turn.error carries its message to the app (the failed entry's text).
+    reset();
+    feed("{\"t\":\"turn.error\",\"agentId\":\"a\",\"message\":\"Build broke\"}");
+    CHECK(nev == 1 && evs[0].kind == EV_TURN && !strcmp(evs[0].a, "error") && !strcmp(evs[0].b, "Build broke"));
 
     // notif.replace: every valid item, in order; duplicates pass through (the model drops them); a bad token is blanked.
     reset();

@@ -47,6 +47,7 @@ code = r'''
 code += defines('CABLE_READ_TOKEN_MAX','ID_MAX','CABLE_NAME_MAX','SWARM_ID_MAX','SWARMS_MAX','CABLE_MAX_AGENTS','MAX_PROJECTS')
 code += defines('NOTICES','QUESTION_MAX','OPTION_MAX','PANE_MEMORY_MAX','UI_FONT','Q_ROWS','DRAFT_ROWS',source=source)
 code += defines('FACE_CX', source=source)
+code += '#define NOTICE_TTL_MS 21600000u\n#define ERROR_VIEW_MS 8000u\nstatic void ui_cable_toast(const char *message) { (void)message; }\n'
 if '#define PANE_RESULT_BYTES ' in source:
     code += defines('PANE_RESULT_BYTES', source=source)
 code += face_geometry(source)
@@ -62,7 +63,7 @@ static struct {
     int pattern_mask, pattern_len, view, voice_return, offset, active, count, pressed, hit_count;
     int draft_drag, tab_drag, start_x, start_y, last_x, last_y, tab_count, machine_count, model_count, notice_count, pet_pose;
     uint32_t touch_started, coast_until, character_activity, pet_until, nap_until, last_celebration;
-    uint32_t notice_sequence, voice_retry_until;
+    uint32_t notice_sequence, voice_retry_until, error_until;
     uint8_t status_phase;
     unsigned bell_unread;
     uint32_t notice_ms;
@@ -157,7 +158,8 @@ static unsigned changes;
 static void change(void) { changes++; }
 static void display_lock(void) {}
 static void display_unlock(void) {}
-static void display_wake(void) {}
+static int wakes;
+static void display_wake(void) { wakes++; }
 static bool fake_asleep, present_scene=true;
 static bool display_is_asleep(void) { return fake_asleep; }
 static bool audio_client_active(void) { return recording; }
@@ -211,13 +213,15 @@ static bool scroll_emit(ht_scroll_phase_t phase, int dy, int velocity, void *ctx
 code += function('color')
 code += function('settings_item') + function('settings_count') + function('hit_contains')
 code += function('find')
+code += 'static void notice_expire(uint32_t now);\n'
 for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'tabs_open', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_skin', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
     code += function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
 code += function('focus_centred') + function('focus_header') + function('focus_clipped') + function('tabs_move') + function('tab_name') + function('tab_split') + function('tab_fade') + function('tab_neighbour') + function('focus_carousel') + function('tab_label') + function('render_focus_tabs') + function('pane_label') + function('render_focus_panes') + function('render_agents') + function('render_tabs') + function('page_controls') + function('render_notice') + function('css_line') + function('inbox_line') + function('inbox_page') + function('render_focus_inbox') + function('render_list')
-for name in ['notice_remove', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_add', 'ui_notify_task_done', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt']:
+for name in ['notice_remove', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_add', 'notice_expire', 'on_face', 'notice_read_now', 'ui_notify_summary', 'ui_turn_error', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt']:
     code += function(name)
+code += '#define ui_notify_task_done(a,b,c,d) ui_notify_summary(a,b,c,d,"alert",false,false)\n'
 for name in ['event', 'ui_project_emit', 'ui_project_restore_event', 'ui_project_clear_event', 'ui_project_set_name', 'ui_project_remove', 'ui_project_clear_all', 'ui_project_apply_order']:
     code += function(name)
 visit_actions=source.split('    case A_LATEST:',1)[1].split('    case A_TABS:',1)[0]
@@ -1220,6 +1224,62 @@ static void notification_read_checks(const char *dir) {
     }
     assert(!starts && !question_sends && !desktop_opens);
     puts("Notification read: post-DMA only, sleep/lock, stale/identical replacements, read/open idempotence, questions, hidden empty bell, reconnect snapshots and bounded receipt history PASS");
+
+    // NOTIFICATION TIERS: only an alert beeps, wakes and celebrates; a list entry is a drawer row and
+    // nothing else; silent leaves no row. The pane on the face never beeps or wakes and its row is read.
+    reset(); fake_ms=5000; wakes=0;
+    assert(ui_notify_summary("b","B","M2","Built.","alert",false,false) && s.notice_count==1 && wakes==1 && s.pet_pose==3);
+    reset(); fake_ms=5000; wakes=0;
+    assert(!ui_notify_summary("b","B","M2","Built.","list",true,false) && s.notice_count==1 && !wakes && !s.pet_pose);
+    reset(); fake_ms=5000; wakes=0; fake_asleep=true;
+    assert(!ui_notify_summary("b","B","M2","Built.","list",true,false) && s.notice_count==1 && !wakes && fake_asleep);
+    reset(); fake_ms=5000; wakes=0;
+    assert(!ui_notify_summary("b","B","M2","Built.","silent",false,true) && !s.notice_count && !wakes && !s.pet_pose);
+    // An old daemon sends no tier: quiet is a list entry (it used to beep), silent is silent, neither is an alert.
+    reset(); fake_ms=5000; wakes=0;
+    assert(!ui_notify_summary("b","B","M2","x",NULL,true,false) && s.notice_count==1 && !wakes);
+    assert(!ui_notify_summary("c","C","M2","x",NULL,false,true) && s.notice_count==1);
+    assert(!ui_notify_summary("c","C","M2","x",NULL,true,true) && s.notice_count==1);
+    assert(!ui_notify_summary("c","C","M2","x","bogus",true,false) && s.notice_count==2);
+    assert(ui_notify_summary("d","D","M2","x",NULL,false,false) && s.notice_count==3 && wakes==1);
+    // One row per agent: the newest wins.
+    assert(ui_notify_summary("d","D","M2","newer","alert",false,false) && s.notice_count==3 && !strcmp(s.notice[0].summary,"newer"));
+    // On the face: no beep, no wake, no celebration, and the row is read at once.
+    reset(); fake_ms=5000; wakes=0;
+    assert(!ui_notify_summary("a","A","M2","Done.","alert",false,false) && !wakes && !s.pet_pose);
+    assert(s.notice_count==1 && s.notice[0].read_on_dial && !notice_unread(NULL));
+    // Rows expire 6 h after receipt, across the millisecond wrap too, but a question never does.
+    for (int w = 0; w < 2; w++) {
+        reset(); fake_ms = w ? UINT32_MAX - 1000 : 1000;
+        ui_notify_summary("b","B","M2","Old.","list",false,false);
+        cable_notif_t pinned={.agent_id="q",.name="Q",.summary="Which?",.question=true};
+        ui_notif_replace(&pinned,1); ui_notify_summary("b","B","M2","Old.","list",false,false);
+        assert(s.notice_count==2);
+        uint32_t t0 = fake_ms;
+        fake_ms = t0 + 21599999u; surface_tick(fake_ms); assert(s.notice_count==2);
+        fake_ms = t0 + 21600000u; surface_tick(fake_ms); assert(s.notice_count==1 && s.notice[0].question);
+    }
+    // A failed turn: the full-screen error clears itself after 8 s; the drawer row stays.
+    reset(); fake_ms=9000; wakes=0;
+    assert(ui_turn_error("b","The build crashed.") && s.view==MESSAGE && wakes==1);
+    assert(s.notice_count==1 && s.notice[0].failed && !s.notice[0].read_on_dial);
+    fake_ms=16999; surface_tick(fake_ms); assert(s.view==MESSAGE);
+    fake_ms=17000; surface_tick(fake_ms); assert(s.view==HOME && s.notice_count==1);
+    reset(); fake_ms=9000; wakes=0;
+    assert(!ui_turn_error("a","The build crashed.") && s.view==MESSAGE && !wakes && s.notice[0].read_on_dial);
+    // The person's own question is never covered: the row is filed, the screen stays.
+    reset(); fake_ms=9000; s.view=QUESTION; wakes=0;
+    assert(ui_turn_error("b","The build crashed.") && s.view==QUESTION && !s.error_until && s.notice_count==1 && s.notice[0].failed);
+    s.view=CHOICE; ui_turn_error("c","Also broke."); assert(s.view==CHOICE);
+    s.view=ANSWER_REVIEW; ui_turn_error("d","Also broke."); assert(s.view==ANSWER_REVIEW);
+    // A different message replacing the error view must not inherit its 8 s timer.
+    reset(); fake_ms=9000; ui_turn_error("b","The build crashed.");
+    fake_ms=14000; view(MESSAGE); fake_ms=17000; surface_tick(fake_ms); assert(s.view==MESSAGE);
+    // An empty failure still says something.
+    reset(); fake_ms=9000; ui_turn_error("b","");
+    assert(!strcmp(s.notice[0].summary,"The turn failed") && !strcmp(s.message,"The turn failed"));
+    ui_turn_error("c",NULL); assert(!strcmp(s.message,"The turn failed"));
+    puts("Notification tiers: alert/list/silent, old-daemon flags, face, one row per agent, 6 h expiry and 8 s error PASS");
     reset();
 }
 

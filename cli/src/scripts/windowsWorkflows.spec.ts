@@ -75,4 +75,35 @@ describe('the Windows release workflows', () => {
     expect(desktop).not.toContain('TEMPORARY')
     expect(desktop).not.toContain('head_commit')
   })
+
+  // Installer spec §2.4 and §4.2.
+  it('tests harness-install.exe on both runners and publishes a staging one with the staging zips', () => {
+    const desktop = read('windows-desktop.yml')
+    expect(desktop).toMatch(/- name: harness-install\.exe tests\n\s+working-directory: installer\n\s+run: \|\n\s+cargo test --locked\n/)
+    expect(desktop).toContain('HARNESS_INSTALL_BIN: ${{ github.workspace }}\\installer\\target\\debug\\harness-install.exe')
+    expect(desktop).toContain('HARNESS_INSTALL_BASE: https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/staging/')
+    expect(desktop).toContain('windows-arm64.zip" .zips/harness-install.exe')
+    expect(desktop).toContain("'desktop-windows-installer': 'harness-install.exe'")
+  })
+
+  // Installer spec §2.2: every desktop release ships Windows, unsigned, from the same manifest write.
+  it('builds Windows in the desktop release and publishes it with the other platforms', () => {
+    const release = read('release-desktop.yml')
+    const job = (name: string) => release.match(new RegExp(`\n  ${name}:\n([\\s\\S]*?)(?=\n  [\\w-]+:\n|$)`))?.[1] ?? ''
+    const build = job('build-windows')
+    expect(build).toContain('{ runner: windows-latest, arch: x64, target: x86_64-pc-windows-msvc }')
+    expect(build).toContain('{ runner: windows-11-arm, arch: arm64, target: aarch64-pc-windows-msvc }')
+    expect(build).toContain("if: needs.preflight.outputs.reused != 'true'")
+    expect(build).toContain('flutter build windows --release --build-name $env:VERSION')
+    expect(build).not.toContain('HARNESS_STAGING')
+    expect(build).toContain('HARNESS_INSTALL_BASE: https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/\n')
+    expect(build).toContain("if: matrix.arch == 'x64'")
+    expect(build).not.toContain('gcloud')
+    expect(job('upload-windows')).toContain('bash desktop/scripts/upload-desktop-windows.sh "$VERSION" windows-release')
+    expect(release).toMatch(/publish:\n\s+needs: \[version, preflight, build-macos, build-linux, build-windows, upload-windows\]/)
+    expect(release).toContain("needs.build-linux.result == 'success' && needs.upload-windows.result == 'success'")
+    expect(release).toMatch(/candidate:\n\s+needs: \[version, build-macos, build-linux, upload-windows\]/)
+    expect(release).toMatch(/cleanup:\n\s+needs: \[version, preflight, build-macos, build-linux, build-windows, upload-windows, candidate, publish\]/)
+    expect(release).toContain('[harness-install.exe](${base}/harness-install.exe)')
+  })
 })

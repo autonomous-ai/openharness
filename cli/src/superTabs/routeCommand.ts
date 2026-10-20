@@ -117,11 +117,12 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const members = agents.filter(a => !busy.has(String(a.id)) && ENGINES.includes(String(object(a.configuration).engine))).map(a => withLaunchEffort(a, list(state.starts)))
   // The account's machines can start a new agent. A member may run on a machine only its collaborator can
   // open; the Lead tries that machine too, but a member there is unknown, never offline.
-  const machines = new Map<string, { name: string; status: string; account: boolean }>()
+  const machines = new Map<string, { name: string; status: string; account: boolean; pool?: Json }>()
   for (const m of list(value.machines)) machines.set(String(m.machineId), { name: String(m.name), status: String(m.status ?? 'unknown'), account: true })
   // The Lead's own machine is the account's even when the list could not be read.
   if (!machines.has(where.machineId)) machines.set(where.machineId, { name: where.machineId, status: 'unknown', account: true })
   for (const m of members) if (!machines.has(String(m.machineId))) machines.set(String(m.machineId), { name: String(m.machineId), status: 'unknown', account: false })
+  for (const pool of list(state.machines)) machines.set(String(pool.machineId), { name: String(pool.name), status: 'contributed', account: false, pool })
   const enabled = policy.models.filter(m => m.enabled)
 
   // The probes do not wait for the context reads: the machines, the task's folder and the group's talk and log are read
@@ -176,15 +177,15 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     warnings: [...(Array.isArray(effective.warnings) ? effective.warnings : []), ...(value.machinesUnreadable === true ? [MACHINES_UNREADABLE] : [])],
     next: verdict.pick.kind === 'member'
       ? `Assign with: command OPERATION_ID {"type":"work.assign","conversationId":"${input.conversationId}","agentId":"${verdict.pick.agentId}"${decision}}`
-      : `Start with: start OPERATION_ID ${JSON.stringify({ conversationId: input.conversationId, name: 'Builder', cwd: assessment.needs.cwd ?? '/absolute/repo/on/that/machine',
+      : `Start with: start OPERATION_ID ${JSON.stringify({ conversationId: input.conversationId, name: 'Builder', cwd: text(machines.get(verdict.pick.machineId)?.pool?.cwd) ?? assessment.needs.cwd ?? '/absolute/repo/on/that/machine',
         worktree: true, requirements: startRequirements(assessment.needs), machineId: verdict.pick.machineId, engine: verdict.pick.engine, model: verdict.pick.model,
         effort: verdict.pick.effort, ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : {}) })}, then assign the started agent${decision ? ' with the same routeDecisionId' : ''}.`,
   }
 }
 
-async function probeMachine(machineId: string, { name: machineName, status, account }: { name: string; status: string; account: boolean },
+async function probeMachine(machineId: string, { name: machineName, status, account, pool }: { name: string; status: string; account: boolean; pool?: Json },
   members: Json[], allModels: Policy['models'], policy: Policy, a: Assessment, where: Where, open: typeof openDaemon): Promise<Probe[]> {
-  const models = account ? allModels : []
+  const models = pool ? allModels.filter(m => Array.isArray(pool.engines) && pool.engines.includes(m.engine)) : account ? allModels : []
   const engines = [...new Set([...models.map(m => m.engine), ...members.map(m => String(object(m.configuration).engine) as 'claude' | 'codex')])]
   const memberProbe = (m: Json, refusals: string[] = [], quota = UNKNOWN_QUOTA, frame: MemberFrame | null = null): Probe => {
     const c = object(m.configuration), engine = String(c.engine) as 'claude' | 'codex'
@@ -197,6 +198,25 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     kind: 'new', machineId, machineName, engine: m.engine, model: m.model, effort: m.effort, quality: m.quality, cost: m.cost,
     quota, activity: 'new agent', known, refusals, load })
   const offline = () => models.map(m => newProbe(m, [OFFLINE], UNKNOWN_QUOTA, false))
+  if (pool) {
+    const observed = object(pool.observation), resources = object(observed.resources)
+    const fresh = finite(observed.receivedAt) && Date.now() - observed.receivedAt < 45_000
+    const quotas = list(observed.quotas)
+    const quota = (engine: string) => { const q = quotas.find(q => q.engine === engine); return fresh && q ? quotaOf2({ known: q.known === true, windows: list(q.windows).filter(w => finite(w.usedPercent)).map(w => ({ usedPercent: w.usedPercent as number, resetsAt: w.resetsAt, name: text(w.name) ?? undefined })) }) : UNKNOWN_QUOTA }
+    const blocked = [...(!fresh ? [OFFLINE] : []), ...(pool.paused ? ['New work is paused on this machine.'] : [])]
+    const needs = startRequirements(a.needs), tools = object(observed.tools)
+    const newReasons = [...blocked,
+      ...(pool.availableSlots === 0 ? ['This machine has no available agent slots.'] : []),
+      ...(!finite(resources.projectDiskFreeBytes) || resources.projectDiskFreeBytes < needs.diskBytes ? ['The project has insufficient measured free disk.'] : []),
+      ...(!finite(resources.memoryTotalBytes) || !finite(resources.memoryUsedBytes) || resources.memoryTotalBytes - resources.memoryUsedBytes < needs.memoryBytes ? ['Insufficient measured free memory.'] : []),
+      ...needs.tools.filter(t => tools[t] !== true).map(t => `Required tool not reported: ${t}.`),
+      ...(needs.devices.length ? ['Required devices have not been reported.'] : [])]
+    return [...members.map(m => memberProbe(m, fresh ? [] : [OFFLINE], quota(String(object(m.configuration).engine)))),
+      ...models.map(m => newProbe(m, [...newReasons, ...(quota(m.engine).leftPercent === 0 ? ['Subscription exhausted.'] : [])], quota(m.engine), fresh && quota(m.engine).known,
+        { agents: Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.length : null,
+          freeMemoryBytes: finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes) ? resources.memoryTotalBytes - resources.memoryUsedBytes : null,
+          hasFolder: finite(resources.projectDiskFreeBytes) }))]
+  }
   // The account says this machine is off, so nothing there can run or be asked.
   if (account && status === 'offline') return [...members.map(m => memberProbe(m, [OFFLINE])), ...offline()]
   let target: Daemon

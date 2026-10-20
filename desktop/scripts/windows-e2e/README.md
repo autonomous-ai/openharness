@@ -38,6 +38,10 @@ The tools create a new `harness-desktop-e2e-<run-id>` child, never adopt an
 existing directory without this run's receipt. B's user tools stay in the fresh
 user's `e2e/` folder. `VM_KEY` is consumed by B's unchanged first-login helper.
 
+`install-state.ps1` (sub-project F) says what an install left for the test user, read-only: the version folders,
+the shortcut and keys, how many installed files carry a Zone.Identifier, the browser's mark on the downloaded
+installer, the installer's temp folders and log.
+
 Root must establish the fresh user's interactive console without reboot,
 autologon, or signing admin out. `session-on` verifies the recorded SID/profile,
 active console and accessible Default input desktop, starts an owned keep-awake
