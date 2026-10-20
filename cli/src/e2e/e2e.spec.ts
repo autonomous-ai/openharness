@@ -326,6 +326,21 @@ describe('pane probe (live steps on a tmux pane)', () => {
     expect([...own.checks, ...grid.checks].every((c) => /^ref-[0-9a-z]{6}$/.test(c.ref ?? ''))).toBe(true)
   })
 
+  // grid-dev, 2026-10-20: codex's TUI wraps a long prompt, so its `(ref-…)` tag reached the screen in two
+  // pieces; the probe took it for dropped and typed every write step three times, and the third ran into
+  // the next step's prompt on the grid leg (edit=stuck).
+  it('types a step once when the tool wraps its prompt across lines', async () => {
+    const { pane, probe, files } = fakeAgent()
+    // At 72 columns the tag of this step's prompt (from column 69) is cut in two, as on grid-dev's screen.
+    const wrap = (text: string) => text.split('\n').map((line) => line.match(/.{1,72}/g)?.join('\n  ') ?? line).join('\n')
+    const wrapped: Tmux = { ...pane, capture: async (p, lines) => wrap(await pane.capture(p, lines)) }
+    const write = SCENARIO.subscription[1]
+    const out = await runCheck(wrapped, '%1', write, probe)
+    expect(out.status).toBe('ok')
+    expect(pane.typed.filter((t) => t.startsWith(write.prompt))).toHaveLength(1)
+    expect(files['out/hello-1.txt']).toBe('hello from step 1\n')
+  })
+
   it('saying is not doing: each step fails when the tool only claims it, with what was missing', async () => {
     const notes: Record<CheckId, RegExp> = {
       read: /notes\/info-1\.txt's token never appeared/,
