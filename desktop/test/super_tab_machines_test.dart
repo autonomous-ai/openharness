@@ -314,6 +314,71 @@ void main() {
   });
 
   testWidgets(
+    'The machine card reads "Add machine", not "Configure", for the lead\'s own '
+    'not-yet-contributed computer, and opens Add mode with it preselected',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['agents'] = [
+        {
+          'id': 'lead-agent',
+          'name': 'Lead',
+          'machineId': 'm',
+          'harnessId': 'native-lead',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'codex'},
+        },
+      ];
+      (f.connection.server.state['conversations'] as List)[0]['leadId'] =
+          'lead-agent';
+      (f.connection.server.state['conversations'] as List)[0]['agentIds'] = [
+        'lead-agent',
+      ];
+      // No 'machines' entry: an agent running on this computer does not mean
+      // it was ever contributed to this tab.
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 300,
+              height: 400,
+              child: SuperTabMachines(
+                controller: c,
+                app: f.app,
+                onAddAgent: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-machine-m')));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(TextButton, 'Configure'), findsNothing);
+      expect(find.widgetWithText(TextButton, 'Add machine'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, 'Add machine'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Add machine'), findsWidgets);
+      expect(find.text('Configure machine'), findsNothing);
+      expect(find.byType(AppSelectField<String>), findsOneWidget);
+      expect(
+        find.text('This computer (${f.app.stateOf('m')!.machine.displayName})'),
+        findsOneWidget,
+      );
+      expect(find.widgetWithText(FilledButton, 'Add machine'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Update'), findsNothing);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
     'Configure shows the machine as text, explains the update, and has Cancel and Update',
     (tester) async {
       final f = SuperTabLaunchFixture();
@@ -332,10 +397,7 @@ void main() {
         find.text('This computer (${f.app.stateOf('m')!.machine.displayName})'),
         findsOneWidget,
       );
-      expect(
-        find.textContaining('Checks this computer’s project folder'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('Checks its project folder'), findsOneWidget);
       expect(find.widgetWithText(FilledButton, 'Update'), findsOneWidget);
       expect(find.widgetWithText(TextButton, 'Cancel'), findsOneWidget);
       expect(find.widgetWithText(FilledButton, 'Save'), findsNothing);

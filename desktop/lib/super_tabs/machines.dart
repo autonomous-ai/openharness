@@ -125,18 +125,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   Future<void> _contribute({Map<String, dynamic>? existing}) async {
     final app = widget.app;
     if (app == null) return;
-    final isConfigure = existing != null;
     final existingId = existing?['machineId'] as String?;
-    String labelFor(MachineState m) => m.isLocalMachine
-        ? 'This computer (${m.machine.displayName})'
-        : m.machine.displayName;
-    // Configure edits one already-contributed machine in place: it is not
-    // choosing among candidates, so none of the picker's bookkeeping below
-    // applies and the machine itself cannot be swapped for another.
-    final configuredState = isConfigure ? app.stateOf(existingId!) : null;
-    final configuredLabel = configuredState != null
-        ? labelFor(configuredState)
-        : (existing?['name'] as String?) ?? 'This machine';
     // "Already in this tab" means already CONTRIBUTED — an agent already
     // running there (unconfirmed) does not count, or a freshly created tab
     // whose lead runs on this Mac could never contribute it. `_ids` (agents
@@ -145,6 +134,22 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       for (final m in c.snapshot?.machines ?? const <Map<String, dynamic>>[])
         m['machineId'] as String,
     };
+    // A card's "Configure"/"Add machine" button always passes `existing`, but
+    // that machine may not actually be contributed yet (a lead's agent can
+    // run on a computer before it is ever added to the tab). Only a truly
+    // contributed machine is edited in place; anything else opens Add mode
+    // with that machine offered as the default choice, not forced on it.
+    final isConfigure = existingId != null && contributed.contains(existingId);
+    String labelFor(MachineState m) => m.isLocalMachine
+        ? 'This computer (${m.machine.displayName})'
+        : m.machine.displayName;
+    // Configure edits one already-contributed machine in place: it is not
+    // choosing among candidates, so none of the picker's bookkeeping below
+    // applies and the machine itself cannot be swapped for another.
+    final configuredState = isConfigure ? app.stateOf(existingId) : null;
+    final configuredLabel = configuredState != null
+        ? labelFor(configuredState)
+        : (existing?['name'] as String?) ?? 'This machine';
     // Only this account's own, reachable computers can be offered — a machine
     // already in the tab would duplicate its entry, and one offline or
     // unlinked cannot actually be contributed right now.
@@ -175,10 +180,17 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               m.isOffline,
         )
         .toList();
-    String? machineId =
-        existingId ??
-        addable.where((m) => m.isLocalMachine).firstOrNull?.machine.machineId ??
-        addable.firstOrNull?.machine.machineId;
+    String? machineId = isConfigure
+        ? existingId
+        : (existingId != null &&
+                  addable.any((m) => m.machine.machineId == existingId)
+              ? existingId
+              : addable
+                        .where((m) => m.isLocalMachine)
+                        .firstOrNull
+                        ?.machine
+                        .machineId ??
+                    addable.firstOrNull?.machine.machineId);
     String? error;
     var busy = false;
     String? setupId;
@@ -311,8 +323,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                       Text(configuredLabel, style: DesktopChrome.text()),
                       const SizedBox(height: 16),
                       Text(
-                        'Checks this computer’s project folder and installed '
-                        'engines again, and updates what the lead can use.',
+                        'Checks its project folder and installed engines '
+                        'again, and updates what the lead can use.',
                         style: DesktopChrome.text(),
                       ),
                     ] else ...[
@@ -622,7 +634,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                           _contribute(existing: shared ?? {'machineId': id}),
                         );
                       },
-                      child: const Text('Configure'),
+                      child: Text(shared != null ? 'Configure' : 'Add machine'),
                     ),
                   if (c.canWrite && c.selected != null)
                     TextButton(
