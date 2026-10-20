@@ -4,8 +4,8 @@ Date: 2026-10-19
 Status: implemented on `feat/windows-dial`; the E5.2 scenario/evidence report is **COMPLETE WITH LIMITS** in the
 [E2E report](../../testing/windows-dial-e2e.md): all eleven dispositions are documented, and the owner explicitly
 waived the remaining blocked cleanup on 2026-10-20. The whole-E review and final I1/M1 follow-up review passed.
-Ready for owner integration with the recorded limits; full hardware acceptance is not claimed. Ships in combined Windows
-[PR #1457](https://github.com/autonomous-ai/openharness/pull/1457) (`feat/windows-desktop` → `main`)
+Merged into `feat/windows-desktop` on 2026-10-20 with the recorded limits; full hardware acceptance is not claimed. Ships in combined Windows PR
+(`feat/windows-desktop` → `main`)
 after E5.2, E5.3 and final review; the owner's session performs the integration.
 
 ## Goal
@@ -29,11 +29,11 @@ it works today. Linux is not touched.
 | B | CLI on Windows (done; merge pending) | A |
 | C | Desktop on Windows (in progress) | B |
 | D | Code signing, winget (later; not in this PR) | A–C, F |
-| **E** | The dial on Windows (this spec; combined Windows PR #1457) | B, C |
+| **E** | The dial on Windows (this spec; combined Windows PR) | B, C |
 | F | `harness-install.exe`, Windows in the desktop release, the website's Windows download | C |
 
 E continues on `feat/windows-dial`, cut from `feat/windows-desktop` at `8fb220f15` after C5.3. Per the owner's
-2026-10-20 update, E ships in the combined Windows [PR #1457](https://github.com/autonomous-ai/openharness/pull/1457),
+2026-10-20 update, E ships in the combined Windows PR,
 `feat/windows-desktop` → `main`. When E5.2, E5.3 and the final review are done, report back; the owner's session
 will merge `feat/windows-dial` into `feat/windows-desktop`. Do not perform that merge yourself.
 F cherry-picks only E1.3's immutable, test-tooling-only kit commit `7ee856dd9`; no rebase onto E is assumed. B's spec listed "serial/USB cables (planned separately)" as out of scope: this is that plan.
@@ -328,7 +328,7 @@ the PC (`WEB_URL=http://127.0.0.1:<port>`), so no website deploy is needed. Resu
 
 ## Release
 
-E ships in the combined Windows [PR #1457](https://github.com/autonomous-ai/openharness/pull/1457),
+E ships in the combined Windows PR,
 `feat/windows-desktop` → `main`. After E5.2, E5.3 and the final review, report back; the owner's session merges
 `feat/windows-dial` into `feat/windows-desktop`. Do not perform that merge yourself. F's earlier cherry-pick
 of E1.3's immutable kit commit `7ee856dd9` remains test-tooling-only. After the combined Windows PR merges,
@@ -406,7 +406,7 @@ partially: the read-only audit found zero owned processes, one serial-helper fil
 A second, tools-only account's read-only audit passed (zero owned processes/files, no launcher), with no product
 uninstall there. Standard-user desktop uninstall remains NOT RUN. E5.3 records the implemented behavior,
 scoped evidence, owner-waived residual cleanup and remaining limits. E is ready for owner integration with
-these limits, not full hardware acceptance. Only the owner's session integrates E into PR #1457 after final
+these limits, not full hardware acceptance. Only the owner's session integrates E into `feat/windows-desktop` after final
 documentation commits and scoped review; no agent merge is authorized.
 
 ### Recorded cleanup and owner waiver

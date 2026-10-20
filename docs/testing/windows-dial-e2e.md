@@ -94,8 +94,7 @@ The desktop zip and E's manifest-built CLI installation are separate inputs;
 the desktop artifact alone does not establish that E's CLI or serial helper is
 installed. Keep the tested development CLI from being replaced by an updater.
 
-Per the owner's 2026-10-20 update, E ships in the combined Windows
-[PR #1457](https://github.com/autonomous-ai/openharness/pull/1457),
+Per the owner's 2026-10-20 update, E ships in the combined Windows PR,
 `feat/windows-desktop` → `main`. When E5.2, E5.3 and the final review are done,
 report back; the owner's session will merge `feat/windows-dial` into
 `feat/windows-desktop`. Do not perform that merge yourself. This report performs

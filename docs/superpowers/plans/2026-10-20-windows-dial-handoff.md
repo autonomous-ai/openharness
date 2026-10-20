@@ -22,7 +22,7 @@ name this branch. Older copies in `amber-heron` still say `feat/windows-desktop`
 | Worktree | `~/harnesses/worktrees/openharness/windows-dial` |
 | Branch | `feat/windows-dial`, cut from `feat/windows-desktop` at `8fb220f15`, not pushed yet |
 | Merges into | `feat/windows-desktop` through the owner's session after E5.2, E5.3 and the final review are done; report back then, and do not perform the merge yourself |
-| Ships in | Combined Windows [PR #1457](https://github.com/autonomous-ai/openharness/pull/1457), `feat/windows-desktop` → `main`, per the owner's 2026-10-20 update |
+| Ships in | Combined Windows PR (not opened yet), `feat/windows-desktop` → `main`, per the owner's 2026-10-20 update |
 
 Other work on the same line, which you must not touch:
 
