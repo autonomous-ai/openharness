@@ -18,7 +18,7 @@ export const ANALYTICS_SCHEMA_VERSION = 1
 
 export const ENGINES = [
   'claude', 'codex', 'cursor', 'opencode', 'pi', 'hermes',
-  'commandcode', 'devin', 'muse', 'amp', 'kilo', 'grok', 'agy', 'copilot',
+  'commandcode', 'devin', 'muse', 'amp', 'kilo', 'grok', 'agy', 'copilot', 'prime',
 ] as const
 export type Engine = (typeof ENGINES)[number]
 

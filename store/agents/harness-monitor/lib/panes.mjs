@@ -99,6 +99,7 @@ const ENGINE_COMMANDS = {
   claude: ['claude'], codex: ['codex'], opencode: ['opencode'], cursor: ['cursor-agent'],
   gemini: ['gemini'], grok: ['grok'], copilot: ['copilot'], amp: ['amp'], pi: ['pi'],
   hermes: ['hermes'], muse: ['muse'], kilo: ['kilo'], devin: ['devin'], commandcode: ['cmd'],
+  prime: ['prime-agent'],
   aider: ['aider'], goose: ['goose'], qwen: ['qwen'], droid: ['droid'], auggie: ['auggie'],
 }
 

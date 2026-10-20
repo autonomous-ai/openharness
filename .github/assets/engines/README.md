@@ -32,6 +32,7 @@ a retina display.
 | `grok.png` | SpaceXAI symbol, the WHITE transparent variant, <https://media.x.ai/v1/website/spacexai-symbol-white-transparent-0c31957f.png>, fetched 2026-08-19 — composited on a black tile, see the note below | 600 | `56357e60b43284734c58e06596be038c58d7fd1a9bea7325d21a107a44ea4b47` |
 | `copilot.png` | GitHub's official Copilot octicon, <https://raw.githubusercontent.com/primer/octicons/main/icons/copilot-48.svg>, fetched 2026-08-19 — rendered white, see the note below | 48 (SVG) | `d94b7a94a4c23816b02285f53eca6386429b67522271483fa0f18ab3596617dc` |
 | `agy.png` | Antigravity's official gradient "A" mark — the logo the site itself declares, <https://antigravity.google/assets/image/antigravity-logo.png>, fetched 2026-08-18 | 200 | `8f0b95d2d21dbf930b4d100e2fdc4505673e900a731aa56ea633a4b59c312799` |
+| `prime.png` | Prime Intellect's official mark — the `PrimeIntellect-ai` GitHub organisation avatar at `?size=512` (GitHub serves it at 400px), fetched 2026-10-18 — a white glyph on its own black tile, see the note below | 400 | `0f0b0cf00d7d57f6ba5ffaeb295095a9d1383d2224f1a7b788e081d6736d855b` |
 
 ## Harness marks
 
@@ -80,6 +81,14 @@ Open items, recorded rather than left implicit:
   `icon.icns` inside the macOS app is an app TILE (a white rounded square with a small glyph),
   not the same class of asset as the marks here. The site logo was taken and recorded rather
   than swapped for the tile or upscaled to look bigger than it is.
+- **`prime.png` is the org avatar, an opaque tile.** Prime Agent is Prime Intellect's agent, and
+  the avatar is the same class of asset as `devin.png`: a white butterfly glyph on a full-bleed black
+  square, so it reads on both grounds without any added tile (the check below passes it: 23%
+  transparent, all of it the 512px canvas margin). The site's `apple-touch-icon`
+  (<https://cdn.prod.website-files.com/66239f0441b09824acb92c75/671b6f6054736f752438334f_Positive.jpg>,
+  256px, SHA-256 `21353f899c1fb3ffb8efcc980c6a087b20ad3a052b540b74fee11a7da4f154ea`) is the same
+  glyph in black on white; the avatar was taken because it is larger. The app copies
+  (`desktop/` and `mobile/assets/engine-icons/prime.png`) are the same avatar reduced to 256px.
 - **`codex.png` and `muse.png` are still 104px sources** — fine at the 72px render, slightly soft on
   a retina display. Everything above them is 180px or better. Replace when a larger official file
   turns up; do not upscale these to fake it.

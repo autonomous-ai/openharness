@@ -1,0 +1,16 @@
+
+ [38;2;113;113;122mThinking level: max[39m
+
+ [38;2;208;111;130m⚠ Error: Unknown thinking level 'bogus'. Available: off, minimal, low, medium, high, xhigh, max[39m
+
+ [38;2;113;113;122mModel: gpt-5.4-mini[39m
+
+ [38;2;208;111;130m⚠ Error: Unknown thinking level 'max'. Available: off, minimal, low, medium, high, xhigh[39m
+
+ [38;2;113;113;122mModel: claude-sonnet-5[39m
+
+                                                                                                                                                    [38;2;113;113;122mDetails mode (Ctrl+O to expand)[39m
+[48;2;26;26;31m
+ >  [7m [0m[48;2;26;26;31m
+
+[38;2;113;113;122m[49m←[38;2;161;161;170m manage[39m                                                                                                                                             [38;2;113;113;122mclaude-sonnet-5:high · 10k (1%)

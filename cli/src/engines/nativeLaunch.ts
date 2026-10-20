@@ -211,5 +211,5 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
 const installers: Partial<Record<AgentEngine, (port: number, options: NativeHookOptions) => Promise<boolean>>> = {
   cursor: hooks.installCursorHooks, commandcode: hooks.installCommandCodeHooks, devin: hooks.installDevinHooks,
   amp: hooks.installAmpPlugin, kilo: hooks.installKiloPlugin, grok: hooks.installGrokHooks, agy: hooks.installAgyHooks,
-  copilot: hooks.installCopilotHooks, pi: hooks.installPiExtension,
+  copilot: hooks.installCopilotHooks, pi: hooks.installPiExtension, prime: hooks.installPrimeExtension,
 }

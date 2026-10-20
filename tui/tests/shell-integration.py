@@ -21,7 +21,7 @@ REQUEST = re.compile(rb'\x1b\]633;hn;([^;]+);([^;]+);([^;]+);([^\x07]*)\x07')
 PICKED = b'\x1b]633;picked\x07'
 # Removes the progress line's two rows and returns to the row it started on.
 ERASE = b'\r\x1b[2K\x1b[1A\x1b[2K\x1b[1A'
-AGENTS = ('codex', 'claude', 'cursor-agent', 'opencode', 'pi', 'hermes', 'cmd', 'devin', 'muse', 'amp', 'kilo', 'grok', 'agy', 'copilot')
+AGENTS = ('codex', 'claude', 'cursor-agent', 'opencode', 'pi', 'hermes', 'cmd', 'devin', 'muse', 'amp', 'kilo', 'grok', 'agy', 'copilot', 'prime-agent')
 
 class Shell:
     def __init__(self, root, shell, custom=False):
@@ -342,7 +342,7 @@ with tempfile.TemporaryDirectory(prefix='hn-shell-test-') as tmp:
                     for agent in AGENTS:
                         (root/'bin'/agent).unlink()
                         s.request(agent+' "fresh user"','route')
-                        engine = {'cursor-agent':'cursor', 'cmd':'commandcode'}.get(agent,agent)
+                        engine = {'cursor-agent':'cursor', 'cmd':'commandcode', 'prime-agent':'prime'}.get(agent,agent)
                         assert s.calls()[-1][1:]==['shell-launch',engine,'--native','--','fresh user']
                 # Helpers restore echo and do not alter the user's prompt or cwd.
                 weird=root/'folder ü % #'; weird.mkdir()

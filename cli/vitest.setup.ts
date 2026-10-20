@@ -40,6 +40,9 @@ for (const name of [
   'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'CLAUDE_PROJECTS_DIR', 'GROK_HOME', 'COPILOT_HOME', 'CURSOR_HOME', 'CURSOR_CONFIG_DIR',
   'CURSOR_DATA_DIR', 'HERMES_HOME', 'PI_HOME', 'PI_CODING_AGENT_DIR', 'PI_CODING_AGENT_SESSION_DIR', 'COMMANDCODE_HOME',
   'AGY_HOME', 'AGY_CONFIG_DIR', 'OPENCODE_DB', 'KILO_DB', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME',
+  // A Prime Agent worker hands its agent directory to every child (measured): a suite run from a Prime agent's
+  // shell otherwise installed the discovery extension into the person's ~/.prime/agent/extensions.
+  'PRIME_AGENT_CODING_AGENT_DIR', 'PRIME_AGENT_DIR', 'PRIME_AGENT_PATH',
 ]) delete process.env[name]
 
 process.env.ADAPTER_DATA_DIR = mkdtempSync(join(tmpdir(), 'adapter-test-data-'))

@@ -23,7 +23,7 @@ describe('test environment isolation', () => {
   it('runs in a throwaway home folder, so no default folder of an engine or of Harness is the developer\'s', () => {
     const inTemp = (path: string) => realpathSync(path).startsWith(realpathSync(tmpdir()) + sep)
     expect(inTemp(homedir())).toBe(true)
-    for (const folder of [env.CLAUDE_PROJECTS_DIR, env.CODEX_HOME, env.CURSOR_HOME, env.GROK_HOME, env.COPILOT_HOME, env.HERMES_HOME, env.OPENCODE_DATA_DIR]) {
+    for (const folder of [env.CLAUDE_PROJECTS_DIR, env.CODEX_HOME, env.CURSOR_HOME, env.GROK_HOME, env.COPILOT_HOME, env.HERMES_HOME, env.OPENCODE_DATA_DIR, env.PI_HOME, env.PRIME_AGENT_DIR]) {
       expect(folder.startsWith(homedir() + sep), folder).toBe(true)
     }
   })

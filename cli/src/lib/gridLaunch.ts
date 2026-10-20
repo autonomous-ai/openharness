@@ -645,6 +645,9 @@ const GRID_ENGINE_REFUSALS: Partial<Record<AgentEngine, string>> = {
   devin: 'Devin runs on its own hosted service and documents no endpoint override',
   muse: 'Muse Code documents no way to change its endpoint',
   commandcode: 'Command Code documents no way to change its endpoint',
+  // Pi's route (a provider extension, `-e grid-provider.ts`) probably carries over to its fork, but it has not
+  // been measured on Prime Agent, whose extensions run in a daemon worker rather than in the pane.
+  prime: 'grid support for Prime Agent is not built yet: its provider extension has not been checked against a grid relay',
   terminal: 'a terminal runs no engine to point at a grid — start one inside it and it will use its own login',
 }
 

@@ -7,6 +7,7 @@ pub fn engine(command: &str) -> Option<&str> {
     let name = match command {
         "cursor-agent" => "cursor",
         "cmd" => "commandcode",
+        "prime-agent" => "prime",
         other => other,
     };
     crate::modal::ENGINES
@@ -18,6 +19,7 @@ pub fn command(engine: &str) -> &str {
     match engine {
         "cursor" => "cursor-agent",
         "commandcode" => "cmd",
+        "prime" => "prime-agent",
         other => other,
     }
 }

@@ -51,6 +51,11 @@
    "function"
   ],
   [
+   "prime",
+   "function",
+   "function"
+  ],
+  [
    "commandcode",
    "function",
    "function"
@@ -184,6 +189,16 @@
    "title": "",
    "mtime": 1789898402000,
    "transcriptPath": "<root>/home/.pi/agent/sessions/--work-pi--/2026-09-20T10-00-00-000Z_019fa2a5-a26d-700c-bf8c-97af19ae3d5f.jsonl",
+   "readHistory": null
+  },
+  {
+   "sessionId": "01a15135-c442-71eb-ab4c-34771f76c342",
+   "engine": "prime",
+   "cwd": "/work/prime",
+   "origin": "terminal",
+   "title": "prime work",
+   "mtime": 1789898402000,
+   "transcriptPath": "<root>/home/.prime/agent/sessions/01a15135-c442-71eb-ab4c-34771f76c342.jsonl",
    "readHistory": null
   },
   {

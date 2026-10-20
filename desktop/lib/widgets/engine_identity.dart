@@ -214,6 +214,17 @@ const _engines = <String, EngineIdentity>{
     homepage: 'https://antigravity.google',
     blurb: "Google's Antigravity agent in the terminal.",
   ),
+  'prime': EngineIdentity(
+    id: 'prime',
+    label: 'Prime Agent',
+    category: 'Code',
+    tagline: 'A self-improving agent for coding workflows',
+    creator: 'Prime Intellect',
+    color: Colors.white,
+    asset: 'assets/engine-icons/prime.png',
+    homepage: 'https://github.com/PrimeIntellect-ai/prime-agent',
+    blurb: "Prime Intellect's coding agent for the terminal, built on Pi.",
+  ),
 };
 
 /// The domain-specific harnesses this build has a picture of, keyed by their

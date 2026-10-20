@@ -1,6 +1,6 @@
-export type OneShotEngine = 'claude' | 'codex' | 'cursor' | 'opencode' | 'pi' | 'commandcode' | 'kilo'
+export type OneShotEngine = 'claude' | 'codex' | 'cursor' | 'opencode' | 'pi' | 'commandcode' | 'kilo' | 'prime'
 
-const ONE_SHOT_ENGINES: readonly OneShotEngine[] = ['claude', 'codex', 'cursor', 'opencode', 'pi', 'commandcode', 'kilo']
+const ONE_SHOT_ENGINES: readonly OneShotEngine[] = ['claude', 'codex', 'cursor', 'opencode', 'pi', 'commandcode', 'kilo', 'prime']
 
 export interface DisposableWorker<Options, Result> {
   readonly engine: OneShotEngine
@@ -52,6 +52,7 @@ export interface PoolSnapshot {
   pi: { active: number; target: number; starting: number; ready: number }
   commandcode: { active: number; target: number; starting: number; ready: number }
   kilo: { active: number; target: number; starting: number; ready: number }
+  prime: { active: number; target: number; starting: number; ready: number }
 }
 
 /** Maintains disposable, pre-spawned workers. A checked-out worker is never returned to the pool. */
@@ -64,6 +65,7 @@ export class DisposableOneShotPool<Options, Result> {
     pi: { active: 0, target: 0, starting: 0, ready: new Set(), retryTimer: null, failures: 0 },
     commandcode: { active: 0, target: 0, starting: 0, ready: new Set(), retryTimer: null, failures: 0 },
     kilo: { active: 0, target: 0, starting: 0, ready: new Set(), retryTimer: null, failures: 0 },
+    prime: { active: 0, target: 0, starting: 0, ready: new Set(), retryTimer: null, failures: 0 },
   }
   private readonly all = new Set<DisposableWorker<Options, Result>>()
   private connected = false
@@ -187,6 +189,7 @@ export class DisposableOneShotPool<Options, Result> {
       pi: item('pi'),
       commandcode: item('commandcode'),
       kilo: item('kilo'),
+      prime: item('prime'),
     }
   }
 

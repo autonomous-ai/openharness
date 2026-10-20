@@ -32,7 +32,7 @@ const engines = [
   ['claude','Claude Code'],['codex','Codex'],['cursor','Cursor'],['opencode','OpenCode'],
   ['pi','Pi'],['hermes','Hermes'],['commandcode','Command Code'],['devin','Devin'],
   ['muse','Muse Code'],['amp','Amp'],['agy','Antigravity'],['copilot','GitHub Copilot'],
-  ['grok','Grok Build'],['kilo','Kilo Code'],
+  ['grok','Grok Build'],['kilo','Kilo Code'],['prime','Prime Agent'],
 ];
 function output(path, content) {
   const full = resolve(root, path);
@@ -105,16 +105,17 @@ const height = craftY + rows * rowStep - gap + margin;
 const parts = [
   `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="title desc">`,
   `<title id="title">OpenHarness: coding first, then ${agents.length} harnesses across ${craftGroups.length} more categories</title>`,
-  '<desc id="desc">Coding is the main category, with fourteen supported agents. Below it, harnesses for Design, Engineering, Media, Music, Productivity, Science and Data, Simulation, Games, Research, and Local AI. The full catalog is in the README table.</desc>',
+  '<desc id="desc">Coding is the main category, with fifteen supported agents. Below it, harnesses for Design, Engineering, Media, Music, Productivity, Science and Data, Simulation, Games, Research, and Local AI. The full catalog is in the README table.</desc>',
   '<style>text{font-family:Inter,Arial,sans-serif;fill:#172a24}</style>',
   `<rect width="${width}" height="${height}" rx="26" fill="#f3f2ec"/>`,
   `<rect x="${margin}" y="${codingY}" width="${contentWidth}" height="${codingHeight}" rx="18" fill="#e4ede7" stroke="#b5c8b9"/>`,
   `<text x="${margin+24}" y="73" font-size="36" font-weight="700">Coding</text>`,
 ];
 engines.forEach(([id,name],i) => {
-  const slotWidth = (contentWidth - 48) / 7;
-  const centerX = margin + 24 + ((i % 7) + 0.5) * slotWidth;
-  const y = 100 + Math.floor(i / 7) * 132;
+  // Eight to a row: fifteen engines fill two rows, which is what codingHeight holds.
+  const slotWidth = (contentWidth - 48) / 8;
+  const centerX = margin + 24 + ((i % 8) + 0.5) * slotWidth;
+  const y = 100 + Math.floor(i / 8) * 132;
   parts.push(mark(id,name,centerX-38,y,76));
   parts.push(`<text x="${centerX}" y="${y+101}" text-anchor="middle" font-size="20">${escape(name)}</text>`);
 });

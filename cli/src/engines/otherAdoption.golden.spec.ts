@@ -47,6 +47,7 @@ const ID = {
   opencode: 'ses_person', kilo: 'ses_kiloperson', hermes: '20260920_100000_a1b2c3', hermesAcp: '3f2a9c1e-8b4d-4e6f-9a1b-2c3d4e5f6a7b',
   devin: 'brisk-otter', pi: '019fa2a5-a26d-700c-bf8c-97af19ae3d5f', piMoved: '019fa2a6-0000-7000-8000-000000000002', commandcode: '34e1385f-c18a-4f54-bf12-f8f57e151a3d',
   muse: '8a5b11e5-5eae-441c-ba9d-903608a9632e', agy: 'ae51057a-0000-4000-8000-000000000001',
+  prime: '01a15135-c442-71eb-ab4c-34771f76c342', primeChild: '01a15136-8d70-745f-a3ae-0538ec515c20',
 }
 
 const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
@@ -107,6 +108,7 @@ beforeAll(async () => {
     KILO_DATA_DIR: home('.local', 'share', 'kilo'), KILO_DB: undefined, HERMES_HOME: home('.hermes'), DEVIN_HOME: home('.local', 'share', 'devin', 'cli'),
     PI_HOME: home('.pi'), PI_CODING_AGENT_DIR: undefined, PI_CODING_AGENT_SESSION_DIR: undefined, COMMANDCODE_HOME: home('.commandcode'),
     MUSE_HOME: home('.muse'), AGY_HOME: home('.gemini', 'antigravity-cli'),
+    PRIME_AGENT_DIR: home('.prime', 'agent'), PRIME_AGENT_CODING_AGENT_DIR: undefined,
   }
   for (const [name, value] of Object.entries(env)) {
     saved[name] = process.env[name]
@@ -216,6 +218,11 @@ CREATE TABLE subagent_heads (session_id TEXT, agent_id TEXT, chain_node_id INTEG
   write(home('.pi', 'agent', 'sessions', '--work-pi--', `2026-09-20T10-00-00-000Z_${ID.pi}.jsonl`), jsonl(piHeader, piMessage('user', 1), piMessage('assistant', 2)))
   // …and one in a sessions folder the person moved (`PI_CODING_AGENT_SESSION_DIR`), which Pi keeps flat.
   write(home('pi-moved', `2026-09-20T10-00-00-000Z_${ID.piMoved}.jsonl`), jsonl({ ...piHeader, id: ID.piMoved, cwd: '/work/pi-moved' }, piMessage('user', 3)))
+  // Prime Agent: a root session in its flat folder, named, and an RLM child (rlmDepth 1) it must never list.
+  const primeHeader = { type: 'session', version: 3, id: ID.prime, timestamp: iso(0), cwd: '/work/prime', rlmDepth: 0 }
+  write(home('.prime', 'agent', 'sessions', `${ID.prime}.jsonl`), jsonl(primeHeader, piMessage('user', 1), piMessage('assistant', 2),
+    { type: 'session_info', id: 'n1', parentId: null, timestamp: iso(3), name: 'prime work' }))
+  write(home('.prime', 'agent', 'sessions', `${ID.primeChild}.jsonl`), jsonl({ ...primeHeader, id: ID.primeChild, rlmDepth: 1 }, piMessage('user', 4)))
   // Command Code: a v3 transcript in its project folder.
   const ccMessage = (role: string, seconds: number) => ({ type: 'message', id: `m${seconds}`, parentId: null, timestamp: iso(seconds), message: { role, content: [{ type: 'text', text: 'words' }], meta: { source: role === 'user' ? 'user' : 'model' } } })
   write(home('.commandcode', 'projects', 'work-commandcode', `${ID.commandcode}.jsonl`), jsonl(

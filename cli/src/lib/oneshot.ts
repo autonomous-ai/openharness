@@ -777,6 +777,139 @@ class PiWorker extends ProcessWorker {
   }
 }
 
+function primeBin(): string {
+  return env.PRIME_AGENT_PATH || 'prime-agent'
+}
+
+/** Prime's thinking levels a one-shot may ask for (`--thinking`); `ultra`/`ultracode` are not its own. */
+const PRIME_ONE_SHOT_THINKING = new Set(['low', 'medium', 'high', 'xhigh', 'max'])
+
+/**
+ * The measured Prime Agent print invocation (prime-agent 0.9.5): `-p` prints only the answer on stdout,
+ * nothing on stderr. `--no-session` writes no session file (checked: the sessions folder is unchanged);
+ * `--no-extensions` keeps the machine's discovery extension from registering the recap; `--no-tools` and
+ * `--no-skills` keep it a text condensation. Neither `--model` nor `--thinking` touches the user's
+ * defaults in settings.json (checked), unlike the TUI's `/model` and `/effort`.
+ */
+export function primeOneShotArgs(model?: string, effort?: OneShotOptions['effort']): string[] {
+  return [
+    '-p', '--no-session', '--no-tools', '--no-extensions', '--no-skills',
+    ...(model ? ['--model', model] : []),
+    ...(effort && PRIME_ONE_SHOT_THINKING.has(effort) ? ['--thinking', effort] : []),
+  ]
+}
+
+/**
+ * Prime reads its `-p` prompt from piped stdin like Pi — but gives up on stdin 250ms after it starts
+ * reading (`stdin did not close within 250ms; continuing without waiting for more piped input`, measured:
+ * a prompt written 3s after spawn was dropped and the run printed nothing). A process parked on its stdin,
+ * which is what Pi's warm worker is, therefore cannot work. This worker starts its process only when it is
+ * given the prompt, and closes stdin at once: a pooled one costs nothing and is never stale.
+ */
+class PrimeWorker implements DisposableWorker<OneShotOptions, OneShotResult> {
+  readonly engine = 'prime' as const
+  readonly createdAt = Date.now()
+  private child: ChildProcess | null = null
+  private assigned = false
+  private disposed = false
+  private readonly exitListeners = new Set<() => void>()
+  private stdout = ''
+  private stderr = ''
+  private pending: {
+    resolve: (result: OneShotResult) => void
+    reject: (err: unknown) => void
+    timer: NodeJS.Timeout
+    signal?: AbortSignal
+    onAbort: () => void
+  } | null = null
+
+  constructor(private readonly cwd: string, private readonly model?: string, private readonly effort?: OneShotOptions['effort']) {}
+
+  ready(): Promise<this> {
+    return Promise.resolve(this)
+  }
+
+  isAlive(): boolean {
+    if (this.disposed) return false
+    return this.child == null || (this.child.exitCode == null && !this.child.killed)
+  }
+
+  onExit(listener: () => void): void {
+    this.exitListeners.add(listener)
+  }
+
+  dispose(): void {
+    if (this.child) killGroup(this.child)
+    else if (!this.disposed) this.exited()
+    this.disposed = true
+  }
+
+  private exited(): void {
+    for (const listener of this.exitListeners) listener()
+    this.exitListeners.clear()
+  }
+
+  run(options: OneShotOptions): Promise<OneShotResult> {
+    if (this.assigned) return Promise.reject(new Error('prime recap worker already consumed'))
+    this.assigned = true
+    if (this.disposed) return Promise.reject(new Error('prime recap worker is disposed'))
+    if (options.signal?.aborted) return Promise.reject(abortError(this.engine))
+    const timeoutMs = options.timeoutMs ?? 60_000
+    return new Promise((resolve, reject) => {
+      const onAbort = (): void => { this.fail(abortError(this.engine)); this.dispose() }
+      const timer = setTimeout(() => {
+        this.fail(new Error(`prime one-shot timed out after ${timeoutMs}ms`))
+        this.dispose()
+      }, timeoutMs)
+      this.pending = { resolve, reject, timer, signal: options.signal, onAbort }
+      options.signal?.addEventListener('abort', onAbort)
+      let child: ChildProcess
+      try {
+        child = spawn(primeBin(), primeOneShotArgs(this.model, this.effort), {
+          cwd: this.cwd, env: scrubTerminalContext({ ...oneShotParentEnv() }), detached: true, stdio: ['pipe', 'pipe', 'pipe'],
+        })
+      } catch (err) {
+        this.fail(err)
+        return
+      }
+      this.child = child
+      child.stdout?.on('data', (chunk: Buffer) => { this.stdout += chunk.toString() })
+      child.stderr?.on('data', (chunk: Buffer) => { this.stderr += chunk.toString() })
+      child.stdin?.on('error', (err) => this.fail(err))
+      child.on('error', (err) => this.fail(err))
+      child.on('close', (code) => {
+        this.exited()
+        if (!this.pending) return
+        const text = this.stdout.trim()
+        if (!text) this.fail(new Error(`prime one-shot exited ${code} with no answer: ${this.stderr.slice(0, 500)}`))
+        else this.complete(text)
+      })
+      if (!child.stdin || child.stdin.destroyed) {
+        this.fail(new Error('prime recap worker is not writable'))
+        return
+      }
+      try { child.stdin.end(options.prompt) } catch (err) { this.fail(err) }
+    })
+  }
+
+  private cleanupPending(): typeof this.pending {
+    const pending = this.pending
+    if (!pending) return null
+    this.pending = null
+    clearTimeout(pending.timer)
+    pending.signal?.removeEventListener('abort', pending.onAbort)
+    return pending
+  }
+
+  private complete(text: string): void {
+    this.cleanupPending()?.resolve({ text, sessionId: null })
+  }
+
+  private fail(err: unknown): void {
+    this.cleanupPending()?.reject(err)
+  }
+}
+
 function commandCodeBin(): string {
   return env.COMMANDCODE_PATH || 'commandcode'
 }
@@ -876,7 +1009,9 @@ function createOneShotWorker(
             ? new CommandCodeWorker(cwd, model).ready()
             : engine === 'kilo'
               ? new KiloWorker(model).ready()
-              : new OpencodeWorker(model).ready()
+              : engine === 'prime'
+                ? new PrimeWorker(cwd, model, effort).ready()
+                : new OpencodeWorker(model).ready()
 }
 
 /** The measured Grok 1.0.0 headless invocation. A fresh GROK_HOME contains every persisted session. */
@@ -992,7 +1127,7 @@ const routerPool = new DisposableOneShotPool<OneShotOptions, OneShotResult>(
 /** Routing needs exactly ONE warm worker, of the configured engine — active=1 there, 0 everywhere else. */
 function pinRouterEngine(engine: OneShotEngine): void {
   routerPool.setActiveCounts({
-    claude: 0, codex: 0, cursor: 0, opencode: 0, pi: 0, commandcode: 0, [engine]: 1,
+    claude: 0, codex: 0, cursor: 0, opencode: 0, pi: 0, commandcode: 0, kilo: 0, prime: 0, [engine]: 1,
   } as Parameters<typeof routerPool.setActiveCounts>[0])
 }
 

@@ -78,7 +78,7 @@ export function createAttach({
 }: AttachDeps) {
   const {
     liveParsers, cursorNormalizers, opencodeReaders, kiloReaders, museNormalizers, ampNormalizers,
-    grokNormalizers, agyNormalizers, copilotNormalizers, piNormalizers, hermesReaders, devinReaders, commandcodeNormalizers,
+    grokNormalizers, agyNormalizers, copilotNormalizers, piNormalizers, primeNormalizers, hermesReaders, devinReaders, commandcodeNormalizers,
   } = normalizers
   const sideRead = createSideReads()
   const readerLoads = createReaderLoads(readerLoadWaitMs)
@@ -504,6 +504,12 @@ export function createAttach({
       // Hydrate state silently; never replay history live — except a turn left open, below.
       historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
       piNormalizers.set(session.sessionId, normalizer)
+    } else if (engine('prime')) {
+      // Prime's transcript closes its own turns (the final assistant stop), so the fold answers "was the last
+      // exchange finished?" by itself: no hook is waited on, unlike agy's and Copilot's.
+      const normalizer = new (engine('prime')!).PrimeNormalizer('live')
+      historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
+      primeNormalizers.set(session.sessionId, normalizer)
     } else if (engine('hermes')) {
       // Hermes has no transcript file — poll its SQLite store, like opencode.
       const reader = new (engine('hermes')!).HermesReader({
@@ -548,7 +554,7 @@ export function createAttach({
     if (abandonedHistory) {
       console.log(`[agent] ${sid(session.agentId)} left the turn open at attach as history · it began before its engine was started again`)
       const folds: Array<Map<string, { closeTurn(): unknown }>> = [cursorNormalizers, museNormalizers, ampNormalizers,
-        grokNormalizers, agyNormalizers, copilotNormalizers, piNormalizers, commandcodeNormalizers]
+        grokNormalizers, agyNormalizers, copilotNormalizers, piNormalizers, primeNormalizers, commandcodeNormalizers]
       for (const fold of folds) fold.get(session.sessionId)?.closeTurn()
       const closing = prepared?.state.handle ?? parser ?? liveParsers.get(session.sessionId)
       closing?.closeTurn('abandoned')

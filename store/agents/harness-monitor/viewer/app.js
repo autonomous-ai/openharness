@@ -117,8 +117,8 @@ function setPreset(preset) {
   persist(); columnMenu(); buildColumns()
 }
 for (const button of document.querySelectorAll('[data-preset]')) button.onclick = () => setPreset(button.dataset.preset)
-const iconNames = new Set(['codex', 'opencode', 'cursor', 'pi', 'hermes', 'commandcode', 'devin', 'muse', 'amp', 'kilo', 'grok', 'copilot', 'agy', 'claude'])
-const engineNames = { codex: 'Codex', claude: 'Claude', opencode: 'OpenCode', cursor: 'Cursor', terminal: 'Terminal', pi: 'Pi', hermes: 'Hermes', copilot: 'Copilot', gemini: 'Gemini' }
+const iconNames = new Set(['codex', 'opencode', 'cursor', 'pi', 'hermes', 'commandcode', 'devin', 'muse', 'amp', 'kilo', 'grok', 'copilot', 'agy', 'prime', 'claude'])
+const engineNames = { codex: 'Codex', claude: 'Claude', opencode: 'OpenCode', cursor: 'Cursor', terminal: 'Terminal', pi: 'Pi', hermes: 'Hermes', copilot: 'Copilot', prime: 'Prime Agent', gemini: 'Gemini' }
 function createRow(row) {
   const tr = element('tr'); tr.dataset.id = row.id
   tr.onclick = () => { state.selected = row.id; select(); dom.grid.focus({ preventScroll: true }) }

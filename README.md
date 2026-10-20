@@ -20,7 +20,7 @@
 
 ### Every agent, side by side
 
-Claude Code, Codex, Cursor, OpenCode, Devin, Amp, Copilot and seven more.
+Claude Code, Codex, Cursor, OpenCode, Devin, Amp, Copilot and eight more.
 
 <p align="center"><img src=".github/assets/readme/agents.gif" width="960" alt="Four agents working at once in one window: Claude Code and Codex on a MacBook, Cursor on an office desktop, OpenCode on a GPU box. Each pane shows its machine, project and branch."></p>
 
@@ -235,7 +235,7 @@ The agent does the reasoning. The harness supplies the tools and the view. It's 
 
 | Category | Agents and harnesses |
 |---|---|
-| **Coding** | [Claude Code, Codex, Cursor, OpenCode, Pi, Hermes, Command Code, Devin, Muse Code, Amp, Antigravity, GitHub Copilot, Grok Build, Kilo Code](docs/engines.md), [Machine Monitor](store/agents/machine-monitor/), [Trail of Bits Skills](store/agents/trailofbits-skills/) |
+| **Coding** | [Claude Code, Codex, Cursor, OpenCode, Pi, Hermes, Command Code, Devin, Muse Code, Amp, Antigravity, GitHub Copilot, Grok Build, Kilo Code, Prime Agent](docs/engines.md), [Machine Monitor](store/agents/machine-monitor/), [Trail of Bits Skills](store/agents/trailofbits-skills/) |
 | Essentials | [Harness Monitor](store/agents/harness-monitor/), [Memories](store/agents/memories/) |
 | Design | [Autonomous Workshop](store/agents/autonomous-workshop/), [Blender](store/agents/blender/), [Bonsai MCP](store/agents/bonsai-mcp/), [Creative Direction](store/agents/creative-direction/), [Excalidraw](store/agents/excalidraw/), [FreeCAD](store/agents/freecad/), [Generative Art](store/agents/generative-art/), [OpenSCAD](store/agents/openscad/), [text-to-cad](store/agents/text-to-cad/) |
 | Engineering | [Autonomous Circuit](store/agents/autonomous-circuit/), [CircuitJS](store/agents/circuitjs/), [Home Assistant](store/agents/home-assistant/), [KiCad](store/agents/kicad/), [Orca Slicer](store/agents/orca-slicer/), [Yosys](store/agents/yosys/) |

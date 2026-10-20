@@ -7,6 +7,7 @@ import { VERSION } from '../version.js'
 import { OPENCODE_LEGACY_PLUGIN, OPENCODE_TUI_PLUGIN, OPENCODE_LEGACY_REMOVAL, OPENCODE_VERSION } from './opencode/contract.js'
 import { KILO_PLUGIN } from './kilo/contract.js'
 import { PI_EXTENSION } from './pi/contract.js'
+import { PRIME_EXTENSION } from './prime/contract.js'
 import { AMP_PLUGIN } from './amp/contract.js'
 import { HERMES_HOOK_SETTINGS } from './hermes/contract.js'
 import { opencodeMajorVersion, type OpencodeLaunchSnapshot } from './launchControl.js'
@@ -33,6 +34,7 @@ const pluginValues = (port: number) => ({
 })
 export const installKiloPlugin = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativePlugin(options?.environment ? { ...KILO_PLUGIN, file: join(nativeHookLocations(options.environment).KILO_PLUGIN_DIR, 'launcher-register.js') } : KILO_PLUGIN, pluginValues(port), options)
 export const installPiExtension = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativePlugin(options?.environment ? { ...PI_EXTENSION, file: join(nativeHookLocations(options.environment).PI_AGENT_DIR, 'extensions', 'launcher-register.ts') } : PI_EXTENSION, pluginValues(port), options)
+export const installPrimeExtension = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativePlugin(options?.environment ? { ...PRIME_EXTENSION, file: join(nativeHookLocations(options.environment).PRIME_AGENT_DIR, 'extensions', 'harness-register.ts') } : PRIME_EXTENSION, pluginValues(port), options)
 export const installAmpPlugin = (port: number, options?: NativeHookOptions): Promise<boolean> => installNativePlugin(options?.environment ? { ...AMP_PLUGIN, file: join(nativeHookLocations(options.environment).AMP_PLUGIN_DIR, 'launcher-register.ts') } : AMP_PLUGIN, pluginValues(port), options)
 export const installHermesHooks = (port: number, selectedHome?: string, options?: NativeHookOptions): Promise<boolean> =>
   installNativeYamlHooks(HERMES_HOOK_SETTINGS, home => command(port, 'hermes', env.CODEX_HOME, home, options?.environment), selectedHome,

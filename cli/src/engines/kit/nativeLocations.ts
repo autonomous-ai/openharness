@@ -10,7 +10,7 @@ export const LAUNCH_LOCATION_VARIABLES = [
   'HERMES_HOME', 'CURSOR_CONFIG_DIR', 'CURSOR_DATA_DIR', 'GROK_HOME', 'AGY_HOME', 'COPILOT_HOME',
   'SHELL', 'ZDOTDIR', 'CLAUDE_PROJECTS_DIR', 'CURSOR_HOME', 'AGY_CONFIG_DIR', 'COMMANDCODE_HOME',
   'DEVIN_HOME', 'DEVIN_CONFIG_PATH', 'OPENCODE_PLUGIN_DIR', 'KILO_PLUGIN_DIR', 'PI_HOME',
-  'PI_CODING_AGENT_SESSION_DIR', 'AMP_PLUGIN_DIR',
+  'PI_CODING_AGENT_SESSION_DIR', 'AMP_PLUGIN_DIR', 'PRIME_AGENT_CODING_AGENT_DIR',
 ] as const
 
 /** The shell can unset an inherited location. Absence is part of its snapshot. */
@@ -49,6 +49,7 @@ export function nativeHookLocations(vars: Readonly<Record<string, string>>) {
     OPENCODE_PLUGIN_DIR: vars.OPENCODE_PLUGIN_DIR || join(vars.OPENCODE_CONFIG_DIR || join(config, 'opencode'), 'plugin'),
     KILO_PLUGIN_DIR: vars.KILO_PLUGIN_DIR || join(config, 'kilo', 'plugin'),
     PI_AGENT_DIR: vars.PI_CODING_AGENT_DIR || join(vars.PI_HOME || join(home, '.pi'), 'agent'),
+    PRIME_AGENT_DIR: vars.PRIME_AGENT_CODING_AGENT_DIR || join(home, '.prime', 'agent'),
     HERMES_HOME: vars.HERMES_HOME || join(home, '.hermes'),
     COMMANDCODE_HOME: vars.COMMANDCODE_HOME || join(home, '.commandcode'),
     DEVIN_HOME: vars.DEVIN_HOME || join(data, 'devin', 'cli'),

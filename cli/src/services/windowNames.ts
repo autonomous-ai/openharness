@@ -125,7 +125,7 @@ export async function defaultNamers(engines: readonly string[], list: () => Prom
   const free = await list().then((out) => parseOpencodeModelsOutput(out).map((m) => m.id).filter((id) => /-free$/.test(id)), () => [])
   const own: Namer[] = engines.flatMap((engine): Namer[] => engine === 'claude' ? [{ engine: 'claude', model: 'haiku', effort: 'low' }]
     : engine === 'codex' ? [{ engine: 'codex', effort: 'low' }]
-    : engine === 'opencode' || engine === 'pi' || engine === 'cursor' || engine === 'commandcode' || engine === 'kilo' ? [{ engine }]
+    : engine === 'opencode' || engine === 'pi' || engine === 'prime' || engine === 'cursor' || engine === 'commandcode' || engine === 'kilo' ? [{ engine }]
     : [])
   return [...free.slice(0, MAX_FREE).map((model): Namer => ({ engine: 'opencode', model })), ...own]
 }

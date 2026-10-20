@@ -33,6 +33,6 @@ describe('what a paused harness can promise, per engine', () => {
   // the loop above fail, and this makes "the loop above ran over everything" explicit.
   it('covers the whole roster, so a new engine cannot be forgotten', () => {
     expect(ENGINES.filter(engine => resumeMode(engine)).length).toBe(ENGINES.length)
-    expect(ENGINES.length).toBe(15)
+    expect(ENGINES.length).toBe(16)
   })
 })

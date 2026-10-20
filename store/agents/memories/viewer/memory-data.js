@@ -19,7 +19,7 @@
  */
 
 export const DAY = 86_400_000
-const FALLBACK = { amp: '#c9a227', kilo: '#5fb3b3', devin: '#6aa6f8', muse: '#c77dff', agy: '#8bd3a0', commandcode: '#d4a5a5' }
+const FALLBACK = { amp: '#c9a227', kilo: '#5fb3b3', devin: '#6aa6f8', muse: '#c77dff', agy: '#8bd3a0', commandcode: '#d4a5a5', prime: '#c9ccd3' }
 const SEARCHES_KEPT = 8
 const count = (snap) => snap?.sessions?.asks ?? 0
 

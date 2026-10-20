@@ -30,6 +30,7 @@ export interface ExternalPaths {
   hermesRoot: string
   devinHome: string
   piAgentDir: string
+  primeAgentDir: string
   /** Pi's moved sessions folder (`PI_CODING_AGENT_SESSION_DIR`), when set. */
   piSessionDir?: string
   commandcodeHome: string
@@ -59,6 +60,7 @@ export function externalPaths(vars: NodeJS.ProcessEnv = process.env): ExternalPa
     devinHome: env.DEVIN_HOME,
     piAgentDir: vars.PI_CODING_AGENT_DIR || join(env.PI_HOME, 'agent'),
     ...(vars.PI_CODING_AGENT_SESSION_DIR ? { piSessionDir: vars.PI_CODING_AGENT_SESSION_DIR } : {}),
+    primeAgentDir: vars.PRIME_AGENT_CODING_AGENT_DIR || env.PRIME_AGENT_DIR,
     commandcodeHome: env.COMMANDCODE_HOME,
     museHome: env.MUSE_HOME,
     agyHome: env.AGY_HOME,
@@ -114,6 +116,7 @@ export function externalProviders(paths: ExternalPaths = externalPaths()): Exter
     loaded('hermes', 'hermes', (code) => code.hermesProvider({ root: paths.hermesRoot })),
     loaded('devin', 'devin', (code) => code.devinProvider({ home: paths.devinHome })),
     loaded('pi', 'pi', (code) => code.piProvider({ agentDir: paths.piAgentDir, ...(paths.piSessionDir ? { sessionDir: paths.piSessionDir } : {}) })),
+    loaded('prime', 'prime', (code) => code.primeProvider({ agentDir: paths.primeAgentDir })),
     loaded('commandcode', 'commandcode', (code) => code.commandcodeProvider({ home: paths.commandcodeHome })),
     loaded('muse', 'muse', (code) => code.museProvider({ home: paths.museHome })),
     loaded('agy', 'agy', (code) => code.agyProvider({ home: paths.agyHome })),

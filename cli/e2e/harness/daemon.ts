@@ -114,7 +114,7 @@ const NATIVE_HOOK_PATHS: Record<string, readonly string[]> = {
   cursor: ['CURSOR_CONFIG_DIR', 'CURSOR_DATA_DIR'], opencode: ['OPENCODE_PLUGIN_DIR'],
   kilo: ['KILO_PLUGIN_DIR'], pi: ['PI_HOME'], amp: ['AMP_PLUGIN_DIR', 'AMP_SESSIONS_DIR'],
   hermes: ['HERMES_HOME'], devin: ['DEVIN_CONFIG_PATH'], commandcode: ['COMMANDCODE_HOME'],
-  grok: ['GROK_HOME'], agy: ['AGY_CONFIG_DIR'], copilot: ['COPILOT_HOME'],
+  grok: ['GROK_HOME'], agy: ['AGY_CONFIG_DIR'], copilot: ['COPILOT_HOME'], prime: ['PRIME_AGENT_CODING_AGENT_DIR'],
 }
 const HOOK_ENGINES = new Set(['claude', 'codex', ...Object.keys(NATIVE_HOOK_PATHS)])
 /** The shell profiles a login shell in a pane reads, where a person moves an engine's home. */
