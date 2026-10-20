@@ -289,6 +289,16 @@ worker and PTY host PIDs; the owned counter advanced from `COUNT_12973` to
 render and full completion-copy checks remain unverified, so the scenario is
 **partial**.
 
+A later diagnostic install from the already verified ARM64 ZIP started one
+1.0.3 app process. Its first screenshot had Windows Settings in front, so it
+could not establish whether the app client was white. Bringing that same app
+window forward without resizing showed the signed-in home UI. The Flutter
+child window had a normal nonzero client rectangle; the available app log had
+backend connection warnings but no renderer error. No resize was applied.
+This confirms that a later direct launch rendered, but does not establish why
+the one-command first-run capture was white. The diagnostic app remains
+installed for the owner's Mac-to-VM check.
+
 ### The Windows PC seen from the Mac
 
 Pending the owner at their signed-in Mac desktop. The VM app showed the remote
@@ -302,7 +312,7 @@ CLI, daemon or `~/.harness`.
 | --- | --- | --- |
 | G1 | ARM RC1 GUI Ctrl+C did not interrupt an owned PowerShell child. | Isolated PTY host inherited Ctrl+C ignore from its process group. A Windows regression failed before the host fix and passed after it; the full Windows PTY suite passed. Local x64 Release and staging N1 passed GUI Ctrl+C with the patched test host. The published PTY 0.4.19 binary started after a scoped host retirement, but GUI Ctrl+C on it remains unverified because it belonged to another Windows session. |
 | G2 | Printable terminal input depended on launch/relaunch state. | ARM RC1 failed early input attempts, then `WIN_42` passed after relaunch. The exact lifecycle cause and cold-start reliability remain open. |
-| G3 | The ARM client area turned black/white during RC1, N and one-command 1.0.3 sessions. | The process stayed responsive at the OS level. N did not repaint after one app restart, but one scoped window-size change restored its UI; the surface went black again after the CLI restart and another scoped size change restored it. The GPU accepted D3D feature level 12_1. N1, N2 and x64-on-ARM 1.0.3 rendered in other launches; the one-command ARM64 1.0.3 first-run capture was white. The cause and first-render reliability remain unproved. |
+| G3 | The ARM client area turned black/white during RC1, N and one-command 1.0.3 sessions. | The process stayed responsive at the OS level. N did not repaint after one app restart, but one scoped window-size change restored its UI; the surface went black again after the CLI restart and another scoped size change restored it. The GPU accepted D3D feature level 12_1. N1, N2 and x64-on-ARM 1.0.3 rendered in other launches; the one-command ARM64 1.0.3 first-run capture was white. A later direct ARM64 ZIP launch rendered after focus without a resize. The cause and first-render reliability remain unproved. |
 | G4 | Notification permission gate reported unavailable while a native probe could post a toast. | The first-toast `Setting()` error is handled in N1 source, but no completed agent turn occurred on the hidden staging N1 app because the backend was offline/reset. Product completion toast and click remain unverified. |
 | G5 | Published N footer joined its words and counts. | Staging N1 on both x64 and ARM64 visibly separates the words and counts. |
 | G6 | Windows Settings uninstall entry kept the old version after a successful in-app update. | Both staging 1.0.0 → 1.0.1 updates left `DisplayVersion=1.0.0` while About showed 1.0.1. Launcher fix `147ca03bd` has a failing-then-passing regression; live 1.0.1 → 1.0.2 updates on both VMs now show `DisplayVersion=1.0.2`. |
@@ -325,7 +335,8 @@ terminals, and the Mac's Harness home were not accessed. No global fake CDN
 route, hosts change or CA installation was made during these live checks. QR
 codes, account details and private screenshots stay outside tracked evidence.
 The ARM user's 1.0.3 Settings uninstalls after Scenarios 5, 6 and 7 finished
-cleanly. The separate x64 VM
+cleanly; a later diagnostic ARM64 1.0.3 app is installed and running for the
+owner's Mac-to-VM check. The separate x64 VM
 retains staging 1.0.2; its two owned test
 panes and patched PTY host were retired after their continuity checks. Final
 account, artifact and VM cleanup is pending the remaining scenarios and will
