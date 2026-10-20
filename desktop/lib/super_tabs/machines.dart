@@ -125,19 +125,64 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   Future<void> _contribute({Map<String, dynamic>? existing}) async {
     final app = widget.app;
     if (app == null) return;
-    final choices = app.machineStates.values
+    final isConfigure = existing != null;
+    final existingId = existing?['machineId'] as String?;
+    bool isExisting(MachineState m) =>
+        existingId != null && m.machine.machineId == existingId;
+    // "Already in this tab" means already CONTRIBUTED — an agent already
+    // running there (unconfirmed) does not count, or a freshly created tab
+    // whose lead runs on this Mac could never contribute it. `_ids` (agents
+    // too) is for the machine-card panel below, not this dialog.
+    final contributed = {
+      for (final m in c.snapshot?.machines ?? const <Map<String, dynamic>>[])
+        m['machineId'] as String,
+    };
+    // Only this account's own, reachable computers can be offered — a machine
+    // already in the tab would duplicate its entry, and one offline or
+    // unlinked cannot actually be contributed right now. The machine being
+    // configured is always its own exception: that is the one entry this
+    // dialog is editing, not adding.
+    final own = app.machineStates.values
+        .where((m) => !m.machine.isShared && !m.machine.isSharedMachine)
+        .toList();
+    final addable = own
         .where(
           (m) =>
-              !m.machine.isShared &&
-              !m.machine.isSharedMachine &&
-              !m.needsLink &&
-              m.nodeOnline != false,
+              isExisting(m) ||
+              (!contributed.contains(m.machine.machineId) &&
+                  !m.needsLink &&
+                  !m.isOffline),
         )
         .toList();
+    final alreadyInTab = own
+        .where(
+          (m) => !isExisting(m) && contributed.contains(m.machine.machineId),
+        )
+        .toList();
+    final notLinked = own
+        .where(
+          (m) =>
+              !isExisting(m) &&
+              !contributed.contains(m.machine.machineId) &&
+              m.needsLink,
+        )
+        .toList();
+    final offline = own
+        .where(
+          (m) =>
+              !isExisting(m) &&
+              !contributed.contains(m.machine.machineId) &&
+              !m.needsLink &&
+              m.isOffline,
+        )
+        .toList();
+    String labelFor(MachineState m) => m.isLocalMachine
+        ? 'This Mac (${m.machine.displayName})'
+        : m.machine.displayName;
     String? machineId =
-        existing?['machineId'] as String? ??
-        choices.where((m) => m.isLocalMachine).firstOrNull?.machine.machineId ??
-        choices.firstOrNull?.machine.machineId;
+        existingId ??
+        addable.where((m) => m.isLocalMachine).firstOrNull?.machine.machineId ??
+        addable.firstOrNull?.machine.machineId;
     String? error;
     var busy = false;
     String? setupId;
@@ -247,32 +292,40 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               }
             }
 
+            final canAdd = addable.isNotEmpty;
+            // Only in Add mode: Configure already names the one machine it
+            // edits, so the picker's "already in the tab"/"can't reach it"
+            // bookkeeping about every OTHER machine is noise there.
+            final showStatus = !isConfigure;
+            final singleAlreadyInTab =
+                !canAdd &&
+                alreadyInTab.length == 1 &&
+                notLinked.isEmpty &&
+                offline.isEmpty;
+            final String emptyStatement = own.isEmpty
+                ? 'No computer is connected to this account yet.'
+                : singleAlreadyInTab
+                ? '${labelFor(alreadyInTab.single)} is already in this tab.'
+                : 'No other computer can be added to this tab right now.';
             return AlertDialog(
-              title: const Text('Add machine'),
+              title: Text(isConfigure ? 'Configure machine' : 'Add machine'),
               content: SizedBox(
                 width: 360,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (choices.isEmpty)
-                      Text(
-                        'Connect a computer to Harness first.',
-                        style: DesktopChrome.text(),
-                      )
-                    else
+                    if (canAdd)
                       AbsorbPointer(
                         absorbing: busy,
                         child: AppSelectField<String>(
                           value: machineId!,
                           semanticLabel: 'Machine',
                           options: [
-                            for (final m in choices)
+                            for (final m in addable)
                               SelectOption(
                                 value: m.machine.machineId,
-                                label: m.isLocalMachine
-                                    ? 'This Mac'
-                                    : m.machine.displayName,
+                                label: labelFor(m),
                               ),
                           ],
                           onChanged: (id) {
@@ -284,12 +337,58 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                             });
                           },
                         ),
+                      )
+                    else
+                      Text(emptyStatement, style: DesktopChrome.text()),
+                    if (showStatus &&
+                        !singleAlreadyInTab &&
+                        alreadyInTab.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        'Already in this tab: ${alreadyInTab.map(labelFor).join(', ')}',
+                        style: DesktopChrome.metadata(),
                       ),
+                    ],
+                    if (showStatus)
+                      for (final m in notLinked) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          'Not linked: ${labelFor(m)}. Link it from Machines.',
+                          style: DesktopChrome.metadata(),
+                        ),
+                      ],
+                    if (showStatus)
+                      for (final m in offline) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          'Offline: ${labelFor(m)}. Start Harness on it to add it.',
+                          style: DesktopChrome.metadata(),
+                        ),
+                      ],
                     const SizedBox(height: 16),
-                    Text(
-                      'Let the lead run agents here using this machine’s signed-in accounts.',
-                      style: DesktopChrome.text(),
-                    ),
+                    if (canAdd)
+                      Text(
+                        'Let the lead run agents here using this machine’s signed-in accounts.',
+                        style: DesktopChrome.text(),
+                      )
+                    else ...[
+                      Text(
+                        'To add another computer, install Harness on it and sign in with '
+                        'this account, or approve a device with no screen from Machines.',
+                        style: DesktopChrome.text(),
+                      ),
+                      const SizedBox(height: 4),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton(
+                          onPressed: () {
+                            Navigator.pop(context);
+                            app.requestMachines();
+                          },
+                          child: const Text('Open Machines'),
+                        ),
+                      ),
+                    ],
                     if (error != null) ...[
                       const SizedBox(height: 12),
                       Text(error!, style: DesktopChrome.metadata()),
@@ -298,10 +397,20 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 ),
               ),
               actions: [
-                FilledButton(
-                  onPressed: busy || machineId == null ? null : save,
-                  child: Text(busy ? 'Preparing…' : 'Add machine'),
-                ),
+                if (canAdd)
+                  FilledButton(
+                    onPressed: busy || machineId == null ? null : save,
+                    child: Text(
+                      busy
+                          ? (isConfigure ? 'Saving…' : 'Preparing…')
+                          : (isConfigure ? 'Save' : 'Add machine'),
+                    ),
+                  )
+                else
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Close'),
+                  ),
               ],
             );
           },
