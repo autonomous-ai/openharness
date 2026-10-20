@@ -1,5 +1,5 @@
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 const checkInstall = readFileSync(join(process.cwd(), 'scripts', 'windows-ci', 'check-install.ps1'), 'utf8')
 const windowsYml = readFileSync(join(process.cwd(), '..', '.github', 'workflows', 'windows.yml'), 'utf8')
 const diagnosis = checkInstall.match(/^function Show-Diagnosis[\s\S]*?^}\n/m)?.[0] ?? ''
+const watchPowerShell = process.platform === 'win32' ? 'powershell.exe' : process.env.HARNESS_TEST_POWERSHELL
 
 // Most cases here read the scripts as text: Linux CI has no PowerShell to run them. The `win32` cases run the real
 // PowerShell, on the Windows jobs (windows.yml) and on the VM; the VM end to end (B5.14) ran the whole scripts.
@@ -39,6 +40,68 @@ describe('check-install.ps1', () => {
     const out = execFileSync('powershell.exe', ['-NoProfile', '-Command', script], { encoding: 'utf8' }).trim()
     expect(out).toBe('1')
   })
+
+  // E3.1 review: an open/probe child or an older version under this root could satisfy the dial watch gate.
+  // Run the actual check with fake WMI results and time; no daemon or serial device is involved. Windows uses
+  // PowerShell 5.1; HARNESS_TEST_POWERSHELL permits a limited local behavior check with PowerShell 7 elsewhere.
+  it.skipIf(!watchPowerShell)('requires exactly one watch from the selected payload version, keeping one result an array', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'check-dial-watch-'))
+    const root = join(scratch, "Nguyễn Văn A' & 100%", '.harness')
+    const selected = `${root}\\runtime\\pty\\9.8.7\\harness-serial.exe`
+    const processRow = (path: string | null, mode = 'watch') => ({ ExecutablePath: path, CommandLine: `"${path}" ${mode}` })
+    const one = processRow(selected)
+    const stale = processRow(`${root}\\runtime\\pty\\9.8.6\\harness-serial.exe`)
+    const open = processRow(selected, 'open COM3')
+    const probe = processRow(selected, 'probe COM3')
+    const outside = processRow(`${scratch}\\another-install\\runtime\\pty\\9.8.7\\harness-serial.exe`)
+    const misplaced = processRow(`${root}\\bin\\harness-serial.exe`)
+    const cases = [
+      { name: 'one selected watch', rows: [one], count: 1 },
+      { name: 'case-insensitive selected path', rows: [processRow(selected.toUpperCase())], count: 1 },
+      { name: 'one watch among unrelated children', rows: [stale, open, probe, outside, misplaced, processRow(null), one], count: 1 },
+      { name: 'stale version only', rows: [stale], count: 0 },
+      { name: 'open only', rows: [open], count: 0 },
+      { name: 'probe only', rows: [probe], count: 0 },
+      { name: 'watch in a later argument', rows: [processRow(selected, 'open COM3 watch')], count: 0 },
+      { name: 'watch is only a prefix', rows: [processRow(selected, 'watch-other')], count: 0 },
+      { name: 'another install only', rows: [outside], count: 0 },
+      { name: 'wrong folder below this root', rows: [misplaced], count: 0 },
+      { name: 'no watch', rows: [], count: 0 },
+      { name: 'duplicate selected watches', rows: [one, one], count: 2 },
+    ]
+    const block = checkInstall.match(/^# The dial's watch[\s\S]*?(?=^# The PowerShell)/m)?.[0]
+    expect(block).toBeTruthy()
+    try {
+      mkdirSync(join(root, 'runtime', 'pty'), { recursive: true })
+      writeFileSync(join(root, 'runtime', 'pty', 'current-pty'), '9.8.7\r\n')
+      for (const test of cases) {
+        const rows = Buffer.from(JSON.stringify(test.rows)).toString('base64')
+        const script = `
+$ErrorActionPreference = 'Stop'
+$root = '${root.replace(/'/g, "''")}'
+$script:rows = @(ConvertFrom-Json -InputObject ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${rows}'))))
+function Processes([string]$filter) { $script:rows }
+function Fail([string]$message) { Write-Output "FAIL $message"; exit 1 }
+$script:clock = 0
+function Get-Date { $script:clock++; if ($script:clock -eq 1) { [datetime]'2026-10-20T00:00:00' } else { [datetime]'2026-10-20T00:01:00' } }
+function Start-Sleep { }
+${block}
+Write-Output ([pscustomobject]@{ Count = $watch.Count; IsArray = ($watch -is [array]) } | ConvertTo-Json -Compress)
+`
+        const result = spawnSync(watchPowerShell!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8', timeout: 15_000 })
+        expect(result.error, test.name).toBeUndefined()
+        expect(result.status, `${test.name}: ${result.stdout}\n${result.stderr}`).toBe(test.count === 1 ? 0 : 1)
+        if (test.count === 1) {
+          expect(JSON.parse(result.stdout.trim().split(/\r?\n/).at(-1)!)).toEqual({ Count: 1, IsArray: true })
+          expect(result.stdout).toContain('ok   the dial watch runs:')
+        } else {
+          expect(result.stdout, test.name).toContain(test.count === 0 ? 'FAIL no harness-serial.exe' : 'one watch was expected')
+        }
+      }
+    } finally {
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  }, 60_000)
 
   // Final review R1b-1: a task runs at Task Scheduler's priority 7, below normal, unless it says otherwise, and the
   // daemon and every agent inherit it. The install job proves the class of what the install started.
