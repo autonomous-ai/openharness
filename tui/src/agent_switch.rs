@@ -285,7 +285,7 @@ fn source_for(app: &App, pane: u64) -> Option<Agent> {
 
 pub fn pane_supports(app: &App, pane: u64) -> bool {
     source_for(app, pane).is_some_and(|a| a.engine != "terminal" && a.dsh_id != "autonomous/pair"
-        && app.fleet.machine(&a.machine_id).is_some_and(|m| !m.shared))
+        && app.fleet.machine(&a.machine_id).is_some() && !app.fleet.belongs_to_other_account(&a.machine_id))
 }
 
 pub fn pane_label(app: &App, pane: u64) -> String {
@@ -1030,6 +1030,11 @@ mod tests {
         assert!(!pane_supports(&app, 1));
         app.modal = None; open(&mut app, 1);
         assert!(app.modal.is_none());
+        // A machine shared with this account by email (guest sharing) is its owner's too.
+        app.fleet.machines[0].shared = false;
+        assert!(pane_supports(&app, 1));
+        app.fleet.shares.insert("local".into(), crate::fleet::MachineShare { owner: "Dee".into(), email: "dee@acme.io".into(), team: false });
+        assert!(!pane_supports(&app, 1));
     }
 
     #[tokio::test]

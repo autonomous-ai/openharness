@@ -116,6 +116,9 @@ pub struct Form {
     launch_target: Option<crate::input::LaunchTarget>,
     remember_choices: bool,
     local_only: bool,
+    /// On a machine shared with this account (guest sharing): its harness runs on the owner's plans,
+    /// and the owner's daemon lists a guest no models or profiles.
+    guest: bool,
     prepared_folder: Option<String>,
     focus: Field,
     child: Option<Child>,
@@ -170,13 +173,13 @@ impl Form {
         // The machine is its own row, here and on the page: not "project @ machine" in one.
         let mut fields = vec![Field::Task, Field::Agent, Field::Machine, Field::Project];
         if !page && git_controls { fields.extend([Field::Branch, Field::Worktree]); }
-        if self.draft.what.engine != "terminal" {
+        if self.draft.what.engine != "terminal" && !self.guest {
             fields.push(Field::Model);
         }
         if !data::modes(&self.draft.what.engine).is_empty() {
             fields.push(Field::Approvals);
         }
-        if self.draft.what.engine == "codex" && self.draft.model.is_none() {
+        if self.draft.what.engine == "codex" && self.draft.model.is_none() && !self.guest {
             fields.push(Field::Profile);
         }
         if page && git_controls { fields.extend([Field::Worktree, Field::Branch]); }
@@ -551,6 +554,7 @@ fn make_form(app: &mut App, machine: Option<String>, cwd: Option<String>, surfac
         launch_target: None,
         remember_choices: true,
         local_only: false,
+        guest: false,
         prepared_folder: None,
         focus: if task::supported(&engine) { Field::Task } else { Field::Create },
         child: None,
@@ -583,6 +587,7 @@ fn make_form(app: &mut App, machine: Option<String>, cwd: Option<String>, surfac
 fn refresh_form(app: &App, form: &mut Form) {
     form.machine_label = machine_label(app, &form.draft.machine);
     form.local_only = crate::local::is_local(&form.draft.machine) && app.daemon_down;
+    form.guest = app.fleet.shares.contains_key(&form.draft.machine);
     // Git discovery can finish while its controls have keyboard focus.
     if matches!(form.focus, Field::Branch | Field::Worktree) && !form.fields().contains(&form.focus) {
         form.focus = Field::Project;
@@ -1200,6 +1205,8 @@ fn set_machine(app: &mut App, form: &mut Form, machine: &str) {
     form.models = Value::Null;
     form.profiles = Value::Null;
     form.draft.profile = None;
+    // A guest's harness runs on the owner's plans: a model chosen for another machine stays behind.
+    if app.fleet.shares.contains_key(machine) { form.draft.model = None }
     form.resource_generation.clear();
     crate::input::load_dsh(app, machine.into(), false);
     refresh_form(app, form);
@@ -2050,6 +2057,24 @@ mod tests {
         assert_eq!(ids(agent_rows(&app, "dee")), ["engine:claude", "engine:codex"]);
         // This account's own machines still offer every engine.
         assert!(agent_rows(&app, "local").len() > 2);
+    }
+
+    /// A guest's harness runs on the owner's plans, and the owner's daemon lists a guest no models or
+    /// profiles (GUEST_NOT_ALLOWED): no Model or Profile is offered there, and none chosen goes along.
+    #[tokio::test]
+    async fn a_guest_is_offered_no_model_or_profile_on_a_machine_shared_with_it() {
+        let mut app = app();
+        app.fleet.machines.push(crate::fleet::Machine { shared: false, id: "dee".into(), name: "Dee's Mac".into(), local: false, status: "online".into(), reach: crate::fleet::Reach::Ready });
+        app.fleet.shares.insert("dee".into(), crate::fleet::MachineShare { owner: "Dee".into(), email: "dee@acme.io".into(), team: false });
+        open(&mut app, None, Some("/home/dev/repo".into()));
+        let Some(Modal::NewHarness(mut form)) = app.modal.take() else { panic!() };
+        set_engine(&mut form, "codex");
+        assert!(form.fields().contains(&Field::Model) && form.fields().contains(&Field::Profile), "this computer's own");
+        form.draft.model = Some(("own-grid".into(), "qwen-35b".into(), "studio".into()));
+        set_machine(&mut app, &mut form, "dee");
+        assert!(!form.fields().contains(&Field::Model));
+        assert!(!form.fields().contains(&Field::Profile));
+        assert_eq!((form.draft.model.clone(), form.draft.profile.clone()), (None, None));
     }
 
     fn app() -> App {
