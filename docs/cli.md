@@ -40,10 +40,13 @@ per-engine home directories); [`cli/README.md`](cli/README.md) has the full tabl
 
 ## Automation
 
-The app is one client of the daemon. Anything on the same computer can be another: the loopback
+The app is one client of the daemon. Any process of the same OS user can be another: the loopback
 WebSocket at `ws://127.0.0.1:18473/api/local-ws` takes a `machine_select` frame first
 (`{ machineId, localProtocolVersion: 1 }`, no `Origin` header), then request frames with a `requestId`
-and answers them with `<type>_result`. Selecting one of your other machines proxies the request
+and answers them with `<type>_result`. Since 0.4.21 every loopback request (REST and this WebSocket)
+shows the daemon's local credential, `X-Harness-Local: <credential>` (or `Authorization: Bearer
+<credential>`): the contents of the 0600 `hook-credential` file in `ADAPTER_DATA_DIR`
+(`~/.harness/cli/data`). Without it the daemon answers 401; `/api/status` then gives only its public fields. Selecting one of your other machines proxies the request
 through this daemon's link to it.
 
 What it answers: `agents_list`, `agent_create`, `agent_restart`, `agent_retarget`, `agent_delete`,
