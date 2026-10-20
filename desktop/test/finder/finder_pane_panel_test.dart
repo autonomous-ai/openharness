@@ -89,6 +89,10 @@ void main() {
     );
     expect(tester.widget<Text>(title).style?.fontStyle, FontStyle.italic);
 
+    // A double click: the second click within the window, on the clock the
+    // test moves, so a slow runner cannot split it into two single clicks.
+    await tester.tap(find.text('main.dart').first);
+    await tester.pump(const Duration(milliseconds: 50));
     await tester.tap(find.text('main.dart').first);
     await tester.pumpAndSettle();
     expect(
