@@ -124,3 +124,4 @@ work/experience-evidence/
 mobile/OTA.md
 mobile/scripts/ota-ios.sh
 .playwright-mcp
+serial/target/
