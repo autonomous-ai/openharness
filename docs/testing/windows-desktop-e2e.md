@@ -48,6 +48,12 @@ on both architectures. The 1.0.3 ARM Settings retest below passed after the
 published `desktop/install.ps1` and verified its served staging lines. The
 served file's SHA-256 matched the local `--app --print` output:
 `a6309048b7987a1c0062b4a77fa364bf0bd1f25afa11a454475cb51e1921ae09`.
+The [full Windows run 39343243094](https://github.com/autonomous-ai/openharness/actions/runs/39343243094)
+then passed its x64 and ARM64 build, Rust, full Flutter, trusted-pipe,
+single-instance and one-command installer jobs at `4ba0c9359`. Subsequent
+commits changed only the Desktop workflow trigger, its focused test and this
+E2E record; no runtime source changed. The trigger removal passed its focused
+Vitest test and `actionlint`.
 
 ## Setup and evidence
 
