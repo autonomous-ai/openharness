@@ -17,7 +17,7 @@ record.
 | # | Scenario | Result at this snapshot | Driver |
 | --- | --- | --- | --- |
 | 1 | First install, sign-in, same-version launch | Partial: N installed and same-version launch converged to one installed window. Mark-of-the-Web launch and SmartScreen behavior unresolved. | Script, visual automation; sign-in authorized through existing account session |
-| 2 | This computer, terminal, Add Phone, remote Mac | Partial: owned terminal creation, `WIN_42` output, two HTTP 200 handoffs across daemon recovery and remote row observed. ARM RC1 Ctrl+C failed; patched host passed with local x64 Release and published x64 N1 apps. Published PTY 0.4.19 GUI Ctrl+C remains unverified. | Visual automation, Script |
+| 2 | This computer, terminal, Add Phone, remote Mac | Partial: owned terminal creation, `WIN_42` output, two HTTP 200 handoffs across daemon recovery and remote row observed. ARM RC1 Ctrl+C failed; patched host passed with local x64 Release and published x64 N1 apps. Published PTY 0.4.19 GUI Ctrl+C remains unverified because the serving ARM host is still 0.4.18. | Visual automation, Script |
 | 3 | Notifications, tray, links, paste and font | Partial: tray/links/font and local x64 composer paste observed. One N1 hidden-app Kilo turn stalled while the backend was offline, so completed-turn toast/click and full tray working row remain unverified. | Visual automation, Script |
 | 4 | Staging updates and broken-build rollback | Partial: real 1.0.0 → 1.0.1 GUI update passed on both VMs. The 1.0.1 → 1.0.2 update kept the ARM counter rising and repaired Settings `DisplayVersion` on both VMs. Fake-CDN broken-build rollback remains unverified. | Script, visual automation |
 | 5 | Uninstall through Windows Settings | Passed on 1.0.3 after a 1.0.2 timing failure was fixed: holding the final dialog open over three minutes did not start cleanup early; after OK, the app folder and registrations disappeared while CLI, daemon and agents stayed. | UI Automation |
@@ -191,6 +191,12 @@ race. The GUI and owned test daemon were in session 1. No GUI terminal was
 opened against the session-0 host, so the published-host GUI Ctrl+C path is
 still unverified.
 
+A later read-only ARM check found its rendered 1.0.3 app and serving PTY host
+both in Windows session 2, but the host process still ran from the `0.4.18`
+runtime path. The installed `0.4.19` file had a different hash and was not the
+serving process. No new terminal or Ctrl+C attempt was made on that host; its
+seven existing agents were left running.
+
 Both VMs then offered the published 1.0.2 update in their installed N1 GUIs.
 On x64, Update changed `current/previous` to `1.0.2/1.0.1`, wrote `.started`,
 removed temporary staging folders, and opened one signed-in 1.0.2 window.
@@ -310,7 +316,7 @@ CLI, daemon or `~/.harness`.
 
 | ID | Finding | Current evidence and impact |
 | --- | --- | --- |
-| G1 | ARM RC1 GUI Ctrl+C did not interrupt an owned PowerShell child. | Isolated PTY host inherited Ctrl+C ignore from its process group. A Windows regression failed before the host fix and passed after it; the full Windows PTY suite passed. Local x64 Release and staging N1 passed GUI Ctrl+C with the patched test host. The published PTY 0.4.19 binary started after a scoped host retirement, but GUI Ctrl+C on it remains unverified because it belonged to another Windows session. |
+| G1 | ARM RC1 GUI Ctrl+C did not interrupt an owned PowerShell child. | Isolated PTY host inherited Ctrl+C ignore from its process group. A Windows regression failed before the host fix and passed after it; the full Windows PTY suite passed. Local x64 Release and staging N1 passed GUI Ctrl+C with the patched test host. The published PTY 0.4.19 binary started on x64 after a scoped host retirement, but GUI Ctrl+C on it remains unverified because it belonged to another Windows session. ARM still serves its live agents from 0.4.18 despite having 0.4.19 installed; no host replacement was attempted. |
 | G2 | Printable terminal input depended on launch/relaunch state. | ARM RC1 failed early input attempts, then `WIN_42` passed after relaunch. The exact lifecycle cause and cold-start reliability remain open. |
 | G3 | The ARM client area turned black/white during RC1, N and one-command 1.0.3 sessions. | The process stayed responsive at the OS level. N did not repaint after one app restart, but one scoped window-size change restored its UI; the surface went black again after the CLI restart and another scoped size change restored it. The GPU accepted D3D feature level 12_1. N1, N2 and x64-on-ARM 1.0.3 rendered in other launches; the one-command ARM64 1.0.3 first-run capture was white. A later direct ARM64 ZIP launch rendered after focus without a resize. The cause and first-render reliability remain unproved. |
 | G4 | Notification permission gate reported unavailable while a native probe could post a toast. | The first-toast `Setting()` error is handled in N1 source, but no completed agent turn occurred on the hidden staging N1 app because the backend was offline/reset. Product completion toast and click remain unverified. |
