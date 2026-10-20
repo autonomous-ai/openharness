@@ -51,7 +51,10 @@ fun show_hotspot() {
     badge.SetImage(badge_image);
     badge.SetPosition(Window.GetX() + (Window.GetWidth() - badge_image.GetWidth()) / 2,
                       Window.GetY() + Window.GetHeight() / 2 + 120, 1);
-    phone_image = Image.Text("Or unlock it from a phone: join Wi-Fi " + hotspot + ", then the Harness app",
+    # The app first, and in general words: it finds this computer's Wi-Fi itself, and its screens
+    # change faster than an installed computer's startup can be. Only the Wi-Fi's name is fixed.
+    phone_image = Image.Text("Or set it up from the Harness app on your phone.\n" +
+                             "This computer's Wi-Fi: " + hotspot,
                              0.86, 0.86, 0.86, 1, "monospace 14", "center");
     phone.SetImage(phone_image);
     phone.SetPosition(Window.GetX() + (Window.GetWidth() - phone_image.GetWidth()) / 2,
