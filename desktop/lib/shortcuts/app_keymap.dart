@@ -153,11 +153,15 @@ class KeymapRegion extends InheritedWidget {
     required this.contextKind,
     this.actions,
     this.composing,
+    this.terminalFocusNode,
     required super.child,
   });
   final KeymapContext contextKind;
   final Map<String, VoidCallback>? actions;
   final bool Function()? composing;
+
+  /// Only this renderer owns terminal input; pane chrome remains outside.
+  final FocusNode? terminalFocusNode;
   static KeymapRegion? of(BuildContext context) =>
       context.getInheritedWidgetOfExactType<KeymapRegion>();
   @override
@@ -167,7 +171,22 @@ class KeymapRegion extends InheritedWidget {
 /// Marks the terminal composer, whose Ctrl+W/U edit its own line.
 /// Other text fields in a terminal region keep the ordinary app aliases.
 class KeymapComposer extends InheritedWidget {
-  const KeymapComposer({super.key, required super.child});
+  const KeymapComposer({
+    super.key,
+    this.focusNode,
+    this.paste,
+    required super.child,
+  });
+
+  final FocusNode? focusNode;
+  final Future<void> Function()? paste;
+
+  static KeymapComposer? forFocus(FocusNode? focus) {
+    final context = focus?.context;
+    if (context == null || !context.mounted) return null;
+    final composer = context.getInheritedWidgetOfExactType<KeymapComposer>();
+    return identical(composer?.focusNode, focus) ? composer : null;
+  }
 
   static bool contains(BuildContext context) =>
       context.getInheritedWidgetOfExactType<KeymapComposer>() != null;

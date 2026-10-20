@@ -109,8 +109,12 @@ void main() {
     clipboard = 'paste me';
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(SystemChannels.platform, (call) async {
-          if (call.method == 'Clipboard.getData') return {'text': clipboard};
-          if (call.method == 'Clipboard.hasStrings') return {'value': clipboard?.isNotEmpty ?? false};
+          if (call.method == 'Clipboard.getData') {
+            return clipboard == null ? null : {'text': clipboard};
+          }
+          if (call.method == 'Clipboard.hasStrings') {
+            return {'value': clipboard?.isNotEmpty ?? false};
+          }
           if (call.method == 'Clipboard.setData') {
             clipboard = (call.arguments as Map)['text'] as String?;
           }
@@ -184,47 +188,76 @@ void main() {
   }
 
   for (final image in [false, true]) {
-    testWidgets('Windows composer Edit Paste image=$image preserves draft and selection', (tester) async {
-      const channel = MethodChannel('harness/clipboard_image');
-      final png = Uint8List.fromList([137, 80, 78, 71]);
-      final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-      messenger.setMockMethodCallHandler(channel, (_) async => png);
-      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
-      clipboard = image ? null : 'insert';
-      final app = createApp();
-      app.stateOf('m')!.terminalImagePasteAvailable = true;
-      final frames = <TerminalBinaryFrame>[];
-      final controls = <String>[];
-      final session = liveSession('a0', frames, engine: 'claude', controls: controls);
-      await pumpBar(tester, body: TerminalPanel(notifier: app, session: session,
-        focused: true, composerVisible: true, onToggleComposer: () {}));
-      await tester.enterText(find.byType(TextField), 'my draft');
-      final controller = tester.widget<TextField>(find.byType(TextField)).controller!;
-      controller.selection = const TextSelection.collapsed(offset: 3);
-      await tap(tester, 'menu-bar-edit');
-      Focus.of(tester.element(find.text('Paste'))).requestFocus();
-      await tester.pump();
-      await tap(tester, 'menu-bar-paste');
-      if (image) {
-        expect(controls.where((c) => c == 'terminal_chunked_upload_begin'), hasLength(1));
-        await session.handleFrame('terminal_chunked_upload_begin_result', {
-          'streamId': session.streamId, 'accepted': true,
-        });
+    testWidgets(
+      'Windows composer Edit Paste image=$image preserves draft and selection',
+      (tester) async {
+        const channel = MethodChannel('harness/clipboard_image');
+        final png = Uint8List.fromList([137, 80, 78, 71]);
+        final messenger =
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(channel, (_) async => png);
+        addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+        clipboard = image ? null : 'insert';
+        final app = createApp();
+        app.stateOf('m')!.terminalImagePasteAvailable = true;
+        final frames = <TerminalBinaryFrame>[];
+        final controls = <String>[];
+        final session = liveSession(
+          'a0',
+          frames,
+          engine: 'claude',
+          controls: controls,
+        );
+        await pumpBar(
+          tester,
+          body: TerminalPanel(
+            notifier: app,
+            session: session,
+            focused: true,
+            composerVisible: true,
+            onToggleComposer: () {},
+          ),
+        );
+        await tester.enterText(find.byType(TextField), 'my draft');
+        final controller = tester
+            .widget<TextField>(find.byType(TextField))
+            .controller!;
+        controller.selection = const TextSelection.collapsed(offset: 3);
+        await tap(tester, 'menu-bar-edit');
+        Focus.of(tester.element(find.text('Paste'))).requestFocus();
         await tester.pump();
-        expect(frames.single.kind, TerminalBinaryKind.imagePaste);
-        expect(frames.single.bytes, png);
-        expect(controller.text, 'my draft');
-        expect(controller.selection, const TextSelection.collapsed(offset: 3));
-        await session.handleFrame('terminal_paste_image_result', {
-          'streamId': session.streamId, 'outcome': 'clipboard',
-        });
-      } else {
-        expect(controller.text, 'my insertdraft');
-        expect(frames, isEmpty);
-      }
-      await tester.pumpWidget(const SizedBox());
-      session.dispose(); app.dispose();
-    }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
+        await tap(tester, 'menu-bar-paste');
+        if (image) {
+          expect(
+            controls.where((c) => c == 'terminal_chunked_upload_begin'),
+            hasLength(1),
+          );
+          await session.handleFrame('terminal_chunked_upload_begin_result', {
+            'streamId': session.streamId,
+            'accepted': true,
+          });
+          await tester.pump();
+          expect(frames.single.kind, TerminalBinaryKind.imagePaste);
+          expect(frames.single.bytes, png);
+          expect(controller.text, 'my draft');
+          expect(
+            controller.selection,
+            const TextSelection.collapsed(offset: 3),
+          );
+          await session.handleFrame('terminal_paste_image_result', {
+            'streamId': session.streamId,
+            'outcome': 'clipboard',
+          });
+        } else {
+          expect(controller.text, 'my insertdraft');
+          expect(frames, isEmpty);
+        }
+        await tester.pumpWidget(const SizedBox());
+        session.dispose();
+        app.dispose();
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+    );
   }
 
   testWidgets('Windows Edit targets the real terminal clipboard paths', (

@@ -198,7 +198,7 @@ class _TerminalComposerState extends State<TerminalComposer> {
         !HardwareKeyboard.instance.isAltPressed &&
         !HardwareKeyboard.instance.isMetaPressed &&
         !HardwareKeyboard.instance.isShiftPressed) {
-      unawaited(_pasteClipboard());
+      if (event is KeyDownEvent) unawaited(_pasteClipboard());
       return KeyEventResult.handled;
     }
     final isEnter =
@@ -276,6 +276,8 @@ class _TerminalComposerState extends State<TerminalComposer> {
                 ),
                 Expanded(
                   child: KeymapComposer(
+                    focusNode: widget.focusNode,
+                    paste: _pasteClipboard,
                     child: Shortcuts(
                       // Terminal-style line editing: readline's Ctrl+W/Ctrl+U are missing from
                       // Flutter's own default text-editing shortcuts on every platform, unlike

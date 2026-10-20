@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../core/runtime_platform.dart';
+import '../shortcuts/app_keymap.dart' show KeymapComposer;
 import '../shared/theme/app_pane_icon.dart';
 import '../core/test_run.dart';
 import '../core/windows_status_tray.dart' show quitHarness;
@@ -609,6 +610,9 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
           terminal.copy();
         } else if (terminal != null && command == 'paste') {
           terminal.paste();
+        } else if (command == 'paste' &&
+            KeymapComposer.forFocus(focus)?.paste != null) {
+          KeymapComposer.forFocus(focus)!.paste!();
         } else {
           // Select All uses xterm's own action, just as its keyboard shortcut.
           Actions.invoke(context, intent);

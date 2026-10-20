@@ -281,10 +281,43 @@ class ResolvedKeymap {
   ResolvedKeymap(Iterable<KeyBinding> defaults, KeymapConfig config) {
     for (final context in KeymapContext.values) {
       final effective = <String, KeyBinding>{};
-      void apply(Iterable<KeyBinding> entries, KeymapContext scope) {
+      void apply(
+        Iterable<KeyBinding> entries,
+        KeymapContext scope, {
+        bool custom = false,
+      }) {
         for (final entry in entries.where(
           (binding) => binding.context == scope,
         )) {
+          if (custom) {
+            // New conditional defaults must not invalidate an existing user's
+            // sequence. Ordinary defaults retain their ambiguity checks.
+            effective.removeWhere(
+              (key, value) =>
+                  value.outsideTerminal &&
+                  entry.command != null &&
+                  entry.sequence.startsWith('$key '),
+            );
+            if (entry.command == null) {
+              // The old recorder only knew the ordinary defaults. Its null
+              // rows also retire aliases introduced for those commands later.
+              final removedCommands = defaults
+                  .where(
+                    (binding) =>
+                        !binding.outsideTerminal &&
+                        effective[binding.sequence] == binding &&
+                        (binding.sequence == entry.sequence ||
+                            binding.sequence.startsWith('${entry.sequence} ')),
+                  )
+                  .map((binding) => binding.command)
+                  .toSet();
+              effective.removeWhere(
+                (_, value) =>
+                    value.outsideTerminal &&
+                    removedCommands.contains(value.command),
+              );
+            }
+          }
           if (entry.command == null) {
             effective.removeWhere(
               (key, _) =>
@@ -304,12 +337,12 @@ class ResolvedKeymap {
       }
       apply(defaults, context);
       if (context != KeymapContext.workspace) {
-        apply(config.bindings, KeymapContext.workspace);
+        apply(config.bindings, KeymapContext.workspace, custom: true);
       }
       if (context == KeymapContext.project) {
-        apply(config.bindings, KeymapContext.picker);
+        apply(config.bindings, KeymapContext.picker, custom: true);
       }
-      apply(config.bindings, context);
+      apply(config.bindings, context, custom: true);
       _bindings[context] = List.unmodifiable(effective.values);
       final root = _KeyNode();
       for (final entry in effective.values) {

@@ -108,43 +108,132 @@ void main() {
   });
 
   for (final letter in [LogicalKeyboardKey.keyC, LogicalKeyboardKey.keyV]) {
-    onPlatform(TargetPlatform.windows, 'held $letter owns repeats and release', (tester) async {
-      final app = createApp();
-      app.stateOf('m')!.terminalPasteRawAvailable = true;
-      final frames = <TerminalBinaryFrame>[];
-      final session = liveSession('a0', frames);
-      session.terminal.write('hello');
-      await mount(tester, app, session);
-      final view = tester.widget<TerminalView>(find.byType(TerminalView));
-      if (letter == LogicalKeyboardKey.keyC) {
-        view.controller!.setSelection(session.terminal.buffer.createAnchor(0, 0),
-          session.terminal.buffer.createAnchor(5, 0));
-      }
-      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
-      await tester.sendKeyDownEvent(letter);
-      await tester.pump();
-      await tester.sendKeyRepeatEvent(letter);
-      // Ownership lasts even if the modifier is released before the letter.
-      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
-      await tester.sendKeyRepeatEvent(letter);
-      await tester.sendKeyUpEvent(letter);
-      await tester.pump(const Duration(milliseconds: 20));
-      expect(input(frames), isEmpty);
-      expect(reads, letter == LogicalKeyboardKey.keyV ? 1 : 0);
-      expect(frames.where((f) => f.kind == TerminalBinaryKind.paste),
-        hasLength(letter == LogicalKeyboardKey.keyV ? 1 : 0));
-      frames.clear();
-      await key(tester, LogicalKeyboardKey.keyC, ctrl: true);
-      await tester.pump(const Duration(milliseconds: 20));
-      expect(input(frames), '\x03');
-      await tester.pumpWidget(const SizedBox());
-      session.dispose(); app.dispose();
-    });
+    onPlatform(
+      TargetPlatform.windows,
+      'held $letter owns repeats and release',
+      (tester) async {
+        final app = createApp();
+        app.stateOf('m')!.terminalPasteRawAvailable = true;
+        final frames = <TerminalBinaryFrame>[];
+        final session = liveSession('a0', frames);
+        session.terminal.write('hello');
+        await mount(tester, app, session);
+        final view = tester.widget<TerminalView>(find.byType(TerminalView));
+        if (letter == LogicalKeyboardKey.keyC) {
+          view.controller!.setSelection(
+            session.terminal.buffer.createAnchor(0, 0),
+            session.terminal.buffer.createAnchor(5, 0),
+          );
+        }
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+        await tester.sendKeyDownEvent(letter);
+        await tester.pump();
+        await tester.sendKeyRepeatEvent(letter);
+        // Ownership lasts even if the modifier is released before the letter.
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+        await tester.sendKeyRepeatEvent(letter);
+        await tester.sendKeyUpEvent(letter);
+        await tester.pump(const Duration(milliseconds: 20));
+        expect(input(frames), isEmpty);
+        expect(reads, letter == LogicalKeyboardKey.keyV ? 1 : 0);
+        expect(
+          frames.where((f) => f.kind == TerminalBinaryKind.paste),
+          hasLength(letter == LogicalKeyboardKey.keyV ? 1 : 0),
+        );
+        frames.clear();
+        await key(tester, LogicalKeyboardKey.keyC, ctrl: true);
+        await tester.pump(const Duration(milliseconds: 20));
+        expect(input(frames), '\x03');
+        await tester.pumpWidget(const SizedBox());
+        session.dispose();
+        app.dispose();
+      },
+    );
   }
 
   onPlatform(
     TargetPlatform.windows,
-    'composer Ctrl+V uploads an image without changing the draft',
+    'held copy cannot interrupt a replacement session',
+    (tester) async {
+      final app = createApp();
+      final originalFrames = <TerminalBinaryFrame>[];
+      final nextFrames = <TerminalBinaryFrame>[];
+      final original = liveSession('a0', originalFrames);
+      final next = liveSession('a1', nextFrames);
+      original.terminal.write('hello');
+      await mount(tester, app, original);
+      final view = tester.widget<TerminalView>(find.byType(TerminalView));
+      view.controller!.setSelection(
+        original.terminal.buffer.createAnchor(0, 0),
+        original.terminal.buffer.createAnchor(5, 0),
+      );
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.keyC);
+      await tester.pump();
+      await mount(tester, app, next);
+      await tester.sendKeyRepeatEvent(LogicalKeyboardKey.keyC);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.keyC);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(input(originalFrames), isEmpty);
+      expect(input(nextFrames), isEmpty);
+      await key(tester, LogicalKeyboardKey.keyC, ctrl: true);
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(input(nextFrames), '\x03');
+      await tester.pumpWidget(const SizedBox());
+      original.dispose();
+      next.dispose();
+      app.dispose();
+    },
+  );
+
+  for (final releaseAway in [false, true]) {
+    onPlatform(
+      TargetPlatform.windows,
+      'copy gesture focus return releaseAway=$releaseAway',
+      (tester) async {
+        final app = createApp();
+        final frames = <TerminalBinaryFrame>[];
+        final session = liveSession('a0', frames);
+        session.terminal.write('hello');
+        await mount(tester, app, session, composerVisible: true);
+        final view = tester.widget<TerminalView>(find.byType(TerminalView));
+        view.focusNode!.requestFocus();
+        await tester.pump();
+        view.controller!.setSelection(
+          session.terminal.buffer.createAnchor(0, 0),
+          session.terminal.buffer.createAnchor(5, 0),
+        );
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.keyC);
+        await tester.pump();
+        tester
+            .widget<TextField>(find.byType(TextField))
+            .focusNode!
+            .requestFocus();
+        await tester.pump();
+        if (releaseAway) await tester.sendKeyUpEvent(LogicalKeyboardKey.keyC);
+        view.focusNode!.requestFocus();
+        await tester.pump();
+        if (releaseAway) {
+          await tester.sendKeyDownEvent(LogicalKeyboardKey.keyC);
+        } else {
+          await tester.sendKeyRepeatEvent(LogicalKeyboardKey.keyC);
+        }
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.keyC);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+        await tester.pump(const Duration(milliseconds: 20));
+        expect(input(frames), releaseAway ? '\x03' : isEmpty);
+        await tester.pumpWidget(const SizedBox());
+        session.dispose();
+        app.dispose();
+      },
+    );
+  }
+
+  onPlatform(
+    TargetPlatform.windows,
+    'held composer Ctrl+V uploads one image without changing the draft',
     (tester) async {
       final app = createApp();
       app.stateOf('m')!.terminalImagePasteAvailable = true;
@@ -162,8 +251,17 @@ void main() {
       clipboard = null;
       await mount(tester, app, session, composerVisible: true);
       await tester.enterText(find.byType(TextField), 'draft with an image');
-      await key(tester, LogicalKeyboardKey.keyV, ctrl: true);
-      expect(controls, contains('terminal_chunked_upload_begin'));
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.keyV);
+      await tester.pump();
+      await tester.sendKeyRepeatEvent(LogicalKeyboardKey.keyV);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.keyV);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(
+        controls.where((c) => c == 'terminal_chunked_upload_begin'),
+        hasLength(1),
+      );
       await session.handleFrame('terminal_chunked_upload_begin_result', {
         'streamId': session.streamId,
         'accepted': true,
@@ -743,8 +841,26 @@ void main() {
             .setMockMethodCallHandler(imageChannel, (_) async => png);
         clipboard = null;
         await mount(tester, app, session);
-        await key(tester, LogicalKeyboardKey.keyV, ctrl: true, shift: shift);
-        expect(controls, contains('terminal_chunked_upload_begin'));
+        if (platform == TargetPlatform.windows) {
+          await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+          if (shift) {
+            await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+          }
+          await tester.sendKeyDownEvent(LogicalKeyboardKey.keyV);
+          await tester.pump();
+          await tester.sendKeyRepeatEvent(LogicalKeyboardKey.keyV);
+          await tester.sendKeyUpEvent(LogicalKeyboardKey.keyV);
+          if (shift) await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+          await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+          await tester.pump();
+        } else {
+          await key(tester, LogicalKeyboardKey.keyV, ctrl: true, shift: shift);
+        }
+        expect(
+          controls.where((c) => c == 'terminal_chunked_upload_begin'),
+          hasLength(1),
+        );
+        expect(input(frames), isEmpty);
         await session.handleFrame('terminal_chunked_upload_begin_result', {
           'streamId': session.streamId,
           'accepted': true,

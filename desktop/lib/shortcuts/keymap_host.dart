@@ -140,7 +140,7 @@ class _KeymapHostState extends State<KeymapHost> with WidgetsBindingObserver {
     final stroke = keyStrokeForEvent(event);
     final aliasesBlocked =
         region?.contextKind == KeymapContext.terminal &&
-        (value == null ||
+        (identical(region?.terminalFocusNode, focus) ||
             (KeymapComposer.contains(context) &&
                 composerOwnedStrokes.contains(stroke)));
     final result = _dispatch.dispatch(

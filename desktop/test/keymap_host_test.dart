@@ -1,5 +1,10 @@
 import 'dart:convert';
 
+import 'package:harness/widgets/terminal_panel.dart';
+import 'package:xterm/xterm.dart';
+
+import 'swarm_state_test.dart' show createApp;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -90,8 +95,9 @@ Future<TerminalSession> liveComposerSession() async {
 Widget terminalKeymapHost(
   AppKeymap map,
   Map<String, VoidCallback> actions,
-  Widget child,
-) => MaterialApp(
+  Widget child, {
+  FocusNode? terminalFocusNode,
+}) => MaterialApp(
   home: KeymapProvider(
     keymap: map,
     child: KeymapHost(
@@ -100,6 +106,7 @@ Widget terminalKeymapHost(
       actions: actions,
       child: KeymapRegion(
         contextKind: KeymapContext.terminal,
+        terminalFocusNode: terminalFocusNode,
         child: Material(child: child),
       ),
     ),
@@ -108,22 +115,66 @@ Widget terminalKeymapHost(
 
 void main() {
   group('native Windows terminal aliases', () {
-    testWidgets('pane header buttons count as outside the terminal view', (tester) async {
+    testWidgets('pane header buttons count as outside the terminal view', (
+      tester,
+    ) async {
       final map = MemoryKeymap();
       final focus = FocusNode();
       var opened = 0, closed = 0, created = 0;
-      await tester.pumpWidget(terminalKeymapHost(map, {
-        'swarm.new': () => opened++, 'swarm.close': () => closed++,
-        'agent.new': () => created++,
-      }, TextButton(focusNode: focus, autofocus: true,
-        onPressed: () {}, child: const Text('Pane action'))));
+      await tester.pumpWidget(
+        terminalKeymapHost(
+          map,
+          {
+            'swarm.new': () => opened++,
+            'swarm.close': () => closed++,
+            'agent.new': () => created++,
+          },
+          TextButton(
+            focusNode: focus,
+            autofocus: true,
+            onPressed: () {},
+            child: const Text('Pane action'),
+          ),
+        ),
+      );
       await tester.pump();
       await key(tester, LogicalKeyboardKey.keyT, ctrl: true);
       await key(tester, LogicalKeyboardKey.keyW, ctrl: true);
       await key(tester, LogicalKeyboardKey.keyN, ctrl: true);
       expect([opened, closed, created], [1, 1, 1]);
       await tester.pumpWidget(const SizedBox());
-      focus.dispose(); map.dispose();
+      focus.dispose();
+      map.dispose();
+    }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
+
+    testWidgets('real panel renderer keeps plain Ctrl letters', (tester) async {
+      final app = createApp();
+      final map = MemoryKeymap();
+      final session = await liveComposerSession();
+      final output = <String>[];
+      session.terminal.onOutput = output.add;
+      var opened = 0;
+      await tester.pumpWidget(
+        terminalKeymapHost(map, {
+          'swarm.new': () => opened++,
+        }, TerminalPanel(notifier: app, session: session, focused: true)),
+      );
+      await tester.pump();
+      tester
+          .widget<TerminalView>(find.byType(TerminalView))
+          .focusNode!
+          .requestFocus();
+      await tester.pump();
+      await key(tester, LogicalKeyboardKey.keyT, ctrl: true);
+      await key(tester, LogicalKeyboardKey.keyR, ctrl: true);
+      expect(opened, 0);
+      expect(output.join(), '\x14\x12');
+      await key(tester, LogicalKeyboardKey.keyT, ctrl: true, shift: true);
+      expect(opened, 1);
+      await tester.pumpWidget(const SizedBox());
+      session.dispose();
+      map.dispose();
+      app.dispose();
     }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
 
     testWidgets('Ctrl+T in the terminal view reaches the terminal', (
@@ -149,6 +200,7 @@ void main() {
             },
             child: const SizedBox(width: 100, height: 100),
           ),
+          terminalFocusNode: focus,
         ),
       );
       await tester.pump();
@@ -236,10 +288,12 @@ void main() {
       final focus = FocusNode();
       var zoomed = 0, opened = 0;
       await tester.pumpWidget(
-        terminalKeymapHost(map, {
-          'swarm.new': () => opened++,
-          'pane.zoom': () => zoomed++,
-        }, Focus(focusNode: focus, autofocus: true, child: const SizedBox())),
+        terminalKeymapHost(
+          map,
+          {'swarm.new': () => opened++, 'pane.zoom': () => zoomed++},
+          Focus(focusNode: focus, autofocus: true, child: const SizedBox()),
+          terminalFocusNode: focus,
+        ),
       );
       await tester.pump();
       await key(tester, LogicalKeyboardKey.keyT, ctrl: true);

@@ -283,6 +283,10 @@ class _TerminalPanelState extends State<TerminalPanel>
   String? _pressedLink;
   bool _openingLink = false;
   bool _linkRefreshPending = false;
+  // A clipboard gesture owns its key until release, even after copy clears
+  // selection or modifiers change. A new down always starts a fresh gesture.
+  final _clipboardKeys = <PhysicalKeyboardKey>{};
+
   bool _followTail = true;
   TerminalStyle _terminalFont = terminalFontStore.value;
   bool _observingLinkModifiers = false;
@@ -761,6 +765,9 @@ class _TerminalPanelState extends State<TerminalPanel>
   }
 
   void _handleFocusChange() {
+    _clipboardKeys.removeWhere(
+      (key) => !HardwareKeyboard.instance.physicalKeysPressed.contains(key),
+    );
     _syncCursorBlink();
     if (_focusNode.hasFocus) {
       widget.onRendererFocus?.call();
@@ -1847,6 +1854,12 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// platform's exact one: Linux pastes with Ctrl-Shift-V; native Windows also accepts Ctrl-V and
   /// copies Ctrl-C only when output is selected.
   KeyEventResult _onTerminalKey(FocusNode node, KeyEvent event) {
+    if (event is KeyDownEvent) {
+      _clipboardKeys.remove(event.physicalKey);
+    } else if (_clipboardKeys.contains(event.physicalKey)) {
+      if (event is KeyUpEvent) _clipboardKeys.remove(event.physicalKey);
+      return KeyEventResult.handled;
+    }
     if (_passageId != null && event.logicalKey == LogicalKeyboardKey.escape) {
       if (event is KeyDownEvent) _closePassage();
       return KeyEventResult.handled;
@@ -1886,6 +1899,7 @@ class _TerminalPanelState extends State<TerminalPanel>
         !keyboard.isAltPressed &&
         !keyboard.isMetaPressed &&
         _controller.selection != null) {
+      _clipboardKeys.add(event.physicalKey);
       unawaited(_copySelection());
       return KeyEventResult.handled;
     }
@@ -1905,6 +1919,7 @@ class _TerminalPanelState extends State<TerminalPanel>
                   keyboard.isShiftPressed ==
                       (defaultTargetPlatform == TargetPlatform.linux));
     if (!pasting) return KeyEventResult.ignored;
+    if (windows) _clipboardKeys.add(event.physicalKey);
     unawaited(_paste());
     return KeyEventResult.handled;
   }
@@ -2161,6 +2176,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     final chromeFill = PaneOpacity.fill(context, grid.AppPalette.windowBg);
     return KeymapRegion(
       contextKind: KeymapContext.terminal,
+      terminalFocusNode: _focusNode,
       composing: () =>
           _focusNode.hasFocus &&
           _terminalViewKey.currentState?.isComposing == true,

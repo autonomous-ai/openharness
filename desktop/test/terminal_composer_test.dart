@@ -204,6 +204,21 @@ void main() {
     String draft(WidgetTester tester) =>
         tester.widget<TextField>(find.byType(TextField)).controller!.text;
 
+    testWidgets('held Ctrl+V pastes text only once', (tester) async {
+      await mountComposer(tester);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.keyV);
+      await tester.pump();
+      await tester.sendKeyRepeatEvent(LogicalKeyboardKey.keyV);
+      await tester.pump();
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.keyV);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(draft(tester), 'draftpasted text');
+      expect(nonTextPastes, 0);
+      await tester.pumpWidget(const SizedBox());
+    }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
+
     testWidgets('Ctrl+V with text pastes into the field', (tester) async {
       await mountComposer(tester);
       final controller = tester
