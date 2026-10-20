@@ -786,18 +786,20 @@ class _MachinesPanelState extends State<_MachinesPanel>
       children: [
         _MachineRow(
           key: const ValueKey('add-machine'),
-          name: empty ? 'Add a second machine' : 'Add machine',
+          name: empty ? 'Connect a second computer' : 'Connect a computer',
           icon: AppIcons.plus,
           subtitle: empty
               ? const _MachineStatus('Run harnesses on another computer')
               : null,
           onTap: toggle,
           action: IconButton(
-            tooltip: _showSetup ? 'Hide setup steps' : 'Add a machine',
+            tooltip: _showSetup ? 'Hide setup steps' : 'Connect a computer',
             onPressed: toggle,
             icon: Icon(
               _showSetup ? AppIcons.chevronUp : AppIcons.chevronRight,
-              semanticLabel: _showSetup ? 'Hide setup steps' : 'Add a machine',
+              semanticLabel: _showSetup
+                  ? 'Hide setup steps'
+                  : 'Connect a computer',
               size: 18,
             ),
           ),

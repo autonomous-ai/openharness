@@ -1226,7 +1226,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
             command: 'picker.device_mine',
           ),
         _ResourceAction(
-          'Add machine',
+          'Connect a computer',
           _addMachine,
           command: 'picker.resource_link',
         ),

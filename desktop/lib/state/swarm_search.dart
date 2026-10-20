@@ -110,7 +110,10 @@ class SwarmSearchController extends ChangeNotifier {
        _locations = locations ?? SwarmLocationCatalog(),
        targetId = app.activeSwarmId,
        targetName = app.activeSwarm.name {
-    if (activityFirst && history == null && !navigating && harnessContext == null) {
+    if (activityFirst &&
+        history == null &&
+        !navigating &&
+        harnessContext == null) {
       _content = SessionContentSearch(
         machines: () => app.searchableMachineIds,
         ask: (machineId, words, when) =>
@@ -1096,12 +1099,12 @@ class SwarmSearchController extends ChangeNotifier {
       ? '?'
       : '';
   String get createLabel => isMachineMode
-      ? 'Add machine'
+      ? 'Connect a computer'
       : isModelMode
       ? '[ Add ]'
       : 'New Harness';
 
-  /// What the create row's preview says, in full: the steps, for Add machine.
+  /// What the create row's preview says, in full: the steps, for Connect a computer.
   String get createDescription => isMachineMode
       ? 'On the other computer:\n\n1. Install the app or CLI.\n2. Sign in to the same account.\n\nIt appears here and connects on its own.\n\nA machine someone shares with you appears here too.'
       : isModelMode
@@ -1112,7 +1115,7 @@ class SwarmSearchController extends ChangeNotifier {
       : 'Choose a harness, machine, and project.';
 
   /// The create row's own subtitle, one line that says something by itself: a row shows only its
-  /// first line, and Add machine's first line of [createDescription] is only "On the other
+  /// first line, and Connect a computer's first line of [createDescription] is only "On the other
   /// computer:". The steps stay in the preview beside it.
   String get createDetail => isMachineMode
       ? 'Install Harness there and sign in to the same account'
@@ -1182,7 +1185,8 @@ class SwarmSearchController extends ChangeNotifier {
   bool get previewVisible => _previewVisible;
   bool get supportsPreview =>
       harnessContext == null &&
-      history == null && (setupLayout || !isCommandMode && !isHelpMode);
+      history == null &&
+      (setupLayout || !isCommandMode && !isHelpMode);
   bool get canPreview =>
       supportsPreview &&
       selected != null &&
@@ -2244,7 +2248,9 @@ class SwarmSearchController extends ChangeNotifier {
         ? 1
         : cursor.clamp(0, rows.length - 1);
     if (harnessContext != null && preferred == null) {
-      final agent = rows.indexWhere((row) => row.agentId != null && canSubmit(row));
+      final agent = rows.indexWhere(
+        (row) => row.agentId != null && canSubmit(row),
+      );
       if (agent >= 0) cursor = agent;
     }
     // Nor on a row Return cannot take: "Already added", dimmed, with its
@@ -2518,7 +2524,9 @@ class SwarmSearchController extends ChangeNotifier {
 
   bool alreadyHere(SwarmDestination row) =>
       harnessContext == null &&
-      adding && row.agentId != null && _presentIds.contains(row.id);
+      adding &&
+      row.agentId != null &&
+      _presentIds.contains(row.id);
 
   bool canAdd(SwarmDestination? row) => harnessContext != null
       ? adding && row?.agentId != null && sessionUnavailable(row) == null

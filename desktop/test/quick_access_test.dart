@@ -162,7 +162,7 @@ void main() {
       expect(search.rows.single.commandId, 'app.store');
       expect(search.createTask, isNull);
       search.setQuery('@ Office');
-      expect(search.rows.last.title, 'Add machine');
+      expect(search.rows.last.title, 'Connect a computer');
       expect(
         search.rows.where((row) => !row.isCreate).single.isMachine,
         isTrue,

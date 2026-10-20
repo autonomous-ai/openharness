@@ -214,7 +214,7 @@ void main() {
     expect(picker, findsOneWidget);
     expect(
       tester.widget<SwarmSearchResults>(picker).search.rows.last.title,
-      'Add machine',
+      'Connect a computer',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
@@ -379,7 +379,7 @@ void main() {
             .search;
         expect(search.scopePrefix, '@');
         expect(search.rows.map((row) => row.title), contains('Studio machine'));
-        expect(search.rows.last.title, 'Add machine');
+        expect(search.rows.last.title, 'Connect a computer');
         expect(find.byKey(const ValueKey('machines-panel')), findsNothing);
         expect(find.text('Starting Harness…'), findsNothing);
       }

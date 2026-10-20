@@ -304,7 +304,7 @@ void main() {
         final origin = search(tester);
         final editor = tester.widget<TextField>(field).controller;
         expect(origin.selected!.machineId, 'other');
-        expect(origin.rows.last.title, 'Add machine');
+        expect(origin.rows.last.title, 'Connect a computer');
         await key(tester, LogicalKeyboardKey.enter);
         await key(tester, LogicalKeyboardKey.enter);
         await tester.pumpAndSettle();
@@ -1467,7 +1467,7 @@ void main() {
         await openHarnessPicker(tester);
         final reads = app.localReads;
         for (final (prefix, label) in [
-          ('@', 'Add machine'),
+          ('@', 'Connect a computer'),
           (':', '[ Add ]'),
         ]) {
           await tester.enterText(field, prefix);

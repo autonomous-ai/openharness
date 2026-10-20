@@ -210,7 +210,7 @@ void main() {
       'Build box',
       'Lab computer',
       'Test iPhone',
-      'Add machine',
+      'Connect a computer',
     ]);
     expect(
       find.byKey(const ValueKey('machine-section:computers')),
@@ -290,14 +290,14 @@ void main() {
   );
 
   testWidgets(
-    'Add machine says what to do in its one line; the preview keeps the steps',
+    'Connect a computer says what to do in its one line; the preview keeps the steps',
     (tester) async {
       const line = 'Install Harness there and sign in to the same account';
       await mount(tester);
       await openPicker(tester);
       final add = resourceSearch(tester).rows
           .singleWhere((row) => row.isCreate);
-      expect(add.title, 'Add machine');
+      expect(add.title, 'Connect a computer');
       // Not "On the other computer:", the first line of the steps, cut off there.
       expect(add.detail, line);
       expect(add.terminalDetail, line);

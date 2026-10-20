@@ -33,6 +33,33 @@ Future<void> _openAddMachineDialog(
   await tester.pumpAndSettle();
 }
 
+Future<void> _openConfigureDialog(
+  WidgetTester tester,
+  SuperTabLaunchFixture f,
+  dynamic c,
+) async {
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: SizedBox(
+          width: 300,
+          height: 400,
+          child: SuperTabMachines(
+            controller: c,
+            app: f.app,
+            onAddAgent: (_) {},
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const ValueKey('super-machine-m')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.widgetWithText(TextButton, 'Configure'));
+  await tester.pumpAndSettle();
+}
+
 void main() {
   test('shared repository metadata excludes embedded credentials', () {
     expect(
@@ -84,7 +111,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(AppSelectField<String>), findsOneWidget);
       expect(
-        find.text('This Mac (${f.app.stateOf('m')!.machine.displayName})'),
+        find.text('This computer (${f.app.stateOf('m')!.machine.displayName})'),
         findsOneWidget,
       );
       expect(find.byType(Checkbox), findsNothing);
@@ -110,7 +137,7 @@ void main() {
   );
 
   testWidgets(
-    'Add machine: the lead runs on This Mac but it is not contributed yet, so "+" still offers it',
+    'Add machine: the lead runs on this computer but it is not contributed yet, so "+" still offers it',
     (tester) async {
       final f = SuperTabLaunchFixture();
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
@@ -134,7 +161,7 @@ void main() {
         'cwd': '/work/project',
         'repositoryUrl': null,
       };
-      // No 'machines' entry: an agent running on This Mac does not mean it
+      // No 'machines' entry: an agent running on this computer does not mean it
       // was ever contributed to this tab.
       final c = await f.app.superTabs.open(tabId);
       await c.refresh();
@@ -142,7 +169,7 @@ void main() {
 
       expect(find.byType(AppSelectField<String>), findsOneWidget);
       expect(
-        find.text('This Mac (${f.app.stateOf('m')!.machine.displayName})'),
+        find.text('This computer (${f.app.stateOf('m')!.machine.displayName})'),
         findsOneWidget,
       );
       final button = tester.widget<FilledButton>(
@@ -158,7 +185,7 @@ void main() {
   );
 
   testWidgets(
-    'Add machine: only This Mac, already in the tab, offers no picker and no Add machine button',
+    'Add machine: only this computer, already in the tab, offers no picker and no Add machine button',
     (tester) async {
       final f = SuperTabLaunchFixture();
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
@@ -173,15 +200,16 @@ void main() {
       expect(find.widgetWithText(FilledButton, 'Add machine'), findsNothing);
       expect(
         find.text(
-          'This Mac (${f.app.stateOf('m')!.machine.displayName}) is already in this tab.',
+          'This computer (${f.app.stateOf('m')!.machine.displayName}) is already in this tab.',
         ),
         findsOneWidget,
       );
       expect(
-        find.textContaining('install Harness on it and sign in'),
+        find.textContaining('connect it first in Machines'),
         findsOneWidget,
       );
       expect(find.widgetWithText(TextButton, 'Close'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Cancel'), findsNothing);
       expect(find.widgetWithText(TextButton, 'Open Machines'), findsOneWidget);
 
       await tester.pumpWidget(const SizedBox());
@@ -191,7 +219,7 @@ void main() {
     },
   );
 
-  testWidgets('Add machine: with This Mac already in the tab, the picker offers only another online own '
+  testWidgets('Add machine: with this computer already in the tab, the picker offers only another online own '
       'machine, preselected, and keeps Add machine enabled', (tester) async {
     final f = SuperTabLaunchFixture();
     f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
@@ -215,10 +243,11 @@ void main() {
     expect(find.byType(AppSelectField<String>), findsOneWidget);
     expect(find.text('Other Mac'), findsOneWidget);
     expect(
-      find.text('This Mac (${f.app.stateOf('m')!.machine.displayName})'),
+      find.text('This computer (${f.app.stateOf('m')!.machine.displayName})'),
       findsNothing,
     );
     expect(find.textContaining('Already in this tab:'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Cancel'), findsOneWidget);
     final button = tester.widget<FilledButton>(
       find.widgetWithText(FilledButton, 'Add machine'),
     );
@@ -229,6 +258,29 @@ void main() {
     f.app.superTabs.dispose();
     await tester.pump();
   });
+
+  testWidgets(
+    'Add machine: Cancel closes the dialog without sending any command',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openAddMachineDialog(tester, f, c);
+
+      expect(find.byType(AppSelectField<String>), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(f.connection.server.posts, isEmpty);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
 
   testWidgets('Add machine: an offline own machine is not offered in the picker and is named as offline '
       'with a next step', (tester) async {
@@ -262,7 +314,7 @@ void main() {
   });
 
   testWidgets(
-    'Configure on a machine card reads as editing: title "Configure machine", button "Save"',
+    'Configure shows the machine as text, explains the update, and has Cancel and Update',
     (tester) async {
       final f = SuperTabLaunchFixture();
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
@@ -271,30 +323,85 @@ void main() {
       ];
       final c = await f.app.superTabs.open(tabId);
       await c.refresh();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: SizedBox(
-              width: 300,
-              height: 400,
-              child: SuperTabMachines(
-                controller: c,
-                app: f.app,
-                onAddAgent: (_) {},
-              ),
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-machine-m')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(TextButton, 'Configure'));
-      await tester.pumpAndSettle();
+      await _openConfigureDialog(tester, f, c);
 
       expect(find.text('Configure machine'), findsOneWidget);
-      expect(find.widgetWithText(FilledButton, 'Save'), findsOneWidget);
+      // No picker: the machine cannot be swapped for another one here.
+      expect(find.byType(AppSelectField<String>), findsNothing);
+      expect(
+        find.text('This computer (${f.app.stateOf('m')!.machine.displayName})'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Checks this computer’s project folder'),
+        findsOneWidget,
+      );
+      expect(find.widgetWithText(FilledButton, 'Update'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Cancel'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Save'), findsNothing);
       expect(find.widgetWithText(FilledButton, 'Add machine'), findsNothing);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'Configure: Cancel closes the dialog without sending any command',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner'},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openConfigureDialog(tester, f, c);
+
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(f.connection.server.posts, isEmpty);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'Configure updates the project folder and installed engines for the existing machine',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner'},
+      ];
+      f.connection.server.state['project'] = {
+        'machineId': 'm',
+        'cwd': '/work/project',
+        'repositoryUrl': null,
+      };
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openConfigureDialog(tester, f, c);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Update'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(f.connection.server.posts.single['command'], {
+        'type': 'machine.contribute',
+        'machineId': 'm',
+        'name': f.app.stateOf('m')!.machine.displayName,
+        'cwd': '/work/project',
+        'engines': ['claude', 'codex', 'pi'],
+        'maxAgents': 4,
+      });
 
       await tester.pumpWidget(const SizedBox());
       await c.flush();

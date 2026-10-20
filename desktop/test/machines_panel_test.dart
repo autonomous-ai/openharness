@@ -402,7 +402,7 @@ void main() {
         'M2',
         'iMac · Office',
         'Build server',
-        'Add machine',
+        'Connect a computer',
       ]);
       expect(app.resourceReadIds, containsAll(['local', 'office']));
       await selectResource(tester, 'machine:local');
@@ -447,7 +447,7 @@ void main() {
     'Set password reveals the password field and Save makes this computer available',
     (tester) async {
       await mount(tester);
-      expect(find.text('Add a second machine'), findsOneWidget);
+      expect(find.text('Connect a second computer'), findsOneWidget);
       expect(localInput, findsNothing);
       expect(find.text('Save'), findsNothing);
       expect(find.text('Set password'), findsOneWidget);
@@ -456,7 +456,7 @@ void main() {
         findsNothing,
       );
       await capture(tester, 'first-machine');
-      await tap(tester, find.byTooltip('Add a machine'));
+      await tap(tester, find.byTooltip('Connect a computer'));
       expect(
         find.text('2. Open Machines and choose Set password.'),
         findsOneWidget,
@@ -723,7 +723,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(localInput, findsNothing);
       expect(find.text('Set password'), findsOneWidget);
-      await tap(tester, find.byTooltip('Add a machine'));
+      await tap(tester, find.byTooltip('Connect a computer'));
       expect(
         find.text('1. Open Harness on your other computer.'),
         findsOneWidget,
@@ -768,7 +768,7 @@ void main() {
     'setup and forms remain usable in a narrow window at large text size',
     (tester) async {
       await mount(tester, size: const Size(460, 740), scale: 1.6);
-      await tap(tester, find.byTooltip('Add a machine'));
+      await tap(tester, find.byTooltip('Connect a computer'));
       await capture(tester, 'narrow-setup');
       await tap(tester, find.text('Set up a server…'));
       expect(tester.takeException(), isNull);
@@ -891,7 +891,7 @@ void main() {
       await mount(tester);
       expect(find.text('Starting Harness…'), findsOneWidget);
       expect(find.text('Looking for your machines…'), findsOneWidget);
-      await tap(tester, find.text('Add a second machine'));
+      await tap(tester, find.text('Connect a second computer'));
       expect(find.text('Sign in as fixture@example.test.'), findsOneWidget);
       await tap(tester, find.text('Set up a server…'));
       expect(find.text('Sign in as fixture@example.test.'), findsOneWidget);
@@ -966,7 +966,7 @@ void main() {
       await tap(tester, find.byKey(const Key('machine-delete-confirm')));
       expect(app.deletes, ['remote']);
       expect(find.text('Mac mini'), findsNothing);
-      expect(find.text('Add a second machine'), findsOneWidget);
+      expect(find.text('Connect a second computer'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
     },
   );
@@ -1074,7 +1074,7 @@ void main() {
         ),
       );
       await mount(tester);
-      await tap(tester, find.text('Add a second machine'));
+      await tap(tester, find.text('Connect a second computer'));
       await tap(tester, find.text('Copy download link'));
       replies.last.completeError(
         PlatformException(code: 'clipboard-unavailable'),
@@ -1141,7 +1141,7 @@ void main() {
         ),
       );
       await mount(tester);
-      await tap(tester, find.text('Add a second machine'));
+      await tap(tester, find.text('Connect a second computer'));
       expect(
         find.text('1. Open Harness on your other computer.'),
         findsOneWidget,

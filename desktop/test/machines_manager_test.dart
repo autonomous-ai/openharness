@@ -421,7 +421,7 @@ void main() {
         }
 
         expect(resourceScope('@'), findsOneWidget);
-        expect(resourceSearch(tester).rows.last.title, 'Add machine');
+        expect(resourceSearch(tester).rows.last.title, 'Connect a computer');
         expect(app.activeSwarm, same(tab));
         expect(app.panes, isEmpty);
         expect(tester.takeException(), isNull);

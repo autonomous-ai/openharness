@@ -334,7 +334,7 @@ class MachinePickerFooter extends StatelessWidget {
             children: [
               DesktopPill(
                 key: const Key('machine-picker-add-machine'),
-                label: 'Add machine',
+                label: 'Connect a computer',
                 compact: true,
                 onPressed: onAddMachine,
               ),

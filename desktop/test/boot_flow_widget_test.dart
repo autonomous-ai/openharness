@@ -1070,7 +1070,7 @@ void main() {
       await tester.pumpAndSettle();
       // Creation without a machine opens the same picker as Cmd-M.
       expect(resourceScope('@'), findsOneWidget);
-      expect(resourceSearch(tester).rows.last.title, 'Add machine');
+      expect(resourceSearch(tester).rows.last.title, 'Connect a computer');
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();

@@ -43,7 +43,8 @@ class DesktopSearchPanel extends StatelessWidget {
   final bool showsBack;
 
   /// What Machines needs beyond its rows: which computer this window shows, the account's device
-  /// notices, and Add machine · Add phone · History… under the list. Null leaves Machines its rows.
+  /// notices, and Connect a computer · Add phone · History… under the list. Null leaves Machines
+  /// its rows.
   final MachinePickerHooks? machineHooks;
 
   /// The least height the window needs for Machines' extras above and below its list: a window
