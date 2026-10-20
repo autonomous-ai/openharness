@@ -33,18 +33,18 @@ C:\USERS\HXE2E\.HARNESS\CLI
     |   session-search.db-wal
     |   
     +---agent-creations
-    |       177c5c80-d979-4181-820f-6079511af894.json
-    |       177c5c80-d979-4181-820f-6079511af894.json.claim
-    |       177c5c80-d979-4181-820f-6079511af894.json.result
-    |       4df4ac72-c3fe-433e-b06b-b782c9a33da3.json
-    |       4df4ac72-c3fe-433e-b06b-b782c9a33da3.json.claim
-    |       4df4ac72-c3fe-433e-b06b-b782c9a33da3.json.result
-    |       aa169b03-4ed1-41e6-ab76-204ddf90eb44.json
-    |       aa169b03-4ed1-41e6-ab76-204ddf90eb44.json.claim
-    |       aa169b03-4ed1-41e6-ab76-204ddf90eb44.json.result
-    |       ad8bdfb2-5104-464d-b7a4-93ab9b7a4321.json
-    |       ad8bdfb2-5104-464d-b7a4-93ab9b7a4321.json.claim
-    |       ad8bdfb2-5104-464d-b7a4-93ab9b7a4321.json.result
+    |       177c5c80….json
+    |       177c5c80….json.claim
+    |       177c5c80….json.result
+    |       4df4ac72….json
+    |       4df4ac72….json.claim
+    |       4df4ac72….json.result
+    |       aa169b03….json
+    |       aa169b03….json.claim
+    |       aa169b03….json.result
+    |       ad8bdfb2….json
+    |       ad8bdfb2….json.claim
+    |       ad8bdfb2….json.result
     |       
     +---agent-messages
     |       state.json

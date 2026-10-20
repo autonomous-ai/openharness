@@ -206,4 +206,3 @@ latest C comparison: read-only38dde shortcut/clipboard changes vs testedC877 par
 complete Ruling appendix: report includes all 32 ledger Ruling entries and recorded costs; missing cost explicitly marked.
 timing: original user-request timestamp not recorded; trackedledgerwindow 2026-10-20T02:57:34.449628Z->2026-10-20T14:59:04Z = 12 h 1 min 29.550372 s (43289.550372 s); reportupdatewindow notoriginalrequestduration; overlappingnetwaiting unreconstructable; Emerge/publicationnotperformed.
 final report update UTC:2026-10-20T14:59:04Z; E5.2 COMPLETE WITH LIMITS/ownerwaivedcleanup; E5.3 root closure after docs commit/review; no globalpreservation/uninstall/physicalacceptancePASS inferred.
-shipping: combined Windows PR #1457; owner's session merges E into C only after E5.2/E5.3/final review; agent performs no merge.

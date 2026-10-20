@@ -1,18 +1,18 @@
 --- before (p2 daemon)
-12:35:25.430 {"id":"20d8966b-1bfe-4d77-ad02-c77560b8b8aa","engine":"claude","status":"active","pane":"%2002","instance":"p2"}
-12:35:25.432 {"id":"cd88c448-2531-4481-9f15-99b42c2689be","engine":"codex","status":"active","pane":"%2003","instance":"p2"}
-12:35:25.432 {"id":"069267c4-5f5f-4042-9df0-378a145686fc","engine":"terminal","status":"active","pane":"%2004","instance":"p2"}
+12:35:25.430 {"id":"20d8966b…","engine":"claude","status":"active","pane":"%2002","instance":"p2"}
+12:35:25.432 {"id":"cd88c448…","engine":"codex","status":"active","pane":"%2003","instance":"p2"}
+12:35:25.432 {"id":"069267c4…","engine":"terminal","status":"active","pane":"%2004","instance":"p2"}
 machine stopped (pid 13012).
 create rc=0 pid=7412
 --- p3 daemon
-12:35:46.020 {"id":"20d8966b-1bfe-4d77-ad02-c77560b8b8aa","engine":"claude","status":"active","pane":"%2002","instance":"p2"}
-12:35:46.021 {"id":"cd88c448-2531-4481-9f15-99b42c2689be","engine":"codex","status":"active","pane":"%2003","instance":"p2"}
-12:35:46.021 {"id":"069267c4-5f5f-4042-9df0-378a145686fc","engine":"terminal","status":"offline","pane":"%2004","instance":"p2"}
+12:35:46.020 {"id":"20d8966b…","engine":"claude","status":"active","pane":"%2002","instance":"p2"}
+12:35:46.021 {"id":"cd88c448…","engine":"codex","status":"active","pane":"%2003","instance":"p2"}
+12:35:46.021 {"id":"069267c4…","engine":"terminal","status":"offline","pane":"%2004","instance":"p2"}
 12:35:46.021 PASS the agents made on the p2 host are still listed, on instance p2 — claude:%2002, codex:%2003, terminal:%2004
 12:35:48.561 PASS old claude 20d8966b (p2) still streams —   ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
 12:35:51.094 PASS old codex cd88c448 (p2) still streams —   GPT-6.1-Sol default · C:\work\e2e\proj
 12:35:55.644 PASS old terminal 069267c4 (p2) still streams — DRAIN_42 | PS C:\work\e2e\proj>
-12:35:55.910 create terminal → 3e67bc0b-a959-477f-b015-59c32c2fa4b3 launch=ready (264 ms)
+12:35:55.910 create terminal → 3e67bc0b… launch=ready (264 ms)
 12:35:55.933 PASS a new agent is made on the new host (p3) — instance p3 pane %1
 12:36:00.983 PASS the new p3 agent answers — NEW_42 | PS C:\work\e2e\proj>
 12:36:00.988 SUMMARY 6/6 passed

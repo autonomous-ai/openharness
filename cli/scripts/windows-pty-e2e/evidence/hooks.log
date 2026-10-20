@@ -18,7 +18,7 @@
 #    PATH for this run only. `npm ls -g` before and after: @openai/codex@0.162.1, opencode-ai@1.19.0.
 #    Run-only env line also: DISABLE_AUTOUPDATER=1, so Claude Code could not replace the person's claude.exe mid-run.
 # 3. C:\work\e2e's daemon was not running (nothing on 18473), before and after (section 9). The B4 daemon reused
-#    C:\work\b4\computer-id 757a170d-0dda-4f31-92d1-263b647dabb1; its log has no machine registration line.
+#    C:\work\b4\computer-id 757a170d…; its log has no machine registration line.
 # 4. No sign-in was done. Claude Code's first-run screens (security notes, folder trust) and Codex's Windows sandbox
 #    choice ("Use non-admin sandbox") were answered; neither is a sign-in.
 # 5. Log checks, Copilot and Command Code: sections 5-7.
@@ -123,11 +123,11 @@
 2026-10-17 11:58:34.013 [hooks] 30d63cb5 SessionStart · engine=claude · isNew=false
 
 ## 2. First run: `run.cmd hooks claude codex kilo` (bundle 1046a953f) -> SUMMARY 0/3
-18:30:12.387 create claude → 3de624a5-de4f-42b0-a8c8-13c801ee05e7 launch=starting (200 ms)
+18:30:12.387 create claude → 3de624a5… launch=starting (200 ms)
 18:32:15.227 FAIL claude: its hook binds the pane's conversation — timeout (120000 ms): claude sessionId; last=undefined
-18:32:15.615 create codex → 6838f995-7b81-4c81-bd34-0bf6d0b54465 launch=starting (386 ms)
+18:32:15.615 create codex → 6838f995… launch=starting (386 ms)
 18:34:18.408 FAIL codex: its hook binds the pane's conversation — timeout (120000 ms): codex sessionId; last=undefined
-18:34:18.502 create kilo → b7b09b11-217c-4ea6-83a5-d6ab245b8b24 launch=starting (92 ms)
+18:34:18.502 create kilo → b7b09b11… launch=starting (92 ms)
 18:36:34.607 FAIL kilo: its hook binds the pane's conversation — timeout (120000 ms): kilo sessionId; last=undefined
 18:36:34.608 SUMMARY 0/3 passed
 # Why, from the panes:
@@ -155,11 +155,11 @@
 #      and recorded new review hashes in config.toml.
 
 ## 3. Second run (after fix 1): SUMMARY 2/3
-18:50:11.149 create claude → 97c8d32f-e348-48b6-a6c7-3c7c7e856566 launch=starting (192 ms)
-18:50:20.345 PASS claude: its hook binds the pane's conversation — agent 97c8d32f session e2d47f66-54d6-44ab-b6d8-cb3e7804d3b4 status active
-18:50:21.472 create codex → a21a0aaf-5900-46ae-9baa-b507410e1aa7 launch=starting (1127 ms)
+18:50:11.149 create claude → 97c8d32f… launch=starting (192 ms)
+18:50:20.345 PASS claude: its hook binds the pane's conversation — agent 97c8d32f session e2d47f66… status active
+18:50:21.472 create codex → a21a0aaf… launch=starting (1127 ms)
 18:52:24.930 FAIL codex: its hook binds the pane's conversation — timeout (120000 ms): codex sessionId; last=undefined
-18:52:25.013 create kilo → fe76ccc9-7789-4b2a-bce2-0f585649173e launch=starting (82 ms)
+18:52:25.013 create kilo → fe76ccc9… launch=starting (82 ms)
 18:52:43.087 PASS kilo: its hook binds the pane's conversation — agent fe76ccc9 session ses_eb4ca770effer68rCSYtlxT9GY status active
 18:52:43.088 SUMMARY 2/3 passed
 # Codex: the hook now ran (no "Hook failed") and reached the daemon, which held it:
@@ -172,15 +172,15 @@
 
 ## 4. Final runs (fix 1 + fix 2)
 # run.cmd hooks codex
-18:56:19.393 create codex → c09c979a-1bec-4a0a-b1f1-ffb739f727e5 launch=starting (266 ms)
-18:56:24.488 PASS codex: its hook binds the pane's conversation — agent c09c979a session 01a14b38-dfb7-7e10-aade-30088e24d143 status active
+18:56:19.393 create codex → c09c979a… launch=starting (266 ms)
+18:56:24.488 PASS codex: its hook binds the pane's conversation — agent c09c979a session 01a14b38… status active
 18:56:24.489 SUMMARY 1/1 passed
 # run.cmd hooks claude codex kilo
-18:56:37.809 create claude → 7902cdf2-12f4-44c5-bb9e-6860c3e34278 launch=starting (150 ms)
-18:56:46.033 PASS claude: its hook binds the pane's conversation — agent 7902cdf2 session 30d63cb5-83e2-4329-9c0f-4d334676d736 status active
-18:56:46.293 create codex → 3fb8100e-8710-410a-b6aa-8ba253e8f58f launch=starting (259 ms)
-18:56:52.722 PASS codex: its hook binds the pane's conversation — agent 3fb8100e session 01a14b39-4621-7371-b140-d2b19857287c status active
-18:56:52.916 create kilo → 333b69ef-3fca-4f08-bf3c-3e654ec78d69 launch=starting (194 ms)
+18:56:37.809 create claude → 7902cdf2… launch=starting (150 ms)
+18:56:46.033 PASS claude: its hook binds the pane's conversation — agent 7902cdf2 session 30d63cb5… status active
+18:56:46.293 create codex → 3fb8100e… launch=starting (259 ms)
+18:56:52.722 PASS codex: its hook binds the pane's conversation — agent 3fb8100e session 01a14b39… status active
+18:56:52.916 create kilo → 333b69ef… launch=starting (194 ms)
 18:57:11.037 PASS kilo: its hook binds the pane's conversation — agent 333b69ef session ses_eb4c66078ffe3vEXN6mnUaCvZq status active
 18:57:11.038 SUMMARY 3/3 passed
 # OpenCode: outcome C (B4.12): "OpenCode does not run on Windows on Arm yet". Not verified on the VM. Handed to B5's
@@ -209,8 +209,8 @@
 #      Not refused. A pane with no sessionId is still refused as before: delete 6838f995 / a21a0aaf (the unbound Codex
 #      rows of runs 1-2) → IDENTITY_UNAVAILABLE "the native ps probe did not complete"; ended in the pane with /quit.
 #      Kilo (bound) b7b09b11 → {"deleted":true}.
-#   F6 run.cmd resume 7902cdf2 → "resumed":true, sessionId 30d63cb5-83e2-4329-9c0f-4d334676d736 (same), new pane %2011;
-#      run.cmd resume 3fb8100e → "resumed":true, sessionId 01a14b39-4621-7371-b140-d2b19857287c (same), pane %2012.
+#   F6 run.cmd resume 7902cdf2 → "resumed":true, sessionId 30d63cb5… (same), new pane %2011;
+#      run.cmd resume 3fb8100e → "resumed":true, sessionId 01a14b39… (same), pane %2012.
 #      harness.log: "[resume] 7902cdf2 confirmed · engine=claude · hook=no · same conversation", the same for 3fb8100e.
 #      Both resumed panes show the earlier "> Reply with the single word ok." and its "ok".
 # Plugin folders (B4.11 step 5): dir /b %USERPROFILE%\.config\opencode\plugin %USERPROFILE%\.config\kilo\plugin

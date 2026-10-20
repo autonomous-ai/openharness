@@ -1,5 +1,5 @@
 0.4.18-dev.dbeca9ff8.dirty
-{"ok":true,"machineId":"961c7b1c-b0f4-4bda-85de-7a3465e0f114","agent":{"id":"69b406c2-24fd-41b9-b427-1204c8f6f0d3","sess
+{"ok":true,"machineId":"961c7b1c…","agent":{"id":"69b406c2…","sess
 ✓ stopped 1 harness
 ✓ stopped the Harness daemon (pid 2818)
 ✓ removed Harness's hooks from ~/.claude/settings.json

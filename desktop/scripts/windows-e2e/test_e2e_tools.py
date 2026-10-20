@@ -55,7 +55,7 @@ class RedactTest(unittest.TestCase):
         self.assertEqual(t.redact(r'pipe \\.\pipe\harness-41b22efa0123456789abcdef01234567', home=''),
                          r'pipe \\.\pipe\harness-41b22efa…')
         self.assertEqual(t.redact('sha 2d6bdfb341be3a6234b24742377f93aa7c7cfb0d9fd64efa9282c87852e57085', home=''), 'sha 2d6bdfb3…')
-        self.assertEqual(t.redact('hxe2e S-1-5-21-1478909626-3441007577-4021198368-1006', home=''), 'hxe2e S-1-5-21-…-1006')
+        self.assertEqual(t.redact('hxe2e S-1-5-21-1000000001-1000000002-1000000003-1006', home=''), 'hxe2e S-1-5-21-…-1006')
 
     def test_no_email_token_or_proof_is_left(self):
         self.assertEqual(t.redact('signed in as person.name+x@example.com.', home=''), 'signed in as <email>.')
@@ -68,7 +68,7 @@ class RedactTest(unittest.TestCase):
         self.assertEqual(t.redact('/Users/someone/work/x.log', home='/Users/someone'), '~/work/x.log')
 
     def test_ssh_destinations_short_hex_and_versions_stay(self):
-        line = 'hxe2e@192.168.65.3 admin@WIN-2R12E0MUJKC pid 7500 build 1.4.0 commit 338e589bc'
+        line = 'hxe2e@192.168.65.3 admin@WIN-TESTVM pid 7500 build 1.4.0 commit 338e589bc'
         self.assertEqual(t.redact(line, home=''), line)
 
 

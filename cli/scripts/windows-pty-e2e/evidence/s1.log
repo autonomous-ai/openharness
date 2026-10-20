@@ -1,9 +1,9 @@
-10:54:08.607 create terminal → a61b5044-2acc-4c54-9c5b-0000e72b0214 launch=ready (52 ms)
-10:54:08.613 PASS create terminal — a61b5044-2acc-4c54-9c5b-0000e72b0214 pane %8 ready in 58 ms
-10:54:08.688 create claude → 9f4d41e4-947a-464f-8ffc-da01f7c9e1f1 launch=starting (75 ms)
-10:54:09.702 PASS create claude — 9f4d41e4-947a-464f-8ffc-da01f7c9e1f1 pane %9 ready in 1089 ms
-10:54:10.391 create codex → 61f56d06-4773-4100-ac63-c5652450adc0 launch=starting (689 ms)
-10:54:11.409 PASS create codex — 61f56d06-4773-4100-ac63-c5652450adc0 pane %10 ready in 1707 ms
+10:54:08.607 create terminal → a61b5044… launch=ready (52 ms)
+10:54:08.613 PASS create terminal — a61b5044… pane %8 ready in 58 ms
+10:54:08.688 create claude → 9f4d41e4… launch=starting (75 ms)
+10:54:09.702 PASS create claude — 9f4d41e4… pane %9 ready in 1089 ms
+10:54:10.391 create codex → 61f56d06… launch=starting (689 ms)
+10:54:11.409 PASS create codex — 61f56d06… pane %10 ready in 1707 ms
 10:54:15.948 PASS PowerShell: prompt shows on the stream — after 3022 ms; raw output so far "\u001b[6n\u001b[1;1HPS C:\\work\\e2e\\proj> "
 10:54:18.985 PASS PowerShell: type a command, see its output — PS C:\work\e2e\proj> Write-Output ('E2E_' + (40+2)) | E2E_42 | PS C:\work\e2e\proj>
 10:54:23.528 PASS PowerShell: paste 30 KB (300 lines) through ReadLine, count + checksum — TOTAL=30000 HASH=333713715 (30299 bytes, 3023 ms)

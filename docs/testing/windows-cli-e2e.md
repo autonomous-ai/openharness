@@ -11,7 +11,7 @@ plan; the spec's testing section is
 [§6 of the design](../superpowers/specs/2026-10-16-windows-native-cli-design.md#6-testing).
 
 **How it was driven.** The UTM VM: Windows 11 Home ARM64, build 10.0.26100.9711, 8 logical CPUs, computer name
-`WIN-2R12E0MUJKC`. Two new standard users, `hxe2e` and `hxe2e2` (in `Users`, not in `Administrators`), were reached
+`WIN-TESTVM`. Two new standard users, `hxe2e` and `hxe2e2` (in `Users`, not in `Administrators`), were reached
 over SSH by key. The PTY driver (`cli/scripts/windows-pty-e2e`, through `run.cmd`) used hxe2e's loopback on port
 18474. The Mac's update server (`serve-updates.sh`, `192.168.65.1:8799`) served the updates, and the fake HTTPS CDN
 (`fake-cdn.sh` + `vm-cdn.ps1`) was enabled for scenarios 3 and 4 only. The Mac's CLI (signed in to the same account)
@@ -169,7 +169,7 @@ The fake CDN was then disabled: hosts sha256 back to `2d6bdfb3…` (byte-identic
 Sign-in: `approve-qr.mts` → `result success`, `machine registered: 7e92c45a…`
 ([`s5-login.log`](../../cli/scripts/windows-cli-e2e/evidence/s5-login.log)). After `harness stop` / `harness start`:
 `● started · connecting to the backend`, then `backend connected`. The Mac's `harness machines --json` lists
-`WIN-2R12E0MUJKC` `running`; the Mac's `harness ps --machine 7e92c45a… --all --json`
+`WIN-TESTVM` `running`; the Mac's `harness ps --machine 7e92c45a… --all --json`
 ([`s5-remote.log`](../../cli/scripts/windows-cli-e2e/evidence/s5-remote.log)) lists the VM's harnesses with Kilo
 `"state": "idle"`, `"asks": ["Reply with only the number: what is 6 times 7?"]`, `"about": "42"`.
 
@@ -360,7 +360,7 @@ a `harness stop`) and set the tasks to normal priority. This run predates those 
   helper folders (`C:\Users\admin\e2e`, `e2e-b514`) removed. `C:\work\e2e` untouched (its daemon not running before or
   after; nothing on 1847x).
 - Account: machine `7e92c45a…` (the only one this run registered) deleted and gone from
-  `harness machines`. An older `WIN-2R12E0MUJKC` row (`5d96588a…`, 2026-10-15) is not this run's and was left.
+  `harness machines`. An older `WIN-TESTVM` row (`5d96588a…`, 2026-10-15) is not this run's and was left.
 - Mac: the update server and the fake CDN stopped (8799 and 443 free); both throwaway homes removed; the scratchpad's
   password file, CA and keys, staged CDN and update builds removed. The macOS run 1 repair (G7): in the real
   `~/.harness/cli/data`, `adapter.pid` written back with the running master's pid (19304) and the stray
@@ -488,7 +488,7 @@ The task's `Last Run Time` stayed `11/30/1999`, so it never ran. The start remov
 
 **5 and 6, the parts with no console and no reboot.**
 - The registered task, as `schtasks /Query /XML` shows it, has everything the steps rely on: logon trigger user
-  `WIN-2R12E0MUJKC\hb3`, which is hb3's SID in the file written; `<Interval>PT5M</Interval>`;
+  `WIN-TESTVM\hb3`, which is hb3's SID in the file written; `<Interval>PT5M</Interval>`;
   `IgnoreNew`; `InteractiveToken`; and the action `C:\Users\hb3\.harness\bin\harness-launch.exe --root
   "C:\Users\hb3\.harness" -- start --if-down`.
 - The task's action was run by hand while the daemon was up. It exited 0 at once and the pid file did not change.

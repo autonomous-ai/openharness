@@ -8,8 +8,8 @@ rights: none (2)
 hxe2e2 processes: 0 
 hxe2e2 profile removed
 ## hxe2e's profile: its hives were still loaded (as in B3.21/B5.12); forced unload, then removed
-\Registry\User\S-1-5-21-1478909626-3441007577-4021198368-1006 -> 0x00000000
-\Registry\User\S-1-5-21-1478909626-3441007577-4021198368-1006_Classes -> 0x00000000
+\Registry\User\S-1-5-21-1000000001-1000000002-1000000003-1006 -> 0x00000000
+\Registry\User\S-1-5-21-1000000001-1000000002-1000000003-1006_Classes -> 0x00000000
 C:\Users\hxe2e exists: False
 ProfileList key exists: False
 HKU loaded: False
@@ -42,7 +42,7 @@ admin e2e folders removed
 C:\work has nothing of this run
 ## the account: machines this run registered (09:27:04)
 
-  ✓ Deleted 7e92c45a (WIN-2R12E0MUJKC).
+  ✓ Deleted 7e92c45a (WIN-TESTVM).
     If that computer is running the daemon it signs out and stops on its own.
 
 machine 7e92c45a… is gone from the account

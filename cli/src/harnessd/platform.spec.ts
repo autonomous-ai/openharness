@@ -485,10 +485,10 @@ const task = {
   root: 'C:\\Users\\Demo User\\.harness',
   home: 'C:\\Users\\Demo User',
   logFile: 'C:\\Users\\Demo User\\.harness\\cli\\data\\harness.log',
-  sid: 'S-1-5-21-1478909626-3441007577-4021198368-1001',
+  sid: 'S-1-5-21-1000000001-1000000002-1000000003-1001',
 }
 /** What `whoami /user /fo csv /nh` printed on the Windows 11 VM (2026-10-16). */
-const WHOAMI = '"win-2r12e0mujkc\\admin","S-1-5-21-1478909626-3441007577-4021198368-1001"\r\n'
+const WHOAMI = '"win-testvm\\admin","S-1-5-21-1000000001-1000000002-1000000003-1001"\r\n'
 
 describe('the scheduled task', () => {
   // Task names are machine-wide, and a task folder one user creates can refuse another standard user: a fixed
@@ -534,7 +534,7 @@ describe('the scheduled task', () => {
   it('starts `harness start --if-down --at-logon` at this user\'s logon, from the logon task, and nothing else differs', () => {
     const text = taskSchedulerXml({ ...task, atLogon: true })
     // The logon trigger names this user by SID; without one it would fire at anyone's logon.
-    expect(text).toMatch(/<LogonTrigger>\s*<Enabled>true<\/Enabled>\s*<UserId>S-1-5-21-1478909626-3441007577-4021198368-1001<\/UserId>\s*<\/LogonTrigger>/)
+    expect(text).toMatch(/<LogonTrigger>\s*<Enabled>true<\/Enabled>\s*<UserId>S-1-5-21-1000000001-1000000002-1000000003-1001<\/UserId>\s*<\/LogonTrigger>/)
     expect(text.match(/<UserId>/g)).toHaveLength(1)
     expect(text).not.toContain('<TimeTrigger>')
     expect(text).toContain('<Arguments>--root &quot;C:\\Users\\Demo User\\.harness&quot; -- start --if-down --at-logon</Arguments>')

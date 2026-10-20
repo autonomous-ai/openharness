@@ -1,5 +1,5 @@
 0.4.18-dev.dbeca9ff8.dirty
-{"ok":true,"machineId":"3c78e842-8e3f-49bd-a4f5-f2e9a6710da0","agent":{"id":"cc1634be-87a3-467f-8533-cf7f90e69dd7","sess
+{"ok":true,"machineId":"3c78e842…","agent":{"id":"cc1634be…","sess
 ✓ stopped 1 harness
 ✗ The Harness daemon (pid 2857) did not stop. None of Harness's files were deleted. Run `harness stop`, then `harness uninstall` again.
 exit=1 in 4 s

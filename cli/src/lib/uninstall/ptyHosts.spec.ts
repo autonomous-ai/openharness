@@ -169,7 +169,7 @@ describe('endPtyHosts', () => {
   })
 
   it("on macOS, reads the image from argv when ps cuts comm to 16 characters, but only when comm is the start of it", async () => {
-    // Measured 2026-10-18: `ps -o comm=` shows `/Users/nqhieu84/` and `pty/target/relea` for two hosts.
+    // Measured 2026-10-18: `ps -o comm=` shows `/Users/<user>/` and `pty/target/relea` for two hosts.
     const program = '/Users/John Doe/.harness/runtime/pty/0.5.0/harness-pty'
     const args = `${program} serve --home ${UNIX_HOME} --history-limit 2000`
     let up = true

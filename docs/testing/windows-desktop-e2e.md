@@ -18,10 +18,10 @@ record.
 
 | # | Scenario | Result at this snapshot | Driver |
 | --- | --- | --- | --- |
-| 1 | First install, sign-in, same-version launch | Accepted across separate ARM/x64 runs: final ARM 1.0.4 provisioned missing Node/CLI/PTY and rendered Sign in in 160.404s; supported DELL QR sign-in had already returned success and automatically signed in Desktop. Same-version launch converged to one installed window. Published x64 MOTW launch passed its observed Unknown Publisher warning. No fresh ARM sign-in or single uninterrupted journey is claimed. | Script, visual automation; supported QR sign-in |
-| 2 | This computer, terminal, Add Phone, remote Mac | Passed: owned terminal creation, `WIN_42` output, HTTP 200 handoffs on ARM and real DELL x64, and remote row observed. Published x64 1.0.3 and PTY 0.4.19 passed GUI ping/Ctrl+C and synthetic text copy/paste. Duplicate cursor replies caused a new terminal to lose its first key. The source fix passed clean x64 Debug checks and the published 1.0.4 retest: the first physical `a` appeared in a fresh GUI-created terminal and was independently confirmed in passive PTY output. The owner completed Mac → Windows control; passive VM output confirmed two `MAC_42` command/result pairs. | Visual automation, Script, Person |
+| 1 | First install, sign-in, same-version launch | Accepted across separate ARM/x64 runs: final ARM 1.0.4 provisioned missing Node/CLI/PTY and rendered Sign in in 160.404s; supported x64 test PC QR sign-in had already returned success and automatically signed in Desktop. Same-version launch converged to one installed window. Published x64 MOTW launch passed its observed Unknown Publisher warning. No fresh ARM sign-in or single uninterrupted journey is claimed. | Script, visual automation; supported QR sign-in |
+| 2 | This computer, terminal, Add Phone, remote Mac | Passed: owned terminal creation, `WIN_42` output, HTTP 200 handoffs on ARM and real x64 test PC x64, and remote row observed. Published x64 1.0.3 and PTY 0.4.19 passed GUI ping/Ctrl+C and synthetic text copy/paste. Duplicate cursor replies caused a new terminal to lose its first key. The source fix passed clean x64 Debug checks and the published 1.0.4 retest: the first physical `a` appeared in a fresh GUI-created terminal and was independently confirmed in passive PTY output. The owner completed Mac → Windows control; passive VM output confirmed two `MAC_42` command/result pairs. | Visual automation, Script, Person |
 | 3 | Notifications, tray, links, paste and font | Accepted with explicit combined evidence: tray/links/font observed; published x64 1.0.4 composer bitmap, raw PNG-only and file-drop paste passed. On published x64 1.0.3, a completed Kilo turn posted a native Finished notification; clicking its card restored the correct harness. The live tray menu showed the working Kilo row, Open Harness and Quit. Published 1.0.4 cold protocol launch rendered one installed window; both-architecture native tests prove exactly-once forwarding. Transient banner and live URL-specific delivery log/count remain unobserved; the release app has no such delivery log. | Visual automation, Script, native integration |
-| 4 | Staging updates and broken-build rollback | Passed on real x64: real 1.0.0 → 1.0.1 GUI update passed on both VMs. The 1.0.1 → 1.0.2 update kept the ARM counter rising and repaired Settings `DisplayVersion` on both VMs; DELL x64 then updated from 1.0.2 → 1.0.3 through the GUI and rendered signed in. Private fake-CDN truncated/no-executable packages were refused; a no-first-frame package rolled back to 1.0.3 after two failed starts. Counter and daemon/PTY processes survived. | Script, visual automation |
+| 4 | Staging updates and broken-build rollback | Passed on real x64: real 1.0.0 → 1.0.1 GUI update passed on both VMs. The 1.0.1 → 1.0.2 update kept the ARM counter rising and repaired Settings `DisplayVersion` on both VMs; the x64 test PC then updated from 1.0.2 → 1.0.3 through the GUI and rendered signed in. Private fake-CDN truncated/no-executable packages were refused; a no-first-frame package rolled back to 1.0.3 after two failed starts. Counter and daemon/PTY processes survived. | Script, visual automation |
 | 5 | Uninstall through Windows Settings | Passed on 1.0.3 after a 1.0.2 timing failure was fixed: holding the final dialog open over three minutes did not start cleanup early; after OK, the app folder and registrations disappeared while CLI, daemon and agents stayed. | UI Automation |
 | 6 | x64 desktop on ARM64 | Passed across two runs of published x64 1.0.3: install, rendered window, tray and Settings uninstall passed; a later isolated x64 runtime returned HTTP 200 for Add Phone while the backend was connected. The installed ARM app and seven agents were restored afterward. | Script, visual automation, UI Automation |
 | 7 | Install desktop by one PowerShell command | Passed on real x64: cold staging 1.0.3 install rendered immediately, console showed the full completion copy and `still here`, MOTW/temp counts were zero, and the subsequent Settings uninstall removed the app while preserving agents. A later cold ARM 1.0.4 install rendered at the first passive capture and showed the full completion copy; the earlier white 1.0.3 run is retained below. | Script, visual automation, UI Automation |
@@ -252,7 +252,7 @@ process and one visible window. The installer streaming transcript was not
 retained, so the actual rendered transition and resulting managed files/versions
 are the bootstrap evidence.
 
-Sign-in acceptance reuses the earlier real DELL supported QR flow: approval
+Sign-in acceptance reuses the earlier real x64 test PC supported QR flow: approval
 through the authorized Mac session returned `status: success`, restarted
 harnessd on that account and automatically moved the still-running Desktop
 from Sign in to its account and This Computer. This is separate x64 sign-in
@@ -315,7 +315,7 @@ its first physical `a`; a passive PTY screen independently confirmed the
 character. The full Windows CI subsequently passed both architectures. On published
 x64 **1.0.4**, the GUI created another fresh Terminal harness against published
 PTY 0.4.19. Its first single physical `a` appeared at the prompt without a
-warm-up key; passive PTY output independently confirmed `PS C:\Users\DELL> a`.
+warm-up key; passive PTY output independently confirmed `PS C:\Users\<user>> a`.
 This passes the published first-key retest.
 
 ### 3. Native Windows behavior
@@ -567,7 +567,7 @@ remained; the owned counter continued rising through `COUNT_18687`. Together,
 the two runs satisfy Scenario 6's x64 emulation, pipe handoff, tray and cleanup
 criteria. The earlier 502 was a backend outage, not an x64 FFI failure.
 
-The real DELL x64 VM was also checked after the user prioritized x64. Its
+The real x64 test PC was also checked after the user prioritized x64. Its
 already signed-in, rendered 1.0.2 app ran in the active GUI session with the
 staging 1.0.3 update banner. Clicking **Update** installed 1.0.3 and restarted
 one app process in the same GUI session. Its home surface rendered signed in,
@@ -579,9 +579,9 @@ kept its PID and connected status. No QR screenshot was retained. This is live
 x64 GUI/update/FFI evidence; it does not establish published PTY 0.4.19 GUI
 Ctrl+C because that host then ran in a different Windows session.
 
-A bounded attempt to create one Terminal from the DELL 1.0.3 GUI did not
+A bounded attempt to create one Terminal from the x64 test PC's 1.0.3 GUI did not
 confirm a start; `harness ps` remained empty, so no input or Ctrl+C was sent.
-The DELL GUI daemon logged `pty host is unavailable` and repeated attempts to
+The x64 test PC's GUI daemon logged `pty host is unavailable` and repeated attempts to
 start a host despite an existing 0.4.19 host. Read-only probes found that host
 alive in Session 0, its discovery file naming the same PID, and its pipe
 connectable from both Session 0 and the limited GUI Session 1. However, the
@@ -595,7 +595,7 @@ time through CIM, while a .NET process-handle start-time read failed. An
 authenticated host inventory then confirmed **zero panes**. Its protocol
 accepted a guarded shutdown, but a Session 0 process started the replacement
 0.4.19 host before the limited Session 1 task did. The test stopped after that
-single attempt. DELL remained signed in, backend connected, with the same
+single attempt. The x64 test PC remained signed in, backend connected, with the same
 daemon and zero agents; the replacement host also had zero panes. At that point, published
 0.4.19 GUI Ctrl+C still needed a host started in a compatible user context.
 The later same-session x64 receipt in §2 passed that check.
@@ -743,11 +743,11 @@ including the unrelated terminal window.
 
 The old run-owned ARM backend machine was identified through supported CLI
 metadata with a process-local override to its marked backup, without reading
-credentials. The supported machine list from DELL uniquely identified that
-remote record with zero agents and proved it was not DELL's current machine.
+credentials. The supported machine list from the x64 test PC uniquely identified that
+remote record with zero agents and proved it was not the x64 test PC's current machine.
 Its exact-ID deletion returned **HTTP 403 / NEEDS_AUTONOMOUS_SIGN_IN** requiring
 a Google or Apple sign-in. No successful deletion is claimed. Reauthenticating
-DELL would disturb the preserved session, so it was left unchanged. Its
+the x64 test PC would disturb the preserved session, so it was left unchanged. Its
 backend cleanup restriction is retained separately from the completed local
 Windows-account removal.
 

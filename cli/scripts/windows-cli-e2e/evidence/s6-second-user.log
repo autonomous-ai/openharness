@@ -35,7 +35,7 @@ exit=0
 ok   version 0.4.18-dev.win1
 ok   task Harness harnessd (hxe2e2)
 ok   PATH has c:\users\hxe2e2\.harness\bin
-ok   terminal ede22e86-6f4a-4234-8f0d-788b8cce0b85 on harness-pty pid 5028 (2 shell(s) under it)
+ok   terminal ede22e86… on harness-pty pid 5028 (2 shell(s) under it)
 exit=0
 ## both tasks
 TaskName:      \Harness harnessd (hxe2e)
@@ -58,7 +58,7 @@ ProcessId ParentProcessId Name            Start    Cmd
 ok   version 0.4.18-dev.win1
 ok   task Harness harnessd (hxe2e2)
 ok   PATH has c:\users\hxe2e2\.harness\bin
-ok   terminal 2541c62a-388a-489b-9050-1c7d2e52fbb9 on harness-pty pid 7076 (2 shell(s) under it)
+ok   terminal 2541c62a… on harness-pty pid 7076 (2 shell(s) under it)
 exit=0
 ## all harness-pty.exe before hxe2e2's uninstall (08:56:50)
 harness-pty pid 5028 started 18:40:04.889 owner hxe2e C:\Users\hxe2e\.harness\runtime\pty\0.4.18\harness-pty.exe

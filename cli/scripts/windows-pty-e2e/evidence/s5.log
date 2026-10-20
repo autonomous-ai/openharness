@@ -35,7 +35,7 @@ ProcessId ParentProcessId Start    CommandLine
 
 
 --- delete the agent
-{"requestId":"b037844e-6c83-4bbe-96fe-5d22d1c62804","deleted":true}
+{"requestId":"b037844e…","deleted":true}
 --- powershell 3 s after
 
 ProcessId ParentProcessId Start    CommandLine                                              

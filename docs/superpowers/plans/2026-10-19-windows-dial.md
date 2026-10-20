@@ -18,7 +18,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-19-windows-dial-design.md`. It builds on sub-project B (`docs/superpowers/specs/2026-10-16-windows-native-cli-design.md`) and C (`docs/superpowers/specs/2026-10-18-windows-desktop-design.md`), whose code is on this branch.
 
-**Where and when.** E continues on `feat/windows-dial`, cut from `feat/windows-desktop` at `8fb220f15` (C through C5.3 landed; C5.2's last live checks still run there). Per the owner's 2026-10-20 update, E ships in the combined Windows PR, `feat/windows-desktop` → `main`. When E5.2, E5.3 and the final review are done, report back; the owner's session will merge `feat/windows-dial` into `feat/windows-desktop`. Do not perform that merge yourself. F cherry-picks only E1.3's immutable, test-tooling-only kit commit `7ee856dd9`; no rebase onto E is assumed. Commits and pushes of `feat/windows-dial` are authorized; never `feat/windows-desktop` or `main`, never force-push. The handoff is `docs/superpowers/plans/2026-10-20-windows-dial-handoff.md`.
+**Where and when.** E continues on `feat/windows-dial`, cut from `feat/windows-desktop` at `8fb220f15` (C through C5.3 landed; C5.2's last live checks still run there). Per the owner's 2026-10-20 update, E ships in the combined Windows PR, `feat/windows-desktop` → `main`. When E5.2, E5.3 and the final review are done, report back; the owner's session will merge `feat/windows-dial` into `feat/windows-desktop`. Do not perform that merge yourself. F cherry-picks only E1.3's immutable, test-tooling-only kit commit `7ee856dd9`; no rebase onto E is assumed. Commits and pushes of `feat/windows-dial` are authorized; never `feat/windows-desktop` or `main`, never force-push.
 
 ## Global Constraints
 

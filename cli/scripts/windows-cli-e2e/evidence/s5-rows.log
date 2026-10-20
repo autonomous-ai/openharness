@@ -1,8 +1,8 @@
 # s5 rows and hook lines (08:52:15)
-{"id":"c66db6da-202d-4717-ae5a-e5c924addf6f","engine":"terminal","status":"offline","launch":"ready","pane":"%3001","name":"Terminal harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
-{"id":"47324568-1510-43d4-ad33-4da3359dc63c","engine":"claude","status":"active","launch":"ready","pane":"%3002","name":"Claude harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
-{"id":"dac87568-38e1-428e-8b01-b5588948cb9a","engine":"codex","status":"active","launch":"ready","pane":"%3003","name":"Codex harness 10-17 18:51","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
-{"id":"29c3a0f0-8836-485c-88ed-82cd6323d573","engine":"kilo","status":"active","launch":"ready","pane":"%3004","name":"Kilo CLI","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":"ses_eb34ac58dffeD615Cp1P5v3kH8"}
+{"id":"c66db6da…","engine":"terminal","status":"offline","launch":"ready","pane":"%3001","name":"Terminal harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
+{"id":"47324568…","engine":"claude","status":"active","launch":"ready","pane":"%3002","name":"Claude harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
+{"id":"dac87568…","engine":"codex","status":"active","launch":"ready","pane":"%3003","name":"Codex harness 10-17 18:51","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
+{"id":"29c3a0f0…","engine":"kilo","status":"active","launch":"ready","pane":"%3004","name":"Kilo CLI","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":"ses_eb34ac58dffeD615Cp1P5v3kH8"}
 ## kilo screen after the prompt
   ┃  Reply with only the number: what is 6 times 7?
      42

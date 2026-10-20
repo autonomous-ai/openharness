@@ -1,6 +1,6 @@
 # RF4 (08:57:32); the Mac's update server stopped
-01:57:32.777 create terminal → b5c7e44b-d926-4fda-adee-18aad829f475 launch=ready (86 ms)
-{"id":"b5c7e44b-d926-4fda-adee-18aad829f475","engine":"terminal","status":"active","launch":"ready","pane":"%3005","name":"Terminal harness 10-17 18:57","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
+01:57:32.777 create terminal → b5c7e44b… launch=ready (86 ms)
+{"id":"b5c7e44b…","engine":"terminal","status":"active","launch":"ready","pane":"%3005","name":"Terminal harness 10-17 18:57","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
 COUNT_1
 COUNT_2
 COUNT_3
@@ -9,7 +9,7 @@ COUNT_3
 
   machine · remote machine
    status     ● running · backend connected
-   machine    WIN-2R12E0MUJKC
+   machine    WIN-TESTVM
    device     91DE·CD1F·1675·8D1C  (in your account)
    version    v0.4.20-e2e.1
    agents     5 available
@@ -52,7 +52,7 @@ Installing Harness for win32-arm64 into C:\Users\hxe2e\.harness
   machine · remote machine
   ─────────────────────────────────────
    status     ● started · connecting to the backend in the background
-   machine    WIN-2R12E0MUJKC
+   machine    WIN-TESTVM
    version    v0.4.18-dev.win1
    backend    wss://harness-api.autonomous.ai
    account    prod
@@ -71,7 +71,7 @@ Installing Harness for win32-arm64 into C:\Users\hxe2e\.harness
     machine · remote machine
     ─────────────────────────────────────
      status     ● running · backend connected
-     machine    WIN-2R12E0MUJKC
+     machine    WIN-TESTVM
      device     91DE·CD1F·1675·8D1C  (in your account)
      version    v0.4.18-dev.win1
      backend    wss://harness-api.autonomous.ai
@@ -110,11 +110,11 @@ current
 data
 notify.mjs
 update-rejected.json
-{"id":"c66db6da-202d-4717-ae5a-e5c924addf6f","engine":"terminal","status":"offline","launch":"ready","pane":"%3001","name":"Terminal harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
-{"id":"47324568-1510-43d4-ad33-4da3359dc63c","engine":"claude","status":"active","launch":"ready","pane":"%3002","name":"Claude harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
-{"id":"dac87568-38e1-428e-8b01-b5588948cb9a","engine":"codex","status":"active","launch":"ready","pane":"%3003","name":"Codex harness 10-17 18:51","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
-{"id":"29c3a0f0-8836-485c-88ed-82cd6323d573","engine":"kilo","status":"active","launch":"ready","pane":"%3004","name":"Kilo CLI","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":"ses_eb34ac58dffeD615Cp1P5v3kH8"}
-{"id":"b5c7e44b-d926-4fda-adee-18aad829f475","engine":"terminal","status":"offline","launch":"ready","pane":"%3005","name":"Terminal harness 10-17 18:57","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
+{"id":"c66db6da…","engine":"terminal","status":"offline","launch":"ready","pane":"%3001","name":"Terminal harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
+{"id":"47324568…","engine":"claude","status":"active","launch":"ready","pane":"%3002","name":"Claude harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
+{"id":"dac87568…","engine":"codex","status":"active","launch":"ready","pane":"%3003","name":"Codex harness 10-17 18:51","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
+{"id":"29c3a0f0…","engine":"kilo","status":"active","launch":"ready","pane":"%3004","name":"Kilo CLI","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":"ses_eb34ac58dffeD615Cp1P5v3kH8"}
+{"id":"b5c7e44b…","engine":"terminal","status":"offline","launch":"ready","pane":"%3005","name":"Terminal harness 10-17 18:57","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
 ## COUNTER screen 1
 COUNT_43
 COUNT_44
@@ -130,7 +130,7 @@ ProcessId ParentProcessId Name            Start    Cmd
 ok   version 0.4.18-dev.win1
 ok   task Harness harnessd (hxe2e)
 ok   PATH has c:\users\hxe2e\.harness\bin
-ok   terminal 99c99d15-c768-4985-8be2-a6a05fac8dae on harness-pty pid 5028 (3 shell(s) under it)
+ok   terminal 99c99d15… on harness-pty pid 5028 (3 shell(s) under it)
 exit=0
 ## run 2: the same version again (08:58:50)
    pid        7156
@@ -142,7 +142,7 @@ Installing Harness for win32-arm64 into C:\Users\hxe2e\.harness
     machine · remote machine
     ─────────────────────────────────────
      status     ● running · backend connected
-     machine    WIN-2R12E0MUJKC
+     machine    WIN-TESTVM
      device     91DE·CD1F·1675·8D1C  (in your account)
      version    v0.4.18-dev.win1
      backend    wss://harness-api.autonomous.ai

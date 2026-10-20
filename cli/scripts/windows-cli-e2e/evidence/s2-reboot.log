@@ -1,7 +1,7 @@
 # s2 reboot with autologon (Mac 2026-10-18 07:56:58 +07)
 AutoAdminLogon : '1' (String)
 DefaultUserName : 'hxe2e' (String)
-DefaultDomainName : 'WIN-2R12E0MUJKC' (String)
+DefaultDomainName : 'WIN-TESTVM' (String)
 DefaultPassword : (present, String, not shown)
 AutoLogonCount : (absent)
 ForceAutoLogon : (absent)

@@ -29,8 +29,8 @@ create rc=0 pid=3536
 
 ## 2. C:\work\b4\run.cmd list, then run.cmd create commandcode
 # The driver now selects the sign-in's machine id, so `list` connects (empty list) with no NO_PEER_LINK.
-18:04:00.224 create commandcode → aac1bc5e-f608-487d-af7c-307c9fcce709 launch=starting (233 ms)
-{"id":"aac1bc5e-f608-487d-af7c-307c9fcce709","engine":"commandcode","status":"active","launch":"starting","pane":"%1001","name":"Command Code harness 10-17 11:04","cwd":"C:\\work\\b4\\proj","resumeMode":"conversation","sessionId":""}
+18:04:00.224 create commandcode → aac1bc5e… launch=starting (233 ms)
+{"id":"aac1bc5e…","engine":"commandcode","status":"active","launch":"starting","pane":"%1001","name":"Command Code harness 10-17 11:04","cwd":"C:\\work\\b4\\proj","resumeMode":"conversation","sessionId":""}
 
 ## 3. After 15 s: run.cmd screen <id>, then run.cmd list
 # The pane shows Command Code's own interface (its sign-in screen). It is not `Microsoft Windows [Version ...`.
@@ -50,7 +50,7 @@ Authorize in browser, or paste API key here
 If your browser doesn't open, go to this link:
 https://commandcode.ai/studio/auth/cli?callback=http%3A%2F%2F127.0.0.1%3A60014%2Fcallback&state=<redacted>&mode=redirect
 ctrl+c to cancel
-{"id":"aac1bc5e-f608-487d-af7c-307c9fcce709","engine":"commandcode","status":"active","launch":"ready","pane":"%1001","name":"Administrator: npm view command-code versions","cwd":"C:\\work\\b4\\proj","resumeMode":"conversation","sessionId":""}
+{"id":"aac1bc5e…","engine":"commandcode","status":"active","launch":"ready","pane":"%1001","name":"Administrator: npm view command-code versions","cwd":"C:\\work\\b4\\proj","resumeMode":"conversation","sessionId":""}
 
 ## 4. Processes (Win32_Process): the engine is node.exe running command-code's dist\index.mjs, a direct child of the
 ## B4 pty host. No cmd.exe runs in the pane.
@@ -99,8 +99,8 @@ children of the pty host 11972:
 # C:\work\b4\homes) and %USERPROFILE%\.commandcode (created by this run). The B4 pty host this run started (pid
 # 11972, created 11:03:30, no children, no panes) outlived the daemon by design. It was ended after its identity was
 # checked (pid, creation time, exe path, command line, no children), with Stop-Process on that one pid and no /T.
-{"requestId":"ea441aae-acaa-4c0b-8956-965af5b21301","error":"IDENTITY_UNAVAILABLE","detail":"Conversation identity is held: the native ps probe did not complete.","held":true,"retryable":true}
-{"id":"aac1bc5e-f608-487d-af7c-307c9fcce709","engine":"commandcode","status":"active","launch":"ready","pane":"%1001","name":"Administrator: npm view command-code versions","cwd":"C:\\work\\b4\\proj","resumeMode":"conversation","sessionId":""}
+{"requestId":"ea441aae…","error":"IDENTITY_UNAVAILABLE","detail":"Conversation identity is held: the native ps probe did not complete.","held":true,"retryable":true}
+{"id":"aac1bc5e…","engine":"commandcode","status":"active","launch":"ready","pane":"%1001","name":"Administrator: npm view command-code versions","cwd":"C:\\work\\b4\\proj","resumeMode":"conversation","sessionId":""}
 list-done
 Authorize in browser, or paste API key here
 If your browser doesn't open, go to this link:
@@ -109,31 +109,31 @@ ctrl+c to cancel
 —  × Authentication cancelled by user.
 harness: command-code exited (1). This pane is a shell now - run command-code again, or stop the pane.
 PS C:\work\b4\proj>
-{"id":"1ee0f859-4413-439b-8b42-f5069b9e2e0c","engine":"terminal","status":"active","launch":"ready","pane":"%1001","name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"shell","sessionId":""}
-{"id":"aac1bc5e-f608-487d-af7c-307c9fcce709","engine":"commandcode","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"conversation","sessionId":""}
-{"requestId":"77099f00-cc11-400b-ae84-9799d62be8e7","deleted":true}
-{"requestId":"2889c457-cf6c-4b29-abef-a2bcb583cb20","deleted":true}
+{"id":"1ee0f859…","engine":"terminal","status":"active","launch":"ready","pane":"%1001","name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"shell","sessionId":""}
+{"id":"aac1bc5e…","engine":"commandcode","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"conversation","sessionId":""}
+{"requestId":"77099f00…","deleted":true}
+{"requestId":"2889c457…","deleted":true}
 === list 
-{"id":"1ee0f859-4413-439b-8b42-f5069b9e2e0c","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"shell","sessionId":""}
-{"id":"aac1bc5e-f608-487d-af7c-307c9fcce709","engine":"commandcode","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"conversation","sessionId":""}
+{"id":"1ee0f859…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"shell","sessionId":""}
+{"id":"aac1bc5e…","engine":"commandcode","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"conversation","sessionId":""}
 === end
 === list after 8s 
-{"id":"1ee0f859-4413-439b-8b42-f5069b9e2e0c","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"shell","sessionId":""}
-{"id":"aac1bc5e-f608-487d-af7c-307c9fcce709","engine":"commandcode","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"conversation","sessionId":""}
+{"id":"1ee0f859…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"shell","sessionId":""}
+{"id":"aac1bc5e…","engine":"commandcode","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"conversation","sessionId":""}
 === end
-{"requestId":"19f26486-74d9-4557-9253-c49f8dc5d135","deleted":true}
-{"requestId":"bd141acc-38c4-4bd6-afc7-1676b0b33a8b","deleted":true}
+{"requestId":"19f26486…","deleted":true}
+{"requestId":"bd141acc…","deleted":true}
 === list 
-{"id":"1ee0f859-4413-439b-8b42-f5069b9e2e0c","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"shell","sessionId":""}
-{"id":"aac1bc5e-f608-487d-af7c-307c9fcce709","engine":"commandcode","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"conversation","sessionId":""}
+{"id":"1ee0f859…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"shell","sessionId":""}
+{"id":"aac1bc5e…","engine":"commandcode","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\b4\\proj","resumeMode":"conversation","sessionId":""}
 === end
-1ee0f859-4413-439b-8b42-f5069b9e2e0c inspect {"requestId":"7a9e22b5-22ea-4c40-8f16-82eb02de250e","error":"INVALID_DELETE_REQUEST"}
-aac1bc5e-f608-487d-af7c-307c9fcce709 inspect {"requestId":"1284d081-3db9-427b-9812-31362934e59a","error":"INVALID_DELETE_REQUEST"}
-remaining [["1ee0f859-4413-439b-8b42-f5069b9e2e0c","terminal","stopped"],["aac1bc5e-f608-487d-af7c-307c9fcce709","commandcode","stopped"]]
-1ee0f859-4413-439b-8b42-f5069b9e2e0c inspect {"requestId":"3ab506ed-f614-4cf0-a5c7-df53b1a71134","reviewId":"02c6585a-2d62-43a5-945f-73ab8680d016","sessionBytes":0,"sessionPaths":[],"sharedStore":false,"workspaceKept":true,"workspacePath":"C:\\work\\b4\\proj"}
-1ee0f859-4413-439b-8b42-f5069b9e2e0c delete {"requestId":"f155de28-bd58-496d-a776-5c12c7494f8b","deleted":true,"sessionDeleted":true,"worktreeDeleted":false,"freedBytes":0,"sharedStore":false,"workspaceKept":true,"historyKept":false,"branchKept":true}
-aac1bc5e-f608-487d-af7c-307c9fcce709 inspect {"requestId":"b4931079-fc78-4ab7-a5e7-8c81d2949f91","reviewId":"709c9cd2-916e-467e-aeec-c1dd632cb6fc","sessionBytes":0,"sessionPaths":[],"sharedStore":false,"workspaceKept":true,"workspacePath":"C:\\work\\b4\\proj"}
-aac1bc5e-f608-487d-af7c-307c9fcce709 delete {"requestId":"658e842e-6e91-424f-830b-41f082626bfb","deleted":true,"sessionDeleted":true,"worktreeDeleted":false,"freedBytes":0,"sharedStore":false,"workspaceKept":true,"historyKept":false,"branchKept":true}
+1ee0f859… inspect {"requestId":"7a9e22b5…","error":"INVALID_DELETE_REQUEST"}
+aac1bc5e… inspect {"requestId":"1284d081…","error":"INVALID_DELETE_REQUEST"}
+remaining [["1ee0f859…","terminal","stopped"],["aac1bc5e…","commandcode","stopped"]]
+1ee0f859… inspect {"requestId":"3ab506ed…","reviewId":"02c6585a…","sessionBytes":0,"sessionPaths":[],"sharedStore":false,"workspaceKept":true,"workspacePath":"C:\\work\\b4\\proj"}
+1ee0f859… delete {"requestId":"f155de28…","deleted":true,"sessionDeleted":true,"worktreeDeleted":false,"freedBytes":0,"sharedStore":false,"workspaceKept":true,"historyKept":false,"branchKept":true}
+aac1bc5e… inspect {"requestId":"b4931079…","reviewId":"709c9cd2…","sessionBytes":0,"sessionPaths":[],"sharedStore":false,"workspaceKept":true,"workspacePath":"C:\\work\\b4\\proj"}
+aac1bc5e… delete {"requestId":"658e842e…","deleted":true,"sessionDeleted":true,"worktreeDeleted":false,"freedBytes":0,"sharedStore":false,"workspaceKept":true,"historyKept":false,"branchKept":true}
 remaining []
 machine stopped (pid 1564).
 === checks 

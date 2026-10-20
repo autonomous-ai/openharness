@@ -1,4 +1,4 @@
-12:17:05.753 create codex → 59076af0-18b9-40a1-b81e-40fe9ad545d1 launch=starting (1665 ms)
+12:17:05.753 create codex → 59076af0… launch=starting (1665 ms)
 12:17:09.437 PASS Codex (fresh): engine input box is up —   >_ OpenAI Codex (v0.162.1) |      C:\work\e2e\proj | › Ask Codex to do anything
 12:17:26.683 PASS Codex (fresh): type a prompt, the engine answers —   /review - review any changes and find issues | › What is 6 times 7 Reply with only the number. | • 42 |   Worked for 5s • 5:17 AM | › Ask Codex to do anything |   GPT-6.1-Sol default · C:\work\e2e\proj · ⠸
 12:18:19.593 PASS Codex (fresh): paste 30 KB into the input box — [Pasted Content 5952 chars][Pasted Content
@@ -34,6 +34,6 @@
   Worked for 5s • 5:17 AM
 › Tiếng Việt: Xin chào thế giới — 中文：你好世界 — 日本語：こんにちは — 한국어: 안녕하세요 —
   GPT-6.1-Sol default · C:\work\e2e\proj · Calculate 6 times 7
-12:18:47.339 agent 59076af0-18b9-40a1-b81e-40fe9ad545d1
+12:18:47.339 agent 59076af0…
 12:18:47.340 SUMMARY 5/6 passed
 12:18:47.341   FAILED Codex (fresh): paste Vietnamese/CJK/Korean/emoji into the input box

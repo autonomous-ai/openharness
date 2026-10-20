@@ -38,7 +38,7 @@ upgrade drain and E2E.
   heuristics are tuned to it.
 - **Stream keyframes** are built with the existing pure `synthesizeTmuxSnapshot`
   (`cli/src/lib/tmuxStream.ts:342`).
-- **Reuse from Orca** (`/Users/nqhieu84/go/src/github.com/stablyai/orca`, MIT): attribute in
+- **Reuse from Orca** (https://github.com/stablyai/orca, MIT): attribute in
   `THIRD_PARTY_NOTICES` and in a header comment of each adapted file.
 - **Commits:** do not commit unless the user has authorized commits for this run. Otherwise each
   "Checkpoint" step means: stage the files and leave them uncommitted.

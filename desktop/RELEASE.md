@@ -619,3 +619,17 @@ desktop manifest, verifies its size and SHA-256, and runs the zip's `Harness.exe
 does not add the browser's mark of the web, so SmartScreen does not show its first-run prompt. Smart App Control can
 still block an unsigned build. `--app --production` is the owner's later publication step, after production has the
 Windows manifest keys.
+
+### First production release
+
+The first release with Windows follows the merge of the Windows PR, and each step needs the owner's go. The CLI comes
+first, because the app installs the CLI through `install.ps1`:
+
+1. the Windows Node runtime manifest, through the Node workflow with the production `metadata_path`;
+2. `cli/scripts/promote-pty-payload.sh`, which uploads nothing and checks each payload file's SHA-256 and size;
+3. `bash cli/scripts/upload-install-ps1.sh --production`;
+4. the CLI release;
+5. `make release-desktop`, the first with the Windows keys;
+6. `bash cli/scripts/upload-install-ps1.sh --app --production`;
+7. the website release. Its Windows download answers 503 until the production manifest has
+   `desktop-windows-installer`, so it goes last.

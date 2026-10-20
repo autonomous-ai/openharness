@@ -1,8 +1,8 @@
 # s3 before the update (08:43:04), daemon on N=0.4.19-e2e.1
-01:43:05.184 create terminal → c66db6da-202d-4717-ae5a-e5c924addf6f launch=ready (113 ms)
-{"id":"c66db6da-202d-4717-ae5a-e5c924addf6f","engine":"terminal","status":"active","launch":"ready","pane":"%3001","name":"Terminal harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
-01:43:06.136 create claude → 47324568-1510-43d4-ad33-4da3359dc63c launch=starting (67 ms)
-{"id":"47324568-1510-43d4-ad33-4da3359dc63c","engine":"claude","status":"active","launch":"starting","pane":"%3002","name":"Claude harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
+01:43:05.184 create terminal → c66db6da… launch=ready (113 ms)
+{"id":"c66db6da…","engine":"terminal","status":"active","launch":"ready","pane":"%3001","name":"Terminal harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
+01:43:06.136 create claude → 47324568… launch=starting (67 ms)
+{"id":"47324568…","engine":"claude","status":"active","launch":"starting","pane":"%3002","name":"Claude harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
 PS C:\Users\hxe2e\proj> Write-Output ('BEFORE_' + (40+2))
 BEFORE_42
 PS C:\Users\hxe2e\proj>

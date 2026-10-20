@@ -21,9 +21,9 @@ ProcessId ParentProcessId Name            Start    Cmd
 --- list +10 s
 --- list +20 s
 --- all rows for the 3
-{"id":"a61b5044-2acc-4c54-9c5b-0000e72b0214","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
-{"id":"9f4d41e4-947a-464f-8ffc-da01f7c9e1f1","engine":"claude","status":"stopped","launch":"ready","pane":null,"name":"Multiplication of 6 and 7","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
-{"id":"a9332983-530c-4903-8926-6f2a19e74e17","engine":"codex","status":"stopped","launch":"ready","pane":null,"name":"Codex harness 10-15 5:19","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+{"id":"a61b5044…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+{"id":"9f4d41e4…","engine":"claude","status":"stopped","launch":"ready","pane":null,"name":"Multiplication of 6 and 7","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+{"id":"a9332983…","engine":"codex","status":"stopped","launch":"ready","pane":null,"name":"Codex harness 10-15 5:19","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
 
 2026-10-15 03:32:11.769 [terminal] enabled backends: ptyhost
 2026-10-15 03:32:11.878 [terminal] ptyhost: available (p2)

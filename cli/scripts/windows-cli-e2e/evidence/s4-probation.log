@@ -19,8 +19,8 @@ current
 data
 notify.mjs
 update-rejected.json
-{"id":"c66db6da-202d-4717-ae5a-e5c924addf6f","engine":"terminal","status":"offline","launch":"ready","pane":"%3001","name":"Terminal harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
-{"id":"47324568-1510-43d4-ad33-4da3359dc63c","engine":"claude","status":"active","launch":"ready","pane":"%3002","name":"Claude harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
+{"id":"c66db6da…","engine":"terminal","status":"offline","launch":"ready","pane":"%3001","name":"Terminal harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
+{"id":"47324568…","engine":"claude","status":"active","launch":"ready","pane":"%3002","name":"Claude harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
 AFTER_42
 PS C:\Users\hxe2e\proj> Write-Output ('ROLLBACK_' + (40+2))
 ROLLBACK_42

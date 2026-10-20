@@ -104,7 +104,7 @@ const HOST_IMAGE = /(^|[\\/])harness-pty(\.exe)?$/i
 
 /**
  * Whether [row]'s image is a harness-pty. macOS `ps -o comm=` cuts the image's path to 16 characters (measured
- * 2026-10-18: `/Users/nqhieu84/`, `pty/target/relea`), so on Unix a comm that is the start of the program argv names
+ * 2026-10-18: `/Users/<user>/`, `pty/target/relea`), so on Unix a comm that is the start of the program argv names
  * stands for it, and that program is checked instead. The program is everything before ` serve`, since `ps` quotes no
  * path with a space in it.
  */

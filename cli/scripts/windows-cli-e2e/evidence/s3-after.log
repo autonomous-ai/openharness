@@ -26,12 +26,12 @@ notify.mjs
 SHA256 hash of C:\Users\hxe2e\.harness\cli\notify.mjs:
 a177f39fba13310105094b80a2149fcc3df4e63a27cb36b0fd88cdd3f4a8430c
 CertUtil: -hashfile command completed successfully.
-{"id":"0361bf7d-0e55-4499-9694-6363793de81f","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Terminal harness 10-17 17:50","cwd":"C:\\Users\\hxe2e\\AppData\\Local\\Temp\\harness-check-proj","resumeMode":"shell","sessionId":""}
-{"id":"ab00669d-927b-4240-9f1a-18fe783e287c","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Terminal harness 10-17 17:51","cwd":"C:\\Users\\hxe2e\\AppData\\Local\\Temp\\harness-check-proj","resumeMode":"shell","sessionId":""}
-{"id":"575c8f5a-fafe-4468-90a4-ca7f9c6b983f","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Terminal harness 10-17 17:53","cwd":"C:\\Users\\hxe2e\\AppData\\Local\\Temp\\harness-check-proj","resumeMode":"shell","sessionId":""}
-{"id":"297854ec-7324-43df-8168-1378c46aef99","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Terminal harness 10-17 17:55","cwd":"C:\\Users\\hxe2e\\AppData\\Local\\Temp\\harness-check-proj","resumeMode":"shell","sessionId":""}
-{"id":"c66db6da-202d-4717-ae5a-e5c924addf6f","engine":"terminal","status":"offline","launch":"ready","pane":"%3001","name":"Terminal harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
-{"id":"47324568-1510-43d4-ad33-4da3359dc63c","engine":"claude","status":"active","launch":"ready","pane":"%3002","name":"Claude harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
+{"id":"0361bf7d…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Terminal harness 10-17 17:50","cwd":"C:\\Users\\hxe2e\\AppData\\Local\\Temp\\harness-check-proj","resumeMode":"shell","sessionId":""}
+{"id":"ab00669d…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Terminal harness 10-17 17:51","cwd":"C:\\Users\\hxe2e\\AppData\\Local\\Temp\\harness-check-proj","resumeMode":"shell","sessionId":""}
+{"id":"575c8f5a…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Terminal harness 10-17 17:53","cwd":"C:\\Users\\hxe2e\\AppData\\Local\\Temp\\harness-check-proj","resumeMode":"shell","sessionId":""}
+{"id":"297854ec…","engine":"terminal","status":"stopped","launch":"ready","pane":null,"name":"Terminal harness 10-17 17:55","cwd":"C:\\Users\\hxe2e\\AppData\\Local\\Temp\\harness-check-proj","resumeMode":"shell","sessionId":""}
+{"id":"c66db6da…","engine":"terminal","status":"offline","launch":"ready","pane":"%3001","name":"Terminal harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
+{"id":"47324568…","engine":"claude","status":"active","launch":"ready","pane":"%3002","name":"Claude harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
 PS C:\Users\hxe2e\proj> Write-Output ('BEFORE_' + (40+2))
 BEFORE_42
 PS C:\Users\hxe2e\proj> Write-Output ('AFTER_' + (40+2))
@@ -78,5 +78,5 @@ ProcessId ParentProcessId Name            Start    Cmd
 2026-10-17 18:43:49.915 [harnessd] handed over to the new master (pid 2952) — leaving
 2026-10-17 18:43:50.250 [update] self-update on · v0.4.20-e2e.1 · every 60s
 2026-10-17 18:44:20.769 [harnessd] the update stayed up — keeping it
-{"id":"c66db6da-202d-4717-ae5a-e5c924addf6f","engine":"terminal","status":"offline","launch":"ready","pane":"%3001","name":"Terminal harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
-{"id":"47324568-1510-43d4-ad33-4da3359dc63c","engine":"claude","status":"active","launch":"ready","pane":"%3002","name":"Claude harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
+{"id":"c66db6da…","engine":"terminal","status":"offline","launch":"ready","pane":"%3001","name":"Terminal harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
+{"id":"47324568…","engine":"claude","status":"active","launch":"ready","pane":"%3002","name":"Claude harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}

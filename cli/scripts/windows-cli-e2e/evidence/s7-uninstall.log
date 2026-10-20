@@ -2,8 +2,8 @@
 ## the user PATH before (value and kind, raw)
 Path [ExpandString] %USERPROFILE%\AppData\Local\Microsoft\WindowsApps;C:\Users\hxe2e\.harness\bin;%APPDATA%\npm;%USERPROFILE%\.local\bin
 ## a Claude harness made just before the uninstall, not bound yet (B5.10)
-01:59:14.834 create claude → 9128d372-2105-46fc-a9fb-8aefe6f85749 launch=starting (80 ms)
-{"id":"9128d372-2105-46fc-a9fb-8aefe6f85749","engine":"claude","status":"active","launch":"starting","pane":"%3007","name":"Claude harness 10-17 18:59","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
+01:59:14.834 create claude → 9128d372… launch=starting (80 ms)
+{"id":"9128d372…","engine":"claude","status":"active","launch":"starting","pane":"%3007","name":"Claude harness 10-17 18:59","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
 ## the task's file deleted first: the task must still be found and removed (B5.9)
 File Not Found
 

@@ -14,8 +14,8 @@ $HarnessManifestBase = 'https://storage.googleapis.com/s3-autonomous-upgrade-3/h
 ** The server may need to be upgraded. See https://openssh.com/pq.html
 
 Microsoft Windows [Version 10.0.26100.9711]
-win-2r12e0mujkc\admin
-WIN-2R12E0MUJKC
+win-testvm\admin
+WIN-TESTVM
 Microsoft Windows 11 Home
 8
 

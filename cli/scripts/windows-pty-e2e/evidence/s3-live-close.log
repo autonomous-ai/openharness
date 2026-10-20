@@ -1,10 +1,10 @@
 12:36:20
 12:36:21.270 asked claude 20d8966b to exit
 12:36:26.111 asked codex cd88c448 to exit
-12:36:38.162 delete terminal 68b86551 → {"requestId":"269e0b6f-7b5a-4b8b-b2bf-a37fe74217e3","deleted":true}
-12:36:38.182 delete terminal 90e2ef5f → {"requestId":"df38563b-2c68-4633-bdd7-5221397cf566","deleted":true}
-12:36:38.228 delete terminal 069267c4 → {"requestId":"94e26ab2-37e3-4884-a8a1-62d7dace8017","deleted":true}
-12:36:38.249 left: {"id":"3e67bc0b-a959-477f-b015-59c32c2fa4b3","engine":"terminal","status":"active","pane":"%1"}
+12:36:38.162 delete terminal 68b86551 → {"requestId":"269e0b6f…","deleted":true}
+12:36:38.182 delete terminal 90e2ef5f → {"requestId":"df38563b…","deleted":true}
+12:36:38.228 delete terminal 069267c4 → {"requestId":"94e26ab2…","deleted":true}
+12:36:38.249 left: {"id":"3e67bc0b…","engine":"terminal","status":"active","pane":"%1"}
 --- +5 s
 
 ProcessId CommandLine                                                             

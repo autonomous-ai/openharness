@@ -2,7 +2,7 @@
 ok   version 0.4.18-dev.win1
 
 Folder: \
-HostName:                             WIN-2R12E0MUJKC
+HostName:                             WIN-TESTVM
 TaskName:                             \Harness harnessd (hxe2e)
 Next Run Time:                        10/17/2026 5:55:00 PM
 Status:                               Ready
@@ -31,7 +31,7 @@ Repeat: Until: Time:                  N/A
 Repeat: Until: Duration:              N/A
 Repeat: Stop If Still Running:        N/A
 
-HostName:                             WIN-2R12E0MUJKC
+HostName:                             WIN-TESTVM
 TaskName:                             \Harness harnessd (hxe2e)
 Next Run Time:                        10/17/2026 5:55:00 PM
 Status:                               Ready
@@ -112,7 +112,7 @@ exit=1
 ok   version 0.4.18-dev.win1
 ok   task Harness harnessd (hxe2e)
 ok   PATH has c:\users\hxe2e\.harness\bin
-ok   terminal 297854ec-7324-43df-8168-1378c46aef99 on harness-pty pid 6932 (4 shell(s) under it)
+ok   terminal 297854ec… on harness-pty pid 6932 (4 shell(s) under it)
 exit=0
 
 # procs.ps1 -User hxe2e (as admin) 07:55:36

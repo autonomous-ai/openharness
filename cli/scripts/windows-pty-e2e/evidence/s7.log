@@ -1,6 +1,6 @@
 12:42:54.422 RESULT opencode: id c901a91a launch=ready engine=opencode status=stopped pane=null after 16947 ms
 12:42:54.423 --- opencode screen ---
-(no stream: terminal_open → {"protocolVersion":3,"code":"TERMINAL_AGENT_NOT_FOUND","requestId":"0483924d-66bf-4bb8-aaef-60c2d3ae0b5b"})
+(no stream: terminal_open → {"protocolVersion":3,"code":"TERMINAL_AGENT_NOT_FOUND","requestId":"0483924d…"})
 12:44:12.676 RESULT pi: id 9d49dd80 launch=starting engine=pi status=active pane=%3002 after 78253 ms
 12:44:12.676 --- pi screen ---
  Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.

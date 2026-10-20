@@ -1,7 +1,7 @@
 {"type":"qr","url":"<redacted>","expiresIn":120}
 approved: {"ok":true}
 {"type":"confirm","email":"<the account>"}
-{"type":"result","status":"success","email":"<the account>","fingerprint":"91DE·CD1F·1675·8D1C"}
+{"type":"result","status":"success","email":"<the account>","fingerprint":"91DE·…"}
 machine registered: 7e92c45a…; remove it after the run: harness machines delete 7e92c45a… --yes
 ## restart on the session (08:50:06)
 machine stopped (pid 5740).
@@ -9,7 +9,7 @@ machine stopped (pid 5740).
 
   machine · remote machine
    status     ● started · connecting to the backend in the background
-   machine    WIN-2R12E0MUJKC
+   machine    WIN-TESTVM
    version    v0.4.20-e2e.1
    backend    wss://harness-api.autonomous.ai
    account    prod
@@ -18,4 +18,4 @@ machine stopped (pid 5740).
    local api  http://127.0.0.1:18474
   running in background · stop with: harness stop
 
-{"loggedIn":true,"computerId":"e5f27bf2…","machineId":"7e92c45a…","autonomousEnv":"prod","expiresAt":1792291797056,"method":"qr","fingerprint":"91DE·CD1F·1675·8D1C"}
+{"loggedIn":true,"computerId":"e5f27bf2…","machineId":"7e92c45a…","autonomousEnv":"prod","expiresAt":1792291797056,"method":"qr","fingerprint":"91DE·…"}

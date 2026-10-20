@@ -1,13 +1,13 @@
-12:22:46.328 {"id":"a61b5044-2acc-4c54-9c5b-0000e72b0214","engine":"terminal","status":"offline","launch":"ready","pane":"%8","name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
-12:22:46.330 {"id":"9f4d41e4-947a-464f-8ffc-da01f7c9e1f1","engine":"claude","status":"active","launch":"ready","pane":"%9","name":"Multiplication of 6 and 7","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
-12:22:46.330 {"id":"a9332983-530c-4903-8926-6f2a19e74e17","engine":"codex","status":"active","launch":"ready","pane":"%12","name":"Codex harness 10-15 5:19","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:22:46.328 {"id":"a61b5044…","engine":"terminal","status":"offline","launch":"ready","pane":"%8","name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:22:46.330 {"id":"9f4d41e4…","engine":"claude","status":"active","launch":"ready","pane":"%9","name":"Multiplication of 6 and 7","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:22:46.330 {"id":"a9332983…","engine":"codex","status":"active","launch":"ready","pane":"%12","name":"Codex harness 10-15 5:19","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
 12:22:51
 machine stopped (pid 828).
 create rc=0 pid=12336
 12:22:59
-12:23:03.477 {"id":"a61b5044-2acc-4c54-9c5b-0000e72b0214","engine":"terminal","status":"offline","launch":"ready","pane":"%8","name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
-12:23:03.478 {"id":"9f4d41e4-947a-464f-8ffc-da01f7c9e1f1","engine":"claude","status":"active","launch":"ready","pane":"%9","name":"Multiplication of 6 and 7","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
-12:23:03.478 {"id":"a9332983-530c-4903-8926-6f2a19e74e17","engine":"codex","status":"active","launch":"ready","pane":"%12","name":"Codex harness 10-15 5:19","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:23:03.477 {"id":"a61b5044…","engine":"terminal","status":"offline","launch":"ready","pane":"%8","name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:23:03.478 {"id":"9f4d41e4…","engine":"claude","status":"active","launch":"ready","pane":"%9","name":"Multiplication of 6 and 7","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:23:03.478 {"id":"a9332983…","engine":"codex","status":"active","launch":"ready","pane":"%12","name":"Codex harness 10-15 5:19","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
 12:23:03.478 PASS terminal a61b5044 kept its id and pane — pane %8 → %8, status offline
 12:23:03.478 PASS claude 9f4d41e4 kept its id and pane — pane %9 → %9, status active
 12:23:03.478 PASS codex a9332983 kept its id and pane — pane %12 → %12, status active

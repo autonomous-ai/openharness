@@ -105,7 +105,7 @@ The inputs and conditions the spec implies but its own test list does not pin, m
 | `website/src/lib/installCommand.ts`, `desktopPlatform.ts`, `website/src/app/desktop/…`, `website/src/app/download/page.spec.tsx` | F3.1 | **Download for Windows** |
 | `desktop/scripts/windows-e2e/install-state.ps1`, `desktop-e2e.sh`, `README.md` | F4.1 | What an install left, read-only |
 | `docs/testing/windows-installer-e2e.md`, `desktop/scripts/windows-e2e/evidence/installer-*` | F4.3 | The run on the test PCs |
-| the spec, `docs/superpowers/plans/2026-10-18-windows-desktop-handoff.md` | F4.4 | Status; the production order after the merge |
+| the spec, `desktop/RELEASE.md` | F4.4 | Status; the production order after the merge |
 
 ## Phases
 
@@ -5503,7 +5503,7 @@ git commit -m "test(windows): harness-install.exe, seven scenarios on the x64 te
 ### Task F4.4: The spec's status and the handoff's production order
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-10-19-windows-installer-design.md`, `docs/superpowers/plans/2026-10-18-windows-desktop-handoff.md`
+- Modify: `docs/superpowers/specs/2026-10-19-windows-installer-design.md`, `desktop/RELEASE.md`
 
 - [ ] **Step 1: Write it**
 
@@ -5513,7 +5513,7 @@ git commit -m "test(windows): harness-install.exe, seven scenarios on the x64 te
 - [ ] **Step 2: Commit**
 
 ```bash
-git add docs/superpowers/specs/2026-10-19-windows-installer-design.md docs/superpowers/plans/2026-10-18-windows-desktop-handoff.md
+git add docs/superpowers/specs/2026-10-19-windows-installer-design.md desktop/RELEASE.md
 git commit -m "docs(windows): harness-install.exe and Windows in the desktop release are implemented; the production order" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 

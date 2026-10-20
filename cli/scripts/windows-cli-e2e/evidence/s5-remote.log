@@ -1,12 +1,12 @@
 # the Mac reads the VM as a remote machine: harness ps --machine 7e92c45a… --all --json (08:52:53)
 {
- "machine": "WIN-2R12E0MUJKC",
+ "machine": "WIN-TESTVM",
  "harnesses": [
   {
    "name": "Kilo CLI",
    "id": "29c3a0f0…",
    "agent": "Kilo",
-   "machine": "WIN-2R12E0MUJKC",
+   "machine": "WIN-TESTVM",
    "state": "idle",
    "folder": "C:\\Users\\hxe2e\\proj",
    "branch": null,
@@ -23,7 +23,7 @@
    "name": "Codex harness 10-17 18:51",
    "id": "dac87568…",
    "agent": "Codex",
-   "machine": "WIN-2R12E0MUJKC",
+   "machine": "WIN-TESTVM",
    "state": "unknown",
    "folder": "C:\\Users\\hxe2e\\proj",
    "branch": null,
@@ -36,7 +36,7 @@
    "name": "Claude harness 10-17 18:43",
    "id": "47324568…",
    "agent": "Claude Code",
-   "machine": "WIN-2R12E0MUJKC",
+   "machine": "WIN-TESTVM",
    "state": "unknown",
    "folder": "C:\\Users\\hxe2e\\proj",
    "branch": null,
