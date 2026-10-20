@@ -56,7 +56,7 @@ if (entryPoint < 0) throw new Error("Cannot safely exclude the flasher entry poi
 const definitions = ps1.slice(0, entryPoint);
 const windowsIt = process.platform === "win32" ? it : it.skip;
 
-function runFixture(body: string) {
+function runFixture(body: string, extraEnvironment: Record<string, string> = {}) {
   const directory = mkdtempSync(join(tmpdir(), "harness-flasher-"));
   const system32 = join(process.env.SystemRoot || "C:\\Windows", "System32");
   const powershell = join(system32, "WindowsPowerShell", "v1.0", "powershell.exe");
@@ -70,9 +70,11 @@ function runFixture(body: string) {
       timeout: 15_000,
       env: {
         ...environment, Path: `${system32};${join(system32, "WindowsPowerShell", "v1.0")}`,
+        NODE_ENV: process.env.NODE_ENV ?? "test",
         USERPROFILE: directory, APPDATA: directory, LOCALAPPDATA: directory,
         ADAPTER_DATA_DIR: join(directory, "data"), HARNESS_AUTH_DIR: join(directory, "auth"),
         HARNESS_FLASHER_CACHE: directory, HARNESS_FLASH_RECOVERY_NODE: "", HARNESS_FLASH_RECOVERY_ARGS: "",
+        HARNESS_FLASH_RUN_ID: "", ...extraEnvironment,
       },
       windowsHide: true,
     });
@@ -90,14 +92,51 @@ function runFixture(body: string) {
   }
 }
 
-function expectFixture(body: string) {
-  const result = runFixture(body);
+function expectFixture(body: string, extraEnvironment: Record<string, string> = {}) {
+  const result = runFixture(body, extraEnvironment);
   expect(result.error, result.stderr).toBeUndefined();
   expect(result.status, result.stderr || result.stdout).toBe(0);
   return result;
 }
 
 describe("Windows PowerShell 5.1 flasher behavior without a board", () => {
+  windowsIt.each(["", "../escape", "A".repeat(32), "a".repeat(31), "a".repeat(32) + "\n"])("keeps the legacy lease for absent or invalid run identity %j", (runId) => {
+    expectFixture(`
+function harness { }
+function Invoke-Harness([string]$Verb) { return 0 }
+Stop-HarnessForFlash
+$marker = Join-Path $CACHE_DIR 'flashing'
+if (-not (Test-Path -LiteralPath $marker)) { throw 'legacy marker missing' }
+[long]$stamp = Get-Content -LiteralPath $marker
+if ([Math]::Abs([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $stamp) -gt 5) { throw 'legacy timestamp incompatible' }
+Start-HarnessAfterFlash
+if (Test-Path -LiteralPath $marker) { throw 'legacy cooperative cleanup failed' }
+`, { HARNESS_FLASH_RUN_ID: runId });
+  }, 25_000);
+
+  windowsIt("owns a unique timestamp lease, keeps foreign same-second markers, and does not pass the run identity to Harness", () => {
+    expectFixture(`
+function harness { }
+function Invoke-Harness([string]$Verb) {
+  if ($env:HARNESS_FLASH_RUN_ID) { throw 'run identity leaked into daemon command' }
+  return 0
+}
+$shared = Join-Path $CACHE_DIR 'flashing'
+$foreign = Join-Path $CACHE_DIR ('flashing.' + ('b' * 32))
+$stamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+Set-Content -LiteralPath $shared -Value $stamp -Encoding ascii
+Set-Content -LiteralPath $foreign -Value $stamp -Encoding ascii
+Stop-HarnessForFlash
+$owned = Join-Path $CACHE_DIR ('flashing.' + ('a' * 32))
+if (-not (Test-Path -LiteralPath $owned)) { throw 'per-run marker missing' }
+[long]$started = Get-Content -LiteralPath $owned
+if ([Math]::Abs($started - $stamp) -gt 5) { throw 'per-run timestamp incompatible' }
+Start-HarnessAfterFlash
+if (Test-Path -LiteralPath $owned) { throw 'cooperative cleanup left the owned lease' }
+if ((Get-Content -LiteralPath $shared) -ne [string]$stamp -or (Get-Content -LiteralPath $foreign) -ne [string]$stamp) { throw 'foreign lease changed' }
+`, { HARNESS_FLASH_RUN_ID: "a".repeat(32) });
+  }, 25_000);
+
   // Exercise the real entry function, replacing only hardware/downloads and using a private fake CLI.
   const recoveryFixture = `
 $script:Steps = New-Object 'Collections.Generic.List[string]'

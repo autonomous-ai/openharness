@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import '../core/harness_cli_runner.dart';
 import '../core/runtime_platform.dart';
@@ -76,7 +77,11 @@ class Flasher {
        _killTree = killTree ?? ((pid) => _taskkillTree(pid, runProcess));
 
   /// Overridden in tests.
-  final Future<Process> Function(List<String> arguments) startProcess;
+  final Future<Process> Function(
+    List<String> arguments, {
+    Map<String, String>? environment,
+  })
+  startProcess;
 
   /// How long a cancelled Windows flash has to stop before its process tree is ended.
   final Duration killAfter;
@@ -86,6 +91,9 @@ class Flasher {
   final bool _windows;
   final Future<void> Function(int pid) _killTree;
   Timer? _killTimer;
+  Future<void>? _forcedStop;
+
+  String get scriptName => _windows ? 'flash-circle.ps1' : 'flash-circle.sh';
 
   static Future<void> _taskkillTree(
     int pid,
@@ -188,13 +196,20 @@ class Flasher {
     }
     _killTimer?.cancel();
     _killTimer = Timer(killAfter, () {
-      if (identical(_running, process)) unawaited(_endTree(process));
+      if (identical(_running, process) && _forcedStop == null) {
+        _forcedStop = _endTree(process);
+      }
     });
   }
 
   Future<void> _endTree(Process process) async {
     try {
       await _killTree(process.pid);
+      await process.exitCode;
+      // The script's finally could not run. Only this invocation's unguessable lease name is ours;
+      // a terminal/older script's shared marker and every other app run must be left alone.
+      final lease = _ownedLease;
+      if (lease != null && lease.existsSync()) lease.deleteSync();
     } catch (error) {
       // A failed kill leaves the writer alive: report it without releasing its serial lease.
       if (identical(_running, process)) {
@@ -208,13 +223,30 @@ class Flasher {
     }
   }
 
+  File? _ownedLease;
+
   Future<int> _run(
     List<String> command,
     void Function(FlashLine) onLine,
   ) async {
     if (_running != null) throw StateError('a flash is already running');
     _cancelled = false;
-    final process = await startProcess(command);
+    _forcedStop = null;
+    final random = _windows ? Random.secure() : null;
+    final runId = _windows
+        ? List.generate(
+            16,
+            (_) => random!.nextInt(256).toRadixString(16).padLeft(2, '0'),
+          ).join()
+        : null;
+    final cache = cancelDirectory ?? SerialPortLease.flasherDirectory();
+    _ownedLease = runId == null ? null : File('$cache/flashing.$runId');
+    final process = await startProcess(
+      command,
+      environment: runId == null
+          ? null
+          : {'HARNESS_FLASH_RUN_ID': runId, 'HARNESS_FLASHER_CACHE': cache},
+    );
     _running = process;
     _onLine = onLine;
     try {
@@ -223,6 +255,10 @@ class Flasher {
         _pump(process.stderr, onLine, stderr: true),
       ];
       final code = await process.exitCode;
+      _killTimer?.cancel();
+      // Parent EOF can arrive while taskkill is still ending descendants. Retire the persisted
+      // lease and finish that termination attempt before SerialPortLease.hold releases supervision.
+      await _forcedStop;
       // Drain first: the last lines can still be in flight when the process
       // has already gone, and losing them loses the reason it failed.
       await Future.wait(pumps);
@@ -232,6 +268,7 @@ class Flasher {
       _killTimer = null;
       _onLine = null;
       _running = null;
+      _ownedLease = null;
     }
   }
 
@@ -272,5 +309,9 @@ FlashLine classifyFlashLine(String raw, {required bool stderr}) {
 /// Starts `harness flash` with the managed runtime. [HarnessCliRunner] also
 /// puts the legacy launcher directory on PATH for the child script, so the
 /// flasher can stop and restart its daemon reliably without zsh.
-Future<Process> harnessCliStart(List<String> arguments) =>
-    HarnessCliRunner().start(arguments);
+Future<Process> harnessCliStart(
+  List<String> arguments, {
+  Map<String, String>? environment,
+}) =>
+    HarnessCliRunner(environment: {...Platform.environment, ...?environment})
+        .start(arguments);

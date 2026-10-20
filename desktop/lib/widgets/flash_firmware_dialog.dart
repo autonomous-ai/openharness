@@ -104,7 +104,7 @@ class _FlashDialogState extends State<_FlashDialog> {
       _phase = result.ok ? _Phase.done : _Phase.failed;
       if (!result.ok) {
         _problem = result.cancelled
-            ? 'Stopped. Harness has been started again.'
+            ? 'Stopped.'
             : _lastTrouble() ?? 'The flasher exited with ${result.exitCode}.';
       }
     });
@@ -460,7 +460,7 @@ class _FlashDialogState extends State<_FlashDialog> {
                 ),
                 const Spacer(),
                 Text(
-                  'flash-circle.sh',
+                  widget.flasher.scriptName,
                   style: grid.AppType.monoMeta(
                     color: grid.AppPalette.textFaint,
                   ),

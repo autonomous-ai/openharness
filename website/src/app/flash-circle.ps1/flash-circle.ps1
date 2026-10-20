@@ -47,6 +47,13 @@ $ESPTOOL_RELEASE_BASE = EnvOr 'ESPTOOL_RELEASE_BASE' 'https://github.com/espress
 $CACHE_DIR = EnvOr 'HARNESS_FLASHER_CACHE' (Join-Path $env:USERPROFILE '.harness\flasher')
 $PROBE_TIMEOUT = [int](EnvOr 'HARNESS_PROBE_TIMEOUT' '25')
 $CANCEL_FILE = Join-Path $CACHE_DIR 'cancel'
+$FLASHING_FILE = Join-Path $CACHE_DIR 'flashing'
+# The app can retire only its own lease after forcibly ending this tree. Standalone and older
+# callers keep the shared timestamp marker; an invalid capability cannot name a different path.
+$flashRunId = [Environment]::GetEnvironmentVariable('HARNESS_FLASH_RUN_ID')
+if ($flashRunId -cmatch '\A[0-9a-f]{32}\z') { $FLASHING_FILE = Join-Path $CACHE_DIR "flashing.$flashRunId" }
+# Freeze ownership above, then keep the capability out of esptool, recovery and restarted daemons.
+[Environment]::SetEnvironmentVariable('HARNESS_FLASH_RUN_ID', $null, 'Process')
 
 # --- Flash geometry. Source of truth: apps/esp32-circle/partitions.csv (as flash-circle.sh) ---
 $CHIP = 'esp32s3'
@@ -395,7 +402,7 @@ function Stop-HarnessForFlash {
   if (-not (Get-Command 'harness' -ErrorAction SilentlyContinue)) { return }
   Say ">> stopping Harness to release USB serial ports$Ellipsis"
   New-Item -ItemType Directory -Force -Path $CACHE_DIR | Out-Null
-  Set-Content -LiteralPath (Join-Path $CACHE_DIR 'flashing') -Value ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -Encoding ascii
+  Set-Content -LiteralPath $FLASHING_FILE -Value ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -Encoding ascii
   $script:FlashingMarked = $true
   if ((Invoke-Harness 'stop') -ne 0) { Die "could not stop Harness. Run 'harness stop', then retry the flash." }
   $script:HarnessStopped = $true
@@ -411,7 +418,7 @@ function Stop-HarnessForFlash {
 function Start-HarnessAfterFlash {
   # A failed stop must clear this run's marker, without starting anything it did not stop.
   if ($script:FlashingMarked) {
-    Remove-Item -LiteralPath (Join-Path $CACHE_DIR 'flashing') -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $FLASHING_FILE -Force -ErrorAction SilentlyContinue
     $script:FlashingMarked = $false
   }
   if (-not $script:HarnessStopped) { return }

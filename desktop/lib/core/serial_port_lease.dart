@@ -51,17 +51,35 @@ abstract final class SerialPortLease {
   static bool heldByAnotherProcess({Map<String, String>? environment}) {
     try {
       final dir = flasherDirectory(environment: environment);
-      final file = File('$dir/flashing');
-      if (!file.existsSync()) return false;
+      if (_fresh(File('$dir/flashing'))) return true;
+      // App-started Windows flashes have unique files so a forced stop can retire exactly its
+      // own lease. Bash and standalone/older PowerShell scripts keep the shared timestamp above.
+      final directory = Directory(dir);
+      if (!directory.existsSync()) return false;
+      final runName = RegExp(r'^flashing\.[0-9a-f]{32}$');
+      return directory
+          .listSync(followLinks: false)
+          .whereType<File>()
+          .any(
+            (file) =>
+                runName.hasMatch(file.uri.pathSegments.last) && _fresh(file),
+          );
+    } catch (_) {
+      // Unreadable is not "being flashed": failing open here only risks the collision this guards
+      // against, while failing closed would strand the daemon on any filesystem hiccup.
+      return false;
+    }
+  }
+
+  static bool _fresh(File file) {
+    try {
       final started = int.tryParse(file.readAsStringSync().trim());
       if (started == null) return false;
       final age = DateTime.now().difference(
         DateTime.fromMillisecondsSinceEpoch(started * 1000),
       );
       return !age.isNegative && age < _staleAfter;
-    } catch (_) {
-      // Unreadable is not "being flashed": failing open here only risks the collision this guards
-      // against, while failing closed would strand the daemon on any filesystem hiccup.
+    } on FileSystemException {
       return false;
     }
   }
