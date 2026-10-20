@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import '../logging/debug_surface.dart';
+import 'keymap.dart';
+import 'keymap_keyboard.dart';
 
 /// Harness uses Command as a direct prefix for frequent workspace actions.
 /// T opens a tab, N creates a harness. S opens Store, M machines, I models,
@@ -625,6 +627,55 @@ const linuxAltCommandKeys = <String, List<String>>{
   'pane.toggle_shading': ['ctrl+alt+f'],
   'app.daemon_talk': ['alt+shift+a'],
 };
+
+/// The Windows alias of a Mac chord, independent of the current platform.
+String? windowsCtrlAlias(SingleActivator mac) => windowsCtrlAliasForStroke(
+  keyStrokeFor(
+    mac.trigger,
+    command: mac.meta,
+    control: mac.control,
+    alt: mac.alt,
+    shift: mac.shift,
+  ),
+);
+
+/// The same rule for commands whose Mac defaults are keymap strings.
+String? windowsCtrlAliasForStroke(KeyStroke? mac) {
+  if (mac == null ||
+      !mac.command ||
+      mac.alt ||
+      const {
+        'left',
+        'right',
+        'up',
+        'down',
+        'enter',
+        'backspace',
+        'delete',
+        'home',
+        'end',
+        'tab',
+        'comma',
+        '1',
+        '2',
+        '3',
+        '4',
+        '5',
+        '6',
+        '7',
+        '8',
+        '9',
+        'a',
+        'c',
+        'v',
+        'x',
+        'z',
+        'y',
+      }.contains(mac.key)) {
+    return null;
+  }
+  return KeyStroke(mac.key, control: true, shift: mac.shift).toString();
+}
 
 String platformWorkspaceBinding(String keys) {
   final parts = keys.split('+');

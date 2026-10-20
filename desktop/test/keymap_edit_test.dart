@@ -1,5 +1,7 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shortcuts/keymap.dart';
+import 'package:harness/shortcuts/keymap_commands.dart';
 import 'package:harness/shortcuts/keymap_edit.dart';
 
 KeyBinding binding(
@@ -121,6 +123,44 @@ void main() {
   });
 
   group('rebindBindings', () {
+    test('rebinding a Windows command drops its Ctrl alias', () {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final next = rebindBindings(
+        const [],
+        harnessDefaultBindings,
+        command: 'swarm.new',
+        context: KeymapContext.workspace,
+        stroke: KeyStroke.parse('ctrl+shift+y'),
+      );
+      expect(
+        next.where((b) => b.sequence == 'ctrl+t' && b.command == null),
+        hasLength(1),
+      );
+      final map = ResolvedKeymap(harnessDefaultBindings, KeymapConfig(next));
+      expect(
+        map.match(KeymapContext.workspace, [KeyStroke.parse('ctrl+t')]).matched,
+        isFalse,
+      );
+    });
+
+    test('a user row wins over a Windows alias in workspace and terminal', () {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final map = ResolvedKeymap(
+        harnessDefaultBindings,
+        KeymapConfig.parse(
+          '{"bindings":[{"keys":"ctrl+t","command":"pane.zoom"}]}',
+          commands: harnessCommandById.keys.toSet(),
+        ),
+      );
+      for (final context in [KeymapContext.workspace, KeymapContext.terminal]) {
+        final match = map.match(context, [KeyStroke.parse('ctrl+t')]);
+        expect(match.command, 'pane.zoom');
+        expect(match.outsideTerminal, isFalse);
+      }
+    });
+
     test('moves a command to a new key and unbinds its default', () {
       final next = rebindBindings(
         const [],

@@ -151,6 +151,7 @@ class KeyBinding {
     required this.command,
     this.context = KeymapContext.workspace,
     this.custom = false,
+    this.outsideTerminal = false,
   }) : keys = List.unmodifiable(keys) {
     if (this.keys.isEmpty || this.keys.length > 4) {
       throw const FormatException('Use one to four keys in a sequence');
@@ -163,6 +164,9 @@ class KeyBinding {
   final String? command;
   final KeymapContext context;
   final bool custom;
+
+  /// A default alias that dispatch skips while the terminal view has focus.
+  final bool outsideTerminal;
   String get sequence => keys.join(' ');
 }
 
@@ -254,15 +258,21 @@ class KeymapConfig {
 }
 
 class KeymapMatch {
-  const KeymapMatch({this.command, this.prefix = false});
+  const KeymapMatch({
+    this.command,
+    this.prefix = false,
+    this.outsideTerminal = false,
+  });
   final String? command;
   final bool prefix;
+  final bool outsideTerminal;
   bool get matched => command != null || prefix;
 }
 
 class _KeyNode {
   final children = <KeyStroke, _KeyNode>{};
   String? command;
+  bool outsideTerminal = false;
 }
 
 /// Immutable lookup tables for each input context. Workspace commands are
@@ -310,6 +320,7 @@ class ResolvedKeymap {
         }
         if (node.children.isNotEmpty) _ambiguous(entry, context);
         node.command = entry.command;
+        node.outsideTerminal = entry.outsideTerminal;
       }
       _roots[context] = root;
     }
@@ -343,7 +354,11 @@ class ResolvedKeymap {
       if (next == null) return const KeymapMatch();
       node = next;
     }
-    return KeymapMatch(command: node.command, prefix: node.children.isNotEmpty);
+    return KeymapMatch(
+      command: node.command,
+      prefix: node.children.isNotEmpty,
+      outsideTerminal: node.outsideTerminal,
+    );
   }
 }
 

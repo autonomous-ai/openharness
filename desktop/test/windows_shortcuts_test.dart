@@ -1,6 +1,8 @@
 // Windows' keys: Ctrl where the Mac has ⌘, but never a chord a terminal
 // program answers. The full table is in the C3.6 plan and in CLAUDE.md.
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shortcuts/app_shortcuts.dart';
 import 'package:harness/shortcuts/keymap.dart';
@@ -137,20 +139,40 @@ void main() {
     expect(clashes, isEmpty);
   });
 
-  test('every plain Ctrl+letter stays with the terminal', () {
-    for (var c = 'a'.codeUnitAt(0); c <= 'z'.codeUnitAt(0); c++) {
-      final keys = 'ctrl+${String.fromCharCode(c)}';
-      expect(command(keys), isNull, reason: keys);
-      expect(command(keys, KeymapContext.terminal), isNull, reason: keys);
+  test('outside a terminal, Ctrl does what ⌘ does on the Mac', () {
+    for (final (keys, id) in [
+      ('ctrl+t', 'swarm.new'),
+      ('ctrl+w', 'swarm.close'),
+      ('ctrl+n', 'agent.new'),
+      ('ctrl+f', 'terminal.find'),
+      ('ctrl+g', 'terminal.find_next'),
+      ('ctrl+o', 'agent.open'),
+      ('ctrl+r', 'machines.refresh'),
+      ('ctrl+slash', 'keyboard.help'),
+      ('ctrl+p', 'harnesses.list'),
+    ]) {
+      expect(command(keys), id, reason: keys);
     }
+    expect(command('ctrl+shift+g'), 'terminal.find_next');
+    expect(command('alt+shift+g'), 'terminal.find_previous');
+    expect(command('ctrl+shift+t'), 'swarm.new');
+    expect(command('ctrl+shift+w'), 'swarm.close');
+  });
+
+  test('no alias on text, word-motion or AltGr keys', () {
     for (final keys in [
+      'ctrl+a',
+      'ctrl+c',
+      'ctrl+v',
+      'ctrl+x',
+      'ctrl+z',
+      'ctrl+y',
       'ctrl+left',
       'ctrl+right',
       'ctrl+up',
       'ctrl+down',
       'ctrl+enter',
-      'ctrl+slash',
-      'ctrl+bracketleft',
+      'ctrl+backspace',
       'ctrl+shift+c',
       'ctrl+shift+v',
       'ctrl+shift+a',
@@ -158,22 +180,132 @@ void main() {
       'alt+backspace',
     ]) {
       expect(command(keys), isNull, reason: keys);
-      expect(command(keys, KeymapContext.terminal), isNull, reason: keys);
+    }
+  });
+
+  test('aliases preserve Shift and reject every excluded trigger', () {
+    expect(
+      windowsCtrlAlias(
+        const SingleActivator(LogicalKeyboardKey.keyT, meta: true),
+      ),
+      'ctrl+t',
+    );
+    expect(
+      windowsCtrlAlias(
+        const SingleActivator(LogicalKeyboardKey.keyI, meta: true, shift: true),
+      ),
+      'ctrl+shift+i',
+    );
+    expect(
+      windowsCtrlAlias(const SingleActivator(LogicalKeyboardKey.keyT)),
+      isNull,
+    );
+    expect(
+      windowsCtrlAlias(
+        const SingleActivator(LogicalKeyboardKey.keyT, meta: true, alt: true),
+      ),
+      isNull,
+    );
+    for (final key in [
+      LogicalKeyboardKey.arrowLeft,
+      LogicalKeyboardKey.arrowRight,
+      LogicalKeyboardKey.arrowUp,
+      LogicalKeyboardKey.arrowDown,
+      LogicalKeyboardKey.enter,
+      LogicalKeyboardKey.numpadEnter,
+      LogicalKeyboardKey.backspace,
+      LogicalKeyboardKey.delete,
+      LogicalKeyboardKey.home,
+      LogicalKeyboardKey.end,
+      LogicalKeyboardKey.tab,
+      LogicalKeyboardKey.comma,
+      LogicalKeyboardKey.digit1,
+      LogicalKeyboardKey.digit2,
+      LogicalKeyboardKey.digit3,
+      LogicalKeyboardKey.digit4,
+      LogicalKeyboardKey.digit5,
+      LogicalKeyboardKey.digit6,
+      LogicalKeyboardKey.digit7,
+      LogicalKeyboardKey.digit8,
+      LogicalKeyboardKey.digit9,
+      LogicalKeyboardKey.keyA,
+      LogicalKeyboardKey.keyC,
+      LogicalKeyboardKey.keyV,
+      LogicalKeyboardKey.keyX,
+      LogicalKeyboardKey.keyZ,
+      LogicalKeyboardKey.keyY,
+    ]) {
+      for (final shift in [false, true]) {
+        expect(
+          windowsCtrlAlias(SingleActivator(key, meta: true, shift: shift)),
+          isNull,
+          reason: '$key shift=$shift',
+        );
+      }
     }
     expect(
-      [for (final key in kTerminalOwnedKeys) key.chord.join('+')],
-      containsAll([
-        'Ctrl+Shift+C',
-        'Ctrl+Shift+V',
-        'Ctrl+Shift+A',
-        'Alt+⏎',
-        'Alt+⌫',
-        'Ctrl+C',
-      ]),
+      harnessDefaultBindings.where(
+        (b) => b.outsideTerminal && b.keys.any((k) => k.alt),
+      ),
+      isEmpty,
     );
-    expect([
-      for (final key in kTerminalOwnedKeys) key.chord.join('+'),
-    ], isNot(contains('⌘+⌫')));
+  });
+
+  test('only aliases carry the outside-terminal marker through resolution', () {
+    expect(
+      harnessDefaultKeymap.match(KeymapContext.workspace, [
+        KeyStroke.parse('ctrl+t'),
+      ]).outsideTerminal,
+      isTrue,
+    );
+    expect(
+      harnessDefaultKeymap.match(KeymapContext.workspace, [
+        KeyStroke.parse('ctrl+shift+t'),
+      ]).outsideTerminal,
+      isFalse,
+    );
+    expect(
+      harnessDefaultKeymap.match(KeymapContext.workspace, [
+        KeyStroke.parse('ctrl+a'),
+      ]).outsideTerminal,
+      isFalse,
+    );
+  });
+
+  for (final platform in [TargetPlatform.macOS, TargetPlatform.linux]) {
+    test('$platform has no outside-terminal defaults', () {
+      debugDefaultTargetPlatformOverride = platform;
+      expect(harnessDefaultBindings.where((b) => b.outsideTerminal), isEmpty);
+    });
+  }
+
+  test('the alias list', () {
+    final aliases = [
+      for (final binding in harnessDefaultBindings)
+        if (binding.outsideTerminal) '${binding.sequence} ${binding.command}',
+    ]..sort();
+    expect(aliases, const [
+      'ctrl+b task.route',
+      'ctrl+bracketleft navigation.back',
+      'ctrl+bracketright navigation.forward',
+      'ctrl+d pane.split_down',
+      'ctrl+f terminal.find',
+      'ctrl+g terminal.find_next',
+      'ctrl+h pane.focus_left',
+      'ctrl+i models.list',
+      'ctrl+j pane.focus_below',
+      'ctrl+k pane.focus_above',
+      'ctrl+l pane.focus_right',
+      'ctrl+m machines.list',
+      'ctrl+n agent.new',
+      'ctrl+o agent.open',
+      'ctrl+p harnesses.list',
+      'ctrl+r machines.refresh',
+      'ctrl+s app.store',
+      'ctrl+slash keyboard.help',
+      'ctrl+t swarm.new',
+      'ctrl+w swarm.close',
+    ]);
   });
 
   test('Windows spells its keys out, and its logo key is Win', () {
