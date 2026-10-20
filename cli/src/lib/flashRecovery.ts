@@ -16,6 +16,9 @@ export async function completeFlash(port: string, overrides?: FlashRecoveryDeps)
     stopDiscovery: (await import('../cable/windowsSerial.js')).windowsDialWatch().stop,
     verdictFile: join(env.ADAPTER_DATA_DIR, 'dial-ports.json'),
   }
+  // The daemon's watch deliberately unrefs its child, pipes and first-read deadline. This short-lived
+  // CLI must stay alive until that asynchronous snapshot arrives and the persisted verdict is saved.
+  const lifetime = setInterval(() => {}, 60_000)
   try {
     if (!/^COM[1-9]\d{0,2}$/i.test(port)) throw new Error('flash completion needs a COM port')
     // Discovery reads the native watch; it never opens, probes or resets a serial port.
@@ -32,6 +35,6 @@ export async function completeFlash(port: string, overrides?: FlashRecoveryDeps)
     // must not report recovery when the next daemon would still load the persisted foreign verdict.
     if (new DialVerdicts(deps.verdictFile).isForeign(selected[0])) throw new Error('could not save flashed board recovery')
   } finally {
-    deps.stopDiscovery()
+    try { deps.stopDiscovery() } finally { clearInterval(lifetime) }
   }
 }
