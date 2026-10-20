@@ -52,3 +52,16 @@ export const DESKTOP_DOWNLOAD_LINUX_ARM64_URL = "/desktop/download/linux-arm64";
  * whose browser reports an ARM CPU; `DESKTOP_DOWNLOAD_URL` stays the one every other Mac gets.
  */
 export const DESKTOP_DOWNLOAD_MACOS_ARM64_URL = "/desktop/download/macos-arm64";
+
+/**
+ * Windows: `src/app/desktop/download/windows/`, redirecting to the manifest's `harness-install.exe`
+ * (`desktop-windows-installer`). One x64 program for every Windows PC: it installs the app built for the
+ * PC's own CPU, so there is no per-architecture link.
+ */
+export const DESKTOP_DOWNLOAD_WINDOWS_URL = "/desktop/download/windows";
+
+/**
+ * The PowerShell alternative to the Windows installer, verbatim. The script is the CLI's install.ps1 in its
+ * app mode, published as `harness/desktop/install.ps1` by `cli/scripts/upload-install-ps1.sh --app --production`.
+ */
+export const DESKTOP_WINDOWS_INSTALL_COMMAND = "irm https://cdn.autonomous.ai/harness/desktop/install.ps1 | iex";

@@ -64,43 +64,21 @@ afterAll(() => {
 }, 180_000)
 
 // The six-call malformed-entry case took 137 seconds with slow ARM PowerShell startup.
+// One set of answers for both installers: installer/src/model.rs runs the same vectors against select_entry.
+const vectors = JSON.parse(readFileSync(join(process.cwd(), '..', 'installer', 'tests', 'entry-vectors.json'), 'utf8')) as
+  { name: string; platform: string; document: object; expect: string }[]
+
+// The fourteen-call vector case took about 140 seconds with slow ARM PowerShell startup, so it is one PowerShell.
 describe.runIf(windows)('install.ps1 -App selects the desktop zip', { timeout: 240_000 }, () => {
-  const entry = (arch: string, version: string) => ({ version, url: `https://cdn.example/${arch}.zip`, sha256: '0'.repeat(64), size: 1 })
-  function pick(document: object, platform: string): string {
-    const script = `$ErrorActionPreference = 'Stop'; . ${quote(installer)}; try { $e = Select-HarnessAppEntry -Document (${quote(JSON.stringify(document))} | ConvertFrom-Json) -Platform ${quote(platform)}; "$($e.version) $($e.url)" } catch { $_.Exception.Message }`
+  it('chooses what harness-install.exe chooses, for every shared vector', () => {
+    const script = `$ErrorActionPreference = 'Stop'; . ${quote(installer)}; ` +
+      `foreach ($v in (${quote(JSON.stringify(vectors))} | ConvertFrom-Json)) { ` +
+      `try { $e = Select-HarnessAppEntry -Document $v.document -Platform $v.platform; "$($e.version) $($e.url)" } catch { $_.Exception.Message } }`
     const result = powershell(script, { HARNESS_INSTALL_LIBRARY: '1' })
     expect(result.status, result.stderr).toBe(0)
-    return result.stdout
-  }
-
-  it('selects x64 only on x64 and reports when it is missing', () => {
-    const both = { 'desktop-windows-x64': entry('x64', '1.2.0'), 'desktop-windows-arm64': entry('arm64', '1.3.0') }
-    expect(pick(both, 'win32-x64')).toBe('1.2.0 https://cdn.example/x64.zip')
-    expect(pick({ 'desktop-windows-arm64': both['desktop-windows-arm64'] }, 'win32-x64'))
-      .toBe('The desktop manifest has no Harness desktop app for this computer (win32-x64) yet.')
-  })
-
-  it('selects the numeric newer core on arm64 and prefers arm64 on a tie', () => {
-    const doc = (x64: string, arm64: string) => ({ 'desktop-windows-x64': entry('x64', x64), 'desktop-windows-arm64': entry('arm64', arm64) })
-    expect(pick(doc('1.2.0', '1.3.0'), 'win32-arm64')).toBe('1.3.0 https://cdn.example/arm64.zip')
-    expect(pick(doc('1.10.0', '1.9.0'), 'win32-arm64')).toBe('1.10.0 https://cdn.example/x64.zip')
-    expect(pick(doc('1.3.0', '1.3.0'), 'win32-arm64')).toBe('1.3.0 https://cdn.example/arm64.zip')
-    expect(pick(doc('1.3.0', '1.3.0-rc.1'), 'win32-arm64')).toBe('1.3.0-rc.1 https://cdn.example/arm64.zip')
-  })
-
-  it('skips a malformed newer arm64 entry, including version overflow, to use valid x64', () => {
-    const x64 = entry('x64', '1.2.0')
-    for (const malformed of [
-      { ...entry('arm64', '1.9.0'), url: null },
-      { ...entry('arm64', '1.9.0'), sha256: null },
-      { ...entry('arm64', '1.9.0'), size: 'one' },
-      entry('arm64', '1.9.0junk'),
-      entry('arm64', '9999999999.0.0'),
-    ]) {
-      expect(pick({ 'desktop-windows-x64': x64, 'desktop-windows-arm64': malformed }, 'win32-arm64'))
-        .toBe('1.2.0 https://cdn.example/x64.zip')
-    }
-    expect(pick({}, 'win32-arm64')).toBe('The desktop manifest has no Harness desktop app for this computer (win32-arm64) yet.')
+    const got = result.stdout.split(/\r?\n/)
+    expect(got).toHaveLength(vectors.length)
+    vectors.forEach((vector, index) => expect(got[index], vector.name).toBe(vector.expect))
   })
 })
 
@@ -204,25 +182,33 @@ describe.runIf(windows)('install.ps1 -App runs the real launcher in an isolated 
     return Number(powershell(script).stdout)
   }
 
-  it('installs the complete fixture, registers it, returns before the GUI exits, and leaves no staging', () => {
-    const w = world()
-    const app = join(w.install, 'app', '9.8.7', 'harness-desktop.exe')
-    ownedApps.push(app)
-    const oldPath = pathValue()
-    const oldTasks = taskSnapshot()
-    const started = Date.now()
-    const result = installApp(build('9.8.7'), w.env, ['-Desktop', '-NoService'])
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
-    expect((Date.now() - started) / 1000).toBeLessThan(90)
-    expect(result.stdout).toContain('Harness 9.8.7 is installed, and it is opening now.')
-    expect(readFileSync(join(w.install, 'current'))).toEqual(Buffer.from('9.8.7\r\n'))
-    for (const path of [join(w.install, 'Harness.exe'), join(w.install, 'Harness.ico'), app, join(w.install, 'app', '9.8.7', 'harness_pipe_io.dll'), join(w.programs, 'Harness.lnk')]) {
+  function harnessInstall(): string {
+    const candidates = [process.env.HARNESS_INSTALL_BIN, ...['debug', 'release'].map((profile) => join(process.cwd(), '..', 'installer', 'target', profile, 'harness-install.exe'))]
+    const found = candidates.find((path): path is string => !!path && existsSync(path))
+    if (!found) throw new Error('Build installer/ (cargo build) or set HARNESS_INSTALL_BIN')
+    return found
+  }
+
+  // harness-install.exe in quiet mode: no window, and its log in this world's TEMP.
+  function installExe(manifest: string, env: NodeJS.ProcessEnv) {
+    const run = spawnSync(harnessInstall(), ['--quiet'], {
+      encoding: 'utf8', env: cleanEnv({ ...env, HARNESS_INSTALL_MANIFEST: manifest }), timeout: 240_000,
+    })
+    const log = join(env.TEMP!, 'harness-install.log')
+    return { status: run.status, log: existsSync(log) ? readFileSync(log, 'utf8') : '' }
+  }
+
+  // What either installer leaves behind: the install, its registration and a running app, and nothing else.
+  function expectInstalled(w: ReturnType<typeof world>, version: string) {
+    const app = join(w.install, 'app', version, 'harness-desktop.exe')
+    expect(readFileSync(join(w.install, 'current'))).toEqual(Buffer.from(`${version}\r\n`))
+    for (const path of [join(w.install, 'Harness.exe'), join(w.install, 'Harness.ico'), app, join(w.install, 'app', version, 'harness_pipe_io.dll'), join(w.programs, 'Harness.lnk')]) {
       expect(existsSync(path)).toBe(true)
     }
     expect(query(`${w.registry}\\Classes\\harness`, 'URL Protocol').status).toBe(0)
     expect(registryValue(`${w.registry}\\Classes\\harness\\shell\\open\\command`, '').stdout).toBe(`"${join(w.install, 'Harness.exe')}" "%1"`)
     const uninstall = `${w.registry}\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Harness`
-    expect(query(uninstall, 'DisplayVersion').stdout).toMatch(/DisplayVersion\s+REG_SZ\s+9\.8\.7/)
+    expect(query(uninstall, 'DisplayVersion').stdout).toMatch(new RegExp(`DisplayVersion\\s+REG_SZ\\s+${version.replace(/\./g, '\\.')}`))
     expect(registryValue(uninstall, 'DisplayIcon').stdout).toBe(`${join(w.install, 'Harness.ico')},0`)
     const shortcut = powershell(
       `$ErrorActionPreference = 'Stop'; $shell = New-Object -ComObject Shell.Application; ` +
@@ -238,10 +224,48 @@ describe.runIf(windows)('install.ps1 -App runs the real launcher in an isolated 
       target: join(w.install, 'Harness.exe'), icon: join(w.install, 'Harness.ico'), index: 0,
     })
     expect(existsSync(join(w.home, '.harness'))).toBe(false)
-    expect(pathValue()).toBe(oldPath)
-    expect(taskSnapshot()).toEqual(oldTasks)
     expect(stagingLeft(w.temp)).toEqual([])
     expect(running(app)).toBeGreaterThan(0)
+  }
+
+  it('installs the complete fixture, registers it, returns before the GUI exits, and leaves no staging', () => {
+    const w = world()
+    ownedApps.push(join(w.install, 'app', '9.8.7', 'harness-desktop.exe'))
+    const oldPath = pathValue()
+    const oldTasks = taskSnapshot()
+    const started = Date.now()
+    const result = installApp(build('9.8.7'), w.env, ['-Desktop', '-NoService'])
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
+    expect((Date.now() - started) / 1000).toBeLessThan(90)
+    expect(result.stdout).toContain('Harness 9.8.7 is installed, and it is opening now.')
+    expectInstalled(w, '9.8.7')
+    expect(pathValue()).toBe(oldPath)
+    expect(taskSnapshot()).toEqual(oldTasks)
+  })
+
+  // F's installer, held to install.ps1 -App's expectations (installer spec §4.2).
+  it('harness-install.exe installs the same fixture with the same result', () => {
+    const w = world()
+    ownedApps.push(join(w.install, 'app', '9.8.13', 'harness-desktop.exe'))
+    const oldPath = pathValue()
+    const started = Date.now()
+    const result = installExe(build('9.8.13'), w.env)
+    expect(result.status, result.log).toBe(0)
+    expect((Date.now() - started) / 1000).toBeLessThan(90)
+    expect(result.log).toContain('Harness 9.8.13 is installed, and it is opening now.')
+    expectInstalled(w, '9.8.13')
+    expect(pathValue()).toBe(oldPath)
+  })
+
+  it('harness-install.exe refuses a checksum mismatch with exit 1, names the step, and installs nothing', () => {
+    const w = world()
+    const result = installExe(build('9.8.14', true), w.env)
+    expect(result.status, result.log).toBe(1)
+    expect(result.log).toContain('Harness could not be installed. The step that failed: Downloading Harness.')
+    expect(result.log).toContain('failed its checksum')
+    expect(existsSync(w.install)).toBe(false)
+    expect(query(`${w.registry}\\Classes\\harness`, 'URL Protocol').status).not.toBe(0)
+    expect(stagingLeft(w.temp)).toEqual([])
   })
 
   it('rejects a checksum mismatch with exit 1 and no install or owned staging', () => {

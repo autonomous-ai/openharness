@@ -10,7 +10,7 @@ export default function DesktopPage() {
         <div className={styles.badge}>
           <Download size={21} strokeWidth={2} />
         </div>
-        <p className={styles.eyebrow}>Harness for macOS and Linux</p>
+        <p className={styles.eyebrow}>Harness for macOS, Windows and Linux</p>
         <h1 className={styles.title}>Install the Harness desktop app</h1>
         <DesktopDownload />
         <p className={styles.description}>

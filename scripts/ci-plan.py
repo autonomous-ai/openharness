@@ -28,7 +28,9 @@ MANUAL = {"full": CORE, "all": SUITES, "process": set(), **{name: {name} for nam
 # scripts, store, fixtures) is covered by the plan's actionlint and process checks.
 COMPONENTS = {"cli": "cli", "tests": "cli", "desktop": "desktop", "tui": "tui", "backend": "backend",
               "companions": "companions", "website": "website", "os": "os", "provider": "provider",
-              "devices": "firmware", "mobile": "mobile", "daemons": "daemons", "pty": "pty", "term": "pty"}
+              "devices": "firmware", "mobile": "mobile", "daemons": "daemons", "pty": "pty", "term": "pty",
+              # harness-install.exe's model and steps test on Linux; its Windows half runs in windows-desktop.yml.
+              "installer": "pty"}
 # Paths inside another component that also select a suite: the PTY host's suite runs the CLI's
 # ptyhost terminal contract against the host it builds, and the host builds on the vendored terminal.
 # The shipped TUI (`hn`) builds on term/ as the host does, so a term/ change runs its tests too.

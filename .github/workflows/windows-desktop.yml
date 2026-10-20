@@ -103,6 +103,22 @@ jobs:
           $lockTestExe = $artifacts[0].executable
           if (-not (Test-Path -LiteralPath $lockTestExe -PathType Leaf)) { throw "Rust lock test executable is missing: $lockTestExe" }
           "HARNESS_RUST_LOCK_TEST_EXE=$lockTestExe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      # harness-install.exe (docs/superpowers/specs/2026-10-19-windows-installer-design.md §4.2): its logic, its
+      # Windows calls (WinINet, the machine, the mutex), its resources and quiet runs, on each architecture.
+      - name: harness-install.exe tests
+        working-directory: installer
+        run: |
+          cargo test --locked
+          if ($LASTEXITCODE -ne 0) { throw "harness-install tests failed ($LASTEXITCODE)" }
+      # The release ships one x64 harness-install.exe; on this arm64 runner it runs emulated, as on an Arm PC, and must
+      # still see an arm64 machine (Review Focus 4). Measured on the ARM64 VM: all 36 + 8 pass emulated.
+      - name: harness-install.exe tests, x64 emulated
+        if: matrix.arch == 'arm64'
+        working-directory: installer
+        run: |
+          rustup target add x86_64-pc-windows-msvc
+          cargo test --locked --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw "harness-install x64 tests failed under emulation ($LASTEXITCODE)" }
       # A real node.exe for the tests that run one (harness_cli_runner_windows_test.dart,
       # environment_provisioner_windows_test.dart). Same runtime pin as windows.yml.
       - uses: actions/setup-node@v7
@@ -328,15 +344,18 @@ jobs:
             $env:TMP = $originalTmp
             Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
           }
-      - name: Install by one command (install.ps1 -App)
+      - name: Install by one command (install.ps1 -App) and by harness-install.exe
         working-directory: cli
         timeout-minutes: 40
         env:
           HARNESS_DESKTOP_LAUNCHER_BIN: ${{ github.workspace }}\pty\target\debug\harness-desktop-launcher.exe
           HARNESS_EXE_BIN: ${{ github.workspace }}\pty\target\debug\harness.exe
+          HARNESS_INSTALL_BIN: ${{ github.workspace }}\installer\target\debug\harness-install.exe
         run: |
           # C4.7's package smoke built the desktop launcher; B's original installer specs also run the CLI command.
           if (-not (Test-Path -LiteralPath $env:HARNESS_DESKTOP_LAUNCHER_BIN -PathType Leaf)) { throw 'Desktop launcher is missing' }
+          # The harness-install.exe tests step built it.
+          if (-not (Test-Path -LiteralPath $env:HARNESS_INSTALL_BIN -PathType Leaf)) { throw 'harness-install.exe is missing' }
           if (-not (Test-Path -LiteralPath $env:HARNESS_EXE_BIN -PathType Leaf)) {
             cargo build --locked --manifest-path ../pty/Cargo.toml --bin harness
             if ($LASTEXITCODE -ne 0) { throw "CLI harness.exe build failed ($LASTEXITCODE)" }
@@ -405,6 +424,23 @@ jobs:
           name: harness-desktop-zip-windows-${{ matrix.arch }}
           path: desktop/build/windows-zip/harness-desktop-${{ env.VERSION }}-windows-${{ matrix.arch }}.zip
           if-no-files-found: error
+      # One x64 harness-install.exe for every PC, reading the staging manifest (installer spec §2.4).
+      - name: Build the staging harness-install.exe
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        working-directory: installer
+        env:
+          HARNESS_INSTALL_BASE: https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/staging/
+          HARNESS_INSTALL_VERSION: ${{ env.VERSION }}
+        run: |
+          cargo build --locked --release --target ${{ matrix.target }}
+          if ($LASTEXITCODE -ne 0) { throw "harness-install build failed ($LASTEXITCODE)" }
+      - uses: actions/upload-artifact@v4
+        if: matrix.arch == 'x64'
+        with:
+          name: harness-install-staging
+          path: installer/target/${{ matrix.target }}/release/harness-install.exe
+          if-no-files-found: error
 
   release-staging:
     needs: [mode, release-build]
@@ -428,9 +464,13 @@ jobs:
           pattern: harness-desktop-zip-windows-*
           path: .zips
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: harness-install-staging
+          path: .zips
       - name: Dry run
         if: ${{ needs.mode.outputs.dry_run == 'true' }}
-        run: DRY_RUN=1 DRY_RUN_OUT=.dry-run bash desktop/scripts/publish-desktop-windows-staging.sh "$VERSION" ".zips/harness-desktop-$VERSION-windows-x64.zip" ".zips/harness-desktop-$VERSION-windows-arm64.zip"
+        run: DRY_RUN=1 DRY_RUN_OUT=.dry-run bash desktop/scripts/publish-desktop-windows-staging.sh "$VERSION" ".zips/harness-desktop-$VERSION-windows-x64.zip" ".zips/harness-desktop-$VERSION-windows-arm64.zip" .zips/harness-install.exe
       - uses: actions/upload-artifact@v4
         if: ${{ needs.mode.outputs.dry_run == 'true' }}
         with:
@@ -447,7 +487,7 @@ jobs:
         if: ${{ needs.mode.outputs.dry_run != 'true' }}
       - name: Publish to staging
         if: ${{ needs.mode.outputs.dry_run != 'true' }}
-        run: bash desktop/scripts/publish-desktop-windows-staging.sh "$VERSION" ".zips/harness-desktop-$VERSION-windows-x64.zip" ".zips/harness-desktop-$VERSION-windows-arm64.zip"
+        run: bash desktop/scripts/publish-desktop-windows-staging.sh "$VERSION" ".zips/harness-desktop-$VERSION-windows-x64.zip" ".zips/harness-desktop-$VERSION-windows-arm64.zip" .zips/harness-install.exe
       - name: Verify served staging artifacts
         if: ${{ needs.mode.outputs.dry_run != 'true' }}
         run: |
@@ -460,10 +500,14 @@ jobs:
               const response = await fetch(manifest, { cache: 'no-store' })
               if (!response.ok) throw new Error(`GET ${manifest} -> ${response.status}`)
               const document = await response.json()
-              for (const arch of ['x64', 'arm64']) {
-                const key = `desktop-windows-${arch}`
+              const files = {
+                'desktop-windows-x64': `harness-desktop-${VERSION}-windows-x64.zip`,
+                'desktop-windows-arm64': `harness-desktop-${VERSION}-windows-arm64.zip`,
+                'desktop-windows-installer': 'harness-install.exe',
+              }
+              for (const [key, file] of Object.entries(files)) {
                 const entry = document[key]
-                const expectedUrl = `https://cdn.autonomous.ai/${STAGING_PREFIX}/desktop/${VERSION}/harness-desktop-${VERSION}-windows-${arch}.zip`
+                const expectedUrl = `https://cdn.autonomous.ai/${STAGING_PREFIX}/desktop/${VERSION}/${file}`
                 if (!entry || entry.version !== VERSION || entry.url !== expectedUrl) throw new Error(`${key}: manifest entry differs`)
                 const served = await fetch(entry.url, { cache: 'no-store' })
                 if (!served.ok) throw new Error(`${key}: GET ${entry.url} -> ${served.status}`)
@@ -472,7 +516,7 @@ jobs:
                   throw new Error(`${key}: served bytes differ`)
                 }
               }
-              console.log(`staging desktop ${VERSION}: x64 + arm64 verified`)
+              console.log(`staging desktop ${VERSION}: x64, arm64 and harness-install.exe verified`)
             }
             main().catch((error) => { console.error(`::error::${error.message}`); process.exit(1) })
           JS

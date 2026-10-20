@@ -25,9 +25,10 @@ import {
   DESKTOP_DOWNLOAD_LINUX_X64_URL,
   DESKTOP_DOWNLOAD_MACOS_ARM64_URL,
   DESKTOP_DOWNLOAD_URL,
+  DESKTOP_DOWNLOAD_WINDOWS_URL,
 } from "@/lib/installCommand";
 
-export type DesktopBuildId = "macos" | "macos-arm64" | "linux-x64" | "linux-arm64";
+export type DesktopBuildId = "macos" | "macos-arm64" | "linux-x64" | "linux-arm64" | "windows";
 
 export type DesktopBuild = {
   id: DesktopBuildId;
@@ -46,6 +47,8 @@ export const DESKTOP_BUILD = {
   },
   "linux-x64": { id: "linux-x64", name: "Linux (x64)", detail: "AppImage", href: DESKTOP_DOWNLOAD_LINUX_X64_URL },
   "linux-arm64": { id: "linux-arm64", name: "Linux (ARM64)", detail: "AppImage", href: DESKTOP_DOWNLOAD_LINUX_ARM64_URL },
+  // One installer for both CPUs: it picks the app for the PC it runs on.
+  windows: { id: "windows", name: "Windows", detail: "x64 and ARM", href: DESKTOP_DOWNLOAD_WINDOWS_URL },
 } as const satisfies Record<DesktopBuildId, DesktopBuild>;
 
 /**
@@ -56,16 +59,18 @@ export const DESKTOP_BUILDS: readonly DesktopBuild[] = [
   DESKTOP_BUILD.macos,
   DESKTOP_BUILD["linux-x64"],
   DESKTOP_BUILD["linux-arm64"],
+  DESKTOP_BUILD.windows,
 ];
 
 /**
  * What the visitor is on, as far as the desktop download cares:
  * - a `DesktopBuildId`: that build suits this computer (`macos` also covers a Mac of unknown CPU);
  * - `linux`: Linux, but the browser did not say which CPU (or it is one with no build);
- * - `windows`, `mobile`: no desktop build runs here (`mobile` covers phones and tablets, iPad included);
+ * - `windows` is a `DesktopBuildId` too: one installer serves both of its CPUs;
+ * - `mobile`: no desktop build runs here (phones and tablets, iPad included);
  * - `unknown`: anything else, ChromeOS included. Pages treat it like no detection at all.
  */
-export type VisitorPlatform = DesktopBuildId | "linux" | "windows" | "mobile" | "unknown";
+export type VisitorPlatform = DesktopBuildId | "linux" | "mobile" | "unknown";
 
 /**
  * `DESKTOP_BUILDS` as this visitor should see them: on an ARM Mac, macOS's row (still named "macOS")

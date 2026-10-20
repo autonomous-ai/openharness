@@ -576,7 +576,8 @@ jobs:
 
   # The Harness PTY host (pty/, on term/): its Rust tests, then the CLI's terminal contract for the
   # ptyhost backend against the host just built (tmux's half needs tmux and runs locally). Selected by
-  # pty/, term/, the vendored terminal and the CLI's ptyhost files (scripts/ci-plan.py ALSO).
+  # pty/, term/, the vendored terminal and the CLI's ptyhost files (scripts/ci-plan.py ALSO), and by installer/, whose
+  # model and steps (harness-install.exe) are plain Rust that tests here.
   pty-checks:
     concurrency:
       group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-pty-checks
@@ -595,6 +596,7 @@ jobs:
           workspaces: |
             pty
             term
+            installer
           shared-key: pty-pr
           cache-bin: false
       - name: Terminal and host unit tests
@@ -602,6 +604,7 @@ jobs:
           cargo test --locked --manifest-path term/Cargo.toml
           cargo build --locked --manifest-path pty/Cargo.toml
           cargo test --locked --manifest-path pty/Cargo.toml
+          cargo test --locked --manifest-path installer/Cargo.toml
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CLI_NODE_VERSION }}

@@ -44,6 +44,12 @@ class SelectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(planner.select([path])[0], expected)
 
+    def test_the_windows_installer_selects_the_pty_suite(self):
+        # installer/'s model and steps are plain Rust that tests on Linux; pty-checks runs them (installer spec §4.1).
+        for path in ("installer/src/model.rs", "installer/tests/entry-vectors.json", "installer/Cargo.lock"):
+            with self.subTest(path=path):
+                self.assertEqual(planner.select([path])[0], {"pty"})
+
     def test_the_pipe_auth_vectors_also_select_the_desktop_suite(self):
         # desktop/test/windows_pipe_auth_test.dart reads them from cli/: a new vector runs both halves.
         self.assertEqual(planner.select(["cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json"])[0], {"cli", "desktop"})
