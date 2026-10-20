@@ -8,8 +8,9 @@
  * Re-implementing that here would put those numbers in two places, and the failure mode of a
  * disagreement is a bricked board that needs a USB cable and a person to recover.
  *
- * So this file owns three things and nothing else: WHICH script to run, HOW to get it, and getting the
- * user's flags to it untouched.
+ * This file chooses the script, gets it, and passes the user's flags through untouched. On Windows
+ * it also supplies a private completion callback so the CLI can forget the flashed board's old verdict
+ * before the script starts the daemon again. All decisions about writing the board stay in the script.
  *
  * Flags are passed through verbatim rather than parsed. `--detect-only`, `--port`, `--yes`,
  * `--version`, `--erase-nvs`, `--no-verify` and `--no-flash` therefore work without this file knowing
@@ -18,7 +19,7 @@
  *
  * On Windows the flasher is `flash-circle.ps1`, the PowerShell twin of the shell script (same steps, flags, numbers
  * and output; a website test holds the numbers equal), run with Windows PowerShell 5.1, which every Windows 10/11
- * has. Which script and how to run it is `flasherScript`; nothing else here differs.
+ * has. Which script and how to run it is `flasherScript`.
  */
 
 import { spawn } from 'child_process'
@@ -26,6 +27,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { homedir } from 'os'
 import { env } from '../config/env.js'
+import { completeFlash } from './flashRecovery.js'
 
 /**
  * The script caches its own downloads (esptool, firmware) under `~/.harness/flasher` via
@@ -77,11 +79,13 @@ export interface FlashDeps {
   fetchScript: (url: string) => Promise<string>
   readCache: () => string | null
   writeCache: (body: string) => void
-  run: (scriptPath: string, args: string[]) => Promise<number>
+  run: (scriptPath: string, args: string[], environment?: NodeJS.ProcessEnv) => Promise<number>
   log: (line: string) => void
   warn: (line: string) => void
   /** Which flasher: overridden in tests; the real one is this machine's. */
   platform?: NodeJS.Platform
+  environment?: NodeJS.ProcessEnv
+  complete?: (port: string) => Promise<void>
 }
 
 export function scriptUrl(platform: NodeJS.Platform = process.platform): string {
@@ -101,11 +105,11 @@ async function realFetch(url: string): Promise<string> {
 }
 
 function realRun(script: FlasherScript) {
-  return (scriptPath: string, args: string[]): Promise<number> => new Promise((resolve, reject) => {
+  return (scriptPath: string, args: string[], environment?: NodeJS.ProcessEnv): Promise<number> => new Promise((resolve, reject) => {
     const { file, args: argv } = script.command(scriptPath, args)
     // `inherit`, not a pipe. The script prints progress as it goes and asks for confirmation on the
     // terminal; capturing its output would hide the first and break the second.
-    const child = spawn(file, argv, { stdio: 'inherit', windowsHide: true })
+    const child = spawn(file, argv, { stdio: 'inherit', windowsHide: true, env: environment })
     child.on('error', reject)
     child.on('close', (code) => resolve(code ?? 1))
   })
@@ -175,6 +179,16 @@ async function resolveScript(deps: FlashDeps, script: FlasherScript, cached: str
  */
 export async function flashCommand(args: string[], overrides: Partial<FlashDeps> = {}): Promise<number> {
   const platform = overrides.platform ?? process.platform
+  const environment = overrides.environment ?? process.env
+  // Only the Windows flasher child gets this capability. Its successful write must invalidate the
+  // selected board's old verdict before `finally` starts the daemon, which was absent during the flash.
+  if (args[0] === '__complete') {
+    if (platform !== 'win32' || args.length !== 2 || !environment.HARNESS_FLASH_RECOVERY_NODE || !environment.HARNESS_FLASH_RECOVERY_ARGS) {
+      throw new Error('invalid flash completion callback')
+    }
+    await (overrides.complete ?? completeFlash)(args[1])
+    return 0
+  }
   const { deps: defaults, cached } = defaultsFor(platform)
   const deps: FlashDeps = { ...defaults, ...overrides, platform }
   const script = flasherScript(platform)
@@ -187,7 +201,12 @@ export async function flashCommand(args: string[], overrides: Partial<FlashDeps>
     // product's own device — and the check that actually prevents damage is the script's refusal to write
     // to anything that is not an ESP32-S3. A confirmation in front of a customer converting the device
     // they own is friction wearing the clothes of safety. The user's own flags follow and still win.
-    return await deps.run(cached, ['--yes', ...args])
+    const childEnvironment = platform === 'win32' ? {
+      ...environment,
+      HARNESS_FLASH_RECOVERY_NODE: process.execPath,
+      HARNESS_FLASH_RECOVERY_ARGS: JSON.stringify([...process.execArgv, process.argv[1]]),
+    } : environment
+    return await deps.run(cached, ['--yes', ...args], childEnvironment)
   } catch (err) {
     // The only way `spawn` itself fails here in practice: the script's interpreter is missing. Say what to do
     // instead of just failing.

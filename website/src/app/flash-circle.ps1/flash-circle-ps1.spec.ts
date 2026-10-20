@@ -68,7 +68,12 @@ function runFixture(body: string) {
     return spawnSync(powershell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", fixture], {
       encoding: "utf8",
       timeout: 15_000,
-      env: { ...environment, Path: `${system32};${join(system32, "WindowsPowerShell", "v1.0")}`, HARNESS_FLASHER_CACHE: directory },
+      env: {
+        ...environment, Path: `${system32};${join(system32, "WindowsPowerShell", "v1.0")}`,
+        USERPROFILE: directory, APPDATA: directory, LOCALAPPDATA: directory,
+        ADAPTER_DATA_DIR: join(directory, "data"), HARNESS_AUTH_DIR: join(directory, "auth"),
+        HARNESS_FLASHER_CACHE: directory, HARNESS_FLASH_RECOVERY_NODE: "", HARNESS_FLASH_RECOVERY_ARGS: "",
+      },
       windowsHide: true,
     });
   } finally {
@@ -93,6 +98,70 @@ function expectFixture(body: string) {
 }
 
 describe("Windows PowerShell 5.1 flasher behavior without a board", () => {
+  // Exercise the real entry function, replacing only hardware/downloads and using a private fake CLI.
+  const recoveryFixture = `
+$script:Steps = New-Object 'Collections.Generic.List[string]'
+function Stop-HarnessForFlash { $script:HarnessStopped = $true; $script:Steps.Add('stop') }
+function Install-Esptool { }
+function Select-Port { $script:PORT = 'COM3' }
+function Resolve-Release { $script:FW_VER = 'fixture' }
+function Get-Firmware { }
+function Confirm-Flash { }
+function Invoke-Flash { $script:Steps.Add('write') }
+function Confirm-Running { $script:Steps.Add('verify') }
+function Invoke-Harness([string]$Verb) {
+  if ($Verb -ne 'start') { throw 'unexpected Harness command' }
+  if (Test-Path -LiteralPath (Join-Path $CACHE_DIR 'completed')) { $script:Steps.Add('complete') }
+  $script:Steps.Add('start'); return 0
+}
+$hook = Join-Path $CACHE_DIR 'fake-cli.ps1'
+Set-Content -LiteralPath $hook -Encoding ascii -Value 'if ($args.Count -ne 3 -or $args[0] -ne "flash" -or $args[1] -ne "__complete" -or $args[2] -ne "COM3") { exit 9 }; [IO.File]::WriteAllText([IO.Path]::Combine($env:HARNESS_FLASHER_CACHE, "completed"), "COM3"); exit 0'
+$env:HARNESS_FLASH_RECOVERY_NODE = (Get-Process -Id $PID).Path
+$env:HARNESS_FLASH_RECOVERY_ARGS = ConvertTo-Json -InputObject @('-NoProfile', '-File', $hook) -Compress
+`;
+
+  windowsIt("forgets the flashed board after verification, before the stopped daemon starts", () => {
+    expectFixture(`${recoveryFixture}
+try { Invoke-FlashCircle @('--yes') } finally { Start-HarnessAfterFlash }
+if (($script:Steps -join ',') -ne 'stop,write,verify,complete,start') { throw ('wrong recovery order: ' + ($script:Steps -join ',')) }
+`);
+  }, 25_000);
+
+  windowsIt.each(["failure", "cancel", "cancel-after-write"])("does not forget a verdict after %s", (mode) => {
+    expectFixture(`${recoveryFixture}
+${mode === "failure" ? "function Invoke-Flash { Die 'fixture write failure' }" : mode === "cancel" ? "function Invoke-Flash { Die 'cancelled' 130 }" : "function Confirm-Running { Die 'cancelled' 130 }"}
+try { Invoke-FlashCircle @('--yes'); throw 'failure was ignored' }
+catch { if ($_.Exception.Message -ne $StopMarker) { throw } }
+finally { Start-HarnessAfterFlash }
+if (Test-Path -LiteralPath (Join-Path $CACHE_DIR 'completed')) { throw 'failed or cancelled flash forgot a verdict' }
+if ($script:Steps[$script:Steps.Count - 1] -ne 'start') { throw 'failed flash did not restore Harness' }
+`);
+  }, 25_000);
+
+  windowsIt.each(["--detect-only", "--no-flash", "--version-info"])("does not forget a verdict or stop Harness for %s", (flag) => {
+    expectFixture(`${recoveryFixture}
+try { Invoke-FlashCircle @('${flag}') } finally { Start-HarnessAfterFlash }
+if ($script:Steps.Count -ne 0 -or (Test-Path -LiteralPath (Join-Path $CACHE_DIR 'completed'))) { throw 'a read-only invocation changed daemon/verdict state' }
+`);
+  }, 25_000);
+
+  windowsIt("supports a standalone flasher or older CLI with no completion capability", () => {
+    expectFixture(`${recoveryFixture}
+$env:HARNESS_FLASH_RECOVERY_NODE = ''; $env:HARNESS_FLASH_RECOVERY_ARGS = ''
+try { Invoke-FlashCircle @('--yes') } finally { Start-HarnessAfterFlash }
+if (($script:Steps -join ',') -ne 'stop,write,verify,start') { throw 'standalone flash did not remain compatible' }
+`);
+  }, 25_000);
+
+  windowsIt.each(["malformed", "nonzero"])("warns and still restores Harness when the completion capability is %s", (mode) => {
+    const result = expectFixture(`${recoveryFixture}
+${mode === "malformed" ? "$env:HARNESS_FLASH_RECOVERY_ARGS = '{broken'" : "Set-Content -LiteralPath $hook -Encoding ascii -Value 'exit 7'"}
+try { Invoke-FlashCircle @('--yes') } finally { Start-HarnessAfterFlash }
+if (($script:Steps -join ',') -ne 'stop,write,verify,start') { throw 'callback failure prevented daemon recovery' }
+`);
+    expect(result.stderr).toContain("could not refresh the flashed board");
+  }, 25_000);
+
   windowsIt("quotes Unicode, spaces, punctuation, quotes and trailing backslashes as individual child arguments", () => {
     expectFixture(`
 $script:ESPTOOL = (Get-Process -Id $PID).Path

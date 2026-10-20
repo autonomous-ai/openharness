@@ -420,6 +420,30 @@ function Start-HarnessAfterFlash {
   if ((Invoke-Harness 'start') -ne 0) { Warn "could not start Harness $Dash run 'harness start' yourself." }
 }
 
+function Complete-HarnessFlash {
+  # The daemon was stopped during the flash, so it could not see busy -> free and forget a previous
+  # foreign-board verdict. Only a new CLI supplies this callback, and it owns the verdict file format.
+  # Standalone flashers and older CLIs keep working without it. Never resolve a different CLI on PATH.
+  $node = [Environment]::GetEnvironmentVariable('HARNESS_FLASH_RECOVERY_NODE')
+  $json = [Environment]::GetEnvironmentVariable('HARNESS_FLASH_RECOVERY_ARGS')
+  if (-not $node -and -not $json) { return }
+  $previous = $ErrorActionPreference
+  try {
+    if (-not $node -or -not (Test-Path -LiteralPath $node -PathType Leaf) -or -not $json -or -not $json.TrimStart().StartsWith('[')) { throw 'invalid completion capability' }
+    $decoded = ConvertFrom-Json -InputObject $json
+    if (@($decoded).Count -eq 0) { throw 'empty completion capability' }
+    foreach ($value in $decoded) { if ($value -isnot [string] -or -not $value) { throw 'invalid completion argument' } }
+    [string[]]$arguments = @($decoded)
+    # Native stderr is an ErrorRecord in Windows PowerShell 5.1. Its exit status, not that conversion,
+    # decides whether this optional recovery succeeded; finally must still restart Harness on failure.
+    $ErrorActionPreference = 'Continue'
+    & $node @arguments 'flash' '__complete' $script:PORT *> $null
+    if ($LASTEXITCODE -ne 0) { throw "completion exited $LASTEXITCODE" }
+  } catch {
+    Warn "could not refresh the flashed board in Harness: $($_.Exception.Message)"
+  } finally { $ErrorActionPreference = $previous }
+}
+
 # --- writing, and reading back what runs ---
 function Invoke-Flash {
   Say ''
@@ -490,6 +514,7 @@ function Invoke-FlashCircle([object[]]$Given) {
   Test-Cancel
   Invoke-Flash
   Confirm-Running
+  Complete-HarnessFlash
   Say ''
   Say "Done. $OTA_KEY $($script:FW_VER) is on $($script:PORT)."
   if ($script:ERASE_NVS) { Say "NVS was erased $Dash the device will ask to be set up again." }

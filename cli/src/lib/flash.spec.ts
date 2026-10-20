@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { flashCommand, flasherScript, scriptUrl, type FlashDeps } from './flash.js'
 
 /**
- * `harness flash` owns three things — which script, how to get it, and handing the user's flags over
- * untouched. Everything that decides whether a board survives the write lives in the shell script and
+ * `harness flash` chooses and gets the script, passes the user's flags over untouched, and supplies
+ * Windows' private post-write recovery callback. Everything that decides whether a board survives the write lives in the shell script and
  * is deliberately NOT duplicated here, so these assertions stop at the wrapper.
  *
  * Nothing in this file may touch hardware. The one thing that cannot be proven here — that a real
@@ -239,5 +239,41 @@ describe('harness flash — on Windows', () => {
     expect(await flashCommand(args, { ...deps, platform: 'win32' })).toBe(130)
     expect(paths[0]).toMatch(/[/\\]flash-circle\.ps1$/)
     expect(received).toEqual([['--yes', ...args]])
+  })
+})
+
+describe('harness flash — successful Windows flash recovery', () => {
+  const capability = { HARNESS_FLASH_RECOVERY_NODE: 'C:\\runtime\\node.exe', HARNESS_FLASH_RECOVERY_ARGS: '["C:\\\\cli\\\\cli.js"]' }
+
+  it('handles the private completion before fetching or running another flasher', async () => {
+    const complete = vi.fn(async () => {})
+    const { deps, calls } = harness({ fetchScript: async () => '# flash-circle.ps1\n' })
+    expect(await flashCommand(['__complete', 'COM3'], { ...deps, platform: 'win32', environment: capability, complete })).toBe(0)
+    expect(complete).toHaveBeenCalledWith('COM3')
+    expect(calls.paths).toEqual([])
+    expect(calls.written).toEqual([])
+  })
+
+  it.each([
+    { platform: 'win32', environment: {}, args: ['__complete', 'COM3'] },
+    { platform: 'darwin', environment: capability, args: ['__complete', 'COM3'] },
+    { platform: 'win32', environment: capability, args: ['__complete'] },
+    { platform: 'win32', environment: capability, args: ['__complete', 'COM3', 'COM4'] },
+  ] as const)('refuses a completion without the Windows capability or exact arguments: %j', async ({ platform, environment, args }) => {
+    const complete = vi.fn(async () => {})
+    const { deps } = harness({ fetchScript: async () => platform === 'win32' ? '# flash-circle.ps1\n' : SCRIPT })
+    await expect(flashCommand([...args], { ...deps, platform, environment, complete })).rejects.toThrow(/completion/)
+    expect(complete).not.toHaveBeenCalled()
+  })
+
+  it('passes callback capability only to the Windows flasher child without changing the caller environment', async () => {
+    const environment = { KEEP: 'present' }
+    let child: NodeJS.ProcessEnv | undefined
+    const { deps } = harness({ fetchScript: async () => '# flash-circle.ps1\n', run: async (_path, _args, given) => { child = given; return 0 } })
+    await flashCommand([], { ...deps, platform: 'win32', environment })
+    expect(child?.KEEP).toBe('present')
+    expect(child?.HARNESS_FLASH_RECOVERY_NODE).toBe(process.execPath)
+    expect(JSON.parse(child!.HARNESS_FLASH_RECOVERY_ARGS!)).toEqual([...process.execArgv, process.argv[1]])
+    expect(environment).toEqual({ KEEP: 'present' })
   })
 })
