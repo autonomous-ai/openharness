@@ -800,7 +800,7 @@ add a kind there, not at the call site.
   eligible Mac ⌘[⇧]key defaults also have Ctrl[+Shift]+key aliases, such as Ctrl+T for New Tab,
   Ctrl+W for Close Tab, Ctrl+N for New Harness, and Ctrl+R for Reload. Aliases follow each command's
   existing keys and never replace another default in the same context. Mac chords containing
-  Alt get no alias (Ctrl+Alt can be AltGr). Arrows, Enter/numpad Enter, Backspace, Delete, Home,
+  Alt get no alias (Ctrl+Alt can be AltGr), nor do ⌘⌃ chords (⌘⌃S would take ⌘S's Ctrl+S). Arrows, Enter/numpad Enter, Backspace, Delete, Home,
   End, Tab, digits 1–9, comma, and A/C/V/X/Z/Y are excluded from alias generation; their existing
   bindings remain. For example, Ctrl+Shift+G stays Find Next, so Find Previous keeps Alt+Shift+G.
   In the terminal view, plain Ctrl+letter reaches the program except Ctrl+C with a selection

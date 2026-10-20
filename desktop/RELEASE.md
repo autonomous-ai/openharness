@@ -622,14 +622,18 @@ Windows manifest keys.
 
 ### First production release
 
-The first release with Windows follows the merge of the Windows PR, and each step needs the owner's go. The CLI comes
-first, because the app installs the CLI through `install.ps1`:
+The first release with Windows follows the merge of the Windows PR, and each step needs the owner's go. The CLI side
+comes first: the app installs the CLI through the production `install.ps1`, which 404s until step 5. Until then, do
+not cut a desktop release, because every desktop release now publishes the Windows zips and `harness-install.exe`.
 
-1. the Windows Node runtime manifest, through the Node workflow with the production `metadata_path`;
-2. `cli/scripts/promote-pty-payload.sh`, which uploads nothing and checks each payload file's SHA-256 and size;
-3. `bash cli/scripts/upload-install-ps1.sh --production`;
-4. the CLI release;
-5. `make release-desktop`, the first with the Windows keys;
-6. `bash cli/scripts/upload-install-ps1.sh --app --production`;
-7. the website release. Its Windows download answers 503 until the production manifest has
+1. the CLI release. macOS and Linux go to production; its Windows terminal host and CLI go to staging only;
+2. the staging E2E on Windows (docs/testing/windows-cli-e2e.md) with that release;
+3. the Windows Node runtime manifest, through the Node workflow with the production `metadata_path`;
+4. `cli/scripts/promote-pty-payload.sh <that release>`, which uploads nothing and checks each payload file's SHA-256
+   and size;
+5. `bash cli/scripts/upload-install-ps1.sh --production`. It refuses until production has this CLI's Windows terminal
+   host and a Windows Node runtime;
+6. `make release-desktop`, the first with the Windows keys;
+7. `bash cli/scripts/upload-install-ps1.sh --app --production`, which refuses until production has both Windows zips;
+8. the website release. Its Windows download answers 503 until the production manifest has
    `desktop-windows-installer`, so it goes last.

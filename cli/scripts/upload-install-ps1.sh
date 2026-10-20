@@ -5,7 +5,8 @@
 # copy then installs the staging build:
 #   irm https://cdn.autonomous.ai/harness/staging/cli/install.ps1 | iex
 # --production publishes harness/cli/install.ps1 exactly as it is. That is the owner's step, once the staging E2E
-# (docs/testing/windows-cli-e2e.md) has passed. --print writes what would be uploaded to stdout and uploads nothing.
+# (docs/testing/windows-cli-e2e.md) has passed, and it refuses until the production manifests carry Windows.
+# --print writes what would be uploaded to stdout and uploads nothing.
 # --app publishes the same script with its app-default line on, at <prefix>/desktop/install.ps1 (or
 # harness/desktop/install.ps1 with --production): irm https://cdn.autonomous.ai/harness/staging/desktop/install.ps1 | iex
 # Cache headers are upload-install-sh.sh's, for its reason: Cloudflare honours only no-cache/no-store here.
@@ -59,6 +60,31 @@ if [ "$PRINT" = 1 ]; then
 fi
 
 command -v gcloud >/dev/null 2>&1 || { echo "error: gcloud not found; install and authenticate the gcloud SDK" >&2; exit 1; }
+if [ "$MODE" = production ]; then
+  # The production install.ps1 installs whatever the production manifests name. Until they carry this CLI's Windows
+  # terminal host and a Windows Node runtime (and, for --app, both Windows zips), it would install a CLI built
+  # without Windows support, or fail halfway: so it goes up only after those steps (desktop/RELEASE.md).
+  read_manifest() { gcloud storage cat "gs://${GCS_BUCKET}/harness/$1/metadata.json" 2>/dev/null || echo '{}'; }
+  CLI_JSON="$(read_manifest cli)" NODE_JSON="$(read_manifest runtime)" PTY_JSON="$(read_manifest pty)" \
+  DESKTOP_JSON="$([ "$APP" = 1 ] && read_manifest desktop || echo '{}')" APP="$APP" node -e '
+    const read = (name) => { try { return JSON.parse(process.env[name]) } catch { return {} } }
+    const cli = read("CLI_JSON").cli?.version, node = read("NODE_JSON").node ?? {}, pty = read("PTY_JSON").pty ?? {}
+    const missing = []
+    if (!cli) missing.push("cli/metadata.json has no cli version")
+    for (const key of ["win32-x64", "win32-arm64"]) {
+      if (!node[key]) missing.push(`runtime/metadata.json has no ${key} Node runtime`)
+      if (pty[key]?.version !== cli) missing.push(`pty/metadata.json ${key} is ${pty[key]?.version ?? "absent"}, not the CLI ${cli}`)
+    }
+    if (process.env.APP === "1") {
+      const desktop = read("DESKTOP_JSON")
+      for (const key of ["desktop-windows-x64", "desktop-windows-arm64"]) if (!desktop[key]) missing.push(`desktop/metadata.json has no ${key}`)
+    }
+    if (missing.length) {
+      console.error(`error: production is not ready for Windows:\n  ${missing.join("\n  ")}`)
+      process.exit(1)
+    }
+  ' || exit 1
+fi
 echo ">> uploading install.ps1 ($MODE) -> gs://${GCS_BUCKET}/${GCS_PATH}"
 gcloud storage cp --cache-control="no-cache, no-store, must-revalidate" --content-type="text/plain; charset=utf-8" "$OUT" "gs://${GCS_BUCKET}/${GCS_PATH}"
 echo ">> published: https://cdn.autonomous.ai/${GCS_PATH}"

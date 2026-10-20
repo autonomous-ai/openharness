@@ -13,6 +13,13 @@ import {
   type PtyOpOf,
 } from './protocol.js'
 
+// Installed Windows hosts are replaced only by install.ps1, never by the CLI's self-update, so a CLI that raised the
+// protocol would reach Windows machines whose host cannot speak it, and no new pane would open. Bump it only once the
+// host is updated with the CLI (the PTY host rollover, not yet built).
+it('keeps the protocol that installed Windows hosts speak', () => {
+  expect(PTY_PROTOCOL).toBe(2)
+})
+
 describe('ptyHost protocol framing', () => {
   it('decodes frames split across chunks', () => {
     const frame = encodeFrame(FrameKind.Output, Buffer.from([0, 0, 0, 0, 0, 0, 0, 1, 104, 105]))

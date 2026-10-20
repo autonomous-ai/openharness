@@ -239,6 +239,10 @@ process names stay `node` (`processName.ts` already does that).
    folders are removed once no live process runs from them, retried later when removal fails.
 5. A Node runtime update installs a new `runtime\node-…` folder and pointer; the next master and core
    use it; the old folder is retired when nothing runs it.
+6. The terminal host payload (`runtime\pty\<version>`, `current-pty`) is not part of self-update: only
+   `install.ps1` writes it. Until the host is updated with the CLI (PTY host rollover, parked), a CLI release
+   must not raise `PTY_PROTOCOL`, and fixes to `harness-pty.exe`, `harness-launch.exe` or `harness-serial.exe`
+   reach a machine only when `install.ps1` runs again.
 
 The Mac's rules stay: a dev build is never replaced, updates only move forward, rejected versions are
 remembered. Agents survive because the pty host is independent of the daemon (A).

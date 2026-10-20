@@ -264,10 +264,8 @@ alternative the website names. It goes after the first release that carries the 
 - Specs: `desktopPlatform` (Windows is a build; the Mac and Linux pages list it), the `/desktop` page on Windows, and
   the `/download` page's list.
 
-**Order after the merge:**
-1. `make release-desktop`, the first with Windows;
-2. §2.5;
-3. the website release.
+**Order after the merge:** the CLI side first, then `make release-desktop`, the first with Windows, then §2.5, then the
+website release, as `desktop/RELEASE.md` ("First production release") lists step by step.
 
 The Windows route answers 503 until the manifest has the key, so the website goes last.
 

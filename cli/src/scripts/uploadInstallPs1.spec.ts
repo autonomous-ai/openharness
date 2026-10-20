@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
 
 const script = join(process.cwd(), 'scripts', 'upload-install-ps1.sh')
 const source = readFileSync(join(process.cwd(), 'scripts', 'install.ps1'), 'utf8')
@@ -61,5 +62,71 @@ describe.skipIf(process.platform === 'win32')('upload-install-ps1.sh', () => {
     expect(result.status, result.stderr).toBe(0)
     expect(changed(result.stdout)).toEqual([[APP_OFF, APP_ON]])
     expect(result.stderr).toContain('gs://s3-autonomous-upgrade-3/harness/desktop/install.ps1')
+  })
+
+  describe('a production upload', () => {
+    const dirs: string[] = []
+    afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+
+    /** A fake bucket behind a gcloud shim; returns a runner and the bucket objects written. */
+    function bucket(objects: Record<string, object>) {
+      const root = mkdtempSync(join(tmpdir(), 'harness-install-ps1-'))
+      dirs.push(root)
+      const store = join(root, 'bucket'), shim = join(root, 'shim')
+      mkdirSync(shim)
+      for (const [object, value] of Object.entries(objects)) {
+        mkdirSync(dirname(join(store, object)), { recursive: true })
+        writeFileSync(join(store, object), JSON.stringify(value))
+      }
+      writeFileSync(join(shim, 'gcloud'), `#!/bin/bash
+[ "$1" = storage ] || exit 9
+obj() { echo "$1" | sed -E 's#^gs://[^/]+/##'; }
+if [ "$2" = cat ]; then f='${store}'/"$(obj "$3")"; [ -f "$f" ] || { echo "One or more URLs matched no objects." >&2; exit 1; }; cat "$f"; exit 0; fi
+if [ "$2" = cp ]; then dst="\${@: -1}"; mkdir -p "$(dirname '${store}'/"$(obj "$dst")")"; cp "\${@: -2:1}" '${store}'/"$(obj "$dst")"; exit $?; fi
+exit 9
+`)
+      chmodSync(join(shim, 'gcloud'), 0o755)
+      return {
+        run: (args: string[]) => run(args, { PATH: `${shim}:${process.env.PATH}` }),
+        written: (object: string) => existsSync(join(store, object)),
+      }
+    }
+    const entries = (version: string) => ({ 'win32-x64': { version }, 'win32-arm64': { version } })
+    const live = (version = '1.2.3') => ({
+      'harness/cli/metadata.json': { cli: { version } },
+      'harness/runtime/metadata.json': { node: { 'darwin-arm64': {}, ...entries('22.23.2') } },
+      'harness/pty/metadata.json': { pty: entries(version) },
+    })
+
+    it('goes ahead once production has this CLI, its Node runtime and its terminal host for both Windows builds', () => {
+      const b = bucket(live())
+      const result = b.run(['--production'])
+      expect(result.status, result.stderr).toBe(0)
+      expect(b.written('harness/cli/install.ps1')).toBe(true)
+    })
+
+    it('refuses while production lacks a Windows Node runtime or terminal host, or has one from another CLI version', () => {
+      for (const objects of [
+        { ...live(), 'harness/runtime/metadata.json': { node: { 'darwin-arm64': {} } } },
+        { ...live(), 'harness/pty/metadata.json': { pty: { 'win32-x64': { version: '1.2.3' } } } },
+        { ...live(), 'harness/pty/metadata.json': { pty: entries('1.2.2') } },
+        { 'harness/runtime/metadata.json': live()['harness/runtime/metadata.json'], 'harness/pty/metadata.json': { pty: entries('1.2.3') } },
+      ]) {
+        const b = bucket(objects)
+        const result = b.run(['--production'])
+        expect(result.status).toBe(1)
+        expect(result.stderr).toContain('not ready for Windows')
+        expect(b.written('harness/cli/install.ps1')).toBe(false)
+      }
+    })
+
+    it('refuses the app copy until the production desktop manifest has both Windows zips', () => {
+      const without = bucket({ ...live(), 'harness/desktop/metadata.json': { 'desktop-darwin-arm64': {} } })
+      expect(without.run(['--app', '--production']).status).toBe(1)
+      expect(without.written('harness/desktop/install.ps1')).toBe(false)
+      const ready = bucket({ ...live(), 'harness/desktop/metadata.json': { 'desktop-windows-x64': {}, 'desktop-windows-arm64': {} } })
+      expect(ready.run(['--app', '--production']).status).toBe(0)
+      expect(ready.written('harness/desktop/install.ps1')).toBe(true)
+    })
   })
 })

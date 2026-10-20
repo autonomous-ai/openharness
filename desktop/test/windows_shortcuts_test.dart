@@ -432,7 +432,7 @@ void main() {
       'ctrl+o agent.open',
       'ctrl+p harnesses.list',
       'ctrl+r machines.refresh',
-      'ctrl+s app.store',
+      'ctrl+s super_tab.new',
       'ctrl+slash keyboard.help',
       'ctrl+t swarm.new',
       'ctrl+w swarm.close',

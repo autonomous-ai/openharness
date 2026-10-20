@@ -644,9 +644,12 @@ String? windowsCtrlAlias(SingleActivator mac) => windowsCtrlAliasForStroke(
 
 /// The same rule for commands whose Mac defaults are keymap strings.
 String? windowsCtrlAliasForStroke(KeyStroke? mac) {
+  // ⌘⌃ chords have no Ctrl twin: ⌘ and ⌃ both become Ctrl, so ⌘⌃S would
+  // take Ctrl+S from ⌘S.
   if (mac == null ||
       !mac.command ||
       mac.alt ||
+      mac.control ||
       const {
         'left',
         'right',
