@@ -221,10 +221,12 @@ String? superTabRepositoryUrl(String? remote) {
   final uri = Uri.tryParse(remote);
   if (uri == null ||
       uri.host.isEmpty ||
-      !['https', 'http', 'ssh', 'git'].contains(uri.scheme))
+      !['https', 'http', 'ssh', 'git'].contains(uri.scheme)) {
     return null;
+  }
   if (uri.userInfo.isNotEmpty &&
-      !(uri.scheme == 'ssh' && uri.userInfo == 'git'))
+      !(uri.scheme == 'ssh' && uri.userInfo == 'git')) {
     return null;
+  }
   return remote;
 }
