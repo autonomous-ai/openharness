@@ -41,6 +41,10 @@ class SuperTabClient {
   final _loaded = <String, SuperTabController>{};
   SuperTabController? peek(String id) => _loaded[id];
 
+  /// The tabs closed on this computer. Only discovery says which of them the
+  /// account still belongs to.
+  Set<String> get hiddenIds => Set.unmodifiable(_hidden);
+
   void bind(String? account) {
     if (_account == account) return;
     _account = account;
