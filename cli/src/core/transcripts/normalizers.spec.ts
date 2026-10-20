@@ -3,7 +3,7 @@ import { createSessionNormalizers, type SessionNormalizers } from './normalizers
 
 /** Every engine map in the table, in the order a turn's state is looked up. */
 const ENGINE_MAPS = [
-  'liveParsers', 'cursorNormalizers', 'opencodeReaders', 'kiloReaders', 'piNormalizers', 'museNormalizers',
+  'liveParsers', 'cursorNormalizers', 'opencodeReaders', 'kiloReaders', 'piNormalizers', 'ompNormalizers', 'museNormalizers',
   'ampNormalizers', 'grokNormalizers', 'agyNormalizers', 'copilotNormalizers', 'hermesReaders', 'devinReaders',
   'commandcodeNormalizers',
 ] as const

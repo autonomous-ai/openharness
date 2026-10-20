@@ -28,5 +28,5 @@ export type InlineRuntimeReader = InlineRuntimeReaderBase & (
   | { engine: 'commandcode'; target(sessionId: string, profileId: string): CommandcodeModelTarget | null }
   | { engine: 'opencode'; catalog(): Promise<OpencodeModelTarget[]> }
   | { engine: 'kilo'; catalog(): Promise<KiloModelTarget[]> }
-  | { engine: 'pi' | 'grok' | 'agy' | 'amp' | 'muse' | 'copilot' }
+  | { engine: 'pi' | 'grok' | 'agy' | 'amp' | 'muse' | 'copilot' | 'omp' }
 )

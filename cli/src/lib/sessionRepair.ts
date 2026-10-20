@@ -14,8 +14,9 @@
  *     unbound until its next turn, which is recoverable — mis-binding is not.
  */
 
-import { realpath, stat } from 'fs/promises'
+import { readdir, readlink, realpath, stat } from 'fs/promises'
 import { basename, dirname, isAbsolute, join, sep } from 'path'
+import { homedir } from 'node:os'
 import { env } from '../config/env.js'
 import type { SessionStoreContract } from '../engines/facets/sessionStore.js'
 import { identityBytes, identityEntries, identityFile, identityHead, identityLines, identityScanBudget, IdentityReadUnavailable } from '../engines/kit/identityScan.js'
@@ -158,6 +159,41 @@ async function readTranscriptHead(path: string, sidechain: string | null, reques
 async function readTranscriptMeta(path: string): Promise<TranscriptMeta | null> {
   const head = await readTranscriptHead(path, null)
   return head?.cwd ? { cwd: head.cwd } : null
+}
+
+async function ompSessionMeta(path: string): Promise<TranscriptMeta | null> {
+  if (basename(path) === '__advisor.jsonl') return null
+  return readTranscriptMeta(path)
+}
+
+/** omp's sessions root. A symlinked `~/.omp` is resolved: /proc names the file the process actually holds. */
+async function ompSessionsRoot(): Promise<string> {
+  const root = join(homedir(), '.omp', 'agent', 'sessions')
+  return realpath(root).catch(() => root)
+}
+
+/**
+ * omp's folder for a working directory: the path under the home directory (else the absolute path), its
+ * separators turned into `-`, with a leading `-`. `/home/me/src/app` → `-src-app`, `/tmp/x` → `-tmp-x`.
+ * Measured on 34 of 34 folders. Pi's `--<path>--` rule does not apply.
+ */
+export function ompSessionFolder(cwd: string, home: string = homedir()): string {
+  const inside = cwd === home || cwd.startsWith(`${home}${sep}`)
+  const path = inside ? cwd.slice(home.length).replace(/^[\\/]+/, '') : cwd.replace(/^[\\/]+/, '')
+  return `-${path.split(/[\\/]+/).filter(Boolean).join('-')}`
+}
+
+async function ompHeldSession(pid: number): Promise<RepairedSession | null> {
+  let links: string[]
+  try { links = await readdir(`/proc/${pid}/fd`) } catch { return null }
+  const root = `${await ompSessionsRoot()}/`
+  for (const fd of links) {
+    let target = ''
+    try { target = await readlink(`/proc/${pid}/fd/${fd}`) } catch { continue }
+    if (!target.endsWith('.jsonl') || target.includes('__advisor') || !target.startsWith(root)) continue
+    return { sessionId: idFromFile(target), transcriptPath: target }
+  }
+  return null
 }
 
 /**
@@ -382,6 +418,13 @@ export async function findLiveSession(
   const dirList = placeholders(dirs.length)
   // Native identity is eager. Optional interpretation cannot keep a process unbound.
   switch (engine) {
+    case 'omp': {
+      // The file the process holds is exact. Without a pid, only this directory's folder is scanned:
+      // the whole store holds every project's sessions and runs out of the scan's entry budget.
+      const held = opts?.pid ? await ompHeldSession(opts.pid) : null
+      if (held) return held
+      return fileEngineSession(join(await ompSessionsRoot(), ompSessionFolder(cwd)), cwd, startedAtMs, ompSessionMeta, opts)
+    }
     case 'pi':
       return fileEngineSession(join(env.PI_HOME, 'agent', 'sessions'), cwd, startedAtMs, readTranscriptMeta, opts)
     case 'commandcode':
