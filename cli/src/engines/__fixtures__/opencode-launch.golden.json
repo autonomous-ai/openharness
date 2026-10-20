@@ -294,6 +294,15 @@
         ]
       },
       {
+        "binary": "sqlite3",
+        "args": [
+          "-batch",
+          "-bail",
+          "<root>/fixture.db",
+          "PRAGMA busy_timeout = 5000;\nBEGIN IMMEDIATE;\nUPDATE message SET data = json_set(data, '$.model.providerID', 'fixture', '$.model.modelID', 'model#high') WHERE id = (SELECT id FROM message WHERE session_id = 'ses_fixture' AND json_extract(data, '$.role') = 'user' ORDER BY time_created DESC LIMIT 1);\nSELECT changes();\nUPDATE session SET model = json_object('id', 'model#high', 'providerID', 'fixture', 'variant', 'default') WHERE id = 'ses_fixture' AND EXISTS (SELECT 1 FROM message WHERE session_id = 'ses_fixture' AND json_extract(data, '$.role') = 'user');\nSELECT changes();\nCOMMIT;"
+        ]
+      },
+      {
         "control": [
           "clearEnv",
           [
@@ -1067,6 +1076,15 @@
         ]
       },
       {
+        "binary": "sqlite3",
+        "args": [
+          "-batch",
+          "-bail",
+          "<root>/fixture.db",
+          "PRAGMA busy_timeout = 5000;\nBEGIN IMMEDIATE;\nUPDATE message SET data = json_set(data, '$.model.providerID', 'fixture', '$.model.modelID', 'model#high') WHERE id = (SELECT id FROM message WHERE session_id = 'ses_fixture' AND json_extract(data, '$.role') = 'user' ORDER BY time_created DESC LIMIT 1);\nSELECT changes();\nUPDATE session SET model = json_object('id', 'model#high', 'providerID', 'fixture', 'variant', 'default') WHERE id = 'ses_fixture' AND EXISTS (SELECT 1 FROM message WHERE session_id = 'ses_fixture' AND json_extract(data, '$.role') = 'user');\nSELECT changes();\nCOMMIT;"
+        ]
+      },
+      {
         "control": [
           "clearEnv",
           [
@@ -1455,6 +1473,15 @@
       {
         "control": [
           "holdRoute"
+        ]
+      },
+      {
+        "binary": "sqlite3",
+        "args": [
+          "-batch",
+          "-bail",
+          "<root>/fixture.db",
+          "PRAGMA busy_timeout = 5000;\nBEGIN IMMEDIATE;\nUPDATE message SET data = json_set(data, '$.model.providerID', 'fixture', '$.model.modelID', 'model#high') WHERE id = (SELECT id FROM message WHERE session_id = 'ses_fixture' AND json_extract(data, '$.role') = 'user' ORDER BY time_created DESC LIMIT 1);\nSELECT changes();\nUPDATE session SET model = json_object('id', 'model#high', 'providerID', 'fixture', 'variant', 'default') WHERE id = 'ses_fixture' AND EXISTS (SELECT 1 FROM message WHERE session_id = 'ses_fixture' AND json_extract(data, '$.role') = 'user');\nSELECT changes();\nCOMMIT;"
         ]
       },
       {

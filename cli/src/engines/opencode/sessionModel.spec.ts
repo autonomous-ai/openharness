@@ -151,6 +151,24 @@ d('setOpencodeSessionModel (sqlite3 CLI)', () => {
     await expect(setOpencodeSessionModel(db, "ses_x'; --", NEW)).resolves.toMatchObject({ ok: false, code: 'OPENCODE_SESSION_NOT_FOUND' })
   })
 
+  // node:sqlite would wait out busy_timeout (5 s) on the daemon's own thread while opencode holds the write lock;
+  // the CLI waits in its own process, so the daemon keeps serving and the write lands once the lock is let go.
+  it('prefers the sqlite3 CLI, so opencode holding the write lock does not stop the caller\'s thread', async () => {
+    schema(db)
+    seed(db)
+    const opencode = new (sqliteBuiltin.builtinSqlite()!)(db, { readOnly: false })
+    opencode.exec('BEGIN IMMEDIATE')
+    const started = Date.now()
+    const write = setOpencodeSessionModel(db, SID, NEW)
+    const returnedAfter = Date.now() - started
+    await new Promise((settle) => setTimeout(settle, 200))
+    opencode.exec('COMMIT')
+    opencode.close()
+    await expect(write).resolves.toEqual({ ok: true })
+    expect(returnedAfter).toBeLessThan(1000)
+    expect(messageData(db, 'u2')).toEqual({ role: 'user', model: NEW, text: 'second' })
+  }, 15_000)
+
   // Windows ships no sqlite3 CLI; the installers' Node has node:sqlite, which writes the same transaction.
   it('writes through node:sqlite when the sqlite3 CLI is not on PATH', async () => {
     expect(sqliteBuiltin.builtinSqlite()).not.toBeNull()

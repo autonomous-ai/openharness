@@ -152,7 +152,8 @@ export function createAgentRetargeter({
     if (!current()) return changed()
     if (!valid.ok) return { ok: false, error: valid.error, detail: valid.detail }
     // A resumed opencode session takes its model from its own rows in opencode.db, not from `-m`
-    // (see below), and those rows are written through the `sqlite3` CLI. Without it the respawn
+    // (see below), and those rows are written through the `sqlite3` CLI, or through `node:sqlite` where no CLI
+    // is installed (Windows; `kit/nativeSessionModel.ts`). Without either the respawn
     // would land the right provider, key and argv on a pane that then answers on the OLD model —
     // the failure this handler exists to refuse — so it is refused here, before the pane is touched.
     // Only when the launch will name a model: a grid launch always does; a move home does only when

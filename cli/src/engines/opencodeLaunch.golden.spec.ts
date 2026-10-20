@@ -3,7 +3,6 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmS
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { builtinSqlite } from '../lib/sqliteBuiltin.js'
 import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { AgentEngine } from './types.js'
@@ -82,12 +81,6 @@ else { console.error('Unexpected fixture command'); process.exitCode=1; }
 require('node:fs').appendFileSync(${JSON.stringify(calls)}, JSON.stringify({binary:'sqlite3',args:process.argv.slice(2)})+'\\n');
 console.log('5000\\n1\\n1');
 `, { mode: 0o755 })
-  // The store a model rewrite writes when this Node has node:sqlite (Windows ships no sqlite3 CLI): one session
-  // with one user message, in the shape opencode 1.18.x keeps.
-  const store = new (builtinSqlite()!)(join(root, 'fixture.db'), { readOnly: false })
-  store.exec("CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT, model TEXT); CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT);"
-    + " INSERT INTO session VALUES ('ses_fixture', 'fixture', NULL); INSERT INTO message VALUES ('msg_fixture', 'ses_fixture', 1, '{\"role\":\"user\"}');")
-  store.close()
   vi.resetModules()
 })
 afterAll(() => {
