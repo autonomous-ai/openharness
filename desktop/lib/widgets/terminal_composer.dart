@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
+import '../shortcuts/app_keymap.dart';
 import '../theme/app_theme.dart';
 import '../terminal/terminal_font_store.dart';
 import '../terminal/terminal_session.dart';
@@ -219,70 +220,72 @@ class _TerminalComposerState extends State<TerminalComposer> {
                   ),
                 ),
                 Expanded(
-                  child: Shortcuts(
-                    // Terminal-style line editing: readline's Ctrl+W/Ctrl+U are missing from
-                    // Flutter's own default text-editing shortcuts on every platform, unlike
-                    // Option/Cmd+Backspace and Ctrl+A/E, which the field already gets for free.
-                    shortcuts: const <ShortcutActivator, Intent>{
-                      SingleActivator(LogicalKeyboardKey.keyW, control: true):
-                          DeleteToNextWordBoundaryIntent(forward: false),
-                      SingleActivator(LogicalKeyboardKey.keyU, control: true):
-                          DeleteToLineBreakIntent(forward: false),
-                    },
-                    child: TextField(
-                      controller: _controller,
-                      focusNode: widget.focusNode,
-                      enabled: enabled,
-                      minLines: 1,
-                      maxLines: 6,
-                      // The message is going to a terminal, so it is shown in the terminal's own face:
-                      // what is typed here should look like what will land over there.
-                      style: terminalStyle
-                          .toTextStyle(color: grid.AppPalette.textPrimary)
-                          .copyWith(letterSpacing: 0),
-                      textInputAction: TextInputAction.newline,
-                      keyboardType: TextInputType.multiline,
-                      decoration: InputDecoration(
-                        isDense: true,
-                        filled: false,
-                        // ⚠️ THE BOX, unpinned from the theme — and `withNoTextScaling` above does
-                        // NOT reach it. `inputDecorationTheme` gives every field a minimum of
-                        // `AppControl.heightFieldScaled` and a padding multiplied by
-                        // `AppFont.uiScale` — a plain static, not a MediaQuery, so no scaling scope
-                        // can hold it back. Left inherited, raising the UI size grows this field
-                        // (36 → 48.9 at the top of the range) past the surface's own 48, which
-                        // shrinks the Expanded holding the terminal, which drops a row, which sends a
-                        // `terminal_resize` to the remote agent. The composer only appears for REMOTE
-                        // machines, so that is the only case where it would ever have bitten.
-                        //
-                        // The surface above owns this box's height now, so the field asks for no
-                        // minimum of its own — and `contentPadding` below is stated rather than
-                        // inherited for the same reason. Measured by
-                        // `terminal_ui_scale_isolation_test.dart`.
-                        constraints: const BoxConstraints(minHeight: 0),
-                        hintText: enabled
-                            ? 'Message harness…  ·  ↵ send'
-                            : 'Connecting to terminal…',
-                        // InputDecorator merges this with the app-wide field hint
-                        // style. Set tracking explicitly so the UI-control font's
-                        // letter spacing cannot leak into terminal typography.
-                        hintStyle: terminalStyle
-                            .toTextStyle(
-                              color: enabled
-                                  ? grid.AppPalette.textSecondary
-                                  : grid.AppPalette.textFaint,
-                            )
+                  child: KeymapComposer(
+                    child: Shortcuts(
+                      // Terminal-style line editing: readline's Ctrl+W/Ctrl+U are missing from
+                      // Flutter's own default text-editing shortcuts on every platform, unlike
+                      // Option/Cmd+Backspace and Ctrl+A/E, which the field already gets for free.
+                      shortcuts: const <ShortcutActivator, Intent>{
+                        SingleActivator(LogicalKeyboardKey.keyW, control: true):
+                            DeleteToNextWordBoundaryIntent(forward: false),
+                        SingleActivator(LogicalKeyboardKey.keyU, control: true):
+                            DeleteToLineBreakIntent(forward: false),
+                      },
+                      child: TextField(
+                        controller: _controller,
+                        focusNode: widget.focusNode,
+                        enabled: enabled,
+                        minLines: 1,
+                        maxLines: 6,
+                        // The message is going to a terminal, so it is shown in the terminal's own face:
+                        // what is typed here should look like what will land over there.
+                        style: terminalStyle
+                            .toTextStyle(color: grid.AppPalette.textPrimary)
                             .copyWith(letterSpacing: 0),
-                        contentPadding: const EdgeInsets.fromLTRB(
-                          0,
-                          12,
-                          14,
-                          12,
+                        textInputAction: TextInputAction.newline,
+                        keyboardType: TextInputType.multiline,
+                        decoration: InputDecoration(
+                          isDense: true,
+                          filled: false,
+                          // ⚠️ THE BOX, unpinned from the theme — and `withNoTextScaling` above does
+                          // NOT reach it. `inputDecorationTheme` gives every field a minimum of
+                          // `AppControl.heightFieldScaled` and a padding multiplied by
+                          // `AppFont.uiScale` — a plain static, not a MediaQuery, so no scaling scope
+                          // can hold it back. Left inherited, raising the UI size grows this field
+                          // (36 → 48.9 at the top of the range) past the surface's own 48, which
+                          // shrinks the Expanded holding the terminal, which drops a row, which sends a
+                          // `terminal_resize` to the remote agent. The composer only appears for REMOTE
+                          // machines, so that is the only case where it would ever have bitten.
+                          //
+                          // The surface above owns this box's height now, so the field asks for no
+                          // minimum of its own — and `contentPadding` below is stated rather than
+                          // inherited for the same reason. Measured by
+                          // `terminal_ui_scale_isolation_test.dart`.
+                          constraints: const BoxConstraints(minHeight: 0),
+                          hintText: enabled
+                              ? 'Message harness…  ·  ↵ send'
+                              : 'Connecting to terminal…',
+                          // InputDecorator merges this with the app-wide field hint
+                          // style. Set tracking explicitly so the UI-control font's
+                          // letter spacing cannot leak into terminal typography.
+                          hintStyle: terminalStyle
+                              .toTextStyle(
+                                color: enabled
+                                    ? grid.AppPalette.textSecondary
+                                    : grid.AppPalette.textFaint,
+                              )
+                              .copyWith(letterSpacing: 0),
+                          contentPadding: const EdgeInsets.fromLTRB(
+                            0,
+                            12,
+                            14,
+                            12,
+                          ),
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          disabledBorder: InputBorder.none,
                         ),
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                        disabledBorder: InputBorder.none,
                       ),
                     ),
                   ),

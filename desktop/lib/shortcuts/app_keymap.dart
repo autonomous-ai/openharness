@@ -161,6 +161,18 @@ class KeymapRegion extends InheritedWidget {
   bool updateShouldNotify(KeymapRegion oldWidget) => false;
 }
 
+/// Marks the terminal composer, whose Ctrl+W/U edit its own line.
+/// Other text fields in a terminal region keep the ordinary app aliases.
+class KeymapComposer extends InheritedWidget {
+  const KeymapComposer({super.key, required super.child});
+
+  static bool contains(BuildContext context) =>
+      context.getInheritedWidgetOfExactType<KeymapComposer>() != null;
+
+  @override
+  bool updateShouldNotify(KeymapComposer oldWidget) => false;
+}
+
 String? effectiveShortcutHint(BuildContext context, ShortcutAction action) {
   final command = harnessCommands
       .where((command) => command.action == action)

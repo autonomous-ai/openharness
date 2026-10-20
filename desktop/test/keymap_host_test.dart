@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,6 +9,9 @@ import 'package:harness/shortcuts/keymap.dart';
 import 'package:harness/shortcuts/keymap_commands.dart';
 import 'package:harness/shortcuts/keymap_host.dart';
 import 'package:harness/shortcuts/keymap_keyboard.dart';
+import 'package:harness/terminal/terminal_binary.dart';
+import 'package:harness/terminal/terminal_session.dart';
+import 'package:harness/widgets/terminal_composer.dart';
 
 class MemoryKeymap extends AppKeymap {
   ResolvedKeymap map = harnessDefaultKeymap;
@@ -46,7 +51,188 @@ Future<void> key(
   await tester.pump();
 }
 
+Future<TerminalSession> liveComposerSession() async {
+  const streamId = '00112233-4455-6677-8899-aabbccddeeff';
+  Object? requestId;
+  final session = TerminalSession(
+    machineId: 'fixture-machine',
+    agentId: 'fixture-agent',
+    agentName: 'Fixture',
+    engineId: 'claude',
+    client: const TerminalClientDescriptor(kind: 'desktop', name: 'Fixture'),
+    send: (type, payload) async {
+      if (type == 'terminal_open') requestId = payload['requestId'];
+      return true;
+    },
+    sendBinary: (_) async => true,
+  );
+  await session.open(initialCols: 80, initialRows: 24);
+  await session.handleFrame('terminal_ready', {
+    'requestId': requestId,
+    'protocolVersion': 3,
+    'streamId': streamId,
+    'agentId': 'fixture-agent',
+  });
+  await session.handleBinary(
+    TerminalBinaryFrame(
+      kind: TerminalBinaryKind.keyframe,
+      streamId: streamId,
+      seq: 0,
+      bytes: Uint8List.fromList(utf8.encode(r'$ ')),
+      compressed: false,
+      cols: 80,
+      rows: 24,
+    ),
+  );
+  return session;
+}
+
+Widget terminalKeymapHost(
+  AppKeymap map,
+  Map<String, VoidCallback> actions,
+  Widget child,
+) => MaterialApp(
+  home: KeymapProvider(
+    keymap: map,
+    child: KeymapHost(
+      keymap: map,
+      enabled: () => true,
+      actions: actions,
+      child: KeymapRegion(
+        contextKind: KeymapContext.terminal,
+        child: Material(child: child),
+      ),
+    ),
+  ),
+);
+
 void main() {
+  group('native Windows terminal aliases', () {
+    testWidgets('Ctrl+T in the terminal view reaches the terminal', (
+      tester,
+    ) async {
+      final map = MemoryKeymap();
+      final focus = FocusNode();
+      final delivered = <String>[];
+      var opened = 0;
+      await tester.pumpWidget(
+        terminalKeymapHost(
+          map,
+          {'swarm.new': () => opened++},
+          Focus(
+            focusNode: focus,
+            autofocus: true,
+            onKeyEvent: (_, event) {
+              if (event is KeyDownEvent) {
+                final stroke = keyStrokeForEvent(event);
+                if (stroke != null) delivered.add(stroke.toString());
+              }
+              return KeyEventResult.handled;
+            },
+            child: const SizedBox(width: 100, height: 100),
+          ),
+        ),
+      );
+      await tester.pump();
+      await key(tester, LogicalKeyboardKey.keyT, ctrl: true);
+      expect(opened, 0);
+      expect(delivered, ['ctrl+t']);
+      await key(tester, LogicalKeyboardKey.keyT, ctrl: true, shift: true);
+      expect(opened, 1);
+      await tester.pumpWidget(const SizedBox());
+      focus.dispose();
+      map.dispose();
+    }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
+
+    testWidgets(
+      'Ctrl+T in the terminal composer opens a tab, Ctrl+W and Ctrl+U edit the line',
+      (tester) async {
+        final map = MemoryKeymap();
+        final focus = FocusNode();
+        final session = await liveComposerSession();
+        var opened = 0, closed = 0;
+        await tester.pumpWidget(
+          terminalKeymapHost(map, {
+            'swarm.new': () => opened++,
+            'swarm.close': () => closed++,
+          }, TerminalComposer(session: session, focusNode: focus)),
+        );
+        focus.requestFocus();
+        await tester.pump();
+        await tester.enterText(find.byType(TextField), 'hello world');
+        await key(tester, LogicalKeyboardKey.keyT, ctrl: true);
+        expect(opened, 1);
+        await key(tester, LogicalKeyboardKey.keyW, ctrl: true);
+        expect(closed, 0);
+        final controller = tester
+            .widget<TextField>(find.byType(TextField))
+            .controller!;
+        expect(controller.text, 'hello ');
+        await key(tester, LogicalKeyboardKey.keyU, ctrl: true);
+        expect(controller.text, isEmpty);
+        controller.value = const TextEditingValue(
+          text: 'draft',
+          selection: TextSelection.collapsed(offset: 5),
+          composing: TextRange(start: 0, end: 5),
+        );
+        await key(tester, LogicalKeyboardKey.keyT, ctrl: true);
+        expect(opened, 1);
+        controller.clearComposing();
+        await tester.pumpWidget(const SizedBox());
+        session.dispose();
+        focus.dispose();
+        map.dispose();
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+    );
+
+    testWidgets(
+      'find fields inside a terminal region keep Ctrl+W app aliases',
+      (tester) async {
+        final map = MemoryKeymap();
+        final focus = FocusNode(debugLabel: 'terminal composer');
+        var opened = 0, closed = 0;
+        await tester.pumpWidget(
+          terminalKeymapHost(map, {
+            'swarm.new': () => opened++,
+            'swarm.close': () => closed++,
+          }, TextField(focusNode: focus, autofocus: true)),
+        );
+        await tester.pump();
+        await key(tester, LogicalKeyboardKey.keyT, ctrl: true);
+        await key(tester, LogicalKeyboardKey.keyW, ctrl: true);
+        expect(opened, 1);
+        expect(closed, 1);
+        await tester.pumpWidget(const SizedBox());
+        focus.dispose();
+        map.dispose();
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+    );
+
+    testWidgets('a user row on Ctrl+T still runs in the terminal view', (
+      tester,
+    ) async {
+      final map = MemoryKeymap();
+      map.apply('{"bindings":[{"keys":"ctrl+t","command":"pane.zoom"}]}');
+      final focus = FocusNode();
+      var zoomed = 0, opened = 0;
+      await tester.pumpWidget(
+        terminalKeymapHost(map, {
+          'swarm.new': () => opened++,
+          'pane.zoom': () => zoomed++,
+        }, Focus(focusNode: focus, autofocus: true, child: const SizedBox())),
+      );
+      await tester.pump();
+      await key(tester, LogicalKeyboardKey.keyT, ctrl: true);
+      expect(zoomed, 1);
+      expect(opened, 0);
+      await tester.pumpWidget(const SizedBox());
+      focus.dispose();
+      map.dispose();
+    }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
+  });
+
   test('saved close shortcuts override the pane and tab defaults', () {
     final map = MemoryKeymap();
     addTearDown(map.dispose);
