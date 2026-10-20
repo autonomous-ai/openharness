@@ -618,6 +618,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               child: Row(
                 children: [
                   Flexible(
+                    flex: 3,
                     child: Text(
                       name,
                       maxLines: 1,
@@ -627,13 +628,15 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   ),
                   if (person != null) ...[
                     const SizedBox(width: 8),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 64),
-                      child: Text(
-                        superTabPersonName(person.email),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: DesktopChrome.metadata(),
+                    Flexible(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 64),
+                        child: Text(
+                          superTabPersonName(person.email),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: DesktopChrome.metadata(),
+                        ),
                       ),
                     ),
                   ],
