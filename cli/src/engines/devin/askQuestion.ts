@@ -35,6 +35,11 @@ const TITLED_RULE_RE = /^\s*─{2,}\s*[^─\s][^─]*─{2,}\s*$/
 const PLAIN_RULE_RE = /^\s*─{2,}\s*$/
 /** Marker, optional number, label. The description lines below a row carry neither, so they never match. */
 const ROW_RE = /^\s*([❭❯›>·□■☑✔])\s+(?:(\d+)\s+)?(\S.*?)\s*$/
+/** A numbered row with no marker. From devin 3000.11 a single-select or approval row carries a marker only
+ *  under the cursor (`❭ 1 Yes` over `  2 No`), so the rows away from it are bare. A bare line is a row only
+ *  when its number is the one the rows so far lead to: a description that happens to start with a number
+ *  is not the next option. */
+const BARE_ROW_RE = /^\s*(\d+)\s+(\S.*?)\s*$/
 const OTHER_RE = /^other\s*\(type your own\)$/i
 const CHECKED = new Set(['■', '☑', '✔'])
 
@@ -71,16 +76,21 @@ export function locateDevinQuestion(capture: string): FoundDialog | null {
   const rows: QuestionRow[] = []
   let question = ''
   let multi = false
+  let lastNumber = 0
   for (let i = top + 1; i < footer; i++) {
     const line = lines[i]
     if (PLAIN_RULE_RE.test(line)) break
+    // Only once the question is read: before it, a bare number starts the question, not a row.
+    const bare = question ? BARE_ROW_RE.exec(line) : null
     const row = ROW_RE.exec(line)
+      ?? (bare && Number(bare[1]) === lastNumber + 1 ? [line, '', bare[1], bare[2]] as const : null)
     if (!row) {
       // The first non-row line under the title is the question itself; anything later is a description.
       if (!rows.length && !question && line.trim()) question = line.trim()
       continue
     }
     const [, marker, number, label] = row
+    if (number) lastNumber = Number(number)
     if (CHECKED.has(marker) || marker === '□') multi = true
     // Unnumbered rows cannot be answered by keystroke, and "Other" opens a text editor either way.
     if (!number || OTHER_RE.test(label)) continue
@@ -129,6 +139,7 @@ const PERMISSION_FOOTER_RE = /↵\s*confirm/i
 const COMMAND_RE = /^\s*[└├│]?\s*\$\s*(\S.*?)\s*$/
 const APPROVE_RE = /^(yes|allow|approve|accept|proceed|run|continue)\b/i
 const REJECT_RE = /^(no|reject|deny|decline|cancel|don'?t|stop)\b/i
+const BYPASS_RE = /\bbypass\b/i
 
 export function parseDevinPermissionPane(capture: string): PaneView {
   return locateDevinPermission(capture)?.view ?? null
@@ -146,7 +157,10 @@ export function locateDevinPermission(capture: string): FoundDialog | null {
   let start = -1
   const floor = earlierDialogEnd(lines, footer, 20)
   for (let i = footer - 1; i > floor && footer - i <= 20; i--) {
+    // Read upward, so a bare row is the one numbered just below the last row read.
+    const bare = BARE_ROW_RE.exec(lines[i])
     const match = ROW_RE.exec(lines[i])
+      ?? (bare && (!rows.length || Number(bare[1]) === Number(rows[0].number) - 1) ? [lines[i], '', bare[1], bare[2]] as const : null)
     if (!match) continue
     const [, , number, label] = match
     if (!number) continue
@@ -155,7 +169,8 @@ export function locateDevinPermission(capture: string): FoundDialog | null {
   }
   if (start < 0 || rows.length < 2) return null
 
-  const answerable = rows.filter((row) => APPROVE_RE.test(row.label) || REJECT_RE.test(row.label))
+  // `Yes, switch to bypass mode` (3000.11) approves this command AND every later one: never a tap away.
+  const answerable = rows.filter((row) => !BYPASS_RE.test(row.label) && (APPROVE_RE.test(row.label) || REJECT_RE.test(row.label)))
   if (!answerable.length || !answerable.some((row) => REJECT_RE.test(row.label))) return null
 
   // What is being approved: the `$ …` line above the rows. Best-effort, like every other engine's — the

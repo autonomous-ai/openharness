@@ -16,6 +16,7 @@ import '../core/launch_setup.dart';
 import '../core/dsh_catalog.dart';
 import '../core/harness_catalog.dart';
 import '../core/first_task.dart';
+import '../core/guest_folders.dart';
 import '../core/models.dart';
 import '../usage/models_menu_controller.dart';
 import '../core/fuzzy_match.dart';
@@ -547,27 +548,32 @@ class NewHarnessController extends ChangeNotifier {
           .then((_) => _adoptAccountAgent()),
     );
     final initialMachine = _machineId;
-    unawaited(
-      app.probeDsh(initialMachine, force: true).then((_) {
-        // Store and remembered choices can open before the machine's catalog
-        // arrives. Resolve their preferred engine once compatibility is known.
-        // An inherited session, draft, or explicit user choice keeps its engine.
-        if (_disposed ||
-            locked ||
-            _selectionTouched ||
-            draft != null ||
-            (engine != null && !isHarnessId(engine)) ||
-            _machineId != initialMachine ||
-            _harnessId == null) {
-          return;
-        }
-        _engine = _initialEngine(null);
-        _restorePermissionMode();
-        _refresh();
-      }),
-    );
-    unawaited(_ensureHome(_machineId));
-    unawaited(_refreshGeneratedProject());
+    // A guest is listed no harnesses or folders there (asGuest): nothing to ask.
+    if (!asGuest) {
+      unawaited(
+        app.probeDsh(initialMachine, force: true).then((_) {
+          // Store and remembered choices can open before the machine's catalog
+          // arrives. Resolve their preferred engine once compatibility is known.
+          // An inherited session, draft, or explicit user choice keeps its engine.
+          if (_disposed ||
+              locked ||
+              _selectionTouched ||
+              draft != null ||
+              (engine != null && !isHarnessId(engine)) ||
+              _machineId != initialMachine ||
+              _harnessId == null) {
+            return;
+          }
+          _engine = _initialEngine(null);
+          _restorePermissionMode();
+          _refresh();
+        }),
+      );
+      unawaited(_ensureHome(_machineId));
+      unawaited(_refreshGeneratedProject());
+    } else {
+      _startAsGuest();
+    }
   }
 
   final AppNotifier app;
@@ -636,7 +642,58 @@ class NewHarnessController extends ChangeNotifier {
           _machine?.dsh.entries ?? const <DshEntry>[],
           _harnessId!,
         );
-  List<String> get compatibleEngines => _harnessId == null
+
+  /// A machine shared with this account: this person is a guest there, with a space of
+  /// their own (docs/plans/2026-10-19-guest-machine-sharing-plan.md). Its daemon starts
+  /// Claude Code or Codex in that space, on its owner's plans, and lists a guest no
+  /// folders, harnesses, models or profiles, so none are asked for or offered.
+  bool get asGuest => _machine?.machine.isSharedMachine == true;
+
+  /// Where a guest may start there (asGuest): its workspace and the folders the owner shares, as the
+  /// machine last said; null until it has.
+  GuestFolders? _guestFolders;
+
+  /// A guest starts in its workspace until it picks a folder the owner shares.
+  void _startAsGuest() {
+    _project = const NewHarnessProject.fresh();
+    // An agent a guest cannot start there (OpenCode, a Store harness) gives way to Claude Code.
+    if (_harnessId != null || !compatibleEngines.contains(_engine)) {
+      _harnessId = null;
+      _engine = compatibleEngines.first;
+      _restorePermissionMode();
+    }
+    _guestFolders = null;
+    final id = _machineId;
+    unawaited(
+      app.guestFolders(id).then((folders) {
+        if (_disposed || id != _machineId) return;
+        _guestFolders = folders;
+        _refresh();
+      }),
+    );
+  }
+
+  /// A guest's Project: its workspace, or one of the folders the owner shares.
+  List<NewHarnessOption> _guestPlaces() => [
+    NewHarnessOption(
+      id: guestWorkspaceId,
+      title: 'My workspace',
+      detail: 'Your own folder on $machineLabel',
+      project: const NewHarnessProject.fresh(),
+    ),
+    for (final folder in _guestFolders?.folders ?? const <GuestFolder>[])
+      NewHarnessOption(
+        id: '$guestFolderId${folder.path}',
+        title: p.basename(folder.path),
+        detail:
+            '${folder.path} · ${folder.write ? 'you can edit it' : 'read only'}',
+        project: NewHarnessProject.folder(folder.path, exact: true),
+      ),
+  ];
+
+  List<String> get compatibleEngines => asGuest
+      ? const ['claude', 'codex']
+      : _harnessId == null
       ? [
           for (final engine in allEngines) engine.id,
           for (final agent in cloudAgents) agent.id,
@@ -952,7 +1009,8 @@ class NewHarnessController extends ChangeNotifier {
     branchRefreshError = null;
     _branchesCheckedAt = null;
     _gitFuture = null;
-    if (key.$2 != null && !key.$3 && !checking) {
+    // A guest's harness starts in its own space: no folder of theirs to read Git in (asGuest).
+    if (key.$2 != null && !key.$3 && !checking && !asGuest) {
       _gitFuture = _readGitProject(key);
     }
   }
@@ -1077,7 +1135,8 @@ class NewHarnessController extends ChangeNotifier {
   }
 
   Future<void> refreshModels() async {
-    if (_disposed) return;
+    // A guest's harness runs on its owner's plans: no grid or saved API to pick.
+    if (_disposed || asGuest) return;
     final request = ++_modelRequest;
     final machine = _machineId;
     _loadingModels = true;
@@ -1319,8 +1378,9 @@ class NewHarnessController extends ChangeNotifier {
       _modes.any((mode) => mode.id == _mode) ? _mode : kDefaultPermissionMode;
   String get modeLabel =>
       _modes.where((m) => m.id == mode).firstOrNull?.label ?? mode;
-  bool get usesProfile => _base == 'codex' && _model == null;
-  bool get hasProfile => _baseOf(_settingsEngine) == 'codex';
+  // A guest's Codex runs on its owner's subscription, through the relay: no CODEX_HOME of its own to pick (asGuest).
+  bool get usesProfile => !asGuest && _base == 'codex' && _model == null;
+  bool get hasProfile => !asGuest && _baseOf(_settingsEngine) == 'codex';
   bool get supportsProfiles =>
       hasProfile && _machine?.engines['codex']?.supportsCodexHome == true;
   String? get profileHelp => supportsProfiles
@@ -1378,11 +1438,13 @@ class NewHarnessController extends ChangeNotifier {
   List<NewHarnessField> get fields => [
     NewHarnessField.harness,
     NewHarnessField.agent,
-    if (!isTerminal) NewHarnessField.model,
+    if (!isTerminal && !asGuest) NewHarnessField.model,
     NewHarnessField.machine,
-    NewHarnessField.projectMenu,
+    // A guest picks only among the folders the owner shares, when there are any.
+    if (!asGuest || (_guestFolders?.folders.isNotEmpty ?? false))
+      NewHarnessField.projectMenu,
     if (advancedOpen) ...[
-      if (isGitProject) NewHarnessField.branch,
+      if (isGitProject && !asGuest) NewHarnessField.branch,
       if (hasModes) NewHarnessField.mode,
       if (usesProfile) NewHarnessField.profile,
     ],
@@ -1460,6 +1522,7 @@ class NewHarnessController extends ChangeNotifier {
   }
 
   bool get needsProject =>
+      !asGuest &&
       !isTerminal &&
       !isCloud &&
       _project.folder == null &&
@@ -1504,6 +1567,7 @@ class NewHarnessController extends ChangeNotifier {
     final engineState = machine.engines[_engine];
     if (!compatibleEngines.contains(_engine) ||
         (_rememberedAgent &&
+            !asGuest &&
             !_selectionTouched &&
             engineState?.installed == false &&
             // The product default installs on Create; one that cannot be
@@ -1571,6 +1635,7 @@ class NewHarnessController extends ChangeNotifier {
 
   String get projectLabel {
     final project = _project;
+    if (asGuest) return project.folder ?? 'My workspace';
     if (project.folder case final folder?) return tildePath(folder);
     if (project.repository case final repo?) return '~/harnesses/${repo.name}';
     if (isTerminal) return '~';
@@ -1877,6 +1942,8 @@ class NewHarnessController extends ChangeNotifier {
   static const newProjectId = 'project:name';
   static const createBranchId = 'branch:create:';
   static const existingProjectId = 'project:existing';
+  static const guestWorkspaceId = 'project:guest-workspace';
+  static const guestFolderId = 'project:guest-folder:';
   static const repositoryId = 'project:repository';
   static const storeId = 'agent:store';
   static const codingId = 'harness:coding';
@@ -1941,35 +2008,37 @@ class NewHarnessController extends ChangeNotifier {
     }
   }
 
-  List<NewHarnessOption> _projectMenu() => [
-    if (!_desktopChoices)
-      const NewHarnessOption(
-        id: repositoryId,
-        synthetic: true,
-        title: 'Clone Repository',
-        detail: 'Paste a GitHub repository URL',
-      ),
-    const NewHarnessOption(
-      id: existingProjectId,
-      synthetic: true,
-      title: 'Open Folder',
-      detail: 'Enter a path or browse folders',
-    ),
-    const NewHarnessOption(
-      id: newProjectId,
-      synthetic: true,
-      title: 'New Folder',
-      detail: 'Name a new folder',
-    ),
-    if (_desktopChoices)
-      const NewHarnessOption(
-        id: repositoryId,
-        synthetic: true,
-        title: 'GitHub',
-        detail: 'Clone a GitHub repository',
-      ),
-    ..._ranked(_recentProjects()),
-  ];
+  List<NewHarnessOption> _projectMenu() => asGuest
+      ? _guestPlaces()
+      : [
+          if (!_desktopChoices)
+            const NewHarnessOption(
+              id: repositoryId,
+              synthetic: true,
+              title: 'Clone Repository',
+              detail: 'Paste a GitHub repository URL',
+            ),
+          const NewHarnessOption(
+            id: existingProjectId,
+            synthetic: true,
+            title: 'Open Folder',
+            detail: 'Enter a path or browse folders',
+          ),
+          const NewHarnessOption(
+            id: newProjectId,
+            synthetic: true,
+            title: 'New Folder',
+            detail: 'Name a new folder',
+          ),
+          if (_desktopChoices)
+            const NewHarnessOption(
+              id: repositoryId,
+              synthetic: true,
+              title: 'GitHub',
+              detail: 'Clone a GitHub repository',
+            ),
+          ..._ranked(_recentProjects()),
+        ];
 
   /// Takes the highlighted row as this field's answer and moves along.
   void accept([NewHarnessOption? row]) {
@@ -2226,6 +2295,10 @@ class NewHarnessController extends ChangeNotifier {
     _listing = null;
     _pathKey = null;
     unawaited(app.probeEngines(id, force: true));
+    // A guest is listed no harnesses or folders there, only where it may start (asGuest).
+    if (app.stateOf(id)?.machine.isSharedMachine == true) {
+      return _startAsGuest();
+    }
     unawaited(app.probeDsh(id, force: true));
     unawaited(_ensureHome(id));
     unawaited(_refreshGeneratedProject());
@@ -2680,7 +2753,8 @@ class NewHarnessController extends ChangeNotifier {
     options = switch (field) {
       NewHarnessField.harness => [
         ..._harnessOptions(),
-        if (offersStore) _store,
+        // A guest starts nothing from the Store there (asGuest).
+        if (offersStore && !asGuest) _store,
       ],
       NewHarnessField.launch ||
       NewHarnessField.task ||
@@ -2926,6 +3000,13 @@ class NewHarnessController extends ChangeNotifier {
   }
 
   List<NewHarnessOption> _harnessOptions() {
+    // A guest there starts Claude Code or Codex, nothing from the Store (asGuest).
+    if (asGuest) {
+      return _ranked([
+        for (final id in compatibleEngines)
+          NewHarnessOption(id: id, title: labelOf(id), engine: id),
+      ]);
+    }
     final machine = _machine;
     final harnesses = machine != null && machine.dsh.loaded
         ? [
@@ -3696,7 +3777,9 @@ class NewHarnessController extends ChangeNotifier {
       return NewHarnessOutcome.failed;
     }
     final choice = _engine;
-    var harness = _harnessId;
+    // A guest starts the engine itself, in its own space, on the owner's plans (asGuest).
+    var harness = asGuest ? null : _harnessId;
+    final model = asGuest ? null : _model;
     final terminal = isTerminalEngine(choice);
     final base = choice;
     // The daemon's launch installs a missing engine inside its new terminal.
@@ -3718,10 +3801,10 @@ class NewHarnessController extends ChangeNotifier {
       status = recheck ? 'Checking on the harness…' : 'Starting harness…';
       notifyListeners();
     }
-    if (_model != null && !recheck) {
+    if (model != null && !recheck) {
       await refreshModels();
       if (_disposed) return NewHarnessOutcome.failed;
-      if (!_modelAvailable(_model!)) {
+      if (!_modelAvailable(model)) {
         return _fail(
           'The selected model is unavailable for $agentLabel on $machineLabel. Choose a model or use your subscription.',
         );
@@ -3801,8 +3884,8 @@ class NewHarnessController extends ChangeNotifier {
       engine: base,
       harnessId: harness,
       permissionMode: permissionMode ?? kDefaultPermissionMode,
-      model: _model,
-      profile: base == 'codex' && _model == null ? _profile : null,
+      model: model,
+      profile: base == 'codex' && model == null && !asGuest ? _profile : null,
       profileMachineId: _machineId,
     );
     // Working in a picked worktree says nothing about the next harness's.
@@ -3812,15 +3895,20 @@ class NewHarnessController extends ChangeNotifier {
     final failure = await app.createAgent(
       _machineId,
       engine: base,
-      folder: terminal ? folder : folder ?? '',
-      projectFolder: projectFolderRequest,
+      // A guest's harness starts in its workspace, or a folder the owner shares (asGuest).
+      folder: asGuest
+          ? (_project.folder ?? '')
+          : (terminal ? folder : folder ?? ''),
+      projectFolder: asGuest ? null : projectFolderRequest,
       swarmId: _targetId,
       split: split,
       placement: effectivePlacement,
       bypassPermission: bypass,
       permissionMode: permissionMode,
-      codexHome: base == 'codex' && _model == null ? _profile?.path : null,
-      model: _model,
+      codexHome: base == 'codex' && model == null && !asGuest
+          ? _profile?.path
+          : null,
+      model: model,
       dsh: harness,
       // Sent exactly as written; an agent that cannot take one is never sent it.
       prompt: takesTask && files.isEmpty && launchMessage.isNotEmpty

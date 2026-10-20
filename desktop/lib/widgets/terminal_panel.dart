@@ -2761,7 +2761,10 @@ class _TerminalHeader extends StatelessWidget {
     ].join('\n');
     // Reserve space for the pane-local model selector.
     // Engines without a picker keep their existing header width.
-    final showModelPicker = modelPickerSupports(session.engineId);
+    // A guest's harness runs on its owner's plans: no model to move it to.
+    final showModelPicker =
+        modelPickerSupports(session.engineId) &&
+        notifier.stateOf(session.machineId)?.machine.isSharedMachine != true;
     // Both text selectors keep their natural width until the title has yielded.
     final pickerWidth =
         (showModelPicker ? 232.0 : 0.0) + (agent != null ? 140.0 : 0.0);

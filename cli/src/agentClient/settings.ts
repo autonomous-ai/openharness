@@ -9,6 +9,8 @@
  * change through to the account (core/experiments.ts `createAgentSettingsSync`): the copy is the daemon's alone.
  */
 import { AGENT_SETTING_NAMES, type AgentSettings } from '../lib/agentSettings.js'
+import { localCredentialHeaders } from '../lib/localCredential.js'
+import { env } from '../config/env.js'
 import { daemonUnreachableText } from '../lib/daemonState.js'
 import { outsideCaller } from './model.js'
 
@@ -48,6 +50,8 @@ export const SETTINGS_SIGNED_OUT = 'Signed out: these are experiments of your ac
 export interface SettingsDeps {
   /** This computer's daemon's port (lib/daemonState.ts `daemonPort`). */
   port: number
+  /** Its data dir, where its local credential is (lib/localCredential.ts). */
+  dataDir?: string
   /** Who runs it, by what its shell says (model.ts `outsideCaller`): an agent may not turn a setting on. */
   env?: NodeJS.ProcessEnv
   fetch?: typeof fetch
@@ -77,7 +81,7 @@ export async function settingsCommand(argv: readonly string[], deps: SettingsDep
     const response = await (deps.fetch ?? fetch)(`http://127.0.0.1:${deps.port}/api/agent-settings`, {
       method: change ? 'PATCH' : 'GET',
       // The local API's CSRF gate: a write must say it comes from this computer.
-      headers: { 'x-adapter-local': '1', ...(change ? { 'content-type': 'application/json' } : {}) },
+      headers: { 'x-adapter-local': '1', ...localCredentialHeaders(deps.dataDir ?? env.ADAPTER_DATA_DIR), ...(change ? { 'content-type': 'application/json' } : {}) },
       ...(change ? { body: JSON.stringify(change) } : {}),
       signal: AbortSignal.timeout(20_000),
     })

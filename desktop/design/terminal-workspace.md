@@ -37,6 +37,11 @@ confirmed roster (for example after sign-out). If the agent is already stopped,
 only **Open terminal** (in Participants or on a message) resumes its saved conversation; a restored
 or revisited terminal selection closes instead, so an explicit stop stays stopped.
 
+A Lead routes each delegation with `harness super-tab route`. The decision appears in the
+conversation as one row (who, how — Jev's confidence or the policy order — and why); owners and
+collaborators can **Change** it with a reason, which tells the Lead to hand the task over.
+Settings ▸ Routing holds the account's policy; a Super Tab's **Routing** overrides single fields.
+
 ## Keep the workspace structure
 
 Tabs remain compact and content-sized, adding one at a time until the row fills.

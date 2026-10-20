@@ -152,6 +152,18 @@ it('takes how the phone opened Find or Computers, and the phone\'s own requests,
   }
 })
 
+it('takes the Desktop\'s Add Phone card and each way into Add Phone, and no other name like them', async () => {
+  const context = { surface: 'desktop', release: '1.2.73', platform: 'macos', channel: 'production' }
+  const counters = { ui_desktop_phone_offer_started: 2, ui_desktop_phone_offer_ok: 1, ui_desktop_phone_offer_cancelled: 1,
+    ui_desktop_phone_offer_unknown: 1, ui_desktop_phone_offer_over_1m: 1, ui_desktop_add_phone_offer: 1,
+    ui_desktop_add_phone_titlebar: 2, ui_desktop_add_phone_menu: 1, ui_desktop_add_phone_account: 1,
+    ui_desktop_add_phone_machines: 1, ui_desktop_add_phone_command: 1 }
+  expect((await submit({ ...good, context, counters })).statusCode).toBe(200)
+  for (const name of ['ui_desktop_add_phone_welcome', 'ui_desktop_add_phone_qr', 'ui_phone_add_phone_offer', 'ui_web_add_phone_command']) {
+    expect((await submit({ ...good, context, counters: { [name]: 1 } })).statusCode).toBe(400)
+  }
+})
+
 it('rejects extra context, custom versions and device fingerprints without echoing them', async () => {
   const context = { surface: 'desktop', release: '1.2.73', platform: 'macos', channel: 'production' }
   for (const c of [{ ...context, path: 'PRIVATE_CANARY' }, { ...context, release: 'PRIVATE_CANARY' },

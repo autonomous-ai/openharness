@@ -1,10 +1,11 @@
 import { inspectCapacity, startAgent } from './start.js'
 import { object } from './host.js'
+import { routeTask } from './routeCommand.js'
 import { openDaemon, whereFor, type Daemon, type Where } from '../agentClient/daemon.js'
 import { callerOf, type Frame } from '../agentClient/model.js'
 import { identifier } from './host.js'
 
-const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status | messages GROUP | message GROUP MESSAGE_ID | post GROUP TEXT OPERATION_ID | command OPERATION_ID JSON | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | help'
+const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status | messages GROUP | message GROUP MESSAGE_ID | post GROUP TEXT OPERATION_ID | command OPERATION_ID JSON | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | help'
 export function parseSuperTabArgs(argv: readonly string[], where: Where) {
   const positional: string[] = []
   let tabId = '', agentId = ''
@@ -35,6 +36,8 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
   } else if (action === 'resume' && identifier(first) && positional.length === 2) payload.startId = first
   else if (action === 'capacity' && identifier(first) && second && positional.length === 3) {
     Object.assign(payload, { targetMachineId: first, request: JSON.parse(second) })
+  } else if (action === 'route' && identifier(first) && second && positional.length === 3) {
+    Object.assign(payload, { conversationId: first, assessment: JSON.parse(second) })
   } else if (!['status', 'help'].includes(action) || positional.length !== 1) throw new Error(USAGE)
   return { where: target, payload }
 }
@@ -73,6 +76,9 @@ export async function superTabCommand(argv: readonly string[], deps: {
         try { result = { ok: true, ...await inspectCapacity(target, object(request.payload.request)) } }
         finally { target.close() }
       }
+    } else if (request.payload.action === 'route') {
+      result = await routeTask({ tabId: String(request.payload.tabId), conversationId: String(request.payload.conversationId),
+        assessment: request.payload.assessment }, scoped, request.where, deps.open)
     } else result = await daemon.request('super_tabs', request.payload, 30_000)
     print(JSON.stringify({ ...result, ...(operationId ? { operationId } : {}) }))
     return result.error ? 1 : 0

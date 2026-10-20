@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { readFile, statfs } from 'node:fs/promises'
-import { freemem, homedir, totalmem } from 'node:os'
+import { cpus, freemem, homedir, totalmem } from 'node:os'
 import { parse } from 'node:path'
 import { promisify } from 'node:util'
 
@@ -30,6 +30,26 @@ async function command(file: string, args: string[]): Promise<string> {
     windowsHide: true, env: { ...process.env, LC_ALL: 'C' },
   })
   return stdout
+}
+
+export function parseDarwinDevice(raw: string): { deviceType: string | null; chip: string | null } {
+  const data = JSON.parse(raw) as { SPHardwareDataType?: Array<Record<string, unknown>> }
+  const row = data.SPHardwareDataType?.[0]
+  const label = (value: unknown) => typeof value === 'string' && value.length <= 120 ? value : null
+  // Never retain serial numbers, device UUIDs or the unfiltered profiler output.
+  return { deviceType: label(row?.machine_name), chip: label(row?.chip_type ?? row?.cpu_type) }
+}
+let device: Promise<{ deviceType: string | null; chip: string | null; os: string }> | undefined
+export function readMachineDevice() {
+  return device ??= (async () => {
+    const base = { deviceType: null as string | null, chip: cpus()[0]?.model?.slice(0, 120) ?? null,
+      os: process.platform === 'darwin' ? 'macOS' : process.platform === 'win32' ? 'Windows' : 'Linux' }
+    try {
+      if (process.platform === 'darwin') return { ...base, ...parseDarwinDevice(await command('/usr/sbin/system_profiler', ['SPHardwareDataType', '-json'])) }
+      if (process.platform === 'linux') return { ...base, deviceType: (await readFile('/sys/class/dmi/id/product_name', 'utf8')).trim().slice(0, 120) || null }
+    } catch { /* Device type is optional; utilization sampling still works. */ }
+    return base
+  })()
 }
 function number(value: string | undefined): number | null {
   if (value == null || !/^\d+(?:\.\d+)?$/.test(value.trim())) return null

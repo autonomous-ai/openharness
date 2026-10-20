@@ -7,6 +7,7 @@ import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import { watchSocketLiveness } from './lib/wsLiveness.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import { isTrustedLocal } from './lib/localSocket.js'
+import { localCredentialMatches } from './lib/localCredential.js'
 import type { Frame, LocalClientSink } from './backendSocket.js'
 import {
   decodeTerminalLocal,
@@ -51,6 +52,9 @@ export interface LocalWsServerOptions {
   backend: LocalWsBackend
   /** The daemon's Unix-socket server (lib/localSocket.ts), served the same endpoint beside TCP. */
   localSocketServer?: http.Server | null
+  /** The daemon's local credential (lib/localCredential.ts). Given, a TCP upgrade must carry it: the
+   *  loopback port takes any local OS user's process, the Unix socket only this user's. */
+  localCredential?: string
   /** Serves a `machine_select` for any OTHER machine this signed-in user owns, by relaying to
    *  backend's `/api/web-ws` — see lib/remoteRelay.ts — and one for a harness shared with this account
    *  (`shareId`, sharing/relay.ts). Both are the gateway's. Omit to keep today's own-machine-only behavior. */
@@ -281,9 +285,10 @@ function withLocalClient(frame: Frame, localClient: LocalWsServerOptions['localC
 }
 
 /**
- * Add an internal loopback WebSocket endpoint to the CLI's existing HTTP server. It intentionally has
- * no credential: loopback-only, no Origin header, and the desktop computer-id validation identify the
- * local process without placing SSO credentials on this transport.
+ * Add an internal loopback WebSocket endpoint to the CLI's existing HTTP server. Over the daemon's Unix
+ * socket it takes no credential: the filesystem says who the peer is. Over TCP it takes the daemon's
+ * local credential (lib/localCredential.ts) — never an SSO credential — besides being loopback-only with
+ * no Origin header: any OS user's process can reach the loopback port.
  */
 /** How long a closing server waits for its clients to answer the close before it drops them. */
 export const LOCAL_WS_CLOSE_GRACE_MS = 1_000
@@ -292,8 +297,8 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: MAX_WS_MESSAGE_BYTES,
-    // The loopback endpoint deliberately has no credential. Echo a protocol only for generic WS
-    // clients that insist on proposing one; it carries no authority and is never inspected.
+    // The local credential travels in a header, never a subprotocol. Echo a protocol only for generic
+    // WS clients that insist on proposing one; it carries no authority and is never inspected.
     handleProtocols: (protocols) => [...protocols][0] ?? false,
   })
   // One desktop can have a connection per machine. Once a live window reports its selected pane,
@@ -324,6 +329,12 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     const bound = server.address()
     if (req.headers.origin || !bound || typeof bound === 'string' || !isLoopbackRequest(req, loopbackHosts(bound.port))) {
       rejectUpgrade(socket, 403, 'Forbidden')
+      return
+    }
+    // Another OS user's process reaches this port too (a guest's harness, say): only this user's carries
+    // the credential.
+    if (options.localCredential !== undefined && !localCredentialMatches(options.localCredential, req)) {
+      rejectUpgrade(socket, 401, 'Unauthorized')
       return
     }
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))

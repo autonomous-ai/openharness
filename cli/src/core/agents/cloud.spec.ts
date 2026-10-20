@@ -86,6 +86,12 @@ describe('agents a service owns', () => {
     cloud.doors.publish([harness({ agent: 'fo', name: 'trip!', state: 'working', said: 'Which one?\n1) 9:30\n2) 11:00' })])
     cloud.doors.publish([harness({ agent: 'fo', name: 'trip!', state: 'failed', said: 'Which one?\n1) 9:30\n2) 11:00' })])
     expect(cards().at(-1)).toMatchObject({ payload: { kind: 'error', text: 'It stopped with an error.' } })
+    // Failing with something new said: the summary carries `failed`, so the tier is an alert.
+    cloud.doors.publish([harness({ agent: 'fo', name: 'trip!', state: 'working', said: 'Which one?\n1) 9:30\n2) 11:00' })])
+    cloud.doors.publish([harness({ agent: 'fo', name: 'trip!', state: 'failed', said: 'Running migrations…', messages: 9 })])
+    expect(cards().at(-1)).toMatchObject({ payload: { kind: 'summary', failed: true } })
+    cloud.doors.publish([harness({ agent: 'fo', name: 'trip!', state: 'working', said: 'Which one?\n1) 9:30\n2) 11:00' })])
+    cloud.doors.publish([harness({ agent: 'fo', name: 'trip!', state: 'failed', said: 'Which one?\n1) 9:30\n2) 11:00' })])
     // Idle and changed, with nothing new said: nothing to tell.
     const before = cards().length
     cloud.doors.publish([harness({ agent: 'fo', name: 'renamed', state: 'failed', said: 'Which one?\n1) 9:30\n2) 11:00' })])

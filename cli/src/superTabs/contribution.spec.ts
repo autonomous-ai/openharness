@@ -1,0 +1,79 @@
+import { describe, expect, it, vi } from 'vitest'
+import { fakeCore } from '../testing/fakeCore.js'
+import { ContributionPreparations, prepareContribution } from './contribution.js'
+
+const GiB = 1024 ** 3
+function fixture() {
+  const core = fakeCore()
+  const state: Record<string, unknown> = { project: { machineId: core.daemon.machineId(), cwd: '/repo', repositoryUrl: 'https://github.com/example/project' } }
+  const backend = vi.fn(async () => ({ state }))
+  const close = vi.fn()
+  const request = vi.fn(async () => ({ engines: [
+    { engine: 'claude', installed: true, signedIn: true },
+    { engine: 'codex', installed: true, signedIn: false },
+    { engine: 'pi', installed: true },
+    { engine: 'opencode', installed: false },
+    { engine: 'terminal', installed: true },
+  ] }))
+  const open = vi.fn(async () => ({ request, close }))
+  const prepare = vi.fn(async () => '/clone')
+  const capacity = vi.fn(async () => ({ ok: true, resources: { memoryTotalBytes: 32 * GiB, memoryUsedBytes: 16 * GiB, projectDiskFreeBytes: 100 * GiB } }))
+  const deps = { backend, open, prepare, capacity }
+  const run = () => prepareContribution(core, { tabId: 'tab' }, deps as never)
+  return { run, state, deps, core, request, close }
+}
+describe('one-field machine preparation', () => {
+  it('uses the lead project on its host and probes all engines without inventing authentication', async () => {
+    const f = fixture()
+    expect(await f.run()).toEqual({ ok: true, state: 'ready', cwd: '/repo', engines: ['claude', 'pi'], maxAgents: 4 })
+    expect(f.request).toHaveBeenCalledWith('engines_probe', { accounts: true }, 20000)
+    expect(f.deps.prepare).not.toHaveBeenCalled()
+    expect(f.close).toHaveBeenCalledOnce()
+  })
+  it('prepares the repository on another machine and reuses an existing contribution', async () => {
+    const f = fixture(); (f.state.project as Record<string, unknown>).machineId = 'another'
+    expect(await f.run()).toMatchObject({ cwd: '/clone' })
+    expect(f.deps.prepare).toHaveBeenCalledWith({ source: 'remote', repositoryUrl: 'https://github.com/example/project.git', name: 'project' })
+    f.state.machines = [{ machineId: f.core.daemon.machineId(), cwd: '/existing' }]
+    expect(await f.run()).toMatchObject({ cwd: '/existing' })
+    expect(f.deps.prepare).toHaveBeenCalledOnce()
+  })
+  it('does not clone paths or credential-bearing URLs from shared metadata', async () => {
+    const f = fixture()
+    for (const repositoryUrl of [null, 'file:///private/repo', 'https://token@github.com/example/project', 'ext::command']) {
+      f.state.project = { machineId: 'other', repositoryUrl }
+      await expect(f.run()).rejects.toThrow()
+    }
+    expect(f.deps.prepare).not.toHaveBeenCalled()
+    expect(f.deps.open).not.toHaveBeenCalled()
+  })
+  it('fails when no installed engine or project disk can be read and closes the connection', async () => {
+    const f = fixture()
+    f.request.mockResolvedValueOnce({ engines: [] })
+    await expect(f.run()).rejects.toThrow('Sign in')
+    f.deps.capacity.mockResolvedValueOnce({ error: 'INVALID_REQUEST' } as never)
+    await expect(f.run()).rejects.toThrow('project folder')
+    expect(f.close).toHaveBeenCalledTimes(2)
+  })
+  it('keeps a slow clone in one bounded receipt and preserves errors for polling', async () => {
+    let resolve!: (value: Record<string, unknown>) => void
+    const prepare = vi.fn(() => new Promise<Record<string, unknown>>(r => { resolve = r }))
+    const jobs = new ContributionPreparations(prepare), input = { operationId: 'setup', tabId: 'tab' }
+    expect(jobs.read(input)).toMatchObject({ state: 'preparing' })
+    expect(jobs.read(input)).toMatchObject({ state: 'preparing' })
+    expect(prepare).toHaveBeenCalledOnce()
+    expect(jobs.read({ ...input, tabId: 'elsewhere' })).toEqual({ error: 'OPERATION_CONFLICT' })
+    resolve({ ok: true, state: 'ready', cwd: '/clone' }); await Promise.resolve()
+    expect(jobs.read(input)).toMatchObject({ state: 'ready', cwd: '/clone' })
+    jobs.clear(); jobs.read(input); expect(prepare).toHaveBeenCalledTimes(2)
+    const failed = new ContributionPreparations(async () => { throw new Error('Clone failed') })
+    failed.read(input); await Promise.resolve()
+    expect(failed.read(input)).toEqual({ error: 'SETUP_FAILED', detail: 'Clone failed' })
+  })
+  it('bounds pending setups and refuses invalid receipt keys', () => {
+    const jobs = new ContributionPreparations(() => new Promise(() => {}))
+    expect(jobs.read({ tabId: 'tab' })).toEqual({ error: 'INVALID_REQUEST' })
+    for (let i = 0; i < 32; i++) jobs.read({ tabId: 'tab', operationId: `setup-${i}` })
+    expect(jobs.read({ tabId: 'tab', operationId: 'extra' })).toMatchObject({ error: 'SETUP_BUSY' })
+  })
+})

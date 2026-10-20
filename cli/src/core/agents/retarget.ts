@@ -32,6 +32,7 @@ import type { createLaunchHelpers } from './launch.js'
 import type { PaneSwap } from './swap.js'
 import { createLaunchAuthority } from './launchAuthority.js'
 import { nativeOpencodeStore } from '../../engines/kit/nativeLocations.js'
+import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
 type LaunchHelpers = ReturnType<typeof createLaunchHelpers>
 
@@ -71,6 +72,7 @@ export function createAgentRetargeter({
     if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
     const live = registry.resolve(agentId)
     if (!live) return { ok: false, error: 'AGENT_NOT_FOUND' }
+    if (live.guest) return GUEST_HARNESS_REFUSAL
     // Registry observations can update a row in place while a service or pane
     // read waits. The request keeps its original conversation and exact process.
     const session = structuredClone(live)

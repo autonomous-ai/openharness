@@ -142,7 +142,11 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
   }
 
   const stage = (s: RegisteredSession, hydrate: boolean, silent: boolean): RuntimeStage => {
-    const view = viewFor(s), revision = view.revision, version = s.cliVersion
+    const view = viewFor(s), revision = view.revision
+    // viewFor has just matched the live row's identity, so its version is the one to guard. A copy taken
+    // before an accepted read learned the version (2026-10-19: 7 of 42 new Claude agents) is only older.
+    s = { ...s, cliVersion: deps.resolve(s.agentId)!.cliVersion }
+    const version = s.cliVersion
     const context = contextFor(s, view)
     if (hydrate) context.state = { ...blankRuntimeState(), model: typeof s.model === 'string' ? s.model : null, cliVersion: s.cliVersion }
     let answer: RuntimeAnswer | null = null
@@ -195,7 +199,7 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
     read,
     async capturePane(s: RegisteredSession, capture: (id: string, historyLines?: number) => Promise<string | null>,
       historyLines?: number, silent = false): Promise<string | null> {
-      const view = viewFor(s), revision = view.revision, version = s.cliVersion
+      const view = viewFor(s), revision = view.revision, version = deps.resolve(s.agentId)!.cliVersion
       const current = () => valid(view) && view.revision === revision && deps.resolve(view.agentId)?.cliVersion === version
       const text = await capture(s.agentId, historyLines)
       if (!text || !current()) return null

@@ -38,6 +38,12 @@ static void fresh(void) {
     pod_nav_init(&N);
 }
 
+// fresh() with nobody working: Home's pages are then the Notices card and the tabs only.
+static void fresh_still(void) {
+    fresh();
+    pod_model_turn(&M, "a1", "done", NULL, 0, 11);
+}
+
 static void to_agent(int tab, int idx) {
     act(POD_A_OPEN_TAB, tab, 0);
     act(POD_A_OPEN_AGENT, idx, 0);
@@ -510,11 +516,11 @@ static void nav_test_stale_leaves_working(void) {
 // The Tabs grid scrolls by rows in the root frame: SCROLL adds (never below 0), a model change or sync leaves it, and the
 // root frame holds no tab (the chosen cover is the model's selected tab).
 static void nav_test_grid_scroll(void) {
-    fresh();
+    fresh_still();
     act(POD_A_SCROLL, 1, 0);
     CHECK(top()->scroll == 1 && N.depth == 1 && top()->tab_id[0] == 0);
     act(POD_A_SCROLL, -5, 0);
-    CHECK(top()->scroll == -1);                   // the Notices card (a4 asks)
+    CHECK(top()->scroll == -2);                   // the Notices card (a4 asks)
     act(POD_A_SCROLL, 3, 0);
     pod_nav_sync(&N, &M);
     CHECK(top()->scroll == 1 && top()->view == POD_V_TABS && N.depth == 1);   // clamped to the last tab
@@ -843,24 +849,25 @@ static void nav_test_enter_tab_not_from_room(void) {
 }
 
 
-// ---- Pets Home's Notices card: the TABS frame's scroll is the tab index, -1 the Notices card (only while there are notices) ----
+// ---- Pets Home's Notices card: the TABS frame's scroll is the tab index, -2 the Notices card (only while there are notices) ----
 static void nav_test_home_notices_scroll(void) {
-    fresh();   // a4 asks: one notice
+    fresh_still();   // a4 asks: one notice
     CHECK(pod_notice_count(&M) == 1 && pod_tabs_pages_of(&N, &M) == 3);   // two tabs and the Notices card
-    act(POD_A_SCROLL, -1, 0);
-    CHECK(top()->scroll == -1);
-    act(POD_A_SCROLL, -1, 0);
-    CHECK(top()->scroll == -1);   // the card is the first page
-    act(POD_A_SCROLL, 2, 0);
+    act(POD_A_SCROLL, -2, 0);
+    CHECK(top()->scroll == -2);
+    act(POD_A_SCROLL, -2, 0);
+    CHECK(top()->scroll == -2);   // the card is the first page
+    act(POD_A_SCROLL, 3, 0);
     CHECK(top()->scroll == 1);
     // the notices go: Home never rests on a page that does not exist
-    act(POD_A_SCROLL, -2, 0);
-    CHECK(top()->scroll == -1);
+    act(POD_A_SCROLL, -3, 0);
+    CHECK(top()->scroll == -2);
     pod_model_question_close(&M, "a4");
+    pod_model_turn(&M, "a4", "done", NULL, 0, 12);   // it went back to work: finish it, so no Working card
     CHECK(pod_notice_count(&M) == 0 && pod_tabs_pages_of(&N, &M) == 2);
     pod_nav_sync(&N, &M);
     CHECK(top()->scroll == 0);   // the Notices card went: tab 0
-    act(POD_A_SCROLL, -1, 0);
+    act(POD_A_SCROLL, -2, 0);
     CHECK(top()->scroll == 0);   // and there is no card to scroll to
     // a notice arriving does not move the person: the tab they are on stays
     act(POD_A_SCROLL, 1, 0);
@@ -879,29 +886,29 @@ static void nav_test_home_notices_scroll(void) {
     CHECK(top()->scroll == 0);
     // no tabs, a notice: the Notices card alone
     pod_model_swarms(&M, NULL, NULL, NULL, 0, "", NULL, 0);
-    act(POD_A_SCROLL, -1, 0);
+    act(POD_A_SCROLL, -2, 0);
     pod_nav_sync(&N, &M);
-    CHECK(pod_tabs_pages_of(&N, &M) == 1 && top()->scroll == -1);
+    CHECK(pod_tabs_pages_of(&N, &M) == 1 && top()->scroll == -2);
     // a Pets TAB frame (never drawn) keeps the ordinary clamp
-    fresh();
+    fresh_still();
     act(POD_A_OPEN_TAB, 0, 0);
-    act(POD_A_SCROLL, -1, 0);
+    act(POD_A_SCROLL, -2, 0);
     CHECK(top()->scroll == 0);
 }
 
 // Leaving a room for Home lands on that room's tab card, never on the Notices card (or whichever page the person left Home on).
 static void nav_test_home_lands_on_room_tab(void) {
-    fresh();
-    act(POD_A_SCROLL, -1, 0);   // Home on the Notices card
+    fresh_still();
+    act(POD_A_SCROLL, -2, 0);   // Home on the Notices card
     to_agent(1, 0);             // a room of tab "Docs" (a4, asks) opened another way (a focus, a notice)
-    CHECK(N.depth == 3 && N.stack[0].scroll == -1);
+    CHECK(N.depth == 3 && N.stack[0].scroll == -2);
     act(POD_A_TABS, 0, 1);      // swipe up from the bottom zone
     CHECK(N.depth == 1 && top()->scroll == 1);
     act(POD_A_SCROLL, -3, 0);
     to_agent(0, 0);
     act(POD_A_BACK, 0, 2);      // the side button
     CHECK(N.depth == 1 && top()->scroll == 0);
-    act(POD_A_SCROLL, -1, 0);
+    act(POD_A_SCROLL, -2, 0);
     to_agent(1, 0);
     act(POD_A_TALK, 0, 3);
     act(POD_A_BACK, 0, 4);      // abort the recording
@@ -915,8 +922,82 @@ static void nav_test_home_lands_on_room_tab(void) {
     CHECK(N.depth == 1 && top()->scroll >= 0);
 }
 
+// ---- Home's page list: Notices (-2) while there are notices, Working (-1) while an agent works, then the tabs ----
+static const char *pages(void) {
+    static char b[96];
+    int16_t p[POD_TABS_MAX + 2];
+    int n = pod_home_pages(&M, p, POD_TABS_MAX + 2), k = 0;
+    b[k++] = '{';
+    for (int i = 0; i < n; i++) k += snprintf(b + k, sizeof b - k, "%s%d", i ? "," : "", p[i]);
+    b[k++] = '}'; b[k] = 0;
+    return b;
+}
+static void nav_test_home_pages(void) {
+    fresh();   // a1 works, a4 asks
+    CHECK(pod_home_working(&M) == 1 && !strcmp(pages(), "{-2,-1,0,1}") && pod_tabs_pages_of(&N, &M) == 4);
+    pod_model_question_close(&M, "a4");   // a4 goes back to work
+    CHECK(!strcmp(pages(), "{-1,0,1}"));
+    pod_model_turn(&M, "a1", "done", NULL, 0, 30);
+    pod_model_turn(&M, "a4", "done", NULL, 0, 31);
+    CHECK(pod_home_working(&M) == 0 && !strcmp(pages(), "{0,1}"));
+    pod_model_question(&M, "a4", "Proceed?");
+    CHECK(!strcmp(pages(), "{-2,0,1}"));
+    pod_model_swarms(&M, NULL, NULL, NULL, 0, "", NULL, 0);   // no tabs
+    CHECK(!strcmp(pages(), "{-2}"));
+    pod_model_turn(&M, "a1", "started", NULL, 0, 40);
+    CHECK(!strcmp(pages(), "{-2,-1}"));
+    pod_model_question_close(&M, "a4");
+    pod_model_turn(&M, "a1", "done", NULL, 0, 50);
+    pod_model_turn(&M, "a4", "done", NULL, 0, 51);
+    CHECK(!strcmp(pages(), "{}") && pod_tabs_pages_of(&N, &M) == 0);
+}
+static void nav_test_home_clamp(void) {
+    fresh();   // {-2,-1,0,1}
+    N.stack[0].scroll = -1;   // Working vanishes while shown: tab 0, the page to its right
+    pod_model_turn(&M, "a1", "done", NULL, 0, 30);
+    pod_nav_sync(&N, &M);
+    CHECK(top()->scroll == 0);
+    pod_model_turn(&M, "a1", "started", NULL, 0, 40);   // Notices vanishes while shown: Working, the page to its right
+    N.stack[0].scroll = -2;
+    pod_model_question_close(&M, "a4");
+    pod_nav_sync(&N, &M);
+    CHECK(top()->scroll == -1);
+    pod_model_swarms(&M, NULL, NULL, NULL, 0, "", NULL, 0);   // nothing to the right: the nearest to the left
+    pod_model_question(&M, "a4", "Proceed?");
+    N.stack[0].scroll = 5;
+    pod_nav_sync(&N, &M);
+    CHECK(top()->scroll == -1);
+    N.stack[0].scroll = -2;   // a present page is kept
+    pod_nav_sync(&N, &M);
+    CHECK(top()->scroll == -2);
+}
+
+// A room opened from the Working card sits at depth 2: the Inbox still opens at the full stack, and the room follows the app's tab like any other.
+static void nav_test_working_card_room(void) {
+    fresh();   // a1 works
+    N.stack[0].scroll = POD_HOME_WORKING;
+    CHECK(act(POD_A_FOLLOW, pod_model_find(&M, "a1") - M.agents, 0).fx == POD_FX_AGENT_OPEN && N.depth == 2);
+    pod_model_unread_add(&M, "a3", "Gamma", "It works.", 20, 21);
+    act(POD_A_INBOX, 0, 1);
+    CHECK(N.depth == 3 && top()->view == POD_V_INBOX);
+    act(POD_A_OPEN_NOTIF, 0, 2);   // TABS, AGENT, INBOX, room: full
+    CHECK(N.depth == 4 && top()->view != POD_V_INBOX);
+    act(POD_A_INBOX, 0, 3);
+    CHECK(N.depth == 2 && top()->view == POD_V_INBOX && N.stack[0].scroll == POD_HOME_WORKING);
+    act(POD_A_BACK, 0, 4);
+    CHECK(N.depth == 1 && N.stack[0].scroll == POD_HOME_WORKING);
+    fresh();
+    N.stack[0].scroll = POD_HOME_WORKING;
+    act(POD_A_FOLLOW, pod_model_find(&M, "a1") - M.agents, 0);
+    M.selected = 1;   // the app moved to Docs, which does not hold a1: the room follows to Docs' first agent
+    CHECK(pod_nav_follow_tab(&N, &M) && N.depth == 3 && !strcmp(top()->agent, "a4") && N.stack[0].scroll == 1);
+}
+
 int main(void) {
     nav_test_home_notices_scroll();
+    nav_test_home_pages();
+    nav_test_home_clamp();
+    nav_test_working_card_room();
     nav_test_home_lands_on_room_tab();
     nav_test_enter_tab_pushes();
     nav_test_enter_tab_empty_noop();

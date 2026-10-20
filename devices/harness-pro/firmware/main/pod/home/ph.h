@@ -54,8 +54,13 @@ pod_scene_t ph_card_scene(const pod_model_t *, const pod_agent_t *);
 // side x side square, else its 72 px logo, else a ">_" outline on `fill`.
 // An engine's logo at exactly `size` (a baked one: 44 or 72) at (x, y), else a ">_" outline box of that size on `fill` (0xRRGGBB).
 void ph_engine_logo(ht_scene_t *, int x, int y, int size, const char *engine, unsigned fill);
-// Home's Notices card (ph_overview.c header): while pod_notice_count > 0 it is the page before tab 0; the TABS frame's scroll is the tab index, -1 the Notices card.
+// Home's Notices card (ph_overview.c header): while pod_notice_count > 0 it is the page before tab 0; the TABS frame's scroll is the tab index, POD_HOME_NOTICES (-2) the Notices card.
 // A tap on it is one POD_A_INBOX hit.
+// Home's Working card: the working agents newest turn first (the least pod_agent_secs, ties in model order); returns how many are listed (at most cap).
+int ph_working_list(const pod_model_t *, const pod_agent_t **out, int cap, uint32_t now_ms);
+// The card colours of an engine (the tab cards' mapping; NULL or an unknown engine: the grey pair), and the Working card's: Codex's blue.
+void ph_engine_tint(const char *engine, unsigned *c1, unsigned *c2);
+void ph_working_tint(const pod_model_t *, unsigned *c1, unsigned *c2);
 void ph_card_art(ht_scene_t *, int cx, int cy, int side, const pod_model_t *, const pod_agent_t *, unsigned fill, uint32_t now_ms);
 
 // ---- Agent, Recap, Talk, Notices, Update (ph_agent.c, ph_recap.c, ph_talk.c, ph_inbox.c, ph_ota.c) ----

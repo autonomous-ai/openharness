@@ -24,6 +24,7 @@ import { sid } from './lib/log.js'
 import { VERSION } from './version.js'
 import { env } from './config/env.js'
 import { hookCredentialMatches, loadOrCreateHookCredential } from './lib/hookAuth.js'
+import { LOCAL_CREDENTIAL_REQUIRED, localCredentialMatches } from './lib/localCredential.js'
 import { routeStoreRequest, type StoreHandler } from './lib/storeProxy.js'
 import type { HookTerminalHint } from './lib/terminalTypes.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
@@ -184,6 +185,9 @@ export interface HookServerHandlers {
   onExperimentalRead?: () => Promise<PairOutcome>
   onExperimentalWrite?: (body: unknown) => Promise<PairOutcome>
   onProductFeedback?: (body: unknown) => Promise<PairOutcome>
+  /** The phone half of a sign-in (backend routes/qrSignIn.ts) for the desktop and web apps: approve a device
+   *  that says its code aloud (a lamp, #1410) with this computer's own session, as the phone does. */
+  onSignInAnswer?: (action: 'lookup' | 'approve' | 'deny', body: { code: string }) => Promise<PairOutcome>
   onProductUsageReport?: (body: unknown) => Promise<PairOutcome>
   onProductUsageRead?: () => Promise<PairOutcome>
   onProductUsageWrite?: (body: unknown) => Promise<PairOutcome>
@@ -381,6 +385,17 @@ export interface HookServerOptions {
   admissionBytesCapacity?: number
 }
 
+/** The `/api/status` fields a caller without the local credential is answered. */
+// Which daemon this is (its pid and computer, as a takeover or a status check compares) and where its socket
+// is — never the account, its folders or its connections.
+const PUBLIC_STATUS_FIELDS = ['version', 'pid', 'corePid', 'computerId', 'localWs', 'localSocket', 'supported'] as const
+
+function publicStatus(status: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { credentialRequired: true }
+  for (const key of PUBLIC_STATUS_FIELDS) if (key in status) out[key] = status[key]
+  return out
+}
+
 export function startHookServer(
   port: number,
   handlers: HookServerHandlers,
@@ -443,7 +458,20 @@ export function startHookServer(
       // send it, can trigger actions. A local process could still call it — same trust level as the
       // CLI, which is acceptable on loopback.
       const localOk = req.headers['x-adapter-local'] === '1'
-      const hookOk = hookCredentialMatches(hookCredential, req.headers['x-harness-hook-token'])
+      // An engine hook's token. Today the daemon's own credential; a guest's harness will carry a token
+      // scoped to its own agent (docs/plans/2026-10-19-guest-machine-sharing-plan.md), checked here.
+      const hookTokenMatches = (request: http.IncomingMessage): boolean =>
+        hookCredentialMatches(hookCredential, request.headers['x-harness-hook-token'])
+      const hookOk = hookTokenMatches(req)
+      // The loopback port takes any local OS user's process, so over TCP every route but the few below
+      // wants the daemon's local credential (lib/localCredential.ts): the 0600 file only this OS user can
+      // read. Over the daemon's Unix socket the filesystem already said who this is.
+      const credentialOk = trustedLocal || localCredentialMatches(hookCredential, req)
+      // Open without it: liveness, the status a discovery reads (cut down, below), the hook routes (their
+      // own token, above) and the native device routes (their own bearer, just below).
+      const open = (req.method === 'GET' && (url === '/api/health' || url === '/api/status'))
+        || url.startsWith('/api/hook/') || url.startsWith('/api/autonomous-device/')
+      if (!credentialOk && !open) { json(401, { error: LOCAL_CREDENTIAL_REQUIRED }); return }
 
       if (url.startsWith('/api/autonomous-device/')) {
         const peer = req.socket.remoteAddress
@@ -469,7 +497,10 @@ export function startHookServer(
       // it linked from retired with the browser setup links (#348). `harness stop` stops the daemon
       // through its pid, never through here.
       if (req.method === 'GET' && url === '/api/status') {
-        json(200, handlers.onStatus ? await handlers.onStatus() : { supported: false }); return
+        const status = handlers.onStatus ? await handlers.onStatus() : { supported: false }
+        // Without the credential, only what says a daemon is here and where its socket is: nothing about
+        // the account, its folders or its connections.
+        json(200, credentialOk ? status : publicStatus(status)); return
       }
 
       // SessionStart AND UserPromptSubmit both POST here (the catch hook re-registers so a session
@@ -1051,6 +1082,21 @@ export function startHookServer(
           json(result.status, result.body)
         } catch { json(502, { success: false, error: { code: 'USAGE_UNAVAILABLE', message: 'Product usage unavailable' } }) }
         return
+      }
+      const signInAnswer = req.method === 'POST' ? /^\/api\/auth\/qr\/(lookup|approve|deny)$/.exec(url) : null
+      if (signInAnswer) {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onSignInAnswer) { json(503, { error: 'UNAVAILABLE' }); return }
+        let body: unknown
+        try { body = JSON.parse(await readBody(req)) } catch { json(400, { error: 'BAD_REQUEST' }); return }
+        // The code and nothing else: whose account approves is this computer's session, never the caller's.
+        const code = (body as { code?: unknown } | null)?.code
+        if (!body || typeof body !== 'object' || Object.keys(body).length !== 1
+            || typeof code !== 'string' || code.length < 1 || code.length > 128) {
+          json(400, { error: 'BAD_REQUEST' }); return
+        }
+        const action = signInAnswer[1] as 'lookup' | 'approve' | 'deny'
+        await proxied(() => handlers.onSignInAnswer!(action, { code })); return
       }
       if (req.method === 'POST' && url === '/api/product-usage/feedback') {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }

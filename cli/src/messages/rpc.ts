@@ -4,6 +4,8 @@
  * send` reaches its own daemon the same way.
  */
 import { randomBytes } from 'node:crypto'
+import { env } from '../config/env.js'
+import { localCredentialHeaders } from '../lib/localCredential.js'
 import { existsSync } from 'node:fs'
 import { WebSocket } from 'ws'
 import { localSocketPath } from '../lib/localSocket.js'
@@ -22,7 +24,7 @@ export const messagesRpc: Rpc = (target, payload, timeoutMs = 20_000) => new Pro
   const socketPath = target.dataDir ? localSocketPath(target.dataDir, target.port) : null
   const ws = socketPath && existsSync(socketPath)
     ? new WebSocket(`ws+unix://${socketPath}:/api/local-ws`)
-    : new WebSocket(`ws://127.0.0.1:${target.port}/api/local-ws`)
+    : new WebSocket(`ws://127.0.0.1:${target.port}/api/local-ws`, { headers: localCredentialHeaders(target.dataDir ?? env.ADAPTER_DATA_DIR) })
   const requestId = randomBytes(16).toString('hex')
   let finished = false, selected = false
   const finish = (error: Error | null, value?: Record<string, unknown>): void => {

@@ -450,12 +450,20 @@ pod_out_t pod_ui_touch(pod_ui_t *u, bool down, int x, int y, uint32_t now_ms, bo
         if (iabs(dx) >= POD_SW_MIN_PX && wide(dx, dy) && fast) {
             u->sw_ok = u->sw_on = false;
             *changed = true;
-            if (top(u)->view == POD_V_TABS) {   // Home: a page a swipe, clamped. A page is the scroll (the tab index) + 1 while the Notices card exists (scroll -1), else the scroll
-                const int lead = pod_tabs_pages_of(&u->nav, &u->model) - u->model.tab_count;   // 1 with the Notices card, else 0
-                int last = pod_tabs_pages_of(&u->nav, &u->model) - 1, at = top(u)->scroll + lead;
-                at = at < 0 ? 0 : at > last ? last : at;
-                int want = at + (dx < 0 ? 1 : -1);
-                if (want >= 0 && want <= last) pod_nav_act(&u->nav, &u->model, POD_A_SCROLL, want - lead - top(u)->scroll, now_ms);   // to the page itself, whatever the frame's scroll holds
+            if (top(u)->view == POD_V_TABS) {   // Home: a page a swipe, clamped, in the order of the page list
+                // A swipe that starts on the Working card's pet band (more than 3 working) pages the pets, never the cards, even at either end.
+                const int wp = (pod_home_working(&u->model) + 2) / 3;
+                if (u->nav.depth == 1 && top(u)->scroll == POD_HOME_WORKING && wp > 1 && u->start_y >= 256 && u->start_y <= 536) {
+                    const int to = (int)u->nav.work_page + (dx < 0 ? 1 : -1);
+                    if (to >= 0 && to < wp) u->nav.work_page = (uint8_t)to;
+                    return none;
+                }
+                int16_t pg[POD_TABS_MAX + 2];
+                const int n = pod_home_pages(&u->model, pg, POD_TABS_MAX + 2), cur = pod_home_clamp(&u->model, top(u)->scroll);
+                int at = 0;
+                while (at < n - 1 && pg[at] < cur) at++;
+                const int want = at + (dx < 0 ? 1 : -1);
+                if (want >= 0 && want < n) pod_nav_act(&u->nav, &u->model, POD_A_SCROLL, pg[want] - top(u)->scroll, now_ms);   // to the page itself, whatever the frame's scroll holds
                 return none;
             }
             if (top(u)->view == POD_V_INBOX)   // the Inbox: either way goes back to where it was opened
@@ -752,28 +760,42 @@ bool pod_ui_start(pod_ui_t *u, uint32_t now_ms)
 
 // ---- notifications -----------------------------------------------------------------------------------------
 
-bool pod_ui_notify(pod_ui_t *u, const char *agent_id, bool awake, uint32_t now_ms)
+bool pod_ui_notify(pod_ui_t *u, const char *agent_id, pod_tier_t tier, bool awake, uint32_t now_ms)
+{
+    return pod_ui_notify_text(u, agent_id, tier, NULL, false, awake, now_ms);
+}
+
+bool pod_ui_notify_text(pod_ui_t *u, const char *agent_id, pod_tier_t tier, const char *text, bool question, bool awake, uint32_t now_ms)
 {
     pod_model_clock(&u->model, now_ms);
     const pod_agent_t *a = pod_model_find(&u->model, agent_id);
-    if (!a) return false;
+    if (!a || tier == POD_TIER_SILENT) return false;
     const pod_frame_t *t = top(u);
     const bool looking = awake && t && (t->view == POD_V_AGENT || t->view == POD_V_RECAP) && !strcmp(t->agent, a->id);
-    char text[POD_UNREAD_TEXT];
-    size_t pos = 0;
-    text[0] = 0;
-    for (int i = 0; i < a->recap_lines && pos + 1 < sizeof text; i++) {   // the recap's sentences, joined
-        const char *l = a->recap + a->line_at[i];
-        if (!*l) continue;
-        int n = snprintf(text + pos, sizeof text - pos, "%s%s", pos ? " " : "", l);
-        if (n < 0) break;
-        pos += (size_t)n < sizeof text - pos ? (size_t)n : sizeof text - pos - 1;
+    char joined[POD_UNREAD_TEXT];
+    if (!text) {
+        size_t pos = 0;
+        joined[0] = 0;
+        for (int i = 0; i < a->recap_lines && pos + 1 < sizeof joined; i++) {   // the recap's sentences, joined
+            const char *l = a->recap + a->line_at[i];
+            if (!*l) continue;
+            int n = snprintf(joined + pos, sizeof joined - pos, "%s%s", pos ? " " : "", l);
+            if (n < 0) break;
+            pos += (size_t)n < sizeof joined - pos ? (size_t)n : sizeof joined - pos - 1;
+        }
+        pod_utf8_trim(joined);
+        text = joined;
     }
-    pod_utf8_trim(text);
-    pod_model_unread_add(&u->model, a->id, a->name, text, (int32_t)pod_agent_secs(a, now_ms), now_ms);
-    // The toast: none over the update, nor over the bubble that says the same. It shows only over a room, never for
-    // the agent it is (looking or not: its recap is already there), and not over Home, Notices or Talk; a toast raised for the next notice replaces this one.
-    if (!pod_ui_talking(u) && !u->ota && !looking) {
+    if (question) pod_model_unread_ask(&u->model, a->id, a->name, text, now_ms);
+    else pod_model_unread_add(&u->model, a->id, a->name, text, (int32_t)pod_agent_secs(a, now_ms), now_ms);
+    u->dirty = true;
+    if (looking) {   // its own room is on screen: shown in place, read at once, no sound, no wake, no toast
+        pod_model_unread_read(&u->model, a->id);
+        return false;
+    }
+    // The toast (alert only): none over the update, nor over the bubble that says the same. It shows only over a room, never for
+    // the agent it is, and not over Home, Notices or Talk; a toast raised for the next notice replaces this one.
+    if (tier == POD_TIER_ALERT && !pod_ui_talking(u) && !u->ota) {
         const bool room = t && (t->view == POD_V_AGENT || t->view == POD_V_RECAP);
         if (room && strcmp(t->agent, a->id)) {
             pod_copy_str(u->ban_agent, sizeof u->ban_agent, a->id);
@@ -781,8 +803,7 @@ bool pod_ui_notify(pod_ui_t *u, const char *agent_id, bool awake, uint32_t now_m
             u->ban_on = true;
         }
     }
-    u->dirty = true;
-    return true;
+    return tier == POD_TIER_ALERT;
 }
 
 void pod_ui_notif_begin(pod_ui_t *u) { pod_model_unread_clear(&u->model); }

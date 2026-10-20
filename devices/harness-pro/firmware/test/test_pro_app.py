@@ -909,9 +909,9 @@ static void *cable_task(void *arg) {
     pro_app_turn("a1", "verb", "Reading...", -1);
     pro_app_turn("a1", "activity", "Reading files", 3);
     pro_app_turn("a1", "step", "Read - pod_model.c", -1);
-    pro_app_question("a3", "Which branch?");
+    pro_app_question("a3", "r1", "Which branch?");
     pro_app_question_close("a3");
-    pro_app_summary("a2", "Fixed the parser.", "Fixed the parser. Added two tests.", "Fixed the parser. Added two tests. Then more.", false, false);
+    pro_app_summary("a2", "Fixed the parser.", "Fixed the parser. Added two tests.", "Fixed the parser. Added two tests. Then more.", false, POD_TIER_SILENT);
     pro_app_focus("a4");
     pro_app_turn("a1", "done", "", 0);
     pro_app_swarms(NULL, 0, NULL, NULL, NULL, 0);
@@ -1484,25 +1484,25 @@ static void pro_app_test_summary_and_question(void) {
     now = 3000;
     pro_app_turn("a1", "started", "", 0);
     // A live summary ends the turn; `full` wins over `recap`.
-    pro_app_summary("a1", "short", "the recap", "the long recap", false, false);
+    pro_app_summary("a1", "short", "the recap", "the long recap", false, POD_TIER_SILENT);
     CHECK(agent("a1")->state == POD_DONE && strstr(agent("a1")->recap, "the long recap") && !strstr(agent("a1")->recap, "the recap\n"));
     // A restore summary is history: no end of turn.
     pro_app_turn("a2", "started", "", 0);
-    pro_app_summary("a2", "old text", NULL, NULL, true, false);
+    pro_app_summary("a2", "old text", NULL, NULL, true, POD_TIER_SILENT);
     CHECK(agent("a2")->state == POD_WORKING);
     // "done" is not a text
-    pro_app_summary("a3", "done", NULL, NULL, false, false);
+    pro_app_summary("a3", "done", NULL, NULL, false, POD_TIER_SILENT);
     CHECK(agent("a3")->recap[0] == 0);
     // Questions: held while open, closed by the daemon or by a new turn.
-    pro_app_question("a1", "Which branch?");
+    pro_app_question("a1", "r1", "Which branch?");
     CHECK(pro_app_question_open("a1") && agent("a1")->state == POD_ASKING);
     pro_app_question_close("a1");
     CHECK(!pro_app_question_open("a1"));
-    pro_app_question("a1", NULL);
+    pro_app_question("a1", "r1", NULL);
     CHECK(pro_app_question_open("a1") && !strcmp(agent("a1")->question, "Needs your answer"));
     pro_app_turn("a1", "started", "", 0);
     CHECK(!pro_app_question_open("a1"));
-    pro_app_question("zz", "ghost?");
+    pro_app_question("zz", "r1", "ghost?");
     CHECK(!pro_app_question_open("zz"));
 }
 
@@ -1574,7 +1574,7 @@ static void pro_app_test_voice_gate(void) {
     CHECK(!strcmp(pro_app_voice_block_reason("a3"), "Link this computer in Harness."));
     CHECK(!strcmp(pro_app_voice_block_reason("a4"), "Choose an agent pane."));
     CHECK(pro_app_voice_block_reason("nobody") == NULL);        // unknown: allowed
-    pro_app_question("a1", "Which?");
+    pro_app_question("a1", "r1", "Which?");
     CHECK(!strcmp(pro_app_voice_block_reason("a1"), "Answer its question first."));
     pro_app_question_close("a1");
     CHECK(pro_app_voice_block_reason("a1") == NULL);
@@ -1609,7 +1609,7 @@ static void pro_app_test_voice_paths(void) {
     CHECK(top() == POD_V_AGENT && !pod_ui_talking(&U) && U.notice_on && !strcmp(U.notice, "Can't talk right now"));
     // A gate refusal never reaches the recorder
     V.refuse = false;
-    pro_app_question("a1", "Which?");
+    pro_app_question("a1", "r1", "Which?");
     render();
     CHECK(hit(POD_A_TALK, 0) == NULL);                         // no screen draws a Talk button; the gate still meets a stale hit
     tap_stale_talk();
@@ -1769,10 +1769,10 @@ static void side_button_discards_hands_free(void) {
 static void question_needs_the_link(void) {
     setup();
     pro_app_link(false, NULL);
-    pro_app_question("a1", "Which one?");
+    pro_app_question("a1", "r1", "Which one?");
     CHECK(!pro_app_question_open("a1"));
     pro_app_link(true, "mac");
-    pro_app_question("a1", "Which one?");
+    pro_app_question("a1", "r1", "Which one?");
     CHECK(pro_app_question_open("a1"));
 }
 
@@ -1796,7 +1796,7 @@ static void notif_room(void) {
 static void notify_banner_beep_and_expiry(void) {
     notif_room();
     // A plain live summary: an unread entry, the toast, one beep.
-    pro_app_summary("a3", "t", "Shipped the thing. Tests pass.", NULL, false, true);
+    pro_app_summary("a3", "t", "Shipped the thing. Tests pass.", NULL, false, POD_TIER_ALERT);
     CHECK(BEEPS == 1 && U.model.unread_count == 1 && !strcmp(U.model.unread[0].agent, "a3"));
     CHECK(pod_ui_take_changed(&U));
     render();
@@ -1814,53 +1814,172 @@ static void notify_banner_beep_and_expiry(void) {
     CHECK(banner() == NULL && U.model.unread_count == 1);   // it stays unread in the Inbox
     // A newer one replaces the shown one, and moves to the top of the list.
     now = 20000;
-    pro_app_summary("a2", "t", "Renamed the module.", NULL, false, true);
+    pro_app_summary("a2", "t", "Renamed the module.", NULL, false, POD_TIER_ALERT);
     render();
-    CHECK(BEEPS == 2 && U.model.unread_count == 2 && !strcmp(U.model.unread[0].agent, "a2") && banner() && !strcmp(banner()->id, "a2"));
+    CHECK(BEEPS == 1 && U.model.unread_count == 2 && !strcmp(U.model.unread[0].agent, "a2") && banner() && !strcmp(banner()->id, "a2"));   // 15 s after the beep: coalesced
     now = 22000;
-    pro_app_summary("a3", "t", "And again.", NULL, false, true);
+    pro_app_summary("a3", "t", "And again.", NULL, false, POD_TIER_ALERT);
     render();
-    CHECK(BEEPS == 3 && U.model.unread_count == 2 && !strcmp(banner()->id, "a3") && !strcmp(U.model.unread[0].agent, "a3"));
+    CHECK(BEEPS == 1 && U.model.unread_count == 2 && !strcmp(banner()->id, "a3") && !strcmp(U.model.unread[0].agent, "a3"));
     // Muted: the entry and the toast come, the beep does not.
     MUTED = true;
-    now = 30000;
-    pro_app_summary("a2", "t", "Muted one.", NULL, false, true);
-    CHECK(BEEPS == 3 && U.model.unread_count == 2);
+    now = 40000;
+    pro_app_summary("a2", "t", "Muted one.", NULL, false, POD_TIER_ALERT);
+    CHECK(BEEPS == 1 && U.model.unread_count == 2);
     MUTED = false;
     // quiet / silent / restore (notify false): no entry, no beep, no toast; a restore also leaves the turn state alone.
     notif_room();
     now = 6000;
-    pro_app_summary("a3", "t", "quiet", NULL, false, false);
-    pro_app_summary("a3", "t", "restored", NULL, true, false);
+    pro_app_summary("a3", "t", "quiet", NULL, false, POD_TIER_SILENT);
+    pro_app_summary("a3", "t", "restored", NULL, true, POD_TIER_SILENT);
     CHECK(BEEPS == 0 && U.model.unread_count == 0);
     render();
     CHECK(banner() == NULL);
     // A restore that claims to notify still does not (the cable never sends that; the app does not trust it).
-    pro_app_summary("a3", "t", "restored", NULL, true, true);
+    pro_app_summary("a3", "t", "restored", NULL, true, POD_TIER_ALERT);
     CHECK(BEEPS == 0 && U.model.unread_count == 0);
     // An agent the roster does not hold: nothing.
-    pro_app_summary("zz", "t", "ghost", NULL, false, true);
+    pro_app_summary("zz", "t", "ghost", NULL, false, POD_TIER_ALERT);
     CHECK(BEEPS == 0 && U.model.unread_count == 0);
-    // Awake on that agent's own screen: it beeps and the entry is filed all the same (the recap on screen reads it), but no toast
-    // covers the room that says the same. Dark on it: news, and the glass lights.
+    // Awake on that agent's own screen: no beep, no wake, the entry is read at once. Dark on it: news, and the glass lights.
     notif_setup();
     now = 40000;
     pod_ui_focus(&U, "a3", now);
     CHECK(top() == POD_V_AGENT || top() == POD_V_RECAP);
-    pro_app_summary("a3", "t", "Looked at.", NULL, false, true);
+    pro_app_summary("a3", "t", "Looked at.", NULL, false, POD_TIER_ALERT);
     render();
-    CHECK(BEEPS == 1 && banner() == NULL && U.model.unread_count == 0);   // its recap is on screen: read at once
+    CHECK(BEEPS == 0 && banner() == NULL && U.model.unread_count == 0);   // its recap is on screen: no beep, read at once
     pro_app_sleep();
     CHECK(pro_app_asleep());
-    pro_app_summary("a3", "t", "In the dark.", NULL, false, true);
-    CHECK(BEEPS == 2 && U.model.unread_count == 1 && !pro_app_asleep());
+    pro_app_summary("a3", "t", "In the dark.", NULL, false, POD_TIER_ALERT);
+    CHECK(BEEPS == 1 && U.model.unread_count == 1 && !pro_app_asleep());
+}
+
+// The tiers: alert = entry + toast + beep + wake; list = entry only; silent = nothing. One beep per 30 s; one entry per agent.
+static void notify_tiers(void) {
+    notif_room();   // a1's room, now = 5300
+    pro_app_summary("a3", "t", "Listed.", NULL, false, POD_TIER_LIST);
+    render();
+    CHECK(BEEPS == 0 && U.model.unread_count == 1 && banner() == NULL && !U.ban_on);
+    pro_app_summary("a2", "t", "Silent.", NULL, false, POD_TIER_SILENT);
+    CHECK(BEEPS == 0 && U.model.unread_count == 1 && !pod_model_unread_find(&U.model, "a2"));
+    // A newer entry of the same agent replaces the older one.
+    pro_app_summary("a3", "t", "Listed again.", NULL, false, POD_TIER_LIST);
+    CHECK(U.model.unread_count == 1 && !strcmp(U.model.unread[0].text, "Listed again."));
+    // An asleep device receiving a list entry stays asleep; an alert wakes it.
+    pro_app_sleep();
+    pro_app_summary("a2", "t", "Dark list.", NULL, false, POD_TIER_LIST);
+    CHECK(pro_app_asleep() && BEEPS == 0 && U.model.unread_count == 2);
+    pro_app_summary("a2", "t", "Dark alert.", NULL, false, POD_TIER_ALERT);
+    CHECK(!pro_app_asleep() && BEEPS == 1 && U.model.unread_count == 2);
+    // Alerts 10 s apart beep once; 31 s after the beep, again. A coalesced alert still wakes and toasts.
+    now += 10000;
+    pro_app_sleep();
+    pro_app_summary("a3", "t", "Second.", NULL, false, POD_TIER_ALERT);
+    render();
+    CHECK(BEEPS == 1 && !pro_app_asleep() && banner() && !strcmp(banner()->id, "a3"));
+    now += 21000;   // 31 s after the first beep
+    pro_app_summary("a2", "t", "Third.", NULL, false, POD_TIER_ALERT);
+    CHECK(BEEPS == 2);
+}
+
+// A question is an alert; a failed turn files a failed entry as an alert.
+static void notify_question_and_error(void) {
+    notif_room();   // a1's room, now = 5300
+    pro_app_question("a3", "r1", "Which branch?");
+    render();
+    CHECK(BEEPS == 1 && banner() && !strcmp(banner()->id, "a3") && pod_model_unread_find(&U.model, "a3"));
+    now += 10000;
+    pro_app_question("a2", "r1", "Which file?");
+    CHECK(BEEPS == 1);   // coalesced
+    pro_app_question_close("a3");
+    pro_app_question_close("a2");
+    CHECK(U.model.unread_count == 0);   // answered: its entry goes
+    // Asleep: the question wakes the glass.
+    pro_app_sleep();
+    now += 40000;
+    pro_app_question("a3", "r1", "Again?");
+    CHECK(!pro_app_asleep() && BEEPS == 2);
+    // Its own room: no beep, nothing filed.
+    pro_app_question_close("a3");
+    notif_setup();
+    pod_ui_focus(&U, "a3", now);
+    pro_app_question("a3", "r1", "Here?");
+    CHECK(BEEPS == 0 && U.model.unread_count == 0);
+    // turn.error: a failed entry, an alert.
+    notif_room();
+    pro_app_turn("a3", "error", "Build broke", 0);
+    render();
+    const pod_unread_t *e = pod_model_unread_find(&U.model, "a3");
+    CHECK(BEEPS == 1 && e && e->kind == POD_UNREAD_FAILED && !strcmp(e->text, "Build broke") && banner());
+}
+
+// The daemon re-sends an open question after a link drop: the row returns, but the glass does not wake or beep again.
+static void notify_question_resent_after_relink_is_quiet(void) {
+    notif_room();
+    pro_app_question("a3", "r1", "Which branch?");
+    CHECK(BEEPS == 1);
+    pro_app_link(false, NULL);
+    pro_app_link(true, "mac");
+    pro_app_sleep();
+    now += 40000;   // past the beep coalescing, so only the repeat check can silence it
+    pro_app_question("a3", "r1", "Which branch?");
+    CHECK(pro_app_question_open("a3") && pod_model_unread_find(&U.model, "a3") && BEEPS == 1 && pro_app_asleep());
+    pro_app_question("a3", "r2", "A different one?");   // another prompt is news
+    CHECK(BEEPS == 2 && !pro_app_asleep());
+    pro_app_question_close("a3");
+    now += 40000;
+    pro_app_question("a3", "r3", "A different one?");   // answered, then asked again: news
+    CHECK(BEEPS == 3);
+}
+
+// The same prompt under a new request is a new question, even when the close of the last one was lost (Claude
+// Code's approvals all read "Do you want to proceed?").
+static void notify_question_same_prompt_new_request_beeps(void) {
+    notif_room();
+    pro_app_question("a3", "r1", "Do you want to proceed?");
+    CHECK(BEEPS == 1);
+    pro_app_link(false, NULL);   // the close of r1 is lost with the link
+    pro_app_link(true, "mac");
+    now += 40000;
+    pro_app_question("a3", "r2", "Do you want to proceed?");
+    CHECK(BEEPS == 2);
+}
+
+// A question's entry goes whenever the question ends: a new turn, a finished turn, a link drop.
+static void notify_question_entry_ends_with_question(void) {
+    notif_room();
+    pro_app_question("a3", "r1", "Which branch?");
+    CHECK(pod_model_unread_find(&U.model, "a3"));
+    pro_app_turn("a3", "started", "Working", 0);
+    CHECK(!pod_model_unread_find(&U.model, "a3"));
+    pro_app_question("a2", "r1", "Which file?");
+    CHECK(pod_model_unread_find(&U.model, "a2"));
+    pro_app_summary("a2", "t", "Done.", NULL, false, POD_TIER_SILENT);
+    CHECK(!pod_model_unread_find(&U.model, "a2"));   // a silent end files nothing, and the question's entry is gone
+    pro_app_question("a3", "r1", "Again?");
+    CHECK(pod_model_unread_find(&U.model, "a3"));
+    pro_app_link(false, NULL);
+    CHECK(!pod_model_unread_find(&U.model, "a3"));
+    pro_app_link(true, "mac");
+    CHECK(!pod_model_unread_find(&U.model, "a3"));
+}
+
+// Entries expire after 6 h, measured from receipt on the render clock.
+static void notify_entries_expire(void) {
+    notif_room();
+    pro_app_summary("a3", "t", "Old.", NULL, false, POD_TIER_LIST);
+    now += POD_UNREAD_TTL_MS - 1; render();
+    CHECK(U.model.unread_count == 1);
+    now += 1; render();
+    CHECK(U.model.unread_count == 0);
 }
 
 static void notify_tap_opens_and_swipe_dismisses(void) {
     notif_room();
     // A tap on the toast opens Notices, which lists the entry.
     now = 6000;
-    pro_app_summary("a3", "t", "Shipped the thing. Tests pass.", NULL, false, true);
+    pro_app_summary("a3", "t", "Shipped the thing. Tests pass.", NULL, false, POD_TIER_ALERT);
     render();
     const pod_hit_t *b = banner();
     CHECK(b);
@@ -1871,7 +1990,7 @@ static void notify_tap_opens_and_swipe_dismisses(void) {
     // A swipe up dismisses; the entry stays unread and nothing opens.
     notif_room();
     now = 7000;
-    pro_app_summary("a3", "t", "Again.", NULL, false, true);
+    pro_app_summary("a3", "t", "Again.", NULL, false, POD_TIER_ALERT);
     render();
     b = banner();
     CHECK(b);
@@ -1884,7 +2003,7 @@ static void notify_tap_opens_and_swipe_dismisses(void) {
     CHECK(up.fx == POD_FX_NONE && banner() == NULL && U.model.unread_count == 1 && top() == POD_V_AGENT);
     // A drag down or sideways on the toast is neither a tap nor a dismissal.
     now = 8000;
-    pro_app_summary("a2", "t", "Third.", NULL, false, true);
+    pro_app_summary("a2", "t", "Third.", NULL, false, POD_TIER_ALERT);
     render();
     b = banner();
     cx = b->x + b->w / 2; cy = b->y + b->h / 2;
@@ -1899,7 +2018,7 @@ static void notify_never_over_talk(void) {
     expect(tap(POD_A_TALK, 0), POD_FX_VOICE_BEGIN, "a1");
     CHECK(pod_ui_talking(&U));
     now = 6000;
-    pro_app_summary("a3", "t", "Done while talking.", NULL, false, true);
+    pro_app_summary("a3", "t", "Done while talking.", NULL, false, POD_TIER_ALERT);
     render();
     CHECK(banner() == NULL && U.model.unread_count == 1);   // in the Inbox; no toast over a recording
     now = 7000; render();
@@ -1911,7 +2030,7 @@ static void notify_never_over_talk(void) {
     // No cable: no toast.
     notif_room();
     now = 6000;
-    pro_app_summary("a3", "t", "x", NULL, false, true);
+    pro_app_summary("a3", "t", "x", NULL, false, POD_TIER_ALERT);
     pro_app_link(false, NULL);
     render();
     CHECK(banner() == NULL);
@@ -1948,7 +2067,7 @@ static void notify_replace_seen_and_read(void) {
     pro_app_notif_replace(rows, 3);
     // Notices: Home's card before the first tab opens it; a row opens the agent. A recap on screen reads its entry and sends
     // notif.read with the token; a working agent's room has no recap to show, so its entry waits.
-    pod_nav_act(&U.nav, &U.model, POD_A_SCROLL, -1, now);
+    pod_nav_act(&U.nav, &U.model, POD_A_SCROLL, POD_HOME_NOTICES, now);
     render();
     expect(tap(POD_A_INBOX, 0), POD_FX_NONE, NULL);
     CHECK(top() == POD_V_INBOX);
@@ -2107,18 +2226,18 @@ static void ota_notifications_quiet(void) {
     const int depth = U.nav.depth;
     fw_update_ui_begin("0.1.2", "0.1.3");
     now += 100;
-    pro_app_summary("a3", "t", "Shipped the thing.", NULL, false, true);
+    pro_app_summary("a3", "t", "Shipped the thing.", NULL, false, POD_TIER_ALERT);
     CHECK(BEEPS == 0 && U.model.unread_count == 1 && !U.ban_on);   // in Notices, no beep, no toast
     render();
     CHECK(banner() == NULL && !U.frame.banner);
-    pro_app_summary("a1", "t", "Another.", NULL, false, true);
+    pro_app_summary("a2", "t", "Another.", NULL, false, POD_TIER_ALERT);
     CHECK(BEEPS == 0 && U.model.unread_count == 2);
     ota_end();
     CHECK(U.nav.depth == depth);
     now += 100; render();
     CHECK(banner() == NULL);   // Notices has them; the toast never came
     // Back to normal afterwards.
-    pro_app_summary("a2", "t", "After.", NULL, false, true);
+    pro_app_summary("a2", "t", "After.", NULL, false, POD_TIER_ALERT);
     CHECK(BEEPS == 1 && U.ban_on);
 }
 
@@ -2252,7 +2371,7 @@ int main(int argc, char **argv) {
         {"pro_app_test_voice_paths", pro_app_test_voice_paths}, {"pro_app_test_touch_rules", pro_app_test_touch_rules},
         {"pro_app_test_roster_and_swarms", pro_app_test_roster_and_swarms}, {"side_button", side_button}, {"side_button_console", side_button_console}, {"question_needs_the_link", question_needs_the_link},
         {"notify_banner_beep_and_expiry", notify_banner_beep_and_expiry}, {"notify_tap_opens_and_swipe_dismisses", notify_tap_opens_and_swipe_dismisses},
-        {"notify_never_over_talk", notify_never_over_talk}, {"notify_replace_seen_and_read", notify_replace_seen_and_read},
+        {"notify_never_over_talk", notify_never_over_talk}, {"notify_tiers", notify_tiers}, {"notify_question_and_error", notify_question_and_error}, {"notify_entries_expire", notify_entries_expire}, {"notify_question_entry_ends_with_question", notify_question_entry_ends_with_question}, {"notify_question_resent_after_relink_is_quiet", notify_question_resent_after_relink_is_quiet}, {"notify_question_same_prompt_new_request_beeps", notify_question_same_prompt_new_request_beeps}, {"notify_replace_seen_and_read", notify_replace_seen_and_read},
         {"ota_screen_and_touch", ota_screen_and_touch}, {"voice_refused_while_updating", voice_refused_while_updating},
         {"update_gate", update_gate}, {"ota_failed_returns", ota_failed_returns}, {"ota_keeps_awake", ota_keeps_awake},
         {"ota_notifications_quiet", ota_notifications_quiet}, {"updated_notice", updated_notice},

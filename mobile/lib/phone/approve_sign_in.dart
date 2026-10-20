@@ -24,10 +24,120 @@ import 'welcome/scan_to_connect.dart';
 /// devices trust it — so the prompt says what is asking and from where, and makes a computer on
 /// another network take a deliberate hold rather than a tap. The computer then asks its own person
 /// whose account it is joining; nothing is created until it says yes.
+///
+/// A device with no screen — a lamp (#1410), `harness login --code` — says eight digits aloud instead
+/// of showing a QR: "Type a code instead" under the camera takes them, and they go on to the same
+/// approval. The device still asks its own person whose account it is joining.
 Future<void> signInAComputer(BuildContext context, AppNotifier notifier, {Widget? camera}) async {
-  final code = await scanForSignIn(context, camera: camera);
+  var typeCode = false;
+  final scanned = await scanForSignIn(context, camera: camera, onTypeCode: () => typeCode = true);
+  if (!context.mounted) return;
+  final code = scanned ?? (typeCode ? await typeSignInCode(context) : null);
   if (code == null || !context.mounted) return;
   await approveComputerSignIn(context, notifier, code);
+}
+
+/// The eight digits a device with no screen says aloud. Null when the person dropped it.
+Future<SignInCode?> typeSignInCode(BuildContext context) =>
+    showAppDialog<SignInCode>(context: context, builder: (_) => const _TypeCodeDialog());
+
+/// Owns its controller, so nothing rebuilds over a disposed one while the dialog animates out.
+class _TypeCodeDialog extends StatefulWidget {
+  const _TypeCodeDialog();
+
+  @override
+  State<_TypeCodeDialog> createState() => _TypeCodeDialogState();
+}
+
+class _TypeCodeDialogState extends State<_TypeCodeDialog> {
+  final _controller = TextEditingController();
+
+  /// The digits typed, whatever spacing the person used to keep their place.
+  String get _digits => _controller.text.replaceAll(RegExp(r'\D'), '');
+  bool get _complete => _digits.length == 8;
+
+  void _submit() {
+    if (_complete) Navigator.of(context).pop(SignInCode(_digits));
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final accent = AppPalette.accentOnSurface;
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: Tty.origin, vertical: 24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 360),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Type the code',
+                style: TextStyle(color: AppPalette.textPrimary, fontSize: 17, fontWeight: AppFont.semibold, height: 1.3),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'The eight digits the device says aloud.',
+                style: TextStyle(color: AppPalette.textSecondary, fontSize: 15, height: 1.45),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Never type a code someone sent you — only one a device in front of you is saying.',
+                style: TextStyle(color: AppPalette.textSecondary, fontSize: 13, height: 1.4),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                key: const Key('sign-in-code-field'),
+                controller: _controller,
+                autofocus: true,
+                keyboardType: TextInputType.number,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: AppPalette.textPrimary, fontSize: 24, letterSpacing: 4),
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'[0-9 ]')),
+                  LengthLimitingTextInputFormatter(9),
+                ],
+                decoration: const InputDecoration(hintText: '1234 5678'),
+                onChanged: (_) => setState(() {}),
+                onSubmitted: (_) => _submit(),
+              ),
+              const SizedBox(height: 22),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton(
+                      key: const Key('sign-in-code-cancel'),
+                      style: appDialogButtonStyle(background: AppSurface.recess, foreground: AppPalette.textPrimary),
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('Cancel'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: FilledButton(
+                      key: const Key('sign-in-code-continue'),
+                      style: appDialogButtonStyle(background: accent, foreground: Colors.white),
+                      onPressed: _complete ? _submit : null,
+                      child: const Text('Continue'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// The prompt and the answer for one scanned [code].
@@ -56,7 +166,11 @@ Future<void> approveComputerSignIn(
     await _tell(
       context,
       'Already answered',
-      scanAgain == null
+      // A typed code was heard, and could have been heard by someone else: the device's own
+      // "Sign in as …?" is then all that stands in their way, so say so while it can be answered.
+      _typed(code)
+          ? "Someone else already answered this code. If the device asks to sign in with an account that isn't yours, say no."
+          : scanAgain == null
           ? 'That code was already answered. Scan the new one.'
           : 'That code was already answered. $scanAgain',
     );
@@ -90,6 +204,9 @@ Future<void> approveComputerSignIn(
     if (context.mounted) await _tell(context, "Couldn't answer", _reason(error));
   }
 }
+
+/// A code typed from a device's voice (eight digits) rather than read from a QR.
+bool _typed(SignInCode code) => RegExp(r'^\d{8}$').hasMatch(code.code);
 
 /// Why a request failed, as a sentence for the person.
 ///

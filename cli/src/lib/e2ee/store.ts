@@ -61,6 +61,9 @@ export interface PairedClient {
   /** A machine of another account this machine is shared with (gateway/sharedTrust.ts): trusted like the
    *  account's own, but never a member of the trust group, and taken back when the sharing ends. */
   shared?: true
+  /** With `shared`: the account (email) the machine is shared with. Its sessions are that account's guest
+   *  (docs/plans/2026-10-19-guest-machine-sharing-plan.md). */
+  sharedWith?: string
 }
 
 /** What a password-linked peer is: another harness machine (which also serves, so it can be dialed back)
@@ -159,12 +162,13 @@ export class E2eeStore {
     return this.paired.get(identityPubB64) ?? null
   }
 
-  addPaired(identityPubB64: string, label: string, at: number, role: PairRole = 'web', peer?: { machineId?: string; kind?: PeerKind; shared?: boolean }): void {
+  addPaired(identityPubB64: string, label: string, at: number, role: PairRole = 'web', peer?: { machineId?: string; kind?: PeerKind; shared?: boolean; sharedWith?: string }): void {
     this.paired.set(identityPubB64, {
       identityPub: identityPubB64, label, pairedAt: at, role,
       ...(peer?.machineId ? { machineId: peer.machineId } : {}),
       ...(peer?.kind ? { kind: peer.kind } : {}),
       ...(peer?.shared ? { shared: true as const } : {}),
+      ...(peer?.shared && peer.sharedWith ? { sharedWith: peer.sharedWith } : {}),
     })
     writeSecure(PAIRED_FILE, [...this.paired.values()])
   }

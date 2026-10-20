@@ -392,6 +392,9 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
    try {
     const runtime = tmuxRuntime(entry)
     if (entry.externalResume?.phase === 'cancelled') { summary.skipped.push({ agentId: entry.agentId, reason: 'external adoption cancelled' }); continue }
+    // A guest's harness ran as the guest's own OS user (core/agents/guestCreate.ts). Rebuilt here it would run
+    // as the owner, with the owner's keys: it is left stopped, and the guest starts a new one.
+    if (entry.guest) { summary.skipped.push({ agentId: entry.agentId, reason: 'a guest\'s harness' }); continue }
     if (!runtime) { summary.skipped.push({ agentId: entry.agentId, reason: 'no tmux pane' }); continue }
     if (entry.launch?.state === 'failed') { summary.skipped.push({ agentId: entry.agentId, reason: 'last launch failed' }); continue }
     // Held: its pane, alive, runs no engine on purpose, so it is neither a stopped engine nor a terminal. Its

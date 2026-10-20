@@ -14,6 +14,7 @@ import { AgentStopError, createStopAgentService, type StopAgentServiceDeps } fro
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 
 import type { ResumeAgent } from './launches.js'
+import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
 export interface LifecycleDeps {
   settlePane?: StopAgentServiceDeps['settlePane']
@@ -87,8 +88,10 @@ export function createAgentLifecycle({
     retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume,
     refreshGridWebSearch, clearDeleted, attachDsh, attachSession, relaunchMarks,
   })
-  const resumeAgent: ResumeAgent = (id, permissionMode) => purgeAgentService.busy(id) || purgeAgentService.blocksFolder(stoppedAgents.get(id)?.cwd)
-    ? Promise.resolve({ ok: false, error: 'AGENT_BUSY' }) : resume(id, permissionMode)
+  const resumeAgent: ResumeAgent = (id, permissionMode) => (stoppedAgents.get(id) ?? registry.byAgent(id))?.guest
+    ? Promise.resolve(GUEST_HARNESS_REFUSAL)
+    : purgeAgentService.busy(id) || purgeAgentService.blocksFolder(stoppedAgents.get(id)?.cwd)
+      ? Promise.resolve({ ok: false, error: 'AGENT_BUSY' }) : resume(id, permissionMode)
   return { stopJobs, stopAgent, purgeAgentService, resumeAgent }
 }
 

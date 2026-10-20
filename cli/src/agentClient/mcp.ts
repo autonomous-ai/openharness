@@ -16,14 +16,15 @@ import { createInterface } from 'node:readline'
 import { VERSION } from '../version.js'
 import { AGENT_SESSION_ENV } from './model.js'
 import { EXIT, VIA_MCP_ENV } from './commands.js'
+import { ENGINES, TERMINAL_ENGINE } from '../engines/types.js'
 
 /** Newest first: the client's own when it is one of these, else the newest. */
 export const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'] as const
 
 /** What an agent is told once, as it connects: when Harness is the right tool, and whose harnesses are whose. */
-export const INSTRUCTIONS = `Harness runs coding agents (Claude Code, Codex) in sessions of their own, on this computer or the person's other machines. The person can watch and join every one in the Harness app.
+export const INSTRUCTIONS = `Harness runs coding agents (Claude Code, Codex, and other engines) in sessions of their own, on this computer or the person's other machines. The person can watch and join every one in the Harness app.
 
-Every harness spends the person's tokens. Start one (harness_start) only for work that can run in parallel with yours, needs another model's view (a review, a second opinion from Codex), takes long, or belongs in its own folder. Do quick work yourself. For scratch or new work give it a project name (project), not a folder of your own: Claude Code and Codex ask the person to trust a folder Harness did not make.
+Every harness spends the person's tokens. Start one (harness_start) only for work that can run in parallel with yours, needs another model's view (a review, a second opinion from Codex), takes long, or belongs in its own folder. Do quick work yourself. Give it a project name (project), never a folder of your own: Harness owns and trusts a project folder it makes (~/harnesses/<name>), so the agent needs no approval; a folder you name makes Claude Code or Codex ask the person to trust it, and it waits until they answer.
 
 Call harness_whoami first: it says whether you may start harnesses now. Then list (harness_list), search what was already said or decided (harness_search), and see the machines you may run on (harness_machines). Put everything in the task: starting a harness does not let you message it. A follow-up goes by harness_send only to a teammate in your tab, while Agent Messages are on; otherwise start a new harness with the fuller task. Never give work to, or close, a harness you did not start: those are the person's.
 
@@ -45,6 +46,9 @@ interface Tool {
   /** The `harness` words for these arguments. */
   argv: (args: Record<string, unknown>, cwd: string) => string[]
 }
+
+/** The agents a harness may be started with: every engine but the terminal (a shell pane is not an agent). */
+export const STARTABLE_AGENTS = ENGINES.filter((engine) => engine !== TERMINAL_ENGINE)
 
 const str = (value: unknown): string => (typeof value === 'string' ? value.trim() : '')
 const schema = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', properties, required, additionalProperties: false })
@@ -80,13 +84,13 @@ export const TOOLS: Tool[] = [
   },
   {
     name: 'harness_start',
-    description: 'Start a new harness: an agent in a session of its own, working on [task] in an existing [folder], or in a new [project] Harness makes for it. Returns within a minute; wait for it with harness_wait and read its answer with harness_read. If its agent is still being installed then, it starts by itself: follow it by its name, and never start it again.',
+    description: 'Start a new harness: an agent in a session of its own, working on [task] in a new [project] Harness makes and owns (no approval needed), or in an existing [folder] (the engine asks the person to trust it). Prefer project. Returns within a minute; wait for it with harness_wait and read its answer with harness_read. If its agent is still being installed then, it starts by itself: follow it by its name, and never start it again.',
     inputSchema: schema({
       task: { type: 'string', description: 'The whole task, as you would write it to a colleague: what to do, where, and what to answer with.' },
-      folder: { type: 'string', description: 'An existing folder to work in: an absolute path, or one relative to where this server runs. Claude Code and Codex ask the person to trust a folder Harness did not make, and wait until they answer.' },
-      project: { type: 'string', description: 'For scratch or new work, instead of folder: a name for a new project folder Harness makes (~/harnesses/<name>), which needs no approval. With neither, Harness names one.' },
+      project: { type: 'string', description: 'For scratch or new work, always prefer this: a name for a new project folder Harness makes (~/harnesses/<name>) and trusts, so the agent needs no approval. With neither, Harness names one.' },
+      folder: { type: 'string', description: 'Only for work that must live in an existing folder: an absolute path, or one relative to where this server runs. Claude Code and Codex ask the person to trust a folder Harness did not make, and wait until they answer — so prefer project.' },
       name: { type: 'string', description: 'A short name to call it by (e.g. "reviewer"). Always give one.' },
-      agent: { type: 'string', enum: ['claude', 'codex'], description: 'Claude Code (default) or Codex.' },
+      agent: { type: 'string', enum: [...STARTABLE_AGENTS], description: 'The agent to run: Claude Code (default), Codex, or another harness engine (opencode, pi, cursor, …).' },
       machine: { type: 'string', description: 'Another of the person\'s machines, by name, to run it there.' },
     }, ['task', 'name']),
     // Starting a harness only adds one, on the person's own machines. Said so, Codex runs it without asking: a tool

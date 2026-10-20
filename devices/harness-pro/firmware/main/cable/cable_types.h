@@ -44,6 +44,12 @@ typedef struct {
 } cable_swarm_members_t;
 
 /*
+ * How loud a finished turn is (the summary frame's `tier`): alert = beep, wake, toast and an entry in Notices; list = the
+ * entry only; silent = nothing new (the pet and the card still update). A question and a failed turn are always alerts.
+ */
+typedef enum { POD_TIER_ALERT, POD_TIER_LIST, POD_TIER_SILENT } pod_tier_t;
+
+/*
  * ONE TILE OF THE SELECTED TAB'S GRID, exactly where the window put it: a unit rectangle in THOUSANDTHS of the
  * grid. `agent_id` is empty for a tile this device cannot drive (a shell, a viewer); it still holds its place.
  * Relayed, never derived. An empty list means a daemon or window too old to send one.

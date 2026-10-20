@@ -130,7 +130,11 @@ export async function restartAgent(
     return { ok: false, detail: armed.reason ?? 'could not re-arm the pane before restart' }
   }
 
-  const outcome = await deps.terminate()
+  let outcome: TerminateOutcome
+  try { outcome = await deps.terminate() }
+  catch (error) {
+    return { ok: false, detail: `could not stop the running ${session.engine} session: ${error instanceof Error ? error.message : error}` }
+  }
   if (!current()) return changed
   if (!KILL_CONFIRMED.has(outcome)) {
     return { ok: false, detail: `could not confirm the running ${session.engine} process was stopped (${outcome})` }

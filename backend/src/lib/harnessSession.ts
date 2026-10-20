@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto'
 import { pub } from './bus.js'
 import type { Prisma } from '@prisma/client'
 import { prisma } from './prisma.js'
@@ -211,6 +212,10 @@ export async function revokeHarnessSessionById(sessionId: string, userId: string
 //   computer   asks the person "Sign in as <email>?" — someone else's phone may have approved it
 //   computer → POST /api/auth/qr/claim   (no auth)  → the session, created now, handed over once
 //
+// A device with no screen (a lamp, #1410) asks for a spoken code at start: eight digits it says aloud
+// and the person types on the phone, which stand in for the QR's code at lookup and answer. The device
+// still asks "Sign in as <email>?" (aloud), so a stranger who heard the digits gains nothing by them.
+//
 // Signing in is what makes the account's devices trust a computer (the device key log), so approving
 // is handing over the account's terminals, and both ends get a say: the phone sees what is asking and
 // from where, and the computer sees whose account it would join before any session exists.
@@ -232,11 +237,57 @@ interface QrRecord {
   status: 'pending' | 'approved' | 'denied'
   userId?: string
   email?: string
+  /** Its spoken code, when the device asked for one; it lives and dies with the record. */
+  spokenCode?: string
 }
 
 const qrKey = (hash: string): string => `hnauth:qr:${hash}`
 const qrPollKey = (hash: string): string => `hnauth:qrpoll:${hash}`
 const qrLockKey = (hash: string): string => `hnauth:qrlock:${hash}`
+const qrSpokenKey = (digits: string): string => `hnauth:qrspoken:${digits}`
+
+/** A spoken code: eight digits, easy to say and to type on a phone's number pad. */
+const SPOKEN_CODE = /^\d{8}$/
+
+/** Whether [code] is a spoken code (eight digits, typed with any spacing) rather than a QR's. */
+export function isSpokenCode(code: string): boolean {
+  return SPOKEN_CODE.test(code.replace(/[\s-]/g, ''))
+}
+
+// Eight digits are a small space, so the wrong ones an account types are counted, per hour and per
+// day, in Redis so every replica shares them (the per-process 20/min alone let one account try
+// ~28,800 a day per replica, review of #1427). Misses only: a person who mistypes once is unaffected.
+export const SPOKEN_CODE_MISSES_PER_HOUR = 10
+export const SPOKEN_CODE_MISSES_PER_DAY = 30
+const SPOKEN_MISS_WINDOWS = [
+  { suffix: 'h', ms: 60 * 60_000, max: SPOKEN_CODE_MISSES_PER_HOUR },
+  { suffix: 'd', ms: 24 * 60 * 60_000, max: SPOKEN_CODE_MISSES_PER_DAY },
+] as const
+const spokenMissKey = (userId: string, suffix: string): string => `hnauth:spokenmiss:${userId}:${suffix}`
+// INCR every window, arming its expiry on first use, in one atomic round trip (as bus.ts's new-id quota).
+const SPOKEN_MISS_SCRIPT = `
+for i, key in ipairs(KEYS) do
+  if redis.call('incr', key) == 1 then redis.call('pexpire', key, ARGV[i]) end
+end
+return 1`
+
+/** False once [userId] has missed too many spoken codes: even the right one then waits for the window. */
+export async function spokenCodeGuessesLeft(userId: string): Promise<boolean> {
+  const counts = await Promise.all(SPOKEN_MISS_WINDOWS.map((w) => pub.get(spokenMissKey(userId, w.suffix))))
+  return counts.every((count, i) => Number(count ?? 0) < SPOKEN_MISS_WINDOWS[i]!.max)
+}
+
+export async function recordSpokenCodeMiss(userId: string): Promise<void> {
+  const keys = SPOKEN_MISS_WINDOWS.map((w) => spokenMissKey(userId, w.suffix))
+  await pub.eval(SPOKEN_MISS_SCRIPT, keys.length, ...keys, ...SPOKEN_MISS_WINDOWS.map((w) => w.ms))
+}
+
+/** The record a phone's code names: the QR's own code, or a spoken one typed with any spacing. */
+async function codeHashFor(code: string): Promise<string | null> {
+  const digits = code.replace(/[\s-]/g, '')
+  if (SPOKEN_CODE.test(digits)) return pub.get(qrSpokenKey(digits))
+  return isHarnessQrCode(code) ? harnessTokenHash(code) : null
+}
 
 async function readQr(codeHash: string): Promise<QrRecord | null> {
   const raw = await pub.get(qrKey(codeHash))
@@ -273,12 +324,14 @@ function ipHint(ip: string | undefined): string | undefined {
 }
 
 export async function startQrSignIn(
-  req: { label: string; kind: HarnessSessionKind; computerId?: string },
+  req: { label: string; kind: HarnessSessionKind; computerId?: string; spokenCode?: boolean },
   origin: QrSignInOrigin,
-): Promise<{ code: string; pollToken: string; expiresIn: number }> {
+): Promise<{ code: string; pollToken: string; expiresIn: number; spokenCode?: string }> {
   const code = newHarnessToken(HARNESS_QR_PREFIX)
   const pollToken = newHarnessToken(HARNESS_QR_POLL_PREFIX)
   const codeHash = harnessTokenHash(code)
+  // Only on request: a spoken code is a far smaller space than the QR's, so a QR sign-in never has one.
+  const spokenCode = req.spokenCode ? await claimSpokenCode(codeHash) : undefined
   const record: QrRecord = {
     pollHash: harnessTokenHash(pollToken),
     label: req.label,
@@ -288,12 +341,22 @@ export async function startQrSignIn(
     ...(origin.country ? { country: origin.country } : {}),
     createdAt: Date.now(),
     status: 'pending',
+    ...(spokenCode ? { spokenCode } : {}),
   }
   await pub.multi()
     .set(qrKey(codeHash), JSON.stringify(record), 'EX', QR_SIGN_IN_TTL_SEC)
     .set(qrPollKey(record.pollHash), codeHash, 'EX', QR_SIGN_IN_TTL_SEC)
     .exec()
-  return { code, pollToken, expiresIn: QR_SIGN_IN_TTL_SEC }
+  return { code, pollToken, expiresIn: QR_SIGN_IN_TTL_SEC, ...(spokenCode ? { spokenCode } : {}) }
+}
+
+/** Eight digits no live sign-in holds, taken for [codeHash]. Live codes are few, so a clash is rare. */
+async function claimSpokenCode(codeHash: string): Promise<string> {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const digits = String(randomInt(0, 100_000_000)).padStart(8, '0')
+    if (await pub.set(qrSpokenKey(digits), codeHash, 'EX', QR_SIGN_IN_TTL_SEC, 'NX') === 'OK') return digits
+  }
+  throw new Error('qr start: no free spoken code')
 }
 
 /** How long a box ticket waits for its box: the phone hands it over on the box's own hotspot, and the
@@ -337,8 +400,9 @@ export interface QrSignInLookup {
 
 /** What is asking to sign in, for the phone about to approve it. Null for a code that is gone. */
 export async function lookupQrSignIn(code: string, phone: QrSignInOrigin): Promise<QrSignInLookup | null> {
-  if (!isHarnessQrCode(code)) return null
-  const r = await readQr(harnessTokenHash(code))
+  const codeHash = await codeHashFor(code)
+  if (!codeHash) return null
+  const r = await readQr(codeHash)
   if (!r) return null
   return {
     label: r.label,
@@ -355,8 +419,8 @@ export async function answerQrSignIn(
   code: string,
   answer: { approve: true; userId: string; email: string } | { approve: false },
 ): Promise<'ok' | 'gone' | 'answered'> {
-  if (!isHarnessQrCode(code)) return 'gone'
-  const codeHash = harnessTokenHash(code)
+  const codeHash = await codeHashFor(code)
+  if (!codeHash) return 'gone'
   const r = await readQr(codeHash)
   if (!r) return 'gone'
   const locked = await pub.set(qrLockKey(codeHash), '1', 'EX', QR_SIGN_IN_MAX_LIFE_SEC, 'NX')
@@ -371,10 +435,11 @@ export async function answerQrSignIn(
   // slower than the code's two minutes: it lives out its whole life instead, with nothing to extend.
   const next: QrRecord = { ...r, status: 'approved', userId: answer.userId, email: answer.email }
   const left = Math.max(1, qrLifeLeft(r))
-  await pub.multi()
+  const tx = pub.multi()
     .set(qrKey(codeHash), JSON.stringify(next), 'EX', left, 'XX')
     .expire(qrPollKey(r.pollHash), left)
-    .exec()
+  if (r.spokenCode) tx.expire(qrSpokenKey(r.spokenCode), left)
+  await tx.exec()
   return 'ok'
 }
 
@@ -384,7 +449,9 @@ export async function cancelQrSignIn(pollToken: string): Promise<void> {
   if (!codeHash) return
   const r = await readQr(codeHash)
   if (!r || r.pollHash !== harnessTokenHash(pollToken)) return
-  await pub.multi().del(qrKey(codeHash)).del(qrPollKey(r.pollHash)).set(qrLockKey(codeHash), '1', 'EX', QR_SIGN_IN_MAX_LIFE_SEC).exec()
+  const tx = pub.multi().del(qrKey(codeHash)).del(qrPollKey(r.pollHash)).set(qrLockKey(codeHash), '1', 'EX', QR_SIGN_IN_MAX_LIFE_SEC)
+  if (r.spokenCode) tx.del(qrSpokenKey(r.spokenCode))
+  await tx.exec()
 }
 
 export type QrSignInPoll =
@@ -416,7 +483,9 @@ export async function extendQrSignIn(pollToken: string): Promise<number | null> 
   // An approved code already lives out its whole life (answerQrSignIn); extending would shorten it.
   if (r.status === 'approved') return left
   const ttl = Math.min(QR_SIGN_IN_TTL_SEC, left)
-  await pub.multi().expire(qrKey(codeHash), ttl).expire(qrPollKey(r.pollHash), ttl).exec()
+  const tx = pub.multi().expire(qrKey(codeHash), ttl).expire(qrPollKey(r.pollHash), ttl)
+  if (r.spokenCode) tx.expire(qrSpokenKey(r.spokenCode), ttl)
+  await tx.exec()
   return ttl
 }
 
@@ -434,6 +503,7 @@ export async function claimQrSignIn(pollToken: string): Promise<(HarnessTokens &
   let r: QrRecord
   try { r = JSON.parse(read[1]) as QrRecord } catch { return null }
   await pub.del(qrPollKey(r.pollHash))
+  if (r.spokenCode) await pub.del(qrSpokenKey(r.spokenCode))
   if (r.pollHash !== harnessTokenHash(pollToken) || r.status !== 'approved' || !r.userId || !r.email) return null
   const tokens = await createSession(r.userId, r.label, r.kind)
   return tokens ? { ...tokens, email: r.email, kind: r.kind } : null

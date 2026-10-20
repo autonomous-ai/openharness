@@ -171,7 +171,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
         ]
       : [
           'Usage: claude [options] [command] [prompt]', '', 'Arguments:', '  prompt  Your prompt', '',
-          '  --model <model>', '  --permission-mode <mode>  (choices: "acceptEdits", "auto", "bypassPermissions", "default", "plan")',
+          '  --model <model>', '  --effort <level>', '  --permission-mode <mode>  (choices: "acceptEdits", "auto", "bypassPermissions", "default", "plan")',
           '  --dangerously-skip-permissions', '  -r, --resume [value]', '  --fork-session', '  --session-id <uuid>', '',
         ]).filter((line) => !line.split(/[^A-Za-z0-9-]+/).some((word) => without.has(word))).join('\n'))
     return
@@ -185,6 +185,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
       : `error: unexpected argument '${refused}' found\n\nUsage: codex [OPTIONS] [PROMPT]\n\nFor more information, try '--help'.\n`)
     process.exit(engine === 'claude' ? 1 : 2)
   }
+  // Every launch's argv, for a test to read what an agent was started with.
+  if (config.root) appendFileSync(join(config.root, 'launch-argv'), `${JSON.stringify({ engine, args })}\n`)
   // The process table shows it as it shows the real CLI: named `claude` or `codex`, with the command line
   // it was started with, both of which discovery reads (tmux.ts: a resume typed into a pane names its
   // conversation on that command line). The title used to be the name alone, so no argument was ever on
@@ -289,6 +291,23 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // refuses before its TUI is up (codex-rs app-server thread_processor.rs) until `codex unarchive <id>`
   // moves it back under `sessions/`.
   if (engine === 'codex' && resumed && !fork) {
+    // Codex 0.163.0 keeps a failed thread's writer in its shared app-server. A --no-daemon resume
+    // stays alive on this lock screen without opening the conversation or sending SessionStart
+    // (2026-10-19). A live terminal process alone therefore cannot prove that a restart succeeded.
+    const writer = join(codexHome, 'app-server-daemon', 'fake-writer.json')
+    const locked = () => args.includes('--no-daemon') && existsSync(writer)
+      && JSON.parse(readFileSync(writer, 'utf8')).threadId === resumed
+    if (locked()) {
+      process.stdout.write('This conversation is open in another app\r\nClose it there and press R to continue here.\r\n')
+      process.stdin.setRawMode?.(true)
+      process.stdin.resume()
+      await new Promise(resolve => {
+        const retry = data => {
+          if (/r/i.test(String(data)) && !locked()) { process.stdin.off('data', retry); resolve() }
+        }
+        process.stdin.on('data', retry)
+      })
+    }
     const holds = (dir) => {
       let names = []
       try { names = readdirSync(dir, { withFileTypes: true }) } catch { return false }

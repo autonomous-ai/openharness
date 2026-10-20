@@ -6,6 +6,43 @@ import 'package:harness/super_tabs/controller.dart';
 import 'support/super_tab_fixture.dart';
 
 void main() {
+  test(
+    'group terminals keep every member when selecting one and after reopening',
+    () async {
+      final server = ConversationServer();
+      server.state['agents'] = [
+        for (final id in ['a', 'b'])
+          {
+            'id': id,
+            'name': id,
+            'machineId': 'm',
+            'harnessId': 'native-$id',
+            'contributorId': 'owner',
+            'configuration': {'engine': 'codex'},
+          },
+      ];
+      (server.state['conversations'] as List)[1]['agentIds'] = ['a', 'b'];
+      final c = server.controller();
+      await c.refresh();
+      c.selectGroupTerminals('offline');
+      expect(c.terminalAgents('offline').map((a) => a.id), ['a', 'b']);
+      c.selectTerminal('offline', 'b');
+      expect(c.terminalAgents('offline').map((a) => a.id), ['a', 'b']);
+      await c.flush();
+      c.dispose();
+      final restored = server.controller(initial: server.saved);
+      await restored.refresh();
+      expect(restored.terminalAgents('offline').map((a) => a.id), ['a', 'b']);
+      restored.selectGroupTerminals('offline');
+      expect(restored.terminalAgents('offline').map((a) => a.id), ['a', 'b']);
+      (server.state['conversations'] as List)[1]['agentIds'] = ['a'];
+      await restored.refresh();
+      expect(restored.terminalAgents('offline').map((a) => a.id), ['a']);
+      restored.revokeAccess('Removed');
+      expect(restored.terminalAgents('offline'), isEmpty);
+      restored.dispose();
+    },
+  );
   test('terminal selections survive reopening and cannot cross accounts or group membership', () async {
     final server = ConversationServer();
     server.state['agents'] = [

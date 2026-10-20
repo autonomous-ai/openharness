@@ -112,7 +112,7 @@ separately), every `speech.*` and the speech PCM frame (`0x05`), `models`, `noti
 `question.state`, `answer.receipt`, `draft.state`, `voice.draft`, `voice.question`, `voice.search`, `voice.form`,
 `selection.state`, `carry.state`, `form.state`, `visit.state`, `metrics.state` (and `metrics.get`),
 `player.overview`, `player.context` (parsed in the shared firmware but unused by Pod), `machine.selected`,
-`machine.error`, `toast`, and the notification fields of `summary` (`silent`, `quiet`, `name`, `machine`).
+`machine.error`, `toast`, and the notification fields of `summary` (`silent`, `quiet`, `name`, `machine`), though it reads `tier` (below).
 The Pro does use: `welcome`, `ping`, `agents.*`, `agent.updated`, `machines.*`, `swarms`, `focus`,
 `turn.started/activity/done/error`, `summary`, `question`, `question.close`, `player.library`, `voice.transcript`,
 `voice.error`; and sends `hello`, `machines.list`, `agents.list`, `player.library.get`, `agent.open`, `scroll`,
@@ -156,3 +156,10 @@ firmware transfer, which has its own resend). The daemon answers with a full sna
 frame for each question still open. It does not replay recent `summary` history (the attach push does); a lost
 `summary` is not repaired by a resync. The welcome of a Pro lists `resync` in `features`; a Pro whose welcome does not (an older daemon) sends the old
 `swarms.list` and `agents.list` instead. A welcome without `seq` turns the gap check off for that session.
+
+## `summary.tier`
+
+`summary` carries `tier`: `"alert"` (beep, wake, toast, Notices entry), `"list"` (Notices entry only: no beep,
+wake or toast) or `"silent"` (the card updates, nothing else). The host still sends the older flags beside it
+for firmware that predates `tier`: `alert` sets neither, `list` sets `quiet: true`, `silent` sets `silent: true`.
+`question` and `turn.error` carry no `tier`; treat both as `alert`.

@@ -2280,6 +2280,22 @@ describe('who started it', () => {
     expect(registry.byAgent(pending.agentId)?.startedBy).toBe('agent')
   })
 
+  it('keeps whose guest it was started for through the hook that rebuilds the row and a reload', async () => {
+    const transcriptPath = join(dataDir, 'session-guest.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const pending = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%31' }], cwd: '/tmp/g', guest: 'kim@acme.io' })!
+    expect(pending.guest).toBe('kim@acme.io')
+    expect(registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%32' }], cwd: '/tmp/o', guest: null })).not.toHaveProperty('guest')
+    registry.register({ sessionId: 'session-guest', transcriptPath, tmuxPane: '%31', cwd: '/tmp/g' })
+    expect(registry.byAgent(pending.agentId)?.guest).toBe('kim@acme.io')
+    registry.flush()
+    const reloaded = await loadRegistryModule()
+    reloaded.registry.load()
+    expect(reloaded.registry.byAgent(pending.agentId)?.guest).toBe('kim@acme.io')
+  })
+
   it('keeps which harness here started it, beside startedBy, through a reload and the hook that rebuilds the row', async () => {
     const transcriptPath = join(dataDir, 'session-child.jsonl')
     writeFileSync(transcriptPath, '{}\n')

@@ -33,6 +33,27 @@ function setup(live: RegisteredSession[], saved: RegisteredSession[] = [], over:
   return { deps, created, replies, ask }
 }
 
+describe('the agents a guest asks for', () => {
+  // A guest (a session of an account this machine is shared with) sees the harnesses it started and nothing
+  // of the owner's (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+  it('only its own harnesses, oldest first; never the owner\'s, the stopped, the cloud ones or the monitor\'s readings', async () => {
+    const [mine, also, older, owners, theirs] = [session('mine', { guest: 'kim@acme.io' }), session('also', { guest: 'kim@acme.io' }), session('older', { guest: 'kim@acme.io' }), session('owners'), session('theirs', { guest: 'lee@acme.io' })]
+    const cloud = vi.fn(() => [])
+    const { created, replies, deps } = setup([mine, also, older, owners, theirs], [session('saved', { guest: 'kim@acme.io' })], { cloudFrames: cloud })
+    created.set('older', '2026-10-05T09:00:00.000Z')
+    await createAgentList(deps).agentsList({ includeStopped: true, monitor: true }, () => 'web', (r) => { replies.push(r) }, 'kim@acme.io')
+    // Made at the same time, the id breaks the tie.
+    expect(replies).toEqual([{ agents: [expect.objectContaining({ id: 'older' }), expect.objectContaining({ id: 'also' }), expect.objectContaining({ id: 'mine' })] }])
+    expect(deps.stoppedAgents.available).not.toHaveBeenCalled()
+    expect(cloud).not.toHaveBeenCalled()
+    expect(deps.harnessResourcesReader).not.toHaveBeenCalled()
+    // A share recorded before its account was: a guest that owns nothing.
+    replies.length = 0
+    await createAgentList(deps).agentsList({}, () => 'web', (r) => { replies.push(r) }, '')
+    expect(replies).toEqual([{ agents: [] }])
+  })
+})
+
 describe('the agents a window asks for', () => {
   it('every live agent\'s frame, oldest first, an id breaking a tie, and nothing stopped unless asked for', async () => {
     const [a, b, c] = [session('b-agent'), session('a-agent'), session('c-agent')]

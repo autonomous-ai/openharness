@@ -65,6 +65,7 @@ import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { machineChoices, newCommand, type MachineRow, type NewMachine } from './lib/newCommand.js'
 import { gridSetupCommand } from './lib/gridSetupCommand.js'
+import { localCredentialHeaders } from './lib/localCredential.js'
 import { WebSocket as NewCommandSocket } from 'ws'
 import { describeMasterStatus, readStatusFile } from './harnessd/master.js'
 import { namedNode } from './harnessd/processName.js'
@@ -114,6 +115,9 @@ Machine:
   harness login --google       sign in with Google in your browser, without asking
   harness login --apple        sign in with Apple in your browser, without asking
   harness login --qr           sign in by scanning a QR with Harness on your phone, without asking
+  harness login --code         for a device with no screen: say a short code the person types into Harness
+                               (phone: Settings ▸ Sign in a computer ▸ Type a code instead; desktop or web:
+                               Machines ▸ Approve a device); with --json the code is an event
   harness login --force        stop the daemon and sign in with a different account
   harness login --json         emit machine-readable NDJSON instead of opening a browser (for GUI clients)
   harness login --entry-point=desktop   record which surface started the sign-in (GUI clients; default cli)
@@ -157,6 +161,8 @@ Machine:
   harness help agents          the agent commands, states, exit codes and rules on one screen
   harness settings [<name> on|off]  what agents may do (agents-start-agents, pull-request-line, agent-messages): your account's experiments in Settings ▸ Experimental, each off by default
   harness machines delete <id> remove ANOTHER machine (refuses this one; use \`harness logout\`)
+  harness e2e plan             which coding tools have a new version out (the grid-switch e2e trigger)
+  harness e2e grid-switch      move a fresh agent subscription -> grid -> back home with its tool + MCP; leaves a review bundle
   harness remote               from a Harness terminal tile: open a terminal on another of your machines and move this tile to it
   harness version              print the installed version (v${VERSION})
   harness update [--force]     update to the latest build now (it also self-updates in the background;
@@ -380,6 +386,8 @@ interface SignInHooks {
   onStarted?: (cancel: () => Promise<void>) => void
   /** The person said yes / the browser came back: finish the sign-in, do not abandon it. */
   onCommitted?: () => void
+  /** `--code`: say a short code instead of showing the QR (a device with no screen, #1410). */
+  spoken?: boolean
 }
 
 /**
@@ -487,8 +495,8 @@ async function loginCommand(
   }
   const signIn = async (): Promise<SignInOutcome> => {
     try {
-      return method === 'qr'
-        ? await qrSignInCommand(json, emit, (email) => succeed(false, email), { driver, onStarted: (cancel) => { takeBack = cancel }, onCommitted: () => setWaiting(false) })
+      return method === 'qr' || method === 'code'
+        ? await qrSignInCommand(json, emit, (email) => succeed(false, email), { driver, spoken: method === 'code', onStarted: (cancel) => { takeBack = cancel }, onCommitted: () => setWaiting(false) })
         : await browserSignIn(json, emit, () => succeed(false), { entryPoint, provider: method }, { onCommitted: () => setWaiting(false) })
     } finally {
       setWaiting(false)
@@ -599,6 +607,10 @@ function askLine(question: string): Promise<string> {
  * ask the person here whether to sign in as the account that approved, then save the session.
  * Under --json the QR is an event (`{"type":"qr"}`) and the question is one too
  * (`{"type":"confirm","email"}`), answered with a `yes` or `no` line on standard input.
+ *
+ * [SignInHooks.spoken] (`--code`): a device with no screen says a short code instead of the QR —
+ * `{"type":"code","code","expiresIn"}` under --json, sent again whenever the code is kept alive — and
+ * the person types it into Harness on their phone. The confirm question stays, to be asked aloud.
  */
 async function qrSignInCommand(
   json: boolean,
@@ -613,6 +625,15 @@ async function qrSignInCommand(
     ...(hooks.onStarted ? { onStarted: hooks.onStarted } : {}),
     label: hostname().slice(0, 80),
     computerId: computerId(),
+    ...(hooks.spoken ? {
+      showCode: (code: string, expiresIn: number) => {
+        if (json) { emit({ type: 'code', code, expiresIn }); return }
+        if (shown) return
+        shown = true
+        console.log(`\n  On your phone, open Harness ▸ Settings ▸ Sign in a computer ▸ Type a code instead (or Machines ▸ Approve a device on a computer), and enter:\n\n    ${code.slice(0, 4)} ${code.slice(4)}\n`)
+        console.log('  Waiting for your phone…')
+      },
+    } : {}),
     show: (link, expiresIn) => {
       if (json) { emit({ type: 'qr', url: link, expiresIn }); return }
       if (shown) return
@@ -1291,7 +1312,7 @@ async function runningDaemonStatus(): Promise<{
 } | null> {
   try {
     const body = await localDaemonStatus(env.ADAPTER_DATA_DIR, env.PORT)
-      ?? await legacyDaemonStatus(daemonPort(), readPid(), computerId())
+      ?? await legacyDaemonStatus(daemonPort(), readPid(), computerId(), env.ADAPTER_DATA_DIR)
     if (!body) return null
     const status = body as {
       version?: unknown; sessions?: unknown; machineId?: unknown; connected?: unknown
@@ -1606,12 +1627,18 @@ async function resetCommand(): Promise<void> {
   process.exit(0)
 }
 
+/** What every call to this daemon's loopback API carries: the CSRF mark its writes want, and the local
+ *  credential every TCP call wants (lib/localCredential.ts). */
+function daemonHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return { 'x-adapter-local': '1', ...localCredentialHeaders(env.ADAPTER_DATA_DIR), ...extra }
+}
+
 /** Call the running daemon's localhost control API. Exits with a friendly message if it's not up. */
 async function daemonCall(method: 'GET' | 'POST', path: string, body?: unknown): Promise<{ res: Response; json: Record<string, unknown> }> {
   const url = `http://127.0.0.1:${daemonPort()}${path}`
   let res: Response
   try {
-    const headers: Record<string, string> = { 'x-adapter-local': '1' } // passes the local API's CSRF gate
+    const headers: Record<string, string> = daemonHeaders() // the local API's CSRF gate and credential
     if (body) headers['content-type'] = 'application/json'
     res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined })
   } catch (error) {
@@ -1792,7 +1819,7 @@ async function remotePasswordSetCommand(json: boolean, stdin: boolean): Promise<
   try {
     const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/remote-password/set`, {
       method: 'POST',
-      headers: { 'x-adapter-local': '1', 'content-type': 'application/json' },
+      headers: daemonHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({ password }),
     })
     if (res.ok) {
@@ -1821,7 +1848,7 @@ async function remotePasswordClearCommand(json: boolean): Promise<void> {
   try {
     const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/remote-password/clear`, {
       method: 'POST',
-      headers: { 'x-adapter-local': '1' },
+      headers: daemonHeaders(),
     })
     if (res.ok) cleared = true
   } catch { /* fall back to the disk-backed store below */ }
@@ -1840,7 +1867,7 @@ async function remotePasswordClearCommand(json: boolean): Promise<void> {
 async function remotePasswordStatusCommand(json: boolean): Promise<void> {
   let status: { hasPassword: boolean; fingerprint: string | null; setAt: number | null } | null = null
   try {
-    const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/remote-password/status`, { headers: { 'x-adapter-local': '1' } })
+    const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/remote-password/status`, { headers: daemonHeaders() })
     if (res.ok) {
       const body = (await res.json().catch(() => null)) as { hasPassword?: unknown; fingerprint?: unknown; setAt?: unknown } | null
       if (typeof body?.hasPassword === 'boolean') {
@@ -2004,7 +2031,7 @@ async function trustLinkedMachine(peer: LinkedPeer): Promise<void> {
   try {
     const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/link/trust-peer`, {
       method: 'POST',
-      headers: { 'x-adapter-local': '1', 'content-type': 'application/json' },
+      headers: daemonHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify(peer),
     })
     if (res.ok) return
@@ -2053,7 +2080,7 @@ async function daemonGroupRemove(selector: string): Promise<boolean> {
   try {
     const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/group/remove`, {
       method: 'POST',
-      headers: { 'x-adapter-local': '1', 'content-type': 'application/json' },
+      headers: daemonHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({ selector }),
     })
     return res.ok
@@ -2081,7 +2108,7 @@ async function groupCommand(sub: string | undefined, arg: string | undefined, js
   }
   if (sub === 'sync') {
     try {
-      const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/group/sync`, { method: 'POST', headers: { 'x-adapter-local': '1' } })
+      const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/group/sync`, { method: 'POST', headers: daemonHeaders() })
       if (!res.ok) throw new Error(String(res.status))
     } catch (error) {
       console.error(`\n  ✗ ${daemonUnreachableText((error as { cause?: unknown }).cause ?? error)}\n`)
@@ -2632,7 +2659,7 @@ switch (cmd) {
     runDevicesCommand(rest, {
       port: daemonPort(),
       machineId: async () => (await runningDaemonStatus())?.machineId ?? null,
-      connect: (url) => new NewCommandSocket(url),
+      connect: (url, headers) => new NewCommandSocket(url, { headers }),
     }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'pair':
@@ -2654,7 +2681,7 @@ switch (cmd) {
         port: daemonPort(),
         localMachineId: wantedDaemonIdentity(),
         daemonRunning: isDaemonRunning, unreachable: () => daemonUnreachableText(),
-        connect: (url) => new NewCommandSocket(url),
+        connect: (url) => new NewCommandSocket(url, { headers: localCredentialHeaders(env.ADAPTER_DATA_DIR) }),
         output: (line) => console.log(line),
         error: (line) => console.error(line),
       }).then((code) => { process.exitCode = code }).catch(onError)
@@ -2689,7 +2716,7 @@ switch (cmd) {
       localMachineId: wantedDaemonIdentity(),
       daemonRunning: isDaemonRunning, unreachable: () => daemonUnreachableText(),
       listMachines: usableMachines,
-      connect: (url) => new NewCommandSocket(url),
+      connect: (url) => new NewCommandSocket(url, { headers: localCredentialHeaders(env.ADAPTER_DATA_DIR) }),
       output: (line) => console.log(line),
       error: (line) => console.error(line),
       origin: () => agentOrigin(),
@@ -2724,6 +2751,20 @@ switch (cmd) {
       error: (line) => console.error(line),
       color: process.stdout.isTTY === true,
     })
+    break
+  case 'e2e':
+    // The grid-switch e2e: a fresh agent moved subscription -> grid -> back home with the person's
+    // tool + MCP, leaving a review bundle. Env-driven (see src/e2e/runGridSwitchTrace.ts); the
+    // relay-side reviewer (opencode `e2e-watchdog`) lives with the relay, in autonomous-grid-cli.
+    // Shipped with the CLI, so it is always the daemon's own version that drives the daemon.
+    if (args[0] === 'grid-switch') {
+      import('./e2e/runGridSwitchTrace.js')
+        .then(({ runGridSwitch }) => runGridSwitch())
+        .then((r) => { process.exitCode = r.error || r.stuck ? 1 : 0 })
+        .catch(onError)
+    } else if (args[0] === 'plan') {
+      import('./e2e/plan.js').then(({ planCommand }) => planCommand(flags.includes('--json'))).catch(onError)
+    } else { console.error(`Unknown command: e2e ${args[0] ?? ''} (grid-switch | plan)`); usage(1) }
     break
   case 'machines':
     if (!args[0]) machinesListCommand(flags.includes('--json')).catch(onError)

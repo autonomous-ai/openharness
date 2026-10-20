@@ -10,6 +10,7 @@ import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { clearPaneRemainOnExit, processLaunchArgs } from '../../lib/tmux.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import { createAgentRestarter, type RestartDeps } from './restart.js'
+import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
 vi.mock('../../lib/engineBin.js', async (real) => ({ ...await real<object>(), enginePathOverride: vi.fn(() => undefined) }))
 vi.mock('../../lib/engineLaunch.js', async (real) => ({
@@ -142,6 +143,11 @@ describe('restarting an agent', () => {
       expect(await setup(agent(), { stopJobs: new Map([['a1', Promise.resolve()]]) }).restart('a1')).toEqual({ ok: false, error: 'AGENT_BUSY' })
       expect(await setup(agent(), { pinnedControls: new Set(['a1']) }).restart('a1')).toEqual({ ok: false, error: 'AGENT_BUSY' })
       expect(await setup(null).restart('a1')).toEqual({ ok: false, error: 'AGENT_NOT_FOUND' })
+    })
+
+    it('for a guest\'s harness, which a relaunch would run as the owner', async () => {
+      const run = setup(agent({ guest: 'kim@acme.io' }))
+      expect(await run.restart('a1')).toEqual(GUEST_HARNESS_REFUSAL)
     })
 
     it('for an agent held for a service, its launch, now, with nothing of a swap touched', async () => {

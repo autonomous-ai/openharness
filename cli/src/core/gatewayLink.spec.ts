@@ -124,6 +124,9 @@ describe('the gateway in its own process, as the core sees it', () => {
     link.port.usageLaunch?.({ id: 'creation-fixture-1', phase: 'start' })
     link.port.broadcast({ type: 'turn_started' })
     expect(kinds()).toEqual(['start', 'broadcast'])
+    // About a guest's harness: the gateway is told whose, to seal it for that guest's sessions.
+    link.port.broadcast({ type: 'turn_started', agentId: 'g' }, 'kim@acme.io')
+    expect(kinds().at(-1)).toBe('broadcast')
     setBuffered(0)
     link.port.usageCounter?.('create_requests')
     expect(kinds().at(-1)).toBe('usageCounter')

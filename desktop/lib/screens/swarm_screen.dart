@@ -36,6 +36,7 @@ import '../widgets/resting_section.dart'
 import '../widgets/session_close_dialog.dart';
 import '../notify/system_notifications.dart';
 import '../widgets/account_device_detail.dart';
+import '../widgets/approve_device_code.dart';
 import '../settings/settings_screen.dart';
 import '../settings/settings_section.dart';
 import 'login_screen.dart' show showSignInSheet;
@@ -119,6 +120,7 @@ import '../widgets/delete_agent_dialog.dart';
 import '../widgets/delete_harness_dialog.dart';
 import '../widgets/fork_agent_dialog.dart';
 import '../widgets/restart_agent_action.dart';
+import '../measurement/product_measurement.dart' show AddPhoneOpening;
 import '../measurement/task_feedback.dart';
 import '../widgets/new_agent_dialog.dart';
 import '../widgets/box_chrome.dart';
@@ -467,7 +469,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   final _newTabSources = <String, TerminalPane>{};
 
   Widget _startGuide() => WorkspaceWelcome(
-    key: ValueKey('welcome:${app.activeSwarmId}'),
+    key: ValueKey('welcome:${app.activeSwarmId}:${app.activeSwarm.isSuperTab}'),
     onCommand: _runShortcut,
     composerBuilder: newHarnessOpensInBox
         ? (recent) => _newHarnessEmbedded && _newHarness != null
@@ -501,7 +503,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         : null,
     // What to pick up, opened into this tab the way Cmd-P opens it: a harness
     // as itself, a conversation Harness did not start as a harness resuming it.
-    app: app,
+    // Super Tab creation uses the same form as Cmd-N, without recent sessions.
+    app: app.activeSwarm.isSuperTab ? null : app,
     projects: _projects.projects,
     onOpen: (row) {
       if (_newHarness?.requestDismiss() == false) return;
@@ -1965,6 +1968,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           ],
         },
       'footerCovered':
+          app.activeSwarm.isSuperTab ||
           (!_routeIsCurrent && !_footerPreviewCurrent) ||
           (_newHarnessOverlay != null && !_newHarnessHidden) ||
           _searchOverlay != null,
@@ -2653,7 +2657,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
       case 'settings':
         await _settings();
       case 'addPhone':
-        await _addPhone();
+        await _addPhone(
+          from: args['from'] == 'titlebar'
+              ? AddPhoneOpening.titlebar
+              : AddPhoneOpening.menu,
+        );
       case 'customize':
         await _customize();
     }
@@ -3206,7 +3214,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (!mounted) return;
     switch (choice) {
       case AccountMenuChoice.addPhone:
-        await _addPhone();
+        await _addPhone(from: AddPhoneOpening.account);
       case AccountMenuChoice.customize:
         await _customize();
       case AccountMenuChoice.notifications:
@@ -3234,15 +3242,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   /// Harness ▸ Add Phone… and `> add phone`: the QR a phone scans to sign in
   /// and pair with this computer. See `widgets/add_phone_dialog.dart`.
-  Future<void> _addPhone() async {
+  /// [from] is the way in it is counted under ([AddPhoneOpening]).
+  Future<void> _addPhone({required AddPhoneOpening from}) async {
     // Open, from its card or by hand, it is this computer's offer
     // ([_phoneOfferCard]) spent for good — and a sign-in made from inside it
     // (its Continue with…) must not bring the card back once it closes, so
     // the offer is dropped on the way out too.
-    app.dropPhoneOffer();
     try {
-      await _dialog(
-        () => showAddPhoneDialog(
+      await _dialog(() {
+        // Counted, and the offer spent, once it opens: [_dialog] refuses one
+        // while another dialog is up.
+        app.addPhoneOpened(from);
+        return showAddPhoneDialog(
           context,
           app,
           keymap: _keymap,
@@ -3253,8 +3264,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
           // picker refused to open — the link did nothing. The request waits
           // for the route ([_maybeOpenMachinesRequest]).
           onManageDevices: () => app.requestMachines(phones: true),
-        ),
-      );
+        );
+      });
     } finally {
       app.dropPhoneOffer();
     }
@@ -3422,8 +3433,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
         ? null
         : () {
             _closeSearch(restoreFocus: false);
-            unawaited(_addPhone());
+            unawaited(_addPhone(from: AddPhoneOpening.machines));
           },
+    onApproveDevice: () async {
+      _pickerModalChanged(true);
+      try {
+        await approveDeviceByCode(context, app);
+      } finally {
+        _pickerModalChanged(false);
+        if (mounted && _search != null) _focusSearch();
+      }
+    },
   );
 
   void _openResourcePicker(String prefix) {
@@ -7036,8 +7056,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (kIsWeb || !app.phoneOfferShowing) return null;
     if (app.firstArrival.pending || app.firstArrival.running) return null;
     return PhoneOfferCard(
-      onAdd: () => unawaited(_addPhone()),
-      onDismiss: app.dropPhoneOffer,
+      onAdd: () => unawaited(_addPhone(from: AddPhoneOpening.offer)),
+      onDismiss: app.dismissPhoneOffer,
+      onShown: app.phoneOfferShown,
     );
   }
 
@@ -7241,7 +7262,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         !appearancePrefsStore.value.shadeInactivePanes,
       ),
     ),
-    'app.add_phone': () => unawaited(_addPhone()),
+    'app.add_phone': () => unawaited(_addPhone(from: AddPhoneOpening.command)),
     'app.product_feedback': () => unawaited(
       showTaskFeedback(
         context,
@@ -7330,9 +7351,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (id == 'agent.share' || id == 'pane.toggle_viewer') {
       final focused = WorkspacePaneContext.focused(app);
       final agent = focused?.agent;
+      final machine = app.stateOf(focused?.pane.machineId ?? '')?.machine;
       return focused != null &&
           agent != null &&
-          app.stateOf(focused.pane.machineId)?.machine.isShared == false &&
+          machine?.isShared == false &&
+          // A guest shares nothing of a machine shared with it.
+          (id != 'agent.share' || !machine!.isSharedMachine) &&
           (id == 'agent.share' ||
               agent.viewerUrl != null ||
               agent.viewerError != null);
@@ -7373,6 +7397,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
       // again, only a fork needs the engine to carry a conversation over.
       return machine != null &&
           !machine.machine.isShared &&
+          // A guest's harness is never relaunched or forked: either would run the
+          // owner's way, as the owner (docs/plans/2026-10-19-guest-machine-sharing-plan.md).
+          (!machine.machine.isSharedMachine ||
+              (id != 'agent.fork' && id != 'agent.restart')) &&
           (id != 'agent.fork' || _focusedAgent?.canFork == true) &&
           (id != 'agent.clone' || _focusedAgent?.canClone == true) &&
           ((id != 'agent.restart' && id != 'agent.clone') ||
@@ -7992,14 +8020,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
                         ],
                       ),
                     ),
-                    MediaQuery.withNoTextScaling(
-                      child: _native
-                          ? SizedBox(
-                              key: const ValueKey('workspace-status-bar'),
-                              height: _statusBarHeight,
-                            )
-                          : _statusBar(),
-                    ),
+                    if (!app.activeSwarm.isSuperTab)
+                      MediaQuery.withNoTextScaling(
+                        child: _native
+                            ? SizedBox(
+                                key: const ValueKey('workspace-status-bar'),
+                                height: _statusBarHeight,
+                              )
+                            : _statusBar(),
+                      ),
                   ],
                 ),
               ),
@@ -8110,8 +8139,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
   // Include the pane's former bottom gutter in this row, so its controls sit
   // halfway between the pane edge and window bottom. Pane height is unchanged.
   // Keep inventory controls discoverable on the first, empty welcome screen.
-  double get _statusBarHeight =>
-      workspaceBarControlHeight(context) + kWorkspaceInset;
+  double get _statusBarHeight => app.activeSwarm.isSuperTab
+      ? 0
+      : workspaceBarControlHeight(context) + kWorkspaceInset;
 
   Widget _statusBar() {
     final compactFooter = widget.chrome?.compactFooter;
@@ -8793,7 +8823,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     key: const ValueKey('swarm-add-phone-button'),
     label: 'Add Phone',
     tooltip: _addPhoneTooltip,
-    onPressed: _shortcutsEnabled ? () => unawaited(_addPhone()) : null,
+    onPressed: _shortcutsEnabled
+        ? () => unawaited(_addPhone(from: AddPhoneOpening.titlebar))
+        : null,
     builder: (context, emphasized) => SizedBox(
       width: workspaceBarCellSizeOf(context).width * 4,
       height: workspaceBarControlHeight(context),

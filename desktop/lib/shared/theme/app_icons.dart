@@ -94,6 +94,7 @@ abstract final class AppIcons {
   static const gamepad2 = LucideIcons.gamepad2400;
   static const gauge = LucideIcons.gauge400;
   static const gitBranch = LucideIcons.gitBranch400;
+  static const gitPullRequest = LucideIcons.gitPullRequest400;
   static const globe = LucideIcons.globe400;
   static const hand = LucideIcons.hand400;
   static const heart = LucideIcons.heart400;

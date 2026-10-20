@@ -5,6 +5,7 @@ import { createResumeAgentService } from '../../lib/resumeAgentService.js'
 import { AgentStopError, createStopAgentService } from '../../lib/stopAgentService.js'
 import { createAgentLifecycle, createPurgeRequest, createStopRequest, type LifecycleDeps } from './lifecycle.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
+import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
 vi.mock('../../lib/stopAgentService.js', async (real) => ({ ...await real<object>(), createStopAgentService: vi.fn(() => vi.fn(async () => {})) }))
 vi.mock('../../lib/resumeAgentService.js', async (real) => ({
@@ -142,6 +143,15 @@ describe('stopping, purging and resuming an agent', () => {
       const resume = vi.mocked(createResumeAgentService).mock.results[0].value
       expect(resume).toHaveBeenCalledWith('a1', 'plan')
       expect(deps.stoppedAgents.get).toHaveBeenCalledWith('a1')
+    })
+
+    it('resumes no guest\'s harness, stopped or running: it would run as the owner', async () => {
+      const stopped = setup({ stoppedAgents: { list: () => [], get: vi.fn(() => row({ guest: 'kim@acme.io' })) } as never })
+      expect(await stopped.lifecycle.resumeAgent('a1')).toEqual(GUEST_HARNESS_REFUSAL)
+      const running = setup({ stoppedAgents: { list: () => [], get: vi.fn(() => undefined) } as never })
+      vi.spyOn(running.deps.registry, 'byAgent').mockReturnValue(row({ guest: 'kim@acme.io' }))
+      expect(await running.lifecycle.resumeAgent('a1')).toEqual(GUEST_HARNESS_REFUSAL)
+      expect(vi.mocked(createResumeAgentService).mock.results.every((r) => !vi.mocked(r.value).mock.calls.length)).toBe(true)
     })
 
     it('waits while the agent is being purged, or while a purge holds its folder', async () => {

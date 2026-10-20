@@ -123,6 +123,9 @@ class SuperTabFixtureConnection extends WsConn {
     }
     if (type == 'super_tabs') {
       if (payload['action'] == 'wake') return {'ok': true};
+      if (payload['action'] == 'prepareContribution') {
+        return {'ok': true, 'state': 'ready', 'cwd': '/work/project', 'engines': ['claude', 'codex', 'pi'], 'maxAgents': 4};
+      }
       if (payload['action'] == 'prepareNative' ||
           payload['action'] == 'renewNative') {
         if (native?['status'] == 'stopped') {
@@ -491,6 +494,21 @@ void main() {
       },
     );
   }
+
+  test('the lead prompt routes before starting or assigning work', () async {
+    final f = SuperTabLaunchFixture()..connection.nativeName = 'hi';
+    final box = await f.box(engine: 'claude');
+    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+    final prompt =
+        f.connection.calls
+                .firstWhere((c) => c.$1 == 'agent_create')
+                .$2['prompt']
+            as String;
+    expect(prompt, contains('route GROUP'));
+    expect(prompt, contains('routeDecisionId'));
+    expect(prompt, contains('overrideReason'));
+    expect(prompt, contains('NO_CANDIDATE'));
+  });
 
   test('lost join acknowledgement retries the same contribution without a second native launch', () async {
     final f = SuperTabLaunchFixture()..connection.loseJoin = true;

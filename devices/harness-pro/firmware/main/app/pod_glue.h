@@ -161,14 +161,19 @@ void pod_ui_ota(pod_ui_t *, const char *from, const char *to, int pct, bool rest
 bool pod_ui_updating(const pod_ui_t *);
 
 // ---- notifications ----
-// A live summary ended a turn: file an unread entry for the agent (its recap, name, elapsed) and show the toast for
-// POD_TOAST_MS over a room (a newer one replaces it; none while TALK is on top; a tap opens Notices, a swipe up dismisses). False,
-// and nothing filed, when the agent is not on the roster. The caller beeps only on true.
+// A live summary ended a turn: file an unread entry for the agent (its recap, name, elapsed; one per agent, the newest) and, for an
+// alert, show the toast for POD_TOAST_MS over a room (a newer one replaces it; none while TALK is on top; a tap opens Notices, a
+// swipe up dismisses). Nothing is filed when the agent is not on the roster.
 #define POD_BANNER_SWIPE_PX 40
 // `awake`: the glass is lit. A dark one is not looking, even when it rests on that agent's screen.
 // When the current toast started (it shows for POD_TOAST_MS); the toast draw reads it for its timer line.
 uint32_t pod_ui_banner_shown_ms(const pod_ui_t *);
-bool pod_ui_notify(pod_ui_t *, const char *agent_id, bool awake, uint32_t now_ms);
+// `tier` (alert / list / silent): silent files nothing; list files the entry only; alert also toasts. If the agent's own room is on
+// screen (and the glass is lit) any tier is read at once there. Returns true only when the caller must wake the glass and beep:
+// an alert, not on that agent's own screen. `text` NULL = the agent's recap; `question`: the entry is a question's (it goes when the
+// question closes).
+bool pod_ui_notify_text(pod_ui_t *, const char *agent_id, pod_tier_t tier, const char *text, bool question, bool awake, uint32_t now_ms);
+bool pod_ui_notify(pod_ui_t *, const char *agent_id, pod_tier_t tier, bool awake, uint32_t now_ms);
 // notif.replace: begin (clears the list), one row per item, end. The toast is not shown for these.
 void pod_ui_notif_begin(pod_ui_t *);
 void pod_ui_notif_row(pod_ui_t *, const char *agent_id, const char *name, const char *token, const char *summary, uint32_t now_ms);

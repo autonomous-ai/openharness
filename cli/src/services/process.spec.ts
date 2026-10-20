@@ -215,12 +215,16 @@ describe('a service in its own process', () => {
     socket().say({ type: 'session_search', payload: { requestId: 'r6', accountOwner: true }, asker: { local: false, owner: true, accountOwner: false } })
     socket().say({ type: 'session_search', payload: { requestId: 'r7' }, asker: { local: false, owner: true, accountOwner: true } })
     socket().say({ type: 'session_search', payload: { requestId: 'r8', accountOwner: true }, asker: { local: false, owner: true, accountOwner: 'yes' } })
-    await vi.waitFor(() => expect(asked).toHaveLength(8))
+    // A guest's session, whose guest it is: never anything a payload says.
+    socket().say({ type: 'session_search', payload: { requestId: 'r9', guest: 'lee@acme.io' }, asker: { local: false, owner: false, guest: 'kim@acme.io' } })
+    socket().say({ type: 'session_search', payload: { requestId: 'r10', guest: 'lee@acme.io' }, asker: { local: false, owner: false, guest: 7 } })
+    await vi.waitFor(() => expect(asked).toHaveLength(10))
     expect(asked).toEqual([
       { local: true, owner: true }, { local: false, owner: false }, { local: false, owner: false },
       { local: true, owner: true, connection: 'local:1', requestId: 'cmd-1' }, { local: true, owner: true },
       { local: false, owner: true, accountOwner: false }, { local: false, owner: true, accountOwner: true },
       { local: false, owner: true },
+      { local: false, owner: false, guest: 'kim@acme.io' }, { local: false, owner: false },
     ])
   })
 

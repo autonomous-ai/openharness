@@ -2,7 +2,7 @@ import { PassThrough } from 'node:stream'
 import { parseNewArgs } from '../lib/newCommand.js'
 import { step } from './commands.js'
 import { describe, expect, it } from 'vitest'
-import { agentOfClient, answer, callerEnv, INSTRUCTIONS, mcpCommand, PROTOCOL_VERSIONS, result, TOOLS, type McpDeps, type Ran } from './mcp.js'
+import { agentOfClient, answer, callerEnv, INSTRUCTIONS, mcpCommand, PROTOCOL_VERSIONS, result, STARTABLE_AGENTS, TOOLS, type McpDeps, type Ran } from './mcp.js'
 import { HARNESS_AGENT_TOOLS } from '../engines/facets/hooks.js'
 
 /** A runner that records what it was asked and answers [ran]. */
@@ -134,6 +134,20 @@ describe('harness mcp', () => {
     expect(r.calls.map((c) => c.argv)).toEqual([['search', 'the missing diff'], ['machines']])
   })
 
+  it('lets harness_start run any startable engine, not only claude and codex', async () => {
+    const listed = ((await answer({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, deps()))!.result as { tools: Array<{ name: string; inputSchema: { properties: Record<string, unknown> } }> }).tools
+    const start = listed.find((tool) => tool.name === 'harness_start')!
+    const agentSchema = start.inputSchema.properties.agent as { enum?: string[] }
+    expect(agentSchema.enum).toContain('claude')
+    expect(agentSchema.enum).toContain('codex')
+    expect(agentSchema.enum).toContain('opencode')
+    expect(agentSchema.enum).toContain('pi')
+    expect(agentSchema.enum).toContain('cursor')
+    // Every engine but the terminal is startable, and the terminal is not an agent.
+    expect(agentSchema.enum).toEqual(STARTABLE_AGENTS)
+    expect(agentSchema.enum).not.toContain('terminal')
+  })
+
   it('starts a harness in a new project Harness makes when asked for one, or when given no folder', async () => {
     // A folder was required, so Codex as an MCP client could only name one of its own: Claude Code, started in an empty
     // ~/work, waited on its trust question (a clean VM, CLI 0.3.75, 2026-10-11).
@@ -141,7 +155,7 @@ describe('harness mcp', () => {
       .tools.find((tool) => tool.name === 'harness_start')!
     expect(listed.inputSchema.required).toEqual(['task', 'name'])
     expect(listed.inputSchema.properties).toHaveProperty('project')
-    expect(INSTRUCTIONS).toContain('For scratch or new work give it a project name (project), not a folder of your own')
+    expect(INSTRUCTIONS).toContain('Give it a project name (project), never a folder of your own')
     const r = runner()
     const d = deps({ run: r.run })
     await answer(call('harness_start', { task: 'a second opinion', project: 'opinion', name: 'opinion' }), d)

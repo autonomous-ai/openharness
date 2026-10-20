@@ -13,7 +13,7 @@ it('keeps an explicit stable receipt for agent messages and arbitrary work comma
   expect(parseSuperTabArgs(['--tab', 'tab', 'status'], where).payload.agentId).toBe('')
   for (const argv of [[], ['status'], [...prefix, 'post', 'lead', 'Ready'], [...prefix, 'messages', '../other'],
     [...prefix, 'message', 'lead'], [...prefix, 'message', 'lead', '../other'], [...prefix, 'message', 'lead', 'id', 'extra'],
-    ['--port', 'no', 'help'], ['--machine', '', 'help'], [...prefix, 'status', 'extra']]) {
+    ['--port', 'no', 'help'], ['--machine', '', 'help'], [...prefix, 'status', 'extra'], [...prefix, 'route', 'g1'], [...prefix, 'route', '../x', '{}']]) {
     expect(() => parseSuperTabArgs(argv, where)).toThrow('harness super-tab')
   }
 })
@@ -39,4 +39,22 @@ it('uses the existing daemon transport and retains a receipt in an uncertain ans
   expect(await superTabCommand([...prefix, 'post', 'lead', 'Ready', 'op'], deps)).toBe(1)
   expect(JSON.parse(print.mock.calls.at(-1)![0])).toEqual({ error: 'Connection lost', operationId: 'op' })
   expect(close).toHaveBeenCalledTimes(2)
+})
+it('parses route GROUP JSON', () => {
+  expect(parseSuperTabArgs([...prefix, 'route', 'g1', '{"difficulty":"low","risk":"low","why":"x"}'], where).payload)
+    .toMatchObject({ action: 'route', conversationId: 'g1', assessment: { difficulty: 'low' } })
+})
+it('routes through the caller and prints the decision, or the parse failure as an error', async () => {
+  const print = vi.fn(), close = vi.fn()
+  const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}) => {
+    if (type === 'agents_list') return { agents: [{ id: 'native', engine: 'claude', tmuxPane: '%42', status: 'active' }] }
+    if (payload.action === 'routeContext') return { error: 'AGENT_UNAVAILABLE', detail: 'x' }
+    return { ok: true }
+  })
+  const deps = { where: () => where, pane: '%42', open: async () => ({ request, close, machineId: 'machine' }), print }
+  expect(await superTabCommand(['--tab', 'tab', 'route', 'g1', '{"difficulty":"low","risk":"low","why":"x"}'], deps)).toBe(1)
+  expect(request).toHaveBeenCalledWith('super_tabs', expect.objectContaining({ action: 'routeContext', tabId: 'tab', harnessId: 'native' }), 30_000)
+  expect(JSON.parse(print.mock.calls.at(-1)![0])).toMatchObject({ error: 'AGENT_UNAVAILABLE' })
+  expect(await superTabCommand(['--tab', 'tab', 'route', 'g1', '{nope'], deps)).toBe(1)
+  expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toMatch(/JSON/)
 })

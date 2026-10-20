@@ -3,6 +3,7 @@ import { constants } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { readMachineResources } from '../lib/machineResources.js'
 import { commandAvailableInInteractiveShell } from '../lib/engineLaunch.js'
+import { launchModelEngines } from '../lib/launchModel.js'
 import { object } from './wire.js'
 import { readCapacityDisk } from './disk.js'
 
@@ -11,6 +12,13 @@ export interface Requirements {
   memoryBytes: number; diskBytes: number; maxCpuPercent: number
   tools: string[]; devices: string[]; quotaRequired: boolean
 }
+/** What `start` asks of a machine when the Lead has no reason to ask for more: the help's template. */
+export const START_REQUIREMENTS: Requirements = { memoryBytes: 2147483648, diskBytes: 10737418240, maxCpuPercent: 85, tools: ['git'], devices: [], quotaRequired: false }
+/** The same plus what the task needs. The route admits a pick on exactly this, so the start it suggests is admitted too. */
+export const startRequirements = (needs: { tools: string[]; devices: string[] }): Requirements =>
+  // CPU use is only a momentary reading: a busy machine would refuse every candidate (seen in the route e2e at 98.7%), so the route does not cap it.
+  ({ ...START_REQUIREMENTS, maxCpuPercent: 100, tools: [...new Set([...START_REQUIREMENTS.tools, ...needs.tools])], devices: needs.devices })
+
 export async function readCapabilities(input: Json, deps = {
   resources: readMachineResources,
   disk: readCapacityDisk,
@@ -38,9 +46,11 @@ export async function readCapabilities(input: Json, deps = {
     probeTools(),
     Promise.all(devices.map(async d => [d, await deps.device(d).catch(() => false)] as const)),
   ])
-  return { ok: true, sampledAt: Date.now(), resources: { ...resources, projectDiskFreeBytes: disk?.freeBytes ?? null,
+  return { ok: true, sampledAt: Date.now(), resources: { ...resources, projectDiskFreeBytes: disk?.freeBytes ?? null, projectDiskTotalBytes: disk?.totalBytes ?? null,
     projectDiskVolume: disk?.volume ?? null, projectDiskPath: disk?.path ?? null },
-    tools: Object.fromEntries(toolValues), devices: Object.fromEntries(deviceValues) }
+    tools: Object.fromEntries(toolValues), devices: Object.fromEntries(deviceValues),
+    // A daemon from before the launch flags leaves this out, and a start then switches the model after it.
+    launchModel: launchModelEngines() }
 }
 
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
@@ -48,15 +58,16 @@ const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFi
  * invented token counts; an unreported/custom-profile allowance is unknown. */
 export function quotaOf(reply: Json, engine: string, customAccount: boolean) {
   const reading = !customAccount && Array.isArray(reply.providers) ? reply.providers.map(object).find(r => r.provider === engine) : null
-  const windows: Array<{ usedPercent: number; resetsAt: unknown }> = []
+  const windows: Array<{ usedPercent: number; resetsAt: unknown; name: string }> = []
   if (reading?.outcome === 'answered' && reading.httpStatus === 200) {
     const body = object(reading.body)
     const raw = engine === 'claude' ? [body.five_hour, body.seven_day]
       : engine === 'codex' ? [object(body.rate_limit).primary_window, object(body.rate_limit).secondary_window] : []
-    for (const value of raw) {
+    // Both engines report the short window first and the weekly one second; the name is by that position, kept even when one is missing.
+    raw.forEach((value, index) => {
       const w = object(value), used = w.utilization ?? w.used_percentage ?? w.used_percent
-      if (finite(used) && used >= 0 && used <= 100) windows.push({ usedPercent: used, resetsAt: w.resets_at ?? w.reset_at ?? null })
-    }
+      if (finite(used) && used >= 0 && used <= 100) windows.push({ usedPercent: used, resetsAt: w.resets_at ?? w.reset_at ?? null, name: index === 0 ? '5-hour' : 'weekly' })
+    })
   }
   return { known: windows.length > 0, account: typeof reading?.account === 'string' ? reading.account : null, windows }
 }

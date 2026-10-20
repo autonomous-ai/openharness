@@ -197,6 +197,8 @@ describe('the gateway\'s process, spoken to by the core', () => {
     w.link.notice({ kind: 'status', connected: true })
     w.link.notice({ kind: 'client', connId: 'phone-1', client: { role: 'web', label: null, identity: 'P', direct: false } })
     w.link.port.broadcast({ type: 'turn_started' })
+    // A guest's harness's event, named for that guest's sessions (gateway/gateway.ts `broadcast`).
+    w.link.port.broadcast({ type: 'turn_started', agentId: 'guests' }, 'kim@acme.io')
     w.link.port.commander({ type: 'commander_event' })
     w.link.port.user({ type: 'notification' })
     w.link.port.reply('phone-1', 'agents_list', 'r-1', { agents: [] })
@@ -215,6 +217,7 @@ describe('the gateway\'s process, spoken to by the core', () => {
     w.link.ops.wifiService(false)
     await w.link.stop()
     expect(port.broadcast).toHaveBeenCalledWith({ type: 'turn_started' })
+    expect(port.broadcast).toHaveBeenCalledWith({ type: 'turn_started', agentId: 'guests' }, 'kim@acme.io')
     expect(port.commander).toHaveBeenCalledWith({ type: 'commander_event' })
     expect(port.user).toHaveBeenCalledWith({ type: 'notification' })
     expect(port.reply).toHaveBeenCalledWith('phone-1', 'agents_list', 'r-1', { agents: [] })
@@ -234,7 +237,7 @@ describe('the gateway\'s process, spoken to by the core', () => {
     // Stopped: what the core says after is for no gateway, and is dropped.
     expect(w.gateways[0].stop).toHaveBeenCalled()
     w.link.port.broadcast({ type: 'after' })
-    expect(port.broadcast).toHaveBeenCalledTimes(1)
+    expect(port.broadcast).toHaveBeenCalledTimes(2)
   })
 
   it('tells the core everything the gateway says, as the same call', () => {

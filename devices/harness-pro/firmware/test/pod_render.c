@@ -326,10 +326,17 @@ int main(int argc, char **argv)
     }
     if (inbox) pod_nav_act(&N, &M, POD_A_INBOX, 0, T0);
     else if (!strcmp(screen, "tabs:notices")) {   // Home on the Notices card (the entries are added above; the asking agent counts too)
-        pod_nav_act(&N, &M, POD_A_SCROLL, -1, T0);
+        pod_nav_act(&N, &M, POD_A_SCROLL, POD_HOME_NOTICES, T0);
+    } else if (!strncmp(screen, "tabs:working", 12)) {   // Home on the Working card (fw, be, web, cur work: three pets on page 0); :codex has be, web (Muse), site (Codex) work
+        if (strstr(screen, ":codex")) {
+            static const char *const off[] = {"fw", "ota", "cur"};
+            for (int i = 0; i < 3; i++) pod_model_turn(&M, off[i], "done", NULL, 0, T0);
+            pod_model_turn(&M, "site", "activity", "Building the landing page", 20, T0);
+        }
+        pod_nav_act(&N, &M, POD_A_SCROLL, POD_HOME_WORKING, T0);
     } else if (!strcmp(screen, "tabs:9")) more_tabs(3);   // nine tabs: more than one page
     else if (!strcmp(screen, "tabs:seven") || !strcmp(screen, "tabs:single")) cover_tabs(!strcmp(screen, "tabs:seven"));
-    else if (!strcmp(screen, "tabs:none")) { static const char *const *no_ids[1]; static const uint8_t no_n[1]; pod_model_swarms(&M, NULL, no_ids, no_n, 0, "", NULL, 0); pod_model_question_close(&M, "cli"); }   // the first screen: no tabs
+    else if (!strcmp(screen, "tabs:none")) { static const char *const *no_ids[1]; static const uint8_t no_n[1]; pod_model_swarms(&M, NULL, no_ids, no_n, 0, "", NULL, 0); pod_model_question_close(&M, "cli"); for (unsigned i = 0; i < sizeof AGENTS / sizeof AGENTS[0]; i++) pod_model_turn(&M, AGENTS[i].id, "done", NULL, 0, T0); }   // the first screen: no tabs, nobody working (else the Working card)
     else if (!strcmp(screen, "tabs:long")) snprintf(M.tabs[0].name, CABLE_NAME_MAX, "%.*s", CABLE_NAME_MAX - 1, "marketing-site-redesign-with-a-long-name");   // Home: a name as long as the model keeps one
     else if (!strncmp(screen, "tabs", 4)) {   // tabs, or tabs:<n>: Home on tab n
         if (screen[4] == ':' && !strcmp(screen + 5, "mock")) mock_tabs();

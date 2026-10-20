@@ -1,4 +1,8 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { loadOrCreateHookCredential } from '../lib/hookAuth.js'
 import { settingsCommand, SETTINGS_SIGNED_OUT, SETTINGS_USAGE } from './settings.js'
 
 /** This computer's daemon as `harness settings` meets it: its answers to `/api/agent-settings`, and what was asked. */
@@ -99,5 +103,19 @@ describe('harness settings', () => {
     expect(await d.run('--help')).toBe(0)
     expect(d.out).toEqual([SETTINGS_USAGE])
     expect(d.asked).toEqual([])
+  })
+
+  it('shows the daemon this OS user\'s local credential, which its loopback port wants', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'settings-cred-'))
+    try {
+      const credential = loadOrCreateHookCredential(dataDir)
+      const asked: Record<string, string>[] = []
+      const fetch = (async (_url: string, init: RequestInit) => {
+        asked.push(init.headers as Record<string, string>)
+        return new Response(JSON.stringify({ ...OFF, signedIn: true }))
+      }) as unknown as typeof globalThis.fetch
+      expect(await settingsCommand([], { port: 4321, dataDir, fetch, env: {}, out: () => {}, err: () => {} })).toBe(0)
+      expect(asked).toEqual([{ 'x-adapter-local': '1', 'X-Harness-Local': credential }])
+    } finally { rmSync(dataDir, { recursive: true, force: true }) }
   })
 })

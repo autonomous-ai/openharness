@@ -28,6 +28,7 @@ import {
   permissionFlagToVerify,
   permissionModeFlags,
   refusePermissionFlagIfUnsupported,
+  unsupportedLaunchModelFlag,
   resetCommandFlagSupportCache,
   engineFallbackPrelude,
   ENGINE_INPUT_DRAIN_SH,
@@ -816,6 +817,23 @@ describe('a login shell that is not POSIX', () => {
   })
 })
 
+describe('a model and effort on launch', () => {
+  it('gives Claude Code its model and effort as flags of that session, ahead of the first prompt', () => {
+    expect(buildEngineCommandArgv('claude', { launchModel: { model: 'opus', effort: 'high' }, extraArgs: ['--x'], firstPrompt: 'go' }))
+      .toEqual([engineBin('claude'), '--x', '--model', 'opus', '--effort', 'high', 'go'])
+    expect(buildEngineCommandArgv('claude', { launchModel: { model: 'default', effort: 'default' } })).toEqual([engineBin('claude')])
+  })
+
+  it('keeps a model with shell characters one argv item, never part of a shell string', () => {
+    const argv = buildEngineCommandArgv('claude', { launchModel: { model: 'a$(id)', effort: null } })
+    expect(argv).toEqual([engineBin('claude'), '--model', 'a$(id)'])
+  })
+
+  it('leaves an engine without the flags as it was', () => {
+    expect(buildEngineCommandArgv('codex', { launchModel: { model: 'gpt-5', effort: 'high' } })).toEqual(buildEngineCommandArgv('codex'))
+  })
+})
+
 describe('a first prompt on launch', () => {
   const PROMPT = 'Start a local model on this machine'
 
@@ -1076,6 +1094,34 @@ describe('the permission gates', () => {
     const shell = withFakeOpencode('--auto')
     const kept = await dropPermissionFlagIfUnsupported('opencode', { permissionMode: 'auto', bypassPermission: true }, shell)
     expect(kept).toEqual({ choice: { permissionMode: 'auto', bypassPermission: true }, droppedFlag: null })
+  })
+})
+
+describe('the launch model gate', () => {
+  function withFakeClaude(help: string): string {
+    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-gate-'))
+    dirs.push(binDir)
+    process.env.HARNESS_ENGINE_TEST_PATH = binDir
+    fakeEngine(binDir, 'claude', help)
+    return bashProbeShell()
+  }
+
+  it('names the first flag a build of the engine lacks', async () => {
+    const shell = withFakeClaude('--model <model>')
+    await expect(unsupportedLaunchModelFlag('claude', { model: 'opus', effort: 'high' }, shell)).resolves.toBe('--effort')
+    await expect(unsupportedLaunchModelFlag('claude', { model: 'opus', effort: null }, shell)).resolves.toBeNull()
+  })
+
+  it('does not read a longer flag as the one it needs', async () => {
+    const shell = withFakeClaude('--model <model>\n--effort-hint')
+    await expect(unsupportedLaunchModelFlag('claude', { model: null, effort: 'high' }, shell)).resolves.toBe('--effort')
+  })
+
+  it('lets a build that has both flags through, and asks nothing for default or an engine without flags', async () => {
+    const shell = withFakeClaude('--model <model>\n--effort <level>')
+    await expect(unsupportedLaunchModelFlag('claude', { model: 'opus', effort: 'high' }, shell)).resolves.toBeNull()
+    await expect(unsupportedLaunchModelFlag('claude', { model: 'default', effort: 'default' }, shell)).resolves.toBeNull()
+    await expect(unsupportedLaunchModelFlag('codex', { model: 'x', effort: 'high' }, shell)).resolves.toBeNull()
   })
 })
 

@@ -23,6 +23,7 @@ import type { createLaunchHelpers } from './launch.js'
 import type { RestartAgent } from './launches.js'
 import type { PaneSwap } from './swap.js'
 import type { LaunchOverridesDeps } from '../../lib/launchOverrides.js'
+import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
 type LaunchHelpers = ReturnType<typeof createLaunchHelpers>
 
@@ -101,6 +102,7 @@ export function createAgentRestarter({
     if (purgeBusy(agentId) || stopJobs.has(agentId) || pinnedControls.has(agentId)) return { ok: false, error: 'AGENT_BUSY' }
     const session = registry.resolve(agentId)
     if (!session) return { ok: false, error: 'AGENT_NOT_FOUND' }
+    if (session.guest) return GUEST_HARNESS_REFUSAL
     if (!session.sessionId && (session.launch?.state === 'held' || session.launch?.state === 'starting') && session.launch.nativeToken) {
       return { ok: false, error: 'NATIVE_LAUNCH_HELD', detail: 'The original launch is held for recovery. Its first prompt or fork cannot be replaced by a fresh launch.' }
     }
