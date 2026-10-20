@@ -8,7 +8,6 @@ import '../measurement/product_resumes.dart';
 import '../measurement/setup_transport.dart';
 
 import 'dart:async';
-import 'dart:convert' show jsonDecode, jsonEncode;
 import 'dart:math' show Random;
 
 import 'package:dio/dio.dart';
@@ -1607,7 +1606,6 @@ class AppNotifier extends ChangeNotifier {
     // ([_warmStartMachines]). Started after the config and the sign-in check, they landed after
     // the first frame, ~250ms into the dial's wait. Disk only; dropped when nobody is signed in.
     lastOpenedAgent.prefetch();
-    unawaited(_readHarnessOsMachines());
     final cache = _machineCache;
     if (cache != null) {
       // Read before the first frame by `startHarness` — see [_preDialFromHint].
@@ -6087,52 +6085,7 @@ class AppNotifier extends ChangeNotifier {
   final Map<String, DateTime> _osAsked = {};
 
   bool runsHarnessOs(String machineId) =>
-      osStatus[machineId]?['harnessOs'] == true ||
-      _harnessOsMachines.contains(machineId);
-
-  /// Computers seen running Harness OS, kept between launches: one that is off is not asked, and an
-  /// encrypted one that restarted is off until someone unlocks it — what its row then says
-  /// ([machineMayBeLocked]).
-  final Set<String> _harnessOsMachines = {};
-  static const _harnessOsKey = 'phone_harness_os_machines_v1';
-
-  Future<void> _readHarnessOsMachines() async {
-    final raw = await _paneLayout?.storage.read(_harnessOsKey);
-    if (raw == null) return;
-    try {
-      final ids = jsonDecode(raw);
-      if (ids is! List) return;
-      final before = _harnessOsMachines.length;
-      _harnessOsMachines.addAll(ids.whereType<String>());
-      if (_harnessOsMachines.length != before) notifyListeners();
-    } on FormatException {
-      // Nothing worth keeping: it fills again as computers answer.
-    }
-  }
-
-  void _rememberHarnessOs(String machineId, bool runs) {
-    final changed = runs
-        ? _harnessOsMachines.add(machineId)
-        : _harnessOsMachines.remove(machineId);
-    if (!changed) return;
-    unawaited(
-      _paneLayout?.storage.write(
-            _harnessOsKey,
-            jsonEncode(_harnessOsMachines.toList()),
-          ) ??
-          Future.value(),
-    );
-  }
-
-  /// A Harness OS computer that does not answer may be one that restarted with its disk encrypted,
-  /// waiting for its password — on its screen, or from a phone on its hotspot (Set up a device).
-  bool machineMayBeLocked(String machineId) {
-    final state = machineStates[machineId];
-    // Offline as the phone's screens call it (`phoneMachineStatusOf`): its node says so.
-    return state != null &&
-        state.nodeOnline == false &&
-        runsHarnessOs(machineId);
-  }
+      osStatus[machineId]?['harnessOs'] == true;
 
   bool updateAvailable(String machineId) {
     final update = osStatus[machineId]?['update'];
@@ -6155,9 +6108,6 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     osStatus[machineId] = status;
-    if (status['harnessOs'] is bool) {
-      _rememberHarnessOs(machineId, status['harnessOs'] == true);
-    }
     notifyListeners();
   }
 

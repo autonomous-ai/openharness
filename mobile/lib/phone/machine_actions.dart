@@ -7,7 +7,6 @@ import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/widgets/rename_agent_dialog.dart'
     show showMachineRenameDialog;
 
-import 'add_device/add_device_page.dart';
 import 'change_wifi_page.dart';
 import 'link_page.dart';
 import 'phone_navigation.dart';
@@ -101,22 +100,7 @@ void openMachineActions(
   final List<PhoneSheetAction> destructive;
   switch (status) {
     case PhoneMachineStatus.offline:
-      actions = [
-        // First, as its row says: a Harness OS computer that restarted waits for its password. The
-        // phone finds its hotspot and asks for it (Set up a device, its unlock step).
-        if (notifier.machineMayBeLocked(machineId))
-          PhoneSheetAction(
-            icon: LucideIcons.lockOpen300,
-            label: 'Unlock after a restart…',
-            chevron: true,
-            enabled: !removing,
-            onTap: () =>
-                Navigator.of(context)
-                    .push(phoneRoute((_) => AddDevicePage(notifier: notifier))),
-          ),
-        tryAgain,
-        rename,
-      ];
+      actions = [tryAgain, rename];
       destructive = [remove];
     case PhoneMachineStatus.needsPassword:
       actions = [

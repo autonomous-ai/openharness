@@ -265,9 +265,7 @@ class _Body extends StatelessWidget {
         rows.add(_GroupLine(word: group.word, hint: group.hint));
       }
       for (final state in ordered.sublist(start, end)) {
-        // One that may be waiting for its password keeps its own line: the run's says otherwise.
-        final locked = notifier.machineMayBeLocked(state.machine.machineId);
-        rows.add(_row(context, state, tty, ownLine: !gathered || locked));
+        rows.add(_row(context, state, tty, ownLine: !gathered));
       }
       start = end;
     }
@@ -328,12 +326,6 @@ class _Body extends StatelessWidget {
         'turn it on, or run harness start there',
       ),
     };
-    // A Harness OS computer that restarted with its disk encrypted waits, off the account, for its
-    // password: at its screen, or from this phone on its hotspot. Its row says which, not "turn it
-    // on" — it is on.
-    if (notifier.machineMayBeLocked(machineId)) {
-      (color, detail) = (tty.yellow, 'restarted? tap to unlock it from here');
-    }
     // Something asked of it by hand is still on its way: the row says so, rather than the state it
     // is about to leave.
     if (notifier.machineRemoving(machineId)) {
