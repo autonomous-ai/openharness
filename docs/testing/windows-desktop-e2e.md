@@ -17,9 +17,9 @@ record.
 | # | Scenario | Result at this snapshot | Driver |
 | --- | --- | --- | --- |
 | 1 | First install, sign-in, same-version launch | Partial: N installed and same-version launch converged to one installed window. Mark-of-the-Web launch and SmartScreen behavior unresolved. | Script, visual automation; sign-in authorized through existing account session |
-| 2 | This computer, terminal, Add Phone, remote Mac | Partial: owned terminal creation, `WIN_42` output, two HTTP 200 handoffs across daemon recovery and remote row observed. ARM RC1 Ctrl+C failed; patched host passed with local x64 Release and published x64 N1 apps. Published PTY 0.4.19 GUI Ctrl+C remains unverified because the serving ARM host is still 0.4.18. | Visual automation, Script |
+| 2 | This computer, terminal, Add Phone, remote Mac | Partial: owned terminal creation, `WIN_42` output, HTTP 200 handoffs on ARM and real DELL x64, and remote row observed. ARM RC1 Ctrl+C failed; patched host passed with local x64 Release and published x64 N1 apps. Published PTY 0.4.19 GUI Ctrl+C remains unverified: the serving ARM host is still 0.4.18, and DELL's cross-session host could not be safely recognized by its limited GUI daemon. | Visual automation, Script |
 | 3 | Notifications, tray, links, paste and font | Partial: tray/links/font and local x64 composer paste observed. One N1 hidden-app Kilo turn stalled while the backend was offline, so completed-turn toast/click and full tray working row remain unverified. | Visual automation, Script |
-| 4 | Staging updates and broken-build rollback | Partial: real 1.0.0 → 1.0.1 GUI update passed on both VMs. The 1.0.1 → 1.0.2 update kept the ARM counter rising and repaired Settings `DisplayVersion` on both VMs. Fake-CDN broken-build rollback remains unverified. | Script, visual automation |
+| 4 | Staging updates and broken-build rollback | Partial: real 1.0.0 → 1.0.1 GUI update passed on both VMs. The 1.0.1 → 1.0.2 update kept the ARM counter rising and repaired Settings `DisplayVersion` on both VMs; DELL x64 then updated from 1.0.2 → 1.0.3 through the GUI and rendered signed in. Fake-CDN broken-build rollback remains unverified. | Script, visual automation |
 | 5 | Uninstall through Windows Settings | Passed on 1.0.3 after a 1.0.2 timing failure was fixed: holding the final dialog open over three minutes did not start cleanup early; after OK, the app folder and registrations disappeared while CLI, daemon and agents stayed. | UI Automation |
 | 6 | x64 desktop on ARM64 | Passed across two runs of published x64 1.0.3: install, rendered window, tray and Settings uninstall passed; a later isolated x64 runtime returned HTTP 200 for Add Phone while the backend was connected. The installed ARM app and seven agents were restored afterward. | Script, visual automation, UI Automation |
 | 7 | Install desktop by one PowerShell command | Partial: the staging one-liner installed ARM64 1.0.3 with no observed SmartScreen prompt or downloaded-file markers, and Settings uninstall preserved the CLI and agents. Its first-run client area was white; rendered UI and full console completion copy remain unverified. | Script, visual automation, UI Automation |
@@ -295,6 +295,33 @@ The same seven agent IDs, daemon/core/worker/PTY PIDs and process start times
 remained; the owned counter continued rising through `COUNT_18687`. Together,
 the two runs satisfy Scenario 6's x64 emulation, pipe handoff, tray and cleanup
 criteria. The earlier 502 was a backend outage, not an x64 FFI failure.
+
+The real DELL x64 VM was also checked after the user prioritized x64. Its
+already signed-in, rendered 1.0.2 app ran in the active GUI session with the
+staging 1.0.3 update banner. Clicking **Update** installed 1.0.3 and restarted
+one app process in the same GUI session. Its home surface rendered signed in,
+the installed `current` pointer read 1.0.3, and `harness status` remained
+`backend connected` with zero available agents. On this x64 app, one actual
+**Add Phone** click produced `POST /api/auth/handoff → 200` in **478 ms** in the
+app log. The dialog was dismissed, the app remained at 1.0.3, and the daemon
+kept its PID and connected status. No QR screenshot was retained. This is live
+x64 GUI/update/FFI evidence; it does not establish published PTY 0.4.19 GUI
+Ctrl+C because that host currently runs in a different Windows session.
+
+A bounded attempt to create one Terminal from the DELL 1.0.3 GUI did not
+confirm a start; `harness ps` remained empty, so no input or Ctrl+C was sent.
+The DELL GUI daemon logged `pty host is unavailable` and repeated attempts to
+start a host despite an existing 0.4.19 host. Read-only probes found that host
+alive in Session 0, its discovery file naming the same PID, and its pipe
+connectable from both Session 0 and the limited GUI Session 1. However, the
+Windows process-table scan from Session 1 reported the host row with an empty
+creation marker; the Session 0 scan read the marker. The daemon drops rows
+without that marker, so it cannot prove that the discovery file still names
+the same process and will not trust the host. This bounds the failure to the
+cross-session process-identity check, rather than a terminal input or Ctrl+C
+result. The host and either daemon were not restarted; DELL remained signed in
+and backend connected with zero agents. Published 0.4.19 GUI Ctrl+C needs a
+host started in a compatible user context for a valid E2E check.
 
 The staging `desktop/install.ps1` served the staging manifest base and enabled
 app installation. Its real `irm …/staging/desktop/install.ps1 | iex` command ran
