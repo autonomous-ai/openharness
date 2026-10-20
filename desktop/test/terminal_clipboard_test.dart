@@ -817,6 +817,92 @@ void main() {
     },
   );
 
+  for (final engine in ['claude', 'codex']) {
+    for (final shift in [false, true]) {
+      onPlatform(
+        TargetPlatform.windows,
+        'local Windows $engine image paste (Shift=$shift) delivers image bytes instead of Ctrl+V',
+        (tester) async {
+          final app = createApp();
+          app.stateOf('m')!
+            ..localOnly = true
+            ..terminalImagePasteAvailable = true;
+          final frames = <TerminalBinaryFrame>[];
+          final controls = <String>[];
+          final session = liveSession(
+            'a0',
+            frames,
+            engine: engine,
+            controls: controls,
+          );
+          final png = Uint8List.fromList([137, 80, 78, 71]);
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(imageChannel, (_) async => png);
+          clipboard = null;
+          await mount(tester, app, session);
+          await key(tester, LogicalKeyboardKey.keyV, ctrl: true, shift: shift);
+          expect(input(frames), isEmpty);
+          expect(
+            controls.where((c) => c == 'terminal_chunked_upload_begin'),
+            hasLength(1),
+          );
+          await session.handleFrame('terminal_chunked_upload_begin_result', {
+            'streamId': session.streamId,
+            'accepted': true,
+          });
+          await tester.pump();
+          expect(frames.single.kind, TerminalBinaryKind.imagePaste);
+          expect(frames.single.bytes, png);
+          await session.handleFrame('terminal_paste_image_result', {
+            'streamId': session.streamId,
+            'outcome': 'fallback_path',
+          });
+          await tester.pump();
+          expect(session.uploadProgress, isNull);
+          await tester.pumpWidget(const SizedBox());
+          session.dispose();
+          app.dispose();
+        },
+      );
+    }
+  }
+
+  for (final platform in [TargetPlatform.macOS, TargetPlatform.linux]) {
+    onPlatform(
+      platform,
+      '$platform local image paste keeps the engine clipboard shortcut',
+      (tester) async {
+        final app = createApp();
+        app.stateOf('m')!
+          ..localOnly = true
+          ..terminalImagePasteAvailable = true;
+        final frames = <TerminalBinaryFrame>[];
+        final controls = <String>[];
+        final session = liveSession(
+          'a0',
+          frames,
+          engine: 'claude',
+          controls: controls,
+        );
+        clipboard = null;
+        await mount(tester, app, session);
+        await key(
+          tester,
+          LogicalKeyboardKey.keyV,
+          cmd: platform == TargetPlatform.macOS,
+          ctrl: platform == TargetPlatform.linux,
+          shift: platform == TargetPlatform.linux,
+        );
+        await tester.pump(const Duration(milliseconds: 20));
+        expect(input(frames), '\x16');
+        expect(controls, isNot(contains('terminal_chunked_upload_begin')));
+        await tester.pumpWidget(const SizedBox());
+        session.dispose();
+        app.dispose();
+      },
+    );
+  }
+
   for (final (platform, shift) in [
     (TargetPlatform.linux, true),
     (TargetPlatform.windows, false),

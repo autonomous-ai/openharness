@@ -1,7 +1,11 @@
 # Windows shortcuts: Ctrl where the Mac has ⌘
 
-Status: design, 20 October 2026. Part of C (the Harness desktop on Windows), on `feat/windows-desktop`; it ships in
-the Windows PR.
+Status: implemented; 8/8 delegated live checks passed across recorded sources, 20 October 2026.
+The Ctrl+backslash sidebar example remains excluded. Full Windows CI covers `38dde786e`; local
+repair `9fcc9f769` has scoped Mac/Windows checks, an x64 release build, and live image confirmation.
+Live testing used x64 under ARM64 emulation; native physical-x64 acceptance is not established.
+See the [acceptance record](../../testing/windows-desktop-e2e.md#windows-shortcuts) for evidence and remaining limits.
+Part of C (the Harness desktop on Windows), on `feat/windows-desktop`; merge and publication remain open.
 
 ## Why
 

@@ -794,11 +794,38 @@ add a kind there, not at the call site.
   `_linuxAltShortcuts`/`linuxAltCommandKeys` move the few that would land on a key a terminal
   program answers (Alt+Enter, Alt+T, Alt+F/B/D). The runner rewrites Super to Meta
   (`super_as_meta_cb`), so a Super chord a user binds still reads as `cmd`.
-  Windows takes Ctrl where the Mac takes ⌘ (`ctrlWorkspacePrefix`): Ctrl+Shift for every letter, as Windows
-  Terminal does, because a plain Ctrl+letter is always some terminal program's; plain Ctrl only for the tab digits
-  and Settings' comma. `_windowsShortcuts`/`windowsCommandKeys` move a shifted twin to Alt+Shift, pane focus and
-  moves to Alt(+Shift)+arrows, tabs to Ctrl+Page Down/Up and zoom to Ctrl+Shift+Z. The terminal keeps every plain
-  Ctrl chord and Ctrl+Shift+C/V/A.
+  Native Windows (`ctrlWorkspacePrefix`, excluding web) keeps its existing shortcuts everywhere:
+  Ctrl+Shift for workspace letters, Alt+Shift for shifted twins, Alt(+Shift)+arrows for pane focus
+  and moves, Ctrl+Page Down/Up for tabs, and Ctrl+Shift+Z for zoom. Outside the terminal view,
+  eligible Mac ⌘[⇧]key defaults also have Ctrl[+Shift]+key aliases, such as Ctrl+T for New Tab,
+  Ctrl+W for Close Tab, Ctrl+N for New Harness, and Ctrl+R for Reload. Aliases follow each command's
+  existing keys and never replace another default in the same context. Mac chords containing
+  Alt get no alias (Ctrl+Alt can be AltGr). Arrows, Enter/numpad Enter, Backspace, Delete, Home,
+  End, Tab, digits 1–9, comma, and A/C/V/X/Z/Y are excluded from alias generation; their existing
+  bindings remain. For example, Ctrl+Shift+G stays Find Next, so Find Previous keeps Alt+Shift+G.
+  In the terminal view, plain Ctrl+letter reaches the program except Ctrl+C with a selection
+  (copies, clears the selection, and sends no interrupt) and Ctrl+V (Harness text/image paste).
+  Native Windows local panes read clipboard PNG bytes through `NativeClipboard.readImagePng`
+  and the guarded `session.pasteImage` route. When a Windows clipboard writer is unavailable,
+  the existing CLI route saves the PNG and pastes its file path into the prompt.
+  With no selection, Ctrl+C still interrupts. Ctrl+Shift+C/V/A remain available; a pane this
+  window does not control still permits copying but blocks paste. The composer and find bar
+  count as text fields: editing keys win, and other aliases work. The terminal composer also
+  reserves Ctrl+W/U for line editing and routes Ctrl+V through Harness image/text paste;
+  Ctrl+T opens a tab there. IME composition does not dispatch aliases. Menu/tooltips retain
+  the keys that work everywhere; the Shortcuts sheet and command palette also list aliases
+  as “outside a terminal”. Only the Windows Edit menu follows focus: text fields show
+  Cut/Copy/Paste/Select All as Ctrl+X/C/V/A; terminals disable Cut and show Ctrl+C, Ctrl+V,
+  and Ctrl+Shift+A. Composer Edit-menu Paste uses the same image-aware path as Ctrl+V.
+  Holding Ctrl shows tab numbers. User bindings retain their behavior, including in terminals;
+  rebinding a command removes its default aliases, including bindings saved before aliases existed.
+  Windows stores keybindings in `%APPDATA%\harness\keybindings.jsonc` when APPDATA is absolute.
+  If that file is absent, the default store reads the previous configuration location (normally
+  `~/.config/harness/keybindings.jsonc`, respecting XDG_CONFIG_HOME). Editing/rebinding writes
+  the new path using the legacy content first and leaves the old file intact. With missing
+  or nonabsolute APPDATA, the previous path rule remains. macOS, Linux, and web are unchanged.
+  The [Windows shortcut acceptance record](../docs/testing/windows-desktop-e2e.md#windows-shortcuts)
+  identifies the tested source revisions and platform limits.
   Other workspace shortcuts are ⌘-based — Ctrl otherwise belongs to the shell/tmux, ⌥ is a
   Meta prefix for the pty (⌥⏎ and ⌥⌫ only — `AltAsMetaInputHandler` in
   `lib/terminal/terminal_input.dart` turns them into `ESC` + Return and `ESC` + `\x7f`, so the
