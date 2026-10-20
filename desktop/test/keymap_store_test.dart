@@ -105,6 +105,28 @@ void main() {
     expect(store.legacyFile?.path, legacy);
   });
 
+  test('Windows factory accepts AppData without an available legacy root', () {
+    const environment = {'APPDATA': r'C:\Roaming'};
+    final store = AppKeymap.fileStore(
+      environment: environment,
+      isWindows: true,
+    );
+    addTearDown(store.dispose);
+    expect(store.file.path, r'C:\Roaming\harness\keybindings.jsonc');
+    expect(store.legacyFile, isNull);
+    expect(
+      KeymapStore.legacyPath(environment: environment, isWindows: true),
+      isNull,
+    );
+  });
+
+  test('Windows factory still rejects an environment with no config root', () {
+    expect(
+      () => AppKeymap.fileStore(environment: const {}, isWindows: true),
+      throwsA(isA<FileSystemException>()),
+    );
+  });
+
   test('Windows falls back when AppData is absent or relative', () {
     for (final appData in [null, '', 'relative']) {
       expect(

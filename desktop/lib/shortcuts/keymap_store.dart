@@ -59,7 +59,10 @@ class KeymapStore extends ChangeNotifier {
     if (windows && appData != null && p.windows.isAbsolute(appData)) {
       return p.windows.join(appData, 'harness', 'keybindings.jsonc');
     }
-    return _configurationPath(env, windows: windows);
+    return _configurationPath(env, windows: windows) ??
+        (throw const FileSystemException(
+          'No home directory for keyboard configuration',
+        ));
   }
 
   static String? legacyPath({
@@ -73,7 +76,7 @@ class KeymapStore extends ChangeNotifier {
     );
   }
 
-  static String _configurationPath(
+  static String? _configurationPath(
     Map<String, String> env, {
     required bool windows,
   }) {
@@ -86,9 +89,7 @@ class KeymapStore extends ChangeNotifier {
     } else if (home != null && home.isNotEmpty) {
       root = paths.join(home, '.config');
     } else {
-      throw const FileSystemException(
-        'No home directory for keyboard configuration',
-      );
+      return null;
     }
     return paths.join(root, 'harness', 'keybindings.jsonc');
   }
