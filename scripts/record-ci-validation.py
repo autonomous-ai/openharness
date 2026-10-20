@@ -37,10 +37,11 @@ SOURCE_INPUTS = {
                 ".gitattributes", ".gitignore", ".gitmodules", "Makefile"),
     # VM tests also read CLI protocol definitions, shared layout fixtures,
     # daemon metadata and store catalog/artwork, including docs/images posters,
-    # the Hub's publication rules that desktop/lib/community/hub_contract.dart mirrors, and the
+    # the Hub's publication rules that desktop/lib/community/hub_contract.dart mirrors, its usage
+    # counters that desktop/lib/measurement/hub_usage.dart sends (test/hub_usage_contract_test.dart), and the
     # phone's P2P/E2EE sources the web's copies are checked against (test/p2p/mobile_parity_test.dart).
     "desktop": (".github/", "scripts/", "desktop/", "cli/", "tests/", "daemons/", "store/", "docs/images/",
-                "mobile/pubspec.lock", "backend/src/lib/communityContract.ts",
+                "mobile/pubspec.lock", "backend/src/lib/communityContract.ts", "backend/src/lib/hubMetricsContract.ts",
                 "mobile/lib/p2p/terminal_p2p_plugin.dart", "mobile/lib/p2p/terminal_p2p_link.dart", "mobile/lib/p2p/terminal_p2p_policy.dart",
                 "mobile/lib/ws/terminal_transport_plugin.dart", "mobile/lib/ws/relay_codec.dart", "mobile/lib/e2ee/relay_session_crypto.dart",
                 ".gitattributes", ".gitignore", ".gitmodules", "Makefile"),
