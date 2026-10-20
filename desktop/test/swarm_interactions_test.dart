@@ -23,6 +23,7 @@ import 'package:harness/shared/widgets/app_select_field.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/terminal/terminal_binary.dart';
+import 'package:harness/models/models_panel.dart';
 import 'package:harness/widgets/codex_profile_field.dart';
 import 'package:harness/widgets/account_menu.dart';
 import 'package:harness/widgets/agent_drag.dart' show PaneCloseButton;
@@ -905,6 +906,10 @@ void main() {
         ),
         findsNothing,
       );
+      // The menu bar's "View all … notifications" opens it; only a titlebar
+      // button toggles. Open already, it stays.
+      await send('notificationInbox', {'open': true});
+      expect(find.byType(NotificationInbox), findsOneWidget);
       await send('select', {'id': second});
       expect(find.byType(NotificationInbox), findsNothing);
       expect(app.activeSwarmId, second);
@@ -1087,6 +1092,76 @@ void main() {
         isNull,
       );
       await tester.pumpWidget(const SizedBox());
+      app.dispose();
+    },
+  );
+
+  testWidgets(
+    'every titlebar click closes the open dropdown before it acts; a dropdown\'s own button closes it',
+    (tester) async {
+      const channel = MethodChannel('harness/swarm_tabs');
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        (call) async => null,
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          null,
+        ),
+      );
+      Future<void> send(String method) async {
+        final reply = Completer<void>();
+        tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          channel.name,
+          const StandardMethodCodec().encodeMethodCall(MethodCall(method)),
+          (_) => reply.complete(),
+        );
+        for (var frame = 0; frame < 5 && !reply.isCompleted; frame++) {
+          await tester.pump();
+        }
+        await tester.pump(const Duration(milliseconds: 300));
+      }
+
+      final app = createApp();
+      final projects = SwarmProjectStore();
+      await app.modelManager.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SwarmScreen(
+            notifier: app,
+            nativeTabs: true,
+            projectStore: projects,
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // The daemon's button returns early while it has nothing to show; the
+      // open menu still closes.
+      await send('account');
+      expect(find.byType(AccountMenu), findsOneWidget);
+      await send('daemon');
+      expect(find.byType(AccountMenu), findsNothing);
+
+      // Models: its button opens it and closes it again; the avatar's closes
+      // it on the way to its own menu, and the other way round.
+      await send('modelControls');
+      expect(find.byType(ModelsPanel), findsOneWidget);
+      await send('modelControls');
+      expect(find.byType(ModelsPanel), findsNothing);
+      await send('modelControls');
+      await send('account');
+      expect(find.byType(ModelsPanel), findsNothing);
+      expect(find.byType(AccountMenu), findsOneWidget);
+      await send('modelControls');
+      expect(find.byType(AccountMenu), findsNothing);
+      expect(find.byType(ModelsPanel), findsOneWidget);
+      await send('modelControls');
+      expect(find.byType(ModelsPanel), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      projects.dispose();
       app.dispose();
     },
   );

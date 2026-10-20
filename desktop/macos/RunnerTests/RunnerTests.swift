@@ -110,39 +110,130 @@ final class SwarmTitlebarUpdateTests: XCTestCase {
     views.filter { $0.needsDisplay || $0.layer?.needsDisplay() == true }.map { "\(type(of: $0))" }
   }
 
-  func testAnIdenticalUpdateRedrawsNoControl() {
+  private struct Row {
+    let window: NSWindow
+    let messenger: Messenger
+    let titlebar: SwarmTitlebar
+    let strip: NSView
+  }
+
+  private func row(_ state: [String: Any]) -> Row? {
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 600),
       styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
     window.contentView = NSView()
     let messenger = Messenger()
     let titlebar = SwarmTitlebar(window: window, messenger: messenger, installStatusItem: false)
     messenger.call("configure", [:])
-    let state: [String: Any] = [
-      "enabled": true, "stripEnabled": true, "activeId": "a",
+    messenger.call("update", state)
+    guard let strip = window.titlebarAccessoryViewControllers.first?.view else {
+      XCTFail("the row is not in the title bar")
+      return nil
+    }
+    strip.layoutSubtreeIfNeeded()
+    flush(Row(window: window, messenger: messenger, titlebar: titlebar, strip: strip))
+    return Row(window: window, messenger: messenger, titlebar: titlebar, strip: strip)
+  }
+
+  private func flush(_ row: Row) {
+    row.window.layoutIfNeeded()
+    row.window.displayIfNeeded()
+    // Offscreen, AppKit leaves layer-backed views marked: draw them now.
+    for view in [row.strip] + descendants(of: row.strip) { view.layer?.displayIfNeeded() }
+  }
+
+  private func state(enabled: Bool = true, stripEnabled: Bool = true) -> [String: Any] {
+    [
+      "enabled": enabled, "stripEnabled": stripEnabled, "activeId": "a",
       "tabs": [["id": "a", "name": "First"], ["id": "b", "name": "Second"]],
       "account": ["kind": "avatar", "initial": "T"],
     ]
-    messenger.call("update", state)
-    guard let strip = window.titlebarAccessoryViewControllers.first?.view else {
-      return XCTFail("the row is not in the title bar")
+  }
+
+  private func tabs(_ row: Row) -> [NSView] {
+    descendants(of: row.strip).filter { "\(type(of: $0))" == "SwarmTabButton" }
+  }
+
+  func testAnIdenticalUpdateRedrawsNoControl() {
+    guard let row = row(state()) else { return }
+    let controls = [row.strip] + descendants(of: row.strip).filter {
+      $0 is NSButton || "\(type(of: $0))".hasPrefix("SwarmTab")
     }
-    strip.layoutSubtreeIfNeeded()
-    window.layoutIfNeeded()
-    window.displayIfNeeded()
-    // Offscreen, AppKit leaves layer-backed views marked: draw them now.
-    for view in [strip] + descendants(of: strip) { view.layer?.displayIfNeeded() }
-    let controls = [strip] + descendants(of: strip).filter { $0 is NSButton || "\(type(of: $0))".hasPrefix("SwarmTab") }
     XCTAssertFalse(controls.isEmpty)
     XCTAssertEqual(dirty(controls), [], "drawn once")
     let enabled = controls.compactMap { ($0 as? NSButton)?.isEnabled }
-    messenger.call("update", state)
+    row.messenger.call("update", state())
     XCTAssertEqual(dirty(controls), [])
     XCTAssertEqual(controls.compactMap { ($0 as? NSButton)?.isEnabled }, enabled)
-    withExtendedLifetime(titlebar) {}
+    withExtendedLifetime(row.titlebar) {}
   }
 
-  // The close mark is full ink at rest, as AppIcons.closeInk in Flutter.
+  private func holdCommand(_ row: Row, _ held: Bool) {
+    let event = NSEvent.keyEvent(with: .flagsChanged, location: .zero, modifierFlags: held ? .command : [],
+      timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: row.window.windowNumber, context: nil,
+      characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 55)!
+    NSApp.sendEvent(event)
+  }
+
+  // The tabs' ⌘1… hints teach the menu shortcuts, so they follow the menus (`enabled`), not the row,
+  // which stays live over Settings while the shortcuts are off.
+  func testShortcutHintsFollowTheMenusNotTheRow() {
+    guard let row = row(state()) else { return }
+    holdCommand(row, true)
+    XCTAssertEqual(dirty(tabs(row)).count, 2, "Command shows each tab's hint")
+    holdCommand(row, false)
+    row.messenger.call("update", state(enabled: false, stripEnabled: true))
+    flush(row)
+    holdCommand(row, true)
+    XCTAssertEqual(dirty(tabs(row)), [], "over Settings the shortcuts are off: no hints")
+    holdCommand(row, false)
+    withExtendedLifetime(row.titlebar) {}
+  }
+
+  /// The strongest ink a view draws, from 0 to 1.
+  private func ink(_ view: NSView) -> CGFloat {
+    guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return 0 }
+    view.cacheDisplay(in: view.bounds, to: rep)
+    var strongest: CGFloat = 0
+    for y in 0..<rep.pixelsHigh {
+      for x in 0..<rep.pixelsWide { strongest = max(strongest, rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) }
+    }
+    return strongest
+  }
+
+  // The tab's × draws at rest with the ink it has pressed (AppIcons.closeInk in Flutter).
   func testCloseMarkIsFullInkAtRest() {
+    guard let row = row(state()),
+          let close = descendants(of: row.strip).first(where: {
+            "\(type(of: $0))" == "SwarmPlainIconButton" && "\(type(of: $0.superview!))" == "SwarmTabButton"
+          }) as? NSButton else { return XCTFail("no tab ×") }
+    close.isHidden = false
+    let resting = ink(close)
+    close.highlight(true)
+    let pressed = ink(close)
+    XCTAssertGreaterThan(pressed, 0)
+    XCTAssertEqual(resting, pressed, accuracy: 0.02)
     XCTAssertEqual(HarnessControlSymbols.closeInk, 1)
+    withExtendedLifetime(row.titlebar) {}
+  }
+}
+
+/// The menu bar's Harness menu.
+final class HarnessStatusMenuTests: XCTestCase {
+  // "View all N notifications…" opens the inbox; only a titlebar button toggles it, so the row asks
+  // for `open`: an inbox already open stays.
+  func testViewAllOpensTheInbox() {
+    var sent: [(String, Any?)] = []
+    let status = HarnessStatusMenu(installStatusItem: false, showWindow: {}, emit: { sent.append(($0, $1)) })
+    let entries: [[String: Any]] = (0..<6).map {
+      ["machineId": "m", "agentId": "a\($0)", "sessionId": "s\($0)", "readToken": "r\($0)",
+       "unread": true, "title": "Harness \($0)"]
+    }
+    status.update(["enabled": true, "statusMenuEntries": entries])
+    status.menuNeedsUpdate(status.menu)
+    guard let viewAll = status.menu.items.first(where: { $0.title.hasPrefix("View all") }),
+          let action = viewAll.action else { return XCTFail("no View all row") }
+    NSApp.sendAction(action, to: viewAll.target, from: viewAll)
+    XCTAssertEqual(sent.last?.0, "notificationInbox")
+    XCTAssertEqual((sent.last?.1 as? [String: Any])?["open"] as? Bool, true)
   }
 }

@@ -2090,6 +2090,10 @@ private final class SwarmTabStrip: NSView {
   private var motionObserver: NSObjectProtocol?
   private var modifierMonitor: Any?
   private var shortcutHintsVisible = false
+  /// Whether the menu shortcuts work (Dart's `enabled`). The tabs' ⌘1… hints teach them, so they
+  /// follow these, not the row's `actionsEnabled`, which stays on over Settings.
+  private var shortcutsEnabled = false
+  private var showsShortcutHints: Bool { shortcutHintsVisible && shortcutsEnabled }
   private var lastBackgroundClick: (time: TimeInterval, point: NSPoint)?
   // Dragging is explicit below. AppKit must not also start a titlebar gesture.
   override var mouseDownCanMoveWindow: Bool { false }
@@ -2326,7 +2330,7 @@ private final class SwarmTabStrip: NSView {
 
   private func setShortcutHintsVisible(_ visible: Bool) {
     shortcutHintsVisible = visible
-    for tab in tabs { tab.showsShortcutHint = visible && actionsEnabled }
+    for tab in tabs { tab.showsShortcutHint = showsShortcutHints }
   }
 
   /// Tabs whose status slot moves: a working spinner.
@@ -2387,6 +2391,7 @@ private final class SwarmTabStrip: NSView {
     // The row stays live over Settings, which its actions close first (Dart's `stripEnabled`);
     // menus and shortcuts follow `enabled`.
     actionsEnabled = (state["stripEnabled"] ?? state["enabled"]) as? Bool == true
+    shortcutsEnabled = state["enabled"] as? Bool == true
     // The footer is a sibling above Flutter. Let Flutter's modal backdrop
     // cover this area too, including hit testing and accessibility.
     statusBar.isHidden = (state["tabs"] as? [Any])?.isEmpty != false || state["footerCovered"] as? Bool == true
@@ -2549,7 +2554,7 @@ private final class SwarmTabStrip: NSView {
         : displayLabel
       tab.shortcutHint = row.keys.contains("shortcutHint")
         ? row["shortcutHint"] as? String : (index < 9 ? "⌘\(index + 1)" : nil)
-      tab.showsShortcutHint = shortcutHintsVisible && actionsEnabled
+      tab.showsShortcutHint = showsShortcutHints
       tab.foreground = palette.navigationForeground
       tab.selected = id == activeId
       tab.keyboardFocus = tabsFocused && id == activeId

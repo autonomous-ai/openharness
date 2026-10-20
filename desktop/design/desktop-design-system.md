@@ -399,9 +399,10 @@ hover, without wrapping or reducing the font size. Remove a coding-agent logo
 that repeats the agent selector; keep a distinct domain-harness mark on the left.
 The session name and its activity/status remain on the left.
 
-Use the shared 12-point close glyph in a 28-point target, sitting 4 points
-inside the header's trailing edge. Resting ink is 45%; hover and keyboard focus
-brighten the glyph without a fill, border, or movement. Keep the controls on one
+Use the shared close mark (14-point Lucide ×, `AppIcons.closeSize`) in a
+28-point target, sitting 4 points inside the header's trailing edge. It is full
+foreground ink at rest (`AppIcons.closeInk`), as the tab's ×, with no fill,
+border, or movement on hover or keyboard focus. Keep the controls on one
 line; the session title yields first, then the model truncates while the agent
 retains readable identity. Never shrink the close target.
 

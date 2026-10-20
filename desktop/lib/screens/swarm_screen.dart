@@ -2317,10 +2317,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// What the titlebar tells rather than asks: keys held, the daemon hovered.
   static const _nativeReports = {'keymapPending', 'daemonHover', 'daemonLook'};
 
+  /// Keys, not clicks: the focused picker may own them ([_actOnNative]), so
+  /// they do not close it first.
+  static const _nativeKeys = {'keymapCommand', 'searchCommand'};
+
   /// Every titlebar call. The one rule: what it asks for is meant for the
   /// workspace. The button of an open dropdown closes it; any other action
-  /// closes it as it runs ([dismissTransientMenus]); a row click pops the
-  /// Settings page first; a modal still drops it ([_actOnNative]).
+  /// closes every open dropdown first ([dismissTransientMenus]); a row click
+  /// pops the Settings page first; a modal still drops it ([_actOnNative]).
   Future<void> _onNative(MethodCall call) async {
     var action = call;
     final args = call.arguments is Map ? call.arguments as Map : const {};
@@ -2333,7 +2337,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
       action = MethodCall(method, args['arguments']);
     }
     if (mounted && !_nativeReports.contains(action.method)) {
-      if (_closeTitlebarDropdown(action.method)) return;
+      // A dropdown's titlebar button closes it again. Asked to `open` (the
+      // menu bar's "View all … notifications"), an open one just stays.
+      if (_titlebarDropdown?.$1 == action.method) {
+        final wanted = action.arguments is Map ? action.arguments as Map : {};
+        if (wanted['open'] != true) _closeTitlebarDropdown(action.method);
+        return;
+      }
+      if (!_nativeKeys.contains(action.method)) dismissTransientMenus();
       if (fromRow && _titlebarCover == _TitlebarCover.settingsPage) {
         await _leaveSettings();
       }
@@ -2779,6 +2790,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }) async {
     if (_dialogOpen || _spokenPaletteOpen || !mounted) return;
     _closeSearch();
+    // An open dropdown is an overlay above every route: close it, or its rows
+    // stay live over the dialog.
+    dismissTransientMenus();
     _dialogOpen = true;
     // The route must not restore an old terminal while the destination changes
     // behind a dialog. Return input explicitly when that dialog finishes.
@@ -2873,6 +2887,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
           return state['detail'] as String? ??
               'Could not check ${targets[i].$2.displayName}. Nothing else will be stopped.';
         }
+        // An agent the daemon already closed: nothing to ask about or stop.
+        if (state['closed'] == true) {
+          activities[i] = 'stopped';
+          continue;
+        }
         activities[i] =
             state['keptRunning'] == true ||
                 canStop?.call(targets[i].$1, targets[i].$2.id) == false
@@ -2889,11 +2908,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (!mounted) return false;
     if (inspectionError != null) return closeAfterError(inspectionError);
     var stopNow = activities.any(
-      (activity) => activity != 'idle' && activity != 'kept_running',
+      (activity) =>
+          activity != 'idle' &&
+          activity != 'kept_running' &&
+          activity != 'stopped',
     );
     if (stopNow && await choose() != 'now') return false;
     for (var i = 0; i < requests.length; i++) {
       if (!mounted) return false;
+      if (activities[i] == 'stopped') continue;
       var result = await request(i, stopNow ? 'now' : 'idle');
       if (!mounted) return false;
       if (result['keptRunning'] == true) {
@@ -5962,6 +5985,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _unregisterModels = registerTransientMenu(
       () => _closeModelsControls(restoreFocus: false),
     );
+    // Its titlebar button closes it again ([_onNative]).
+    _titlebarDropdown = ('modelControls', _closeModelsControls);
     if (_menuHost) _syncNative();
     setState(() {});
   }
@@ -5970,6 +5995,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (_modelsOverlay == null) return;
     _unregisterModels?.call();
     _unregisterModels = null;
+    if (_titlebarDropdown?.$1 == 'modelControls') _titlebarDropdown = null;
     _modelsOverlay?.remove();
     _modelsOverlay?.dispose();
     _modelsOverlay = null;

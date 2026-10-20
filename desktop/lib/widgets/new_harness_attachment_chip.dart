@@ -18,6 +18,10 @@ class NewHarnessAttachmentChip extends StatelessWidget {
   final HarnessAttachment file;
   final VoidCallback? onRemove;
 
+  /// The × in a chip stays small beside its file name; it is not a workspace
+  /// close mark ([AppIcons.closeSize]).
+  static const removeIconSize = 12.0;
+
   /// A picture shows itself; anything else, the mark of its kind.
   Widget _mark() {
     final icon = Icon(
@@ -71,7 +75,7 @@ class NewHarnessAttachmentChip extends StatelessWidget {
         AppIconButton(
           icon: AppIcons.close,
           tooltip: 'Remove ${file.name}',
-          size: AppIcons.closeSize,
+          size: removeIconSize,
           onPressed: onRemove,
         ),
       ],

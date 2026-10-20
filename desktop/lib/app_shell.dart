@@ -35,6 +35,7 @@ import 'widgets/flash_firmware_dialog.dart';
 import 'widgets/linux_menu_bar.dart';
 import 'widgets/setup_tour.dart';
 import 'widgets/sign_in_step.dart';
+import 'widgets/transient_menus.dart';
 import 'core/startup.dart';
 import 'logging/app_log.dart';
 import 'logging/install.dart';
@@ -329,6 +330,9 @@ class _RootShellState extends ConsumerState<RootShell>
     // Reserve before the first frame too: held menu shortcuts can arrive
     // before the new dialog has changed the route's current state.
     _menuDialogOpen = true;
+    // An open dropdown is an overlay above every route: close it, or its rows
+    // stay live over the dialog (Sign out behind Check for Updates).
+    dismissTransientMenus();
     try {
       await action();
     } finally {
