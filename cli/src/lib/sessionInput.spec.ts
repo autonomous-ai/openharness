@@ -1293,3 +1293,157 @@ describe('optional lamp delivery preserves legacy behavior', () => {
     controller.forget('s1')
   })
 })
+
+describe('what became of a person\'s message, for its measurement', () => {
+  afterEach(() => vi.useRealTimers())
+
+  function setup(overrides: Partial<ConstructorParameters<typeof SessionInputController>[0]> = {}) {
+    const onError = vi.fn(), onSubmitted = vi.fn()
+    const inject = vi.fn<(...args: unknown[]) => Promise<boolean | TerminalActionResult>>(async () => true)
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session('claude'), validateRuntime: async () => true, inject, sendKey: async () => true,
+      capture: async () => claudeBox(''), onError, onSubmitted, ...overrides })
+    const said: string[] = []
+    const receipt = (outcome: string) => { said.push(outcome) }
+    return { controller, inject, onError, onSubmitted, said, receipt }
+  }
+
+  it('started once its turn begins, and said once', async () => {
+    const { controller, onSubmitted, said, receipt } = setup()
+    controller.submit('s1', 'hello', undefined, undefined, receipt)
+    await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalled())
+    expect(said).toEqual([])
+    controller.onTurnStarted('s1', 'hello')
+    controller.onTurnEnded('s1')
+    controller.onTurnStarted('s1', 'hello')
+    expect(said).toEqual(['started'])
+    controller.forget('s1')
+  })
+
+  it('a turn that is not the one typed leaves it unknown', async () => {
+    const { controller, onSubmitted, said, receipt } = setup({ getSession: () => session('commandcode') })
+    controller.submit('s1', 'hello', undefined, undefined, receipt)
+    await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalled())
+    controller.onTurnStarted('s1', 'something else')
+    expect(said).toEqual(['prompt_mismatch'])
+    controller.forget('s1')
+  })
+
+  it('typed while a turn runs, it is taken when that turn ends; one typed after it settles the first', async () => {
+    const { controller, onSubmitted, said, receipt } = setup()
+    const later: string[] = []
+    controller.setTurnOpen('s1', true)
+    controller.submit('s1', 'first', undefined, undefined, receipt)
+    await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalledTimes(1))
+    controller.submit('s1', 'second', undefined, undefined, (outcome) => { later.push(outcome) })
+    await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalledTimes(2))
+    expect(said).toEqual(['taken'])
+    controller.onTurnEnded('s1')
+    expect(later).toEqual(['taken'])
+    controller.forget('s1')
+  })
+
+  it('taken once it left the composer, without a turn seen yet', async () => {
+    vi.useFakeTimers()
+    const { controller, onError, said, receipt } = setup()
+    controller.submit('s1', 'hello', undefined, undefined, receipt)
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(onError).not.toHaveBeenCalled()
+    expect(said).toEqual(['taken'])
+    controller.forget('s1')
+  })
+
+  it.each([
+    ['not_submitted', { capture: async (): Promise<string> => claudeBox('hello') }],
+    ['ambiguous', { capture: async (): Promise<string> => 'Sign in required' }],
+  ] as const)('%s when the person is told so after the paste', async (outcome, overrides) => {
+    vi.useFakeTimers()
+    const { controller, onError, said, receipt } = setup(overrides)
+    controller.submit('s1', 'hello', undefined, undefined, receipt)
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(onError).toHaveBeenCalledTimes(1)
+    expect(said).toEqual([outcome])
+    controller.forget('s1')
+  })
+
+  it.each([
+    ['runtime_gone', { validateRuntime: async (): Promise<boolean> => false }],
+    ['held', { inject: async (): Promise<TerminalActionResult> => ({ state: 'failed', dispatch: 'not_started', reason: 'permission_open' }) }],
+    ['withheld', { inject: async (): Promise<TerminalActionResult> => ({ state: 'unknown', dispatch: 'possibly_executed', reason: 'enter_withheld:permission_open' }) }],
+    ['paste_failed', { inject: async (): Promise<boolean> => false }],
+  ] as const)('%s, refused at the paste', async (outcome, overrides) => {
+    const { controller, onError, said, receipt } = setup(overrides)
+    controller.submit('s1', 'hello', undefined, undefined, receipt)
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1))
+    expect(said).toEqual([outcome])
+    controller.forget('s1')
+  })
+
+  it('agent_gone for a harness not there, at once or when its turn in the queue comes', () => {
+    let there = true
+    const { controller, said, receipt, inject } = setup({ getSession: () => there ? session('commandcode') : undefined })
+    controller.setTurnOpen('s1', true)
+    controller.submit('s1', 'queued', undefined, undefined, receipt)
+    expect(said).toEqual([])
+    there = false
+    controller.onTurnEnded('s1')
+    expect(said).toEqual(['agent_gone'])
+    const now: string[] = []
+    controller.submit('s1', 'to nobody', undefined, undefined, (o) => { now.push(o) })
+    expect(now).toEqual(['agent_gone'])
+    expect(inject).not.toHaveBeenCalled()
+    controller.forget('s1')
+  })
+
+  it('queue_full past the queue\'s 8, queue_expired after its 5 minutes, agent_gone for one left when it goes', async () => {
+    vi.useFakeTimers()
+    const { controller, inject } = setup({ getSession: () => session('commandcode') })
+    controller.setTurnOpen('s1', true)
+    const outcomes: string[][] = Array.from({ length: 9 }, () => [])
+    for (let i = 0; i < 9; i++) controller.submit('s1', `m${i}`, undefined, undefined, (o) => { outcomes[i]!.push(o) })
+    expect(outcomes[8]).toEqual(['queue_full'])
+    expect(outcomes.slice(0, 8).flat()).toEqual([])
+    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1)
+    const fresh: string[] = []
+    controller.submit('s1', 'fresh', undefined, undefined, (o) => { fresh.push(o) })
+    expect(outcomes.slice(0, 8)).toEqual(Array.from({ length: 8 }, () => ['queue_expired']))
+    expect(fresh).toEqual([])
+    controller.forget('s1')
+    expect(fresh).toEqual(['agent_gone'])
+    expect(inject).not.toHaveBeenCalled()
+  })
+
+  it('cancelled by the person, and ambiguous for a harness gone while it waited', async () => {
+    const { controller, onSubmitted, said, receipt } = setup()
+    controller.submit('s1', 'one', undefined, undefined, receipt)
+    await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalledTimes(1))
+    expect(await controller.cancelConfirmed('s1')).toBe(true)
+    expect(said).toEqual(['cancelled'])
+
+    const later: string[] = []
+    controller.submit('s1', 'two', undefined, undefined, (o) => { later.push(o) })
+    await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalledTimes(2))
+    controller.forget('s1')
+    expect(later).toEqual(['ambiguous'])
+  })
+
+  it('a write that throws is unknown, and fails as before', async () => {
+    const { controller, said, receipt } = setup({ inject: async () => { throw new Error('PRIVATE') } })
+    controller.submit('s1', 'hello', undefined, undefined, receipt)
+    await vi.waitFor(() => expect(said).toEqual(['ambiguous']))
+    controller.forget('s1')
+  })
+
+  it('a receipt that throws changes nothing about the message', async () => {
+    const { controller, onSubmitted, onError, inject } = setup()
+    const receipt = vi.fn(() => { throw new Error('measurement broke') })
+    controller.submit('s1', 'hello', undefined, undefined, receipt)
+    await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalled())
+    controller.onTurnStarted('s1', 'hello')
+    controller.onTurnEnded('s1')
+    expect(receipt).toHaveBeenCalledTimes(1)
+    expect(inject).toHaveBeenCalledTimes(1)
+    expect(onError).not.toHaveBeenCalled()
+    controller.forget('s1')
+  })
+})

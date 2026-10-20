@@ -1,0 +1,75 @@
+#!/bin/sh
+# The Wi-Fi networks around, as setup.py's /setup/networks lists them — {"networks": [{ssid, signal,
+# security}]}, strongest first, one row a name — for the phone to choose one while the disk is still
+# locked (`http`). Read from `iw ... scan` output on stdin, or with a device, scanned now: `ap-force`
+# scans on the hotspot's own card while it hosts it, which most cards allow; one that refuses keeps
+# the list of the startup's scan (`run`).
+#
+#   networks DEVICE OWN-NAME [ap-force]   scan now
+#   networks - OWN-NAME < iw-scan-output  only read
+set -u
+device=$1
+own=${2:-}
+if [ "$device" = - ]; then
+    output=$(cat)
+else
+    output=$(iw dev "$device" scan ${3:-} 2>/dev/null) || exit 1
+fi
+printf '%s\n' "$output" | awk -v own="$own" '
+function flush() {
+    if (security == "" && privacy) security = "WEP"
+    if (ssid != "" && ssid != own && (!(ssid in best) || signal > best[ssid])) {
+        best[ssid] = signal
+        kind[ssid] = security
+    }
+    ssid = ""; signal = 0; security = ""; privacy = 0
+}
+# One access point a block: "BSS aa:bb:...(on wlan0)".
+/^BSS / { flush(); next }
+/^[ \t]*signal:/ {
+    # dBm to the 0-100 NetworkManager shows: -100 dBm is 0, -50 and above 100.
+    dbm = $2 + 0
+    signal = int(2 * (dbm + 100))
+    if (signal < 0) signal = 0
+    if (signal > 100) signal = 100
+    next
+}
+/^[ \t]*SSID:/ {
+    line = $0
+    sub(/^[ \t]*SSID: ?/, "", line)
+    ssid = line
+    next
+}
+/^[ \t]*capability:/ { if ($0 ~ /Privacy/) privacy = 1; next }
+/Authentication suites:/ {
+    psk = ($0 ~ /PSK/); sae = ($0 ~ /SAE/); eap = ($0 ~ /IEEE 802\.1X/)
+    if (psk && sae) security = "WPA2 WPA3"
+    else if (sae) security = "WPA3"
+    else if (psk) security = "WPA2"
+    else if (eap) security = "802.1X"
+    next
+}
+END {
+    flush()
+    count = 0
+    for (name in best) { names[++count] = name }
+    # Strongest first.
+    for (i = 2; i <= count; i++) {
+        for (j = i; j > 1 && best[names[j]] > best[names[j - 1]]; j--) {
+            swap = names[j]; names[j] = names[j - 1]; names[j - 1] = swap
+        }
+    }
+    printf "{\"networks\":["
+    for (i = 1; i <= count && i <= 40; i++) {
+        name = names[i]
+        # A character at a time: the backslashes of a gsub replacement differ between awks.
+        quoted = ""
+        for (k = 1; k <= length(name); k++) {
+            c = substr(name, k, 1)
+            if (c == "\\" || c == "\"") quoted = quoted "\\"
+            quoted = quoted c
+        }
+        printf "%s{\"ssid\":\"%s\",\"signal\":%d,\"security\":\"%s\"}", (i > 1 ? "," : ""), quoted, best[name], kind[name]
+    }
+    printf "]}\n"
+}'

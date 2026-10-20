@@ -3844,6 +3844,32 @@ describe('request sources', () => {
     expect(phone).not.toContain('request_app_search_started')
     expect(await startedFor({})).toContain('request_app_search_started')
   })
+
+  it('counts what became of a phone\'s message, which nothing answers, under the phone', async () => {
+    const socket = relaySocket('token')
+    socket.connect()
+    const ws = wsMock.instances.at(-1)!
+    ws.open()
+    const counted: string[] = []
+    vi.spyOn(gatewayOf(socket), 'usageCounter').mockImplementation((metric) => { counted.push(metric) })
+    const message = { type: 'message', payload: { agentId: 'a1', content: 'PRIVATE_TEXT', usageSurface: 'phone' } }
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue(message)
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
+    const handed: Array<[Record<string, unknown>, ((outcome: 'started' | 'held') => void) | undefined]> = []
+    socket.messageProvider = (payload, receipt) => { handed.push([payload, receipt]) }
+    for (const n of [1, 2]) {
+      ws.message({ t: 'down', connId: 'conn-1', frame: { type: 'message', payload: { __e2e: { v: 1, k: 's', n, ct: 'ciphertext' } } } })
+    }
+    await vi.waitFor(() => expect(handed).toHaveLength(2))
+    expect(counted).toEqual(['request_phone_message_started', 'request_phone_message_started'])
+    handed[0]![1]!('started')
+    handed[1]![1]!('held')
+    expect(counted.slice(2)).toEqual(['request_phone_message_ok', 'request_phone_message_failed', 'request_phone_message_error_conflict'])
+    expect(JSON.stringify(counted)).not.toContain('PRIVATE')
+    await socket.stop()
+    vi.restoreAllMocks()
+  })
 })
 
 describe('machines_changed relay', () => {
@@ -4173,9 +4199,10 @@ describe('relay down-frames are default-deny: sealed, or the backend\'s own', ()
     bindMessageRequest(socket, onMessage)
     socket.registerLocalClient('local:app', { sendFrame: () => true, sendBinary: () => true })
     await dispatch({ type: 'message', payload: { content: 'hi', agentId: 'a1' } }, 'local:app', 'local')
-    expect(onMessage).toHaveBeenCalledWith('a1', 'hi')
+    // With what became of it, for its measurement.
+    expect(onMessage).toHaveBeenCalledWith('a1', 'hi', undefined, expect.any(Function))
     await dispatch({ type: 'message', payload: { content: 'task in A', agentId: 'a1', tabId: 'swarm-a' } }, 'local:app', 'local')
-    expect(onMessage).toHaveBeenLastCalledWith('a1', 'task in A')
+    expect(onMessage).toHaveBeenLastCalledWith('a1', 'task in A', undefined, expect.any(Function))
   })
 })
 

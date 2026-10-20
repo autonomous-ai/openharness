@@ -1,0 +1,41 @@
+#!/bin/bash
+# The setup hotspot before the disk is open: a phone joins Harness-XXXX and sends the computer's
+# password, which answers the same question the screen asks (sd-encrypt). For an encrypted Harness
+# with no screen. Placed before sd-encrypt in HOOKS (installer.py). See /usr/lib/harness-os/unlock/.
+
+build() {
+    local unlock=/usr/lib/harness-os/unlock
+
+    # This computer's Wi-Fi card: its driver (autodetect keeps only the one in use) and firmware.
+    add_checked_modules '/drivers/net/wireless/'
+    map add_module 'cfg80211' 'mac80211'
+    # And the parts its driver loads by itself rather than depends on (Intel's iwlwifi asks for
+    # iwlmvm or iwldvm once it knows the card): every Wi-Fi module running here now.
+    local module path
+    for module in /sys/module/*; do
+        module=${module##*/}
+        path=$(modinfo -k "$KERNELVERSION" -n "$module" 2>/dev/null) || continue
+        [[ $path == */drivers/net/wireless/* ]] && add_module "$module"
+    done
+    add_firmware 'regulatory.db' 'regulatory.db.p7s'
+
+    map add_binary \
+        '/usr/bin/wpa_supplicant' \
+        '/usr/bin/dnsmasq' \
+        '/usr/bin/iw' \
+        '/usr/bin/cryptsetup' \
+        '/usr/lib/systemd/systemd-reply-password'
+
+    add_file "$unlock/run" "$unlock/run" 755
+    add_file "$unlock/http" "$unlock/http" 755
+    add_file "$unlock/networks" "$unlock/networks" 755
+    add_file "$unlock/harness-unlock.service" '/usr/lib/systemd/system/harness-unlock.service' 644
+    add_symlink '/usr/lib/systemd/system/initrd.target.wants/harness-unlock.service' \
+        '../harness-unlock.service'
+}
+
+help() {
+    cat <<HELPEOF
+Hosts the Harness setup hotspot while the disk waits for its password, for a phone to unlock it.
+HELPEOF
+}

@@ -510,6 +510,24 @@ void main() {
     expect(prompt, contains('NO_CANDIDATE'));
   });
 
+  test('the lead prompt asks for short plain replies, answered once', () async {
+    final f = SuperTabLaunchFixture();
+    final box = await f.box(engine: 'claude');
+    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+    final prompt =
+        f.connection.calls
+                .firstWhere((c) => c.$1 == 'agent_create')
+                .$2['prompt']
+            as String;
+    expect(prompt, contains('like a helpful colleague'));
+    expect(prompt, contains('under about 150 words'));
+    expect(prompt, contains('UNIQUE_OPERATION_ID [--reply-to MESSAGE_ID]`'));
+    expect(prompt, contains('post with --reply-to MESSAGE_ID'));
+    expect(prompt, contains('do not post again'));
+    expect(prompt, isNot(contains('Report exact revisions')));
+    expect(prompt, isNot(contains('email addresses')));
+  });
+
   test('lost join acknowledgement retries the same contribution without a second native launch', () async {
     final f = SuperTabLaunchFixture()..connection.loseJoin = true;
     final box = await f.box();

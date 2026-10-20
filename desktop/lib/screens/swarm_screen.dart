@@ -274,6 +274,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
   Timer? _deviceRevealCooldown;
   bool _deviceRevealInFlight = false;
   StreamSubscription<void>? _modelsRequests;
+  StreamSubscription<String>? _superTabClosures;
+  // The one Super Tab notice: whether it exists (queued or shown), whether it
+  // is on screen, and the closed tab its Reopen restores.
+  int _superTabNoticeSerial = 0;
+  bool _superTabNoticeLive = false, _superTabNoticeShowing = false;
+  String? _superTabReopenId;
   final _shellFocus = FocusNode(debugLabel: 'Tab shell');
 
   /// Where the keyboard waits after the active tab closes
@@ -505,6 +511,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
     // as itself, a conversation Harness did not start as a harness resuming it.
     // Super Tab creation uses the same form as Cmd-N, without recent sessions.
     app: app.activeSwarm.isSuperTab ? null : app,
+    // The palette lists the same getter. A Super Tab draft has no recents but
+    // still offers these.
+    closedSuperTabs: app.closedSuperTabs,
+    onOpenSuperTab: _openClosedSuperTab,
     projects: _projects.projects,
     onOpen: (row) {
       if (_newHarness?.requestDismiss() == false) return;
@@ -742,6 +752,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         _toggleModels(initialTab: ModelsTab.local);
       }
     });
+    _superTabClosures = app.superTabClosures.listen(_offerSuperTabReopen);
     if (!kUnderTest) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
@@ -891,6 +902,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _modelsMenu?.removeListener(_subscriptionUsageChanged);
     app.modelManager.setPanelVisible(false);
     _modelsRequests?.cancel();
+    _superTabClosures?.cancel();
     _keymap.removeListener(_keymapChanged);
     _defaultKeymap.dispose();
     grid.AppTheme.palette.removeListener(_paletteChanged);
@@ -3275,6 +3287,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// Settings ▸ Usage. A palette that finds a setting by name is how an editor
   /// makes a settings screen nobody has to navigate.
   static const _settingsCommand = 'settings:';
+  static const _closedSuperTabCommand = 'super_tab.open:';
 
   Future<void> _manageMachines() async {
     Future<void> open() => app.manageMachines(
@@ -4130,6 +4143,61 @@ class _SwarmScreenState extends State<SwarmScreen> {
     );
   }
 
+  /// Like the other New Tab page rows: ask a typed New Harness draft first,
+  /// then open into this tab when it is empty.
+  void _openClosedSuperTab(String tabId) {
+    if (_newHarness?.requestDismiss() == false) return;
+    _closeNewHarness(restoreFocus: false);
+    app.openClosedSuperTab(tabId, intoSwarmId: app.activeSwarmId);
+  }
+
+  /// Closing a Super Tab asks nothing, so the way back is said right after.
+  /// A second close replaces this notice rather than queueing behind it.
+  void _offerSuperTabReopen(String historyId) {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    // One notice serves every close: Reopen reads the latest id when pressed.
+    _superTabReopenId = historyId;
+    // Still queued: its text is the same, so it will do.
+    if (_superTabNoticeLive && !_superTabNoticeShowing) return;
+    // On screen and therefore ours: replace it so the 8 s start again.
+    if (_superTabNoticeShowing) messenger.removeCurrentSnackBar();
+    final serial = ++_superTabNoticeSerial;
+    _superTabNoticeLive = true;
+    _superTabNoticeShowing = false;
+    final notice = messenger.showSnackBar(
+      SnackBar(
+        key: const ValueKey('super-tab-closed'),
+        // A snack bar with an action stays until dismissed unless told not to.
+        persist: false,
+        duration: const Duration(seconds: 8),
+        // A queued snack bar is built only once it is current, so this is the
+        // reliable "on screen now" signal.
+        content: _SuperTabClosedText(
+          onShown: () {
+            if (serial == _superTabNoticeSerial) _superTabNoticeShowing = true;
+          },
+        ),
+        action: SnackBarAction(
+          label: 'Reopen',
+          onPressed: () {
+            if (_superTabReopenId case final id?) {
+              app.reopenClosedSwarm(historyId: id);
+            }
+          },
+        ),
+      ),
+    );
+    unawaited(
+      notice.closed.then((_) {
+        if (serial != _superTabNoticeSerial) return;
+        _superTabNoticeLive = false;
+        _superTabNoticeShowing = false;
+      }),
+    );
+  }
+
   void _showPaneActionHint(String message) {
     if (!mounted) return;
     ScaffoldMessenger.maybeOf(context)
@@ -4301,6 +4369,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
       // The result list is gone before a dialog or focus-changing command runs.
       // Recheck availability: a machine or pane may have changed while typing.
       FocusManager.instance.applyFocusChangesIfNeeded();
+      if (command.startsWith(_closedSuperTabCommand)) {
+        if (_canExecuteCommand('super_tab.new')) {
+          _openClosedSuperTab(command.substring(_closedSuperTabCommand.length));
+        }
+        return;
+      }
       if (command.startsWith(_settingsCommand)) {
         final section = SettingsSection.values
             .where((s) => s.name == command.substring(_settingsCommand.length))
@@ -7577,6 +7651,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
           shortcut: _keymap.hint(command.id),
           searchFields: [command.id, ...command.keywords],
         ),
+    // Where New Super Tab lives: the tabs closed here, back by name.
+    if (_canExecuteCommand('super_tab.new'))
+      for (final tab in app.closedSuperTabs)
+        SwarmDestination(
+          id: 'command:$_closedSuperTabCommand${tab.id}',
+          title: tab.name,
+          detail: 'Closed Super Tabs',
+          swarmId: null,
+          current: false,
+          commandId: '$_closedSuperTabCommand${tab.id}',
+          searchFields: ['closed', 'reopen', 'super tab'],
+        ),
     if (_canExecuteCommand('app.settings'))
       for (final group in settingsGroups)
         for (final section in group.sections)
@@ -8931,4 +9017,26 @@ class _SwarmScreenState extends State<SwarmScreen> {
       ),
     ),
   );
+}
+
+class _SuperTabClosedText extends StatefulWidget {
+  const _SuperTabClosedText({required this.onShown});
+  final VoidCallback onShown;
+
+  @override
+  State<_SuperTabClosedText> createState() => _SuperTabClosedTextState();
+}
+
+class _SuperTabClosedTextState extends State<_SuperTabClosedText> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onShown();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      const Text('Super Tab closed. Its agents keep running.');
 }

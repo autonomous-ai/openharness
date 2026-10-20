@@ -47,6 +47,7 @@ class NewAgentPage extends StatefulWidget {
     required this.machineId,
     this.folder,
     this.deskTabId,
+    this.newDeskTab = false,
     this.voice,
   });
 
@@ -64,6 +65,10 @@ class NewAgentPage extends StatefulWidget {
   /// The desk tab the new harness joins — the tab Find was narrowed to when New Harness was tapped.
   /// Null joins the tab the phone is in. See `PhoneDesk.adopt`.
   final String? deskTabId;
+
+  /// The new harness opens a desk tab of its own — the `+` at the end of Find's tab chips, the
+  /// desktop's New Tab. Wins over [deskTabId]. See `PhoneDesk.adopt`.
+  final bool newDeskTab;
 
   @override
   State<NewAgentPage> createState() => _NewAgentPageState();
@@ -211,6 +216,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
 
   @override
   void dispose() {
+    _holdCheck?.cancel();
     _keepDraft();
     _task.dispose();
     _attachments.dispose();
@@ -837,6 +843,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
         // The folder chosen, or none for home — never [_project], which a terminal cannot make.
         folder: _folder,
         deskTabId: widget.deskTabId,
+        newDeskTab: widget.newDeskTab,
         attempt: creation,
       );
       _answered(creation, engine, error);
@@ -939,6 +946,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
       codexHome: _showsCodexProfile ? _codexProfile?.path : null,
       model: _model,
       deskTabId: widget.deskTabId,
+      newDeskTab: widget.newDeskTab,
       attempt: creation,
       prompt: task.isEmpty || files.isNotEmpty ? null : task,
       // Whenever a first task is sent, the harness is called by its words until the engine titles
@@ -955,6 +963,8 @@ class _NewAgentPageState extends State<NewAgentPage> {
   Future<void> _cancelPending() async {
     final creation = _creation;
     if (creation == null || _creating || creation.cancelling) return;
+    // Called off: no more asking by itself; whatever comes of the cancel, the person checks.
+    _holdCheck?.cancel();
     setState(() {});
     final problem = await widget.notifier.cancelAgentCreation(creation);
     if (!mounted) return;
@@ -964,6 +974,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
           ?.showSnackBar(const SnackBar(content: Text('Creation cancelled.')));
     }
     setState(() {
+      _held = null;
       _error = problem;
       _failure = null;
     });
@@ -977,6 +988,8 @@ class _NewAgentPageState extends State<NewAgentPage> {
     // own, made from the rows as they read then.
     if (!creation.awaitingConfirmation) _creation = null;
     if (error == null) {
+      _held = null;
+      _holdCheck?.cancel();
       // The harness exists: the draft that described it would be a second one waiting to be made
       // by accident. See [NewAgentDraft].
       newAgentDraft = null;
@@ -985,12 +998,39 @@ class _NewAgentPageState extends State<NewAgentPage> {
       _open(creation.agentId);
       return;
     }
+    // Held before anything started — an engine the machine is installing, a model waking: not a
+    // failure. Said as a wait, not in red, and asked again by itself until the harness starts, is
+    // refused, or is called off; Cancel request stays.
+    if (creation.canCancelPending) {
+      setState(() {
+        _creating = false;
+        _error = null;
+        _failure = null;
+        _held = error;
+      });
+      _holdCheck?.cancel();
+      _holdCheck = Timer(const Duration(seconds: 4), () {
+        if (mounted &&
+            identical(_creation, creation) &&
+            !_creating &&
+            !creation.cancelling &&
+            _held != null) {
+          unawaited(_start());
+        }
+      });
+      return;
+    }
     setState(() {
       _creating = false;
+      _held = null;
       _error = error;
       _failure = error;
     });
   }
+
+  /// What the machine holds the request on, while it does (an engine installing): shown as a wait.
+  String? _held;
+  Timer? _holdCheck;
 
   /// The files [creation] is to be handed once it exists, and the task that follows them — kept
   /// beside [_creation] so a Check status that finds it started still hands them over.
@@ -1468,6 +1508,32 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                         ),
                                       ),
                                   ],
+                                  if (_held != null && _error == null)
+                                    Padding(
+                                      key: const ValueKey('new-agent-held'),
+                                      padding: const EdgeInsets.only(top: 8),
+                                      child: Row(
+                                        children: [
+                                          SizedBox.square(
+                                            dimension: 12,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 1.6,
+                                              color: tty.dim,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: Text(
+                                              _held!,
+                                              style: tty.style(
+                                                color: tty.dim,
+                                                size: TtySize.meta,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
                                   if (_error != null)
                                     Padding(
                                       padding: const EdgeInsets.only(top: 8),

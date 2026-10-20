@@ -126,14 +126,19 @@ class SuperTabLaunch {
         'First run `$command status`. Registration may still be finishing: if it reports AGENT_UNAVAILABLE, wait briefly and retry. '
         'Do not start work or post until it confirms your participation.\n'
         'Read the conversation: `$command messages ${saved['conversationId']}`. '
-        'Post explanations, questions and results with `$command post ${saved['conversationId']} "message" UNIQUE_OPERATION_ID`. '
+        'Post explanations, questions and results with `$command post ${saved['conversationId']} "message" UNIQUE_OPERATION_ID [--reply-to MESSAGE_ID]`. '
         'Reuse that operation ID and exact message after a lost reply. Your native terminal is not the shared conversation.\n'
         'If sandbox restrictions block this local Harness command, request permission to run it outside the sandbox. '
         'For work groups, assignments, acceptance evidence and messages to other agents, use `$command help`. '
         '${saved['lead'] == true ? 'Before starting or assigning work, run `$command route GROUP JSON` with your difficulty and risk assessment, then start or assign its pick with the routeDecisionId it returns. To choose otherwise, pass overrideReason. If it answers NO_CANDIDATE, tell the person in the group why, using its reasons; do not guess another machine. ' : ''}'
         'Use a group for an independently assignable outcome with acceptance checks. Reuse existing groups and agents. '
         'Engine-native helper subagents do not need a group. Questions stay in the conversation where the work happens. '
-        'Report exact revisions, evidence and links appropriate to the project.\n\n'
+        'Write to the people in this tab like a helpful colleague. Answer first, in plain words and in the language they used. '
+        'Keep it short: a few sentences, under about 150 words, unless they ask for detail. '
+        'Do not show commands, message or sequence ids, field names or error codes. '
+        'Do not describe your own tools or permission prompts unless that blocks what they asked. '
+        'Answer each message once: post with --reply-to MESSAGE_ID. If you have already answered a message, do not post again. '
+        'When you hand over finished work, give the result with the revision and links they need.\n\n'
         'The person’s request:\n${task.isEmpty ? 'Ask what they would like to work on.' : task}';
     saved['launchPrompt'] = prompt;
     await persist();

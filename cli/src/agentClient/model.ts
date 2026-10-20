@@ -22,6 +22,10 @@ export interface Frame {
   parentAgentId?: string | null
   /** `agent` when another agent started it, here or from another machine or outside Harness. */
   startedBy?: string | null
+  /** `cloud`: a harness in its maker's cloud (lib/cloudAgents.ts), with no pane and no session. Its state and words are
+   *  the cloud service's: `cloud.state` and `cloud_transcript`. */
+  location?: string
+  cloud?: { state?: string; links?: Array<{ label: string; url: string }> } | null
 }
 
 /** The agent running the verb: a harness in its own pane, or an agent outside Harness. Null for a person at a terminal. */
@@ -63,9 +67,16 @@ export const STOPPED_WITHIN_MS = 7 * 24 * 60 * 60_000
 
 export const isAgent = (frame: Frame): boolean => !!frame.id && frame.engine !== 'terminal'
 
+/** A cloud harness's `cloud.state` (lib/cloudAgents.ts `CloudState`). Its frame's activity says idle while it asks the
+ *  person, so a wait read it as done (lampOS, #1444). */
+const CLOUD_STATES: Record<string, State> = {
+  starting: 'starting', working: 'working', needs_input: 'needs-input', idle: 'idle', failed: 'failed', stopped: 'stopped',
+}
+
 export function stateOf(frame: Frame): State {
   if (frame.status === 'stopped') return 'stopped'
   if (frame.status === 'offline') return 'offline'
+  if (frame.location === 'cloud') return CLOUD_STATES[frame.cloud?.state ?? ''] ?? 'unknown'
   const state = frame.activity?.state
   return state === 'working' ? 'working' : state === 'idle' ? 'idle' : 'unknown'
 }
@@ -216,6 +227,16 @@ export function lastTurn(events: HistoryEvent[]): LastTurn | null {
   const said = (from: number) => turn.slice(from).filter((e) => e.type === 'text_delta').map((e) => text(e.payload?.content)).join('').trim()
   const final = said(lastTool + 1)
   return { ask: asSaid(text(events[start].payload?.content)) || null, answer: final || said(0), tools, answered: !!final }
+}
+
+/** A cloud harness's last turn from its conversation (`cloud_transcript`): the person's last words and everything the
+ *  agent said after them. */
+export function cloudTurn(messages: ReadonlyArray<{ from?: unknown; text?: unknown }>): LastTurn | null {
+  let start = -1
+  for (let i = messages.length - 1; i >= 0; i--) if (messages[i].from === 'person') { start = i; break }
+  if (start < 0) return null
+  const answer = messages.slice(start + 1).filter((m) => m.from === 'agent').map((m) => text(m.text).trim()).filter(Boolean).join('\n\n')
+  return { ask: text(messages[start].text) || null, answer, tools: 0, answered: !!answer }
 }
 
 export const clip = (value: string, max: number): string => (value.length > max ? `${value.slice(0, max - 1)}…` : value)

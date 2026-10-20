@@ -34,6 +34,12 @@ it('creates two independent margins with no joint dimensions or arbitrary labels
   expect(cleanUsageContext({ ...context, release: 'PRIVATE/custom-build', private: 'PRIVATE' })).toEqual({ ...context, release: 'unknown' })
   expect(cleanUsageContext({ ...context, platform: 'PRIVATE' })).toBeUndefined()
 })
+it('takes a tester\'s build as its own channel, with no release or platform margins', () => {
+  const phone = { surface: 'phone', release: '1.0.7', platform: 'ios', channel: 'testing' } as const
+  expect(cleanUsageContext(phone)).toEqual(phone)
+  expect(healthBreakdowns(phone, 'ui_phone_computer_wait_started')).toEqual([])
+  expect(cleanUsageContext({ ...phone, channel: 'beta' })).toBeUndefined()
+})
 it('splits phone onboarding counts by release and platform, and drops a development build', () => {
   const phone = { surface: 'phone', release: '1.0.3', platform: 'android', channel: 'production' } as const
   expect(healthBreakdowns(phone, 'ui_phone_computer_wait_started')).toEqual([

@@ -1380,6 +1380,8 @@ class AppNotifier extends ChangeNotifier {
       _closeOwnerMemories();
       deviceHosts.clear();
       _deviceReads.clear();
+      // Names and membership belong to the account that discovered them.
+      _superTabNames = {};
     }
     _currentUser = profile;
     final id = profile?.id;
@@ -1664,6 +1666,11 @@ class AppNotifier extends ChangeNotifier {
         return;
       }
       var changed = false;
+      // Membership and names for the closed list: a tab hidden before a
+      // restart has no open view to take its name from.
+      final names = {for (final tab in tabs) tab.id: tab.name};
+      final namesChanged = !mapEquals(names, _superTabNames);
+      _superTabNames = names;
       for (final tab in tabs) {
         final existing = swarms.where((s) => s.superTabId == tab.id).firstOrNull;
         if (existing != null) {
@@ -1684,10 +1691,9 @@ class AppNotifier extends ChangeNotifier {
           changed = true;
         }
       }
-      if (changed) {
-        _persistLayout();
-        notifyListeners();
-      }
+      if (changed) _persistLayout();
+      // The closed list is read from these names, so it can change on its own.
+      if (changed || namesChanged) notifyListeners();
     },
     onSnapshot: (controller) {
       if (_disposed || controller.accountId != currentUser?.id) return;
@@ -1719,6 +1725,30 @@ class AppNotifier extends ChangeNotifier {
       return result['value'];
     },
   );
+
+  Map<String, String> _superTabNames = {};
+  final StreamController<String> _superTabClosures =
+      StreamController<String>.broadcast();
+
+  /// Closing a Super Tab only hides it here, which looks like losing it. Each
+  /// closure announces its history id so the screen can offer to reopen it.
+  Stream<String> get superTabClosures => _superTabClosures.stream;
+
+  /// Super Tabs hidden on this computer that the account still belongs to,
+  /// by name. Saved with the hidden set, so a restart keeps them.
+  List<({String id, String name})> get closedSuperTabs {
+    final open = {for (final s in swarms) s.superTabId};
+    return [
+      for (final id in superTabs.hiddenIds)
+        if (!open.contains(id) && _superTabNames.containsKey(id))
+          (
+            id: id,
+            name: _superTabNames[id]!.trim().isEmpty
+                ? 'Super Tab'
+                : _superTabNames[id]!,
+          ),
+    ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+  }
 
   Future<Map<String, dynamic>> superTabMachineRequest(
     String machineId,
@@ -1769,20 +1799,51 @@ class AppNotifier extends ChangeNotifier {
     swarm.name = name;
     swarm.nameIsCustom = true;
     swarm.isNewTabPage = false;
+    // A tab bound here is one the person belongs to.
+    _superTabNames[tabId] = name;
     _rememberSuperTabVisibility(tabId, true);
     _persistLayout();
     notifyListeners();
   }
 
-  void openSuperTab(String tabId, String name) {
+  /// The one way to show a Super Tab: focus its view if it is open, else give
+  /// it one. An untouched New Tab page named by [intoSwarmId] becomes the view
+  /// instead of being left behind. Any history entry for the tab is dropped, so
+  /// Reopen later cannot add a second view.
+  void openSuperTab(String tabId, String name, {String? intoSwarmId}) {
     _rememberSuperTabVisibility(tabId, true);
+    _closedHistory.removeWhere(
+      (entry) => entry is ClosedSwarm && entry.superTabId == tabId,
+    );
     final existing = swarms.where((s) => s.superTabId == tabId).firstOrNull;
     if (existing != null) {
       selectSwarm(existing.id);
       return;
     }
+    final page = swarms
+        .where(
+          (s) =>
+              s.id == intoSwarmId &&
+              s.panes.isEmpty &&
+              (s.isNewTabPage || (s.isSuperTab && s.superTabId == null)),
+        )
+        .firstOrNull;
+    if (page != null) {
+      bindSuperTab(page.id, tabId, name);
+      selectSwarm(page.id);
+      return;
+    }
     newSwarm(newTabPage: true);
     bindSuperTab(activeSwarmId, tabId, name);
+  }
+
+  /// Opens a tab from [closedSuperTabs]. False when it is no longer listed
+  /// (open already, or the account has left it).
+  bool openClosedSuperTab(String tabId, {String? intoSwarmId}) {
+    final closed = closedSuperTabs.where((tab) => tab.id == tabId).firstOrNull;
+    if (closed == null) return false;
+    openSuperTab(closed.id, closed.name, intoSwarmId: intoSwarmId);
+    return true;
   }
 
   void _rememberSuperTabVisibility(String tabId, bool visible) {
@@ -3064,10 +3125,14 @@ class AppNotifier extends ChangeNotifier {
       replacement = Swarm(id: 'swarm-${_nextSwarmId++}');
       swarms.add(replacement);
     }
+    final historyId = 'closed-${_nextClosedHistoryId++}';
+    if (removed.superTabId != null && !_disposed) {
+      _superTabClosures.add(historyId);
+    }
     _rememberClosed(
       ClosedSwarm(
         removed,
-        historyId: 'closed-${_nextClosedHistoryId++}',
+        historyId: historyId,
         index: index,
         replacement: replacement,
         engine: removed.panes.length == 1
@@ -3391,6 +3456,15 @@ class AppNotifier extends ChangeNotifier {
     );
     if (index < 0) return;
     final saved = _closedHistory[index] as ClosedSwarm;
+    // The tab may have been opened another way since: focus that view.
+    if (saved.superTabId case final tabId?) {
+      final open = swarms.where((s) => s.superTabId == tabId).firstOrNull;
+      if (open != null) {
+        _closedHistory.removeAt(index);
+        selectSwarm(open.id);
+        return;
+      }
+    }
     if (!_canReopenSwarm(saved)) return;
     _closedHistory.removeAt(index);
     if (saved.superTabId case final tabId?) {
@@ -20170,6 +20244,7 @@ class AppNotifier extends ChangeNotifier {
     unawaited(_zooPushes.close());
     unawaited(_daemonFrames.close());
     unawaited(_modelsRequests.close());
+    unawaited(_superTabClosures.close());
     super.dispose();
   }
 }

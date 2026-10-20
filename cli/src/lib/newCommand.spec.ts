@@ -12,7 +12,7 @@ const env = { cwd: '/work/repo', home: '/home/me' }
 describe('harness new: the words', () => {
   it('asks nothing: claude, here, on this machine', () => {
     expect(parseNewArgs([], env)).toEqual({
-      agent: 'claude', machine: null, cwd: '/work/repo', projectName: null, mode: 'auto', modeGiven: false, prompt: null, name: null, json: false,
+      agent: 'claude', machine: null, cwd: '/work/repo', projectName: null, mode: 'auto', modeGiven: false, prompt: null, name: null, repo: null, acuLimit: null, json: false,
     })
   })
 
@@ -89,6 +89,17 @@ describe('harness new: the words', () => {
     expect(fresh).toMatchObject({ engine: 'claude', projectSource: 'new', projectName: 'My-Game', permissionMode: 'auto', bypassPermission: true })
     expect(fresh).not.toHaveProperty('cwd')
     expect(newAgentPayload(parseNewArgs(['acme/blender', '.'], env), '/work/repo', 'codex')).toMatchObject({ engine: 'codex', dsh: 'acme/blender' })
+  })
+
+  it('sends a cloud coding agent its repository and ACU limit, and refuses them for any other agent (#1444)', () => {
+    const args = parseNewArgs(['devin-cloud', '--machine', 'office', '--repo', 'acme/api', '--acu-limit', '10', '--json', '--', 'reply', 'to', 'the', 'thread'], env)
+    expect(args).toMatchObject({ agent: 'devin-cloud', repo: 'acme/api', acuLimit: 10, prompt: 'reply to the thread' })
+    expect(newAgentPayload(args, null)).toMatchObject({ engine: 'devin-cloud', repositoryUrl: 'acme/api', acuLimit: 10, prompt: 'reply to the thread' })
+    expect(newAgentPayload(parseNewArgs(['devin-cloud', '--', 'x'], env), null)).not.toHaveProperty('repositoryUrl')
+    expect(() => parseNewArgs(['codex', '--repo', 'acme/api'], env)).toThrow(/--repo is for a cloud agent/)
+    expect(() => parseNewArgs(['devin-cloud', '--repo', ' ', '--', 'x'], env)).toThrow(/--repo needs a value/)
+    expect(() => parseNewArgs(['devin-cloud', '--acu-limit', '0'], env)).toThrow(/1 to 1000/)
+    expect(() => parseNewArgs(['devin-cloud', '--acu-limit', '2.5'], env)).toThrow(/1 to 1000/)
   })
 
   it('only sends a permission mode to the engines that take one', () => {

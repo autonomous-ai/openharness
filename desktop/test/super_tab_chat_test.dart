@@ -98,6 +98,28 @@ void main() {
     },
   );
 
+  testWidgets('the quote of your own message reads You, not your email', (
+    tester,
+  ) async {
+    final server = ConversationServer()
+      ..append('Where do we stand?')
+      ..append('Almost done.');
+    server.messages.last
+      ..['replyTo'] = 'message-1'
+      ..['author'] = {'kind': 'agent', 'id': 'builder', 'name': 'Builder'};
+    await show(tester, server);
+    final reply = find.byKey(const ValueKey('super-message-message-2'));
+    final quote = find.descendant(
+      of: reply,
+      matching: find.byType(SuperTabReplyPreview),
+    );
+    expect(
+      find.descendant(of: quote, matching: find.text('You')),
+      findsOneWidget,
+    );
+    expect(find.text('owner@example.com'), findsNothing);
+  });
+
   testWidgets(
     'a keyboard reply keeps its quoted context after sending and refreshing',
     (tester) async {

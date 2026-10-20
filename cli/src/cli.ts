@@ -155,7 +155,8 @@ Machine:
   harness show <name>          a harness's state and last turn: what it was asked and what it answered
   harness wait <name>[,<name>] wait until they stop working (--any, --timeout 30m); exit 3 = needs the person
   harness close <name> [--now] save a harness's screen and stop it; an agent closes only what it started
-                               new, ps, show, wait and close take --machine <name> for another of your
+  harness reply <name> -- <w>  say words to a cloud harness (Devin Cloud, Cursor Cloud, Fo): its answer or what next
+                               new, ps, show, wait, reply and close take --machine <name> for another of your
                                machines: \`harness show --machine office x\`
   harness mcp                  the agent verbs as an MCP server on stdin/stdout, for agents that use MCP
   harness help agents          the agent commands, states, exit codes and rules on one screen
@@ -2536,7 +2537,7 @@ async function logsExportCommand(json: boolean): Promise<void> {
 import { orchestratorCommand } from './orchestrator/command.js'
 import { superTabCommand } from './superTabs/command.js'
 import { paneOwner, sendCommand } from './messages/command.js'
-import { agentOrigin, closeCommand, psCommand, showCommand, waitCommand, whoamiCommand } from './agentClient/commands.js'
+import { agentOrigin, closeCommand, psCommand, replyCommand, showCommand, waitCommand, whoamiCommand } from './agentClient/commands.js'
 import { agentsHelp, helpFor } from './agentClient/help.js'
 import { openUrlCommand } from './agentClient/openUrl.js'
 import { harnessRunner, mcpCommand } from './agentClient/mcp.js'
@@ -2596,6 +2597,9 @@ switch (cmd) {
   }
   case 'show':
     showCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
+    break
+  case 'reply':
+    replyCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'wait':
     waitCommand(rest, { machines: usableMachines }).then(code => { process.exitCode = code }).catch(onError)

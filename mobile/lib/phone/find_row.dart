@@ -31,6 +31,7 @@ class FindRow extends StatelessWidget {
     this.selected = false,
     this.enabled = true,
     this.onTap,
+    this.onLongPress,
     this.strict = false,
     this.said,
     this.accessory,
@@ -88,6 +89,10 @@ class FindRow extends StatelessWidget {
   final bool enabled;
   final VoidCallback? onTap;
 
+  /// Holding the row: its actions — taken even while [enabled] is false, which is when a harness
+  /// on a computer that does not answer most needs one (Remove from this list).
+  final VoidCallback? onLongPress;
+
   static const double height = 60;
 
   /// [height], or less for a row of one line where its second has been said once for a group of
@@ -119,7 +124,8 @@ class FindRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
     final ink = enabled ? tty.text : tty.faint;
-    final row = TtyTap(
+    final held = onLongPress;
+    final tapped = TtyTap(
       minHeight: minHeight,
       onTap: enabled && onTap != null
           ? () {
@@ -243,6 +249,16 @@ class FindRow extends StatelessWidget {
         ),
       ),
     );
+    final row = held == null
+        ? tapped
+        : GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onLongPress: () {
+              HapticFeedback.mediumImpact();
+              held();
+            },
+            child: tapped,
+          );
     final accessory = this.accessory;
     if (accessory == null) return row;
     final center = _lineOneCenter(context, tty);

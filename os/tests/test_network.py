@@ -41,6 +41,7 @@ class Network(unittest.TestCase):
         hotspot = patch.object(network, 'setup_hotspot_up', return_value=False)
         hotspot.start()
         self.addCleanup(hotspot.stop)
+        self.enterContext(patch.object(network, 'hold_radio', return_value=False))
     def test_privileged_form_uses_a_fixed_executable_not_the_callers_path(self):
         with patch.object(network.subprocess, 'run', return_value=result()) as run:
             network.nmcli('general')
@@ -305,25 +306,78 @@ class SetupHotspot(unittest.TestCase):
         with patch.object(network, 'nmcli', return_value=result(output='Glinks 1\n')):
             self.assertFalse(network.setup_hotspot_up())
 
-    def test_the_list_is_the_one_seen_before_the_hotspot_not_the_hotspot(self):
+    def setUp(self):
         import tempfile
-        with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False) as handle:
-            handle.write('[{"ssid": "Weak", "signal": 30, "security": "WPA2", "device": "wlo1"},'
-                         ' {"ssid": "Glinks 1", "signal": 80, "security": "WPA2", "device": "wlo1"},'
-                         ' {"ssid": "Cafe", "signal": 50, "security": "", "device": "wlo1"}, {"bad": 1}]')
-        self.addCleanup(Path(handle.name).unlink)
-        with patch.object(network, 'SETUP_NETWORKS', handle.name), \
-             patch.object(network, 'setup_hotspot_up', return_value=True), \
-             patch.object(network, 'nmcli') as command:
-            rows = network.scan(rescan=True)
-        command.assert_not_called()
-        self.assertEqual([row['ssid'] for row in rows], ['Glinks 1', 'Cafe', 'Weak'])
-        self.assertEqual(rows[1]['security'], '--')
-        self.assertFalse(any(row['active'] for row in rows))
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.held = Path(folder.name) / 'setup-screen'
+        self.enterContext(patch.object(network, 'SETUP_SCREEN', str(self.held)))
+        self.enterContext(patch.object(network.time, 'sleep'))
 
-    def test_no_list_is_an_empty_one(self):
-        with patch.object(network, 'SETUP_NETWORKS', '/nonexistent/setup-networks.json'):
-            self.assertEqual(network.setup_networks(), [])
+    def test_the_page_takes_the_radio_from_the_hotspot_before_its_first_scan(self):
+        # Someone typed this computer's password at its screen and is offline: the phone's hotspot
+        # goes, then the radio scans, so the list is a real one.
+        events = []
+        screen = Screen(['\n'])
+        page = network.NetworkPage(screen, first_use=True)
+        with patch.object(network, 'connected', return_value=False), \
+             patch.object(network, 'setup_hotspot_up', return_value=True), \
+             patch.object(network, 'wired_devices', return_value=[]), \
+             patch.object(network, 'connect', return_value=True), \
+             patch.object(network, 'nmcli', side_effect=lambda *a, secret=None, wait=8: events.append(a) or result()), \
+             patch.object(network, 'scan', side_effect=lambda rescan=None: events.append(('scan', rescan)) or [WIFI]):
+            self.assertEqual(page.run(), 0)
+        down = events.index(('connection', 'down', 'id', 'harness-setup'))
+        self.assertLess(down, events.index(('scan', True)))
+        # Still held once done: the Wi-Fi chosen here stays while they sign in at the screen.
+        self.assertTrue(self.held.exists())
+
+    def test_a_page_left_alone_lets_the_hotspot_back_until_a_key(self):
+        screen = Screen([])
+        page = network.NetworkPage(screen, first_use=True)
+        now = [0]
+        keys = iter([curses.error, curses.error, 'x', '\n'])
+
+        def key():
+            value = next(keys)
+            if value is curses.error:
+                # Nobody at the keyboard: time passes.
+                now[0] += network.SCREEN_IDLE
+                raise curses.error
+            return value
+
+        held = []
+        with patch.object(network, 'connected', return_value=False), \
+             patch.object(network, 'wired_devices', return_value=[]), \
+             patch.object(network, 'nmcli', return_value=result()), \
+             patch.object(network, 'scan', return_value=[WIFI]), \
+             patch.object(network, 'connect', side_effect=lambda *a: held.append(self.held.exists()) or True), \
+             patch.object(network, 'release_radio', wraps=network.release_radio) as release, \
+             patch.object(network.time, 'monotonic', side_effect=lambda: now[0]), \
+             patch.object(screen, 'get_wch', side_effect=key):
+            self.assertEqual(page.run(), 0)
+        release.assert_called_once()
+        # The key after it took the radio back; the next one chose the Wi-Fi, holding it.
+        self.assertEqual(held, [True])
+        self.assertIn('A phone can set this computer up now', '\n'.join(text for _, text in screen.lines))
+
+    def test_a_computer_a_phone_unlocked_leaves_it_the_radio_until_a_key(self):
+        # The disk opened from a phone: the screen's session started by itself, nobody at it. The
+        # phone sets the Wi-Fi up on setup.py's hotspot; a key here still takes the radio.
+        screen = Screen(['x', '\n'])
+        page = network.NetworkPage(screen, first_use=True)
+        held = []
+        with patch.object(network, 'phone_unlocked', return_value=True), \
+             patch.object(network, 'connected', return_value=False), \
+             patch.object(network, 'wired_devices', return_value=[]), \
+             patch.object(network, 'nmcli', return_value=result()), \
+             patch.object(network, 'scan', return_value=[WIFI]), \
+             patch.object(network, 'hold_radio', wraps=network.hold_radio) as hold, \
+             patch.object(network, 'connect', side_effect=lambda *a: held.append(self.held.exists()) or True):
+            self.assertEqual(page.run(), 0)
+        hold.assert_called_once()
+        self.assertEqual(held, [True])
+        self.assertIn('A phone can set this computer up now', '\n'.join(text for _, text in screen.lines))
 
     def test_the_hotspot_alone_is_not_online(self):
         with patch.object(network, 'nmcli', return_value=result(output='connected (local only)')), \
@@ -334,6 +388,27 @@ class SetupHotspot(unittest.TestCase):
              patch.object(network, 'setup_hotspot_up', return_value=True), \
              patch.object(network, 'wired_devices', return_value=[['ens5', 'ethernet', 'connected']]):
             self.assertTrue(network.connected())
+
+    def test_an_empty_list_just_after_starting_is_scanned_at_once(self):
+        # Unlocked at the keyboard after a reset: no hotspot to leave, and NetworkManager's recent
+        # list is still empty. The page scans now rather than showing nothing until Rescan.
+        screen = Screen(['\n'])
+        page = network.NetworkPage(screen, first_use=True)
+        scans = []
+
+        def scan(rescan=None):
+            scans.append(rescan)
+            return [] if len(scans) == 1 else [WIFI]
+
+        with patch.object(network, 'phone_unlocked', return_value=False), \
+             patch.object(network, 'hold_radio', return_value=False), \
+             patch.object(network, 'connected', return_value=False), \
+             patch.object(network, 'wired_devices', return_value=[]), \
+             patch.object(network, 'nmcli', return_value=result()), \
+             patch.object(network, 'scan', side_effect=scan), \
+             patch.object(network, 'connect', return_value=True):
+            self.assertEqual(page.run(), 0)
+        self.assertEqual(scans[:2], [None, True])
 
     def test_choosing_a_network_on_screen_takes_the_radio_back_first(self):
         calls = []

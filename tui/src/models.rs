@@ -565,7 +565,7 @@ pub struct Target { pub machine: String, pub agent: String, pub engine: String, 
 /// still manages local models.
 pub fn pane_supports(app: &App, pane: u64) -> bool {
     let Some(p) = app.panes.get(&pane) else { return false };
-    app.fleet.machine(&p.machine_id).is_some_and(|m| !m.shared)
+    app.fleet.machine(&p.machine_id).is_some() && !app.fleet.belongs_to_other_account(&p.machine_id)
         && app.fleet.agent(&p.machine_id, &p.agent_id).is_some_and(|a| a.status != "stopped" && ["codex", "claude", "opencode", "pi"].contains(&a.engine.as_str()))
 }
 
@@ -581,7 +581,7 @@ pub fn pane_label(app: &App, pane: u64) -> String {
 
 pub fn target(app: &App) -> Option<Target> {
     let of = |machine: String, agent: String| -> Option<Target> {
-        if app.fleet.machine(&machine).is_some_and(|m| m.shared) { return None }
+        if app.fleet.belongs_to_other_account(&machine) { return None }
         let a = app.fleet.agent(&machine, &agent)?;
         let a = if app.models_view.selection_fixed { if a.status == "stopped" { return None } a } else { live_in_pane(app, a) };
         (a.engine != "terminal").then(|| Target { engine: a.engine.clone(), grid_model: a.grid_model.clone(), base_url: a.grid_base_url.clone(), machine, agent: a.id.clone() })
@@ -2071,6 +2071,9 @@ pub fn open(app: &mut App) {
     app.models_view.selection_pane = app.focused();
     select(app);
     app.models_view.panel_generation = app.models_view.panel_generation.wrapping_add(1);
+    // Each machine's subscriptions as it says them now (at most once a minute each, read_usage).
+    let usable: Vec<String> = app.fleet.machines.iter().filter(|m| m.usable() && !crate::local::is_local(&m.id)).map(|m| m.id.clone()).collect();
+    for id in usable { app.read_usage(&id); }
     let machine = app.fleet.local_id.clone();
     if machine.is_empty() || app.link(&machine).is_none() { return }
     if !app.models_view.reading.contains(&machine) { read_local(app, &machine) }
@@ -2714,6 +2717,20 @@ mod tests {
             app.fleet.agents.insert(("local".into(), "t1".into()), crate::fleet::agent_from("local", &json!({ "id": "t1", "name": "a", "engine": engine }), None));
             assert_eq!(pane_supports(&app, 1), offered, "{engine}");
         }
+    }
+
+    /// A harness on a machine shared with this account by email runs on its owner's plans, which its
+    /// daemon alone moves: no "Change model…", and no Use moves it (desktop's isSharedMachine).
+    #[test]
+    fn a_harness_on_a_machine_shared_with_you_is_not_moved_from_here() {
+        let mut app = app();
+        app.fleet.machines.push(Machine { shared: false, id: "dee".into(), name: "Dee's Mac".into(), local: false, status: "online".into(), reach: Reach::Ready });
+        app.fleet.agents.insert(("dee".into(), "g1".into()), crate::fleet::agent_from("dee", &json!({ "id": "g1", "name": "guest", "engine": "claude" }), None));
+        app.panes.insert(1, crate::pane::Pane::new(1, "dee", "g1", 150, 40));
+        assert!(pane_supports(&app, 1) && target(&app).is_some(), "an own machine's harness moves");
+        app.fleet.shares.insert("dee".into(), crate::fleet::MachineShare { owner: "Dee".into(), email: "dee@acme.io".into(), team: false });
+        assert!(!pane_supports(&app, 1));
+        assert!(target(&app).is_none());
     }
 
     #[test]

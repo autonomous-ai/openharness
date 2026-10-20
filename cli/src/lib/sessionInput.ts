@@ -71,9 +71,34 @@ export interface SessionInputDelivery {
   reason?: string
 }
 
+/**
+ * What became of a person's message, one without a delivery id (the windows' and the phone's composers), said
+ * once and for measurement only: the request's measurement had its start and nothing more (2026-10-19: 14 phone
+ * messages, no outcome). `started`, its turn began; `taken`, the engine took it without a turn being seen yet (it
+ * left the composer, or a running turn it follows ended). The person was told why for each of the next nine
+ * (`agent_gone`, `runtime_gone`, `held`, `withheld`, `paste_failed`, `not_submitted`, `queue_full`,
+ * `queue_expired`, `invalid`, nothing sent for most); `ambiguous`, `prompt_mismatch` and `turn_ended` were typed
+ * and never confirmed either way; `cancelled`, the person stopped it.
+ */
+export type MessageOutcome = 'started' | 'taken' | 'agent_gone' | 'runtime_gone' | 'held' | 'withheld' | 'paste_failed'
+  | 'not_submitted' | 'queue_full' | 'queue_expired' | 'invalid' | 'ambiguous' | 'prompt_mismatch' | 'turn_ended' | 'cancelled'
+export type MessageReceipt = (outcome: MessageOutcome) => void
+
+/** [receipt] said at most once, and never into the input path: a receipt that throws is measurement lost. */
+function sayOnce(receipt?: MessageReceipt): MessageReceipt | undefined {
+  if (!receipt) return undefined
+  let said = false
+  return (outcome) => {
+    if (said) return
+    said = true
+    try { receipt(outcome) } catch { /* Optional measurement. */ }
+  }
+}
+
 interface QueuedInput {
   deliveryId?: string
   inputContext?: string
+  receipt?: MessageReceipt
   content: string
   bytes: number
   expiresAt: number
@@ -91,6 +116,8 @@ interface InputState {
   turnOpen: boolean
   awaitingFingerprint: string | null
   awaitingContent: string | null
+  /** The receipt of the person's message typed last, until it is settled ([settle]). */
+  awaitingReceipt?: MessageReceipt
   controlLocked: boolean
   settling: boolean
   queue: QueuedInput[]
@@ -240,6 +267,13 @@ export class SessionInputController {
     this.delivery(sessionId, id, outcome, reason)
   }
 
+  /** The awaited person's message is settled as [outcome]: wherever its wait for a turn ends. */
+  private settle(state: InputState, outcome: MessageOutcome): void {
+    const receipt = state.awaitingReceipt
+    state.awaitingReceipt = undefined
+    receipt?.(outcome)
+  }
+
   /** Revoke queued work only; a paste already in progress cannot be recalled. */
   cancelDelivery(deliveryId: string): boolean {
     for (const [sessionId, state] of this.states) {
@@ -258,9 +292,12 @@ export class SessionInputController {
     return false
   }
 
-  submit(sessionId: string, content: string, deliveryId?: string, inputContext?: string): void {
+  /** [receipt]: what became of a person's message (one with no [deliveryId]), for its measurement. */
+  submit(sessionId: string, content: string, deliveryId?: string, inputContext?: string, receipt?: MessageReceipt): void {
+    const said = sayOnce(receipt)
     const session = this.controlSession(sessionId)
     if (!session) {
+      said?.('agent_gone')
       this.delivery(sessionId, deliveryId, 'rejected', 'agent_gone')
       if (!deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This harness is no longer available.')
       return
@@ -271,7 +308,7 @@ export class SessionInputController {
       || (deliveryId && (state.deliveryId || state.dispatching || state.turnOpen || state.awaitingFingerprint || state.settling))
       || (!this.typesWhileBusy(session.engine) && (state.turnOpen || state.awaitingFingerprint || state.settling))) {
       console.log(`[inject] ${sid(sessionId)} queued · engine=${session.engine} · depth=${state.queue.length + 1}`)
-      this.enqueue(sessionId, state, content, deliveryId, inputContext)
+      this.enqueue(sessionId, state, content, deliveryId, inputContext, said)
       return
     }
     this.delivery(sessionId, deliveryId, 'queued')
@@ -283,7 +320,7 @@ export class SessionInputController {
     // agent as it is by then, which a restart in between may have changed.
     // With nothing in flight the write starts at once, so a cancel or a control request that follows
     // the submit sees it, as before.
-    const write = (): Promise<void> => this.inject(sessionId, this.controlSession(sessionId) ?? session, content, deliveryId, inputContext)
+    const write = (): Promise<void> => this.inject(sessionId, this.controlSession(sessionId) ?? session, content, deliveryId, inputContext, said)
     const running = state.writes ? state.writes.then(write, write) : write()
     const settled: Promise<void> = running.catch(() => {}).then(() => { if (state.writes === settled) state.writes = undefined })
     state.writes = settled
@@ -358,10 +395,12 @@ export class SessionInputController {
     if (state.awaitingFingerprint) {
       const warn = () => console.warn(`[inject] ${sessionId.slice(0, 8)} observed a different terminal prompt while awaiting submit`)
       const expected = state.awaitingFingerprint
+      const receipt = state.awaitingReceipt
+      state.awaitingReceipt = undefined
       if (expected !== observedFingerprint) {
-        if (engineReads) void this.echoes(session, userMessage, expected).then(matched => { if (!matched) warn() })
-        else warn()
-      }
+        if (engineReads) void this.echoes(session, userMessage, expected).then(matched => { if (!matched) warn(); receipt?.(matched ? 'started' : 'prompt_mismatch') })
+        else { warn(); receipt?.('prompt_mismatch') }
+      } else receipt?.('started')
       state.awaitingFingerprint = null
       state.awaitingContent = null
       state.retries = 0
@@ -404,6 +443,8 @@ export class SessionInputController {
   onTurnEnded(sessionId: string): void {
     const state = this.state(sessionId)
     if (!state.dispatching) this.finishDelivery(sessionId, state, 'unknown', 'turn_ended_without_start')
+    // Typed while a turn ran, the engine holds it as that turn's follow-up; otherwise no turn was seen for it.
+    this.settle(state, state.turnOpen ? 'taken' : 'turn_ended')
     state.turnOpen = false
     state.awaitingFingerprint = null
     state.awaitingContent = null
@@ -436,6 +477,7 @@ export class SessionInputController {
       await this.deps.sendKey(session.agentId, 'C-c')
       const state = this.state(sessionId)
       this.finishDelivery(sessionId, state, 'unknown', 'cancelled_after_paste')
+      this.settle(state, 'cancelled')
       state.turnOpen = false
       state.awaitingFingerprint = null
       state.awaitingContent = null
@@ -452,6 +494,7 @@ export class SessionInputController {
     const result = await this.deps.sendKey(session.agentId, 'C-c')
     const state = this.state(sessionId)
     this.finishDelivery(sessionId, state, 'unknown', 'cancelled_after_paste')
+    this.settle(state, 'cancelled')
     state.turnOpen = false
     state.awaitingFingerprint = null
     state.awaitingContent = null
@@ -468,17 +511,22 @@ export class SessionInputController {
     if (state?.settleTimer) clearTimeout(state.settleTimer)
     if (state) {
       this.finishDelivery(sessionId, state, state.writing || state.awaitingFingerprint || state.deliveryFingerprint ? 'unknown' : 'rejected', 'agent_gone')
-      for (const item of state.queue) this.delivery(sessionId, item.deliveryId, 'rejected', 'agent_gone')
+      this.settle(state, 'ambiguous')
+      for (const item of state.queue) {
+        this.delivery(sessionId, item.deliveryId, 'rejected', 'agent_gone')
+        item.receipt?.('agent_gone')
+      }
       state.cancelled = true
     }
     this.states.delete(sessionId)
   }
 
   /** Preserve the established injection path for every caller that opts out of receipts. */
-  private async injectLegacy(sessionId: string, session: RegisteredSession, content: string, inputContext?: string): Promise<void> {
+  private async injectLegacy(sessionId: string, session: RegisteredSession, content: string, inputContext?: string, receipt?: MessageReceipt): Promise<void> {
     const state = this.state(sessionId)
     if (!(await this.deps.validateRuntime(session))) {
       console.warn(`[inject] ${sid(sessionId)} abort · engine=${session.engine} · process not running`)
+      receipt?.('runtime_gone')
       this.deps.onError(sessionId, 'This agent process is no longer running.')
       return
     }
@@ -508,6 +556,7 @@ export class SessionInputController {
     if (withheld) {
       // Typed, its Enter not pressed: never pressed later either, which would send it into whatever is open.
       console.warn(`[inject] ${sid(sessionId)} typed, not sent · engine=${session.engine} · ${withheld} opened before Enter`)
+      receipt?.('withheld')
       this.deps.onError(sessionId, messageWithheldText(session.engine, withheld))
       return
     }
@@ -515,14 +564,19 @@ export class SessionInputController {
       const held = heldBack(delivery)
       if (held) {
         console.warn(`[inject] ${sid(sessionId)} not typed · engine=${session.engine} · ${held}`)
+        receipt?.('held')
         this.deps.onError(sessionId, messageHoldText(session.engine, held))
         return
       }
       console.warn(`[inject] ${sid(sessionId)} paste failed · engine=${session.engine} · target=${session.agentId}`)
+      receipt?.('paste_failed')
       this.deps.onError(sessionId, 'The message could not be delivered to the agent.')
       return
     }
     console.log(`[inject] ${sid(sessionId)} paste ok · engine=${session.engine} · target=${session.agentId} · len=${content.length}`)
+    // The one typed before it, never refused, was taken as the message before this one.
+    this.settle(state, 'taken')
+    state.awaitingReceipt = receipt
     state.awaitingFingerprint = fingerprint(content)
     state.awaitingContent = content
     state.retries = 0
@@ -536,13 +590,18 @@ export class SessionInputController {
     return inputContext ? this.deps.inject(id, content, inputContext) : this.deps.inject(id, content)
   }
 
-  private async inject(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string, inputContext?: string): Promise<void> {
+  private async inject(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string, inputContext?: string, receipt?: MessageReceipt): Promise<void> {
     const state = this.state(sessionId)
     if (!deliveryId) {
       // A local submission keeps its original scheduling. Overlap removes our ability
       // to attribute a later terminal turn to the lamp; it must not block local input.
       this.finishDelivery(sessionId, state, 'unknown', 'prompt_mismatch')
-      return this.injectLegacy(sessionId, session, content, inputContext)
+      if (!receipt) return this.injectLegacy(sessionId, session, content, inputContext)
+      // A write that threw may have typed something: unknown, and thrown on as before.
+      return this.injectLegacy(sessionId, session, content, inputContext, receipt).catch((error: unknown) => {
+        receipt('ambiguous')
+        throw error
+      })
     }
     state.deliveryId = deliveryId
     state.deliveryFingerprint = undefined
@@ -705,6 +764,7 @@ export class SessionInputController {
         console.warn(`[inject] ${sid(sessionId)} not accepted · engine=cursor · composer clear of draft`)
         state.awaitingFingerprint = null
         state.awaitingContent = null
+        this.settle(state, 'not_submitted')
         this.finishDelivery(sessionId, state, 'unknown', 'not_submitted')
         this.deps.onError(sessionId, 'The agent did not accept the message. Please try again.')
         return
@@ -739,6 +799,7 @@ export class SessionInputController {
         state.awaitingContent = null
         state.observes = 0
         state.ambiguousDispatch = false
+        this.settle(state, 'taken')
         return
       }
       if (capture) {
@@ -771,6 +832,7 @@ export class SessionInputController {
       state.awaitingFingerprint = null
       state.awaitingContent = null
       state.ambiguousDispatch = false
+      this.settle(state, 'not_submitted')
       this.finishDelivery(sessionId, state, 'unknown', 'not_submitted')
       this.deps.onError(sessionId, 'The agent did not accept the message. Please try again.')
       return
@@ -779,6 +841,7 @@ export class SessionInputController {
     const valid = await this.deps.validateRuntime(session)
     if (!valid) {
       this.finishDelivery(sessionId, state, 'unknown', 'runtime_gone_post_paste')
+      this.settle(state, 'runtime_gone')
       state.awaitingFingerprint = null
       state.awaitingContent = null
       state.ambiguousDispatch = false
@@ -827,6 +890,7 @@ export class SessionInputController {
     state.awaitingFingerprint = null
     state.awaitingContent = null
     state.observes = 0
+    this.settle(state, 'taken')
   }
 
   /**
@@ -851,11 +915,13 @@ export class SessionInputController {
     state.awaitingContent = null
     state.observes = 0
     state.ambiguousDispatch = false
+    this.settle(state, 'taken')
     return true
   }
 
   private failAmbiguousSubmission(sessionId: string, state: InputState): void {
     this.finishDelivery(sessionId, state, 'unknown', 'dispatch_ambiguous')
+    this.settle(state, 'ambiguous')
     state.awaitingFingerprint = null
     state.awaitingContent = null
     state.ambiguousDispatch = false
@@ -871,28 +937,34 @@ export class SessionInputController {
     const session = this.controlSession(sessionId)
     if (!session) {
       this.delivery(sessionId, next.deliveryId, 'rejected', 'agent_gone')
+      next.receipt?.('agent_gone')
       if (!next.deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This harness is no longer available.')
       return
     }
-    void this.inject(sessionId, session, next.content, next.deliveryId, next.inputContext)
+    void this.inject(sessionId, session, next.content, next.deliveryId, next.inputContext, next.receipt)
   }
 
-  private enqueue(sessionId: string, state: InputState, content: string, deliveryId?: string, inputContext?: string): void {
+  private enqueue(sessionId: string, state: InputState, content: string, deliveryId?: string, inputContext?: string, receipt?: MessageReceipt): void {
     const bytes = Buffer.byteLength(content, 'utf8')
     const queuedBytes = state.queue.reduce((sum, item) => sum + item.bytes, 0)
     if (state.queue.length >= MAX_QUEUE_ITEMS || queuedBytes + bytes > MAX_QUEUE_BYTES) {
       this.delivery(sessionId, deliveryId, 'rejected', 'queue_full')
+      receipt?.('queue_full')
       if (!deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This agent already has too many queued messages. Try again after the current operation finishes.')
       return
     }
-    state.queue.push({ content, bytes, expiresAt: Date.now() + ITEM_TTL_MS, deliveryId, inputContext })
+    state.queue.push({ content, bytes, expiresAt: Date.now() + ITEM_TTL_MS, deliveryId, inputContext, ...(receipt ? { receipt } : {}) })
     this.delivery(sessionId, deliveryId, 'queued')
   }
 
   private dropExpired(sessionId: string, state: InputState): void {
     const now = Date.now()
     const expiredLocalInput = state.queue.some(item => item.expiresAt <= now && !item.deliveryId?.startsWith('team:'))
-    for (const item of state.queue) if (item.expiresAt <= now) this.delivery(sessionId, item.deliveryId, 'rejected', 'queue_expired')
+    for (const item of state.queue) {
+      if (item.expiresAt > now) continue
+      this.delivery(sessionId, item.deliveryId, 'rejected', 'queue_expired')
+      item.receipt?.('queue_expired')
+    }
     state.queue = state.queue.filter((item) => item.expiresAt > now)
     if (expiredLocalInput) this.deps.onError(sessionId, 'A queued message expired before the agent became available.')
   }

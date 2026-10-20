@@ -17,6 +17,8 @@ export interface CloudAgentInfo {
   place: string
   /** A coding agent works on a GitHub repository; a personal agent runs errands and takes no repository. */
   kind: 'coding' | 'personal'
+  /** A coding agent that can start with no repository: Devin's API takes `repos` as optional (lampOS asked, #1444). */
+  repositoryOptional?: true
   /** How its connection is found among the person's Connections: by the host its MCP server or API is at. */
   connection: { mcp: string } | { api: string }
   /** What to connect, said when it is not connected. */
@@ -29,7 +31,7 @@ export const CLOUD_AGENTS = {
     connect: 'Connect Fo in Connections (Add custom, https://mcp.api.wajo.ai/fo).',
   },
   'devin-cloud': {
-    name: 'Devin Cloud', place: "Devin's cloud", kind: 'coding', connection: { api: 'https://api.devin.ai' },
+    name: 'Devin Cloud', place: "Devin's cloud", kind: 'coding', repositoryOptional: true, connection: { api: 'https://api.devin.ai' },
     connect: 'Add your Devin API key: harness connections add-key Devin https://api.devin.ai',
   },
   'cursor-cloud': {

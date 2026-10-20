@@ -19,7 +19,7 @@ const db = vi.hoisted(() => ({
 vi.mock('./prisma.js', () => ({ prisma: db }))
 // A configured key, so deletion through setProductUsageChoice and the legacy delete path is real.
 vi.mock('../config/env.js', () => ({ env: { PRODUCT_USAGE_SUBJECT_KEY: 'k'.repeat(32) } }))
-import { activitySubject, deleteActivity, deleteLegacyProductUsage, ensureProductUsageExpiry, markActivity, resetActivityMarksForTests, ingestProductUsage, ingestSetupUsage, productUsageChoice, recordRelayUsage, setProductUsageChoice } from './productUsage.js'
+import { activitySubject, deleteActivity, deleteLegacyProductUsage, ensureProductUsageExpiry, markActivity, resetActivityMarksForTests, resetStaffAccountsForTests, ingestProductUsage, ingestSetupUsage, productUsageChoice, recordRelayUsage, setProductUsageChoice } from './productUsage.js'
 import { LAUNCH_ERROR_CODES, LAUNCH_ERROR_FAMILIES, PRODUCT_USAGE_METRICS, type ProductUsageReport } from '../types/productUsage.js'
 
 it('commits release and platform margins under the same unlinked receipt and discards development reports', async () => {
@@ -45,7 +45,46 @@ beforeEach(() => {
   db.productUsagePreference.findUnique.mockResolvedValue(null)
   db.analyticsMachineState.findFirst.mockResolvedValue(null)
   resetActivityMarksForTests()
+  resetStaffAccountsForTests()
   db.user.findUnique.mockResolvedValue({ createdAt: new Date('2026-10-01T08:00:00Z'), email: 'person@example.com' })
+})
+
+describe('kept apart', () => {
+  const stored = (): string[] => db.$runCommandRaw.mock.calls.flatMap(([command]) =>
+    (command as { updates: Array<{ q: { metric: string } }> }).updates.map(update => update.q.metric))
+
+  it('keeps the team\'s own accounts under staff:, with their margins and late marks', async () => {
+    db.user.findUnique.mockResolvedValue({ createdAt: new Date('2026-10-01T08:00:00Z'), email: 'Dee@Autonomous.AI' })
+    const context = { surface: 'phone', release: '1.0.7', platform: 'ios', channel: 'production' } as const
+    expect(await ingestProductUsage('team-account', { ...report, day: '2026-10-12', context }, now)).toEqual({ accepted: true })
+    expect(stored()).toEqual(expect.arrayContaining(['staff:turns_started', 'staff:breakdown:release:phone:1.0.7:turns_started',
+      'staff:health_phone_report_late']))
+    expect(stored().every(metric => metric.startsWith('staff:'))).toBe(true)
+  })
+
+  it('keeps a tester\'s build under testing:, without margins, whoever signed in', async () => {
+    const context = { surface: 'phone', release: '1.0.7', platform: 'ios', channel: 'testing' } as const
+    expect(await ingestProductUsage('someone', { ...report, context }, now)).toEqual({ accepted: true })
+    expect(stored()).toEqual(['testing:turns_started', 'testing:turns_ended'])
+    // A build's channel decides it: no account is read for it.
+    expect(db.user.findUnique).not.toHaveBeenCalled()
+  })
+
+  it('leaves everyone else\'s totals as they were, and asks for an account once', async () => {
+    const context = { surface: 'phone', release: '1.0.7', platform: 'ios', channel: 'production' } as const
+    await ingestProductUsage('person', { ...report, context }, now)
+    await ingestProductUsage('person', { ...report, id: 'cf1c5a03-388c-4265-b5fb-a4c3d47e4080', context }, now)
+    expect(stored().filter(metric => metric.includes(':') && !metric.startsWith('breakdown:'))).toEqual([])
+    expect(stored()).toContain('turns_started')
+    expect(db.user.findUnique).toHaveBeenCalledOnce()
+  })
+
+  it('reads no account for signed-out setup counts', async () => {
+    expect(await ingestSetupUsage({ id: 'cf1c5a03-388c-4265-b5fb-a4c3d47e4081', day: '2026-10-13',
+      counters: { setup_phone_first_open: 1 } }, now)).toEqual({ accepted: true })
+    expect(stored()).toEqual(['setup_phone_first_open'])
+    expect(db.user.findUnique).not.toHaveBeenCalled()
+  })
 })
 
 it('keeps the client and server vocabulary identical', () => {

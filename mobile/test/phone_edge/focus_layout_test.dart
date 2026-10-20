@@ -177,7 +177,7 @@ void main() {
       await pumpFocus(tester, app, scale, brightness);
       await tester.tap(find.byKey(const ValueKey('terminal-title')));
       await frames(tester);
-      expect(find.text('Rename…'), findsOneWidget);
+      expect(find.text('Rename'), findsOneWidget);
     });
   });
 

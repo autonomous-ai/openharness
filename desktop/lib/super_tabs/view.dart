@@ -73,6 +73,12 @@ class _SuperTabViewState extends State<SuperTabView> {
   String _authorName(SuperTabMessage message) =>
       c.snapshot?.authorName(message) ?? message.authorName;
 
+  /// Your own message reads You, in the row and in the quote of it.
+  String _shownAuthor(SuperTabController c, SuperTabMessage message) =>
+      message.authorId == c.accountId && !message.fromAgent
+      ? 'You'
+      : _authorName(message);
+
   @override
   void initState() {
     super.initState();
@@ -818,9 +824,7 @@ class _SuperTabViewState extends State<SuperTabView> {
     return SuperTabMessageRow(
       key: ValueKey('super-message-${message.id}'),
       message: message,
-      author: message.authorId == c.accountId && !message.fromAgent
-          ? 'You'
-          : _authorName(message),
+      author: _shownAuthor(c, message),
       references: {
         for (final g in c.snapshot?.conversations ?? <SuperTabConversation>[])
           if (g.number != null) g.number!: g.id,
@@ -835,7 +839,7 @@ class _SuperTabViewState extends State<SuperTabView> {
       machineName: agent == null ? null : widget.machineName(agent.machineId),
       grouped: grouped,
       reply: reply,
-      replyAuthor: reply == null ? null : _authorName(reply),
+      replyAuthor: reply == null ? null : _shownAuthor(c, reply),
       onReply: c.canWrite && c.selected?.archived == false
           ? () {
               setState(() => _replies[c.selectedId] = message);

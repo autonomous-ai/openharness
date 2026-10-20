@@ -196,6 +196,22 @@ export async function waitForPaneSettle(tmux: Tmux, pane: string, opts: ProbeOpt
   return false
 }
 
+/**
+ * Where [ref] last is on [screen], as `[start, end)`, or null. A tool's TUI wraps a long prompt itself,
+ * indenting what follows, so the tag can reach the screen cut in two (`(ref-2u` / `  j4gc)`): it is
+ * matched with a line break allowed between any two of its characters, with a box's side border and
+ * padding on either side of the break and a prompt lead after it. Searched as one string, a wrapped tag
+ * looked dropped, and every write step was typed three times (grid-dev, 2026-10-20).
+ */
+export function findRef(screen: string, ref: string): [number, number] | null {
+  // The tag is [a-z0-9-]: only `-` needs escaping, and only outside a character class.
+  const wrap = '(?:[ \\t│┃|]*\\r?\\n[ \\t│┃|>›]*)?'
+  const pattern = new RegExp(ref.split('').map((c) => (c === '-' ? '\\-' : c)).join(wrap), 'g')
+  let last: [number, number] | null = null
+  for (const m of screen.matchAll(pattern)) last = [m.index, m.index + m[0].length]
+  return last
+}
+
 /** A short tag typed after the prompt so THIS check's echo can be told from earlier ones. */
 export function checkRef(now: number): string {
   return `ref-${now.toString(36).slice(-4).padStart(4, '0')}${Math.floor(Math.random() * 1296).toString(36).padStart(2, '0')}`
@@ -208,7 +224,7 @@ export function checkRef(now: number): string {
  * wrong: a resume redraws the whole transcript, so the previous leg's answer is on screen again,
  * and as the new turn scrolls the old one out the count stays flat — a real `ANSWER_42` on the
  * back-home leg was recorded as stuck (measured, codex 0.155.1). The tag pins the search to the
- * new turn instead; a wrapped tag (never echoed in one piece) falls back to "one more hit than before".
+ * new turn instead, found even when the tool wrapped it across lines (findRef).
  */
 export async function runCheck(tmux: Tmux, pane: string, check: SmokeCheck, opts: ProbeOptions = {}): Promise<CheckOutcome> {
   const o = { ...DEFAULTS, ...opts }
@@ -230,7 +246,7 @@ export async function runCheck(tmux: Tmux, pane: string, check: SmokeCheck, opts
     let landed = false
     for (let waited = 0; waited < 5_000 && !landed; waited += o.pollMs) {
       await tmux.sleep(o.pollMs)
-      landed = (await tmux.capture(pane, o.tailLines)).includes(ref)
+      landed = findRef(await tmux.capture(pane, o.tailLines), ref) !== null
     }
     if (landed) break
     await tmux.type(pane, `${check.prompt} (${ref})`)
@@ -263,8 +279,8 @@ export async function runCheck(tmux: Tmux, pane: string, check: SmokeCheck, opts
   while (tmux.now() - start < o.checkTimeoutMs) {
     await tmux.sleep(o.pollMs)
     tail = await tmux.capture(pane, o.tailLines)
-    const echo = tail.lastIndexOf(ref)
-    const afterEcho = echo >= 0 ? tail.slice(echo + ref.length) : null
+    const echo = findRef(tail, ref)
+    const afterEcho = echo ? tail.slice(echo[1]) : null
     // A modal can land in the middle of a turn (claude's gateway notice); answer it and keep waiting.
     // Only one that appeared after THIS prompt: startup screens answered before it stay in the
     // scrollback, and answering them again would send their keys into the running turn.

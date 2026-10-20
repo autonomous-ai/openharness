@@ -410,6 +410,25 @@ void main() {
       expect(const CurrentUserProfile(email: '  ').initials, '?');
     });
 
+    test('when the account was made, if the backend says readably', () {
+      CurrentUserProfile made(Object? createdAt) => CurrentUserProfile.fromMe({
+        'user': {'email': 'q@x.co', 'createdAt': createdAt},
+      });
+      expect(
+        made('2026-10-19T08:30:00.000Z').createdAt,
+        DateTime.utc(2026, 10, 19, 8, 30),
+      );
+      expect(made(null).createdAt, isNull);
+      expect(made('yesterday').createdAt, isNull);
+      expect(made(1760862600000).createdAt, isNull);
+      expect(
+        CurrentUserProfile.fromMe({
+          'user': {'email': 'q@x.co'},
+        }).createdAt,
+        isNull,
+      );
+    });
+
     test('a machine with no name is called by its id', () {
       const long = Machine(
         machineId: 'abcdef0123456789',

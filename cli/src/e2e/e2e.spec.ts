@@ -10,7 +10,7 @@ import { pickGridModel } from './gridSwitchDriver.js'
 import { prepareWorkspace, readLog, logPath, readWorkspaceFile, preAcceptClaudeBypassMode, CALC_MCP_MJS } from './workspace.js'
 import { toolResult, useByRef } from './sessionTools.js'
 import { execFileSync } from 'node:child_process'
-import { probeLeg, runCheck, dismissStartupDialogs, STARTUP_DIALOGS, type Tmux } from './paneProbe.js'
+import { findRef, probeLeg, runCheck, dismissStartupDialogs, STARTUP_DIALOGS, type Tmux } from './paneProbe.js'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -324,6 +324,35 @@ describe('pane probe (live steps on a tmux pane)', () => {
     expect(files['notes/todo-1.txt']).toContain('status: done')
     // Every step carries the tag its prompt was typed with — how its tools are found afterwards.
     expect([...own.checks, ...grid.checks].every((c) => /^ref-[0-9a-z]{6}$/.test(c.ref ?? ''))).toBe(true)
+  })
+
+  // grid-dev, 2026-10-20: codex's TUI wraps a long prompt, so its `(ref-…)` tag reached the screen in two
+  // pieces; the probe took it for dropped and typed every write step three times, and the third ran into
+  // the next step's prompt on the grid leg (edit=stuck).
+  it('types a step once when the tool wraps its prompt across lines', async () => {
+    const { pane, probe, files } = fakeAgent()
+    // At 72 columns the tag of this step's prompt (from column 69) is cut in two, as on grid-dev's screen.
+    const wrap = (text: string) => text.split('\n').map((line) => line.match(/.{1,72}/g)?.join('\n  ') ?? line).join('\n')
+    const wrapped: Tmux = { ...pane, capture: async (p, lines) => wrap(await pane.capture(p, lines)) }
+    const write = SCENARIO.subscription[1]
+    const out = await runCheck(wrapped, '%1', write, probe)
+    expect(out.status).toBe('ok')
+    expect(pane.typed.filter((t) => t.startsWith(write.prompt))).toHaveLength(1)
+    expect(files['out/hello-1.txt']).toBe('hello from step 1\n')
+  })
+
+  it('finds a tag cut by a wrap inside a bordered box, and only its own', () => {
+    const ref = 'ref-2uj4gc'
+    // A plain indent (codex), a side border before and after the break, and a quote/prompt lead.
+    for (const screen of [`… (ref-2u\n  j4gc)`, `… (ref-2u   │\n│   j4gc)`, `… (ref-2u│\n│j4gc)`, `… (ref-2u\n› j4gc)`]) {
+      expect(findRef(screen, ref), JSON.stringify(screen)).not.toBeNull()
+    }
+    // Text between the pieces is not a wrap; nor is another tag.
+    expect(findRef('… (ref-2u x\nj4gc)', ref)).toBeNull()
+    expect(findRef('(ref-2uj4gd)', ref)).toBeNull()
+    // The last echo is the one an answer is read after.
+    const screen = `(ref-2uj4gc) first\n(ref-2u\n  j4gc) second`
+    expect(screen.slice(findRef(screen, ref)![1])).toBe(') second')
   })
 
   it('saying is not doing: each step fails when the tool only claims it, with what was missing', async () => {

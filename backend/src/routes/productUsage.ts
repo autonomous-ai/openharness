@@ -10,7 +10,7 @@ const contextSchema = z.strictObject({
   surface: z.enum(['cli', 'desktop', 'phone']),
   release: z.string().max(11).refine(v => v === 'unknown' || releaseBucket(v) === v),
   platform: z.enum(['macos', 'linux', 'windows', 'ios', 'android', 'other']),
-  channel: z.enum(['production', 'development']),
+  channel: z.enum(['production', 'development', 'testing']),
 })
 const daySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
 

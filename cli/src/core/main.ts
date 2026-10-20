@@ -2695,10 +2695,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     if (!sent) { submitAgent(id, content, deliveryId); return }
     if (deliveryId) void sent.then((result) => deliveries.settled({ deliveryId, sessionId: id, state: result.ok ? 'delivered' : 'rejected', ...(result.ok ? {} : { reason: result.error }) }))
   }
-  backend.messageProvider = (payload) => {
+  backend.messageProvider = (payload, receipt) => {
     const agentId = typeof payload.agentId === 'string' ? payload.agentId : typeof payload.sessionId === 'string' ? payload.sessionId : ''
     if (cloud.owns(agentId)) { void cloud.deliver(agentId, typeof payload.content === 'string' ? payload.content : ''); return }
-    inputs.messageRequest(payload)
+    inputs.messageRequest(payload, receipt)
   }
   backend.onCancelOrchestratorMessage = id => input.cancelDelivery(id)
   deliveries.ready() // The input is wired: what was delivered meanwhile (Agent Messages' queue resuming) is written now.

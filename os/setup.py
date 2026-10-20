@@ -9,11 +9,14 @@ Internet and signs in with `harness login --ticket`. When the Wi-Fi fails, the h
 with the reason (wrong password, out of reach, no address, no Internet), for the phone to read when
 it rejoins, and the person tries again.
 
-The hotspot comes up by itself only while there is no network: at once on a computer not signed in
-yet (just installed or reset), screen or not, beside the screen's own Wi-Fi page; on one signed in,
-only with no screen and after a long outage (a new router). While nobody is on it, saved Wi-Fi is
-tried again every few minutes, so a router that was only off brings the computer back by itself.
-Its name ends in the Wi-Fi card's own address, the same however often the computer is flashed.
+A computer not signed in yet (just installed, reset, or signed out) hosts the hotspot from the moment
+it starts, screen or not, network or not: on Wi-Fi it leaves it for the hotspot, and on a cable the
+two run side by side and the phone only signs it in. The hotspot goes once the computer is signed
+in, from the phone or at the screen, and while someone who typed the computer's password at its
+screen has its Wi-Fi page open (network.py SETUP_SCREEN). One signed in hosts it only with no screen
+and after a long outage (a new router); while nobody is on it then, saved Wi-Fi is tried again every
+few minutes, so a router that was only off brings the computer back by itself. Its name ends in the
+Wi-Fi card's own address, the same however often the computer is flashed.
 
 The hotspot has no password, for setup to be one tap: whoever is in range of a computer in setup
 can choose its Wi-Fi, and the Wi-Fi password crosses an open network. Nothing here runs a command
@@ -35,15 +38,21 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 import uuid
 
 STATE = Path('/var/lib/harness-os')
 RESULT = STATE / 'setup-result.json'
 NOW = Path('/run/harness-os/setup-now')
-# What the radio saw before hosting the hotspot, for the screen's Wi-Fi page (network.py SETUP_NETWORKS).
-SCREEN_NETWORKS = Path('/run/harness-os/setup-networks.json')
+# The screen's Wi-Fi page holds the radio while open (network.py SETUP_SCREEN): the pid of that page.
+SCREEN = Path('/run/harness-os/setup-screen')
 # Signed in from a phone: its first workspace is OpenCode alone, not with two terminals (onboarding.py).
 FROM_PHONE = STATE / 'set-up-from-phone'
+# A phone's Wi-Fi and sign-in, sent with the computer's password as it started (unlock/http): /run
+# outlives the switch from its startup to the system, and nothing of it reaches the disk.
+PHONE_SETUP = Path('/run/harness-os/phone-setup.json')
+# How long the Wi-Fi card may take to appear in NetworkManager as the system starts.
+DEVICE_WAIT = 30
 HEADLESS = Path('/etc/harness-os/headless')
 DRM = Path('/sys/class/drm')
 USER = 'me'
@@ -57,8 +66,6 @@ PROTOCOL = 1
 # Signed in with no screen: saved Wi-Fi gets this long to come back before the hotspot takes the radio.
 OFFLINE_AT_START = 60
 OFFLINE_LATER = 600
-# Not signed in, with saved Wi-Fi: this long for it to come back as the computer starts.
-SAVED_GRACE = 15
 # With nobody on the hotspot, saved Wi-Fi is tried again this often, for this long.
 RETRY_SAVED = 300
 SAVED_JOIN = 45
@@ -74,6 +81,7 @@ MESSAGES = {
     'NO_ADDRESS': 'Joined "{ssid}", but the router gave no address. Restart the router and try again.',
     'TIMEOUT': 'Joining "{ssid}" took too long. Move the device closer to the router and try again.',
     'NO_INTERNET': 'Joined "{ssid}", but it does not reach the Internet. A sign-in page or a firewall may be in the way.',
+    'NO_INTERNET_WIRED': 'This computer is on a cable, but it does not reach the Internet. Check the cable or choose a Wi-Fi.',
     'WIFI': 'Could not join "{ssid}". Try again.',
 }
 
@@ -357,6 +365,10 @@ def sign_in(ticket):
     ok, message = run_sign_in(ticket)
     if not ok:
         FROM_PHONE.unlink(missing_ok=True)
+        return ok, message
+    # Online in the account only with its daemon running, and nobody may ever sign in at a screen
+    # to start a session (one with no encryption asks for its password there first): started here.
+    as_user('systemctl', '--user', 'start', 'harness-daemon', timeout=150)
     return ok, message
 
 
@@ -382,16 +394,21 @@ def run_sign_in(ticket):
 
 
 def join(request, networks, device):
-    """Leave the hotspot for the person's Wi-Fi. Returns the result the phone reads."""
-    ssid, password, ticket = request['ssid'], request.get('password') or '', request.get('ticket')
-    seen = next((row for row in networks if row['ssid'] == ssid), None)
-    security = seen['security'] if seen else ('WPA2' if password else '')
-    log(f'joining "{ssid}"')
+    """Leave the hotspot for the person's Wi-Fi, or with no Wi-Fi named (on a cable), only sign in.
+    Returns the result the phone reads."""
+    ssid, password, ticket = request.get('ssid') or '', request.get('password') or '', request.get('ticket')
     started = time.monotonic()
-    failed = connect(ssid, password, security, device)
-    if not failed and not internet():
-        forget(ssid)
-        failed = 'NO_INTERNET'
+    if not ssid:
+        log('signing in on the cable')
+        failed = None if internet() else 'NO_INTERNET_WIRED'
+    else:
+        seen = next((row for row in networks if row['ssid'] == ssid), None)
+        security = seen['security'] if seen else ('WPA2' if password else '')
+        log(f'joining "{ssid}"')
+        failed = connect(ssid, password, security, device)
+        if not failed and not internet():
+            forget(ssid)
+            failed = 'NO_INTERNET'
     if failed:
         log(f'"{ssid}" failed after {int(time.monotonic() - started)}s: {failed}')
         return dict(state='failed', error=failed, ssid=ssid, message=MESSAGES[failed].format(ssid=ssid))
@@ -404,11 +421,15 @@ def join(request, networks, device):
     return dict(state='done', ssid=ssid, signedIn=signed_in())
 
 
-def check_request(body):
+def check_request(body, wired=False):
+    """[wired]: on a cable already, so a ticket alone signs in without a Wi-Fi."""
     if not isinstance(body, dict):
         return 'Send a JSON object.'
     ssid, password, ticket = body.get('ssid'), body.get('password'), body.get('ticket')
-    if not isinstance(ssid, str) or not ssid or len(ssid.encode()) > 32:
+    if wired and ssid in (None, '') and not password:
+        if not ticket:
+            return 'Sign in from the phone to set this computer up.'
+    elif not isinstance(ssid, str) or not ssid or len(ssid.encode()) > 32:
         return 'Choose a Wi-Fi network.'
     if password not in (None, ''):
         if not isinstance(password, str) or '\n' in password or '\r' in password:
@@ -428,8 +449,9 @@ class Setup:
         self.requests = queue.Queue()
 
     def info(self):
+        # online: on a cable beside the hotspot (the radio hosts it), so the phone skips the Wi-Fi.
         return dict(protocol=PROTOCOL, name=socket.gethostname(), hotspot=self.name, run=self.run,
-                    computerId=computer_id(), signedIn=signed_in(), result=read_result())
+                    computerId=computer_id(), signedIn=signed_in(), online=online(), result=read_result())
 
     def handler(self):
         setup = self
@@ -464,7 +486,7 @@ class Setup:
                     body = json.loads(self.rfile.read(min(length, 16384)) or b'{}')
                 except ValueError:
                     return self.reply(400, dict(error='BAD_REQUEST', message='Send a JSON object.'))
-                problem = check_request(body)
+                problem = check_request(body, wired=online())
                 if problem:
                     return self.reply(400, dict(error='BAD_REQUEST', message=problem))
                 if not setup.requests.empty():
@@ -500,75 +522,89 @@ def saved_comes_back(device):
 
 
 def setup_mode(device, asked=False):
-    """Hotspot until the phone sends a Wi-Fi that works, or saved Wi-Fi comes back.
+    """Hotspot until the phone sends a Wi-Fi that works (or, on a cable, signs the computer in), the
+    computer is signed in at its screen, or someone at the screen opens its Wi-Fi page.
 
-    Saved Wi-Fi is tried again only for a computer signed in that lost its network (a router that
-    was off). One not signed in still needs the phone, and one [asked] for setup by hand was taken
-    off its Wi-Fi on purpose: both keep the hotspot until somebody uses it."""
-    may_leave = not asked and signed_in()
+    Signed in, the computer lost its network (a router that was off): saved Wi-Fi is tried again,
+    and a cable plugged in ends it. One not signed in still needs the phone, and one [asked] for
+    setup by hand was taken off its Wi-Fi on purpose: both keep the hotspot until somebody uses it."""
+    was_signed_in = signed_in()
+    may_leave = not asked and was_signed_in
     name = hotspot_name(device)
+    # Scanned before the radio becomes the hotspot: it cannot scan while hosting one.
     networks = visible_networks(name)
-    try:
-        while True:
-            if not start_hotspot(device, name):
-                return False
-            # The screen's Wi-Fi page lists these while the radio hosts the hotspot (network.py).
-            show_networks(networks, device)
-            run = int(read_result().get('run') or 0)
-            log(f'hotspot "{name}" is up with {len(networks)} networks to offer')
-            setup = Setup(name, networks, run)
-            try:
-                server = serve(setup)
-            except OSError as error:
-                log(f'could not answer on {ADDRESS}:{PORT}: {error}')
-                stop_hotspot()
-                return False
-            request, idle_since, elsewhere = None, time.monotonic(), None
-            while request is None:
-                try:
-                    request = setup.requests.get(timeout=5)
-                except queue.Empty:
-                    # Someone at the screen took the radio for a Wi-Fi (network.py): joined, or not.
-                    if not hotspot_up():
-                        elsewhere = online()
-                        break
-                    # Online another way meanwhile (a cable plugged in): the hotspot has no use.
-                    if online():
-                        elsewhere = True
-                        break
-                    if phones_on(device):
-                        idle_since = time.monotonic()
-                    elif may_leave and time.monotonic() - idle_since >= RETRY_SAVED and saved_wifi():
-                        break
-            if request is not None:
-                run += 1
-                write_result(state='connecting', ssid=request['ssid'], run=run)
-                # Let the phone read its answer before the hotspot goes.
-                time.sleep(2)
-            server.shutdown()
-            server.server_close()
+    while True:
+        if screen_here():
+            return False
+        if not start_hotspot(device, name):
+            return False
+        run = int(read_result().get('run') or 0)
+        log(f'hotspot "{name}" is up with {len(networks)} networks to offer')
+        setup = Setup(name, networks, run)
+        try:
+            server = serve(setup)
+        except OSError as error:
+            log(f'could not answer on {ADDRESS}:{PORT}: {error}')
             stop_hotspot()
-            if elsewhere is not None:
-                if elsewhere or wait_online(SAVED_JOIN):
-                    log('joined a Wi-Fi from the screen')
-                    return True
-                # Their Wi-Fi failed: the hotspot comes back for the phone.
-                continue
-            if request is None:
-                log('nobody is on the hotspot; trying saved Wi-Fi')
-                if saved_comes_back(device):
-                    log('saved Wi-Fi is back')
-                    return True
-                networks = visible_networks(name) or networks
-                continue
-            result = join(request, networks, device)
-            write_result(run=run, **result)
-            if result['state'] == 'done':
+            return False
+        request, idle_since, left = None, time.monotonic(), None
+        while request is None:
+            try:
+                request = setup.requests.get(timeout=5)
+            except queue.Empty:
+                # Someone typed this computer's password at its screen and opened its Wi-Fi page
+                # (network.py): the radio is theirs while it is open.
+                if screen_here():
+                    left = 'screen'
+                    break
+                # Signed in meanwhile at the screen (on a cable): nothing left to set up.
+                if not was_signed_in and signed_in():
+                    left = 'signed in'
+                    break
+                if not hotspot_up():
+                    left = 'gone'
+                    break
+                # Signed in, online another way meanwhile (a cable plugged in): the hotspot has no
+                # use. Not signed in, it stays for the phone, which signs in over that cable.
+                if may_leave and online():
+                    left = 'online'
+                    break
+                if phones_on(device):
+                    idle_since = time.monotonic()
+                elif may_leave and time.monotonic() - idle_since >= RETRY_SAVED and saved_wifi():
+                    break
+        if request is not None:
+            run += 1
+            write_result(state='connecting', ssid=request.get('ssid') or '', run=run)
+            # Let the phone read its answer before the hotspot goes.
+            time.sleep(2)
+        server.shutdown()
+        server.server_close()
+        stop_hotspot()
+        if left in ('signed in', 'online'):
+            log(f'{left}; the hotspot goes')
+            return True
+        if left == 'screen':
+            log('the screen took the radio for its Wi-Fi page')
+            return online()
+        if left == 'gone':
+            # Taken down by something else: back up, unless that brought the network.
+            if online() or wait_online(SAVED_JOIN):
                 return True
-            # Back to the hotspot with the reason; the list may have changed meanwhile.
+            continue
+        if request is None:
+            log('nobody is on the hotspot; trying saved Wi-Fi')
+            if saved_comes_back(device):
+                log('saved Wi-Fi is back')
+                return True
             networks = visible_networks(name) or networks
-    finally:
-        SCREEN_NETWORKS.unlink(missing_ok=True)
+            continue
+        result = join(request, networks, device)
+        write_result(run=run, **result)
+        if result['state'] == 'done':
+            return True
+        # Back to the hotspot with the reason; the list may have changed meanwhile.
+        networks = visible_networks(name) or networks
 
 
 def hotspot_up():
@@ -584,13 +620,17 @@ def wait_online(seconds):
     return online()
 
 
-def show_networks(networks, device):
-    """For the screen's Wi-Fi page (network.py), which cannot scan while the radio hosts the hotspot."""
-    try:
-        SCREEN_NETWORKS.parent.mkdir(parents=True, exist_ok=True)
-        SCREEN_NETWORKS.write_text(json.dumps([dict(row, device=device) for row in networks]))
-    except OSError:
-        pass
+def screen_here():
+    """Whether someone at the screen holds the radio (network.py SETUP_SCREEN): they typed this
+    computer's password there and opened its Wi-Fi page. Held until the computer is signed in, so
+    the hotspot does not take the Wi-Fi chosen there while they sign in at the screen; the page
+    lets it go when left alone a while, for a phone."""
+    if not SCREEN.exists():
+        return False
+    if signed_in():
+        SCREEN.unlink(missing_ok=True)
+        return False
+    return True
 
 
 def asked_now():
@@ -611,38 +651,85 @@ def headless():
                    for status in DRM.glob('card*-*/status') if status.is_file())
 
 
-def offline_wait(now, started):
-    """How long this computer must be offline before its hotspot opens; None: never by itself.
+def hotspot_wait(now, started):
+    """How long this computer must stay as it is now before its hotspot opens; None: not now.
 
-    Not signed in (just installed, or reset), screen or not: at once, for setup from a phone beside
-    the screen's own Wi-Fi page, which lists the Wi-Fi seen before the hotspot and takes the radio
-    back for one chosen there. Saved Wi-Fi gets a moment to come back first, as it does at boot.
-    Signed in: a computer with no screen after a long outage (a new router); one with a screen keeps
-    its Wi-Fi page, as a laptop away from its network should."""
+    Not signed in (just installed, reset or signed out), screen or not, network or not: at once,
+    for setup from a phone; on Wi-Fi it leaves it for the hotspot. Not while someone at the screen
+    has its Wi-Fi page open. Signed in: only offline, and only a computer with no screen, after a
+    long outage (a new router); one with a screen keeps its Wi-Fi page, as a laptop away from its
+    network should."""
+    if screen_here():
+        return None
     if not signed_in():
-        return SAVED_GRACE if saved_wifi() and now - started < SAVED_GRACE + 5 else 0
-    if not headless():
+        return 0
+    if online() or not headless():
         return None
     return OFFLINE_AT_START if now - started < OFFLINE_AT_START + 5 else OFFLINE_LATER
 
 
+def signed_in_account():
+    """The account this computer is signed in to: the session's `signInAcct` (cli recordSignInAccount)."""
+    try:
+        return json.loads(SESSION.read_text()).get('signInAcct')
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def set_up_as_unlocked():
+    """The rest of a phone's setup, sent with the computer's password while its disk was locked
+    (unlock/http, protocol 2): the Wi-Fi, its password, the sign-in ticket and the phone's account.
+    Joined and signed in as the system starts — the phone never comes back to a second hotspot. Every
+    time, set up before or not: the Wi-Fi given is joined, and an account other than the phone's is
+    signed out for it. One that fails leaves its reason for the hotspot that follows (watch)."""
+    try:
+        request = json.loads(PHONE_SETUP.read_text())
+    except (OSError, ValueError):
+        return
+    finally:
+        PHONE_SETUP.unlink(missing_ok=True)
+    run = int(read_result().get('run') or 0) + 1
+    # The radio comes up a moment after NetworkManager.
+    deadline = time.monotonic() + DEVICE_WAIT
+    while not (device := wifi_device()) and time.monotonic() < deadline:
+        time.sleep(1)
+    ssid = request.get('ssid') if isinstance(request, dict) else None
+    problem = check_request(request, wired=not ssid and online())
+    if problem:
+        log('the phone\'s setup at the unlock: ' + problem)
+        write_result(run=run, state='failed', error='BAD_REQUEST', message=problem)
+        return
+    if ssid and not device:
+        write_result(run=run, state='failed', error='WIFI', ssid=ssid, message='This computer has no Wi-Fi.')
+        return
+    account = request.get('account')
+    if signed_in() and isinstance(account, str) and account and account != signed_in_account():
+        # The phone's account, in place of the one it was signed in to: a sign-out, then its sign-in.
+        log('signed in to another account than the phone\'s: signing out')
+        as_user('/usr/bin/harness', 'logout', timeout=60)
+    security = request.get('security')
+    networks = [dict(ssid=ssid, security=security)] if ssid and isinstance(security, str) else []
+    log('setting up as the phone asked at the unlock')
+    write_result(run=run, **join(request, networks, device))
+
+
 def watch():
-    started, offline_since = time.monotonic(), None
+    started, waiting_since = time.monotonic(), None
     while True:
         now = time.monotonic()
         forced = asked_now()
-        wait = None if forced else offline_wait(now, started)
-        if (online() or wait is None) and not forced:
-            offline_since = None
+        wait = 0 if forced else hotspot_wait(now, started)
+        if wait is None:
+            waiting_since = None
         else:
-            offline_since = offline_since or now
+            waiting_since = waiting_since or now
             device = wifi_device()
-            if device and (forced or now - offline_since >= wait):
+            if device and now - waiting_since >= wait:
                 if forced:
                     # Asked for by hand: leave the current Wi-Fi so the radio can host the hotspot.
                     nmcli('device', 'disconnect', device)
                 setup_mode(device, asked=forced)
-                offline_since = None
+                waiting_since = None
         time.sleep(5)
 
 
@@ -684,6 +771,8 @@ def change(request):
 
 
 HN = '/usr/lib/harness/harness-tui'
+# The account's daemon on this computer (cli hookServer), for the desk.
+DAEMON = 'http://127.0.0.1:18473'
 RESET_UNIT = 'harness-factory-reset'
 
 
@@ -713,26 +802,80 @@ def wipe(folder, keep):
             path.unlink(missing_ok=True)
 
 
-def factory_reset(keep_wifi=False):
+def desk_ops(ops=None):
+    """The account's desk through the local daemon (its /api/desk proxy, signed in as this computer):
+    read it, or with [ops] write them. The answer's tabs, or None."""
+    request = urllib.request.Request(DAEMON + ('/api/desk/ops' if ops else '/api/desk'),
+                                     data=json.dumps({'ops': ops}).encode() if ops else None,
+                                     headers={'Content-Type': 'application/json', 'X-Adapter-Local': '1'},
+                                     method='POST' if ops else 'GET')
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            body = json.loads(response.read())
+    except (OSError, ValueError):
+        return None
+    body = body.get('data', body) if isinstance(body, dict) else None
+    return body.get('tabs') if isinstance(body, dict) and isinstance(body.get('tabs'), list) else None
+
+
+def forget_desk():
+    """This computer's tabs and panes off the account's desk, which every computer shows: closing its
+    windows alone was raced by the sign-out, and they came back at the next sign-in. A tab of its own
+    goes; one shared with other computers keeps theirs."""
+    status = as_user('/usr/bin/harness', 'auth', 'status', '--json')
+    try:
+        machine = json.loads(status.stdout).get('machineId') if status else None
+    except ValueError:
+        machine = None
+    tabs = desk_ops() if machine else None
+    ops = []
+    for tab in tabs or []:
+        panes = [pane for pane in tab.get('panes') or [] if isinstance(pane, dict)]
+        mine = [pane for pane in panes if pane.get('machineId') == machine]
+        if mine and len(mine) == len(panes):
+            ops.append({'op': 'tab.close', 'id': tab.get('id')})
+        else:
+            ops += [{'op': 'pane.remove', 'tabId': tab.get('id'), 'machineId': machine,
+                     'agentId': pane.get('agentId')} for pane in mine]
+    if ops and desk_ops(ops) is None:
+        log('factory reset: the desk kept some tabs of this computer')
+
+
+def factory_reset(keep_wifi=False, keep_workspace=False):
     """This computer as it was just flashed: no account, no harnesses, the first workspace still to come,
     and (unless [keep_wifi]) no Wi-Fi, so it opens its setup hotspot for a phone. It stays the same
     computer: its id and its device key are kept, as a new key for the same computer is refused by the
     account until the old one is removed. The engines' own sign-ins and ~/projects are the person's.
+    Its workspace goes too — hn's tabs and panes, here and on the account's desk, and what hn keeps
+    (~/.harness/tui) — unless [keep_workspace].
     For the reset button and `harness factory-reset`."""
-    log('factory reset')
-    # Its windows first, while still signed in: the account keeps the tabs (the desk, the same on
-    # every computer), and one left there comes back at the next sign-in in the first workspace's place.
-    windows = as_user(HN, 'list-windows', '-F', '#{window_index}')
-    for index in sorted((int(n) for n in (windows.stdout.split() if windows else []) if n.isdigit()), reverse=True):
-        as_user(HN, 'kill-window', '-t', f':{index}')
+    log('factory reset' + (', keeping the workspace' if keep_workspace else ''))
+    if not keep_workspace:
+        # While still signed in: the account keeps the tabs (the desk, the same on every computer),
+        # and one left there comes back at the next sign-in in the first workspace's place.
+        forget_desk()
+        windows = as_user(HN, 'list-windows', '-F', '#{window_index}')
+        for index in sorted((int(n) for n in (windows.stdout.split() if windows else []) if n.isdigit()), reverse=True):
+            as_user(HN, 'kill-window', '-t', f':{index}')
     as_user('/usr/bin/harness', 'logout', timeout=60)
+    if not keep_workspace:
+        # hn before its files: it writes its tabs out as it ends, and wrote the old ones back.
+        as_user(HN, 'kill-server')
+        subprocess.run(['/usr/bin/pkill', '-u', USER, '-x', 'harness-tui'], capture_output=True)
+        try:
+            shutil.rmtree(f'/tmp/hn-{pwd.getpwnam(USER).pw_uid}', ignore_errors=True)
+        except KeyError:
+            pass
     # Every harness and terminal: the daemon, then the tmux server its panes run in.
     as_user('systemctl', '--user', 'stop', 'harness-daemon', timeout=60)
     as_user('tmux', 'kill-server')
     harness = HOME / '.harness'
-    wipe(harness, {'computer-id': True, 'cli': {'data': {'e2e': True}}})
+    keep = {'computer-id': True, 'cli': {'data': {'e2e': True}}}
+    if keep_workspace:
+        keep['tui'] = True
+    wipe(harness, keep)
     (HOME / '.local/state/harness-os/onboarded').unlink(missing_ok=True)
-    for path in (RESULT, FROM_PHONE):
+    for path in (RESULT, FROM_PHONE, SCREEN):
         path.unlink(missing_ok=True)
     as_user('systemctl', '--user', 'start', 'harness-daemon', timeout=60)
     # hn again from its sign-in page. Its server outlives the screen unit (KillMode=process).
@@ -753,11 +896,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('command', nargs='?', choices=['watch', 'now', 'name', 'join', 'reset'], default='watch')
     parser.add_argument('--keep-wifi', action='store_true', help='reset: keep the saved Wi-Fi')
+    parser.add_argument('--keep-workspace', action='store_true',
+                        help="reset: keep hn's tabs and panes, here and on the account's desk")
     parser.add_argument('--here', action='store_true', help=argparse.SUPPRESS)
     arguments = parser.parse_args()
     if arguments.command == 'reset':
         if arguments.here:
-            factory_reset(keep_wifi=arguments.keep_wifi)
+            factory_reset(keep_wifi=arguments.keep_wifi, keep_workspace=arguments.keep_workspace)
             return
         # In a unit of its own: the computer leaves its Wi-Fi, and whatever asked (an SSH session, the
         # button's handler) may go with it before the reset is done. `journalctl -u harness-factory-reset`.
@@ -765,10 +910,13 @@ def main():
                    '/usr/bin/python3', str(Path(__file__).resolve()), 'reset', '--here']
         if arguments.keep_wifi:
             command.append('--keep-wifi')
+        if arguments.keep_workspace:
+            command.append('--keep-workspace')
         started = subprocess.run(command, capture_output=True, text=True)
         if started.returncode:
             raise SystemExit('Could not start the reset: ' + (started.stderr.strip() or 'systemd-run failed'))
         print('Resetting this computer. It signs out, closes every harness'
+              + ('' if arguments.keep_workspace else ', forgets its tabs')
               + ('' if arguments.keep_wifi else ', forgets its Wi-Fi')
               + ' and opens its setup hotspot for a phone in about a minute.')
         return
@@ -788,6 +936,7 @@ def main():
     if arguments.command == 'name':
         print(hotspot_name())
         return
+    set_up_as_unlocked()
     log(f'watching; hotspot "{hotspot_name()}" when there is no network')
     watch()
 
