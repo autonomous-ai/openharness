@@ -278,6 +278,9 @@ channel. Every handler answers on the platform thread and never blocks it.
    - `writeImagePng` puts a PNG on the clipboard, for image drag-drop onto a local pane, as on macOS and Linux.
 6. **Font list** (`harness/fonts`). Installed font families, via `EnumFontFamiliesExW`, de-duplicated. The
    terminal's font picker reads them as it does on macOS.
+   - A fresh Windows terminal uses a real Windows monospaced face matching the standard Windows PowerShell terminal,
+     rather than falling through the Linux-only DejaVu Sans Mono default. Its default, Reset action and fallback
+     chain keep terminal columns aligned and Vietnamese text readable. An explicitly saved font choice stays in use.
 7. **In-window menu bar.**
    - `linux_menu_bar.dart` becomes a shared `in_window_menu_bar.dart`, used on Linux and Windows. Linux output is
      unchanged.

@@ -22783,6 +22783,60 @@ git commit -m "feat(windows): install the desktop app by one command, irm .../de
   The staging upload (`upload-install-ps1.sh --app` with no `--print`) is a staging publish. It needs the owner's OK,
   and C5.2 Step 8b does it.
 
+### Task C4.9: Use the Windows PowerShell terminal face by default
+
+The owner's VM screenshots show the Windows Harness terminal rendering wide, poorly spaced text while a standard
+Windows PowerShell terminal on the same system is compact and legible. Today Windows takes the Linux default
+`DejaVu Sans Mono`, which is not a Windows system font, and then falls through to an uncontrolled Flutter face. A
+fresh Windows terminal and Settings → Terminal → Reset must use `Consolas`, the stock Windows PowerShell-style
+monospaced face. Keep saved user choices, macOS/iOS, Linux and web behavior unchanged. Do not compensate with global
+letter spacing: xterm's cell measurement and box-drawing alignment depend on a real monospaced face.
+
+**Files:**
+- Modify: `desktop/lib/terminal/terminal_typography.dart` — Windows default family and fallback.
+- Modify: `desktop/lib/terminal/terminal_font_store.dart` — Windows-only preset, available list and default.
+- Modify: `desktop/test/terminal_typography_test.dart`, `desktop/test/terminal_font_store_test.dart` — cross-platform
+  default, reset, stored-selection and fallback assertions.
+- Modify: `docs/testing/windows-desktop-e2e.md` when C5.2 writes the final VM report — before/after screenshot result.
+
+**Interfaces:**
+- Add pure `terminalFontFamilyFor(String operatingSystem)` and `terminalFontFallbackFor(String operatingSystem)` in
+  `terminal_typography.dart`; the existing getters call them with `RuntimePlatform.operatingSystem`.
+- Add `TerminalFontChoice.availableFor(String operatingSystem)` and
+  `TerminalFontChoice.defaultFor(String operatingSystem)`; the existing getters delegate to these.
+- Windows default/preset: `Consolas`, size `13.0`; fallback order `Cascadia Mono`, `Courier New`, `monospace`. The
+  last generic name is only a final fallback, not proof of a monospaced render. Every Windows preset must reach
+  `Consolas`, a real Windows 10/11 face. Saved `font:<family>` and saved preset names continue to load unchanged.
+
+- [ ] **Step 1: Write failing tests.** In `terminal_typography_test.dart`, assert the pure selectors return
+  `Consolas` and the exact fallback list for `windows`, while `macos`, `ios`, `linux` and `web` keep their current
+  families. Assert `TerminalFontChoice.availableFor('windows')` offers a `Consolas` preset and no Linux-only face,
+  `defaultFor('windows')` is that preset, and every offered Windows chain reaches `Consolas`. In
+  `terminal_font_store_test.dart`, pin that an explicit saved `font:JetBrains Mono` or saved preset still loads and
+  that Reset uses the platform default; run the same assertions on Windows CI as well as the Mac.
+
+- [ ] **Step 2: Run the affected Flutter tests and confirm the new Windows assertions fail on current source.**
+  Run: `cd desktop && flutter test test/terminal_typography_test.dart test/terminal_font_store_test.dart`.
+
+- [ ] **Step 3: Implement only the platform font selection.** Add a Windows preset with `Consolas`, route fresh
+  default and Reset through it, and use the Windows fallback chain. Keep the existing storage keys and the 13.0
+  font size. Do not change the terminal renderer, global letter spacing or another platform's face list.
+
+- [ ] **Step 4: Verify Dart and Windows builds.** Rerun the two affected tests, `flutter analyze` on the four Dart
+  files, `dart format --output=none --set-exit-if-changed` on them, and `git diff --check`. Run the relevant Windows
+  desktop CI build/test on x64 and arm64 once for the resulting source; no extra manual run while automatic CI exists.
+
+- [ ] **Step 5: Verify appearance on an owned Windows GUI session.** Build the changed app on Dell x64 or use the
+  matching staging candidate in C5.2. Open a fresh terminal without a saved font override; show ASCII table columns,
+  box-drawing glyphs, and Vietnamese with tone marks. Confirm the Windows console's actual face in its Font settings
+  or with `GetCurrentConsoleFontEx`, compare side by side with the owner's PowerShell reference, and record screenshots
+  privately. Check that `m` and `i` have equal cell advance, columns stay straight, and normal typing/copy/paste still
+  work. Reset must return to `Consolas`; an explicitly selected installed font must survive relaunch. Do not touch
+  another user's VM terminal or `C:\work\e2e`.
+
+- [ ] **Step 6: Commit this task's source and tests only.** Suggested subject:
+  `fix(desktop): use Windows terminal font by default`. Keep the owner's separate plan/spec edits out of that commit.
+
 ### Phase C4 rulings
 
 - **The bin** is `harness-desktop-launcher`, renamed to `Harness.exe` by `package-windows.ps1`. A bin named `Harness` and B's `harness` are one file in `target\` on a case-insensitive file system.
@@ -22802,6 +22856,9 @@ git commit -m "feat(windows): install the desktop app by one command, irm .../de
 - **`dry_run` defaults to true**, so an on-demand run never publishes by accident.
 - **The release mode before merge (reconciliation).** `workflow_dispatch` needs the file on `main`, so while the TEMPORARY push trigger exists, a push whose head commit's subject is `ci(windows): desktop staging release <version>` (or `… staging dry run <version>`) runs the release mode. The `mode` job decides, and every job `needs` it. Push such an empty commit while the PR is a draft. A release run has its own concurrency group: it never cancels and is never cancelled. C5.3 removes the path.
 - **One-command install (C4.8, added after stitching at the owner's request).** `install.ps1 -App`, published again as `desktop/install.ps1` with its app line on, downloads this PC's zip and runs the zip's `Harness.exe --install`. PowerShell's download carries no mark of the web, so there is no SmartScreen prompt until D signs. It reuses B's download code rather than a second script. The app still installs the CLI itself.
+- **Windows terminal font (C4.9, added from the owner's VM screenshot).** A fresh Windows terminal uses `Consolas`
+  with real Windows monospace fallbacks. C5.2 visually compares it with standard Windows PowerShell before publishing
+  the next staging candidate.
 - **The workflow (reconciliation).** `build-test` gets the Rust toolchain once, in C4.1, right after checkout. The release jobs install Flutter as C1.4 does. The release artifacts are named `harness-desktop-zip-windows-<arch>`, apart from build-test's `harness-desktop-windows-<arch>` Release folders.
 
 ---
@@ -25346,6 +25403,11 @@ $D run clipboard.ps1 Read=true | tee -a "$EV/s2-terminal.log"                 # 
 $D shot s2-terminal Window=harness-desktop
 ```
 
+After C4.9, capture the fresh Windows terminal's default font beside a standard Windows PowerShell terminal on the
+same VM. The screenshots must show readable Vietnamese, straight ASCII/box-drawing columns, and normal compact
+monospaced spacing. Record the actual Windows console face and the Harness face in the private E2E report; an explicit
+saved font choice is checked separately so it does not mask the fresh default.
+
 Get an Add Phone code over the pipe (**UIA** to open it, **Script** to check):
 
 ```bash
@@ -25381,6 +25443,7 @@ Pass, scenario 2:
 - the agent was created in the app, and the doc says whether by UIA or a person;
 - the PTY driver's screen shows `WIN_42`; `^C` ended `ping -t` and the prompt came back; `PASTE_OK` pasted with
   Ctrl+Shift+V; Ctrl+Shift+C put `PASTE_OK` on the clipboard;
+- the default Windows terminal face and aligned cell grid pass the C4.9 side-by-side visual check;
 - `s2-add-phone.log` has `POST /api/auth/handoff → 200` in the app log, and no code in any log or screenshot;
 - `s2-restart.log` shows a new pipe id, `● running`, and a second `→ 200` after the restart;
 - the Mac's row is listed (masked).
