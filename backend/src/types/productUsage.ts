@@ -36,14 +36,33 @@ export const PRODUCT_USAGE_LONG_MEASURES = ['1m_to_5m', '5m_to_15m', '15m_to_1h'
  * `resumed`: the step started in an app run that did not sign in (reopened mid-step), so it is not a
  * new person; the rest are the step's own ways out or walls. The sign_in marks are counted with a
  * sign-in that went through: `retried`, an attempt before it in this app run failed or was
- * cancelled; `switched`, it used another button than the first one tried. */
+ * cancelled; `switched`, it used another button than the first one tried; `new_account`, the account
+ * was created by this sign-in (minutes old: its first Harness sign-in anywhere), not one coming back.
+ * `computer_wait_joined_after_leaving`: the computer the wait was for turned up after the app had left
+ * that screen, which ends the wait in no `ok` of its own (16–19 October 2026: 5 `ok` in 49 fresh waits,
+ * while 91% of the phone's people had a computer on the same account those days). */
 export const PRODUCT_USAGE_ONBOARDING_MARKS = ['ui_phone_sign_in_retried', 'ui_phone_sign_in_switched',
+  'ui_phone_sign_in_new_account',
+  // The steps after a sign-in that made its account: started (counted) and ended `ok` there, so the new
+  // people's funnel reads apart from everyone signing in again (mobile/lib/measurement/onboarding_measurement.dart).
+  'ui_phone_computer_wait_new_account', 'ui_phone_computer_wait_new_account_ok',
+  'ui_phone_session_open_new_account', 'ui_phone_session_open_new_account_ok',
+  'ui_phone_first_message_new_account', 'ui_phone_first_message_new_account_ok',
   'ui_phone_computer_wait_resumed', 'ui_phone_computer_wait_not_you',
-  'ui_phone_computer_wait_link_shared', 'ui_phone_session_open_resumed', 'ui_phone_session_open_blocked_password',
+  'ui_phone_computer_wait_link_shared', 'ui_phone_computer_wait_joined_after_leaving',
+  'ui_phone_session_open_resumed', 'ui_phone_session_open_blocked_password',
   'ui_phone_session_open_blocked_offline', 'ui_phone_first_message_resumed'] as const
 export const PRODUCT_USAGE_ONBOARDING_METRICS = [...PRODUCT_USAGE_ONBOARDING_MARKS,
   ...PRODUCT_USAGE_LONG_FLOWS.flatMap(flow => PRODUCT_USAGE_LONG_MEASURES.map(measure => `ui_phone_${flow}_${measure}` as const)),
 ] as const
+/** Why a phone launch's computers had not answered yet (mobile/lib/measurement/launch_measurement.dart,
+ * `LaunchWait`), each at most once per launch beside its `app_start`: the account's list had no computer,
+ * could not be read, or said every one was offline; a computer wanted this phone's password; a dial to a
+ * computer said to be online failed; or a minute passed on screen with none answering. On 2026-10-19 21 of
+ * 44 launches ended in no outcome at all, which said none of this. */
+export const PRODUCT_USAGE_PHONE_LAUNCH_MARKS = ['ui_phone_app_start_no_computer', 'ui_phone_app_start_list_failed',
+  'ui_phone_app_start_offline', 'ui_phone_app_start_locked', 'ui_phone_app_start_connect_failed',
+  'ui_phone_app_start_waited_1m'] as const
 /** The phone's two side pages, counted each time one opens and by how: a sideways swipe on the
  * terminal (Find from the left, Computers from the right), or a button (Computers' row in Settings,
  * its link on a long wait at home). Find's key and screen-reader actions are not counted. Which page
@@ -85,12 +104,18 @@ export const PRODUCT_USAGE_SETUP_METRICS = [...PRODUCT_USAGE_SURFACES.flatMap(su
   // download put its agent in place, and how long it took. Engine names only, never a path or log line.
   ...PRODUCT_USAGE_SETUP_DOWNLOADS.flatMap(engine => PRODUCT_USAGE_SETUP_DOWNLOAD_MEASURES
     .map(measure => `setup_desktop_agent_download_${engine}_${measure}` as const)),
+  // The phone's first launch after an install, once (a local flag, never sent): the step between a store's
+  // download and a sign-in, which nothing else counts. Signed in already at that launch, it is `ui_phone_first_open`.
+  'setup_phone_first_open',
 ] as const
 /** A new-harness, create or resume refusal outside the four fixed kinds (setup, auth, unavailable,
  * invalid), by its code: the daemon's own fixed error names, lower-cased. On 2026-10-16 production counted
  * 23 of 25 launch failures, 22 create refusals and 9 resume refusals as `other`, with nothing to say
  * which. `unlisted` is a code not named here, `none` a refusal that named no code; each family adds up to
- * its `_other` total, and the late failures to `launch_late_failed`. Codes only, never a message. */
+ * its `_other` total, and the late failures to `launch_late_failed`. A delete or restart refusal is counted
+ * by its code whatever its kind, so those two families add up to `delete_failed` and `restart_failed`: on
+ * 2026-10-19 the phone's 3 delete refusals were `other` and its 2 restart refusals `setup`, a kind of nine
+ * codes (listed below). Codes only, never a message. */
 export const LAUNCH_ERROR_CODES = [
   // What a new harness asked for, refused before anything starts (core/agents/launches.ts, lib/engineLaunch.ts).
   'invalid_codex_home', 'invalid_prompt', 'prompt_too_long', 'prompt_unsupported', 'invalid_agent', 'invalid_session',
@@ -114,16 +139,25 @@ export const LAUNCH_ERROR_CODES = [
   'restart_failed', 'restart_unsupported_backend', 'retarget_unsupported_backend', 'fork_on_grid_unsupported',
   'no_active_process', 'opencode_sqlite_missing', 'unavailable', 'missing_name', 'missing_update',
   'invalid_close_request', 'invalid_delete_request', 'close_failed', 'delete_failed',
+  // A Stop (`agent_delete`) the machine could not confirm, or whose harness changed while it saved
+  // (lib/stopAgentService.ts): 3 of the phone's 4 stops on 2026-10-19 were refused as `other`, the kind it falls under.
+  'stop_unconfirmed',
   // A guest on a machine shared with it (core/guestPolicy.ts, core/agents/guestCreate.ts, services/guestLaunches.ts).
   'guest_not_allowed', 'guest_unsupported', 'guest_harness', 'guest_unavailable', 'guest_helper_required',
   'guest_engine_unsupported', 'guest_relay_failed', 'guest_folder_unavailable', 'guest_invalid', 'guest_helper_missing',
   'guest_helper_not_authorized', 'guest_helper_failed',
+  // The `setup` kind's own codes, named for a delete or restart refusal (cli/src/lib/productUsageSignals.ts).
+  'tmux_unavailable', 'tmux_too_old_for_dsh', 'tmux_too_old_for_grid', 'engine_unavailable', 'native_launch_held',
+  'dsh_materialize_failed', 'spawn_failed', 'registration_failed', 'grid_config_failed',
   'unlisted', 'none',
 ] as const
 export type LaunchErrorCode = typeof LAUNCH_ERROR_CODES[number]
-/** The families counted by code: a launch's failure, its start failing after it was created, and the create
- * and resume requests' refusals. */
-export const LAUNCH_ERROR_FAMILIES = ['launch_failed_code', 'launch_late_failed_code', 'create_error_code', 'resume_error_code'] as const
+/** The families counted by code: a launch's failure, its start failing after it was created, the create
+ * and resume requests' `other` refusals, and every delete and restart refusal — from any client, and again,
+ * apart, those the phone asked for (`phone_`), which a daemon's report otherwise carries mixed with the
+ * Desktop's, the TUI's and tools'. */
+export const LAUNCH_ERROR_FAMILIES = ['launch_failed_code', 'launch_late_failed_code', 'create_error_code', 'resume_error_code',
+  'delete_error_code', 'restart_error_code', 'phone_delete_error_code', 'phone_restart_error_code'] as const
 /** The engine an installation's first launch asked for; any other engine is `other`. */
 export const PRODUCT_USAGE_LAUNCH_ENGINES = ['opencode', 'claude', 'codex', 'other'] as const
 export type ProductUsageLaunchEngine = typeof PRODUCT_USAGE_LAUNCH_ENGINES[number]
@@ -164,8 +198,10 @@ export const PRODUCT_USAGE_METRICS = [
     .map(measure => `${action}_user_${measure}` as const)),
   ...PRODUCT_USAGE_UI_METRICS,
   ...PRODUCT_USAGE_ONBOARDING_METRICS,
+  ...PRODUCT_USAGE_PHONE_LAUNCH_MARKS,
   ...PRODUCT_USAGE_PHONE_SCREEN_METRICS,
   ...PRODUCT_USAGE_ADD_PHONE_METRICS,
+  'ui_phone_first_open',
   // Written by the backend itself: a report that named counters this backend does not know yet, which
   // it kept without them (routes/productUsage.ts). One per report, never the names.
   'health_cli_report_unknown_metric', 'health_desktop_report_unknown_metric', 'health_phone_report_unknown_metric',

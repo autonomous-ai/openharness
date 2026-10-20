@@ -55,6 +55,7 @@ class PhoneSearchResults extends StatefulWidget {
     this.onOpen,
     this.showing,
     this.onNewHarness,
+    this.onNewTab,
     this.opening,
   });
 
@@ -66,6 +67,11 @@ class PhoneSearchResults extends StatefulWidget {
   /// (`+ New Harness in api`). Null leaves the row out.
   final void Function(({String machineId, String folder, String label})? place)?
   onNewHarness;
+
+  /// The `+` after the last tab chip: a New Tab, the desktop's — the new-agent form, and the
+  /// harness it makes opens a tab of its own. Drawn only where the chips are and the desk takes
+  /// writes ([AppNotifier.deskWritable]). Null leaves it out.
+  final VoidCallback? onNewTab;
 
   final AppNotifier notifier;
   final PhoneSearchController controller;
@@ -247,6 +253,7 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
               ],
               selected: tab?.id,
               onSelected: (id) => setState(() => _tabId = id),
+              onNewTab: widget.notifier.deskWritable ? widget.onNewTab : null,
             ),
           Expanded(
             child: _rowsDue

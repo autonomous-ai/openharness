@@ -1,4 +1,5 @@
 import '../core/app_version.dart';
+import '../core/install_source.dart';
 import '../core/test_run.dart';
 import '../measurement/launch_measurement.dart';
 import '../measurement/onboarding_measurement.dart';
@@ -195,6 +196,10 @@ class AgentCreationAttempt {
   /// The desk tab the agent joins once started, picked before it was asked for — see
   /// [PhoneDesk.adopt]. Null joins the tab the phone is in.
   String? _deskTabId;
+
+  /// The agent opens a desk tab of its own once started — the `+` at the end of Find's tab chips.
+  /// See [PhoneDesk.adopt].
+  bool _newDeskTab = false;
   Map<String, dynamic>? _choices;
   Future<String?>? _inFlight;
   bool _awaitingConfirmation = false, _finished = false;
@@ -436,8 +441,12 @@ class AppNotifier extends ChangeNotifier {
   late ApiClient api;
   late final ProductMeasurement productMeasurement;
 
-  /// The phone's onboarding steps after sign-in, counted through [productMeasurement].
-  late final onboardingMeasurement = OnboardingMeasurement(productMeasurement);
+  /// The phone's onboarding steps after sign-in, counted through [productMeasurement]. A wait for a
+  /// computer is remembered in the app's own store, for the launch that finds the computer.
+  late final onboardingMeasurement = OnboardingMeasurement(
+    productMeasurement,
+    storage: _paneLayout?.storage,
+  );
   final _measurementConnections = <String, void Function(ProductOutcome)>{};
 
   /// Each machine's dials, the person's (`connect_user`) apart from the app's own (`connect_auto`).
@@ -1301,6 +1310,8 @@ class AppNotifier extends ChangeNotifier {
     // a launch of this app.
     if (!kUnderTest && paneLayoutStore != null) {
       launchMeasurement = LaunchMeasurement(this.productMeasurement);
+      // The install's first launch, once: the step between a store's download and a sign-in.
+      unawaited(this.productMeasurement.noteFirstOpen());
     }
     addListener(_syncProductMeasurement);
     unawaited(_measurementContext());
@@ -1316,6 +1327,7 @@ class AppNotifier extends ChangeNotifier {
     try {
       release = await runningAppVersion();
     } catch (_) {}
+    final source = await installSource();
     if (_disposed) return;
     productMeasurement.context = {
       'surface': 'phone',
@@ -1329,7 +1341,8 @@ class AppNotifier extends ChangeNotifier {
         TargetPlatform.android => 'android',
         _ => 'other',
       },
-      'channel': kReleaseMode ? 'production' : 'development',
+      // A tester's build (TestFlight) is `testing`: the backend keeps its totals apart.
+      'channel': measurementChannel(release: kReleaseMode, source: source),
     };
   }
 
@@ -1868,6 +1881,8 @@ class AppNotifier extends ChangeNotifier {
       }
       if (me != null) {
         currentUser = CurrentUserProfile.fromMe(me);
+        // Made by a sign-in in this run, or coming back to it.
+        onboardingMeasurement.accountCreated(currentUser?.createdAt);
         // A sign-in by hand: the device log keeps which account it was made to.
         if (currentUser?.id case final id?) {
           unawaited(_deviceLog?.signedInAs(id));
@@ -2336,6 +2351,7 @@ class AppNotifier extends ChangeNotifier {
     // few seconds for a `harness link connect` run elsewhere, which a phone's links never come from.
     machine.needsLink = true;
     machine.agentLoadStatus = AgentLoadStatus.needsLink;
+    launchMeasurement?.waiting(LaunchWait.locked);
     // …unless the log already vouches for it and this phone's key is new to it: then the machine
     // has only not read that key yet — see [_redialOnceVouched].
     unawaited(_redialOnceVouched(machine.machine.machineId));
@@ -2531,6 +2547,12 @@ class AppNotifier extends ChangeNotifier {
       settling ? ConnectionStatus.connecting : nextStatus,
       ProductFlow.remoteConnect,
     );
+    // A socket retries only once a dial ended without the machine's welcome (`WsConn`).
+    if (nextStatus == ConnectionStatus.reconnecting &&
+        !machine.needsLink &&
+        _nodeOnlineFromStatus(machine.machine.status) == true) {
+      launchMeasurement?.waiting(LaunchWait.connectFailed);
+    }
     productConnections.status(
       machineId,
       connecting:
@@ -2662,6 +2684,11 @@ class AppNotifier extends ChangeNotifier {
         // (dropping [machinesLoading]); one that answers only after an earlier failure does not.
         if (!machinesLoading) notifyListeners();
       }
+    } catch (_) {
+      if (_authWorkCurrent(revision)) {
+        launchMeasurement?.waiting(LaunchWait.listFailed);
+      }
+      rethrow;
     } finally {
       if (_authWorkCurrent(revision)) _machinesFetchedFor = revision;
       // Said out loud: the list's own notify fires before this, so a flag
@@ -2711,6 +2738,16 @@ class AppNotifier extends ChangeNotifier {
     machines = list
         .where((machine) => machine.authMode == MachineAuthMode.remote)
         .toList();
+    // A wait for a computer that an earlier launch left open, with the computer now here.
+    if (machines.isNotEmpty) unawaited(onboardingMeasurement.computersSeen());
+    // What this launch's wait for a computer is up against, as the list says.
+    if (machines.isEmpty) {
+      launchMeasurement?.waiting(LaunchWait.noComputer);
+    } else if (machines.every(
+      (machine) => _nodeOnlineFromStatus(machine.status) == false,
+    )) {
+      launchMeasurement?.waiting(LaunchWait.offline);
+    }
     final visible = machines.map((machine) => machine.machineId).toSet();
     // A code scanned for a machine this account does not have can never be
     // spent: the pairing screen waits for that machine to show up locked.
@@ -6252,7 +6289,8 @@ class AppNotifier extends ChangeNotifier {
   /// picked — cannot be forgotten.
   ///
   /// [deskTabId] is the desk tab the agent joins once started — the one Find was narrowed to —
-  /// instead of the tab the phone is in. See [PhoneDesk.adopt].
+  /// instead of the tab the phone is in. [newDeskTab] opens a desk tab of its own for it instead —
+  /// Find's `+` at the end of the tab chips. See [PhoneDesk.adopt].
   Future<String?> createAgent(
     String machineId, {
     required String engine,
@@ -6267,6 +6305,7 @@ class AppNotifier extends ChangeNotifier {
     GridModel? model,
     String? swarmId,
     String? deskTabId,
+    bool newDeskTab = false,
     AgentCreationAttempt? attempt,
     String? prompt,
     String? name,
@@ -6299,13 +6338,23 @@ class AppNotifier extends ChangeNotifier {
       'gridModel': ?model?.id,
       'gridName': ?model?.grid,
     };
-    return _create(
+    final created = _create(
       machineId,
       choices,
       swarmId: swarmId,
       deskTabId: deskTabId,
+      newDeskTab: newDeskTab,
       attempt: creation,
     );
+    if (task == null || task.isEmpty) return created;
+    // A task typed into New Harness is a message sent to a session too: the onboarding's first
+    // message, if it is still waiting for one (`terminal_page.dart` counts every other send).
+    return created.then((error) {
+      if (error == null) {
+        onboardingMeasurement.end(ProductFlow.firstMessage, ProductOutcome.ok);
+      }
+      return error;
+    });
   }
 
   /// Clones on their way or still to be confirmed, by machine and source agent — see [cloneAgent].
@@ -6465,6 +6514,7 @@ class AppNotifier extends ChangeNotifier {
     Map<String, dynamic> choices, {
     String? swarmId,
     String? deskTabId,
+    bool newDeskTab = false,
     AgentCreationAttempt? attempt,
   }) {
     final creation = attempt ?? AgentCreationAttempt();
@@ -6483,6 +6533,7 @@ class AppNotifier extends ChangeNotifier {
       creation._targetId = swarmId ?? activeSwarmId;
       // With the request, not read again on a Check status: the tab picked is the one asked for.
       creation._deskTabId = deskTabId;
+      creation._newDeskTab = newDeskTab;
     }
     final work = _createAgentWithReceipt(creation);
     creation._inFlight = work;
@@ -6856,12 +6907,14 @@ class AppNotifier extends ChangeNotifier {
       return null;
     }
     // Created HERE, so it joins the tab this phone is in — the way an agent
-    // created in a window joins that window's tab — or the tab picked for it.
-    // See [PhoneDesk.adopt] for what happens when the phone is in no tab.
+    // created in a window joins that window's tab — or the tab picked for it,
+    // or a tab of its own. See [PhoneDesk.adopt] for what happens when the
+    // phone is in no tab.
     _desk.adopt(
       (machineId: machineId, agentId: agent.id),
       name: agent.displayName,
       tabId: creation._deskTabId,
+      newTab: creation._newDeskTab,
     );
     await assignAgentToPane(null, machineId, agent.id, swarmId: targetId);
     return null;
@@ -7363,15 +7416,32 @@ class AppNotifier extends ChangeNotifier {
 
   /// Deletes an agent via `agent_delete`. Returns null on success, or an error message to show
   /// inline in the caller's dialog.
+  ///
+  /// A refusal the machine says is worth asking again (`retryable`: `IDENTITY_UNAVAILABLE`, its
+  /// conversation file changing under the lookup) is asked again after [stopRetryDelays], before it
+  /// is shown. On 2026-10-19, 3 of the phone's 4 stops were refused as `other`, the kind this code
+  /// falls under. Any other refusal is shown at once — `STOP_UNCONFIRMED` asks for a look at the
+  /// harness first, not another stop.
   Future<String?> deleteAgent(String machineId, String agentId) async {
     final machine = machineStates[machineId];
     if (machine == null) return 'Machine not found';
     Map<String, dynamic> result;
-    try {
-      result = await _conn(machineId)
-          .request('agent_delete', payload: {'agentId': agentId});
-    } catch (error) {
-      return 'Delete failed: $error';
+    for (var attempt = 0; ; attempt++) {
+      try {
+        result = await _conn(machineId)
+            .request('agent_delete', payload: {'agentId': agentId});
+      } catch (error) {
+        return 'Delete failed: $error';
+      }
+      if (result['error'] is! String ||
+          result['retryable'] != true ||
+          attempt >= stopRetryDelays.length) {
+        break;
+      }
+      await Future<void>.delayed(stopRetryDelays[attempt]);
+      if (_disposed || machineStates[machineId] == null) {
+        return 'Machine not found';
+      }
     }
     final error = result['error'];
     if (error is String) return 'Delete failed: $error';
@@ -7382,6 +7452,14 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
     return null;
   }
+
+  /// How long [deleteAgent] waits before asking again after a refusal the machine marks `retryable`,
+  /// one entry per retry.
+  @visibleForTesting
+  List<Duration> stopRetryDelays = const [
+    Duration(seconds: 1),
+    Duration(seconds: 2),
+  ];
 
   /// Deletes on their way, by machine and agent — what a second press joins rather than reviewing
   /// the same harness twice.
@@ -10491,8 +10569,15 @@ class AppNotifier extends ChangeNotifier {
     _pausedAt ??= DateTime.now();
     _desk.pause();
     _stopDeafPoll();
+    // A socket waiting on a machine that is off stops dialling it while nobody is looking;
+    // [handleAppResumed]'s reconnectAll asks again the moment the phone is back
+    // ([WsConn.pauseParkedRecheck]).
+    for (final machine in machines) {
+      _heldConnection(machine.machineId)?.pauseParkedRecheck();
+    }
     // The agents this run learned between lists, for the next launch — see [_keepMachineCache].
     _keepMachineCache();
+    _sendMeasurementBeforeBackground();
   }
 
   /// When the app last went into the background ([handleAppPaused]); null while it is in front.
@@ -10550,8 +10635,25 @@ class AppNotifier extends ChangeNotifier {
 
   /// The app lost the foreground for a moment — the app switcher, a system sheet. Nothing stops;
   /// only the machine cache is written ([_keepMachineCache]), because the switcher is where an app
-  /// is closed, and closing it there need not pass through [handleAppPaused] first.
-  void handleAppInactive() => _keepMachineCache();
+  /// is closed, and closing it there need not pass through [handleAppPaused] first. The queued
+  /// counts go now too, for the same reason ([_sendMeasurementBeforeBackground]).
+  void handleAppInactive() {
+    _keepMachineCache();
+    _sendMeasurementBeforeBackground();
+  }
+
+  /// Whether leaving the screen sends the queued product counts ([ProductMeasurement
+  /// .sendBeforeBackground]). Off under test, where a report would go to the network; a test that
+  /// passes its own measurement turns it on.
+  @visibleForTesting
+  bool sendMeasurementBeforeBackground = !kUnderTest;
+
+  /// Counts kept in RAM are lost when iOS ends a suspended app; the minute's report may never come.
+  /// Never awaited: leaving the screen waits for nothing.
+  void _sendMeasurementBeforeBackground() {
+    if (!sendMeasurementBeforeBackground) return;
+    unawaited(productMeasurement.sendBeforeBackground());
+  }
 
   /// How often a phone with no machine connected reads the machine list again. Every push
   /// (`machines_changed`, `device_keys_changed`) reaches the phone over a machine's socket; with none

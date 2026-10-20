@@ -1078,6 +1078,59 @@ void main() {
       expect(rig.app.stateOf('m')!.agents.single.id, 'a');
     });
 
+    test('a stop the machine says to ask again is asked again, then goes', () async {
+      // IDENTITY_UNAVAILABLE: the conversation file changed under the machine's lookup.
+      final rig = await signedInWith({
+        'm': ['a', 'b'],
+      });
+      addTearDown(rig.app.dispose);
+      rig.app.stopRetryDelays = const [Duration.zero, Duration.zero];
+      var asked = 0;
+      rig.conn('m').answers['agent_delete'] = (_) => ++asked == 1
+          ? {'error': 'IDENTITY_UNAVAILABLE', 'held': true, 'retryable': true}
+          : {'deleted': true};
+
+      expect(await rig.app.deleteAgent('m', 'a'), isNull);
+
+      expect(rig.conn('m').payloadsOf('agent_delete'), hasLength(2));
+      expect(rig.app.stateOf('m')!.agents.map((a) => a.id), ['b']);
+    });
+
+    test('asks again at most twice, then says why', () async {
+      final rig = await signedInWith({
+        'm': ['a'],
+      });
+      addTearDown(rig.app.dispose);
+      rig.app.stopRetryDelays = const [Duration.zero, Duration.zero];
+      rig.conn('m').answers['agent_delete'] = (_) =>
+          {'error': 'IDENTITY_UNAVAILABLE', 'retryable': true};
+
+      expect(
+        await rig.app.deleteAgent('m', 'a'),
+        'Delete failed: IDENTITY_UNAVAILABLE',
+      );
+
+      expect(rig.conn('m').payloadsOf('agent_delete'), hasLength(3));
+      expect(rig.app.stateOf('m')!.agents.single.id, 'a');
+    });
+
+    test('a stop it could not confirm is not asked again', () async {
+      // STOP_UNCONFIRMED asks for a look at the harness first, not another stop.
+      final rig = await signedInWith({
+        'm': ['a'],
+      });
+      addTearDown(rig.app.dispose);
+      rig.app.stopRetryDelays = const [Duration.zero, Duration.zero];
+      rig.conn('m').answers['agent_delete'] = (_) => {'error': 'STOP_UNCONFIRMED'};
+
+      expect(
+        await rig.app.deleteAgent('m', 'a'),
+        'Delete failed: STOP_UNCONFIRMED',
+      );
+
+      expect(rig.conn('m').payloadsOf('agent_delete'), hasLength(1));
+    });
+
     test('a rename is trimmed, sent, and shown', () async {
       final rig = await signedInWith({
         'm': ['a'],

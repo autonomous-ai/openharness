@@ -848,13 +848,10 @@ class _TerminalPageState extends State<TerminalPage>
         ?.session;
     if (session?.voiceDeliver == _deliverVoice) session?.voiceDeliver = null;
     if (session?.onLineSent == _onLineSent) session?.onLineSent = null;
-    // Said once: leaving the session spends the onboarding's line too.
-    if (_spendFirstSessionLine()) {
-      widget.notifier.onboardingMeasurement.end(
-        ProductFlow.firstMessage,
-        ProductOutcome.cancelled,
-      );
-    }
+    // Said once: leaving the session spends the onboarding's line too. Not the onboarding's first
+    // message: a line sent in any other session still answers it ([_onLineSent]), and a sign-out
+    // ends it cancelled.
+    _spendFirstSessionLine();
     _barMessageTimer?.cancel();
     _barMessage.dispose();
     _scrollback.dispose();
@@ -1144,8 +1141,11 @@ class _TerminalPageState extends State<TerminalPage>
         ),
       ),
     );
-    if (!_spendFirstSessionLine()) return;
+    // The onboarding's first message is the first line sent after the hand-over in ANY session, not
+    // only the one it opened: a person signing in again may go straight to a session of their own,
+    // which read as no first message (1 in 3 on 2026-10-19). Nothing once it has ended.
     onboarding.end(ProductFlow.firstMessage, ProductOutcome.ok);
+    if (!_spendFirstSessionLine()) return;
     setState(() {});
   }
 
@@ -3108,7 +3108,7 @@ class _TerminalPageState extends State<TerminalPage>
     if (agent.canFork && !agent.isStopped)
       PhoneSheetAction(
         icon: LucideIcons.gitFork300,
-        label: 'Fork…',
+        label: 'Fork',
         value: _forking ? 'forking…' : null,
         onTap: () => unawaited(_fork()),
       ),
@@ -3125,7 +3125,7 @@ class _TerminalPageState extends State<TerminalPage>
       ),
     PhoneSheetAction(
       icon: LucideIcons.pencil300,
-      label: 'Rename…',
+      label: 'Rename',
       onTap: () => showAgentRenameDialog(
         context,
         widget.notifier,
@@ -3317,7 +3317,7 @@ class _TerminalPageState extends State<TerminalPage>
   PhoneSheetAction _stopAction(Agent agent) => PhoneSheetAction(
     icon: LucideIcons.trash2300,
     // The least used thing here: small at the foot, not a full red row (it still confirms).
-    label: 'Stop this harness…',
+    label: 'Stop this harness',
     destructive: true,
     quiet: true,
     onTap: () => unawaited(
@@ -3379,7 +3379,7 @@ class _TerminalPageState extends State<TerminalPage>
     );
     return PhoneSheetAction(
       icon: LucideIcons.trash300,
-      label: deleting ? 'Deleting…' : 'Delete this harness…',
+      label: deleting ? 'Deleting…' : 'Delete this harness',
       enabled: !deleting,
       destructive: true,
       quiet: true,

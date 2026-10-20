@@ -222,9 +222,9 @@ class PhoneDesk {
   /// (the desk is empty, or the person is in the group for agents no tab holds):
   /// the agent is then exactly where it would have been anyway.
   ///
-  /// [name] is the agent's own, and it is used only by [openNextAgentInNewTab]
-  /// — a tab made for one agent is named after it, which is what a window does
-  /// with a tab it opens.
+  /// [name] is the agent's own, and it is used only for a tab of its own
+  /// ([newTab], [openNextAgentInNewTab]) — a tab made for one agent is named
+  /// after it, which is what a window does with a tab it opens.
   ///
   /// [tabId] is a tab the person picked for this agent before asking for it —
   /// Find narrowed to a tab when New Harness was tapped — and it wins over the
@@ -232,9 +232,20 @@ class PhoneDesk {
   /// so still names the tab Find was opened over. The phone is in the picked tab
   /// from here, as it is after [createTabFor]. A tab closed on another computer
   /// while the form was open falls back to the tab the phone is in.
-  void adopt(AgentRef agent, {String? name, String? tabId}) {
+  ///
+  /// [newTab] is the `+` at the end of Find's tab chips: the agent opens a tab
+  /// of its own ([createTabFor]), the way the desktop's `+` opens a New Tab that
+  /// becomes everyone's tab once its first harness is in it. It travels with
+  /// the request rather than being armed here, so only the agent asked for
+  /// from that `+` gets the tab — never a fork or a form opened later.
+  void adopt(
+    AgentRef agent, {
+    String? name,
+    String? tabId,
+    bool newTab = false,
+  }) {
     if (!_state.enabled) return;
-    final wanted = _newTabForNextAgent;
+    final wanted = newTab || _newTabForNextAgent;
     final wantedName = _newTabName;
     _newTabForNextAgent = false;
     _newTabName = null;

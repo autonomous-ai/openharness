@@ -6,6 +6,9 @@ export const HEALTH_ACTIONS = ['create', 'resume', 'restart', 'model_change', 'h
   'search', 'history_page', 'store_list', 'store_install', 'store_update', 'store_remove',
   'model_list', 'model_download', 'model_start', 'model_stop', 'browser_open', 'message'] as const
 export const HEALTH_RESULTS = ['started', 'ok', 'failed', 'pending', 'cancelled', 'unknown'] as const
+/** The fixed polls an app makes on its own, which count under `automatic` whichever app makes them
+ *  (`PRODUCT_USAGE_AUTOMATIC_ACTIONS`); the phone's are counted again, apart, under `phone_automatic`. */
+export const AUTOMATIC_POLL_ACTIONS = ['history', 'history_page', 'store_list', 'model_list'] as const
 export const HEALTH_FAILURES = ['setup', 'auth', 'unavailable', 'invalid', 'not_found', 'conflict', 'timeout', 'other'] as const
 export const HEALTH_FLOWS = ['app_start', 'workspace_ready', 'viewer_load', 'update_apply', 'update_relaunch',
   'connect_user', 'connect_auto', 'resume_recovery'] as const
@@ -50,6 +53,11 @@ export const PRODUCT_HEALTH_METRICS = [
     ...HEALTH_RESULTS.map(result => `request_${source}_${action}_${result}` as const),
     ...HEALTH_FAILURES.map(failure => `request_${source}_${action}_error_${failure}` as const),
   ])),
+  // Of `automatic`, the phone's own again: until then the Desktop's and the phone's polls read as one total.
+  ...AUTOMATIC_POLL_ACTIONS.flatMap(action => [
+    ...HEALTH_RESULTS.map(result => `request_phone_automatic_${action}_${result}` as const),
+    ...HEALTH_FAILURES.map(failure => `request_phone_automatic_${action}_error_${failure}` as const),
+  ]),
 ] as const
 export type ProductHealthMetric = typeof PRODUCT_HEALTH_METRICS[number]
 export type HealthSource = typeof HEALTH_SOURCES[number]
@@ -57,7 +65,8 @@ export interface ProductUsageContext {
   surface: 'cli' | 'desktop' | 'phone'
   release: string
   platform: 'macos' | 'linux' | 'windows' | 'ios' | 'android' | 'other'
-  channel: 'production' | 'development'
+  // `testing`: a tester's build of a store release (the phone from TestFlight), kept apart from the totals.
+  channel: 'production' | 'development' | 'testing'
 }
 /** Public numeric release only. Custom build names, hashes and suffixes cannot become labels. */
 export function releaseBucket(value: unknown): string {
@@ -67,7 +76,7 @@ export function cleanUsageContext(value: unknown): ProductUsageContext | undefin
   if (!value || typeof value !== 'object') return
   const c = value as ProductUsageContext
   if (!['cli', 'desktop', 'phone'].includes(c.surface) || !['macos', 'linux', 'windows', 'ios', 'android', 'other'].includes(c.platform)
-      || !['production', 'development'].includes(c.channel)) return
+      || !['production', 'development', 'testing'].includes(c.channel)) return
   return { surface: c.surface, release: releaseBucket(c.release), platform: c.platform, channel: c.channel }
 }
 

@@ -33,7 +33,7 @@ import 'set_up_computer.dart' show StepsTimeline, goToSteps;
 ///        └─────────────────────┘
 ///      Looking for your computer▌
 ///
-///   (1) Install Harness                  what to do there ([GoToComputer])
+///   (1) Download and install Harness     what to do there ([GoToComputer])
 ///    │
 ///   (2) Sign in
 ///       Use ada@gmail.com

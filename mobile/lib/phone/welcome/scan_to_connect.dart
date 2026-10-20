@@ -32,7 +32,7 @@ const kAddPhoneWhere = 'Harness menu → Add Phone';
 ///   How to get the QR code                    ([steps]; "Signing in…" over them while it does)
 ///   (1) On your computer, go to
 ///       autonomous.ai/go ⇪                    ②'s address as words, sending the link
-///       Install Harness
+///       Download and install Harness
 ///   (2) Sign in
 ///   (3) Click "Add Phone"
 ///       Harness menu → Add Phone

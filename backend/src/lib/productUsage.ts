@@ -53,6 +53,36 @@ export async function ingestSetupUsage(report: SetupUsageReport, now = new Date(
   return ingestCounters(report)
 }
 
+// Which accounts are the team's, by id, as [apartPrefix] last read them: an email does not change under its
+// id, and a report a minute from every app should not cost a lookup each. Bounded; cleared when full.
+const staffAccounts = new Map<string, boolean>()
+const STAFF_ACCOUNTS_MAX = 10_000
+
+/**
+ * The prefix a report's totals are kept under, apart from the ones every review reads (`usage:daily` asks for
+ * none of these): `testing:` for a tester's build (the phone from TestFlight, `context.channel: 'testing'`),
+ * `staff:` for the team's own accounts (`@autonomous.ai`, as activity marks already flag them). On 16–19 October
+ * 2026 the team was 8–30% of the phone's people each day, and a TestFlight build's counts were the App Store's.
+ * Kept, not dropped, so either can still be read on its own. Signed-out setup reports have no account to ask.
+ *
+ * Read inside the admitted transaction, beside the permission check: a lookup ahead of admission would put a
+ * database read per report outside the bound that admission keeps on this process.
+ */
+async function apartPrefix(tx: Pick<Prisma.TransactionClient, 'user'>, context: ProductUsageContext | undefined,
+  userId: string | undefined): Promise<string> {
+  if (context?.channel === 'testing') return 'testing:'
+  if (!userId) return ''
+  let staff = staffAccounts.get(userId)
+  if (staff === undefined) {
+    const user = await tx.user.findUnique({ where: { id: userId }, select: { email: true } })
+    staff = !!user?.email.toLowerCase().endsWith(STAFF_EMAIL)
+    if (staffAccounts.size >= STAFF_ACCOUNTS_MAX) staffAccounts.clear()
+    staffAccounts.set(userId, staff)
+  }
+  return staff ? 'staff:' : ''
+}
+export function resetStaffAccountsForTests(): void { staffAccounts.clear() }
+
 async function ingestCounters(report: SetupUsageReport & { revision?: number; context?: ProductUsageContext }, userId?: string, now = new Date()) {
   if (report.context?.channel === 'development') return { accepted: true, reason: 'DEVELOPMENT' }
   const increments: UsageIncrement[] = []
@@ -79,10 +109,11 @@ async function ingestCounters(report: SetupUsageReport & { revision?: number; co
             if (!choice.enabled || choice.revision !== report.revision) return { accepted: false, reason: 'CHOICE_CHANGED', ...choice }
           }
           // Receipt and increments commit together; a lost HTTP response can be retried with the same id.
+          const apart = await apartPrefix(tx, report.context, userId)
           await tx.productUsageReceipt.create({ data: {
             id: report.id, expiresAt: new Date(Date.parse(report.day) + (PRODUCT_USAGE_DAYS + 1) * DAY),
           } })
-          await incrementUsageTotals(tx, increments)
+          await incrementUsageTotals(tx, apart ? increments.map(i => ({ ...i, metric: apart + i.metric })) : increments)
           return { accepted: true }
         })
       } catch (error) {

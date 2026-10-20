@@ -115,13 +115,17 @@ it('takes the CLI\'s launch codes, late launch failures and first launches by en
   const counters = { launch_failed_other: 2, launch_failed_code_invalid_prompt: 1, launch_failed_code_unlisted: 1,
     launch_late_failed: 1, launch_late_failed_code_engine_did_not_start: 1, create_error_code_none: 1,
     resume_error_code_session_not_found: 1, first_launch_engine_claude: 1, first_launch_claude_signed_in: 1,
-    first_launch_engine_other: 1, first_launch_codex_unknown: 1 }
+    first_launch_engine_other: 1, first_launch_codex_unknown: 1,
+    // Every delete and restart refusal by its code, the `setup` kind's own included.
+    delete_error_code_delete_failed: 1, restart_error_code_spawn_failed: 1, restart_error_code_internal: 1,
+    // The phone's again, apart.
+    phone_delete_error_code_delete_failed: 1, phone_restart_error_code_spawn_failed: 1 }
   expect((await submit({ ...good, context, counters })).statusCode).toBe(200)
   expect(methods.ingestProductUsage).toHaveBeenCalledWith('account', expect.objectContaining({ counters }))
   methods.ingestProductUsage.mockClear()
   // A name outside the list is never stored: the report keeps its known counters without it (an unknown
   // name no longer refuses the whole report), and alone it is still refused.
-  for (const name of ['launch_failed_code_PRIVATE_CANARY', 'launch_failed_code_ENGINE_DID_NOT_START', 'restart_error_code_internal',
+  for (const name of ['launch_failed_code_PRIVATE_CANARY', 'launch_failed_code_ENGINE_DID_NOT_START', 'fork_error_code_internal',
     'first_launch_engine_cursor', 'first_launch_opencode_signed_in', 'launch_late_failed_other']) {
     const response = await submit({ ...good, context, counters: { launch_late_failed: 1, [name]: 1 } })
     expect(response.statusCode, name).toBe(200)
@@ -145,9 +149,10 @@ it('takes how the phone opened Find or Computers, and the phone\'s own requests,
   const context = { surface: 'phone', release: '1.0.4', platform: 'ios', channel: 'production' }
   const counters = { ui_phone_screen_find_swipe: 2, ui_phone_screen_find_button: 1, ui_phone_screen_computers_swipe: 1,
     ui_phone_screen_computers_button: 1, request_phone_create_started: 1, request_phone_resume_error_other: 1,
-    request_phone_resume_reason_busy: 1 }
+    request_phone_resume_reason_busy: 1, request_phone_automatic_history_ok: 1, request_phone_automatic_store_list_error_timeout: 1 }
   expect((await submit({ ...good, context, counters })).statusCode).toBe(200)
-  for (const name of ['ui_phone_screen_settings_swipe', 'ui_phone_screen_find_pinch', 'ui_desktop_screen_find_swipe']) {
+  for (const name of ['ui_phone_screen_settings_swipe', 'ui_phone_screen_find_pinch', 'ui_desktop_screen_find_swipe',
+    'request_phone_automatic_create_ok', 'request_desktop_automatic_history_ok']) {
     expect((await submit({ ...good, context, counters: { [name]: 1 } })).statusCode).toBe(400)
   }
 })
@@ -162,6 +167,13 @@ it('takes the Desktop\'s Add Phone card and each way into Add Phone, and no othe
   for (const name of ['ui_desktop_add_phone_welcome', 'ui_desktop_add_phone_qr', 'ui_phone_add_phone_offer', 'ui_web_add_phone_command']) {
     expect((await submit({ ...good, context, counters: { [name]: 1 } })).statusCode).toBe(400)
   }
+})
+
+it('takes a tester\'s build as its own channel, and the phone\'s new onboarding names, and no other channel', async () => {
+  const context = { surface: 'phone', release: '1.0.7', platform: 'ios', channel: 'testing' }
+  const counters = { ui_phone_first_open: 1, ui_phone_sign_in_new_account: 1, ui_phone_computer_wait_joined_after_leaving: 1 }
+  expect((await submit({ ...good, context, counters })).statusCode).toBe(200)
+  expect((await submit({ ...good, context: { ...context, channel: 'beta' } })).statusCode).toBe(400)
 })
 
 it('rejects extra context, custom versions and device fingerprints without echoing them', async () => {

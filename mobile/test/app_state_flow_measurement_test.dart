@@ -1,5 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/models.dart';
+import 'package:harness_mobile/measurement/launch_measurement.dart';
+import 'package:harness_mobile/measurement/onboarding_measurement.dart';
 import 'package:harness_mobile/measurement/product_measurement.dart';
 
 import 'viewer_app_fixture.dart';
@@ -19,8 +23,15 @@ void main() {
   });
 
   /// A signed-in phone whose account shares product usage.
-  Future<ViewerRig> sharing(Map<String, List<String>> agents) async {
-    final rig = await signedInWith(agents, productMeasurement: usage);
+  Future<ViewerRig> sharing(
+    Map<String, List<String>> agents, {
+    MemoryKeyValueStore? storage,
+  }) async {
+    final rig = await signedInWith(
+      agents,
+      storage: storage,
+      productMeasurement: usage,
+    );
     addTearDown(rig.app.dispose);
     await usage.flush();
     expect(usage.sharing, isTrue);
@@ -41,6 +52,52 @@ void main() {
     }
     return total;
   }
+
+  group('leaving the screen', () {
+    // iOS suspends an app within seconds and may end it unannounced; counts still in RAM go with
+    // it. The once-a-minute report is not waited for.
+
+    /// A sharing phone that counted a dial and has not reported it yet; [send] as given.
+    Future<(ViewerRig, int)> dialled({required bool send}) async {
+      final rig = await sharing({'m': []});
+      final before = rig.api.usageReports.length;
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
+      rig.app.sendMeasurementBeforeBackground = send;
+      return (rig, before);
+    }
+
+    Iterable<Object?> sentSince(ViewerRig rig, int before) => rig
+        .api
+        .usageReports
+        .skip(before)
+        .expand((report) => (report['counters'] as Map).keys);
+
+    test(
+      'sends the queued counts when the app goes to the background',
+      () async {
+        final (rig, before) = await dialled(send: true);
+        rig.app.handleAppPaused();
+        await pumpEventQueue();
+        expect(sentSince(rig, before), contains('ui_phone_remote_connect_ok'));
+      },
+    );
+
+    test('and when it loses the foreground (the app switcher)', () async {
+      final (rig, before) = await dialled(send: true);
+      rig.app.handleAppInactive();
+      await pumpEventQueue();
+      expect(sentSince(rig, before), contains('ui_phone_remote_connect_ok'));
+    });
+
+    test('sends nothing when that is switched off', () async {
+      final (rig, before) = await dialled(send: false);
+      rig.app.handleAppPaused();
+      rig.app.handleAppInactive();
+      await pumpEventQueue();
+      expect(sentSince(rig, before), isEmpty);
+    });
+  });
 
   group('dials', () {
     test('a socket coming back by itself is the app\'s own', () async {
@@ -214,6 +271,190 @@ void main() {
         expect(rig.api.usageChoiceAsks, [null]);
         expect(usage.signedOutSharing, isFalse);
         expect(kept(storage), 'false');
+      },
+    );
+  });
+
+  group('what the account itself tells the onboarding', () {
+    test(
+      'a wait an earlier launch left open, its computer now on the account',
+      () async {
+        final storage = MemoryKeyValueStore()
+          ..values[OnboardingMeasurement.waitingKey] = '1';
+        final rig = await sharing({'m': []}, storage: storage);
+        expect(await sent(rig, 'computer_wait'), {
+          'ui_phone_computer_wait_joined_after_leaving': 1,
+        });
+        expect(
+          storage.values,
+          isNot(contains(OnboardingMeasurement.waitingKey)),
+        );
+
+        await rig.app.refreshMachines();
+        await settle();
+        expect(await sent(rig, 'computer_wait'), {
+          'ui_phone_computer_wait_joined_after_leaving': 1,
+        }, reason: 'once');
+      },
+    );
+
+    test('a wait left open, still with no computer, is kept', () async {
+      final storage = MemoryKeyValueStore()
+        ..values[OnboardingMeasurement.waitingKey] = '1';
+      final rig = await sharing({}, storage: storage);
+      expect(await sent(rig, 'computer_wait'), isEmpty);
+      expect(storage.values[OnboardingMeasurement.waitingKey], '1');
+    });
+
+    Future<ViewerRig> signingIn(DateTime createdAt) async {
+      final rig = viewerApp(signedIn: false, productMeasurement: usage);
+      addTearDown(rig.app.dispose);
+      rig.api.profile = {
+        'user': {
+          'id': 'u1',
+          'email': 'pat@example.com',
+          'createdAt': createdAt.toUtc().toIso8601String(),
+        },
+      };
+      await rig.app.signInWithCode(email: 'pat@example.com', code: '1234');
+      await settle();
+      return rig;
+    }
+
+    test('a sign-in that made its account says so', () async {
+      final rig = await signingIn(
+        DateTime.now().subtract(const Duration(seconds: 5)),
+      );
+      expect(
+        await sent(rig, 'sign_in'),
+        allOf([
+          containsPair('ui_phone_sign_in_ok', 1),
+          containsPair('ui_phone_sign_in_new_account', 1),
+        ]),
+      );
+    });
+
+    test('a sign-in to an older account is a return', () async {
+      final rig = await signingIn(
+        DateTime.now().subtract(const Duration(days: 30)),
+      );
+      final signIn = await sent(rig, 'sign_in');
+      expect(signIn, containsPair('ui_phone_sign_in_ok', 1));
+      expect(signIn, isNot(contains('ui_phone_sign_in_new_account')));
+    });
+
+    test('a launch already signed in made no account', () async {
+      final rig = viewerApp(productMeasurement: usage);
+      addTearDown(rig.app.dispose);
+      rig.api.profile = {
+        'user': {
+          'id': 'u1',
+          'email': 'pat@example.com',
+          'createdAt': DateTime.now().toUtc().toIso8601String(),
+        },
+      };
+      await rig.app.bootstrap();
+      await settle();
+      expect(await sent(rig, 'sign_in'), isEmpty);
+    });
+  });
+
+  group('what a launch back to work waited on', () {
+    /// A launch that came back signed in, its computers [machines], counted as the app counts one.
+    Future<ViewerRig> launching(
+      Future<List<Machine>> Function() machines,
+    ) async {
+      final rig = viewerApp(productMeasurement: usage);
+      addTearDown(rig.app.dispose);
+      rig.app.launchMeasurement = LaunchMeasurement(
+        usage,
+        observeLifecycle: false,
+        sinceLaunch: () => const Duration(seconds: 3),
+      );
+      rig.api.onMachines = machines;
+      await rig.app.bootstrap();
+      await settle();
+      return rig;
+    }
+
+    Future<Set<String>> waits(ViewerRig rig) async => {
+      for (final metric in (await sent(rig, 'app_start')).keys)
+        for (final why in LaunchWait.values)
+          if (metric == 'ui_phone_app_start_${why.wire}') why.wire,
+    };
+
+    test('an account with no computer', () async {
+      final rig = await launching(() async => const []);
+      expect(
+        await sent(rig, 'app_start'),
+        containsPair('ui_phone_app_start_started', 1),
+      );
+      expect(await waits(rig), {'no_computer'});
+    });
+
+    test('every computer reported offline', () async {
+      final rig = await launching(
+        () async => [
+          remoteMachine('m', status: 'offline'),
+          remoteMachine('n', status: 'stopped'),
+        ],
+      );
+      expect(await waits(rig), {'offline'});
+    });
+
+    test('one computer still online is not offline', () async {
+      final rig = await launching(
+        () async => [remoteMachine('m', status: 'offline'), remoteMachine('n')],
+      );
+      expect(await waits(rig), isEmpty);
+    });
+
+    test('a list that cannot be read', () async {
+      final rig = await launching(() async => throw StateError('offline'));
+      expect(await waits(rig), {'list_failed'});
+    });
+
+    test('a computer that wants this phone\'s password', () async {
+      final rig = await launching(() async => [remoteMachine('m')]);
+      rig.app.trustSettleRound = const Duration(milliseconds: 20);
+      // Each dial again is refused again: nothing vouches for this phone there.
+      rig.app.onRedialForTest = (id) => scheduleMicrotask(
+        () => rig.app.localFailureForTest(id, 4404, 'NO_PEER_LINK'),
+      );
+      rig.app.localFailureForTest('m', 4404, 'NO_PEER_LINK');
+      for (var i = 0; i < 100 && !rig.app.stateOf('m')!.needsLink; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(rig.app.stateOf('m')!.needsLink, isTrue);
+      expect(await waits(rig), {'locked'});
+    });
+
+    test(
+      'a dial to a computer said to be online that fails, until one answers',
+      () async {
+        final rig = await launching(
+          () async => [
+            remoteMachine('m'),
+            remoteMachine('n', status: 'offline'),
+          ],
+        );
+        rig.app.connectionStatusForTest('n', ConnectionStatus.connecting);
+        rig.app.connectionStatusForTest('n', ConnectionStatus.reconnecting);
+        expect(await waits(rig), isEmpty, reason: 'n is offline');
+
+        rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+        rig.app.connectionStatusForTest('m', ConnectionStatus.reconnecting);
+        rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
+        expect(await waits(rig), {'connect_failed'});
+        expect(
+          await sent(rig, 'app_start'),
+          containsPair('ui_phone_app_start_ok', 1),
+        );
+
+        // Answered: what follows is not the launch's.
+        rig.app.connectionStatusForTest('m', ConnectionStatus.reconnecting);
+        rig.app.localFailureForTest('m', 4404, 'NO_PEER_LINK');
+        expect(await waits(rig), {'connect_failed'});
       },
     );
   });

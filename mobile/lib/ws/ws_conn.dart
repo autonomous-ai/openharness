@@ -135,9 +135,31 @@ class WsConn {
   bool _parked = false;
   bool get isParked => _parked;
 
-  /// How long a parked connection waits before it dials again of its own accord, with nothing having
-  /// said the machine is back — the fallback under [wake], not the way back.
+  /// How long a parked connection first waits before it dials again of its own accord, with nothing
+  /// having said the machine is back — the fallback under [wake], not the way back.
+  ///
+  /// ⚠️ **Each such recheck waits twice as long as the one before, up to [_parkedRecheckCeiling]
+  /// (2026-10-20).** At a flat minute, an app left open beside a machine that is switched off
+  /// dialled it sixty times an hour for as long as it stayed open — a simulator left running did
+  /// exactly that through 2026-10-19/20, while the relay counted 15,104 phone sockets against 344
+  /// the day before and the people using the phone stayed level. Each dial is a token, a key mint
+  /// on this thread and a TLS handshake here, and an auth, a lookup and a write at the relay.
+  /// Nothing is slower to come back for it: the relay's push, `/api/machines`, a tap and the app's
+  /// return all [wake] it at once and start the waits over.
   static const _parkedRecheck = Duration(seconds: 60);
+  static const _parkedRecheckCeiling = Duration(minutes: 15);
+
+  /// The rechecks this connection has dialled in a row on its own ([wake] with `recheck`), each
+  /// one parked again: what [parkedRecheckAfter] doubles the next wait by.
+  int _parkedRechecks = 0;
+
+  /// The wait before a parked connection's next recheck after [rechecks] of them in a row:
+  /// a minute, then 2, 4, 8, and 15 at most.
+  @visibleForTesting
+  static Duration parkedRecheckAfter(int rechecks) {
+    final wait = _parkedRecheck * (1 << min(max(rechecks, 0), 4));
+    return wait > _parkedRecheckCeiling ? _parkedRecheckCeiling : wait;
+  }
 
   /// This socket's `e2e_hello` went out right behind its `machine_select`, so the select's ack must
   /// not send another — see [connect]. Reset on every dial.
@@ -633,7 +655,7 @@ class WsConn {
   /// status changes down every socket (`machines_status`), so the app hears this machine come back
   /// through it — or through any other machine's socket, or `/api/machines` — and calls [wake]. A
   /// welcome that arrives anyway (the relay was wrong) still makes it ready ([_markReady]). With
-  /// nothing heard at all, it dials again after [_parkedRecheck].
+  /// nothing heard at all, it dials again after [parkedRecheckAfter] — longer each time.
   ///
   /// Only a connection that never became ready: a live session's machine going away is the
   /// `node_status` the app already handles, on a socket that is still up.
@@ -643,12 +665,26 @@ class WsConn {
     _selectWatchdog?.cancel();
     _selectWatchdog = null;
     _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(_parkedRecheck, () => wake('recheck'));
+    final wait = parkedRecheckAfter(_parkedRechecks);
+    _reconnectTimer = Timer(wait, () => wake(_recheck));
     appLog.info(
       'ws',
       'parked $machineId · the relay says it is offline; '
-          'waiting for it (recheck ${_parkedRecheck.inSeconds}s)',
+          'waiting for it (recheck ${wait.inSeconds}s)',
     );
+  }
+
+  /// [wake]'s reason when nothing said the machine is back: the parked connection's own timer.
+  static const _recheck = 'recheck';
+
+  /// The app has gone to the background: a parked connection stops dialling again on its own. A
+  /// phone that runs no code would not have dialled anyway, but one that still does (Android for a
+  /// while, a simulator) was dialling for nobody. Nothing else changes: it stays parked, a push still
+  /// [wake]s it, and coming back to the front asks again at once ([reconnectNow]).
+  void pauseParkedRecheck() {
+    if (!_parked) return;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
   }
 
   /// Dial a parked connection now — its machine was reported back ([reason] goes to the log).
@@ -656,6 +692,9 @@ class WsConn {
   void wake(String reason) {
     if (!_parked) return;
     _parked = false;
+    // Its own recheck makes the next wait longer; anything else — the machine reported back,
+    // somebody asking for it — starts the waits over.
+    _parkedRechecks = reason == _recheck ? _parkedRechecks + 1 : 0;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     if (_closing || _ready) return;
@@ -680,6 +719,7 @@ class WsConn {
       _reconnectTimer?.cancel();
       _reconnectTimer = null;
     }
+    _parkedRechecks = 0;
     _ready = true;
     _attempt = 0;
     onStatus(ConnectionStatus.connected);
@@ -1268,6 +1308,7 @@ class WsConn {
     _closing = true;
     _ready = false;
     _parked = false;
+    _parkedRechecks = 0;
     _codec = null;
     _disposePlugin();
     _reconnectTimer?.cancel();

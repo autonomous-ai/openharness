@@ -675,11 +675,11 @@ void main() {
     testWidgets('Fork is offered where the machine can fork, and not on a '
         'terminal', (tester) async {
       var focus = await openMenu(tester);
-      expect(find.text('Fork…'), findsOneWidget);
+      expect(find.text('Fork'), findsOneWidget);
       await focus.close();
 
       focus = await openMenu(tester, engine: 'terminal');
-      expect(find.text('Fork…'), findsNothing);
+      expect(find.text('Fork'), findsNothing);
       await focus.close();
     });
 
@@ -687,7 +687,7 @@ void main() {
         'fork opens and the source is left as it was', (tester) async {
       final conn = forking();
       final focus = await openMenu(tester, connection: conn);
-      await tapInView(tester, find.text('Fork…'));
+      await tapInView(tester, find.text('Fork'));
       await frames(tester);
 
       expect(find.text('Fork Harness'), findsOneWidget);
@@ -735,7 +735,7 @@ void main() {
         },
       );
       final focus = await openMenu(tester, connection: conn);
-      await tapInView(tester, find.text('Fork…'));
+      await tapInView(tester, find.text('Fork'));
       await frames(tester);
       await tester.tap(find.byKey(const Key('fork-confirm')));
       await frames(tester);
@@ -749,7 +749,7 @@ void main() {
     testWidgets('Fork with no name is not sent', (tester) async {
       final conn = forking();
       final focus = await openMenu(tester, connection: conn);
-      await tapInView(tester, find.text('Fork…'));
+      await tapInView(tester, find.text('Fork'));
       await frames(tester);
       await tester.enterText(find.byKey(const Key('fork-name')), '  ');
       await tester.tap(find.byKey(const Key('fork-confirm')));
@@ -768,7 +768,7 @@ void main() {
       final focus = await openMenu(tester, connection: conn);
       setPhone(tester, smallPhone);
       await frames(tester);
-      await tapInView(tester, find.text('Fork…'));
+      await tapInView(tester, find.text('Fork'));
       await frames(tester);
       raiseKeyboard(tester);
       await frames(tester);
@@ -798,7 +798,7 @@ void main() {
       final reply = Completer<Map<String, dynamic>>();
       final forkConn = _HeldForkConn(reply.future)..handshaken = true;
       final focus = await openMenu(tester, connection: forkConn);
-      await tapInView(tester, find.text('Fork…'));
+      await tapInView(tester, find.text('Fork'));
       await frames(tester);
       await tester.tap(find.byKey(const Key('fork-confirm')));
       await frames(tester);
@@ -923,7 +923,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('terminal-title')));
       await frames(tester);
       expect(find.text('Stop after it finishes'), findsNothing);
-      expect(find.text('Stop this harness…'), findsOneWidget);
+      expect(find.text('Stop this harness'), findsOneWidget);
       await focus.close();
 
       focus = await openMenu(tester, working: true);
@@ -939,13 +939,13 @@ void main() {
       tester,
     ) async {
       var focus = await openMenu(tester);
-      expect(find.text('Stop this harness…'), findsOneWidget);
-      expect(find.text('Delete this harness…'), findsOneWidget);
+      expect(find.text('Stop this harness'), findsOneWidget);
+      expect(find.text('Delete this harness'), findsOneWidget);
       await focus.close();
 
       focus = await openMenu(tester, engine: 'terminal');
-      expect(find.text('Stop this harness…'), findsOneWidget);
-      expect(find.text('Delete this harness…'), findsNothing);
+      expect(find.text('Stop this harness'), findsOneWidget);
+      expect(find.text('Delete this harness'), findsNothing);
       await focus.close();
     });
 
@@ -959,7 +959,7 @@ void main() {
       );
       await tester.tap(find.byKey(const ValueKey('terminal-title')));
       await frames(tester);
-      await tapInView(tester, find.text('Delete this harness…'));
+      await tapInView(tester, find.text('Delete this harness'));
       await frames(tester);
       expect(find.text('Delete a?'), findsOneWidget);
       await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
@@ -992,14 +992,14 @@ void main() {
       );
       await tester.tap(find.byKey(const ValueKey('terminal-title')));
       await frames(tester);
-      await tapInView(tester, find.text('Delete this harness…'));
+      await tapInView(tester, find.text('Delete this harness'));
       await frames(tester);
       await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
       await frames(tester);
 
       await tester.tap(find.byKey(const ValueKey('terminal-title')));
       await frames(tester);
-      expect(find.text('Delete this harness…'), findsNothing);
+      expect(find.text('Delete this harness'), findsNothing);
       await tapInView(tester, find.text('Deleting…'));
       await frames(tester);
       expect(find.text('Delete a?'), findsNothing, reason: 'took no tap');
@@ -1166,7 +1166,7 @@ void main() {
       );
       await frames(tester);
 
-      expect(find.text('Rename…'), findsNothing, reason: 'the menu went');
+      expect(find.text('Rename'), findsNothing, reason: 'the menu went');
       expect(
         find.text('Waiting for the conversation handoff. Try switching again.'),
         findsOneWidget,
@@ -1342,13 +1342,40 @@ void main() {
       await focus.close();
     });
 
+    // A row that opens a screen of its own says so by opening it: no trailing `…`. The ellipsis is
+    // kept for a row saying something is on its way (`forking…`, `Deleting…`).
+    testWidgets('no row ends in an ellipsis', (tester) async {
+      final focus = await openMenu(tester);
+      for (final label in const [
+        'Fork',
+        'Rename',
+        'Stop this harness',
+        'Delete this harness',
+      ]) {
+        expect(find.text(label), findsOneWidget);
+      }
+      expect(
+        find.descendant(
+          of: find.byType(BottomSheet),
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is Text &&
+                (widget.data ?? widget.textSpan?.toPlainText() ?? '')
+                    .contains('…'),
+          ),
+        ),
+        findsNothing,
+      );
+      await focus.close();
+    });
+
     testWidgets('Rename, Stop and Settings open their own screens', (
       tester,
     ) async {
       final focus = await openMenu(tester);
       // Switched off everywhere for now (`kModelSheetEnabled`): no row that looks like a choice.
       expect(find.text('Model'), findsNothing);
-      await tester.tap(find.text('Rename…'));
+      await tester.tap(find.text('Rename'));
       await frames(tester);
       expect(find.byType(TextField), findsOneWidget);
       await tester.tap(find.text('Cancel'));
@@ -1356,7 +1383,7 @@ void main() {
 
       await tester.tap(find.byKey(const ValueKey('terminal-title')));
       await frames(tester);
-      await tapInView(tester, find.text('Stop this harness…'));
+      await tapInView(tester, find.text('Stop this harness'));
       await frames(tester);
       expect(find.text('Cancel'), findsOneWidget);
       await tester.tap(find.text('Cancel'));

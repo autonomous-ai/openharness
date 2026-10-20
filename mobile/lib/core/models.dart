@@ -15,11 +15,16 @@ class CurrentUserProfile {
   final String email;
   final String? avatarUrl;
 
+  /// When the account's record was made: its first Harness sign-in anywhere. Null from a backend that
+  /// does not say, or says something unreadable.
+  final DateTime? createdAt;
+
   const CurrentUserProfile({
     this.id,
     this.name,
     required this.email,
     this.avatarUrl,
+    this.createdAt,
   });
 
   factory CurrentUserProfile.fromMe(Map<String, dynamic> response) {
@@ -34,6 +39,7 @@ class CurrentUserProfile {
     }
     final rawName = user['name'];
     final rawAvatar = response['avatarUrl'];
+    final rawCreated = user['createdAt'];
     return CurrentUserProfile(
       id: user['id'] is String ? user['id'] as String : null,
       name: rawName is String && rawName.trim().isNotEmpty
@@ -43,6 +49,7 @@ class CurrentUserProfile {
       avatarUrl: rawAvatar is String && rawAvatar.trim().isNotEmpty
           ? rawAvatar.trim()
           : null,
+      createdAt: rawCreated is String ? DateTime.tryParse(rawCreated) : null,
     );
   }
 

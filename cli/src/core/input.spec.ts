@@ -481,6 +481,25 @@ describe('message', () => {
     message({ content: 'nobody to type into' })
     expect(submit.mock.calls).toEqual([['a1', 'hi'], ['s1', 'hi'], ['a1', 'in a tab']])
   })
+
+  it('hands what became of it to its measurement: a dropped frame is invalid, a kept one carries the receipt down', () => {
+    const submit = vi.fn(), receipt = vi.fn()
+    const message = createMessageRequest(submit)
+    message({ content: '', agentId: 'a1' }, receipt)
+    message({ content: 'nobody to type into' }, receipt)
+    expect(receipt.mock.calls).toEqual([['invalid'], ['invalid']])
+    message({ content: 'hi', agentId: 'a1' }, receipt)
+    message({ content: 'scoped', agentId: 'a1', inputContext: 'conversation-input-context' }, receipt)
+    expect(submit.mock.calls).toEqual([['a1', 'hi', undefined, receipt], ['a1', 'scoped', 'conversation-input-context', receipt]])
+    expect(receipt).toHaveBeenCalledTimes(2)
+
+    const inputs = createInput(deps().deps)
+    const into = vi.spyOn(inputs.input, 'submit').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    inputs.messageRequest({ content: 'hello', agentId: 's1' }, receipt)
+    inputs.messageRequest({ content: 'hello', agentId: 's1', inputContext: 'conversation-input-context' }, receipt)
+    expect(into.mock.calls).toEqual([['a1', 'hello', undefined, undefined, receipt], ['a1', 'hello', undefined, 'conversation-input-context', receipt]])
+  })
 })
 
 describe('every route a message takes to a pane', () => {

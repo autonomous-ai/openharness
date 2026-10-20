@@ -19,6 +19,7 @@ import UserNotifications
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     DeviceNameChannel.register(with: engineBridge.pluginRegistry)
+    InstallSourceChannel.register(with: engineBridge.pluginRegistry)
     ClipboardImageChannel.register(with: engineBridge.pluginRegistry)
     SignInPageChannel.register(with: engineBridge.pluginRegistry)
     HandoffChannel.register(with: engineBridge.pluginRegistry)
@@ -137,6 +138,22 @@ enum ClipboardImageChannel {
           result(png.map { FlutterStandardTypedData(bytes: $0) } ?? unreadable)
         }
       }
+    }
+  }
+}
+
+/// `harness/install_source` — whether this build came from the App Store, for the measurement
+/// context's channel (Dart: `lib/core/install_source.dart`): a tester's counts are kept apart. An App
+/// Store build's receipt is named `receipt`; TestFlight's, and any build Xcode installed, `sandboxReceipt`.
+/// Only the file's name is read, never the receipt, and only `store` or `sandbox` goes back.
+enum InstallSourceChannel {
+  static func register(with registry: FlutterPluginRegistry) {
+    guard let messenger = registry.registrar(forPlugin: "HarnessInstallSource")?.messenger() else { return }
+    let channel = FlutterMethodChannel(name: "harness/install_source", binaryMessenger: messenger)
+    channel.setMethodCallHandler { call, result in
+      guard call.method == "source" else { result(FlutterMethodNotImplemented); return }
+      let sandbox = Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt"
+      result(sandbox ? "sandbox" : "store")
     }
   }
 }
