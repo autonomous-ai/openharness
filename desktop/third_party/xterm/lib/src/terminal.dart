@@ -47,6 +47,11 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
   /// [keyInput], [mouseInput], or [paste].
   void Function(String data)? onOutput;
 
+  /// Cursor-position replies, separate from user input. Falls back to
+  /// [onOutput] when unset. A viewer backed by another terminal emulator can
+  /// consume these here because that emulator already answers cursor queries.
+  void Function(String data)? onCursorPositionReport;
+
   /// Function that is called when the dimensions of the terminal change.
   void Function(int width, int height, int pixelWidth, int pixelHeight)?
       onResize;
@@ -76,6 +81,7 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
     this.onTitleChange,
     this.onIconChange,
     this.onOutput,
+    this.onCursorPositionReport,
     this.onResize,
     this.platform = TerminalTargetPlatform.unknown,
     this.inputHandler = defaultInputHandler,
@@ -565,7 +571,9 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
 
   @override
   void sendCursorPosition() {
-    onOutput?.call(_emitter.cursorPosition(_buffer.cursorX, _buffer.cursorY));
+    (onCursorPositionReport ?? onOutput)?.call(
+      _emitter.cursorPosition(_buffer.cursorX, _buffer.cursorY),
+    );
   }
 
   @override
