@@ -389,6 +389,27 @@ class SetupHotspot(unittest.TestCase):
              patch.object(network, 'wired_devices', return_value=[['ens5', 'ethernet', 'connected']]):
             self.assertTrue(network.connected())
 
+    def test_an_empty_list_just_after_starting_is_scanned_at_once(self):
+        # Unlocked at the keyboard after a reset: no hotspot to leave, and NetworkManager's recent
+        # list is still empty. The page scans now rather than showing nothing until Rescan.
+        screen = Screen(['\n'])
+        page = network.NetworkPage(screen, first_use=True)
+        scans = []
+
+        def scan(rescan=None):
+            scans.append(rescan)
+            return [] if len(scans) == 1 else [WIFI]
+
+        with patch.object(network, 'phone_unlocked', return_value=False), \
+             patch.object(network, 'hold_radio', return_value=False), \
+             patch.object(network, 'connected', return_value=False), \
+             patch.object(network, 'wired_devices', return_value=[]), \
+             patch.object(network, 'nmcli', return_value=result()), \
+             patch.object(network, 'scan', side_effect=scan), \
+             patch.object(network, 'connect', return_value=True):
+            self.assertEqual(page.run(), 0)
+        self.assertEqual(scans[:2], [None, True])
+
     def test_choosing_a_network_on_screen_takes_the_radio_back_first(self):
         calls = []
         with patch.object(network, 'setup_hotspot_up', return_value=True), \

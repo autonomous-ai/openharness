@@ -393,6 +393,10 @@ class NetworkPage:
         else:
             self.held = True
             self.refresh(rescan=True if hold_radio() else None)
+            # Nothing yet: just started (NetworkManager has not scanned once since the card came up,
+            # and its recent list is empty) — scanned now, rather than waiting for a Rescan.
+            if not self.networks and not self.message:
+                self.refresh(rescan=True)
         checked = time.monotonic()
         while True:
             if until_online and time.monotonic() - checked >= 2:
