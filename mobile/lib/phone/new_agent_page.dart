@@ -956,6 +956,8 @@ class _NewAgentPageState extends State<NewAgentPage> {
   Future<void> _cancelPending() async {
     final creation = _creation;
     if (creation == null || _creating || creation.cancelling) return;
+    // Called off: no more asking by itself; whatever comes of the cancel, the person checks.
+    _holdCheck?.cancel();
     setState(() {});
     final problem = await widget.notifier.cancelAgentCreation(creation);
     if (!mounted) return;
@@ -965,6 +967,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
           ?.showSnackBar(const SnackBar(content: Text('Creation cancelled.')));
     }
     setState(() {
+      _held = null;
       _error = problem;
       _failure = null;
     });
@@ -1000,7 +1003,11 @@ class _NewAgentPageState extends State<NewAgentPage> {
       });
       _holdCheck?.cancel();
       _holdCheck = Timer(const Duration(seconds: 4), () {
-        if (mounted && identical(_creation, creation) && !_creating) {
+        if (mounted &&
+            identical(_creation, creation) &&
+            !_creating &&
+            !creation.cancelling &&
+            _held != null) {
           unawaited(_start());
         }
       });
