@@ -41,6 +41,92 @@ void main() {
   });
   tearDown(() => app.dispose());
 
+  test(
+    'opening an offline saved harness reconnects before sending its resume',
+    () async {
+      final machine = app.stateOf('m')!;
+      machine.agents = [Agent.fromJson((inventory()['agents'] as List).single)];
+      machine.connectionStatus = ConnectionStatus.disconnected;
+      final resume = app.resumeAgent('m', 'a0');
+      await Future<void>.delayed(Duration.zero);
+      expect(connection.requests, isEmpty);
+      machine.connectionStatus = ConnectionStatus.connected;
+      app.notifyListeners();
+      await Future<void>.delayed(Duration.zero);
+      expect(connection.types, ['agent_resume']);
+      connection.restartReplies.single.complete(
+        restartReceipt(
+          connection.requests.single['creationId'] as String,
+          sessionId: source.sessionId,
+        ),
+      );
+      expect((await resume).error, isNull);
+    },
+  );
+
+  test('a refusal in a durable receipt also opens the already resumed conversation', () async {
+    app.stateOf('m')!.agents = [
+      Agent.fromJson((inventory()['agents'] as List).single),
+    ];
+    final resume = app.resumeAgent('m', 'a0');
+    app.stateOf('m')!.agents = [source];
+    connection.restartReplies.single.complete({
+      'creationId': connection.requests.single['creationId'],
+      'state': 'failed',
+      'failure': {'code': 'AGENT_BUSY'},
+    });
+    expect((await resume).error, isNull);
+  });
+
+  test(
+    'a thrown resume refusal is actionable and a retry starts a new receipt',
+    () async {
+      app.stateOf('m')!.agents = [
+        Agent.fromJson((inventory()['agents'] as List).single),
+      ];
+      final first = app.resumeAgent('m', 'a0');
+      final original = connection.requests.last['creationId'];
+      connection.restartReplies.last.completeError(
+        const WsRequestFailure(
+          responseType: 'agent_resume_result',
+          code: 'IDENTITY_UNAVAILABLE',
+          detail: 'identity check failed',
+        ),
+      );
+      expect((await first).error, contains('could not be verified'));
+      expect(app.restartAttempt('m', 'a0').awaitingConfirmation, isFalse);
+      final retry = app.resumeAgent('m', 'a0');
+      expect(connection.requests.last['creationId'], isNot(original));
+      expect(connection.checks, isEmpty);
+      connection.restartReplies.last.complete(
+        restartReceipt(
+          connection.requests.last['creationId'] as String,
+          sessionId: source.sessionId,
+        ),
+      );
+      expect((await retry).error, isNull);
+    },
+  );
+
+  test(
+    'a busy refusal opens a concurrently resumed copy of the same conversation',
+    () async {
+      app.stateOf('m')!.agents = [
+        Agent.fromJson((inventory()['agents'] as List).single),
+      ];
+      final first = app.resumeAgent('m', 'a0');
+      app.stateOf('m')!.agents = [source];
+      connection.restartReplies.last.completeError(
+        const WsRequestFailure(
+          responseType: 'agent_resume_result',
+          code: 'AGENT_BUSY',
+        ),
+      );
+      expect((await first).error, isNull);
+      expect(connection.requests, hasLength(1));
+    },
+  );
+
   test('thirty pause/resume cycles preserve identity and issue one command per transition', () async {
     for (var cycle = 0; cycle < 30; cycle++) {
       connection.inventory = Completer<Map<String, dynamic>>()

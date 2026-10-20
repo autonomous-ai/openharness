@@ -148,6 +148,7 @@ import '../orchestrator/orchestrator_launcher.dart';
 import '../orchestrator/orchestrator_workspace.dart';
 import '../state/workspace_learning.dart';
 import '../state/workspace_onboarding.dart';
+import '../state/first_arrival.dart';
 import '../state/workspace_chrome.dart';
 import '../widgets/key_hints.dart';
 import '../daemons/daemon_brain.dart';
@@ -510,9 +511,25 @@ class _SwarmScreenState extends State<SwarmScreen> {
                             loading: app.machinesLoading,
                             preparing: _hasNewHarnessMachine,
                             preparingText: app.firstArrival.running
-                                ? 'Opening your agents…'
+                                ? 'Opening your harness…'
                                 : 'Preparing your harness…',
-                            onChoose: () => unawaited(_openMachines()),
+                            recovery: app.firstArrival.error,
+                            checkingStatus: app.firstArrival.checkingStatus,
+                            onRetry: app.firstArrival.canRetry
+                                ? _retryFirstArrival
+                                : null,
+                            onStartNew: app.firstArrival.canRetry &&
+                                    !app.firstArrival.checkingStatus
+                                ? _startFreshAfterArrival
+                                : null,
+                            onChoose: () {
+                              if (app.firstArrival.needsRecovery) {
+                                app.firstArrival.dismiss();
+                                _runShortcut('harnesses.list');
+                              } else {
+                                unawaited(_openMachines());
+                              }
+                            },
                           ),
                           if (recent != null) ...[
                             const SizedBox(height: 56),
@@ -557,6 +574,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       (!app.activeSwarm.isSuperTab || app.activeSwarm.superTabId == null) &&
       _newHarness == null &&
       _search == null &&
+      !app.firstArrival.needsRecovery &&
       !_pickingFolder &&
       _hasNewHarnessMachine;
 
@@ -565,6 +583,31 @@ class _SwarmScreenState extends State<SwarmScreen> {
   bool get _hasNewHarnessMachine =>
       app.localMachineState != null ||
       widget.chrome?.newHarnessMachine?.call() != null;
+
+  Future<void> _retryFirstArrival() async {
+    final tab = app.activeSwarmId;
+    final work = app.firstArrival.retry(
+      app,
+      stillCurrent: () => mounted && app.activeSwarmId == tab &&
+          _newHarness == null && _search == null && !_pickingFolder,
+    );
+    setState(() {});
+    await work;
+    if (mounted) setState(() {});
+  }
+
+  void _startFreshAfterArrival() {
+    final arrival = app.firstArrival;
+    final session = arrival.selectedSession;
+    final engine = arrival.selectedEngine;
+    arrival.dismiss();
+    unawaited(_newAgent(
+      machineId: app.localMachineState?.machine.machineId,
+      folder: session?.cwd,
+      engine: engine,
+      task: session == null ? FirstArrival.starterTask : null,
+    ));
+  }
 
   void _scheduleWelcomeComposer() {
     if (_welcomeEntryScheduled || !_canShowWelcomeComposer) return;
@@ -595,6 +638,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         );
       } finally {
         _welcomeEntryScheduled = false;
+        if (mounted) setState(() {});
         // Switching tabs while defaults load must schedule the new page too.
         if (mounted && app.activeSwarmId != tab) _scheduleWelcomeComposer();
       }

@@ -172,8 +172,10 @@ class TerminalPanel extends StatefulWidget {
   /// same, but never retakes a terminal another client holds.
   final bool focusByUser;
 
-  /// Whether this tile's composer textbox is showing. Only consulted for a remote machine.
+  /// Whether this tile's composer is showing, for a remote machine or a first-run draft.
   final bool composerVisible;
+  final String? firstTask;
+  final VoidCallback? onFirstTaskSubmitted;
   final bool readOnly;
   final TerminalNotice? notice;
 
@@ -203,6 +205,8 @@ class TerminalPanel extends StatefulWidget {
     this.focusRequest = 0,
     this.focusByUser = true,
     this.composerVisible = false,
+    this.firstTask,
+    this.onFirstTaskSubmitted,
     this.readOnly = false,
     this.notice,
     this.onToggleComposer,
@@ -543,7 +547,8 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// one, which is what puts it on the loopback transport.
   bool get _showsComposer {
     final machineState = widget.notifier.stateOf(widget.session.machineId);
-    return machineState?.isLocalMachine != true && widget.composerVisible;
+    return (machineState?.isLocalMachine != true || widget.firstTask != null) &&
+        widget.composerVisible;
   }
 
   /// The composer refuses focus while it is disabled, which it is until the stream goes live. When
@@ -2394,7 +2399,7 @@ class _TerminalPanelState extends State<TerminalPanel>
             ),
             // The grip is shown whether or not the box is: collapsed, it is the only way back.
             if (!widget.compactHeader &&
-                remote &&
+                (remote || widget.firstTask != null) &&
                 widget.onToggleComposer != null)
               ColoredBox(
                 color: chromeFill,
@@ -2410,6 +2415,8 @@ class _TerminalPanelState extends State<TerminalPanel>
                 child: TerminalComposer(
                   session: session,
                   focusNode: _composerFocus,
+                  initialText: widget.firstTask ?? '',
+                  onSubmitted: widget.onFirstTaskSubmitted,
                   inputEnabled: !widget.readOnly && !session.readOnly,
                 ),
               ),

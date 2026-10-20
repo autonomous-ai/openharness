@@ -31,6 +31,8 @@ enum ProductFlow {
   // The Add Phone card (widgets/phone_offer_card.dart), offered once per computer: begun when it is on
   // screen, ok by its Add Phone, cancelled by its ×, unknown when it goes another way.
   phoneOffer('phone_offer'),
+  shareInvite('share_invite'),
+  shareAccept('share_accept'),
   // The phone's own flows, listed so this enum names every flow the phone's copy does; the desktop
   // never begins them.
   signInScan('sign_in_scan'),
@@ -49,7 +51,11 @@ enum ProductFlow {
   /// The revision of the local CLI's report proxy that knows this flow's
   /// names, as [ProductHealthMeasure.vocabulary] — but its counts wait in the
   /// queue for that answer instead of being skipped ([ProductMeasurement]).
-  int get vocabulary => this == phoneOffer ? 3 : 1;
+  int get vocabulary => switch (this) {
+    phoneOffer => 3,
+    shareInvite || shareAccept => 4,
+    _ => 1,
+  };
 
   /// Ended only by what the person does, never by the 15-minute observation
   /// bound: the card waits beside the work until it is used or put away, and
@@ -132,6 +138,10 @@ class ProductMeasurement extends ChangeNotifier {
   final _countedOn = <ProductHealthMeasure, String>{};
   final _funnelSeen = <String, Set<ProductHealthMeasure>>{};
   final _funnelStarted = <String, DateTime>{};
+  DateTime? _firstRunAt;
+  (String, String)? _firstRunTarget;
+  final _firstRunStages = <String>{};
+  bool _setupShown = false;
   final _expires = <Object, DateTime>{};
   final _expire = <Object, void Function(ProductOutcome)>{};
   int get choiceRevision => _revision;
@@ -325,6 +335,9 @@ class ProductMeasurement extends ChangeNotifier {
     if (channel == 'ui') {
       _coverageDay = null;
       _countedOn.clear();
+      _firstRunAt = null;
+      _firstRunTarget = null;
+      _firstRunStages.clear();
     }
   }
 
@@ -498,12 +511,91 @@ class ProductMeasurement extends ChangeNotifier {
     );
   }
 
-  /// The proxy revision ([proxyVocabulary]) that forwards [metric]: the Add
-  /// Phone card's flow and the ways Add Phone opened are 3, everything else
-  /// this queue holds is 1 (a health measure newer than 1 is never queued
-  /// before the proxy has named it, [health]).
+  /// One first-arrival episode in this app run. Retries share its denominator;
+  /// routine launches never call this. Targets stay in RAM and are never reported.
+  void firstRunStarted() {
+    if (!healthEnabled || !sharing || _disposed || _firstRunAt != null) return;
+    _firstRunAt = _now().toUtc();
+    _firstRunStage('started');
+  }
+
+  /// Counts acknowledged invitation results, never addresses, tab ids or invite ids.
+  void sharedInvites({required int sent, required int refused}) {
+    if (!healthEnabled || !sharing || _disposed) return;
+    _coverage();
+    final day = _now().toUtc().toIso8601String().substring(0, 10);
+    for (final (name, count) in [('sent', sent), ('refused', refused)]) {
+      for (var i = 0; i < count.clamp(0, 1000); i++) {
+        _count('ui', day, 'health_desktop_shared_invites_$name');
+      }
+    }
+  }
+
+  void firstRunReady(String machineId, String? agentId) {
+    if (_firstRunAt == null || agentId == null) return;
+    _firstRunTarget = (machineId, agentId);
+    _firstRunStage('ready');
+  }
+
+  void firstRunWork(String machineId, String agentId) {
+    if (_firstRunTarget == (machineId, agentId)) _firstRunStage('work');
+  }
+
+  void firstRunResponse(String machineId, String agentId) {
+    if (_firstRunTarget != (machineId, agentId) ||
+        !_firstRunStages.contains('work') ||
+        _firstRunStages.contains('response')) {
+      return;
+    }
+    _firstRunStage('response');
+    final start = _firstRunAt;
+    if (start == null || !_firstRunStages.contains('response')) return;
+    final seconds = _now().toUtc().difference(start).inSeconds;
+    _firstRunStage(
+      'response_${seconds < 60
+          ? 'under_1m'
+          : seconds < 300
+          ? '1m_to_5m'
+          : 'over_5m'}',
+    );
+  }
+
+  void _firstRunStage(String stage) {
+    final start = _firstRunAt;
+    if (!healthEnabled || !sharing || _disposed || start == null) return;
+    final elapsed = _now().toUtc().difference(start);
+    if (elapsed.isNegative ||
+        elapsed > const Duration(hours: 24) ||
+        !_firstRunStages.add(stage)) {
+      return;
+    }
+    _coverage();
+    _count(
+      'ui',
+      start.toIso8601String().substring(0, 10),
+      'health_desktop_first_run_$stage',
+    );
+  }
+
+  /// Called only when setup is actually visible. A successful readiness probe
+  /// on a normal launch is not an impression of setup.
+  void setupShown() {
+    _setupShown = true;
+    milestone(ProductHealthMeasure.funnelSetupSeen);
+  }
+
+  void setupHidden() => _setupShown = false;
+
+  /// The proxy revision that forwards a queued metric. First-run and sharing
+  /// counters wait for revision 4; an older proxy never receives unknown names.
+  /// Other health measures use [health]'s skip-until-supported behavior.
   static int _vocabularyOf(String metric) =>
-      metric.startsWith('ui_desktop_${ProductFlow.phoneOffer.wire}_')
+      metric.startsWith('health_desktop_first_run_') ||
+          metric.startsWith('health_desktop_shared_invites_') ||
+          metric.startsWith('ui_desktop_share_invite_') ||
+          metric.startsWith('ui_desktop_share_accept_')
+      ? 4
+      : metric.startsWith('ui_desktop_${ProductFlow.phoneOffer.wire}_')
       ? ProductFlow.phoneOffer.vocabulary
       : metric.startsWith('ui_desktop_add_phone_')
       ? AddPhoneOpening.vocabulary
@@ -526,7 +618,7 @@ class ProductMeasurement extends ChangeNotifier {
   }
 
   void _observeSetupFacts() {
-    if (_setupFacts.isNotEmpty) milestone(ProductHealthMeasure.funnelSetupSeen);
+    if (_setupShown) milestone(ProductHealthMeasure.funnelSetupSeen);
     if (!_setupAllowed && !sharing) return;
     for (final entry in _setupFacts.entries) {
       if (!entry.key.beforeSignIn || entry.key == ProductFlow.signIn) continue;

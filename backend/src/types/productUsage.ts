@@ -75,7 +75,7 @@ export const PRODUCT_USAGE_PHONE_SCREEN_METRICS = PRODUCT_USAGE_PHONE_SCREENS.fl
  * when it is on screen, ok for its Add Phone, cancelled for its ×, unknown when it goes another way (Add Phone
  * opened from elsewhere, a sign-out). It waits beside the work, so it has no 15-minute observation bound.
  * Vocabulary 3 (`x-harness-usage-vocabulary`, cli/src/lib/appProductUsageReport.ts), like the openings below. */
-export const PRODUCT_USAGE_DESKTOP_FLOWS = ['phone_offer'] as const
+export const PRODUCT_USAGE_DESKTOP_FLOWS = ['phone_offer', 'share_invite', 'share_accept'] as const
 /** Each time Add Phone opens on a computer, by its way in: that card (`offer`), the title bar's phone, Harness ▸
  * Add Phone… (`menu`, or a key bound to it on macOS), the account menu, the Machines picker, or the command
  * (`> add phone`, a key bound to it elsewhere). Which way in, nothing else. */

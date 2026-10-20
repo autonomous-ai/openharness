@@ -63,6 +63,99 @@ void main() {
     return all;
   }
 
+  test('first-run response follows only the opened harness and never counts retries twice', () async {
+    await usage.flush();
+    usage.proxyVocabulary = 4;
+    usage.firstRunStarted();
+    usage.firstRunStarted();
+    usage.firstRunReady('PRIVATE_MACHINE', 'PRIVATE_AGENT');
+    usage.firstRunWork('OTHER_MACHINE', 'PRIVATE_AGENT');
+    usage.firstRunResponse('PRIVATE_MACHINE', 'PRIVATE_AGENT');
+    await usage.flush();
+    expect(totals()['health_desktop_first_run_response'], isNull);
+    usage.firstRunWork('PRIVATE_MACHINE', 'PRIVATE_AGENT');
+    now = now.add(const Duration(seconds: 45));
+    usage.firstRunResponse('PRIVATE_MACHINE', 'PRIVATE_AGENT');
+    usage.firstRunResponse('PRIVATE_MACHINE', 'PRIVATE_AGENT');
+    await usage.flush();
+    expect(totals()['health_desktop_first_run_started'], 1);
+    expect(totals()['health_desktop_first_run_ready'], 1);
+    expect(totals()['health_desktop_first_run_work'], 1);
+    expect(totals()['health_desktop_first_run_response'], 1);
+    expect(totals()['health_desktop_first_run_response_under_1m'], 1);
+    expect(jsonEncode(reports), isNot(contains('PRIVATE')));
+  });
+
+  test('first-run counters wait for an upgraded proxy instead of dropping the report', () async {
+    await usage.flush();
+    usage.firstRunStarted();
+    usage.firstRunReady('m', 'a');
+    usage.firstRunWork('m', 'a');
+    usage.firstRunResponse('m', 'a');
+    await usage.flush();
+    expect(totals().keys.where((name) => name.contains('first_run')), isEmpty);
+    usage.proxyVocabulary = 4;
+    await usage.flush();
+    expect(totals()['health_desktop_first_run_started'], 1);
+    expect(totals()['health_desktop_first_run_response'], 1);
+  });
+
+  test('first-run stages cross midnight on their start day and stop after 24 hours', () async {
+    await usage.flush();
+    usage.proxyVocabulary = 4;
+    now = DateTime.utc(2026, 10, 14, 23, 59);
+    usage.firstRunStarted();
+    usage.firstRunReady('m', 'a');
+    now = now.add(const Duration(minutes: 2));
+    usage.firstRunWork('m', 'a');
+    usage.firstRunResponse('m', 'a');
+    await usage.flush();
+    expect(
+      reports
+          .where(
+            (r) => (r['counters'] as Map).containsKey(
+              'health_desktop_first_run_response',
+            ),
+          )
+          .single['day'],
+      '2026-10-14',
+    );
+    expect(totals()['health_desktop_first_run_response_1m_to_5m'], 1);
+    now = now.add(const Duration(days: 2));
+    usage.firstRunReady('m', 'another');
+    usage.firstRunWork('m', 'another');
+    await usage.flush();
+    expect(totals()['health_desktop_first_run_work'], 1);
+  });
+
+  test('opt-out and account changes discard the first-run target and queued counts', () async {
+    await usage.flush();
+    usage.firstRunStarted();
+    usage.firstRunReady('PRIVATE_MACHINE', 'PRIVATE_AGENT');
+    usage.savedChoice({'enabled': false, 'revision': 1});
+    choice = {'enabled': true, 'revision': 2};
+    usage.savedChoice(choice);
+    usage.proxyVocabulary = 4;
+    usage.firstRunWork('PRIVATE_MACHINE', 'PRIVATE_AGENT');
+    usage.firstRunResponse('PRIVATE_MACHINE', 'PRIVATE_AGENT');
+    await usage.flush();
+    expect(totals().keys.where((name) => name.contains('first_run')), isEmpty);
+  });
+
+  test('normal readiness probes do not say setup was shown', () async {
+    await usage.flush();
+    usage.setupFacts({
+      ProductFlow.setup: 'ready',
+      ProductFlow.setupHarness: 'ready',
+    });
+    await usage.flush();
+    expect(totals()['health_desktop_funnel_setup_seen'], isNull);
+    usage.setupShown();
+    usage.setupShown();
+    await usage.flush();
+    expect(totals()['health_desktop_funnel_setup_seen'], 1);
+  });
+
   test('connection observations restart cleanly after off/on with the same machine', () async {
     await usage.flush();
     final connections = ProductConnections(usage);
@@ -268,7 +361,10 @@ void main() {
       );
       // A launch's first frame is its heavy workspace restore: not a sample
       // (frames 1–59 are not sampled; the 60th is).
-      runtime.framesForTest([frame(900), for (var i = 1; i < 59; i++) frame(5)]);
+      runtime.framesForTest([
+        frame(900),
+        for (var i = 1; i < 59; i++) frame(5),
+      ]);
       // Minimised, then shown: the first frame back is the catch-up, and would
       // otherwise be the 60th, the sampled one.
       runtime.lifecycleChanged(AppLifecycleState.hidden);
@@ -279,7 +375,10 @@ void main() {
       runtime.framesForTest([for (var i = 0; i < 120; i++) frame(400)]);
       // Visible but without focus (inactive) still counts: a person sees it.
       lifecycle = AppLifecycleState.inactive;
-      runtime.framesForTest([frame(700), for (var i = 0; i < 60; i++) frame(5)]);
+      runtime.framesForTest([
+        frame(700),
+        for (var i = 0; i < 60; i++) frame(5),
+      ]);
       await usage.flush();
       expect(totals()['health_desktop_frame_under_16ms'], 2);
       expect(totals()['health_desktop_frame_over_250ms'], isNull);
