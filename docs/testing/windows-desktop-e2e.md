@@ -274,7 +274,10 @@ Its launcher installed the x64 app under ARM64 emulation. One signed-in window
 rendered with This Computer visible; the native tray icon existed. Add Phone
 opened its dialog, but `/api/auth/handoff` repeatedly returned HTTP 502 while
 the daemon reported backend offline and connection resets. No HTTP 200 was
-observed, so this does not prove the x64 FFI/pipe handoff criterion. Settings
+observed, so this does not prove the x64 FFI/pipe handoff criterion. A later
+read-only check still found 30-second `ECONNRESET` retries, while DNS, TCP 443
+and unauthenticated TLS/HTTP to the backend succeeded; the authenticated
+WebSocket path remained unhealthy. Settings
 then uninstalled the app through its final dialog. The install root, registry
 entries, shortcut and app state disappeared; no desktop process remained. The
 CLI stayed signed in with the same seven agents and unchanged daemon/core/worker
