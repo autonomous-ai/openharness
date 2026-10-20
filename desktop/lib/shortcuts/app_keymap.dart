@@ -26,12 +26,26 @@ class AppKeymap extends ChangeNotifier {
     await store?.start();
   }
 
-  static KeymapStore fileStore() => KeymapStore(
-    file: File(KeymapStore.defaultPath()),
-    defaults: harnessDefaultBindings,
-    commands: harnessCommandById.keys.toSet(),
-    validate: (map) => validateNativeKeys(map, macOS: Platform.isMacOS),
-  );
+  static KeymapStore fileStore({
+    Map<String, String>? environment,
+    bool? isWindows,
+  }) {
+    final path = KeymapStore.defaultPath(
+      environment: environment,
+      isWindows: isWindows,
+    );
+    final legacy = KeymapStore.legacyPath(
+      environment: environment,
+      isWindows: isWindows,
+    );
+    return KeymapStore(
+      file: File(path),
+      legacyFile: legacy == null || legacy == path ? null : File(legacy),
+      defaults: harnessDefaultBindings,
+      commands: harnessCommandById.keys.toSet(),
+      validate: (map) => validateNativeKeys(map, macOS: Platform.isMacOS),
+    );
+  }
 
   Iterable<KeyBinding> bindings(
     String command, {
