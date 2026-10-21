@@ -189,10 +189,8 @@ abstract final class AppIcons {
   static const undo2 = LucideIcons.undo2400;
   static const unlink = LucideIcons.unlink400;
   static const unplug = LucideIcons.unplug400;
-  static const usb = LucideIcons.usb400;
   static const user = LucideIcons.user400;
   static const users = LucideIcons.users400;
   static const waypoints = LucideIcons.waypoints400;
   static const wrapText = LucideIcons.wrapText400;
-  static const zap = LucideIcons.zap400;
 }

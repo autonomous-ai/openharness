@@ -18,7 +18,7 @@ abstract final class SerialPortLease {
   /// fault than the one this prevents, and a silent one.
   static const _staleAfter = Duration(minutes: 10);
 
-  /// Where the flasher keeps downloads, its `flashing` flag and the Windows `cancel` file.
+  /// Where the flasher keeps downloads and its `flashing` flag.
   /// Honours the script's override so both sides look in the same folder.
   static String flasherDirectory({Map<String, String>? environment}) {
     final env = environment ?? Platform.environment;
