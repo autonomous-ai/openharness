@@ -146,6 +146,10 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
 
     assert_eq!(result, S_OK);
 
+    // hn: every failure from here to the running child closes the pseudoconsole (after the pipes,
+    // so the close cannot wait for a drain). Left open, its console process (OpenConsole.exe)
+    // outlives a failed spawn: a host that is asked for a missing program would leak one per try.
+    let spawned = (|| -> Result<PROCESS_INFORMATION> {
     let mut success;
 
     // Prepare child process startup info.
@@ -267,14 +271,22 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
                 TerminateProcess(proc_info.hProcess, 1);
                 CloseHandle(proc_info.hThread);
                 CloseHandle(proc_info.hProcess);
-                drop(conout);
-                drop(conin);
-                (api.close)(pty_handle);
                 return Err(err);
             }
             CloseHandle(proc_info.hThread);
         }
     }
+    Ok(proc_info)
+    })();
+    let proc_info = match spawned {
+        Ok(info) => info,
+        Err(err) => {
+            drop(conout);
+            drop(conin);
+            unsafe { (api.close)(pty_handle) };
+            return Err(err);
+        },
+    };
 
     let conin = UnblockedWriter::new(conin, PIPE_CAPACITY);
     let conout = UnblockedReader::new(conout, PIPE_CAPACITY);
