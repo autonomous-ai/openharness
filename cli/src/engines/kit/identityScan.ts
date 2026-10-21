@@ -76,6 +76,80 @@ export async function identityBytes(path: string, maxBytes: number, expected?: I
   } finally { await handle.close() }
 }
 
+/**
+ * A regular file's opening lines, read in bounded chunks with the same change checks as `identityBytes`.
+ * `skip` sees the first bytes of each line (up to SKIP_PROBE); a skipped line is passed over without being kept or
+ * counted, so a run of large bookkeeping records cannot hide the lines that follow it. `visit` gets each kept line in
+ * order and returns true to stop. The result says why reading ended: `stopped` by `visit`, the file's `end`, or a
+ * `limit` (kept lines, kept characters, or `maxBytes` read). A final line without a newline is visited only at `end`.
+ */
+const SKIP_PROBE = 64
+export async function identityLines(path: string, limits: { maxBytes: number; maxLines: number; maxChars: number },
+  skip: (start: string) => boolean, visit: (line: string) => boolean | Promise<boolean>,
+): Promise<'stopped' | 'end' | 'limit'> {
+  const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK)
+  try {
+    const before = await handle.stat()
+    if (!before.isFile()) throw new IdentityReadUnavailable('the native record is not a regular file')
+    const length = Math.min(before.size, limits.maxBytes), chunk = Buffer.alloc(64 * 1024)
+    let position = 0, lines = 0, chars = 0
+    let parts: Buffer[] = [], size = 0, decided = false, skipping = false
+    const keep = async (): Promise<'stopped' | 'limit' | null> => {
+      const text = Buffer.concat(parts).toString('utf8')
+      parts = []; size = 0
+      // A line's own newline counts only once a later line is read, as in a character slice of the head.
+      if (++lines > limits.maxLines || (chars += text.length) > limits.maxChars) return 'limit'
+      const stop = await visit(text)
+      chars += 1
+      return stop ? 'stopped' : null
+    }
+    const outcome = await (async (): Promise<'stopped' | 'end' | 'limit'> => {
+      while (position < length) {
+        const read = (await handle.read(chunk, 0, Math.min(chunk.length, length - position), position)).bytesRead
+        if (!read) throw new IdentityReadUnavailable('the native record ended during the read')
+        position += read
+        for (let from = 0; from < read;) {
+          const found = chunk.indexOf(10, from), newline = found !== -1 && found < read
+          const to = newline ? found : read
+          if (!skipping) {
+            parts.push(Buffer.from(chunk.subarray(from, to))); size += to - from
+            if (!decided && (size >= SKIP_PROBE || newline)) {
+              decided = true
+              skipping = skip(Buffer.concat(parts).subarray(0, SKIP_PROBE).toString('utf8'))
+              if (skipping) { parts = []; size = 0 }
+            }
+            if (!skipping && size > limits.maxChars * 4) return 'limit'
+          }
+          if (!newline) break
+          if (!skipping) { const done = await keep(); if (done) return done }
+          decided = false; skipping = false
+          from = to + 1
+        }
+      }
+      if (length < before.size) return 'limit'
+      if (!skipping && size && !skip(Buffer.concat(parts).subarray(0, SKIP_PROBE).toString('utf8'))) {
+        const done = await keep(); if (done) return done
+      }
+      return 'end'
+    })()
+    const after = await handle.stat()
+    if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) {
+      throw new IdentityReadUnavailable('the native record changed during the read')
+    }
+    const current = await open(path, constants.O_RDONLY | constants.O_NONBLOCK).catch(() => {
+      throw new IdentityReadUnavailable('the native record disappeared during the read')
+    })
+    try {
+      const now = await current.stat()
+      if (now.dev !== before.dev || now.ino !== before.ino || now.size !== before.size
+        || now.mtimeMs !== before.mtimeMs || now.ctimeMs !== before.ctimeMs) {
+        throw new IdentityReadUnavailable('the native record was replaced during the read')
+      }
+    } finally { await current.close() }
+    return outcome
+  } finally { await handle.close() }
+}
+
 /** opendir bounds the directory buffer too; readdir followed by slice would still read the whole tree. */
 export async function* identityEntries(path: string, budget: { remaining: number }, missingOkay = true): AsyncGenerator<Dirent> {
   // An empty or missing directory still costs a filesystem operation.

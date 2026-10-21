@@ -179,6 +179,24 @@ describe('complete bounded evidence before choosing a conversation', () => {
     await expect(scan()).rejects.toThrow('Conversation identity is held')
   })
 
+  it.each([
+    ['a long session opening with checkpoint snapshots', 60, 88 * 1024, 'resolves'],
+    ['snapshots past the byte bound', 400, 88 * 1024, 'held'],
+  ] as const)('reads past %s to its cwd', async (_name, count, bytes, outcome) => {
+    const path = transcript()
+    const snapshot = JSON.stringify({ type: 'file-history-snapshot', messageId: 'm', snapshot: { trackedFileBackups: 'x'.repeat(bytes) } }) + '\n'
+    const head = ['ai-title', 'agent-name', 'mode', 'permission-mode'].map(type => JSON.stringify({ type, sessionId: 'resumed' }) + '\n').join('')
+    file(join(root, 'claude', 'projects', 'work', 'resumed.jsonl'), head + snapshot.repeat(count) + body('/elsewhere') + 'later\n')
+    if (outcome === 'resolves') await expect(scan()).resolves.toEqual({ sessionId: SID, transcriptPath: path })
+    else await expect(scan()).rejects.toThrow('header exceeds the read limit')
+  })
+
+  it('still holds on a large record that is not a skipped snapshot', async () => {
+    transcript()
+    file(join(root, 'claude', 'projects', 'work', 'big.jsonl'), JSON.stringify({ type: 'user', text: 'x'.repeat(300 * 1024) }) + '\n' + body('/elsewhere'))
+    await expect(scan()).rejects.toThrow('header exceeds the read limit')
+  })
+
   it('can exclude a confirmed different cwd without reading its remaining history', async () => {
     const path = transcript()
     file(join(root, 'claude', 'projects', 'other.jsonl'), JSON.stringify({ cwd: '/elsewhere' }) + '\n' + 'x'.repeat(2 * 1024 * 1024))
