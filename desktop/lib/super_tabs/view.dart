@@ -350,10 +350,12 @@ class _SuperTabViewState extends State<SuperTabView> {
     final boundary = suffix.startsWith(RegExp(r'[\s)\]}.,!?;:]'));
     final token = '#${group.number}${boundary ? '' : ' '}';
     final text = _composer.text.replaceRange(at.start, at.end, token);
+    final caret = at.start + token.length;
     c.setDraft(c.selectedId, text);
+    setState(() => _dismissedMention = text.substring(0, caret));
     _composer.value = TextEditingValue(
       text: text,
-      selection: TextSelection.collapsed(offset: at.start + token.length),
+      selection: TextSelection.collapsed(offset: caret),
     );
     _focus.requestFocus();
   }

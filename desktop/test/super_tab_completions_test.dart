@@ -117,7 +117,7 @@ void main() {
   testWidgets(
     'moving the caret into a reference preserves the following text',
     (tester) async {
-      final (_, c) = await show(tester);
+      final (server, c) = await show(tester);
       for (final punctuation in ['', ',']) {
         await tester.enterText(
           composer,
@@ -133,6 +133,13 @@ void main() {
         await tester.pumpAndSettle();
         expect(c.draft('lead'), 'Review #12$punctuation then reply.');
         expect(controller.selection.baseOffset, 10);
+        expect(picker, findsNothing);
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(
+          (server.posts.last['command'] as Map)['text'],
+          'Review #12$punctuation then reply.',
+        );
       }
       await tester.pump(const Duration(milliseconds: 250));
     },
