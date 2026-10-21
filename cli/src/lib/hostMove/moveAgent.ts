@@ -32,16 +32,25 @@ export const MOVE_TIMEOUT_MS = 30_000
 export const MOVE_PROBE_INTERVAL_MS = 500
 
 /**
- * Bounds on each step taken while the agent's input is held. The whole hold must end well under 120 s on every
- * path (a mailbox message held longer is sent again, gate.ts), so no held step may wait unbounded. The longest
- * path, a fallback whose every step takes its whole bound, holds for about 90 s:
- * stop 15 + respawn 10 + probe 30 + close the new pane 5 + relaunch 30.
+ * Bounds on every step, so the whole move ends well under 120 s on every path: a mailbox message held longer is sent
+ * again (gate.ts), and the routes the move holds have no auto-release. A step that overruns is abandoned and fails the
+ * move as any failure there does.
+ *
+ * Before the hold: capture 5 + launch 10 + create 5 = 20 s. Held, on the longest path (a fallback whose every step
+ * takes its whole bound): stop 10 + prepare 5 + respawn 5 + probe 30 + close the new pane 5 + relaunch 20 = 75 s.
+ * Held, on the longest success: stop 10 + prepare 5 + respawn 5 + probe 30 + retarget 5 + release 5 + close the old
+ * pane 5 = 65 s. At most 95 s in all.
  */
-export const MOVE_STOP_TIMEOUT_MS = 15_000
-export const MOVE_STEP_TIMEOUT_MS = 10_000
-export const MOVE_KILL_TIMEOUT_MS = 5_000
+export const MOVE_CAPTURE_TIMEOUT_MS = 5_000
+/** Restore's launch waits for the grid's or the Store's answer (`relaunchOverrides`) and the permission check. */
+export const MOVE_LAUNCH_TIMEOUT_MS = 10_000
+export const MOVE_CREATE_TIMEOUT_MS = 5_000
+/** The old engine's stop: its native conversation released, then SIGTERM and, after a grace, SIGKILL. */
+export const MOVE_STOP_TIMEOUT_MS = 10_000
+/** Each single host or core call while held: preparing the conversation, respawn, retarget, release, a pane's close. */
+export const MOVE_STEP_TIMEOUT_MS = 5_000
 /** The old pane's relaunch: a restart's resume attempt and its fresh retry, each with its own wait for the engine. */
-export const MOVE_RELAUNCH_TIMEOUT_MS = 30_000
+export const MOVE_RELAUNCH_TIMEOUT_MS = 20_000
 
 export type MoveOutcome = { moved: true; resumed: boolean } | { moved: false; reason: string; fellBack: boolean }
 
@@ -54,8 +63,14 @@ export interface MoveAgentDeps {
   /** The backend's `respawn` of [runtime] with the launch's argv, cwd and env, as `restoreTerminals.ts` does: the
    *  pane, and the scrollback it was seeded with, stay. */
   respawn(runtime: TerminalRuntimeRef, launch: RestoreLaunch): Promise<{ ok: boolean; reason?: string }>
-  /** Restore's launch (`createRestoreLaunch`, core/agents/restoreLaunch.ts), shared and not copied. */
+  /** Restore's launch (`createRestoreLaunch`, core/agents/restoreLaunch.ts), shared and not copied. Asked with
+   *  `prepare: false`: it is built while the old engine still runs, so it must write neither the conversation nor the
+   *  row (`prepareResume` does, once that engine has stopped). */
   buildLaunch: RestoreAgentsDeps['buildLaunch']
+  /** What `buildLaunch` leaves out with `prepare: false`, run once the old engine is confirmed stopped, as a restart
+   *  prepares after its kill: `prepareSessionResume` (the conversation's repair, a Pi session's copy) and
+   *  `refreshGridWebSearch`. Throws when the conversation could not be prepared. */
+  prepareResume(session: RegisteredSession): Promise<void>
   /** Stop the old engine and keep its pane, as `paneSwapDeps`' `terminate` does after its `holdOpen` (core/agents/
    *  swap.ts): a pane that is not held is closed with its process, and the fallback needs it. */
   stopEngine(session: RegisteredSession): Promise<TerminateOutcome>
@@ -68,17 +83,18 @@ export interface MoveAgentDeps {
   /** Move the agent's open streams to [runtime] (`TerminalStreamManager.retarget`). */
   retarget(agentId: string, runtime: TerminalRuntimeRef): Promise<void>
   /** Hand the new pane back to the backend's default disposal once it is the agent's, as a restart does
-   *  (`releaseHold`): it was created held. Left out, the pane stays held. */
-  releaseHold?(runtime: TerminalRuntimeRef): Promise<void>
+   *  (`releaseHold`): it was created held. */
+  releaseHold(runtime: TerminalRuntimeRef): Promise<void>
   /** Close [runtime]. True once the backend confirms it is gone. */
   killPane(runtime: TerminalRuntimeRef): Promise<boolean>
   /** Relaunch the engine in the old pane, with resume (`restartAgent`). True once it runs there. */
   relaunchOld(session: RegisteredSession): Promise<boolean>
   gate: MoveGate
-  /** The reconciler's route hold, for the old and the new pane, released by `releaseRoute` when the move ends: with
-   *  no auto-release shorter than the move, or a pane seen mid-move would be read as an agent appearing or ending. */
-  holdRoute(routeKey: string): void
-  releaseRoute(routeKey: string): void
+  /** The reconciler's route hold (`agentReconciler.holdRoute(key, null)`), for the new pane from step 3 and the old
+   *  one from step 4: a pane seen mid-move would be read as an agent appearing or ending. Returns this hold's own
+   *  release, which lets go of the route only while this hold still owns it: a Stop or delete that cancelled the move
+   *  and took the route over keeps its hold. */
+  holdRoute(routeKey: string): () => void
   /** False once the move is cancelled (Stop, delete, a replacement): `restartJobs.run`'s `current`. */
   current(): boolean
   log(message: string): void
@@ -111,27 +127,33 @@ export function moveMarkerOf(label: string | undefined): string | null {
  * Close every move pane no row names: a move a dead daemon left before its swap. The row still names the old pane,
  * which restore relaunches; this pane, possibly running an engine on the same conversation, would otherwise be minted
  * a second agent by discovery. Run once at core start, before restore and discovery. A pane a finished move made
- * keeps its label, and its row names it: it stays. Returns how many were closed.
+ * keeps its label, and its row names it: it stays.
+ *
+ * Returns how many were closed, and the agents whose orphan pane could not be confirmed closed: restore must hold
+ * those, or it would relaunch an engine beside the one that pane may still run.
  */
 export async function removeOrphanMovePanes(
   backends: ReadonlyArray<Pick<TerminalBackend, 'inventory' | 'kill'>>,
   rows: ReadonlyArray<Pick<RegisteredSession, 'runtimes'>>,
-): Promise<number> {
+): Promise<{ removed: number; unconfirmed: string[] }> {
   const named = new Set(rows.flatMap((row) => row.runtimes.map(terminalRouteKey)))
   let removed = 0
+  const unconfirmed = new Set<string>()
   for (const backend of backends) {
     let inventory: Awaited<ReturnType<TerminalBackend['inventory']>>
     try { inventory = await backend.inventory() } catch { continue }
     // A host that cannot be listed keeps its panes: absence of an answer is not absence of a row.
     if (inventory.state !== 'available') continue
     for (const root of inventory.roots) {
-      if (moveMarkerOf(root.label) === null || named.has(terminalRouteKey(root.runtime))) continue
-      try {
-        if ((await backend.kill(root.runtime)).state === 'succeeded') removed++
-      } catch { /* left for the next start */ }
+      const agentId = moveMarkerOf(root.label)
+      if (agentId === null || named.has(terminalRouteKey(root.runtime))) continue
+      let closed = false
+      try { closed = (await backend.kill(root.runtime)).state === 'succeeded' } catch { /* not confirmed */ }
+      if (closed) removed++
+      else unconfirmed.add(agentId)
     }
   }
-  return removed
+  return { removed, unconfirmed: [...unconfirmed] }
 }
 
 type Bounded<T> = { done: true; value: T } | { done: false; reason: string }
@@ -184,12 +206,14 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
 
   // A log line that throws must not turn a finished step into a failed one.
   const log = (message: string) => { try { deps.log(message) } catch { /* nothing to tell */ } }
-  const heldRoutes = new Set<string>()
-  const holdRoute = (key: string) => {
-    if (heldRoutes.has(key)) return
-    heldRoutes.add(key)
-    deps.holdRoute(key)
+  /** This move's own route holds, each with its owner-scoped release. */
+  const routeHolds = new Map<string, () => void>()
+  const holdRoute = (runtime: TerminalRuntimeRef) => {
+    const key = terminalRouteKey(runtime)
+    if (!routeHolds.has(key)) routeHolds.set(key, deps.holdRoute(key))
   }
+  /** Routes the move must not let go of when it ends: a new pane that may still run, unclaimed by any row. */
+  const keptRoutes = new Set<string>()
   /** The pane step 3 made; until the swap, the only pane a failure may close. */
   let created: TerminalRuntimeRef | null = null
   let holding = false
@@ -209,16 +233,20 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
     let newPaneClosed = true
     if (created) {
       const newPane = created
-      const closed = await bounded(() => deps.killPane(newPane), MOVE_KILL_TIMEOUT_MS, 'closing the new pane')
+      const closed = await bounded(() => deps.killPane(newPane), MOVE_STEP_TIMEOUT_MS, 'closing the new pane')
       newPaneClosed = closed.done && closed.value
-      if (!newPaneClosed) log(`[move] ${agentId}: the new pane was not confirmed closed (${closed.done ? 'refused' : closed.reason})`)
+      if (!newPaneClosed) {
+        // Its route stays held, so discovery never mints it a second agent, possibly beside the same conversation:
+        // until the daemon restarts, whose start closes it (`removeOrphanMovePanes`), or a later close of it.
+        keptRoutes.add(terminalRouteKey(newPane))
+        log(`[move] ${agentId}: warning: the new pane ${newPane.paneId} was not confirmed closed (${closed.done ? 'refused' : closed.reason}); its route stays held`)
+      }
     }
     if (!stopped) return { moved: false, reason, fellBack: false }
     // Cancelled by a Stop, a delete or a replacement: the engine stays stopped, for whoever cancelled the move.
     if (!deps.current()) return { moved: false, reason, fellBack: false }
     if (respawned && !newPaneClosed) {
-      // Relaunched now, the old engine could share its conversation with one still running in the new pane. That pane
-      // keeps its marker, and the next core start closes it (`removeOrphanMovePanes`).
+      // Relaunched now, the old engine could share its conversation with one still running in the new pane.
       log(`[move] ${agentId}: not relaunched in the old pane while the new one may still run its engine`)
       return { moved: false, reason, fellBack: false }
     }
@@ -230,41 +258,61 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
   }
 
   try {
-    for (const runtime of session.runtimes) holdRoute(terminalRouteKey(runtime))
     if (!deps.current()) return await recover(CANCELLED)
+
+    // Steps 1 to 3 write nothing: not the row, not the conversation, not the old pane. A failure or a cancel here
+    // leaves the agent as it was, apart from the pane step 3 made.
 
     // 1. The old pane's scrollback.
-    let captured: string | null
-    try { captured = await deps.capture(session) } catch { captured = null }
-    if (captured === null) return await recover('could not capture the old pane')
+    const capture = await bounded(() => deps.capture(session), MOVE_CAPTURE_TIMEOUT_MS, 'capturing the old pane')
+    if (!capture.done || capture.value === null) return await recover(`could not capture the old pane${capture.done ? '' : `: ${capture.reason}`}`)
     if (!deps.current()) return await recover(CANCELLED)
-    const seed = seedFromCapture(captured)
+    const seed = seedFromCapture(capture.value)
 
-    // 2. The launch, as restore builds it, resuming the row's conversation.
-    const launch = await deps.buildLaunch(session, { resumeSessionId: session.sessionId, current: () => deps.current() })
+    // 2. The launch, as restore builds it, resuming the row's conversation, without preparing it: the old engine still
+    // runs, and the conversation is prepared once it has stopped (step 5).
+    const built = await bounded(
+      () => deps.buildLaunch(session, { resumeSessionId: session.sessionId, current: () => deps.current(), prepare: false }),
+      MOVE_LAUNCH_TIMEOUT_MS, 'building the launch')
+    if (!built.done) return await recover(built.reason)
+    const launch = built.value
     if (!deps.current() || 'cancelled' in launch) return await recover(CANCELLED)
     if ('error' in launch) return await recover(`no launch: ${launch.detail}`)
     if ('held' in launch) return await recover(`the launch waits for ${launch.held}`)
 
     // 3. The new pane, waiting with no engine.
-    const made = await deps.createSeeded(session, seed)
-    if (!made.ok) return await recover(`could not open a pane on the new host: ${made.reason}`)
-    created = made.runtime
-    holdRoute(terminalRouteKey(created))
+    const creating = Promise.resolve().then(() => deps.createSeeded(session, seed))
+    const made = await bounded(() => creating, MOVE_CREATE_TIMEOUT_MS, 'opening the new pane')
+    if (!made.done) {
+      // A create answered after its bound made a pane nothing will use: close it then.
+      void creating.then(async (late) => {
+        if (late.ok && !(await deps.killPane(late.runtime))) log(`[move] ${agentId}: warning: a late new pane ${late.runtime.paneId} was not confirmed closed`)
+      }).catch(() => { /* the next core start closes it (`removeOrphanMovePanes`) */ })
+      return await recover(made.reason)
+    }
+    if (!made.value.ok) return await recover(`could not open a pane on the new host: ${made.value.reason}`)
+    created = made.value.runtime
+    holdRoute(created)
     if (!deps.current()) return await recover(CANCELLED)
 
-    // 4. From here until release, what is typed or sent to the agent waits (gate.ts).
+    // 4. From here until release, what is typed or sent to the agent waits (gate.ts), and the old pane's route is
+    // held: its engine is about to stop, which must not read as the agent ending.
+    for (const runtime of session.runtimes) holdRoute(runtime)
     deps.gate.hold(agentId)
     holding = true
     if (!deps.current()) return await recover(CANCELLED)
     // Someone reached for the agent: nothing has changed yet, so give it back untouched.
     if (deps.gate.touched(agentId)) return await recover('the agent was used as the move began')
 
-    // 5. The old engine stops; its pane stays, for the fallback.
+    // 5. The old engine stops; its pane stays, for the fallback. Only then is the conversation prepared for its resume,
+    // as a restart prepares after its kill.
     stopped = true
     const stop = await bounded(() => deps.stopEngine(session), MOVE_STOP_TIMEOUT_MS, `stopping ${engine}`)
     if (!stop.done) return await recover(stop.reason)
     if (!KILL_CONFIRMED.has(stop.value)) return await recover(`could not confirm the old ${engine} process stopped (${stop.value})`)
+    if (!deps.current()) return await recover(CANCELLED)
+    const prepared = await bounded(() => deps.prepareResume(session), MOVE_STEP_TIMEOUT_MS, `preparing the ${engine} conversation`)
+    if (!prepared.done) return await recover(prepared.reason)
     if (!deps.current()) return await recover(CANCELLED)
 
     // 6. The engine resumes in the new pane, over its scrollback.
@@ -290,15 +338,12 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
     created = null
     const streams = await bounded(() => deps.retarget(agentId, newPane), MOVE_STEP_TIMEOUT_MS, 'moving open streams')
     if (!streams.done) log(`[move] ${agentId}: ${streams.reason}`)
-    if (deps.releaseHold) {
-      const release = deps.releaseHold
-      const released = await bounded(() => release(newPane), MOVE_KILL_TIMEOUT_MS, 'releasing the new pane')
-      if (!released.done) log(`[move] ${agentId}: ${released.reason}`)
-    }
+    const released = await bounded(() => deps.releaseHold(newPane), MOVE_STEP_TIMEOUT_MS, 'releasing the new pane')
+    if (!released.done) log(`[move] ${agentId}: ${released.reason}`)
 
     // 9. The old pane, which nothing names now.
     for (const old of session.runtimes) {
-      const closed = await bounded(() => deps.killPane(old), MOVE_KILL_TIMEOUT_MS, 'closing the old pane')
+      const closed = await bounded(() => deps.killPane(old), MOVE_STEP_TIMEOUT_MS, 'closing the old pane')
       if (!closed.done || !closed.value) log(`[move] ${agentId}: the old pane was not confirmed closed (${closed.done ? 'refused' : closed.reason})`)
     }
     return { moved: true, resumed: true }
@@ -307,6 +352,9 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
   } finally {
     // 10. Held input goes to the pane the row names now: the new one, or the old one after a fallback.
     if (holding) await deps.gate.release(agentId).catch(() => { /* each delivery reports its own failure */ })
-    for (const key of heldRoutes) deps.releaseRoute(key)
+    for (const [key, release] of routeHolds) {
+      if (keptRoutes.has(key)) continue
+      try { release() } catch { /* the reconciler's own */ }
+    }
   }
 }

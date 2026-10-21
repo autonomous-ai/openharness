@@ -29,34 +29,42 @@ function harness(overrides: Partial<MoveAgentDeps> = {}) {
   let releasedAt: number | null = null
   gate.hold = (agentId) => { events.push('hold'); heldAt = Date.now(); hold(agentId) }
   gate.release = async (agentId) => { events.push('release'); releasedAt = Date.now(); await release(agentId) }
-  const holdRoute = vi.fn<(key: string) => void>()
-  const releaseRoute = vi.fn<(key: string) => void>()
+  // The reconciler's route holds, owner-scoped as `holdRoute(key, null)` is: a release lets go only of its own hold.
+  const routes = new Map<string, symbol>()
+  const holdRoute = vi.fn((key: string) => {
+    const owner = Symbol('hold')
+    routes.set(key, owner)
+    return () => { if (routes.get(key) === owner) routes.delete(key) }
+  })
   const deps: MoveAgentDeps = {
     capture: vi.fn(async () => { events.push('capture'); return 'line one\nline two\n' }),
     buildLaunch: vi.fn(async () => { events.push('buildLaunch'); return LAUNCH }),
     createSeeded: vi.fn(async () => { events.push('create'); return { ok: true as const, runtime: NEW } }),
     stopEngine: vi.fn(async () => { events.push('stop'); return 'terminated' as const }),
+    prepareResume: vi.fn(async () => { events.push('prepare') }),
     respawn: vi.fn(async () => { events.push('respawn'); return { ok: true } }),
     probeProcess: vi.fn(async () => ID),
     swap: vi.fn((_agentId: string, runtime: TerminalRuntimeRef) => { events.push('swap'); row.runtime = runtime }),
     retarget: vi.fn(async (_agentId: string, to: TerminalRuntimeRef) => {
       events.push(row.runtime === to ? 'retarget(row names it)' : 'retarget(row names the old pane)')
     }),
+    releaseHold: vi.fn(async (runtime: TerminalRuntimeRef) => { events.push(`releaseHold ${runtime.paneId}`) }),
     killPane: vi.fn(async (runtime: TerminalRuntimeRef) => { events.push(`kill ${runtime.paneId}`); return true }),
     relaunchOld: vi.fn(async () => { events.push('relaunchOld'); return true }),
     gate,
     holdRoute,
-    releaseRoute,
     current: () => true,
     log: vi.fn(),
     ...overrides,
   }
-  return { deps, events, row, gate, holdRoute, releaseRoute, heldMs: () => heldAt === null || releasedAt === null ? null : releasedAt - heldAt }
+  return { deps, events, row, gate, holdRoute, routes, heldMs: () => heldAt === null || releasedAt === null ? null : releasedAt - heldAt }
 }
 
-/** Runs the move to its end on the fake clock: the probe polls, and every bound is a timer. */
+let movedMs = 0
+/** Runs the move to its end on the fake clock: the probe polls, and every bound is a timer. Sets `movedMs`. */
 async function run(deps: MoveAgentDeps, row: RegisteredSession = session()): Promise<MoveOutcome> {
-  const moved = moveAgent(row, deps)
+  const started = Date.now()
+  const moved = moveAgent(row, deps).finally(() => { movedMs = Date.now() - started })
   await vi.advanceTimersByTimeAsync(300_000)
   return moved
 }
@@ -69,18 +77,20 @@ describe('moveAgent', () => {
     const h = harness()
     const outcome = await run(h.deps)
     expect(outcome).toEqual({ moved: true, resumed: true })
-    expect(h.events).toEqual(['capture', 'buildLaunch', 'create', 'hold', 'stop', 'respawn', 'swap', 'retarget(row names it)', 'kill %1', 'release'])
+    expect(h.events).toEqual(['capture', 'buildLaunch', 'create', 'hold', 'stop', 'prepare', 'respawn', 'swap', 'retarget(row names it)', 'releaseHold %7', 'kill %1', 'release'])
     // The same agent id throughout: the row is switched to the new pane, never replaced.
     expect(h.deps.swap).toHaveBeenCalledWith('a1', NEW, ID)
-    expect(h.deps.buildLaunch).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1' }), expect.objectContaining({ resumeSessionId: 's1' }))
+    // Built while the old engine runs: without the writes a launch prepares, which wait for its stop.
+    expect(h.deps.buildLaunch).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1' }), expect.objectContaining({ resumeSessionId: 's1', prepare: false }))
     // The new pane is seeded with the old one's scrollback, as the host's terminal expects it.
     expect(h.deps.createSeeded).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1' }), 'line one\r\nline two')
     expect(h.deps.respawn).toHaveBeenCalledWith(NEW, LAUNCH)
     expect(h.deps.relaunchOld).not.toHaveBeenCalled()
     expect(h.gate.holding('a1')).toBe(false)
-    // Both routes, for the whole move: the reconciler sees neither pane come or go on its own.
-    expect(h.holdRoute.mock.calls.map(([key]) => key).sort()).toEqual([terminalRouteKey(OLD), terminalRouteKey(NEW)].sort())
-    expect(h.releaseRoute.mock.calls.map(([key]) => key).sort()).toEqual([terminalRouteKey(OLD), terminalRouteKey(NEW)].sort())
+    // Both routes, the new one from its create and the old one from the hold: the reconciler sees neither pane come
+    // or go on its own. Both are let go at the end.
+    expect(h.holdRoute.mock.calls.map(([key]) => key)).toEqual([terminalRouteKey(NEW), terminalRouteKey(OLD)])
+    expect(h.routes.size).toBe(0)
   })
 
   it('delivers input typed during the move to the new pane, after the swap', async () => {
@@ -104,7 +114,7 @@ describe('moveAgent', () => {
       expect(h.deps.stopEngine).not.toHaveBeenCalled()
       expect(h.deps.killPane).not.toHaveBeenCalled()
       expect(h.events).not.toContain('hold')
-      expect(h.releaseRoute).toHaveBeenCalledTimes(h.holdRoute.mock.calls.length)
+      expect(h.holdRoute).not.toHaveBeenCalled()
     }
   })
 
@@ -134,7 +144,7 @@ describe('moveAgent', () => {
     })
     const outcome = await run(h.deps)
     expect(outcome).toEqual({ moved: false, reason: expect.any(String), fellBack: true })
-    expect(h.events).toEqual(['capture', 'buildLaunch', 'create', 'hold', 'stop', 'respawn', 'kill %7', 'relaunchOld (engine up)', 'release'])
+    expect(h.events).toEqual(['capture', 'buildLaunch', 'create', 'hold', 'stop', 'prepare', 'respawn', 'kill %7', 'relaunchOld (engine up)', 'release'])
     expect(h.deps.swap).not.toHaveBeenCalled()
     expect(h.row.runtime).toBe(OLD)
     expect(h.gate.holding('a1')).toBe(false)
@@ -154,6 +164,7 @@ describe('moveAgent', () => {
     expect(await run(h.deps)).toEqual({ moved: false, reason: expect.stringContaining('host refused'), fellBack: false })
     // Input then goes to the old pane, as it does after any failed restart.
     expect(h.events.slice(-4)).toEqual(['respawn', 'kill %7', 'relaunchOld', 'release'])
+    expect(h.routes.size).toBe(0)
     expect(h.gate.holding('a1')).toBe(false)
   })
 
@@ -162,6 +173,9 @@ describe('moveAgent', () => {
     expect(await run(h.deps)).toMatchObject({ moved: false, fellBack: false })
     expect(h.deps.relaunchOld).not.toHaveBeenCalled()
     expect(h.events).toContain('release')
+    // Its route stays held, so discovery never mints the pane a second agent; the old pane's is let go.
+    expect([...h.routes.keys()]).toEqual([terminalRouteKey(NEW)])
+    expect(h.deps.log).toHaveBeenCalledWith(expect.stringMatching(/warning: the new pane %7 was not confirmed closed/))
   })
 
   it('nothing after the switch relaunches the old engine', async () => {
@@ -224,22 +238,29 @@ describe('moveAgent', () => {
       await vi.advanceTimersByTimeAsync(0)
       expect(delivered, name).toEqual(['after'])
       expect(h.gate.holding('a1'), name).toBe(false)
-      expect(h.releaseRoute.mock.calls.length, name).toBe(h.holdRoute.mock.calls.length)
+      expect(h.routes.size, name).toBe(0)
     }
   })
 
-  it('the hold ends well under two minutes when every held step is slow or hangs', async () => {
+  it('the hold, and the whole move, end well under two minutes when every step is slow or hangs', async () => {
     const slowest = harness({
-      stopEngine: vi.fn(() => after(14_000, 'terminated' as const)),
-      respawn: vi.fn(() => after(9_000, { ok: true })),
+      capture: vi.fn(() => after(4_000, 'old')),
+      buildLaunch: vi.fn(() => after(9_000, LAUNCH)),
+      createSeeded: vi.fn(() => after(4_000, { ok: true as const, runtime: NEW })),
+      stopEngine: vi.fn(() => after(9_000, 'terminated' as const)),
+      prepareResume: vi.fn(() => after(4_000, undefined)),
+      respawn: vi.fn(() => after(4_000, { ok: true })),
       probeProcess: vi.fn(() => never<ProcessIdentity | null>()),
       killPane: vi.fn(() => after(4_000, true)),
       relaunchOld: vi.fn(() => never<boolean>()),
     })
     await run(slowest.deps)
-    // stop 14 + respawn 9 + probe 30 + closing the new pane 4 + relaunch 30: every bound was waited out, and no more.
-    expect(slowest.heldMs()!).toBeGreaterThan(80_000)
-    expect(slowest.heldMs()!).toBeLessThan(100_000)
+    // Held: stop 9 + prepare 4 + respawn 4 + probe 30 + closing the new pane 4 + relaunch 20. Before it: 4 + 9 + 4.
+    // Every bound was waited out, and no more.
+    expect(slowest.heldMs()!).toBeGreaterThan(65_000)
+    expect(slowest.heldMs()!).toBeLessThan(80_000)
+    expect(movedMs).toBeGreaterThan(80_000)
+    expect(movedMs).toBeLessThan(100_000)
 
     const hangs = harness({
       stopEngine: vi.fn(() => never<'terminated'>()),
@@ -249,9 +270,73 @@ describe('moveAgent', () => {
     await run(hangs.deps)
     expect(hangs.heldMs()!).toBeLessThan(100_000)
 
-    const movedButSlow = harness({ retarget: vi.fn(() => never<void>()), killPane: vi.fn(() => never<boolean>()) })
+    const movedButSlow = harness({
+      retarget: vi.fn(() => never<void>()), releaseHold: vi.fn(() => never<void>()), killPane: vi.fn(() => never<boolean>()),
+    })
     expect(await run(movedButSlow.deps)).toEqual({ moved: true, resumed: true })
     expect(movedButSlow.heldMs()!).toBeLessThan(100_000)
+  })
+
+  it('a launch that never comes ends the move with nothing changed and no route held', async () => {
+    const h = harness({ buildLaunch: vi.fn(() => never<typeof LAUNCH>()) })
+    expect(await run(h.deps)).toEqual({ moved: false, reason: expect.stringContaining('building the launch'), fellBack: false })
+    expect(movedMs).toBeLessThan(120_000)
+    expect(h.deps.createSeeded).not.toHaveBeenCalled()
+    expect(h.deps.stopEngine).not.toHaveBeenCalled()
+    expect(h.deps.killPane).not.toHaveBeenCalled()
+    expect(h.events).not.toContain('hold')
+    expect(h.holdRoute).not.toHaveBeenCalled()
+    expect(h.routes.size).toBe(0)
+  })
+
+  it('a create answered after its bound closes the pane it made', async () => {
+    const h = harness({ createSeeded: vi.fn(() => after(60_000, { ok: true as const, runtime: NEW })) })
+    expect(await run(h.deps)).toMatchObject({ moved: false, fellBack: false })
+    expect(h.deps.stopEngine).not.toHaveBeenCalled()
+    expect(vi.mocked(h.deps.killPane).mock.calls.map(([runtime]) => runtime)).toEqual([NEW])
+    expect(h.routes.size).toBe(0)
+  })
+
+  it('prepares the conversation only once the old engine is confirmed stopped', async () => {
+    const h = harness()
+    await run(h.deps)
+    expect(h.events.indexOf('stop')).toBeLessThan(h.events.indexOf('prepare'))
+    expect(h.events.indexOf('prepare')).toBeLessThan(h.events.indexOf('respawn'))
+    expect(h.deps.prepareResume).toHaveBeenCalledTimes(1)
+
+    for (const stopEngine of [async () => 'failed' as const, async () => 'not-ours' as const, () => never<'terminated'>()]) {
+      const unconfirmed = harness({ stopEngine: vi.fn(stopEngine) })
+      await run(unconfirmed.deps)
+      expect(unconfirmed.deps.prepareResume).not.toHaveBeenCalled()
+      expect(unconfirmed.deps.respawn).not.toHaveBeenCalled()
+    }
+  })
+
+  it('a failed preparation falls back to the old pane', async () => {
+    for (const prepareResume of [async () => { throw new Error('rollout repair failed') }, () => never<void>()]) {
+      const h = harness({ prepareResume: vi.fn(prepareResume) })
+      expect(await run(h.deps)).toEqual({ moved: false, reason: expect.any(String), fellBack: true })
+      expect(h.deps.respawn).not.toHaveBeenCalled()
+      expect(h.deps.swap).not.toHaveBeenCalled()
+      expect(h.events.slice(-3)).toEqual(['kill %7', 'relaunchOld', 'release'])
+    }
+  })
+
+  it('a route hold another owner took after the move\'s is not released by the move', async () => {
+    const h = harness()
+    let stopsHold: (() => void) | null = null
+    // A Stop cancels the move while the old engine stops, and takes the old pane's route for its own retirement.
+    let live = true
+    h.deps.current = () => live
+    h.deps.stopEngine = vi.fn(async () => {
+      live = false
+      stopsHold = h.deps.holdRoute(terminalRouteKey(OLD))
+      return 'terminated' as const
+    })
+    expect(await run(h.deps)).toMatchObject({ moved: false })
+    expect([...h.routes.keys()]).toEqual([terminalRouteKey(OLD)])
+    stopsHold!()
+    expect(h.routes.size).toBe(0)
   })
 
   it('a cancelled move (current() false) before step 5 changes nothing', async () => {
@@ -281,7 +366,7 @@ describe('moveAgent', () => {
       // Only the pane the move made is closed; the old one is never touched.
       expect(vi.mocked(h.deps.killPane).mock.calls.map(([runtime]) => runtime), point).toEqual(madePane ? [NEW] : [])
       expect(h.gate.holding('a1'), point).toBe(false)
-      expect(h.releaseRoute.mock.calls.length, point).toBe(h.holdRoute.mock.calls.length)
+      expect(h.routes.size, point).toBe(0)
     }
   })
 
@@ -366,8 +451,16 @@ describe('removeOrphanMovePanes', () => {
       { ...session(), runtimes: [OLD] },
       { ...session(), agentId: 'a2', runtimes: [{ backend: 'ptyhost', instance: 'p2-1.2.3', paneId: '%9' }] },
     ] as RegisteredSession[]
-    expect(await removeOrphanMovePanes([target.backend, unreachable.backend], rows)).toBe(1)
+    expect(await removeOrphanMovePanes([target.backend, unreachable.backend], rows)).toEqual({ removed: 1, unconfirmed: [] })
     expect(target.kill.mock.calls.map(([runtime]) => runtime.paneId)).toEqual(['%7'])
     expect(unreachable.kill).not.toHaveBeenCalled()
+  })
+
+  it('names the agents whose orphan move pane could not be confirmed closed, for restore to hold', async () => {
+    const refused = backend({ state: 'available', roots: [pane('%7', moveCreateRequest('a1', { seed: '', command: ['sh'] }).label)] })
+    refused.kill.mockResolvedValue({ state: 'failed', dispatch: 'rejected', reason: 'busy' } as never)
+    const throws = backend({ state: 'available', roots: [pane('%8', moveCreateRequest('a3', { seed: '', command: ['sh'] }).label)] })
+    throws.kill.mockRejectedValue(new Error('host gone'))
+    expect(await removeOrphanMovePanes([refused.backend, throws.backend], [session()])).toEqual({ removed: 0, unconfirmed: ['a1', 'a3'] })
   })
 })

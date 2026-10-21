@@ -30,6 +30,19 @@ describe('a restore launch Windows refuses', () => {
   })
 })
 
+describe('a launch built without preparation', () => {
+  it('writes neither the conversation nor the row, and builds the same launch', async () => {
+    const { deps, build } = setup()
+    expect(await build(entry, { resumeSessionId: 'conversation', current: () => true, prepare: false })).toEqual({ argv: ['engine'] })
+    expect(deps.prepareSessionResume).not.toHaveBeenCalled()
+    expect(deps.refreshGridWebSearch).not.toHaveBeenCalled()
+    expect(deps.launch).toHaveBeenCalledWith(entry, { resumeSessionId: 'conversation' }, built.overrides, { bypassPermission: false })
+    await build(entry, { resumeSessionId: 'conversation', current: () => true })
+    expect(deps.prepareSessionResume).toHaveBeenCalledWith(entry)
+    expect(deps.refreshGridWebSearch).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('restore preparation keeps session authority in core', () => {
   it.each(['unknown flags', 'changed executable', 'ready'] as const)('preserves native preparation evidence through restore: %s', async stage => {
     const { deps, build } = setup()

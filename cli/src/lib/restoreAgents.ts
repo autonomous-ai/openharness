@@ -111,7 +111,10 @@ export interface RestoreAgentsDeps {
   liveProcess: (entry: RegisteredSession, runtime: TerminalRuntimeRef) => Promise<ProcessIdentity | null | 'unknown'>
   /** The pane's launch — engine argv plus whatever puts it back on its grid / profile. A grid the
    *  machine cannot honour (unsupported engine, tmux too old, config dir unwritable) is a refusal. */
-  buildLaunch: (entry: RegisteredSession, opts: { resumeSessionId?: string; current(): boolean }) => Promise<RestoreLaunchResult>
+  /** [opts.prepare] false builds the launch without the writes it makes for it (the conversation's resume preparation,
+   *  the row's grid web search): a caller that builds it while the engine still runs does them itself once it has
+   *  stopped (hostMove/moveAgent.ts). */
+  buildLaunch: (entry: RegisteredSession, opts: { resumeSessionId?: string; current(): boolean; prepare?: false }) => Promise<RestoreLaunchResult>
   createPane: (entry: RegisteredSession, launch: RestoreLaunch, control?: TerminalDispatchControl) => Promise<
     | { ok: true; runtime: TerminalRuntimeRef }
     | { ok: false; reason: string }
