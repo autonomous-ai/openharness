@@ -12,7 +12,7 @@
 import { existsSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { SpawnLockBusyError, describeSpawnLockFailure } from '../daemonSpawnLock.js'
-import { currentPtyVersion } from '../ptyHost/launch.js'
+import { binaryVersion, currentPtyVersion } from '../ptyHost/launch.js'
 import { REFUSED_RETRY_MAX_MS, msUntilSlot, type Poller } from '../selfUpdate.js'
 import {
   BIN_FILES, PTY_PENDING, confirmPty, defaultPtyInstallFs, installPreparedPty, readPtyPending, rejectedPtyVersions, restorePty,
@@ -221,6 +221,17 @@ export function startPtyUpdater(opts: {
       }
     },
   }
+}
+
+/**
+ * The protocol the host `current-pty` names speaks (`harness-pty.exe version`, run once per build: ptyHost/launch.ts
+ * `binaryVersion`), or null when there is no pointer or the host cannot be read. The CLI's updater holds back a build
+ * that needs more (lib/selfUpdate.ts `installedPtyProtocol`, spec §5's protocol rule).
+ */
+export function installedPtyProtocol(rootDir: string, version: (binary: string) => { protocol: number } | null = binaryVersion): number | null {
+  const runtimeDir = join(rootDir, 'runtime')
+  const current = currentPtyVersion(runtimeDir)
+  return current === null ? null : version(join(runtimeDir, 'pty', current, 'harness-pty.exe'))?.protocol ?? null
 }
 
 /** The aside files (`<name>.old-<pid>-<ms>`) of bin\[name], newest first. */

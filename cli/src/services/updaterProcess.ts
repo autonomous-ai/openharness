@@ -25,7 +25,7 @@ import { DOWNLOAD_LIMITS, downloadVerified, isLocalDevBuild, retireCliVersions, 
 import { currentCli } from '../lib/windows/installLayout.js'
 import { processRetireDeps } from '../lib/windows/cliVersions.js'
 import { preparePtyPayload, ptyManifestUrl, ptyPlatformKey } from '../lib/windows/ptyPayload.js'
-import { startPtyUpdater, sweepPtyLeftovers } from '../lib/windows/ptyUpdate.js'
+import { installedPtyProtocol, startPtyUpdater, sweepPtyLeftovers } from '../lib/windows/ptyUpdate.js'
 import { startTuiUpdater } from '../tui/update.js'
 import { VERSION } from '../version.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
@@ -49,6 +49,9 @@ export interface UpdaterServiceDeps {
    *  elsewhere. */
   startPty?: typeof startPtyUpdater
   ptyRootDir?: string
+  /** Windows: the protocol of the installed host, which a CLI build must not need more than (lib/selfUpdate.ts
+   *  `installedPtyProtocol`). Left out elsewhere. */
+  installedPtyProtocol?: () => number | null
 }
 
 /** [cliDir]: the CLI folder the retirement looks at, this user's own unless a test names one of its own. */
@@ -69,6 +72,7 @@ export const processUpdaterDeps = (platform: NodeJS.Platform = process.platform,
     installedVersion: () => currentCli(dirname(cliDir))?.version ?? VERSION,
     startPty: startPtyUpdater,
     ptyRootDir: dirname(cliDir),
+    installedPtyProtocol: () => installedPtyProtocol(dirname(cliDir)),
   } : {}),
 })
 
@@ -131,6 +135,8 @@ export function runUpdaterService(_options?: unknown, deps: UpdaterServiceDeps =
       return handOver({ version, ...(ptyVersion ? { ptyVersion } : {}) })
     },
     limits,
+    // Under any master: a build that needs a host this machine does not have would open no pane, whoever judged it.
+    ...(deps.installedPtyProtocol ? { installedPtyProtocol: deps.installedPtyProtocol } : {}),
     // A master judges a build staged while the one before is on probation (#807). Beside a core, under a
     // master too old to run the updater (core/updaterBeside.ts), only one that says so: one from before
     // rolled the newer build back with the one it judged.

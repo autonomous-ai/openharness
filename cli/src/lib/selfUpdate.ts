@@ -273,9 +273,26 @@ export async function downloadVerified(ref: FileRef, limits: TransferLimits = DO
 /**
  * What the canary found. `unwritable`: it could not be set up (a full disk, a folder it may not write),
  * which says nothing about the build; `failed`: the build ran and failed; `wrong-version`: it ran and
- * said it is another version than the manifest names.
+ * said it is another version than the manifest names. A build that ran says which terminal host protocol it
+ * needs (`ptyProtocol`, its `PTY_PROTOCOL`): the updater's protocol rule (`installedPtyProtocol`).
  */
-export type CanaryResult = { ok: true } | { ok: false; problem: 'unwritable' | 'failed' | 'wrong-version'; detail: string }
+export type CanaryResult = { ok: true; ptyProtocol: number } | { ok: false; problem: 'unwritable' | 'failed' | 'wrong-version'; detail: string }
+
+/** The protocol a build that prints only its version speaks: every build from before `version --json`. */
+const PLAIN_VERSION_PTY_PROTOCOL = 2
+
+/** What a build's last `version --json` line says: a G build's `{"version","ptyProtocol"}`, or, for any other line (a
+ *  build from before, which ignores the flag and prints its version alone), that line as its version, at protocol 2. */
+function readVersionAnswer(line: string): { version: string; ptyProtocol: number } {
+  try {
+    const parsed: unknown = JSON.parse(line)
+    const { version, ptyProtocol } = (parsed ?? {}) as { version?: unknown; ptyProtocol?: unknown }
+    if (typeof version === 'string' && Number.isSafeInteger(ptyProtocol) && (ptyProtocol as number) >= 1) {
+      return { version, ptyProtocol: ptyProtocol as number }
+    }
+  } catch { /* plain output */ }
+  return { version: line, ptyProtocol: PLAIN_VERSION_PTY_PROTOCOL }
+}
 
 /** How long the canary may take to answer. */
 export const CANARY_TIMEOUT_MS = 15_000
@@ -283,7 +300,8 @@ export const CANARY_TIMEOUT_MS = 15_000
 export const CANARY_KILL_GRACE_MS = 2_000
 
 /** Cheap runnability check: write the new bundle into a temp install-shaped dir and run
- *  `node cli.js version`. This catches broken ESM/CJS packaging before the live install is touched.
+ *  `node cli.js version --json`. This catches broken ESM/CJS packaging before the live install is touched,
+ *  and learns the terminal host protocol the build needs without staging it (spec §5, the protocol rule).
  *
  *  Given the version the manifest names, the build must also say it is that version. A manifest that
  *  named an older build's bytes under a newer version (published by mistake, e2e/updateHostile.e2e.ts)
@@ -314,7 +332,7 @@ export async function runCanary(cliBuf: Buffer, dir: string, version?: string, t
       let timedOut = false
       let grace: ReturnType<typeof setTimeout> | undefined
       let cancel = (): void => {}
-      const child = execFile(managedNodePath(), [tmpCli, 'version'], { encoding: 'utf8' }, (error, stdout) => {
+      const child = execFile(managedNodePath(), [tmpCli, 'version', '--json'], { encoding: 'utf8' }, (error, stdout) => {
         cancel()
         clearTimeout(grace)
         // An answer is an answer, even one that raced the kill.
@@ -336,9 +354,9 @@ export async function runCanary(cliBuf: Buffer, dir: string, version?: string, t
     })
     if (r.failure !== null) return { ok: false, problem: 'failed', detail: r.failure }
     const lines = r.stdout.trim().split('\n')
-    const said = lines[lines.length - 1]
-    if (version !== undefined && said !== version) return { ok: false, problem: 'wrong-version', detail: `it says it is ${said || 'nothing'}` }
-    return { ok: true }
+    const said = readVersionAnswer(lines[lines.length - 1].trim())
+    if (version !== undefined && said.version !== version) return { ok: false, problem: 'wrong-version', detail: `it says it is ${said.version || 'nothing'}` }
+    return { ok: true, ptyProtocol: said.ptyProtocol }
   } finally {
     try { rmSync(tmpDir, { recursive: true, force: true }) } catch { /* ignore */ }
   }
@@ -613,6 +631,13 @@ export function startSelfUpdater(opts: {
   stageWhileJudged?: boolean
   /** Whose layout `dir` has; this process's when left out. */
   platform?: NodeJS.Platform
+  /**
+   * Windows: the protocol of the terminal host `current-pty` names (lib/windows/ptyUpdate.ts `installedPtyProtocol`).
+   * A build whose canary says it needs a higher one is not staged: it would come up with no host it can open a pane
+   * on. It waits, verified, until a payload of that protocol is installed (the PTY check or install.ps1). Null, or
+   * left out (macOS and Linux, a host that cannot be read), holds nothing back.
+   */
+  installedPtyProtocol?: () => number | null
 }): Poller {
   let checking = false
   let done = false
@@ -622,12 +647,13 @@ export function startSelfUpdater(opts: {
   // they passed their canary: when the lock was busy (a `harness start` or `harness update`
   // mid-flight), or the canary could not be written, the next tick should try again from there, not
   // from the whole download.
-  let verified: { entry: string; version: string; cliBuf: Buffer; notifyBuf: Buffer; canaried: boolean } | null = null
+  let verified: { entry: string; version: string; cliBuf: Buffer; notifyBuf: Buffer; canaried: boolean; ptyProtocol: number } | null = null
   // The manifest's build, when it failed in a way it would fail again, and when it may be tried again.
   let refused: { entry: string; tries: number; until: number } | null = null
   // Said once per version: the check repeats every interval.
   let toldRejected: string | null = null
   let toldWaiting: string | null = null
+  let toldProtocol: string | null = null
 
   const now = opts.now ?? Date.now
   const platform = opts.platform ?? process.platform
@@ -695,7 +721,7 @@ export function startSelfUpdater(opts: {
           refuse(`does not match its manifest (${error.message})`)
           return
         }
-        verified = { entry: key, version: entry.version, cliBuf, notifyBuf, canaried: false }
+        verified = { entry: key, version: entry.version, cliBuf, notifyBuf, canaried: false, ptyProtocol: PLAIN_VERSION_PTY_PROTOCOL }
       }
       if (halted) return
       if (!verified.canaried) {
@@ -707,8 +733,17 @@ export function startSelfUpdater(opts: {
         }
         if (!result.ok) { refuse(`failed its canary (${result.detail})`); return }
         verified.canaried = true
+        verified.ptyProtocol = result.ptyProtocol
       }
       const ready = verified
+      // The protocol rule: no CLI that no installed host can serve. Asked at every check, with the bytes kept, so the
+      // build goes ahead at the first check after its payload is installed.
+      const hostProtocol = opts.installedPtyProtocol?.() ?? null
+      if (hostProtocol !== null && ready.ptyProtocol > hostProtocol) {
+        if (toldProtocol !== ready.version) console.log(`[update] ${ready.version} needs pty protocol ${ready.ptyProtocol}; this machine's host speaks ${hostProtocol} — waiting for its payload`)
+        toldProtocol = ready.version
+        return
+      }
       if (opts.stageWhileJudged === false && unjudgedUpdate(opts.dir, liveSha256(opts.dir, platform))) {
         if (toldWaiting !== ready.version) console.log(`[update] ${ready.version} is ready — waiting for this build to be kept before staging it`)
         toldWaiting = ready.version

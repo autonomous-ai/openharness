@@ -77,6 +77,9 @@ import { startServiceProcess } from './serviceProcess.js'
 import { askDataFolderServer, isLocalSocketName, localSocketPath, refuseServedDataFolder, servedFolderDeps } from './lib/localSocket.js'
 import { legacyDaemonStatus, localDaemonCall, localDaemonStatus } from './lib/daemonEndpoint.js'
 import { PipeUnproven } from './lib/windows/pipeClient.js'
+import { ptyManifestUrl, ptyPlatformKey, type PtyEntry } from './lib/windows/ptyPayload.js'
+import { installPtyForUpdate, newerPtyForUpdate } from './lib/windows/ptyUpdateCommand.js'
+import { PTY_PROTOCOL } from './lib/ptyHost/protocol.js'
 import { runAutonomousDeviceCommand } from './lib/autonomous-device/command.js'
 import { E2eeStore, identitySpent, peekIdentityPub } from './lib/e2ee/store.js'
 import { confirmsRemoval, deviceRegistration, deviceStatusValue, formatDeviceDetail, formatDeviceHistory, formatDeviceList, logOrder, removeConfirmation } from './lib/e2ee/deviceDisplay.js'
@@ -1200,6 +1203,15 @@ async function downloadCanaryStage(entry: UpdateEntry, dir: string, log: (m: str
   return true
 }
 
+/** The terminal host payload newer than the one installed under [rootDir], or null (also when this platform or the
+ *  update URL has none: the CLI's update goes on). */
+async function newerPtyFor(rootDir: string): Promise<PtyEntry | null> {
+  const key = ptyPlatformKey()
+  let url: string
+  try { url = ptyManifestUrl(env.ADAPTER_UPDATE_URL) } catch { return null }
+  return key === null ? null : newerPtyForUpdate({ url, key, rootDir })
+}
+
 /** An explicit hn update manages only the installed bundle, never a checkout or a canary. */
 function isInstalledCli(): boolean {
   const installedCli = join(env.ADAPTER_CLI_DIR, 'cli.js')
@@ -1214,6 +1226,10 @@ function isInstalledCli(): boolean {
  *  background poll. Checks the manifest; if a newer build exists it stops any running daemon first (so
  *  its poller can't race our staging), swaps in the new bytes, then relaunches on them. No-op on a
  *  dev/repo build, and leaves the daemon running-on-the-old-build untouched when already up to date.
+ *
+ *  On Windows the terminal host's promoted payload counts too (lib/windows/ptyUpdateCommand.ts): a newer one is
+ *  installed under the same lock, before the CLI, and with the CLI current it is installed alone and the daemon
+ *  restarted. As for the CLI, a version this machine rolled back is installed anyway.
  *
  *  On a LOCAL build (`install-cli.sh`) it stops and says so: the automatic paths leave those alone
  *  (see {@link shouldAutoUpdate}), and a command that silently did the opposite would be the same
@@ -1245,18 +1261,21 @@ async function updateCommand(force: boolean): Promise<void> {
   // level with — the check that keeps a release from stomping the build is also the check that would
   // make the deliberate swap a no-op.
   const replacingLocalBuild = force && isLocalDevBuild(VERSION)
-  if (!entry || !(semverGt(entry.version, VERSION) || replacingLocalBuild)) {
+  const cliEntry = entry && (semverGt(entry.version, VERSION) || replacingLocalBuild) ? entry : null
+  // Asked before anything stops: a host that is current must not cost the daemon a restart.
+  const ptyRoot = process.platform === 'win32' ? dirname(resolve(env.ADAPTER_CLI_DIR)) : null
+  const pty = ptyRoot === null ? null : await newerPtyFor(ptyRoot)
+  if (!cliEntry && !pty) {
     console.log(`✓ Already on the latest version (v${VERSION}).`)
     process.exit(0)
   }
 
-  // A newer build exists. Stop the running daemon FIRST so its own background updater can't race our
-  // staging on the .prev/.tmp files, then swap the bytes and bring it back up on the new build.
+  // A newer build or terminal host exists. Stop the running daemon FIRST so its own background updater can't
+  // race our staging on the .prev/.tmp files, then swap the bytes and bring it back up on the new build.
   //
   // The whole stop → stage → relaunch sequence runs under the spawn lock. Between the stop and the
   // relaunch there is no pid file for several seconds, and anything that spawns `harness start` on
   // "no daemon" (the desktop app does, every few seconds) used to land a second child in that gap.
-  const staged = entry
   await withSpawnLock('update', async () => {
     const running = readPid()
     const wasRunning = !!(running && isAlive(running))
@@ -1266,6 +1285,19 @@ async function updateCommand(force: boolean): Promise<void> {
     }
     if (wasRunning) { console.log('  stopping the running adapter…'); await stopDaemonOrExit() }
 
+    // The host first, as the updater does: the CLI's update goes on whatever happens to it. Installed, it is on
+    // probation, and the master the relaunch (or the next `harness start`) brings up keeps it or rolls it back.
+    const ptyInstalled = pty !== null && ptyRoot !== null && await installPtyForUpdate(pty, { rootDir: ptyRoot })
+    if (!cliEntry) {
+      if (!ptyInstalled) {
+        if (wasRunning) await relaunch() // the old host stays → bring the daemon back so `update` never leaves it down
+        process.exit(1)
+      }
+      if (wasRunning) { await relaunch(); return }
+      console.log(`✓ Updated the terminal host to ${pty?.version}. Run \`harness start\` to connect.`)
+      process.exit(0)
+    }
+    const staged = cliEntry
     console.log(`▸ Updating v${VERSION} → v${staged.version}…`)
     let ok = false
     try { ok = await downloadCanaryStage(staged, resolve(env.ADAPTER_CLI_DIR), (m) => console.log(m)) }
@@ -2659,7 +2691,13 @@ function withoutFirst(argv: string[], token: string): string[] {
 
 if (cmd === 'help' && args[0] === 'agents') { console.log(agentsHelp()); process.exit(0) }
 if (!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help') usage()
-if (cmd === 'version' || cmd === '--version' || cmd === '-v') { console.log(VERSION); process.exit(0) }
+// `--json` adds the terminal host protocol this build needs: the updater's canary reads it (lib/selfUpdate.ts
+// `runCanary`) to hold a build back until a host of that protocol is installed. A build from before prints its
+// version alone either way, which the canary reads as protocol 2.
+if (cmd === 'version' || cmd === '--version' || cmd === '-v') {
+  console.log(flags.includes('--json') ? JSON.stringify({ version: VERSION, ptyProtocol: PTY_PROTOCOL }) : VERSION)
+  process.exit(0)
+}
 
 
 switch (cmd) {

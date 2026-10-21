@@ -660,8 +660,8 @@ describe('the canary\'s verdicts', () => {
 
   it('tells a build that failed or names another version from a canary that could not be written', async () => {
     const dir = tempDir()
-    expect(await runCanary(Buffer.from('console.log("9.9.9")\n'), dir, '9.9.9')).toEqual({ ok: true })
-    expect(await runCanary(Buffer.from('console.log("loading…"); console.log("9.9.9")\n'), dir, '9.9.9')).toEqual({ ok: true })
+    expect(await runCanary(Buffer.from('console.log("9.9.9")\n'), dir, '9.9.9')).toEqual({ ok: true, ptyProtocol: 2 })
+    expect(await runCanary(Buffer.from('console.log("loading…"); console.log("9.9.9")\n'), dir, '9.9.9')).toEqual({ ok: true, ptyProtocol: 2 })
     expect(await runCanary(Buffer.from('console.log("9.9.8")\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', detail: 'it says it is 9.9.8' })
     expect(await runCanary(Buffer.from(''), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', detail: 'it says it is nothing' })
     expect(await runCanary(Buffer.from('process.exit(3)\n'), dir, '9.9.9')).toEqual({ ok: false, problem: 'failed', detail: 'exit 3' })
@@ -680,7 +680,7 @@ describe('the canary\'s verdicts', () => {
     let ticks = 0
     const timer = setInterval(() => { ticks++ }, 20)
     try {
-      expect(await runCanary(Buffer.from('setTimeout(() => console.log("9.9.9"), 600)\n'), tempDir(), '9.9.9')).toEqual({ ok: true })
+      expect(await runCanary(Buffer.from('setTimeout(() => console.log("9.9.9"), 600)\n'), tempDir(), '9.9.9')).toEqual({ ok: true, ptyProtocol: 2 })
     } finally { clearInterval(timer) }
     expect(ticks).toBeGreaterThan(10)
   })
@@ -709,6 +709,102 @@ describe('the canary\'s verdicts', () => {
     } finally {
       vi.doUnmock('./nodeRuntime.js')
       vi.resetModules()
+    }
+  })
+})
+
+describe('the terminal host protocol a build needs (spec §5, the protocol rule)', () => {
+  const sha = (b: Buffer): string => createHash('sha256').update(b).digest('hex')
+  const notify = Buffer.from('export {}\n')
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
+    dirs = []
+  })
+
+  /** A build that answers `version --json` as a G build does, and plain `version` as every build does. */
+  const build = (version: string, ptyProtocol: number): Buffer => Buffer.from(
+    `console.log(process.argv.includes('--json') ? JSON.stringify({ version: ${JSON.stringify(version)}, ptyProtocol: ${ptyProtocol} }) : ${JSON.stringify(version)})\n`,
+  )
+
+  it('plain version output counts as protocol 2', async () => {
+    const dir = tempDir()
+    // A build from before G prints its version alone, `--json` or not.
+    expect(await runCanary(Buffer.from('console.log("9.9.9")\n'), dir, '9.9.9')).toEqual({ ok: true, ptyProtocol: 2 })
+    expect(await runCanary(Buffer.from('console.log("{not json")\n'), dir)).toEqual({ ok: true, ptyProtocol: 2 })
+    // One that is not the JSON a G build prints is read as plain output too.
+    expect(await runCanary(Buffer.from('console.log(JSON.stringify({ version: "9.9.9" }))\n'), dir)).toEqual({ ok: true, ptyProtocol: 2 })
+    // A G build says its protocol; its JSON version is the one checked.
+    expect(await runCanary(build('9.9.9', 3), dir, '9.9.9')).toEqual({ ok: true, ptyProtocol: 3 })
+    expect(await runCanary(build('9.9.8', 3), dir, '9.9.9')).toEqual({ ok: false, problem: 'wrong-version', detail: 'it says it is 9.9.8' })
+    expect(readdirSync(dir), 'the canary cleans up after itself').toEqual([])
+  })
+
+  it('a build needing a newer pty protocol waits, then stages once the host has it', async () => {
+    const cli = build('9.9.9', 3)
+    let downloads = 0
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (url.endsWith('/metadata.json')) {
+        return new Response(JSON.stringify({ adapter: {
+          version: '9.9.9',
+          cli: { url: 'https://updates.test/cli.js', sha256: sha(cli) },
+          notify: { url: 'https://updates.test/notify.mjs', sha256: sha(notify) },
+        } }))
+      }
+      if (url.endsWith('cli.js')) downloads++
+      return new Response(url.endsWith('cli.js') ? cli : notify)
+    })
+    const logs: string[] = []
+    vi.spyOn(console, 'log').mockImplementation((line: string) => { logs.push(String(line)) })
+    const errors: string[] = []
+    vi.spyOn(console, 'error').mockImplementation((line: string) => { errors.push(String(line)) })
+    let host: number | null = 2
+    const dir = tempDir()
+    const staged: string[] = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir, intervalMs: 10,
+      installedPtyProtocol: () => host,
+      onStaged: (version) => { staged.push(version) },
+    })
+    const waiting = "[update] 9.9.9 needs pty protocol 3; this machine's host speaks 2 — waiting for its payload"
+    try {
+      await vi.waitFor(() => expect(logs).toContain(waiting), { timeout: 5_000 })
+      await new Promise((resolve) => setTimeout(resolve, 80))
+      expect(staged).toEqual([])
+      expect(existsSync(join(dir, 'cli.js')), 'nothing is staged').toBe(false)
+      expect(logs.filter((line) => line === waiting), 'said once').toHaveLength(1)
+      expect(downloads, 'the bytes stay verified for the next tick').toBe(1)
+      expect(errors).toEqual([])
+      // The payload arrives (the PTY check, or install.ps1): the build goes ahead with the bytes it already has.
+      host = 3
+      await vi.waitFor(() => expect(staged).toEqual(['9.9.9']), { timeout: 5_000 })
+      expect(downloads).toBe(1)
+      expect(readFileSync(join(dir, 'cli.js'))).toEqual(cli)
+    } finally { poller.stop() }
+    // A host whose protocol cannot be read holds nothing back, and neither does a build at the host's protocol.
+    for (const [needs, speaks] of [[3, null], [2, 2]] as const) {
+      const other = tempDir()
+      const at = build('9.9.9', needs)
+      vi.stubGlobal('fetch', async (url: string) => {
+        if (url.endsWith('/metadata.json')) {
+          return new Response(JSON.stringify({ adapter: {
+            version: '9.9.9',
+            cli: { url: 'https://updates.test/cli.js', sha256: sha(at) },
+            notify: { url: 'https://updates.test/notify.mjs', sha256: sha(notify) },
+          } }))
+        }
+        return new Response(url.endsWith('cli.js') ? at : notify)
+      })
+      const done: string[] = []
+      const plain = startSelfUpdater({
+        currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: other, intervalMs: 10,
+        installedPtyProtocol: () => speaks,
+        onStaged: (version) => { done.push(version) },
+      })
+      try {
+        await vi.waitFor(() => expect(done).toEqual(['9.9.9']), { timeout: 5_000 })
+      } finally { plain.stop() }
     }
   })
 })

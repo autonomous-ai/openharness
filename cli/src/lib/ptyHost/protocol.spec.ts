@@ -8,16 +8,18 @@ import {
   helloProof,
   MAX_FRAME,
   PTY_PROTOCOL,
+  SUPPORTED_PTY_PROTOCOLS,
   type HelloLine,
   type PtyOp,
   type PtyOpOf,
 } from './protocol.js'
 
-// Installed Windows hosts are replaced only by install.ps1, never by the CLI's self-update, so a CLI that raised the
-// protocol would reach Windows machines whose host cannot speak it, and no new pane would open. Bump it only once the
-// host is updated with the CLI (the PTY host rollover, not yet built).
-it('keeps the protocol that installed Windows hosts speak', () => {
-  expect(PTY_PROTOCOL).toBe(2)
+// A bump no longer needs a pin here: the updater holds a CLI whose `PTY_PROTOCOL` is above the installed host's back
+// until that host's payload is installed (lib/selfUpdate.ts `installedPtyProtocol`; the delivery rule is tested in
+// selfUpdate.spec.ts, "a build needing a newer pty protocol waits, then stages once the host has it"). What still
+// holds is that the daemon reaches the hosts of its own protocol.
+it('a CLI needing a protocol above the installed host\'s waits (the delivery rule replaces the pin)', () => {
+  expect(SUPPORTED_PTY_PROTOCOLS).toContain(PTY_PROTOCOL)
 })
 
 describe('ptyHost protocol framing', () => {

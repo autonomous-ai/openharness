@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SpawnLockBusyError } from '../daemonSpawnLock.js'
 import { rejectedPtyVersions } from './ptyInstall.js'
 import { PTY_PAYLOAD_FILES, PtyPayloadRefused, type PreparedPty, type PtyEntry } from './ptyPayload.js'
-import { keepStaged, ptyOnProbation, rollBackStaged, startPtyUpdater, sweepPtyLeftovers, type PtyPoller, type PtyUpdaterDeps } from './ptyUpdate.js'
+import { installedPtyProtocol, keepStaged, ptyOnProbation, rollBackStaged, startPtyUpdater, sweepPtyLeftovers, type PtyPoller, type PtyUpdaterDeps } from './ptyUpdate.js'
 
 let root: string
 let ptyRoot: string
@@ -342,5 +342,18 @@ describe("the master's rollback and keep", () => {
     expect(calls).toEqual(['confirm cli'])
     expect(existsSync(join(ptyRoot, 'pty-pending.json'))).toBe(false)
     expect(pointer()).toBe('0.11.0')
+  })
+})
+
+describe('installedPtyProtocol', () => {
+  it('is the protocol of the host current-pty names, or null when there is none to read', () => {
+    const asked: string[] = []
+    const version = (binary: string) => { asked.push(binary); return binary.includes('0.10.0') ? { protocol: 2 } : null }
+    expect(installedPtyProtocol(root, version)).toBe(2)
+    expect(asked).toEqual([join(ptyRoot, '0.10.0', 'harness-pty.exe')])
+    writeFileSync(join(ptyRoot, 'current-pty'), '0.11.0')
+    expect(installedPtyProtocol(root, version)).toBeNull()
+    rmSync(join(ptyRoot, 'current-pty'))
+    expect(installedPtyProtocol(root, version)).toBeNull()
   })
 })

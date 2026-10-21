@@ -34,13 +34,14 @@ function at(text: string, call: string, after = 0): number {
 const MUTATING = [
   'clearAdapterState(', 'clearAuthSession(', 'writeAuthSession(', 'saveAuthSession(', 'rmSync(', 'writeFileSync(', 'renameSync(',
   'launch(', 'relaunch(', 'passThroughToGridLogout(', 'downloadCanaryStage(', 'signIn(', 'resolveMachineIfUnknown(',
+  'installPtyForUpdate(',
 ]
 
 describe('commands that stop Harness first (cli.ts)', () => {
   it.each([
     ['resetCommand', ['clearAdapterState(', 'clearAuthSession(']],
     ['logout', ['passThroughToGridLogout(', 'clearAuthSession(', 'launch(']],
-    ['updateCommand', ['downloadCanaryStage(', 'relaunch()']],
+    ['updateCommand', ['installPtyForUpdate(', 'downloadCanaryStage(', 'relaunch()']],
   ])('%s goes on only once Harness has stopped', (name, after) => {
     const text = body(name)
     const guard = at(text, 'stopDaemonOrExit(')

@@ -205,6 +205,19 @@ describe('the updater in its own process', () => {
     expect(processUpdaterDeps('win32', join(tmpdir(), 'x', 'cli')).ptyRootDir).toBe(join(tmpdir(), 'x'))
   })
 
+  it('holds a CLI build back by the installed host\'s protocol on Windows, whatever the master, and nowhere else', () => {
+    // Not gated on HARNESSD_JUDGES_PTY: a build with no host to open a pane on is no fix under any master.
+    const win = make()
+    runUpdaterService(undefined, { ...win.deps, installedPtyProtocol: () => 2 }).stop()
+    expect(win.cli().installedPtyProtocol?.()).toBe(2)
+    const linux = make()
+    runUpdaterService(undefined, linux.deps).stop()
+    expect(linux.cli().installedPtyProtocol).toBeUndefined()
+    expect(processUpdaterDeps('linux').installedPtyProtocol).toBeUndefined()
+    // No current-pty in this root: nothing to read, which holds nothing back.
+    expect(processUpdaterDeps('win32', join(tmpdir(), 'no-such-install', 'cli')).installedPtyProtocol!()).toBeNull()
+  })
+
   it('stages under the spawn lock, saying who holds it while it waits', async () => {
     const m = make()
     runUpdaterService(undefined, m.deps)
