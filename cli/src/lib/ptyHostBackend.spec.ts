@@ -40,6 +40,7 @@ interface BackendOptions {
   owner?: string
   stream?: () => Promise<unknown>
   platform?: NodeJS.Platform
+  features?: string[]
   endTree?: (pid: number) => Promise<'sent' | 'gone' | 'failed'>
 }
 
@@ -48,6 +49,7 @@ function backendWith(replies: Record<string, Reply>, options: BackendOptions = {
   const listeners = new Set<(event: PtyEvent) => void>()
   const client = {
     instance: 'p1',
+    features: options.features ?? [],
     call: async (op: PtyOp) => {
       calls.push(op)
       const reply = replies[op.op]
@@ -109,6 +111,22 @@ describe('PtyHostBackend prepare', () => {
 })
 
 describe('PtyHostBackend create', () => {
+  it('create passes the seed to a host with the seed feature', async () => {
+    const { backend, calls } = await ready({ create: { state: 'ok', value: { pane: '%4' } } }, { features: ['seed'] })
+    expect(backend.canSeed).toBe(true)
+    await backend.create({ command: ['claude'], seed: 'a\r\nb' })
+    expect(calls[0]).toMatchObject({ op: 'create', seed: 'a\r\nb' })
+  })
+
+  it('create refuses a seed for a host without it', async () => {
+    const { backend, calls } = await ready({ create: { state: 'ok', value: { pane: '%4' } } })
+    expect(backend.canSeed).toBe(false)
+    expect(await backend.create({ command: ['claude'], seed: 'a' })).toMatchObject({ state: 'failed', dispatch: 'not_started', reason: 'this host cannot seed a pane' })
+    expect(calls.some((call) => call.op === 'create')).toBe(false)
+    // No seed: a pre-G host still creates.
+    expect(await backend.create({ command: ['claude'] })).toMatchObject({ state: 'succeeded' })
+  })
+
   it('asks for a held 200x50 pane owned by this daemon', async () => {
     const { backend, calls } = await ready({ create: { state: 'ok', value: { pane: '%4' } } })
     const result = await backend.create({ command: ['claude'], cwd: '/w', label: 'harness-claude-1', env: { K: 'v' } })

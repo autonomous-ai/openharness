@@ -34,7 +34,7 @@ import {
   compareVersions, discoveredHostDead, ensurePtyHost, forgetExitedHost, pidAlive, reachPtyHost, readInstanceDiscovery,
   type EnsurePtyHostResult, type HostLiveness, type PtyHostTarget, type PtyHostUnavailable, type PtyHostUnreached, type ReachPtyHostResult,
 } from './ptyHost/launch.js'
-import { PTY_PROTOCOL, SHUTDOWN_PROTOCOL, type PtyEvent } from './ptyHost/protocol.js'
+import { PTY_PROTOCOL, SEED_FEATURE, SHUTDOWN_PROTOCOL, type PtyEvent } from './ptyHost/protocol.js'
 import { PtyHostStream } from './ptyHost/stream.js'
 import { submitContent, submitSettleMs } from './submitTiming.js'
 import type { TerminalBackend, TerminalBackendPrepared } from './terminalBackend.js'
@@ -571,10 +571,17 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     return { sessionEnv: true }
   }
 
+  /** Whether the host attached now lists `seed`; read live, as the client is replaced on reconnect. False when unattached. */
+  get canSeed(): boolean {
+    return this.client?.features.includes(SEED_FEATURE) ?? false
+  }
+
   async create(request: TerminalCreateRequest): Promise<TerminalCreateResult<PtyRuntimeRef>> {
     if (this.draining) return terminalActionNotStarted(`the ${this.instance} pty host is draining: new panes go to the target host`)
     const client = this.client
     if (!client) return terminalActionNotStarted(UNAVAILABLE)
+    // A pre-G host drops `seed` silently, which would look like a pane that kept its scrollback: refuse instead.
+    if (request.seed !== undefined && !client.features.includes(SEED_FEATURE)) return terminalActionNotStarted('this host cannot seed a pane')
     if (request.current?.() === false) return terminalActionNotStarted('The harness changed before pane dispatch')
     request.onDispatch?.()
     // Held from the start, as tmux's remain-on-exit at create: an engine that exits at once still leaves
@@ -589,6 +596,7 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
       owner: this.owner(),
       ...(request.label ? { label: request.label } : {}),
       hold: true,
+      ...(request.seed !== undefined ? { seed: request.seed } : {}),
       // Windows: the shell the pane becomes when its engine exits, made by the host (lib/windows/engineStart.ts).
       ...(request.afterExit ? { afterExit: { command: request.afterExit.command, ...(request.afterExit.env ? { env: request.afterExit.env } : {}) } } : {}),
       // Windows: what the pane must not inherit from the host's environment (a grid launch's provider keys).
