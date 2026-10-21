@@ -2,6 +2,9 @@
 name = "harness-install"
 version = "0.1.0"
 edition = "2024"
+# Keep the initial build-script fingerprint independent of the repository's Git ignore traversal.
+# The shared desktop icon outside this package is tracked explicitly in build.rs.
+include = ["/src", "/tests", "/build.rs", "/harness-install.manifest"]
 
 [[bin]]
 name = "harness-install"
