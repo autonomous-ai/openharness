@@ -3163,6 +3163,19 @@ class AppNotifier extends ChangeNotifier {
     final pane = tab.panes.where((p) => p.id == paneId).firstOrNull;
     if (pane == null) return Future.value();
     if (tab.isCompanions || tab.isDevices) return requestCloseSwarm(tab.id);
+    // A Finder and its chat are one group: closing the Finder closes the chat,
+    // which takes the Finder with it, exactly as the chat's own Close does.
+    if (pane.isFinder && pane.ownerAgentId != null) {
+      final chat = tab.panes
+          .where(
+            (p) =>
+                !p.isViewer &&
+                p.machineId == pane.machineId &&
+                p.agentId == pane.ownerAgentId,
+          )
+          .firstOrNull;
+      if (chat != null) return requestClosePane(chat.id);
+    }
     final captured = tab.panes
         .where(
           (p) =>

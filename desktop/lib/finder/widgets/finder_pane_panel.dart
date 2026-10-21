@@ -29,7 +29,6 @@ class FinderPanePanel extends StatefulWidget {
     required this.root,
     this.files = const LocalFinderFiles(),
     this.git = const LocalFinderGit(),
-    this.onClose,
     this.onGuardClose,
     this.compactHeader = false,
     this.onFixedWidth,
@@ -38,7 +37,6 @@ class FinderPanePanel extends StatefulWidget {
   final String root;
   final FinderFiles files;
   final FinderGit git;
-  final VoidCallback? onClose;
 
   /// Handed the check the pane's close must pass while this panel is
   /// mounted — unsaved tabs are asked about first — and null when it goes.
@@ -135,7 +133,6 @@ class _FinderPanePanelState extends State<FinderPanePanel> {
               controller: _controller,
               compact: widget.compactHeader,
               onCollapse: () => _setCollapsed(true),
-              onClose: widget.onClose,
             ),
           ),
           Divider(height: 1, color: AppColors.border),

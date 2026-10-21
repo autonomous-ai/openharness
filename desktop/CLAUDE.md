@@ -465,7 +465,8 @@ add a kind there, not at the call site.
   one) — and starts that chat in the folder (no worktree; the first message goes to it).
   `AppNotifier.openFinderBeside` puts the tile LEFT of that terminal at 70/30, as a harness's web
   viewer sits. It is the chat's viewer (`ownerAgentId`, `TerminalPane.viewsAgent`): it moves and
-  closes with the terminal. Viewers are never in the saved layout or the desk, so the folder is
+  closes with the terminal, and the two are one group — the Finder has no Close of its own, and
+  closing it (⌘W) closes its chat (`requestClosePane`). Viewers are never in the saved layout or the desk, so the folder is
   kept per chat in `FinderRoots` (`finder.roots` in the local store); `_syncViewerPane` brings the
   Finder back whenever that chat's terminal is shown — after a restart too — until it is closed by
   hand or the agent stops. With no file open the tile is only as wide as its file list, and its

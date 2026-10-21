@@ -1609,7 +1609,6 @@ class _PaneContent extends StatelessWidget {
       return FinderPanePanel(
         key: ValueKey('finder-pane-${pane.id}'),
         root: root,
-        onClose: close,
         onGuardClose: (guard) => pane.beforeClose = guard,
         onFixedWidth: (width) => notifier.setPaneFixedWidth(pane.id, width),
         compactHeader: swarmMode,

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
-import '../../shared/theme/app_icons.dart';
 import '../../shared/theme/app_pane_icon.dart';
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../shared/theme/workspace_bar_style.dart';
@@ -11,21 +10,20 @@ import '../../widgets/engine_identity.dart';
 import '../finder_controller.dart';
 
 /// The Finder tile's header: its folder, the branch it is on with how far
-/// it is from upstream, Collapse (to a rail, as Orca folds a sidebar),
-/// Refresh and Close.
+/// it is from upstream, Collapse (to a rail, as Orca folds a sidebar) and
+/// Refresh. No Close: the Finder and its chat are one group, closed from the
+/// chat (`AppNotifier.requestClosePane`).
 class FinderHeader extends StatelessWidget {
   const FinderHeader({
     super.key,
     required this.controller,
     required this.compact,
     required this.onCollapse,
-    required this.onClose,
   });
 
   final FinderController controller;
   final bool compact;
   final VoidCallback onCollapse;
-  final VoidCallback? onClose;
 
   @override
   Widget build(BuildContext context) {
@@ -81,13 +79,6 @@ class FinderHeader extends StatelessWidget {
                 label: 'Refresh',
                 icon: AppPaneSymbol.reload,
                 onPressed: controller.refresh,
-              ),
-              PaneHeaderButton(
-                label: 'Close Finder',
-                command: 'pane.close',
-                icon: AppPaneSymbol.close,
-                iconSize: AppIcons.closeSize,
-                onPressed: onClose,
               ),
             ],
           ),

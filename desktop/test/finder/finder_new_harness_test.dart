@@ -103,6 +103,14 @@ void main() {
     expect(tab.toJson()['panes'], hasLength(1), reason: 'viewers are unsaved');
   });
 
+  test('closing the Finder closes the group: its chat too', () async {
+    expect(await box().create(), NewHarnessOutcome.created);
+    final viewer = app.activeSwarm.panes.firstWhere((p) => p.isFinder);
+    await app.requestClosePane(viewer.id);
+    await pumpEventQueue();
+    expect(app.allPanes, isEmpty);
+  });
+
   test('closing the chat closes its Finder', () async {
     expect(await box().create(), NewHarnessOutcome.created);
     final chat = app.activeSwarm.panes.firstWhere((p) => p.agentId == 'chat');
