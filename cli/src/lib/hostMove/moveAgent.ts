@@ -52,13 +52,15 @@ export const MOVE_STEP_TIMEOUT_MS = 5_000
 /** The old pane's relaunch: a restart's resume attempt and its fresh retry, each with its own wait for the engine. */
 export const MOVE_RELAUNCH_TIMEOUT_MS = 20_000
 
-export type MoveOutcome = { moved: true; resumed: boolean } | { moved: false; reason: string; fellBack: boolean }
+/** `cancelled`: the move stopped because the agent was taken or used (a Stop, a delete, a replacement, input as the move
+ *  began), not because a step failed: the mover may try it again once it is quiet. */
+export type MoveOutcome = { moved: true; resumed: boolean } | { moved: false; reason: string; fellBack: boolean; cancelled?: true }
 
 export interface MoveAgentDeps {
   /** The old pane's scrollback (`capture` with `SEED_HISTORY_LINES`, ANSI kept); null when it could not be read. */
   capture(session: RegisteredSession): Promise<string | null>
-  /** Open the new pane on the create backend, waiting with no engine: `moveCreateRequest` with the waiting shell
-   *  restore uses (`waitingLaunch` in core/main.ts). An empty [seed] means nothing to carry: no seed is sent. */
+  /** Open the new pane on the create backend, waiting with no engine: `moveCreateRequest` with a waiting command that
+   *  prints nothing over the seed (core/agents/hostMove.ts `moveWaitingArgv`). An empty [seed] means nothing to carry: no seed is sent. */
   createSeeded(session: RegisteredSession, seed: string): Promise<{ ok: true; runtime: TerminalRuntimeRef } | { ok: false; reason: string }>
   /** The backend's `respawn` of [runtime] with the launch's argv, cwd and env, as `restoreTerminals.ts` does: the
    *  pane, and the scrollback it was seeded with, stay. */
@@ -129,16 +131,18 @@ export function moveMarkerOf(label: string | undefined): string | null {
  * a second agent by discovery. Run once at core start, before restore and discovery. A pane a finished move made
  * keeps its label, and its row names it: it stays.
  *
- * Returns how many were closed, and the agents whose orphan pane could not be confirmed closed: restore must hold
- * those, or it would relaunch an engine beside the one that pane may still run.
+ * Returns how many were closed, the agents whose orphan pane could not be confirmed closed, and those panes: restore
+ * must hold those agents, or it would relaunch an engine beside the one that pane may still run, and the panes' routes,
+ * or discovery would mint them an agent of their own.
  */
 export async function removeOrphanMovePanes(
   backends: ReadonlyArray<Pick<TerminalBackend, 'inventory' | 'kill'>>,
   rows: ReadonlyArray<Pick<RegisteredSession, 'runtimes'>>,
-): Promise<{ removed: number; unconfirmed: string[] }> {
+): Promise<{ removed: number; unconfirmed: string[]; keptPanes: TerminalRuntimeRef[] }> {
   const named = new Set(rows.flatMap((row) => row.runtimes.map(terminalRouteKey)))
   let removed = 0
   const unconfirmed = new Set<string>()
+  const keptPanes: TerminalRuntimeRef[] = []
   for (const backend of backends) {
     let inventory: Awaited<ReturnType<TerminalBackend['inventory']>>
     try { inventory = await backend.inventory() } catch { continue }
@@ -150,10 +154,10 @@ export async function removeOrphanMovePanes(
       let closed = false
       try { closed = (await backend.kill(root.runtime)).state === 'succeeded' } catch { /* not confirmed */ }
       if (closed) removed++
-      else unconfirmed.add(agentId)
+      else { unconfirmed.add(agentId); keptPanes.push(root.runtime) }
     }
   }
-  return { removed, unconfirmed: [...unconfirmed] }
+  return { removed, unconfirmed: [...unconfirmed], keptPanes }
 }
 
 type Bounded<T> = { done: true; value: T } | { done: false; reason: string }
@@ -198,6 +202,7 @@ async function proveEngine(deps: MoveAgentDeps, runtime: TerminalRuntimeRef, eng
 }
 
 const CANCELLED = 'the move was cancelled'
+const IN_USE = 'the agent was used as the move began'
 
 export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps): Promise<MoveOutcome> {
   const { agentId, engine } = session
@@ -226,8 +231,10 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
 
   /** Undo everything a failed or cancelled move did before its swap. The gate is released by the caller after it. */
   const recover = async (reason: string): Promise<MoveOutcome> => {
+    const cancelled = reason === CANCELLED || reason === IN_USE
+    const notMoved = (fellBack: boolean): MoveOutcome => ({ moved: false, reason, fellBack, ...(cancelled ? { cancelled: true as const } : {}) })
     if (swapped) {
-      log(`[move] ${agentId}: after the switch, ${reason}`)
+      log(`[terminal] move ${agentId}: after the switch, ${reason}`)
       return { moved: true, resumed: true }
     }
     let newPaneClosed = true
@@ -239,22 +246,22 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
         // Its route stays held, so discovery never mints it a second agent, possibly beside the same conversation:
         // until the daemon restarts, whose start closes it (`removeOrphanMovePanes`), or a later close of it.
         keptRoutes.add(terminalRouteKey(newPane))
-        log(`[move] ${agentId}: warning: the new pane ${newPane.paneId} was not confirmed closed (${closed.done ? 'refused' : closed.reason}); its route stays held`)
+        log(`[terminal] move ${agentId}: warning: the new pane ${newPane.paneId} was not confirmed closed (${closed.done ? 'refused' : closed.reason}); its route stays held`)
       }
     }
-    if (!stopped) return { moved: false, reason, fellBack: false }
+    if (!stopped) return notMoved(false)
     // Cancelled by a Stop, a delete or a replacement: the engine stays stopped, for whoever cancelled the move.
-    if (!deps.current()) return { moved: false, reason, fellBack: false }
+    if (!deps.current()) return notMoved(false)
     if (respawned && !newPaneClosed) {
       // Relaunched now, the old engine could share its conversation with one still running in the new pane.
-      log(`[move] ${agentId}: not relaunched in the old pane while the new one may still run its engine`)
-      return { moved: false, reason, fellBack: false }
+      log(`[terminal] move ${agentId}: not relaunched in the old pane while the new one may still run its engine`)
+      return notMoved(false)
     }
     // The old pane's engine runs again before the gate opens, so held input reaches a live engine. When it does not
     // come back, the input still goes to the old pane, as it does after a failed restart.
     const relaunched = await bounded(() => deps.relaunchOld(session), MOVE_RELAUNCH_TIMEOUT_MS, 'the relaunch in the old pane')
-    if (!relaunched.done) log(`[move] ${agentId}: ${relaunched.reason}`)
-    return { moved: false, reason, fellBack: relaunched.done && relaunched.value }
+    if (!relaunched.done) log(`[terminal] move ${agentId}: ${relaunched.reason}`)
+    return notMoved(relaunched.done && relaunched.value)
   }
 
   try {
@@ -286,7 +293,7 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
     if (!made.done) {
       // A create answered after its bound made a pane nothing will use: close it then.
       void creating.then(async (late) => {
-        if (late.ok && !(await deps.killPane(late.runtime))) log(`[move] ${agentId}: warning: a late new pane ${late.runtime.paneId} was not confirmed closed`)
+        if (late.ok && !(await deps.killPane(late.runtime))) log(`[terminal] move ${agentId}: warning: a late new pane ${late.runtime.paneId} was not confirmed closed`)
       }).catch(() => { /* the next core start closes it (`removeOrphanMovePanes`) */ })
       return await recover(made.reason)
     }
@@ -302,7 +309,7 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
     holding = true
     if (!deps.current()) return await recover(CANCELLED)
     // Someone reached for the agent: nothing has changed yet, so give it back untouched.
-    if (deps.gate.touched(agentId)) return await recover('the agent was used as the move began')
+    if (deps.gate.touched(agentId)) return await recover(IN_USE)
 
     // 5. The old engine stops; its pane stays, for the fallback. Only then is the conversation prepared for its resume,
     // as a restart prepares after its kill.
@@ -337,14 +344,14 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
     swapped = true
     created = null
     const streams = await bounded(() => deps.retarget(agentId, newPane), MOVE_STEP_TIMEOUT_MS, 'moving open streams')
-    if (!streams.done) log(`[move] ${agentId}: ${streams.reason}`)
+    if (!streams.done) log(`[terminal] move ${agentId}: ${streams.reason}`)
     const released = await bounded(() => deps.releaseHold(newPane), MOVE_STEP_TIMEOUT_MS, 'releasing the new pane')
-    if (!released.done) log(`[move] ${agentId}: ${released.reason}`)
+    if (!released.done) log(`[terminal] move ${agentId}: ${released.reason}`)
 
     // 9. The old pane, which nothing names now.
     for (const old of session.runtimes) {
       const closed = await bounded(() => deps.killPane(old), MOVE_STEP_TIMEOUT_MS, 'closing the old pane')
-      if (!closed.done || !closed.value) log(`[move] ${agentId}: the old pane was not confirmed closed (${closed.done ? 'refused' : closed.reason})`)
+      if (!closed.done || !closed.value) log(`[terminal] move ${agentId}: the old pane was not confirmed closed (${closed.done ? 'refused' : closed.reason})`)
     }
     return { moved: true, resumed: true }
   } catch (error) {

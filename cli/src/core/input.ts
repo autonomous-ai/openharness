@@ -17,6 +17,7 @@ import { adaptSlashCommand } from '../lib/goalCommand.js'
 import { sid } from '../lib/log.js'
 import type { LiveEvent } from '../engines/kit/events.js'
 import type { RegisteredSession } from '../lib/registry.js'
+import type { MoveGate } from '../lib/hostMove/gate.js'
 import { SessionInputController, type MessageReceipt, type SessionInputDelivery, type SessionInputDeps } from '../lib/sessionInput.js'
 import { passingHold } from '../lib/messageHolds.js'
 import type { ScreenReader } from '../lib/screenReader.js'
@@ -57,6 +58,9 @@ export interface InputDeps {
   /** The person sent text to an agent from a window or the phone (a `message` frame, by agent or session id): one
    *  another agent started is theirs from then on (services/agentCleanup.ts). */
   typed?: (id: string) => void
+  /** While an agent changes host, its messages wait here and go to the pane it ends on (hostMove/gate.ts): the one
+   *  gate the terminal streams hold its keystrokes in too. */
+  moveGate?: MoveGate
 }
 
 /**
@@ -122,6 +126,7 @@ export function sessionInputDeps(
   const { captureTerminal, validateTerminal, keyTerminalAction } = terminal
   const writeMessage = messageWriter(deps)
   return {
+    ...(deps.moveGate ? { moveGate: deps.moveGate } : {}),
     readScreen: deps.readScreen,
     submission: deps.submission,
     getSession: (id) => resolve(id),

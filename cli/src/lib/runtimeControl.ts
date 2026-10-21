@@ -44,7 +44,9 @@ export interface RuntimeProfileControllerDeps {
   /** Type without submitting. */
   sendLiteral: (terminalTarget: string, text: string) => Promise<boolean>
   sendKey: (terminalTarget: string, key: string) => Promise<boolean>
-  acquireInput: (sessionId: string) => (() => void) | null
+  /** The pane's control, or null when it is busy. May wait: while the agent changes host, the daemon's waits for the
+   *  move to end rather than refuse (hostMove/gate.ts `acquireAfterHold`). */
+  acquireInput: (sessionId: string) => (() => void) | null | Promise<(() => void) | null>
 }
 
 export interface CursorParameterRow {
@@ -151,7 +153,7 @@ export class RuntimeProfileController {
     // The other engines' pane drivers read the pane with their engine's own code, loaded in this process: without
     // it the switch is refused before any key is sent.
     if (!native && isOtherEngine(session.engine) && !await loadEngine(session.engine)) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
-    const release = this.deps.acquireInput(session.agentId)
+    const release = await this.deps.acquireInput(session.agentId)
     if (!release) throw new RuntimeProfileControlError('BUSY')
     let controlStarted = false
     let pickerOpen = false

@@ -37,6 +37,7 @@
  */
 
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
+import type { LaunchOverrides } from './launchOverrides.js'
 import type { AgentLaunch, ProcessIdentity, RegisteredSession } from './registry.js'
 import type { TerminalDispatchControl, TerminalRuntimeRef } from './terminalTypes.js'
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
@@ -51,6 +52,19 @@ export interface RestoreLaunch {
   /** Windows: the folder the engine starts in and the shell its pane becomes after it (lib/windows/engineStart.ts
    *  `windowsPaneLaunch`); elsewhere the launch script enters the folder and hands the pane on itself. */
   paneLaunch?: WindowsPaneLaunch
+  /** Built with `prepare: false` (a move, hostMove/moveAgent.ts): what the build left out, and what it was built with,
+   *  so the caller prepares and relaunches with the same overrides once the engine has stopped, without asking the
+   *  grid or the Store again. */
+  deferred?: DeferredLaunch
+}
+
+export interface DeferredLaunch {
+  /** The conversation's resume preparation, when it resumes one, and the row's grid web search. Throws when the
+   *  conversation could not be prepared. */
+  prepare(): void
+  /** The overrides (`relaunchOverrides`) and the permission (`downgradedPermission`) the launch was built with. */
+  overrides: LaunchOverrides
+  permission: { permissionMode?: string | null; bypassPermission?: boolean }
 }
 
 /** The launch, why there is none, or the service its launch asks that could not be asked (`held`). */

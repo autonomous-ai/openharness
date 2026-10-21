@@ -358,7 +358,8 @@ describe('moveAgent', () => {
       const gateHold = h.gate.hold
       h.gate.hold = cancelAt('hold', gateHold)
       const outcome = await run(h.deps)
-      expect(outcome, point).toMatchObject({ moved: false, fellBack: false })
+      // Cancelled, not failed: the mover may try the agent again.
+      expect(outcome, point).toMatchObject({ moved: false, fellBack: false, cancelled: true })
       expect(h.deps.stopEngine, point).not.toHaveBeenCalled()
       expect(h.deps.respawn, point).not.toHaveBeenCalled()
       expect(h.deps.swap, point).not.toHaveBeenCalled()
@@ -378,7 +379,7 @@ describe('moveAgent', () => {
       hold(agentId)
       h.gate.enqueue(agentId, async () => { delivered.push(h.row.runtime.paneId) })
     }
-    expect(await run(h.deps)).toMatchObject({ moved: false, fellBack: false })
+    expect(await run(h.deps)).toMatchObject({ moved: false, fellBack: false, cancelled: true })
     expect(h.deps.stopEngine).not.toHaveBeenCalled()
     expect(vi.mocked(h.deps.killPane).mock.calls.map(([runtime]) => runtime)).toEqual([NEW])
     expect(delivered).toEqual(['%1'])
@@ -387,7 +388,7 @@ describe('moveAgent', () => {
   it('a move cancelled once the old engine stopped leaves it stopped, for whoever cancelled it', async () => {
     let live = true
     const h = harness({ current: () => live, stopEngine: vi.fn(async () => { live = false; return 'terminated' as const }) })
-    expect(await run(h.deps)).toMatchObject({ moved: false, fellBack: false })
+    expect(await run(h.deps)).toMatchObject({ moved: false, fellBack: false, cancelled: true })
     expect(h.deps.respawn).not.toHaveBeenCalled()
     expect(h.deps.relaunchOld).not.toHaveBeenCalled()
     expect(vi.mocked(h.deps.killPane).mock.calls.map(([runtime]) => runtime)).toEqual([NEW])
@@ -451,7 +452,7 @@ describe('removeOrphanMovePanes', () => {
       { ...session(), runtimes: [OLD] },
       { ...session(), agentId: 'a2', runtimes: [{ backend: 'ptyhost', instance: 'p2-1.2.3', paneId: '%9' }] },
     ] as RegisteredSession[]
-    expect(await removeOrphanMovePanes([target.backend, unreachable.backend], rows)).toEqual({ removed: 1, unconfirmed: [] })
+    expect(await removeOrphanMovePanes([target.backend, unreachable.backend], rows)).toEqual({ removed: 1, unconfirmed: [], keptPanes: [] })
     expect(target.kill.mock.calls.map(([runtime]) => runtime.paneId)).toEqual(['%7'])
     expect(unreachable.kill).not.toHaveBeenCalled()
   })
@@ -461,6 +462,9 @@ describe('removeOrphanMovePanes', () => {
     refused.kill.mockResolvedValue({ state: 'failed', dispatch: 'rejected', reason: 'busy' } as never)
     const throws = backend({ state: 'available', roots: [pane('%8', moveCreateRequest('a3', { seed: '', command: ['sh'] }).label)] })
     throws.kill.mockRejectedValue(new Error('host gone'))
-    expect(await removeOrphanMovePanes([refused.backend, throws.backend], [session()])).toEqual({ removed: 0, unconfirmed: ['a1', 'a3'] })
+    // And the panes themselves, whose routes restore holds so discovery never mints them an agent.
+    expect(await removeOrphanMovePanes([refused.backend, throws.backend], [session()])).toEqual({
+      removed: 0, unconfirmed: ['a1', 'a3'], keptPanes: [expect.objectContaining({ paneId: '%7' }), expect.objectContaining({ paneId: '%8' })],
+    })
   })
 })

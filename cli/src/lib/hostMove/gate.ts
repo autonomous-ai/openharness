@@ -72,3 +72,25 @@ export class MoveGate {
     this.holds.delete(agentId)
   }
 }
+
+/** Longer than a move holds an agent (at most 75 s, moveAgent.ts), so a wait outlasts any hold that ends. */
+export const HOLD_WAIT_MS = 90_000
+const HOLD_POLL_MS = 100
+
+/**
+ * [acquire] (a control of the agent's pane, `acquireTerminalControl`), asked again once [agentId]'s move lets it go
+ * when it was refused because a move holds it: the /model picker then waits out a move it never sees, rather than
+ * answering BUSY. A refusal for any other reason is the answer at once. The first ask counts the agent as in use
+ * (`touch`), which cancels a move that has not yet stopped the engine. Waits at most [boundMs].
+ */
+export async function acquireAfterHold<T>(gate: Pick<MoveGate, 'holding'>, agentId: string, acquire: () => T | null,
+  boundMs = HOLD_WAIT_MS): Promise<T | null> {
+  const first = acquire()
+  if (first !== null || !gate.holding(agentId)) return first
+  const deadline = Date.now() + boundMs
+  while (gate.holding(agentId)) {
+    if (Date.now() >= deadline) return null
+    await new Promise((resolve) => setTimeout(resolve, HOLD_POLL_MS))
+  }
+  return acquire()
+}

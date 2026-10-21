@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { MoveGate } from './gate.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { acquireAfterHold, HOLD_WAIT_MS, MoveGate } from './gate.js'
 
 describe('MoveGate', () => {
   it('input during a hold is delivered once, in order, after release', async () => {
@@ -67,5 +67,38 @@ describe('MoveGate', () => {
     expect(delivered).toEqual(['a2'])
     await gate.release('a1')
     expect(delivered).toEqual(['a2', 'a1'])
+  })
+})
+
+describe('acquireAfterHold', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  it('a control refused while the agent changes host is asked again once the move lets it go', async () => {
+    vi.useFakeTimers()
+    const gate = new MoveGate()
+    gate.hold('a1')
+    const release = () => {}
+    // Refused while held, as `acquireControl` refuses it; given once the hold ends.
+    const acquire = vi.fn(() => gate.holding('a1') ? null : release)
+    const got = acquireAfterHold(gate, 'a1', acquire)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(acquire).toHaveBeenCalledTimes(1)
+    await gate.release('a1')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(await got).toBe(release)
+    expect(acquire).toHaveBeenCalledTimes(2)
+  })
+
+  it('a refusal with no move in flight is answered at once, and a hold that never ends is waited out only so long', async () => {
+    vi.useFakeTimers()
+    const gate = new MoveGate()
+    expect(await acquireAfterHold(gate, 'a1', () => null)).toBeNull()
+    gate.hold('a1')
+    let answered = false
+    const got = acquireAfterHold(gate, 'a1', () => null).then((value) => { answered = true; return value })
+    await vi.advanceTimersByTimeAsync(HOLD_WAIT_MS - 1_000)
+    expect(answered).toBe(false)
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(await got).toBeNull()
   })
 })
