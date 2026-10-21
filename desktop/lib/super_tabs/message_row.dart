@@ -43,6 +43,12 @@ class SuperTabMessageRow extends StatefulWidget {
   final VoidCallback onReturnToComposer;
   final List<Widget> receipts;
 
+  // Routing notes share the message body column, including grouped messages.
+  static const horizontalInset = 24.0;
+  static const avatarSize = 28.0;
+  static const avatarGap = 12.0;
+  static const bodyInset = horizontalInset + avatarSize + avatarGap;
+
   /// Compact only a few short updates. Reports and long runs retain their own
   /// speaker identity, so scrolling through agent output does not lose the who.
   static Set<String> consecutiveUpdates(List<SuperTabMessage> messages) {
@@ -182,12 +188,15 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
               child: Stack(
                 children: [
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(24, 6, 24, 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: SuperTabMessageRow.horizontalInset,
+                      vertical: 6,
+                    ),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         SizedBox(
-                          width: 28,
+                          width: SuperTabMessageRow.avatarSize,
                           child: widget.grouped
                               ? null
                               : ExcludeSemantics(
@@ -201,12 +210,12 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                           : superTabPersonName(
                                               message.authorName,
                                             ),
-                                      size: 28,
+                                      size: SuperTabMessageRow.avatarSize,
                                     ),
                                   ),
                                 ),
                         ),
-                        const SizedBox(width: 12),
+                        const SizedBox(width: SuperTabMessageRow.avatarGap),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,

@@ -11,6 +11,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/super_tabs/workspace.dart';
+import 'package:harness/super_tabs/message_text.dart';
 import 'package:harness/widgets/pane_grid.dart';
 import 'package:harness/widgets/agent_drag.dart';
 import 'package:harness/widgets/terminal_panel.dart';
@@ -18,6 +19,7 @@ import 'package:harness/ws/local_cli_discovery.dart';
 
 import '../test/super_tab_launch_test.dart'
     show SuperTabFixtureConnection, SuperTabLaunchFixture, tabId;
+import '../test/super_tab_route_test.dart' show routeRow, decision;
 import '../test/support/super_tab_fixture.dart'
     show projectFixture, conversationFixture;
 
@@ -147,6 +149,9 @@ void main() {
       server.append(
         'Keep changes on the device and sync when the connection returns.',
       );
+      server.append('Routed to Multiply');
+      server.messages.last['source'] = routeRow()['source'];
+      server.routeDecisions['d1'] = decision();
       debugPrint('Swarm fixture: load conversation controller');
       final c = await tester.runAsync(() async {
         final controller = await f.app.superTabs
@@ -212,6 +217,17 @@ void main() {
       }
 
       await shot('conversation');
+      expect(
+        tester.getTopLeft(find.text('Routed to Multiply')).dx,
+        tester.getTopLeft(find.byType(SuperTabMessageText).first).dx,
+      );
+      expect(find.text('Change'), findsNothing);
+      await tester.tap(find.text('Details'));
+      await tester.pumpAndSettle();
+      expect(find.text('schema change, high risk'), findsOneWidget);
+      await shot('routing-details');
+      await tester.tap(find.text('Hide details'));
+      await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Project options'));
       await tester.pumpAndSettle();
       await shot('project-menu');
