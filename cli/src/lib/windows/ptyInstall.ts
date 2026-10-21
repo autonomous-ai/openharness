@@ -122,7 +122,12 @@ function swapPair(fs: PtyInstallFs, ready: string, target: string, aside: string
       fs.rename(ready, target)
       return
     } catch (error) {
-      putBack(fs, aside, target)
+      try {
+        putBack(fs, aside, target)
+      } catch (putBackError) {
+        // The put-back failure is what is thrown; the rename-in failure that led to it stays readable.
+        throw Object.assign(putBackError as Error, { cause: error })
+      }
       done.splice(done.indexOf(entry), 1)
       if (!RETRIED.has(codeOf(error)) || attempt >= ATTEMPTS) throw error
       fs.sleep(backoff(attempt))
@@ -297,8 +302,11 @@ export interface PtyRestore {
   pointer: boolean
   /** The bin files copied back from the previous version. */
   restored: string[]
-  /** The bin files left as they were: missing from the previous version, or refused by Windows. */
+  /** The bin files left as they were: missing from the previous version, or a copy back that failed and was undone. */
   kept: string[]
+  /** The bin files whose copy back failed and whose undo failed too: the path is missing, and its last bytes sit in
+   *  a `bin\<name>.old-*` file. The caller must put one back before a sweep. */
+  missing: string[]
 }
 
 /**
@@ -310,7 +318,7 @@ export interface PtyRestore {
  */
 export function restorePty(rootDir: string, fs: PtyInstallFs = defaultPtyInstallFs): PtyRestore {
   const ptyRoot = ptyRootOf(rootDir)
-  const result: PtyRestore = { found: false, pointer: false, restored: [], kept: [] }
+  const result: PtyRestore = { found: false, pointer: false, restored: [], kept: [], missing: [] }
   const pending = readPending(ptyRoot)
   if (!pending) return result
   const previousDir = join(ptyRoot, pending.previous)
@@ -326,11 +334,14 @@ export function restorePty(rootDir: string, fs: PtyInstallFs = defaultPtyInstall
   const bin = join(rootDir, 'bin')
   for (const name of BIN_FILES) {
     if (!has(name)) { result.kept.push(name); continue }
+    const done: Replaced[] = []
     try {
-      replaceBinFile(fs, join(previousDir, name), bin, name, [])
+      replaceBinFile(fs, join(previousDir, name), bin, name, done)
       result.restored.push(name)
     } catch {
-      result.kept.push(name)
+      // Swallowed so a restore never sticks, but only once the current file is back where it was, if it can be.
+      undoAll(done.map((entry) => () => undoReplaced(fs, entry)))
+      ;(existsSync(join(bin, name)) ? result.kept : result.missing).push(name)
     }
   }
   fs.rm(join(ptyRoot, PTY_PENDING), { force: true })
@@ -356,7 +367,9 @@ export function rejectedPtyVersions(rootDir: string): string[] {
 /**
  * Delete the leftovers in bin\: `*.old-*` aside files (ours and install.ps1's `.<name>.old-*`), `.<name>.new-*`
  * temporary copies of an interrupted install, and install.ps1's `*~RF*.TMP`. One that is still running cannot be
- * deleted on Windows and is left for the next sweep. Returns how many are left.
+ * deleted on Windows and is left for the next sweep. Returns how many are left. The caller holds the daemon spawn
+ * lock: an install's `.new-*` copy and, mid-pair, its `.old-*` aside file are the only copies of their bytes, so a
+ * sweep outside the lock can break a concurrent install or lose a path while it is renamed aside.
  */
 export function sweepAsideFiles(rootDir: string, fs: PtyInstallFs = defaultPtyInstallFs): number {
   const bin = join(rootDir, 'bin')

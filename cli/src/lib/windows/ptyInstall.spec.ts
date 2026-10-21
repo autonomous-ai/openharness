@@ -251,13 +251,43 @@ describe('installPreparedPty', () => {
         },
       }
       const before = snapshot()
-      expect(() => installPreparedPty(staged(), root, fs)).toThrow('held')
+      const error = (() => { try { installPreparedPty(staged(), root, fs) } catch (e) { return e } })()
+      // The put-back failure is thrown, with the rename-in failure behind it.
+      expect(error).toMatchObject({ code: 'EBUSY', message: 'held', cause: { code: 'EIO', message: 'disk error' } })
       expect(snapshot(true)).toEqual(before)
+    })
+
+    /** During a restore: harness.exe's rename-in fails, and the next [putBackFailures] renames of its aside file too. */
+    function restoreFailing(putBackFailures: number): PtyInstallFs {
+      return {
+        ...running,
+        rename: (a, b) => {
+          if (basename(a).includes('.new-') && basename(b) === 'harness.exe' && !existsSync(b)) throw err('EIO', 'disk error')
+          if (basename(a).startsWith('harness.exe.old-') && basename(b) === 'harness.exe' && putBackFailures-- > 0) throw err('EBUSY', 'held')
+          running.rename(a, b)
+        },
+      }
+    }
+
+    it('a restore whose rename-in and every put-back fail has the undo put the current file back, and says kept', () => {
+      installPreparedPty(staged(), root, running)
+      // putBack's five attempts all fail; the undo's rename then succeeds.
+      expect(restorePty(root, restoreFailing(5))).toEqual({ found: true, pointer: true, restored: ['harness-launch.exe'], kept: ['harness.exe'], missing: [] })
+      expect(readFileSync(join(bin, 'harness.exe'), 'utf8')).toBe('new harness.exe')
+      expect(readFileSync(join(bin, 'harness-launch.exe'), 'utf8')).toBe('old harness-launch.exe')
+    })
+
+    it('a restore that can put nothing back reports the path missing, not kept', () => {
+      installPreparedPty(staged(), root, running)
+      expect(restorePty(root, restoreFailing(Infinity))).toEqual({ found: true, pointer: true, restored: ['harness-launch.exe'], kept: [], missing: ['harness.exe'] })
+      expect(existsSync(join(bin, 'harness.exe'))).toBe(false)
+      // Its bytes are still there, under an aside name.
+      expect(readdirSync(bin).some((n) => n.startsWith('harness.exe.old-') && readFileSync(join(bin, n), 'utf8') === 'new harness.exe')).toBe(true)
     })
 
     it('restorePty puts the old files back the same way', () => {
       installPreparedPty(staged(), root, running)
-      expect(restorePty(root, running)).toEqual({ found: true, pointer: true, restored: ['harness.exe', 'harness-launch.exe'], kept: [] })
+      expect(restorePty(root, running)).toEqual({ found: true, pointer: true, restored: ['harness.exe', 'harness-launch.exe'], kept: [], missing: [] })
       expect(readFileSync(join(bin, 'harness.exe'), 'utf8')).toBe('old harness.exe')
       expect(readFileSync(join(bin, 'harness-launch.exe'), 'utf8')).toBe('old harness-launch.exe')
     })
@@ -349,7 +379,7 @@ describe('installPreparedPty', () => {
 describe('restorePty', () => {
   it('restorePty puts the pointer and the bin files back, rejects the version, and keeps the folder', () => {
     installPreparedPty(staged(), root, realFs)
-    expect(restorePty(root)).toEqual({ found: true, pointer: true, restored: ['harness.exe', 'harness-launch.exe'], kept: [] })
+    expect(restorePty(root)).toEqual({ found: true, pointer: true, restored: ['harness.exe', 'harness-launch.exe'], kept: [], missing: [] })
     expect(readPointer(ptyRoot, 'current-pty')).toBe('0.10.0')
     expect(readFileSync(join(bin, 'harness.exe'), 'utf8')).toBe('old harness.exe')
     expect(readFileSync(join(bin, 'harness-launch.exe'), 'utf8')).toBe('old harness-launch.exe')
@@ -361,7 +391,7 @@ describe('restorePty', () => {
   it('keeps the current bin file for one the previous version lacks', () => {
     installPreparedPty(staged(), root, realFs)
     rmSync(join(ptyRoot, '0.10.0', 'harness-launch.exe'))
-    expect(restorePty(root)).toEqual({ found: true, pointer: true, restored: ['harness.exe'], kept: ['harness-launch.exe'] })
+    expect(restorePty(root)).toEqual({ found: true, pointer: true, restored: ['harness.exe'], kept: ['harness-launch.exe'], missing: [] })
     expect(readPointer(ptyRoot, 'current-pty')).toBe('0.10.0')
     expect(readFileSync(join(bin, 'harness.exe'), 'utf8')).toBe('old harness.exe')
     expect(readFileSync(join(bin, 'harness-launch.exe'), 'utf8')).toBe('new harness-launch.exe')
@@ -372,7 +402,7 @@ describe('restorePty', () => {
   it('with the previous folder gone, rejects the version and leaves the pointer and bin files', () => {
     installPreparedPty(staged(), root, realFs)
     rmSync(join(ptyRoot, '0.10.0'), { recursive: true })
-    expect(restorePty(root)).toEqual({ found: true, pointer: false, restored: [], kept: ['harness.exe', 'harness-launch.exe'] })
+    expect(restorePty(root)).toEqual({ found: true, pointer: false, restored: [], kept: ['harness.exe', 'harness-launch.exe'], missing: [] })
     expect(readPointer(ptyRoot, 'current-pty')).toBe('0.11.0')
     expect(readFileSync(join(bin, 'harness.exe'), 'utf8')).toBe('new harness.exe')
     expect(rejectedPtyVersions(root)).toEqual(['0.11.0'])
@@ -394,7 +424,7 @@ describe('restorePty', () => {
   it('a bin file Windows will not take is kept, and the restore still completes', () => {
     installPreparedPty(staged(), root, realFs)
     const fs: PtyInstallFs = { ...realFs, copyFile: () => { throw err('EIO') } }
-    expect(restorePty(root, fs)).toEqual({ found: true, pointer: true, restored: [], kept: ['harness.exe', 'harness-launch.exe'] })
+    expect(restorePty(root, fs)).toEqual({ found: true, pointer: true, restored: [], kept: ['harness.exe', 'harness-launch.exe'], missing: [] })
     expect(existsSync(join(ptyRoot, 'pty-pending.json'))).toBe(false)
   })
 
