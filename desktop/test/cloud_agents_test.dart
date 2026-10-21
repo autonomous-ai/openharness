@@ -532,6 +532,14 @@ void main() {
     await dial({'phase': 'move', 'dy': 20});
     await dial({'phase': 'up', 'dy': 0, 'velocity': 400});
     final released = position().pixels;
+    // Inertia reads the wall clock; pumping advances only the fake timers.
+    // Wait for one real clock tick, including hosts with coarser clock precision.
+    await tester.runAsync(() async {
+      final before = DateTime.now();
+      do {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      } while (!DateTime.now().isAfter(before));
+    });
     await tester.pump(const Duration(milliseconds: 200));
     expect(position().pixels, greaterThan(released), reason: 'the fling');
     await dial({'phase': 'down', 'dy': 0});

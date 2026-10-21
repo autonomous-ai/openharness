@@ -1,0 +1,74 @@
+name: Node runtime for Windows
+
+# Republish nodejs.org's Windows Node at the version the Mac runtime uses, after checking the signature on its
+# SHASUMS256.txt (cli/scripts/publish-node-runtime-windows.sh). By hand, when the Node pin moves. The Mac pin is
+# release.yml's and ci.yml's node-version. STAGING by default: production (harness/runtime/metadata.json) is the
+# owner's step, once the staging E2E (docs/testing/windows-cli-e2e.md) has passed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      node_version:
+        description: 'Node version (X.Y.Z), the one the Mac runtime uses'
+        required: true
+        default: '22.23.2'
+      metadata_path:
+        description: 'Manifest to merge the win32 keys into. Staging unless the owner promotes.'
+        required: true
+        default: harness/staging/runtime/metadata.json
+
+permissions:
+  contents: read
+  id-token: write   # the OIDC token the auth step exchanges, as in release.yml
+
+concurrency:
+  group: node-runtime-windows
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GCS_BUCKET: s3-autonomous-upgrade-3
+      NODE_VERSION: ${{ inputs.node_version }}
+      METADATA_PATH: ${{ inputs.metadata_path }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+      - name: Check the inputs
+        run: |
+          set -euo pipefail
+          [[ "$NODE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::node_version must be X.Y.Z"; exit 1; }
+          [[ "$METADATA_PATH" =~ ^harness/(staging[a-z0-9-]*/)?runtime/metadata\.json$ ]] || { echo "::error::metadata_path must be harness/runtime/metadata.json, or one under a staging prefix"; exit 1; }
+          command -v gpgv
+      - name: Authenticate to GCP (workload identity federation)
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+      - name: Verify and publish
+        run: bash cli/scripts/publish-node-runtime-windows.sh "$NODE_VERSION"
+      - name: Read back what an installer would read
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://storage.googleapis.com/${GCS_BUCKET}/${METADATA_PATH}" -o manifest.json
+          node --input-type=commonjs - <<'JS'
+            const fs = require("node:fs"), crypto = require("node:crypto")
+            const main = async () => {
+              const node = JSON.parse(fs.readFileSync("manifest.json", "utf8")).node || {}
+              for (const key of ["win32-x64", "win32-arm64"]) {
+                const entry = node[key]
+                if (!entry || entry.version !== `v${process.env.NODE_VERSION}`) throw new Error(`${key}: ${JSON.stringify(entry)}`)
+                const response = await fetch(entry.url, { cache: "no-store" })
+                if (!response.ok) throw new Error(`${key}: GET ${entry.url} -> ${response.status}`)
+                const bytes = Buffer.from(await response.arrayBuffer())
+                if (crypto.createHash("sha256").update(bytes).digest("hex") !== entry.sha256 || bytes.length !== entry.size) throw new Error(`${key}: served bytes differ`)
+                console.log(`  ${key}: ${entry.url} ok`)
+              }
+            }
+            main().catch((error) => { console.error(`::error::${error.message}`); process.exit(1) })
+          JS

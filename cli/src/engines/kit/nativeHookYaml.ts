@@ -1,10 +1,11 @@
 /** A managed YAML hook block and exact-command approvals, applied from eager engine declarations. */
-import { isMap, isScalar, Lexer, parseDocument } from 'yaml'
+import { isMap, isScalar, Lexer, parseDocument, visit } from 'yaml'
 import { basename, join } from 'node:path'
 import { HookPreparationHeld, inspectHookFile, type HookFilePublication, runHookPreparation, type HookPreparationAttempt, type HookPreparationOptions } from './nativeHookFiles.js'
 import { NativeEvidenceBudget } from './nativeEvidence.js'
 import { isManagedHookCommand } from './notifyHooks.js'
 import { nativeHookHomes, type NativeHookHomes } from './nativeHookHomes.js'
+import { failure, type HookFileRemoval } from './hookRemoval.js'
 
 export interface NativeYamlHooks {
   home: string
@@ -75,7 +76,7 @@ function isOwnedHooksBody(rule: NativeYamlHooks, body: string[]): boolean {
  * left behind by the earlier buggy rewrite (identified by its notify.mjs commands). Returns the cleaned
  * document plus whether a FOREIGN `hooks:` key survives — the caller must not touch the file then.
  */
-function stripOwnedBlocks(rule: NativeYamlHooks, config: string, hookLines: ReadonlySet<number>): { cleaned: string; foreignHooks: boolean; removed: number } {
+function stripOwnedBlocks(rule: NativeYamlHooks, config: string, hookLines: ReadonlySet<number>, removal = false): { cleaned: string; foreignHooks: boolean; removed: number } {
   const lines = config.split('\n')
   const out: string[] = []
   let removed = 0
@@ -94,6 +95,8 @@ function stripOwnedBlocks(rule: NativeYamlHooks, config: string, hookLines: Read
       }
       i = j
       removed++
+      // Uninstall: the one blank line the installer put before its block (`hooksBlock`) goes with it.
+      if (removal && out.at(-1) === '') out.pop()
       continue
     }
     if (hookLines.has(i) && !/^hooks:\s*$/.test(line)) foreignHooks = true
@@ -101,14 +104,22 @@ function stripOwnedBlocks(rule: NativeYamlHooks, config: string, hookLines: Read
       let j = i + 1
       while (j < lines.length && (lines[j].startsWith(' ') || lines[j].startsWith('\t') || lines[j].trim() === '')) j++
       const body = lines.slice(i + 1, j)
-      if (isOwnedHooksBody(rule, body)) { removed++; i = j - 1; continue }
+      if (isOwnedHooksBody(rule, body)) {
+        removed++
+        // Uninstall keeps the blank lines after the mapping: they separate what the person wrote.
+        let end = j
+        if (removal) while (end > i + 1 && lines[end - 1].trim() === '') end--
+        i = end - 1
+        continue
+      }
       foreignHooks = true
       out.push(line)
       continue
     }
     out.push(line)
   }
-  return { cleaned: out.join('\n').replace(/\n{3,}$/, '\n'), foreignHooks, removed }
+  const cleaned = out.join('\n')
+  return { cleaned: removal ? cleaned : cleaned.replace(/\n{3,}$/, '\n'), foreignHooks, removed }
 }
 
 /** What one home's installation said, held until every home before it has said its own. */
@@ -140,6 +151,110 @@ export async function installNativeYamlHooks(rule: NativeYamlHooks, commandForHo
   // starved the same tail behind the preparation pool on every healthy retry.
   await Promise.all(Array.from({ length: Math.min(4, homes.length) }, worker))
   return installed
+}
+
+/** Why a config is reported though nothing in it was removed: Harness's commands are in the person's own mapping. */
+export const YAML_HOOKS_KEPT = "Harness's hook commands are in a hooks: mapping Harness did not write; remove them by hand."
+
+/** A `hooks:` mapping left in [cleaned] that runs one of Harness's commands for this engine. */
+function managedHooksIn(rule: NativeYamlHooks, cleaned: string): boolean {
+  const document = parseDocument(cleaned, { strict: true, uniqueKeys: false, prettyErrors: false })
+  if (!isMap(document.contents)) return false
+  let found = false
+  for (const pair of document.contents.items) {
+    if (!isScalar(pair.key) || pair.key.value !== 'hooks') continue
+    visit(pair.value, { Scalar(_, node) {
+      if (typeof node.value === 'string' && isManagedHookCommand(node.value) && rule.ownership.every((fragment) => (node.value as string).includes(fragment))) {
+        found = true
+        return visit.BREAK
+      }
+    } })
+  }
+  return found
+}
+
+/**
+ * `harness uninstall`: every block this installer owns (`stripOwnedBlocks`: the delimited one and a bare one an older
+ * release left), and Harness's approvals, out of each home's files. Both files are read and prepared before either is
+ * written, as the installer does, so an approvals file that cannot be changed leaves the config as it was too, and is
+ * the file reported. A foreign `hooks:` mapping is left alone, as the installer leaves it, and reported when Harness's
+ * commands are in it. A config with CRLF line ends throughout is read as LF and written back with CRLF.
+ */
+export async function removeNativeYamlHooks(rule: NativeYamlHooks, homes: readonly string[]): Promise<HookFileRemoval[]> {
+  const outcomes: HookFileRemoval[] = []
+  for (const home of homes) {
+    const configPath = join(home, rule.homes.file)
+    const allowlistPath = join(home, rule.allowlist)
+    // The file being worked on, which a failure is reported against; and what was written before it.
+    let at = configPath
+    let done: HookFileRemoval[] = []
+    try {
+      outcomes.push(...await runHookPreparation([configPath, allowlistPath], async (attempt) => {
+        at = configPath
+        done = []
+        const observed = inspectHookFile(configPath)
+        let config: { next: string; removed: number } | null = null
+        let kept: string | undefined
+        if (observed.content !== null) {
+          const crlf = observed.content.includes('\r\n') && !/(?:^|[^\r])\n/.test(observed.content)
+          const text = crlf ? observed.content.replace(/\r\n/g, '\n') : observed.content
+          const original = parseDocument(text, { strict: true, uniqueKeys: false, prettyErrors: false })
+          if (original.errors.length || (original.contents !== null && !isMap(original.contents))) {
+            throw new HookPreparationHeld('the YAML configuration is not a complete mapping')
+          }
+          const hookLines = new Set<number>()
+          if (isMap(original.contents)) for (const pair of original.contents.items) {
+            if (isScalar(pair.key) && pair.key.value === 'hooks' && pair.key.range) hookLines.add(text.slice(0, pair.key.range[0]).split('\n').length - 1)
+          }
+          const { cleaned, foreignHooks, removed } = stripOwnedBlocks(rule, text, hookLines, true)
+          if (foreignHooks && managedHooksIn(rule, cleaned)) kept = YAML_HOOKS_KEPT
+          if (removed > 0) {
+            const next = cleaned.trim() ? cleaned : ''
+            // The person's own duplicate keys are theirs, read by Hermes as before: only an error the removal made counts.
+            const duplicates = (yaml: string) => parseDocument(yaml, { strict: true, uniqueKeys: true, prettyErrors: false }).errors
+              .filter((error) => error.code === 'DUPLICATE_KEY').length
+            const left = parseDocument(next, { strict: true, uniqueKeys: false, prettyErrors: false })
+            if (left.errors.length || (left.contents !== null && !isMap(left.contents)) || duplicates(next) > duplicates(text)) {
+              throw new HookPreparationHeld('the YAML configuration would not stay a complete mapping')
+            }
+            config = { next: crlf ? next.replace(/\n/g, '\r\n') : next, removed }
+          }
+        }
+        at = allowlistPath
+        const approvals = inspectHookFile(allowlistPath)
+        let allowlist: { next: string; removed: number } | null = null
+        if (approvals.content !== null) {
+          let data: { approvals?: Array<{ command?: string }> }
+          try { data = JSON.parse(approvals.content) } catch { throw new HookPreparationHeld('the hook approvals are not a readable list') }
+          if (!data || typeof data !== 'object' || Array.isArray(data) || (data.approvals !== undefined && !Array.isArray(data.approvals))) {
+            throw new HookPreparationHeld('the hook approvals are not a readable list')
+          }
+          const all = data.approvals ?? []
+          const left = all.filter((a) => !(typeof a?.command === 'string' && isManagedHookCommand(a.command)
+            && rule.ownership.every((fragment) => a.command!.includes(fragment))))
+          if (left.length !== all.length) {
+            allowlist = { next: JSON.stringify({ ...data, approvals: left }, null, 2) + '\n', removed: all.length - left.length }
+            approvals.prepare(allowlist.next)
+          }
+        }
+        at = configPath
+        if (config) observed.prepare(config.next)
+        if (config) {
+          ;(await observed.replace(config.next, attempt)).verify()
+          done.push({ file: configPath, removed: config.removed, ...(kept ? { kept } : {}) })
+        } else if (kept) done.push({ file: configPath, removed: 0, kept })
+        if (allowlist) {
+          at = allowlistPath
+          ;(await approvals.replace(allowlist.next, attempt)).verify()
+          done.push({ file: allowlistPath, removed: allowlist.removed })
+        }
+        return done
+      }, { identity: JSON.stringify(['uninstall', rule.begin, home]) }))
+    } catch (error) {
+      outcomes.push(...done, { file: at, removed: 0, failed: failure(error) })
+    }
+  }
+  return outcomes
 }
 
 async function installIn(rule: NativeYamlHooks, cmd: string, home: string, options: HookPreparationOptions & { createMissing?: boolean }, lines: HomeLines): Promise<boolean> {

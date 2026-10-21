@@ -1,0 +1,23 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90mC:/work/oh/cli[39m
+
+[90mstdout[2m | src/lib/ptyHost/drain.spec.ts[2m > [22m[2mptyHostBackends[2m > [22m[2mcreates on the newest host and keeps older panes on the old one
+[22m[39m[terminal] ptyhost: available (p2)
+
+[90mstdout[2m | src/lib/ptyHost/drain.spec.ts[2m > [22m[2mptyHostBackends[2m > [22m[2mcreates on the newest host and keeps older panes on the old one
+[22m[39m[terminal] ptyhost: available (p1, draining)
+
+[90mstdout[2m | src/lib/ptyHost/drain.spec.ts[2m > [22m[2mshutdown on the real host[2m > [22m[2mis refused while the host has a pane; granted, the host exits and takes its discovery file down
+[22m[39m[terminal] ptyhost: available (p2)
+
+[90mstderr[2m | src/lib/ptyHost/drain.spec.ts[2m > [22m[2mshutdown on the real host[2m > [22m[2mis refused while the host has a pane; granted, the host exits and takes its discovery file down
+[22m[39m[terminal] ptyhost: lost the connection to the host; reconnecting
+
+ [32m✓[39m src/lib/ptyHost/drain.spec.ts [2m([22m[2m23 tests[22m[2m)[22m[33m 4036[2mms[22m[39m
+     [33m[2m✓[22m[39m streams the old host's pane, makes new panes on the new host, and lets the old one go once its pane closes [33m 3742[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m23 passed[39m[22m[90m (23)[39m
+[2m   Start at [22m 05:34:02
+[2m   Duration [22m 7.59s[2m (transform 1.70s, setup 115ms, import 2.24s, tests 4.04s, environment 0ms)[22m
+

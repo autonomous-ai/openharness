@@ -42,7 +42,13 @@ import {
   unreadableCwdGuard,
   ZSH_GUARD_ZSHENV,
   zshNewUserGuard,
+  engineLaunchEnv,
+  buildEngineInstallationArgv,
 } from './engineLaunch.js'
+import { isHeldStartCommand, NATIVE_LAUNCH_MARKER } from './nativePaneHold.js'
+import { WindowsStartupUnverified } from './windows/engineStart.js'
+import { defaultWindowsShell } from './windows/shell.js'
+import type { NativeLaunch } from '../engines/nativeLaunch.js'
 import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { engineBin } from './engineBin.js'
 import { engineInstallRecipe, type EngineInstallRecipe } from './engineInstall.js'
@@ -52,7 +58,7 @@ import { DSH_SESSION_ENV, harnessEnvToClear } from '../dsh/launch.js'
 import { launchScriptOf } from '../testing/launchScript.js'
 import { buildGridEngineLaunch, gridConflictingEnvToClear } from './gridLaunch.js'
 import { TmuxBackend } from './tmuxBackend.js'
-import { resumeSessionId } from './tmux.js'
+import { resumeSessionId } from './processTable.js'
 
 // What these cases test is what real shells make of the scripts this module writes: sh, dash, bash and
 // zsh run each one, and nothing here could be faked without faking the subject. Each run carries its own
@@ -670,6 +676,126 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
   it('falls back to direct execution when no absolute shell is available', () => {
     expect(buildEngineLaunchArgv('claude', {}, '')).toEqual([engineBin('claude')])
     expect(buildEngineLaunchArgv('claude', {}, 'zsh')).toEqual([engineBin('claude')])
+  })
+
+  // Windows 11's default execution policy refuses npm's codex.ps1, which PowerShell would pick for a bare `codex`, and
+  // cmd.exe would re-read the first message if the .cmd shim ran it (lib/windows/launch.ts): node runs the script.
+  it('runs an npm engine on Windows as node on its script, never its .ps1 or .cmd', () => {
+    const npm = mkdtempSync(join(tmpdir(), 'engine-launch-npm-'))
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    try {
+      for (const name of ['codex', 'codex.ps1', 'node.exe']) writeFileSync(join(npm, name), '')
+      writeFileSync(join(npm, 'codex.cmd'), readFileSync(join(import.meta.dirname, 'windows', 'fixtures', 'npm-codex.cmd')))
+      const script = join(npm, 'node_modules', '@openai', 'codex', 'bin', 'codex.js')
+      mkdirSync(join(script, '..'), { recursive: true })
+      writeFileSync(script, '')
+      vi.stubEnv('PATH', npm)
+      vi.stubEnv('CODEX_PATH', '')
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+      // The owned-process flag Codex's help listed (nativeLaunch.ts `startupArgs`) goes first, after the script.
+      const native = { startupArgs: ['--no-daemon'] } as unknown as NativeLaunch
+      expect(buildEngineCommandArgv('codex', { native, bypassPermission: true, firstPrompt: 'fix&calc "%PATH%"\n\nnext' }))
+        .toEqual([join(npm, 'node.exe'), script, '--no-daemon', '--approve-for-me', ...CODEX_SCREEN, ...firstPromptArgs('codex', 'fix&calc "%PATH%"\n\nnext')])
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+      vi.unstubAllEnvs()
+      rmSync(npm, { recursive: true, force: true })
+    }
+  })
+
+  // Windows has no /usr/bin/env: the variables it carried ride in the pane's env (engineLaunchEnv).
+  it('never puts /usr/bin/env in front of a Windows launch, and gives its variables as env instead', () => {
+    const native = { token: 'native-token' } as NativeLaunch
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    let windows: string[][]
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+      windows = [buildEngineLaunchArgv('claude', {}, ''), buildEngineLaunchArgv('claude', { native }, '')]
+    } finally { Object.defineProperty(process, 'platform', platform) }
+    // The engine itself first: its name here, its resolved exe on a real Windows (windows/launch.ts).
+    expect(windows[0][0]).toMatch(/(?:^|[\\/])claude(?:\.exe)?$/)
+    for (const argv of windows) expect(argv).not.toContain('/usr/bin/env')
+    expect(engineLaunchEnv('claude', native, 'win32')).toEqual({ [NATIVE_LAUNCH_MARKER]: 'native-token' })
+    expect(engineLaunchEnv('codex', undefined, 'win32')).toBeUndefined()
+    // Elsewhere the prefix stays in the argv, as before, and there is no env to add.
+    if (process.platform !== 'win32') expect(buildEngineLaunchArgv('claude', { native }, '').slice(0, 2)).toEqual(['/usr/bin/env', `${NATIVE_LAUNCH_MARKER}=native-token`])
+    expect(engineLaunchEnv('claude', native, 'darwin')).toBeUndefined()
+  })
+
+  describe('on Windows, which has no POSIX shell (lib/windows/engineStart.ts)', () => {
+    const POSIX_ONLY = /^(?:\/bin\/(?:sh|dash|bash|zsh)|\/usr\/bin\/env)$/
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    const onWindows = <T>(run: () => T): T => {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+      try { return run() } finally { Object.defineProperty(process, 'platform', platform) }
+    }
+    const executable = (current = true) => ({ command: '/fixture/codex', identity: 'fixture', current: () => current })
+    const native = (overrides: Partial<NativeLaunch> = {}): NativeLaunch => ({
+      token: '0f0e0d0c-0b0a-4908-8706-050403020100', executable: executable(), opencodeMajor: null, environment: {}, proofs: [],
+      ready: () => true, current: () => true, prepareHooks: async () => true, permission: async () => 'supported',
+      startupArgs: ['--no-daemon'], ...overrides,
+    })
+
+    it('has no interactive shell, whatever SHELL says (OpenSSH sets cmd.exe)', () => {
+      for (const shell of ['c:\\windows\\system32\\cmd.exe', '/bin/zsh', '/usr/bin/bash', undefined]) {
+        expect(onWindows(() => interactiveEngineShell(shell))).toBeNull()
+      }
+    })
+
+    it('starts a plain engine as itself: no script, no POSIX program', () => {
+      for (const shell of ['/bin/zsh', 'c:\\windows\\system32\\cmd.exe', '']) {
+        const argv = onWindows(() => buildEngineLaunchArgv('claude', { cwd: '/work', installIfMissing: engineInstallRecipe('claude'), clearEnv: ['A'] }, shell))
+        expect(argv).toEqual(onWindows(() => buildEngineCommandArgv('claude', {})))
+        expect(argv.filter((arg) => POSIX_ONLY.test(arg))).toEqual([])
+      }
+    })
+
+    it('starts Codex, whose startup contract needs a script elsewhere, with the flag its help listed', () => {
+      const withFlag = onWindows(() => buildEngineLaunchArgv('codex', { native: native(), resumeSessionId: 'abc' }, '/bin/zsh'))
+      expect(withFlag).toEqual(['/fixture/codex', '--no-daemon', 'resume', 'abc', ...CODEX_SCREEN])
+      // An older Codex, whose help has no --no-daemon: none.
+      expect(onWindows(() => buildEngineLaunchArgv('codex', { native: native({ startupArgs: [] }) }, '')))
+        .toEqual(['/fixture/codex', ...CODEX_SCREEN])
+      for (const argv of [withFlag]) expect(argv.filter((arg) => POSIX_ONLY.test(arg))).toEqual([])
+    })
+
+    it('refuses a Codex launch nobody probed, as the script ends one whose probe could not answer', () => {
+      for (const opts of [{}, { native: native({ startupArgs: undefined }) }]) {
+        expect(() => onWindows(() => buildEngineLaunchArgv('codex', opts, ''))).toThrow(WindowsStartupUnverified)
+        expect(() => onWindows(() => buildEngineCommandArgv('codex', opts))).toThrow('Could not verify Codex startup options. Please try opening this session again.')
+      }
+      // An engine with no startup probe needs none.
+      expect(onWindows(() => buildEngineCommandArgv('opencode', {}))).toHaveLength(1)
+      // Elsewhere the script probes, and the command carries no flag of its own.
+      if (process.platform !== 'win32') expect(buildEngineCommandArgv('codex', {})).toEqual([engineBin('codex'), ...CODEX_SCREEN])
+    })
+
+    it('runs a confirmed native launch as its engine, and holds one whose evidence changed', () => {
+      const confirmed = onWindows(() => buildEngineLaunchArgv('codex', { native: native() }, ''))
+      expect(confirmed).toEqual(['/fixture/codex', '--no-daemon', ...CODEX_SCREEN])
+      const token = native().token!
+      for (const changed of [
+        native({ executable: executable(false) }),
+        native({ ready: () => false }),
+        native({ proofs: [{ files: [], current: () => false }] as unknown as NativeLaunch['proofs'] }),
+      ]) {
+        const held = onWindows(() => buildEngineLaunchArgv('codex', { native: changed }, ''))
+        expect(held.slice(1, 2)).toEqual(['-e'])
+        expect(held.slice(3)).toEqual(['harness-held', 'Waiting for native launch preparation to be confirmed.', token])
+        expect(isHeldStartCommand(held.join(' '), token)).toBe(true)
+        expect(held.filter((arg) => POSIX_ONLY.test(arg))).toEqual([])
+      }
+      // A native launch with no executable (a terminal's) has nothing to guard.
+      expect(onWindows(() => buildEngineLaunchArgv('claude', { native: native({ executable: undefined }) }, '')))
+        .toEqual(onWindows(() => buildEngineCommandArgv('claude', {})))
+    })
+
+    it('opens a terminal as the default Windows shell, and installs nothing through a POSIX shell', () => {
+      expect(onWindows(() => buildEngineLaunchArgv('terminal', { cwd: '/work', terminalHint: { machineName: 'box' } }, '/bin/zsh')))
+        .toEqual(defaultWindowsShell())
+      expect(() => onWindows(() => buildEngineInstallationArgv('codex', engineInstallRecipe('codex')!, { HOME: '/h' })))
+        .toThrow('Harness cannot install codex on Windows yet')
+    })
   })
 
   it('appends the confirmed flag for engines with a known bypass flag', () => {

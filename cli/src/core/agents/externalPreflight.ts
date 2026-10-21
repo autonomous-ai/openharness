@@ -2,6 +2,7 @@
 import { engineHooks } from '../../engines/hooks.js'
 import { buildEngineCommandArgv, refusePermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
+import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
 import type { ExternalResumeDeps } from './externalResume.js'
 import type { LaunchOverridesDeps } from '../../lib/launchOverrides.js'
 
@@ -34,8 +35,11 @@ export function createExternalPreflight(deps: {
       return { detail: 'Waiting to confirm Codex’s hooks in the selected profile.' }
     }
     if (!current()) return changed
-    buildEngineCommandArgv(row.engine, { ...(native ? { native } : {}), cwd: session.cwd, resumeSessionId: session.sessionId,
-      bypassPermission: row.bypassPermission, permissionMode: row.permissionMode, extraArgs: session.launchArgs })
+    // Windows refuses a batch-file engine whose arguments cmd.exe would read (lib/windows/launch.ts): held, saying why.
+    try {
+      buildEngineCommandArgv(row.engine, { ...(native ? { native } : {}), cwd: session.cwd, resumeSessionId: session.sessionId,
+        bypassPermission: row.bypassPermission, permissionMode: row.permissionMode, extraArgs: session.launchArgs })
+    } catch (error) { return { detail: windowsLaunchRefusal(error).detail } }
     return native ? { current } : null
   }
 }

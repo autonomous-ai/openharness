@@ -96,6 +96,18 @@ describe('the process the services run in', () => {
     expect(exits).toEqual([0])
   })
 
+  it('stops what it runs when the master asks it to leave (Windows has no SIGTERM to send)', async () => {
+    const channel = new FakeChannel()
+    const running = host({ channel })
+    const stop = vi.fn()
+    running.add({ stop })
+    channel.emit('message', { type: 'harnessd:status', status: {} })
+    channel.emit('message', { type: 'harnessd:shutdown' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stop).toHaveBeenCalledOnce()
+    expect(exits).toEqual([0])
+  })
+
   it('exits all the same when a service never finishes stopping', async () => {
     const running = host({ leaveGraceMs: 300 })
     running.add({ stop: () => new Promise<void>(() => {}) })

@@ -77,6 +77,7 @@ void main() {
         autonomousEnv: 'test',
         machineId: 'm',
         transportKind: WsTransportKind.localPlaintext,
+        allowLocalTcpFixture: true,
         localWsUri: Uri.parse(
           '${endpoint.replaceFirst('http:', 'ws:')}/api/local-ws',
         ),

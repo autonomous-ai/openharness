@@ -3,7 +3,8 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { isolatedTmux, type IsolatedTmux } from '../testing/isolatedTmux.js'
 import { buildEngineLaunchArgv } from './engineLaunch.js'
-import { resolvePaneEngineProcess } from './tmux.js'
+import { resolvePaneEngineProcess } from './paneEngineProcess.js'
+import { TmuxBackend } from './tmuxBackend.js'
 
 let server: IsolatedTmux | undefined
 afterEach(async () => {
@@ -43,11 +44,11 @@ if (process.argv.includes('--help')) {
     argv[argv.indexOf('harness-engine') + 2] = binary
     const pane = await server.run('new-session', '-d', '-P', '-F', '#{pane_id}', '-s', 'restart-probe', ...argv)
     await vi.waitFor(async () => expect(Number(await readFile(probe, 'utf8'))).toBeGreaterThan(0), { timeout: 5_000 })
-    expect(await resolvePaneEngineProcess(pane, 'codex')).toBeNull()
+    expect(await resolvePaneEngineProcess(new TmuxBackend(), { backend: 'tmux', paneId: pane }, 'codex')).toBeNull()
     await writeFile(release, '')
     await vi.waitFor(async () => {
       const pid = Number(await readFile(running, 'utf8'))
-      expect(await resolvePaneEngineProcess(pane, 'codex')).toMatchObject({ pid })
+      expect(await resolvePaneEngineProcess(new TmuxBackend(), { backend: 'tmux', paneId: pane }, 'codex')).toMatchObject({ pid })
     }, { timeout: 8_000 })
   }, 20_000)
 })

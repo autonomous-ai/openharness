@@ -25,6 +25,7 @@ import 'agent_drag.dart';
 import 'box_chrome.dart';
 import 'rename_agent_dialog.dart';
 import 'terminal_composer.dart';
+import 'terminal_edit_actions.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import 'terminal_find_bar.dart';
@@ -282,6 +283,10 @@ class _TerminalPanelState extends State<TerminalPanel>
   String? _pressedLink;
   bool _openingLink = false;
   bool _linkRefreshPending = false;
+  // A clipboard gesture owns its key until release, even after copy clears
+  // selection or modifiers change. A new down always starts a fresh gesture.
+  final _clipboardKeys = <PhysicalKeyboardKey>{};
+
   bool _followTail = true;
   TerminalStyle _terminalFont = terminalFontStore.value;
   bool _observingLinkModifiers = false;
@@ -760,6 +765,9 @@ class _TerminalPanelState extends State<TerminalPanel>
   }
 
   void _handleFocusChange() {
+    _clipboardKeys.removeWhere(
+      (key) => !HardwareKeyboard.instance.physicalKeysPressed.contains(key),
+    );
     _syncCursorBlink();
     if (_focusNode.hasFocus) {
       widget.onRendererFocus?.call();
@@ -1707,6 +1715,14 @@ class _TerminalPanelState extends State<TerminalPanel>
   }
 
   Future<void> _copyOrPaste() async {
+    if (_controller.selection != null) {
+      await _copySelection();
+    } else {
+      await _paste();
+    }
+  }
+
+  Future<void> _copySelection() async {
     final terminal = widget.session.terminal;
     final selection = _controller.selection;
     if (selection != null) {
@@ -1715,7 +1731,6 @@ class _TerminalPanelState extends State<TerminalPanel>
       await Clipboard.setData(ClipboardData(text: text));
       return;
     }
-    await _paste();
   }
 
   /// Paste — including the kinds of clipboard this app cannot fully read.
@@ -1724,16 +1739,18 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// text at all, so a naive body finds `null` and returns, silently: the single
   /// most common thing anyone pastes into a coding agent did nothing, with no
   /// error and nothing in a log. [NativeClipboard] closes that gap with a native
-  /// platform-channel read for an actual image (macOS/Linux only; see its doc).
+  /// platform-channel read for an actual image (see its doc).
   ///
   /// The engines running in these panes read the system clipboard THEMSELVES —
-  /// Claude Code attaches an image on Ctrl+V — so on a LOCAL pane that is already
+  /// Claude Code attaches an image on Ctrl+V on macOS/Linux — so on a LOCAL pane that is already
   /// true with zero help from us: a bare Ctrl+V is all that ever ran here, before
   /// native image paste existed, and it still works because the engine and this
   /// app share the exact same OS clipboard. The wire-based `pasteImage` (chunked
   /// upload, daemon writes the far side's OS clipboard, daemon replays Ctrl+V) is
-  /// reserved for a genuinely REMOTE pane, whose engine reads a DIFFERENT
-  /// clipboard than this one — see `MachineState.isLocalMachine`.
+  /// used for a genuinely REMOTE pane, whose engine reads a DIFFERENT
+  /// clipboard than this one — see `MachineState.isLocalMachine`. Native Windows
+  /// also uses that path: an engine's image shortcut can differ (Claude uses
+  /// Alt+V), and its process may not share the desktop's interactive clipboard.
   Future<void> _paste() async {
     final target = widget.session;
     final streamId = target.streamId;
@@ -1778,11 +1795,13 @@ class _TerminalPanelState extends State<TerminalPanel>
     final machine = widget.notifier.stateOf(target.machineId);
     // A local engine reads its own clipboard on Ctrl-V — except under WSL,
     // where WSLg leaves a Windows screenshot there as BMP or not at all, and
-    // Codex/Claude Code find no image (openharness#107). There the app reads
-    // the image itself and hands it to the daemon like a remote paste; the
-    // daemon, knowing it is on WSL too, pastes the saved file's path.
+    // Codex/Claude Code find no image (openharness#107). WSL and native Windows
+    // read the image here and hand it to the daemon like a remote paste. Without
+    // a clipboard writer there, the daemon pastes the saved image's file path,
+    // avoiding assumptions about an engine's clipboard shortcut or OS session.
+    final windows = !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
     if (machine != null &&
-        (!machine.isLocalMachine || RuntimePlatform.isWsl) &&
+        (!machine.isLocalMachine || RuntimePlatform.isWsl || windows) &&
         machine.terminalImagePasteAvailable) {
       final imageBytes = await NativeClipboard.readImagePng();
       if (!stillOwnsPaste()) return;
@@ -1836,9 +1855,15 @@ class _TerminalPanelState extends State<TerminalPanel>
   /// xterm binds paste itself, but only ever to its text-only action. `onKeyEvent`
   /// is the one hook that runs BEFORE its shortcut map (terminal_view.dart), so
   /// this is where the binding has to be replaced rather than added. The chord taken is the
-  /// platform's exact one: Linux reserves Ctrl-V for the terminal program and pastes with
-  /// Ctrl-Shift-V.
+  /// platform's exact one: Linux pastes with Ctrl-Shift-V; native Windows also accepts Ctrl-V and
+  /// copies Ctrl-C only when output is selected.
   KeyEventResult _onTerminalKey(FocusNode node, KeyEvent event) {
+    if (event is KeyDownEvent) {
+      _clipboardKeys.remove(event.physicalKey);
+    } else if (_clipboardKeys.contains(event.physicalKey)) {
+      if (event is KeyUpEvent) _clipboardKeys.remove(event.physicalKey);
+      return KeyEventResult.handled;
+    }
     if (_passageId != null && event.logicalKey == LogicalKeyboardKey.escape) {
       if (event is KeyDownEvent) _closePassage();
       return KeyEventResult.handled;
@@ -1869,10 +1894,22 @@ class _TerminalPanelState extends State<TerminalPanel>
         event.logicalKey == LogicalKeyboardKey.backspace) {
       return _onDeleteToLineStart();
     }
-    if (event is! KeyDownEvent || event.logicalKey != LogicalKeyboardKey.keyV) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final windows = !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+    if (windows &&
+        event.logicalKey == LogicalKeyboardKey.keyC &&
+        keyboard.isControlPressed &&
+        !keyboard.isShiftPressed &&
+        !keyboard.isAltPressed &&
+        !keyboard.isMetaPressed &&
+        _controller.selection != null) {
+      _clipboardKeys.add(event.physicalKey);
+      unawaited(_copySelection());
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey != LogicalKeyboardKey.keyV || keyboard.isAltPressed) {
       return KeyEventResult.ignored;
     }
-    if (keyboard.isAltPressed) return KeyEventResult.ignored;
     final apple =
         defaultTargetPlatform == TargetPlatform.macOS ||
         defaultTargetPlatform == TargetPlatform.iOS;
@@ -1882,9 +1919,11 @@ class _TerminalPanelState extends State<TerminalPanel>
               !keyboard.isShiftPressed
         : keyboard.isControlPressed &&
               !keyboard.isMetaPressed &&
-              keyboard.isShiftPressed ==
-                  (defaultTargetPlatform == TargetPlatform.linux);
+              (windows ||
+                  keyboard.isShiftPressed ==
+                      (defaultTargetPlatform == TargetPlatform.linux));
     if (!pasting) return KeyEventResult.ignored;
+    if (windows) _clipboardKeys.add(event.physicalKey);
     unawaited(_paste());
     return KeyEventResult.handled;
   }
@@ -2141,6 +2180,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     final chromeFill = PaneOpacity.fill(context, grid.AppPalette.windowBg);
     return KeymapRegion(
       contextKind: KeymapContext.terminal,
+      terminalFocusNode: _focusNode,
       composing: () =>
           _focusNode.hasFocus &&
           _terminalViewKey.currentState?.isComposing == true,
@@ -2271,54 +2311,59 @@ class _TerminalPanelState extends State<TerminalPanel>
                                       as RenderBox?,
                               repaint: _scrollController,
                             ),
-                            child: TerminalView(
-                              session.terminal,
-                              key: _terminalViewKey,
-                              controller: _controller,
-                              autoResize: widget.visible && !session.readOnly,
-                              resizeBuffer: false,
-                              renderingEnabled: widget.visible,
-                              outputRepaintInterval:
-                                  widget.outputRepaintInterval,
-                              scrollController: _scrollController,
+                            child: TerminalEditActions(
                               focusNode: _focusNode,
-                              autofocus: widget.focused && !showComposer,
-                              readOnly:
-                                  widget.readOnly || !session.acceptsInput,
-                              theme: terminalScreenThemeFor(
-                                grid.AppTheme.palette.value,
-                                terminalThemeStore.value,
-                              ),
-                              padding: const EdgeInsets.all(10),
-                              backgroundOpacity: paneOpacity,
-                              textStyle: terminalFontStore.value,
-                              // The chosen point size already sizes each terminal cell.
-                              // Applying the OS text scale again would change rows/cols
-                              // and resize the remote terminal unexpectedly.
-                              textScaler: TextScaler.noScaling,
-                              onKeyEvent: _onTerminalKey,
-                              onTapDown: _onLinkTapDown,
-                              onTapUp: _onLinkTapUp,
-                              mouseCursor:
-                                  _hoveredLink != null && _linkModifierPressed
-                                  ? SystemMouseCursors.click
-                                  // An I-beam invites typing; a blocked pane does not.
-                                  : _inputBlocked
-                                  ? SystemMouseCursors.basic
-                                  : SystemMouseCursors.text,
-                              onSecondaryTapDown: (_, _) => _copyOrPaste(),
-                              deleteDetection: isTouchBrowser,
-                              // A <textarea>, not an <input>: iOS Safari hangs
-                              // its AutoFill bar (passwords, cards, places)
-                              // over the keyboard for every <input>. Return
-                              // still submits: see CustomTextEdit's action echo.
-                              keyboardType: isIOSBrowser
-                                  ? TextInputType.multiline
-                                  : TextInputType.text,
+                              copy: _copySelection,
+                              paste: _paste,
+                              child: TerminalView(
+                                session.terminal,
+                                key: _terminalViewKey,
+                                controller: _controller,
+                                autoResize: widget.visible && !session.readOnly,
+                                resizeBuffer: false,
+                                renderingEnabled: widget.visible,
+                                outputRepaintInterval:
+                                    widget.outputRepaintInterval,
+                                scrollController: _scrollController,
+                                focusNode: _focusNode,
+                                autofocus: widget.focused && !showComposer,
+                                readOnly:
+                                    widget.readOnly || !session.acceptsInput,
+                                theme: terminalScreenThemeFor(
+                                  grid.AppTheme.palette.value,
+                                  terminalThemeStore.value,
+                                ),
+                                padding: const EdgeInsets.all(10),
+                                backgroundOpacity: paneOpacity,
+                                textStyle: terminalFontStore.value,
+                                // The chosen point size already sizes each terminal cell.
+                                // Applying the OS text scale again would change rows/cols
+                                // and resize the remote terminal unexpectedly.
+                                textScaler: TextScaler.noScaling,
+                                onKeyEvent: _onTerminalKey,
+                                onTapDown: _onLinkTapDown,
+                                onTapUp: _onLinkTapUp,
+                                mouseCursor:
+                                    _hoveredLink != null && _linkModifierPressed
+                                    ? SystemMouseCursors.click
+                                    // An I-beam invites typing; a blocked pane does not.
+                                    : _inputBlocked
+                                    ? SystemMouseCursors.basic
+                                    : SystemMouseCursors.text,
+                                onSecondaryTapDown: (_, _) => _copyOrPaste(),
+                                deleteDetection: isTouchBrowser,
+                                // A <textarea>, not an <input>: iOS Safari hangs
+                                // its AutoFill bar (passwords, cards, places)
+                                // over the keyboard for every <input>. Return
+                                // still submits: see CustomTextEdit's action echo.
+                                keyboardType: isIOSBrowser
+                                    ? TextInputType.multiline
+                                    : TextInputType.text,
 
-                              onAltBufferScroll: session.scrollViaTmuxCopyMode
-                                  ? (up) => session.sendScrollCommand(up, 1)
-                                  : null,
+                                onAltBufferScroll: session.scrollViaTmuxCopyMode
+                                    ? (up) => session.sendScrollCommand(up, 1)
+                                    : null,
+                              ),
                             ),
                           ),
                         ),
@@ -2411,6 +2456,7 @@ class _TerminalPanelState extends State<TerminalPanel>
                   session: session,
                   focusNode: _composerFocus,
                   inputEnabled: !widget.readOnly && !session.readOnly,
+                  onPasteNonText: _paste,
                 ),
               ),
           ],

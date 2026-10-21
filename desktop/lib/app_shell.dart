@@ -16,6 +16,9 @@ import 'package:flutter_web_plugins/url_strategy.dart';
 import 'core/crash_log.dart';
 import 'core/desktop_window.dart';
 import 'core/linux_app_image.dart';
+import 'core/runtime_platform.dart';
+import 'core/test_run.dart';
+import 'core/windows_status_tray.dart';
 import 'settings/settings_screen.dart';
 import 'settings/settings_section.dart';
 import 'screens/login_screen.dart';
@@ -32,7 +35,7 @@ import 'widgets/environment_preflight_screen.dart';
 import 'widgets/environment_setup_screen.dart';
 import 'widgets/export_logs_dialog.dart';
 import 'widgets/flash_firmware_dialog.dart';
-import 'widgets/linux_menu_bar.dart';
+import 'widgets/in_window_menu_bar.dart';
 import 'widgets/setup_tour.dart';
 import 'widgets/sign_in_step.dart';
 import 'widgets/transient_menus.dart';
@@ -225,6 +228,8 @@ class _RootShellState extends ConsumerState<RootShell>
     if (kIsWeb) _sharedLocation = SharedAgentLocation.parse(Uri.base);
     WidgetsBinding.instance.addObserver(this);
     _appMenuChannel.setMethodCallHandler(_onAppMenu);
+    // Available from startup, including sign-in and setup.
+    if (RuntimePlatform.isWindows && !kUnderTest) windowsStatusTray.install();
   }
 
   @override
@@ -266,9 +271,9 @@ class _RootShellState extends ConsumerState<RootShell>
 
   /// Runs one app-menu action.
   ///
-  /// The macOS native menu reports over `harness/app_menu`; the Linux menu bar
-  /// ([LinuxMenuBar]) fires the same strings directly, so one switch serves
-  /// both platforms.
+  /// The macOS native menu reports over `harness/app_menu`; the in-window menu bar
+  /// ([InWindowMenuBar]) fires the same strings directly, so one switch serves
+  /// every platform.
   Future<void> runAppMenuAction(String action) async {
     if (!mounted) return;
     switch (action) {
@@ -419,9 +424,10 @@ class _RootShellState extends ConsumerState<RootShell>
         final deviceBands = home && shared == null;
         return Column(
           children: [
-            // The app's commands as a menu strip (Linux only; macOS carries
-            // them in its native menu bar, and this renders nothing there).
-            LinuxMenuBar(onAction: runAppMenuAction),
+            // The app's commands as a menu strip (Linux and Windows; macOS
+            // carries them in its native menu bar, and this renders nothing
+            // there).
+            InWindowMenuBar(onAction: runAppMenuAction),
             if (app.hasAvailableUpdate &&
                 !touring &&
                 !signInStep &&

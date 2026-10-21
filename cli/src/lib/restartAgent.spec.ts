@@ -83,6 +83,19 @@ describe('restartAgent', () => {
     expect(allowed.calls).toEqual(['holdOpen', 'terminate', 'buildArgv', 'respawn', 'waitForProcess'])
   })
 
+  it('stops nothing when the relaunch is refused on this platform, and asks with the resume it would launch', async () => {
+    const asked: unknown[] = []
+    const d = { ...deps(), launchRefusal: (opts: unknown) => { asked.push(opts); return 'Harness cannot start codex on Windows with these arguments.' } }
+    expect(await restartAgent({ engine: 'codex', sessionId: 's1' }, true, d)).toEqual({
+      ok: false, error: 'ENGINE_LAUNCH_REFUSED', detail: 'Harness cannot start codex on Windows with these arguments. Nothing was stopped.',
+    })
+    expect(d.calls).toEqual([])
+    expect(asked).toEqual([{ bypassPermission: true, resumeSessionId: 's1' }])
+    const fresh = { ...deps(), launchRefusal: (opts: unknown) => { asked.push(opts); return null } }
+    expect(await restartAgent({ engine: 'codex', sessionId: '' }, false, fresh)).toMatchObject({ ok: true })
+    expect(asked.at(-1)).toEqual({ bypassPermission: false })
+  })
+
   it('never respawns when holdOpen fails to re-arm the pane', async () => {
     const d = deps({ holdOpen: async () => ({ ok: false, reason: 'tmux unreachable' }) })
     const outcome = await restartAgent({ engine: 'claude', sessionId: 's1' }, false, d)

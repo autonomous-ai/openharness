@@ -1,0 +1,61 @@
+# s7 round 1 (2026-10-18 08:59:12)
+## the user PATH before (value and kind, raw)
+Path [ExpandString] %USERPROFILE%\AppData\Local\Microsoft\WindowsApps;C:\Users\hxe2e\.harness\bin;%APPDATA%\npm;%USERPROFILE%\.local\bin
+## a Claude harness made just before the uninstall, not bound yet (B5.10)
+01:59:14.834 create claude → 9128d372… launch=starting (80 ms)
+{"id":"9128d372…","engine":"claude","status":"active","launch":"starting","pane":"%3007","name":"Claude harness 10-17 18:59","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
+## the task's file deleted first: the task must still be found and removed (B5.9)
+File Not Found
+
+Folder: \
+TaskName                                 Next Run Time          Status         
+======================================== ====================== ===============
+Harness harnessd (hxe2e)                 10/17/2026 7:00:00 PM  Ready          
+## harness-pty.exe of every user before
+harness-pty pid 5028 started 18:40:04.889 owner hxe2e C:\Users\hxe2e\.harness\runtime\pty\0.4.18\harness-pty.exe
+## harness uninstall --yes, over SSH (08:59:17)
+✓ stopped 4 harnesses
+✓ removed the Harness daemon from Task Scheduler: it no longer starts at login
+✓ stopped the Harness daemon (pid 7156)
+✓ ended 3 terminals in the Harness terminal host
+✓ removed Harness's hooks from ~\.claude\settings.json
+✓ removed Harness's hooks from ~\.codex\hooks.json
+✓ removed Codex's record of Harness's hooks from ~\.codex\config.toml
+✓ removed Harness's hooks from ~\.copilot\hooks\harness.json
+✓ removed Harness's hooks from ~\.commandcode\settings.json
+✓ removed ~\.config\kilo\plugin\launcher-register.js
+✓ removed ~\.pi\agent\extensions\launcher-register.ts
+✓ removed ~\.config\amp\plugins\launcher-register.ts
+✓ removed ~\.config\opencode\plugin\launcher-register.js
+✓ removed ~\.config\opencode\plugins\launcher-register\tui.js
+· if you had added a permission rule in ~\.claude\settings.json that is the same as one of Harness's, it went too: add it again if you need it
+· Codex may ask you to review your own hooks again: it remembers the hooks you reviewed by their place in ~\.codex\hooks.json, and taking Harness's out moved them
+✓ removed ~\.harness\bin from your PATH
+✗ Harness is only partly uninstalled:
+  · the harness Claude harness 10-17 18:43 did not stop (IDENTITY_UNAVAILABLE: Conversation identity is held: the native ps probe did not complete.), so it may still be running
+  · the harness Codex harness 10-17 18:51 did not stop (IDENTITY_UNAVAILABLE: Conversation identity is held: the native ps probe did not complete.), so it may still be running
+  · the harness Claude harness 10-17 18:59 did not stop (IDENTITY_UNAVAILABLE: Conversation identity is held: the native ps probe did not complete.), so it may still be running
+  · Windows did not start the step that removes Harness's files once this command has ended. (Access denied) Windows refused to start it, as it does for a standard user signed in over SSH; run harness uninstall at the desktop, or delete C:\Users\hxe2e\.harness yourself.
+exit=1
+## harness-pty.exe of every user after
+## hxe2e processes after round 1 over SSH
+
+## left in ~\.harness
+agent-messages
+auth
+bin
+cli
+computer-id
+connections
+dsh
+hook-routes
+pty
+runtime
+harness-launch.exe
+harness.exe
+ERROR: The system cannot find the file specified.
+## harness uninstall --yes again, from a non-SSH logon (batch logon task) (08:59:42)
+Γ£ô ~\.harness goes once this command has exited (anything left is listed in C:\Users\hxe2e\AppData\Local\Temp\harness-uninstall-1464-1792288785498.log)
+Harness is uninstalled.
+uninstall exit=0 in 1.7 s
+exit=0

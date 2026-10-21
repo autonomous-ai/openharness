@@ -5,14 +5,15 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/community/fork_link.dart';
 import 'package:harness/community/fork_project.dart';
+import 'package:path/path.dart' as p;
 
 import 'community_fork_test.dart' show link, snapshot;
 
 class StorageImporter extends ForkProjectImporter {
   StorageImporter(Directory fixture)
     : super(
-        root: Directory('${fixture.path}/metadata'),
-        projectsRoot: Directory('${fixture.path}/harnesses'),
+        root: Directory(p.join(fixture.path, 'metadata')),
+        projectsRoot: Directory(p.join(fixture.path, 'harnesses')),
       );
 
   int downloads = 0;
@@ -24,6 +25,21 @@ class StorageImporter extends ForkProjectImporter {
     await holdDownload?.future;
     return snapshot()..['id'] = request.harnessId;
   }
+}
+
+class _DirectoryBeforeRename implements Directory {
+  _DirectoryBeforeRename(this.directory, this.beforeRename);
+  final Directory directory;
+  final Future<void> Function() beforeRename;
+
+  @override
+  Future<Directory> rename(String newPath) async {
+    await beforeRename();
+    return directory.rename(newPath);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 void main() {
@@ -60,10 +76,10 @@ void main() {
     'editable source uses the normal project folder; metadata stays private',
     () async {
       final fork = await importer.prepare(link);
-      expect(fork.folder, '${fixture.path}/harnesses/moonlight');
+      expect(fork.folder, p.join(fixture.path, 'harnesses', 'moonlight'));
       expect(
         fork.package,
-        '${importer.root.path}/forks/${link.requestId}/package',
+        p.join(importer.root.path, 'forks', link.requestId, 'package'),
       );
       expect(fork.legacyFolder, isNull);
       expect(
@@ -87,7 +103,7 @@ void main() {
   );
 
   test('existing projects and separate forks with the same title are never overwritten', () async {
-    final occupied = Directory('${fixture.path}/harnesses/moonlight');
+    final occupied = Directory(p.join(fixture.path, 'harnesses', 'moonlight'));
     await occupied.create(recursive: true);
     await File('${occupied.path}/work.txt').writeAsString('keep this');
     const another = ForkLink(
@@ -99,8 +115,8 @@ void main() {
       StorageImporter(fixture).prepare(another),
     ]);
     expect(forks.map((f) => f.folder).toSet(), {
-      '${fixture.path}/harnesses/moonlight-2',
-      '${fixture.path}/harnesses/moonlight-3',
+      p.join(fixture.path, 'harnesses', 'moonlight-2'),
+      p.join(fixture.path, 'harnesses', 'moonlight-3'),
     });
     expect(await File('${occupied.path}/work.txt').readAsString(), 'keep this');
   });
@@ -142,7 +158,7 @@ void main() {
       expect(await lines.moveNext(), isTrue);
       expect(lines.current, await Directory(old).resolveSymbolicLinks());
       final fork = await importer.prepare(link);
-      expect(fork.folder, '${fixture.path}/harnesses/moonlight');
+      expect(fork.folder, p.join(fixture.path, 'harnesses', 'moonlight'));
       expect(fork.legacyFolder, old);
       expect(fork.ownsFolder(old), isTrue);
       expect(fork.ownsFolder(fork.folder), isTrue);
@@ -176,7 +192,7 @@ void main() {
     test(
       'migration resumes $interruption using its saved reservation',
       () async {
-        final target = Directory('${fixture.path}/harnesses/moonlight');
+        final target = Directory(p.join(fixture.path, 'harnesses', 'moonlight'));
         await target.create(recursive: true);
         await legacy(
           extra: {
@@ -211,7 +227,7 @@ void main() {
   test(
     'a changed reservation keeps both the original files and the new occupant',
     () async {
-      final target = Directory('${fixture.path}/harnesses/moonlight');
+      final target = Directory(p.join(fixture.path, 'harnesses', 'moonlight'));
       await target.create(recursive: true);
       await File('${target.path}/work.txt').writeAsString('other work');
       await legacy(
@@ -243,6 +259,95 @@ void main() {
       expect(await File('${fork.folder}-moved/index.html').exists(), isTrue);
       expect(await Directory(fork.folder).exists(), isFalse);
     },
+  );
+
+  for (final interruption in [
+    'before-release',
+    'after-release',
+    'after-move',
+  ]) {
+    test(
+      'Windows fork move resumes $interruption without replacing user files',
+      () async {
+        final target = Directory(
+          p.join(fixture.path, 'harnesses', 'moonlight'),
+        );
+        await target.create(recursive: true);
+        await legacy(
+          extra: {
+            'projectPath': target.path,
+            'movingProject': true,
+            'keepLegacyPath': false,
+          },
+        );
+        if (interruption != 'before-release') await target.delete();
+        if (interruption == 'after-move') {
+          await Directory(getOldFolder()).rename(target.path);
+        }
+        final fork = await importer.prepare(link);
+        expect(fork.folder, target.path);
+        expect(
+          await File(p.join(target.path, 'marker.txt')).readAsString(),
+          'my edited project\n',
+        );
+        expect(
+          await File(p.join(target.path, '.private-note')).readAsString(),
+          'preserve me',
+        );
+        expect(await Directory(getOldFolder()).exists(), isFalse);
+        expect(
+          jsonDecode(await receipt().readAsString())['movingProject'],
+          isNull,
+        );
+        expect(importer.downloads, 0);
+      },
+      skip: !Platform.isWindows,
+    );
+  }
+
+  test(
+    'Windows fork move preserves a destination that reappears before rename',
+    () async {
+      final target = Directory(p.join(fixture.path, 'harnesses', 'moonlight'));
+      await target.create(recursive: true);
+      await legacy(
+        extra: {
+          'projectPath': target.path,
+          'movingProject': true,
+          'keepLegacyPath': false,
+        },
+      );
+      final old = Directory(getOldFolder());
+      final racingSource = _DirectoryBeforeRename(old, () async {
+        expect(await target.exists(), isFalse);
+        await target.create();
+        await File(p.join(target.path, 'work.txt')).writeAsString('other work');
+      });
+      await IOOverrides.runZoned(
+        () async {
+          await expectLater(
+            importer.prepare(link),
+            throwsA(isA<FileSystemException>()),
+          );
+        },
+        createDirectory: (path) => p.equals(path, old.path)
+            ? racingSource
+            : Zone.root.run(() => Directory(path)),
+      );
+      expect(
+        await File(p.join(old.path, 'marker.txt')).readAsString(),
+        'my edited project\n',
+      );
+      expect(
+        await File(p.join(target.path, 'work.txt')).readAsString(),
+        'other work',
+      );
+      expect(
+        jsonDecode(await receipt().readAsString())['movingProject'],
+        isTrue,
+      );
+    },
+    skip: !Platform.isWindows,
   );
 
   test('a missing legacy project never creates an empty replacement', () async {

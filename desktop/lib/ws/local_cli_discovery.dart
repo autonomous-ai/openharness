@@ -1,3 +1,5 @@
+import '../core/home_dir.dart';
+
 import 'dart:async';
 import 'dart:io';
 
@@ -6,6 +8,7 @@ import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
 
 import '../core/serial_port_lease.dart';
+import '../core/uninstall_marker.dart';
 import '../core/config.dart';
 import '../core/harness_cli_runner.dart';
 import '../core/harness_file_store.dart';
@@ -212,8 +215,8 @@ class LocalCliDiscovery {
   final Future<void> Function() _spawnCommand;
   final Future<void> Function() _stopCommand;
 
-  /// Which way the daemon is reached — its socket or the loopback port. Shared
-  /// with REST and the local WebSocket; [probe] decides it.
+  /// The daemon's local transport: a Windows pipe, Unix socket, or loopback
+  /// port. Shared with REST and the local WebSocket.
   final LocalDaemonTransport transport;
 
   LocalCliDiscovery({
@@ -334,6 +337,9 @@ class LocalCliDiscovery {
   /// state a daemon sits in for the length of every self-update's backend handshake, and it is what
   /// this loop used to spawn into every few seconds.
   ///
+  /// [uninstalling] holds the whole tick while `harness uninstall` is at work; [UninstallMarker.held]
+  /// by default, and a test's own answer otherwise.
+  ///
   /// [spawnAllowedAt] gates the spawn — not the probe — to a moment: production passes [inSpawnSlot]
   /// so the spawn keeps clear of the CLI's update slot. Outside the window a down daemon stays down
   /// for a few more ticks and is spawned on the first tick inside it.
@@ -368,7 +374,9 @@ class LocalCliDiscovery {
     void Function(LocalCliEndpoint endpoint)? onSnapshot,
     void Function(bool online)? onBackendOnline,
     Future<void> Function(int pid)? checkOwner,
+    bool Function()? uninstalling,
   }) {
+    final uninstallAtWork = uninstalling ?? UninstallMarker.held;
     var backoff = initialBackoff;
     // The daemon pid [checkOwner] last saw: it is asked once per daemon, not once per tick.
     int? ownerCheckedPid;
@@ -419,6 +427,9 @@ class LocalCliDiscovery {
           if (SerialPortLease.held || SerialPortLease.heldByAnotherProcess()) {
             return;
           }
+          // Down on purpose as well: `harness uninstall` stopped it and is removing its files. A
+          // daemon started now holds them and undoes the uninstall (UninstallMarker).
+          if (uninstallAtWork()) return;
           final seen = await probe();
           observe(seen);
           // A new daemon — replaced from a terminal while the app is open, say. Awaited inside the
@@ -532,10 +543,26 @@ class LocalCliDiscovery {
     if (base.host != '127.0.0.1' && base.host != 'localhost') {
       return const LocalCliProbe.down('the local CLI address is not loopback');
     }
+    if (transport.trustedPipe != null) {
+      return _probeStatus(
+        _trustedPipeDio(base),
+        base.resolve('/api/status'),
+        base,
+        localComputerId,
+        socketPath: null,
+      );
+    }
+    // On systems without a private pipe, follow a recorded port when present.
+    final tcpBase = transport.refreshTcpBase(base);
+    if (tcpBase == null) {
+      return const LocalCliProbe.down(
+        'the daemon has not recorded its port yet',
+      );
+    }
     return _probeStatus(
       _dio,
-      base.resolve('/api/status'),
-      base,
+      tcpBase.resolve('/api/status'),
+      tcpBase,
       localComputerId,
       socketPath: null,
     );
@@ -543,6 +570,15 @@ class LocalCliDiscovery {
 
   Dio? _socketProbe;
   String? _socketProbePath;
+  Dio? _trustedPipeProbe;
+
+  Dio _trustedPipeDio(Uri base) => _trustedPipeProbe ??= Dio(
+    BaseOptions(
+      connectTimeout: const Duration(milliseconds: 400),
+      receiveTimeout: const Duration(milliseconds: 400),
+      sendTimeout: const Duration(milliseconds: 400),
+    ),
+  )..httpClientAdapter = LocalDaemonHttpAdapter(transport, daemonBase: base);
 
   Dio _socketDio(String path) {
     if (_socketProbe == null || _socketProbePath != path) {
@@ -700,7 +736,7 @@ Map<String, AgentProject> _localAgentProjects(
 ) {
   if (sessions is! List) return const {};
   final projects = <String, AgentProject>{};
-  final home = environment['HOME'] ?? environment['USERPROFILE'];
+  final home = maybeHomeDir(environment: environment);
   for (final session in sessions) {
     if (session is! Map || session['id'] is! String) continue;
     final id = session['id'] as String;

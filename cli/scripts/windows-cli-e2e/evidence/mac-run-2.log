@@ -1,0 +1,77 @@
+## this tree's bundle: 0.4.18-dev.dbeca9ff8.dirty
+
+  machine · remote machine
+  ─────────────────────────────────────
+   status     ● started · this computer only (not signed in)
+   version    v0.4.18-dev.dbeca9ff8.dirty
+   backend    not signed in · harness login
+   account    prod
+   state      ~/.harness/cli/data
+   auth       ~/.harness/auth
+   agents     0 available
+   pid        75875
+   logs       ~/.harness/cli/data/harness.log
+   dial log   ~/.harness/logs/dial-YYYYMMDD.log
+   local api  http://127.0.0.1:18491
+  ─────────────────────────────────────
+  running in background · stop with: harness stop
+
+  Agents, terminals and the cabled dial work here. `harness login` adds your other machines.
+## launchctl print (first line)
+Bad request.
+Could not find service "ai.autonomous.harness.harnessd" in domain for user gui: 502
+## harness new terminal
+{"ok":true,"machineId":"43d4f4e0…","agent":{"id":"841f72ad…","sessionId":"","userId":"","name":"Terminal harness 10-18 9:22","title":null,"status":"active","activity":null,"closePlan":null,"closeSupported":true,"launch":{"state":"ready"},"createdAt":"2026-10-18T02:22:01.196Z","updatedAt":"2026-10-18T02:22:01.196Z","lastOpenedAt":null,"tokenUsage":null,"outputStats":null,"tmuxPane":"%0","terminal":{"available":true,"primary":"tmux\u0000%0","runtimes":[{"backend":"tmux","paneId":"%0"}]},"engine":"terminal","selectedModel":null,"grid":null,"codexHome":null,"project":{"kind":"none","name":"home","cwd":"$T/home","root":null,"remote":null,"branch":null},"gitContext":{"state":"workspace","current":{"name":"home","cwd":"$T/home","root":null,"remote":null,"branch":null},"observedAt":null,"locations":[],"pullRequests":[],"truncated":false,"checkouts":[],"history":{"branches":[],"pullRequests":[],"truncated":false},"version":{"epoch":"d12e117d…","revision":1}},"dsh":null,"dshName":null,"viewerUrl":null,"viewerName":null,"verdict":null,"forkedFrom":null,"parentAgentId":null,"startedBy":null,"forkable":false,"resumeMode":"shell","permissionMode":null,"bypassPermission":null,"namedAgent":null}}
+## harness uninstall --yes
+✓ stopped 1 harness
+✓ stopped the Harness daemon (pid 75875)
+✓ removed Harness's hooks from ~/.claude/settings.json
+✓ removed Harness's hooks from ~/.codex/hooks.json
+✓ removed Codex's record of Harness's hooks from ~/.codex/config.toml
+✓ removed ~/.codex/rules/harness.rules
+✓ removed Harness's hooks from ~/.grok/hooks/harness.json
+✓ removed Harness's hooks from ~/.gemini/config/hooks.json
+✓ removed Harness's hooks from ~/.copilot/hooks/harness.json
+✓ removed Harness's hooks from ~/.cursor/hooks.json
+✓ removed Harness's hooks from ~/.commandcode/settings.json
+✓ removed Harness's hooks from ~/.config/devin/config.json
+✓ removed ~/.config/kilo/plugin/launcher-register.js
+✓ removed ~/.pi/agent/extensions/launcher-register.ts
+✓ removed ~/.config/amp/plugins/launcher-register.ts
+· if you had added a permission rule in ~/.claude/settings.json that is the same as one of Harness's, it went too: add it again if you need it
+· Codex may ask you to review your own hooks again: it remembers the hooks you reviewed by their place in ~/.codex/hooks.json, and taking Harness's out moved them
+✓ removed ~/.local/bin/harness
+✓ removed ~/.local/bin/hn
+✓ removed the PATH line Harness added to ~/.zshrc
+✓ removed ~/.harness
+Harness is uninstalled.
+exit=0 in 1 s
+## what is left
+$T/home:
+total 0
+drwxr-xr-x@ 16 <mac-user>  wheel  512 Oct 18 09:22 .
+drwx------@  5 <mac-user>  wheel  160 Oct 18 09:21 ..
+drwx------@  4 <mac-user>  wheel  128 Oct 18 09:22 .cache
+drwxr-xr-x@  3 <mac-user>  wheel   96 Oct 18 09:22 .claude
+drwxr-xr-x@  5 <mac-user>  wheel  160 Oct 18 09:22 .codex
+drwxr-xr-x@  3 <mac-user>  wheel   96 Oct 18 09:22 .commandcode
+drwxr-xr-x@  6 <mac-user>  wheel  192 Oct 18 09:22 .config
+drwxr-xr-x@  3 <mac-user>  wheel   96 Oct 18 09:22 .copilot
+drwxr-xr-x@  3 <mac-user>  wheel   96 Oct 18 09:22 .cursor
+drwxr-xr-x@  3 <mac-user>  wheel   96 Oct 18 09:22 .gemini
+drwxr-xr-x@  3 <mac-user>  wheel   96 Oct 18 09:22 .grok
+drwxr-xr-x@  5 <mac-user>  wheel  160 Oct 18 09:22 .local
+drwxr-xr-x@  3 <mac-user>  wheel   96 Oct 18 09:22 .pi
+-rw-------@  1 <mac-user>  wheel    0 Oct 18 09:22 .zsh_history
+-rw-r--r--@  1 <mac-user>  wheel    0 Oct 18 09:22 .zshrc
+drwxr-xr-x@  3 <mac-user>  wheel   96 Oct 18 09:21 Library
+
+$T/home/.local/bin:
+total 0
+drwxr-xr-x@ 2 <mac-user>  wheel   64 Oct 18 09:22 .
+drwxr-xr-x@ 5 <mac-user>  wheel  160 Oct 18 09:22 ..
+grep: $T/home/.zprofile: No such file or directory
+grep: $T/home/.bashrc: No such file or directory
+grep: $T/home/.profile: No such file or directory
+ls: $T/home/Library/LaunchAgents: No such file or directory
+no process

@@ -1,0 +1,42 @@
+12:22:46.328 {"id":"a61b5044…","engine":"terminal","status":"offline","launch":"ready","pane":"%8","name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:22:46.330 {"id":"9f4d41e4…","engine":"claude","status":"active","launch":"ready","pane":"%9","name":"Multiplication of 6 and 7","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:22:46.330 {"id":"a9332983…","engine":"codex","status":"active","launch":"ready","pane":"%12","name":"Codex harness 10-15 5:19","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:22:51
+machine stopped (pid 828).
+create rc=0 pid=12336
+12:22:59
+12:23:03.477 {"id":"a61b5044…","engine":"terminal","status":"offline","launch":"ready","pane":"%8","name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+12:23:03.478 {"id":"9f4d41e4…","engine":"claude","status":"active","launch":"ready","pane":"%9","name":"Multiplication of 6 and 7","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:23:03.478 {"id":"a9332983…","engine":"codex","status":"active","launch":"ready","pane":"%12","name":"Codex harness 10-15 5:19","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+12:23:03.478 PASS terminal a61b5044 kept its id and pane — pane %8 → %8, status offline
+12:23:03.478 PASS claude 9f4d41e4 kept its id and pane — pane %9 → %9, status active
+12:23:03.478 PASS codex a9332983 kept its id and pane — pane %12 → %12, status active
+12:23:03.479 PASS no new agents appeared — 3 → 3
+12:23:07.021 PASS terminal a61b5044 stream reattaches with its screen — AFTER_42 | PS C:\work\e2e\proj> Write-Output ('AFTER_' + (40
+12:23:09.560 PASS claude 9f4d41e4 stream reattaches with its screen — engine screen back, earlier answer still shown: ● 42: ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── |   ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+12:23:12.091 PASS codex a9332983 stream reattaches with its screen — engine screen back: › Ask Codex to do anything |   GPT-6.1-Sol default · C:\work\e2e\proj
+12:23:12.092 SUMMARY 7/7 passed
+
+ProcessId ParentProcessId Name            Start    Cmd                                                                                       
+--------- --------------- ----            -----    ---                                                                                       
+    12096             564 powershell.exe  05:23:12 powershell  -NoProfile -ExecutionPolicy Bypass -File C:\work\e2e\procs.ps1                
+    12232            4144 harness-pty.exe 03:32:11 C:\work\e2e\dist\pty\harness-pty.exe serve --home C:\work\e2e\ptyhome                     
+    12612            9408 node.exe        05:22:53 "C:\Program Files\nodejs\node.exe" --max-semi-space-size=4 --max-old-space-size=4096 C:\wo
+     5104            9628 powershell.exe  20:35:11 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     3048            9628 powershell.exe  21:15:23 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     1464            9628 powershell.exe  07:49:36 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+    10524            9628 powershell.exe  19:44:49 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     9856            9628 powershell.exe  20:05:45 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     8104            9628 powershell.exe  20:03:56 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     6264           10948 node.exe        05:19:50 "C:\Program Files\nodejs\node.exe" ./mcp/server.bundle.mjs                                
+    11720           12232 OpenConsole.exe 05:19:48 "C:\work\e2e\dist\pty\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x418 -
+    12512           12232 node.exe        05:19:48 "C:\Program Files\nodejs\node.exe" C:\Users\admin\AppData\Roaming\npm\node_modules\@openai
+     6652           12232 OpenConsole.exe 03:54:08 "C:\work\e2e\dist\pty\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x2d4 -
+    12112           12232 OpenConsole.exe 03:54:08 "C:\work\e2e\dist\pty\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x1d0 -
+      168           12232 powershell.exe  03:54:08 powershell.exe -NoLogo                                                                    
+    12648           12232 claude.exe      03:54:08 C:\Users\admin\.local\bin\claude.exe                                                      
+     9408           12336 node.exe        05:22:52 "C:\Program Files\nodejs\node.exe"  C:\work\e2e\dist\cli.js start -f                      
+     5380           12648 claude.exe      03:55:56 C:\Users\admin\.local\bin\claude.exe --permission-mode auto                               
+
+
+

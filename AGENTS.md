@@ -23,7 +23,7 @@ For product names, terminology, and visible copy, follow the
   suite as passing, and never silently skip a required check to meet a time target.
 - Once required checks pass, carry out the authorized merge/release without another
   validation cycle. Verify published versions and checksums, then report completion.
-  Desktop's `--wait` follows the exact tag/SHA through the workflow's six-artifact
+  Desktop's `--wait` follows the exact tag/SHA through the workflow's nine-artifact
   verification; reuse that receipt instead of repeating the downloads manually.
 - CI rules (details in [docs/validation-and-release.md](docs/validation-and-release.md#pr-ci)):
   - PR CI is fast on purpose. It runs only the Linux unit checks of the components

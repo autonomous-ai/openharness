@@ -12,8 +12,7 @@ vi.mock('../lib/createAgentPane.js', () => ({ createAndRegisterPane: async (inpu
   captured.panes.push(input)
   return { ok: false, error: 'RECORDED', detail: 'No pane is opened by this golden.' }
 } }))
-vi.mock('../lib/tmuxVersion.js', async real => ({ ...await real<object>(), tmuxSupportsSessionEnv: async () => true }))
-vi.mock('../lib/tmux.js', async real => ({ ...await real<object>(), clearPaneRemainOnExit: async () => {}, processArgs: async () => '' }))
+vi.mock('../lib/processTable.js', async real => ({ ...await real<object>(), processArgs: async () => '' }))
 vi.mock('../lib/gatewayRuntime.js', async real => ({ ...await real<object>(), probeGatewayRuntime: async () => ({ kind: 'none' }) }))
 vi.mock('../lib/binaryOnPath.js', async real => {
   const actual = await real<typeof import('../lib/binaryOnPath.js')>()
@@ -58,6 +57,7 @@ beforeAll(() => {
   for (const name of ['HOME', 'ADAPTER_DATA_DIR', 'ADAPTER_RUNTIME_DIR', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'OPENCODE_DATA_DIR', 'OPENCODE_CONFIG_DIR']) {
     const path = join(root, name.toLowerCase()); mkdirSync(path, { recursive: true }); vi.stubEnv(name, path)
   }
+  vi.stubEnv('USERPROFILE', join(root, 'home'))
   vi.stubEnv('TZ', 'UTC'); vi.stubEnv('SHELL', '/bin/sh'); vi.stubEnv('ZDOTDIR', join(root, 'zdotdir'))
   vi.stubEnv('CLAUDE_PATH', '/fixture/bin/claude'); vi.stubEnv('CODEX_PATH', '/fixture/bin/codex')
   vi.stubEnv('HARNESS_OS', ''); vi.stubEnv('HARNESS_GRID_BIN', '')
@@ -95,14 +95,14 @@ it('records create, fork, relaunch and actual retarget dispatch before the extra
   const { buildEngineLaunchArgv } = await import('../lib/engineLaunch.js')
   const { env } = await import('../config/env.js')
   const world = { dataDir: join(root, 'adapter_data_dir'), machine: async () => ({ hermesSystemManaged: false, opencodeMajor: await opencodeMajorVersion() }),
-    tmuxSupportsSessionEnv: async () => true, readCodexConfig: () => null, setGridLaunch: () => {} }
+    capabilities: async () => ({ sessionEnv: true }), readCodexConfig: () => null, setGridLaunch: () => {} }
   const shapes = launchShapes(world)
   const row = (engine: AgentEngine, named = false): RegisteredSession => ({ agentId: 'fixture-agent', sessionId: 'ses_fixture', engine, cwd: work,
     registeredAt: Date.now(), active: true, runtimes: [{ backend: 'tmux', paneId: '%4' }], agent: named ? 'reviewer' : null,
     processIdentity: { pid: 4242, executable: engine, startMarker: 'fixture' }, grid: null, gridLaunch: null, codexHome: null,
     dsh: null, dshRuntime: null, scmLaunch: null, permissionMode: null, bypassPermission: false, subscriptionModel: 'fixture/model#high',
   }) as unknown as RegisteredSession
-  const createRest = { tmuxBackend: {}, registry: {}, hooksDisabled: true, hookPort: 4242,
+  const createRest = { createBackend: {}, registry: {}, hooksDisabled: true, hookPort: 4242,
     installOpencodePlugin: async () => true, terminalHintMachineName: () => 'fixture-machine', blocksFolder: () => false,
     gridSetup: () => null, privateGridName: async () => null, watchNewPane: async () => {}, announceSession: () => {}, attachDsh: () => {},
   }
@@ -118,7 +118,7 @@ it('records create, fork, relaunch and actual retarget dispatch before the extra
 
       const source = row('opencode', named)
       resetCase()
-      const fork = await shapes.fork({ tmuxBackend: {}, registry: { byAgent: () => source },
+      const fork = await shapes.fork({ createBackend: {}, registry: { byAgent: () => source },
         mirror: { isBusy: () => false, recentAsks: () => ['fixture ask'], recent: () => [], lastFullText: () => 'fixture answer' },
         pendingForkInherit: new Map(), watchNewPane: async () => {}, announceSession: () => {}, attachDsh: () => {},
       } as never)({ agentId: source.agentId, name: null, prompt: 'try another approach' })
@@ -132,12 +132,18 @@ it('records create, fork, relaunch and actual retarget dispatch before the extra
     const source = row('opencode', true), events: unknown[] = []
     const event = (entry: unknown[]) => { events.push(entry); appendFileSync(calls, JSON.stringify({ control: entry }) + '\n') }
     const retarget = createAgentRetargeter({
-      purgeBusy: () => false, tmuxBackend: { clearEnv: async (_pane: unknown, names: string[]) => { event(['clearEnv', names]); return { state: 'succeeded' } } },
+      purgeBusy: () => false,
+      // The pane's own backend, tmux here: the retarget clears its session environment and hands the pane back.
+      terminals: (() => {
+        const tmux = { name: 'tmux', holdOpen: async () => ({ state: 'succeeded' }), respawn: async () => ({ state: 'succeeded' }),
+          clearEnv: async (_pane: unknown, names: string[]) => { event(['clearEnv', names]); return { state: 'succeeded' } }, releaseHold: async () => {} }
+        return { backendFor: () => tmux, instances: () => [tmux] }
+      })(),
       registry: { resolve: () => source, byAgent: () => source, updateProcessIdentity: (...args: unknown[]) => event(['process', ...args]),
         setGridLaunch: (...args: unknown[]) => event(['grid', ...args]), setSubscriptionModel: (...args: unknown[]) => event(['subscription', ...args]),
         setActive: (...args: unknown[]) => event(['active', ...args]) },
       runtimeProfiles: { selectedModel: () => null },
-      launchOverridesDeps: { machine: world.machine, tmuxSupportsSessionEnv: world.tmuxSupportsSessionEnv },
+      launchOverridesDeps: { machine: world.machine, capabilities: world.capabilities },
       sessionTurnOpen: () => false,
       acquireTerminalControl: () => () => event(['release']), relaunchOverrides: shapes.relaunch,
       downgradedPermission: async () => ({ bypassPermission: false, permissionMode: null }),

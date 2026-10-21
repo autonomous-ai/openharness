@@ -12,16 +12,19 @@ import { join } from 'node:path'
 export function localCredentialHeaders(env = process.env) {
   const dir = env.ADAPTER_DATA_DIR || join(homedir(), '.harness', 'cli', 'data')
   const uid = typeof process.getuid === 'function' ? process.getuid() : null
+  // Windows reports every file as 0o666 and every folder as 0o777, so the mode checks below would always refuse
+  // the credential the daemon wrote; there its protection is the profile folder's ACL (cli hookAuth.ts).
+  const posixModes = process.platform !== 'win32'
   const opened = []
   try {
     const folder = openSync(dir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
     opened.push(folder)
     const where = fstatSync(folder)
-    if (!where.isDirectory() || (uid !== null && where.uid !== uid) || (where.mode & 0o022) !== 0) return {}
+    if (!where.isDirectory() || (uid !== null && where.uid !== uid) || (posixModes && (where.mode & 0o022) !== 0)) return {}
     const file = openSync(join(dir, 'hook-credential'), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
     opened.push(file)
     const stat = fstatSync(file)
-    if (!stat.isFile() || stat.size > 128 || (uid !== null && stat.uid !== uid) || (stat.mode & 0o777) !== 0o600) return {}
+    if (!stat.isFile() || stat.size > 128 || (uid !== null && stat.uid !== uid) || (posixModes && (stat.mode & 0o777) !== 0o600)) return {}
     const value = readFileSync(file, 'utf8').trim()
     return /^[A-Za-z0-9_-]{43}$/.test(value) ? { 'X-Harness-Local': value } : {}
   } catch {

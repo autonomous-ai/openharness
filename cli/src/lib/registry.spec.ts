@@ -490,6 +490,33 @@ describe('registry remote display names', () => {
     expect(registry.list()).toHaveLength(2)
   })
 
+  it('round-trips a ptyhost row and projects its pane', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    registry.openProcessAgent({
+      agentId: 'windows-agent',
+      engine: 'claude',
+      runtimes: [{ backend: 'ptyhost', instance: 'p1', paneId: '%2' }],
+      processIdentity: processIdentity(702),
+    })
+
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    const saved = reloaded.byAgent('windows-agent')!
+    expect(saved.runtimes).toEqual([{ backend: 'ptyhost', instance: 'p1', paneId: '%2' }])
+    expect(saved.primaryRuntimeKey).toBe('ptyhost\u0000p1\u0000%2')
+    expect(saved.tmuxPane).toBe('%2')
+  })
+
+  it('drops a ptyhost runtime whose instance or pane is malformed', async () => {
+    const { validTerminalRuntime } = await loadRegistryModule()
+    expect(validTerminalRuntime({ backend: 'ptyhost', instance: 'p3', paneId: '%0' })).toBe(true)
+    expect(validTerminalRuntime({ backend: 'ptyhost', instance: 'p12345', paneId: '%0' })).toBe(false)
+    expect(validTerminalRuntime({ backend: 'ptyhost', instance: 'default', paneId: '%0' })).toBe(false)
+    expect(validTerminalRuntime({ backend: 'ptyhost', paneId: '%0' })).toBe(false)
+    expect(validTerminalRuntime({ backend: 'ptyhost', instance: 'p3', paneId: 'w1:p1' })).toBe(false)
+  })
+
   it('drops runtimes a retired Herdr backend left on disk, and agents left with none', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()

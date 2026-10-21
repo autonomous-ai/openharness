@@ -120,8 +120,8 @@ function setup(over: { me?: { accountId: string; email: string } | null; stateDi
   }
   const listeners = new Set<(event: TabFrame) => void>()
   const notices = new Set<(notice: BackendNotice) => void>()
-  const agents = [{ agentId: 'lead', sessionId: 's-lead', engine: 'claude', cwd: '/work/app', tmuxPane: '%1', active: true, title: over.title ?? 'lead' },
-    ...(over.more ?? []).map((agentId, i) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: `/work/${agentId}`, tmuxPane: `%${i + 2}`, active: true, title: agentId }))] as unknown as RegisteredSession[]
+  const agents = [{ agentId: 'lead', sessionId: 's-lead', engine: 'claude', cwd: '/work/app', tmuxPane: '%1', runtimes: [{ backend: 'tmux', paneId: '%1' }], active: true, title: over.title ?? 'lead' },
+    ...(over.more ?? []).map((agentId, i) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: `/work/${agentId}`, tmuxPane: `%${i + 2}`, runtimes: [{ backend: 'tmux', paneId: `%${i + 2}` }], active: true, title: agentId }))] as unknown as RegisteredSession[]
   const delivered: Array<[string, string]> = []
   const core = fakeCore({
     dataDir: root,

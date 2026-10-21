@@ -380,6 +380,13 @@ class ApiClient {
     );
   }
 
+  /// Whether Add Phone's sign-in code cannot be had on this computer right
+  /// now: on Windows, the daemon's pipe did not prove itself at the last ask
+  /// ([LocalDaemonTransport.trustedRoutesUnavailable]). Never in a viewer
+  /// build, which asks the backend itself.
+  bool get phoneSignInUnavailable =>
+      auth == null && (localTransport?.trustedRoutesUnavailable ?? false);
+
   /// A one-time code that signs a phone in to this account: the Add Phone
   /// QR's `h=`, which the phone redeems for a session of its own instead of
   /// asking for an emailed code (backend `lib/harnessSession.ts`).
@@ -387,7 +394,7 @@ class ApiClient {
   /// Minted by the backend against the daemon's own session, and the daemon
   /// hands it out over its owner-only socket and nowhere else — a code that
   /// signs a device in is a credential. So null is an ordinary answer: an
-  /// older daemon or backend, this app on the TCP fallback, the backend down.
+  /// older daemon or backend, a missing private transport, the backend down.
   /// The QR then goes without it and the phone falls back to the email code.
   Future<({String code, Duration ttl})?> phoneSignInCode() async {
     try {

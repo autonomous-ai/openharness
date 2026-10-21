@@ -1,0 +1,63 @@
+--- powershell before
+
+ProcessId ParentProcessId Start    CommandLine                                              
+--------- --------------- -----    -----------                                              
+     3048            9628 21:15:23 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe
+     1464            9628 07:49:36 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe
+    10524            9628 19:44:49 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe
+     8104            9628 20:03:56 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe
+     9856            9628 20:05:45 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe
+     5104            9628 20:35:11 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe
+    13104            2936 05:29:30 powershell.exe -NoLogo                                   
+
+
+
+PS C:\work\e2e\proj> Start-Process powershell -ArgumentList '-c','Start-Sleep 600'; Start-Sleep 2; Get-CimInstance Win32
+_Process -Filter "Name='powershell.exe'" | ? { $_.CommandLine -match 'Sleep 600' } | Select ProcessId,ParentProcessId,Co
+mmandLine | ft -AutoSize
+ProcessId ParentProcessId CommandLine
+--------- --------------- -----------
+     5932           13104 "C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe" -c Start-Sleep 600
+PS C:\work\e2e\proj>
+--- powershell with the child
+
+ProcessId ParentProcessId Start    CommandLine                                                                    
+--------- --------------- -----    -----------                                                                    
+     3048            9628 21:15:23 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                      
+     1464            9628 07:49:36 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                      
+    10524            9628 19:44:49 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                      
+     8104            9628 20:03:56 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                      
+     9856            9628 20:05:45 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                      
+     5104            9628 20:35:11 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                      
+    13104            2936 05:29:30 powershell.exe -NoLogo                                                         
+     5932           13104 05:30:23 "C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe" -c Start-Sleep 600 
+
+
+
+--- delete the agent
+{"requestId":"b037844e…","deleted":true}
+--- powershell 3 s after
+
+ProcessId ParentProcessId Start    CommandLine                                              
+--------- --------------- -----    -----------                                              
+     3048            9628 21:15:23 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe
+     1464            9628 07:49:36 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe
+    10524            9628 19:44:49 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe
+     8104            9628 20:03:56 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe
+     9856            9628 20:05:45 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe
+     5104            9628 20:35:11 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe
+
+
+
+
+   Id StartTime            
+   -- ---------            
+ 1464 10/14/2026 7:49:36 AM
+ 3048 10/14/2026 9:15:23 PM
+ 5104 10/14/2026 8:35:11 PM
+ 8104 10/14/2026 8:03:56 PM
+ 9856 10/14/2026 8:05:45 PM
+10524 10/14/2026 7:44:49 PM
+11548 10/15/2026 5:30:40 AM
+
+

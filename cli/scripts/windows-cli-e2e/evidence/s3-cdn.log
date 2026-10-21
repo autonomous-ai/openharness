@@ -1,0 +1,25 @@
+# fake CDN on (machine-wide hosts + CA), 2026-10-18 08:42:12
+SHA256 hash of C:\Windows\System32\drivers\etc\hosts:
+2d6bdfb341be3a6234b24742377f93aa7c7cfb0d9fd64efa9282c87852e57085
+hosts sha256 before 2d6bdfb341be3a6234b24742377f93aa7c7cfb0d9fd64efa9282c87852e57085
+hosts sha256 after  8173142272626c94bd0058db06c5df73ae1bb9e80290e5ccdf9320b8cf29387e
+cdn.autonomous.ai -> 192.168.65.1
+storage.googleapis.com -> 192.168.65.1
+CA B347CD87C36C81E3C4129D14EEB945F570E0A14A (CN=Harness fake CDN test CA 2026-10-18) in LocalMachine\Root
+fake CDN: https://192.168.65.1:443/ serving $SCR/fake-cdn/root as cdn.autonomous.ai, storage.googleapis.com
+fake CDN: http://192.168.65.1:80/ forwards plain HTTP for the same names
+01:42:27.123 GET https://cdn.autonomous.ai/harness/staging/cli/install.ps1 -> local 200 (33153 bytes)
+01:42:27.327 GET https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/staging/cli/metadata.json -> local 200 (470 bytes)
+01:42:27.369 GET https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/staging/runtime/metadata.json -> local 200 (695 bytes)
+01:42:27.372 GET https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/staging/pty/metadata.json -> local 200 (544 bytes)
+01:42:27.484 GET https://cdn.autonomous.ai/harness/staging/cli/0.4.19-e2e.1/cli.js -> local 200 (9696355 bytes)
+01:42:29.165 GET https://cdn.autonomous.ai/harness/staging/cli/0.4.19-e2e.1/notify.mjs -> local 200 (95307 bytes)
+# fake CDN off (08:49:35)
+hosts sha256 before -Enable 2d6bdfb341be3a6234b24742377f93aa7c7cfb0d9fd64efa9282c87852e57085
+hosts sha256 now           2d6bdfb341be3a6234b24742377f93aa7c7cfb0d9fd64efa9282c87852e57085
+hosts byte-identical: True
+CA B347CD87C36C81E3C4129D14EEB945F570E0A14A in LocalMachine\Root: False
+disabled
+SHA256 hash of C:\Windows\System32\drivers\etc\hosts:
+2d6bdfb341be3a6234b24742377f93aa7c7cfb0d9fd64efa9282c87852e57085
+CertUtil: -hashfile command completed successfully.

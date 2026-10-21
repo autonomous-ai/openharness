@@ -10,7 +10,7 @@
 import { engineKeepsTranscriptFile, type RegisteredSession } from './registry.js'
 import { controlTranscriptEvidence, savedTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { findLiveSession, findResumedTranscript, processSessionEvidence, type RepairedSession } from './sessionRepair.js'
-import { resumeSessionId } from './tmux.js'
+import { resumeSessionId } from './processTable.js'
 import { readProcessEvidence } from './processEvidence.js'
 import { NativeEvidenceBudget, nativeUnavailable } from '../engines/kit/nativeEvidence.js'
 import { IdentityReadUnavailable, ObservedConversationUnavailable } from '../engines/kit/identityScan.js'

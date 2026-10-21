@@ -27,7 +27,7 @@ import { readOpencodeMessages } from '../../../engines/opencode/reader.js'
 import { agentCommandOwnershipSnapshot } from '../../engineBin.js'
 import { hasSqliteReader } from '../../sqliteAvailability.js'
 import { sqliteReadAll, type SqliteParam, type SqliteReadResult, type SqliteRow } from '../../sqliteRead.js'
-import { argvTokens, engineProcessMatch, resumeSessionId } from '../../tmux.js'
+import { argvTokens, engineProcessMatch, resumeSessionId } from '../../processTable.js'
 import { absoluteFolder, epochMs, fileStamp, text } from './support.js'
 import type { ExternalEngine, ExternalProvider, ExternalSession, OwnerClaim, ProcessView, RunningProcess, ScanContext } from './types.js'
 

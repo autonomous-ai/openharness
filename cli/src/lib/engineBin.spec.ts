@@ -8,6 +8,7 @@ import {
   agentCommandOwnershipSnapshot,
   cursorRuntimeBin,
   ENGINE_CLI_COMMANDS,
+  engineBin,
   PROCESS_ENGINES,
   executableFileIdentity,
   installedEngineBin,
@@ -126,4 +127,15 @@ describe('canonical engine CLI commands', () => {
       child.kill('SIGKILL')
     }
   })
+})
+
+function onPlatform<T>(platform: NodeJS.Platform, run: () => T): T {
+  const original = Object.getOwnPropertyDescriptor(process, 'platform')!
+  Object.defineProperty(process, 'platform', { value: platform })
+  try { return run() } finally { Object.defineProperty(process, 'platform', original) }
+}
+
+it('starts Command Code by its own name on Windows, where cmd is the command processor (F7)', () => {
+  expect(onPlatform('win32', () => engineBin('commandcode'))).toBe('command-code')
+  expect(onPlatform('darwin', () => engineBin('commandcode'))).toBe('cmd')
 })

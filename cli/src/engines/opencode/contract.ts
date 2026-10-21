@@ -68,8 +68,10 @@ export const MachineRegister = async ({ directory, worktree, project, client }) 
   const seen = new Set()
   const post = async (sessionID) => {
     const pane = process.env.TMUX_PANE
+    // A Harness pty host pane (Windows) names itself HARNESS_PANE=<instance>:%N, and has no TMUX_PANE.
+    const ptyPane = pane ? null : /^(p\\d{1,4}):(%\\d{1,9})$/.exec(process.env.HARNESS_PANE || "")
     const token = hookToken()
-    if (!pane || !token || !sessionID || seen.has(sessionID)) return
+    if ((!pane && !ptyPane) || !token || !sessionID || seen.has(sessionID)) return
     seen.add(sessionID)
     try {
       await fetch("http://127.0.0.1:`,
@@ -90,6 +92,7 @@ export const MachineRegister = async ({ directory, worktree, project, client }) 
           callerPid: process.pid,
           runtimeHints: [
             ...(pane ? [{ backend: "tmux", paneId: pane }] : []),
+            ...(ptyPane ? [{ backend: "ptyhost", instance: ptyPane[1], paneId: ptyPane[2] }] : []),
           ],
         }),
       })
@@ -135,8 +138,9 @@ export default {
   id: "harness-session-register",
   setup(ctx) {
     const pane = process.env.TMUX_PANE
+    const ptyPane = pane ? null : /^(p\\d{1,4}):(%\\d{1,9})$/.exec(process.env.HARNESS_PANE || "")
     const router = ctx && ctx.ui && ctx.ui.router
-    if (!pane || !router || typeof router.current !== "function") return
+    if ((!pane && !ptyPane) || !router || typeof router.current !== "function") return
     const posted = new Set()
     let busy = false
     const post = async (sessionID) => {
@@ -162,7 +166,7 @@ export default {
             cwd,
             tmuxPane: pane,
             callerPid: process.pid,
-            runtimeHints: [{ backend: "tmux", paneId: pane }],
+            runtimeHints: pane ? [{ backend: "tmux", paneId: pane }] : [{ backend: "ptyhost", instance: ptyPane[1], paneId: ptyPane[2] }],
           }),
         })
         if (res && res.ok) posted.add(sessionID)

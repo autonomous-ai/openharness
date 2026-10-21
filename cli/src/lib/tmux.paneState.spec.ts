@@ -15,7 +15,10 @@ vi.mock('child_process', async (real) => {
   }
 })
 
-const { tmuxPaneState, lookupPaneEngineProcess, processRows } = await import('./tmux.js')
+const { tmuxPaneState } = await import('./tmux.js')
+const { lookupPaneEngineProcess } = await import('./paneEngineProcess.js')
+const { TmuxBackend } = await import('./tmuxBackend.js')
+const { processRows } = await import('./processTable.js')
 
 describe('what tmux says about a pane', () => {
   afterEach(() => { answer.err = null; answer.stdout = ''; answer.stderr = '' })
@@ -51,7 +54,7 @@ describe('what tmux says about a pane', () => {
 
   it('takes a lost answer to the pane-pid question for unknown, not for a pane that is gone', async () => {
     answer.stdout = ''
-    expect(await lookupPaneEngineProcess('%9', 'claude')).toMatchObject({ ok: false, unknown: true })
+    expect(await lookupPaneEngineProcess(new TmuxBackend(), { backend: 'tmux', paneId: '%9' }, 'claude')).toMatchObject({ ok: false, unknown: true })
   })
 
   it('takes a process table with nobody in it for a read that failed', async () => {

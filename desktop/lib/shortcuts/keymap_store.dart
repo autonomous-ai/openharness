@@ -1,4 +1,4 @@
-import '../core/host_platform.dart';
+import '../core/home_dir.dart';
 
 import 'dart:async';
 import 'dart:convert';
@@ -16,6 +16,7 @@ import 'keymap_edit.dart';
 class KeymapStore extends ChangeNotifier {
   KeymapStore({
     required this.file,
+    this.legacyFile,
     required Iterable<KeyBinding> defaults,
     required Set<String> commands,
     this.watchFiles = true,
@@ -29,6 +30,10 @@ class KeymapStore extends ChangeNotifier {
 
   static const maximumBytes = 128 * 1024;
   final File file;
+
+  /// Only the default Windows store opts into reading its old location.
+  /// Explicit/custom-file stores never infer another file from the environment.
+  final File? legacyFile;
   final bool watchFiles;
   final void Function(ResolvedKeymap)? validate;
   final List<KeyBinding> _defaults;
@@ -44,22 +49,49 @@ class KeymapStore extends ChangeNotifier {
   Set<String> _targets = {};
   Timer? _debounce;
 
-  static String defaultPath({Map<String, String>? environment}) {
+  static String defaultPath({
+    Map<String, String>? environment,
+    bool? isWindows,
+  }) {
     final env = environment ?? Platform.environment;
+    final windows = isWindows ?? Platform.isWindows;
+    final appData = env['APPDATA'];
+    if (windows && appData != null && p.windows.isAbsolute(appData)) {
+      return p.windows.join(appData, 'harness', 'keybindings.jsonc');
+    }
+    return _configurationPath(env, windows: windows) ??
+        (throw const FileSystemException(
+          'No home directory for keyboard configuration',
+        ));
+  }
+
+  static String? legacyPath({
+    Map<String, String>? environment,
+    bool? isWindows,
+  }) {
+    if (!(isWindows ?? Platform.isWindows)) return null;
+    return _configurationPath(
+      environment ?? Platform.environment,
+      windows: true,
+    );
+  }
+
+  static String? _configurationPath(
+    Map<String, String> env, {
+    required bool windows,
+  }) {
+    final paths = windows ? p.windows : p.posix;
     final xdg = env['XDG_CONFIG_HOME'];
-    var home = env['HOME'] ?? env['USERPROFILE'];
-    if (home == null || home.isEmpty) home = containerHome;
+    final home = maybeHomeDir(environment: env, isWindows: windows);
     final String root;
-    if (xdg != null && p.isAbsolute(xdg)) {
+    if (xdg != null && paths.isAbsolute(xdg)) {
       root = xdg;
     } else if (home != null && home.isNotEmpty) {
-      root = p.join(home, '.config');
+      root = paths.join(home, '.config');
     } else {
-      throw const FileSystemException(
-        'No home directory for keyboard configuration',
-      );
+      return null;
     }
-    return p.join(root, 'harness', 'keybindings.jsonc');
+    return paths.join(root, 'harness', 'keybindings.jsonc');
   }
 
   Future<void> start() => reload();
@@ -105,9 +137,9 @@ class KeymapStore extends ChangeNotifier {
     }
   }
 
-  Future<String> _readSource() async {
+  Future<String> _readSource([File? sourceFile]) async {
     try {
-      final bytes = await file
+      final bytes = await (sourceFile ?? file)
           .openRead(0, maximumBytes + 1)
           .fold(
             BytesBuilder(copy: false),
@@ -119,6 +151,9 @@ class KeymapStore extends ChangeNotifier {
       return utf8.decode(bytes.takeBytes());
     } on FileSystemException catch (error) {
       if (!const {2, 3}.contains(error.osError?.errorCode)) rethrow;
+      if (sourceFile == null && legacyFile != null) {
+        return _readSource(legacyFile);
+      }
       return ''; // A missing file inherits defaults.
     }
   }
@@ -139,6 +174,7 @@ class KeymapStore extends ChangeNotifier {
       final source = await _readSource();
       final blank = keymapFileSource(const [], _commands);
       if (source.trim().isNotEmpty && source != blank) {
+        await file.parent.create(recursive: true);
         await File('${file.path}.bak').writeAsString(source, flush: true);
         await file.writeAsString(blank, flush: true);
       }
@@ -199,30 +235,33 @@ class KeymapStore extends ChangeNotifier {
   }
 
   Future<void> _updateWatches(int generation) async {
-    final targets = {p.normalize(file.absolute.path)};
-    var linkPath = targets.first;
-    for (var depth = 0; depth < 8; depth++) {
-      try {
-        if (await FileSystemEntity.type(linkPath, followLinks: false) !=
-            FileSystemEntityType.link) {
+    final targets = <String>{};
+    for (final watchedFile in [file, ?legacyFile]) {
+      var linkPath = p.normalize(watchedFile.absolute.path);
+      targets.add(linkPath);
+      for (var depth = 0; depth < 8; depth++) {
+        try {
+          if (await FileSystemEntity.type(linkPath, followLinks: false) !=
+              FileSystemEntityType.link) {
+            break;
+          }
+          final destination = await Link(linkPath).target();
+          final next = p.normalize(
+            p.isAbsolute(destination)
+                ? destination
+                : p.join(p.dirname(linkPath), destination),
+          );
+          if (!targets.add(next)) break;
+          linkPath = next;
+        } on FileSystemException {
           break;
         }
-        final destination = await Link(linkPath).target();
-        final next = p.normalize(
-          p.isAbsolute(destination)
-              ? destination
-              : p.join(p.dirname(linkPath), destination),
-        );
-        if (!targets.add(next)) break;
-        linkPath = next;
-      } on FileSystemException {
-        break;
       }
-    }
-    try {
-      targets.add(p.normalize(await file.resolveSymbolicLinks()));
-    } on FileSystemException {
-      /* Missing file or target. */
+      try {
+        targets.add(p.normalize(await watchedFile.resolveSymbolicLinks()));
+      } on FileSystemException {
+        /* Missing file or target. */
+      }
     }
     final directories = <String>{};
     for (final target in targets.toList()) {
@@ -328,12 +367,26 @@ class KeymapStore extends ChangeNotifier {
   /// Invoked only by the explicit Open Keyboard Config action. Starting the
   /// app never creates a dotfile or rewrites existing user configuration.
   Future<File> ensureFile() async {
+    // Opening the file is also how someone repairs malformed/oversized config.
+    // Migrate its bytes without parsing or applying the runtime read limit.
+    Uint8List? legacyBytes;
+    if (legacyFile != null && !await file.exists()) {
+      try {
+        legacyBytes = await legacyFile!.readAsBytes();
+      } on FileSystemException catch (error) {
+        if (!const {2, 3}.contains(error.osError?.errorCode)) rethrow;
+      }
+    }
     await file.parent.create(recursive: true);
     final handle = await file.open(mode: FileMode.append);
     try {
       await handle.lock(FileLock.exclusive);
       if (await handle.length() == 0) {
-        await handle.writeString(keymapFileSource(const [], _commands));
+        if (legacyBytes != null && legacyBytes.isNotEmpty) {
+          await handle.writeFrom(legacyBytes);
+        } else {
+          await handle.writeString(keymapFileSource(const [], _commands));
+        }
         await handle.flush();
       }
     } finally {

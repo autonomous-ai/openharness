@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 base64 = "0.22.1"
 alacritty_terminal = "0.26.0"
+harness-term = { path = "../term" }
 # Shell widgets read /dev/tty while stdout carries the selected value. macOS
 # kqueue cannot watch that device; Crossterm's tty reader uses poll/select.
 crossterm = { version = "0.29.0", features = ["use-dev-tty"] }

@@ -19,6 +19,7 @@ beforeAll(() => {
   for (const name of ['HOME', 'ADAPTER_DATA_DIR', 'ADAPTER_RUNTIME_DIR', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'HERMES_HOME', 'OPENCODE_DATA_DIR', 'OPENCODE_CONFIG_DIR', 'ZDOTDIR']) {
     const directory = join(root, name.toLowerCase()); mkdirSync(directory); vi.stubEnv(name, directory)
   }
+  vi.stubEnv('USERPROFILE', join(root, 'home'))
   for (const name of ['CLAUDE_PATH', 'CODEX_PATH', 'CURSOR_PATH', 'OPENCODE_PATH', 'PI_PATH', 'HERMES_PATH', 'COMMANDCODE_PATH', 'DEVIN_PATH', 'MUSE_PATH', 'AMP_PATH', 'KILO_PATH', 'GROK_PATH', 'AGY_PATH', 'COPILOT_PATH', 'HARNESS_GRID_BIN']) vi.stubEnv(name, '')
   vi.stubEnv('TZ', 'UTC'); vi.stubEnv('SHELL', '/bin/sh'); vi.stubEnv('PATH', '/usr/bin:/bin')
   vi.resetModules()

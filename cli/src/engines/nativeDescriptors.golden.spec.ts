@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, expect, it, vi } from 'vitest'
-import type { ProcessRow } from '../lib/tmux.js'
+import type { ProcessRow } from '../lib/processTable.js'
 import type { RegisteredSession } from '../lib/registry.js'
 
 const fixture = vi.hoisted(() => ({ root: '', rows: [] as ProcessRow[], lsof: new Map<number, string[]>() }))
@@ -77,7 +77,7 @@ vi.mock('node:child_process', async original => {
     done(null, Buffer.from(output), Buffer.alloc(0))
   }, execFileSync: forbidden, spawn: forbidden, spawnSync: forbidden }
 })
-vi.mock('../lib/tmux.js', async original => ({ ...await original<object>(), processRows: async () => fixture.rows }))
+vi.mock('../lib/processTable.js', async original => ({ ...await original<object>(), processRows: async () => fixture.rows }))
 vi.mock('../lib/loginShellEnv.js', () => ({ loginShellEnvironment: () => ({}) }))
 vi.mock('../lib/nativeProcessImages.js', async original => ({ ...await original<object>(),
   bundledProcessImageHelper: async () => ({ path: '/fixture-tools/native-control', key: 'fixture' }),

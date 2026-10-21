@@ -1,0 +1,32 @@
+   status     ● started · this computer only (not signed in)
+   version    v0.4.9-dev.c71364a8e
+   backend    not signed in · harness login
+   account    prod
+   state      C:\work\e2e\data
+   auth       ~\.harness\auth
+   agents     0 available
+   pid        4344
+   logs       C:\work\e2e\data\harness.log
+   dial log   C:\work\e2e\logs\dial-YYYYMMDD.log
+   local api  http://127.0.0.1:18473
+  ─────────────────────────────────────
+  running in background · stop with: harness stop
+
+  Agents, terminals and the cabled dial work here. `harness login` adds your other machines.
+
+  machine · remote machine
+  ─────────────────────────────────────
+   status     ○ stopped
+   version    v0.4.9-dev.c71364a8e
+   backend    not signed in · harness login
+   account    prod
+   state      C:\work\e2e\data
+   auth       ~\.harness\auth
+   agents     0 available
+   pid        4344
+   logs       C:\work\e2e\data\harness.log
+   dial log   C:\work\e2e\logs\dial-YYYYMMDD.log
+   local api  http://127.0.0.1:18473
+  ─────────────────────────────────────
+  running in background · stop with: harness stop
+

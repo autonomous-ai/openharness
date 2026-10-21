@@ -10,7 +10,7 @@ import 'package:collection/collection.dart' show compareNatural;
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
-import '../core/runtime_platform.dart';
+import '../core/home_dir.dart';
 import '../core/codex_profiles.dart';
 import '../core/launch_setup.dart';
 import '../core/dsh_catalog.dart';
@@ -448,7 +448,7 @@ class NewHarnessController extends ChangeNotifier {
            draft != null || engine != null || harnessId != null,
        _restoringDraft = draft != null,
        _now = now ?? DateTime.now,
-       _home = home ?? RuntimePlatform.environment['HOME'] {
+       _home = home ?? maybeHomeDir() {
     final explicitSelection =
         draft != null || engine != null || harnessId != null;
     _rememberedAgent = !explicitSelection;
@@ -1655,9 +1655,40 @@ class NewHarnessController extends ChangeNotifier {
   String? _homeOf(String id) =>
       app.stateOf(id)?.isLocalMachine == true ? _home : _homes[id];
 
+  p.Context _pathsFor(String id, [String? hint]) {
+    if (app.stateOf(id)?.isLocalMachine == true) return p.context;
+    // The machine model has no OS field. Its own home response (or a known
+    // project path before that response) owns the syntax, never this host.
+    // A relative query carries no style evidence over the committed project.
+    final absoluteHint = hint != null &&
+            (p.posix.isAbsolute(hint) ||
+                p.windows.isAbsolute(hint) &&
+                    !p.windows.isRootRelative(hint))
+        ? hint
+        : null;
+    final ownerPath =
+        _homes[id] ??
+        absoluteHint ??
+        (id == _machineId ? _project.folder : _projectsByMachine[id]?.folder);
+    return ownerPath != null &&
+            p.windows.isAbsolute(ownerPath) &&
+            !p.windows.isRootRelative(ownerPath)
+        ? p.windows
+        : p.posix;
+  }
+
   String tildePath(String path, [String? machineId]) {
-    final home = _homeOf(machineId ?? _machineId);
+    final id = machineId ?? _machineId;
+    final home = _homeOf(id);
     if (home == null) return path;
+    final paths = _pathsFor(id, path);
+    if (paths.style == p.Style.windows) {
+      if (paths.equals(path, home)) return '~';
+      if (paths.isWithin(home, path)) {
+        return '~/${paths.relative(path, from: home).replaceAll('\\', '/')}';
+      }
+      return path;
+    }
     return path == home
         ? '~'
         : path.startsWith('$home/')
@@ -2324,7 +2355,7 @@ class NewHarnessController extends ChangeNotifier {
     try {
       final home = await _ensureHome(id);
       if (home == null) return;
-      final root = p.join(home, 'harnesses');
+      final root = _pathsFor(id, home).join(home, 'harnesses');
       final List<String> names;
       if (app.stateOf(id)?.isLocalMachine == true) {
         names = await Isolate.run(
@@ -2607,7 +2638,10 @@ class NewHarnessController extends ChangeNotifier {
       }
       return query;
     }
-    final slash = query.lastIndexOf('/');
+    final paths = _pathsFor(_machineId, query);
+    final slash = paths.style == p.Style.windows
+        ? max(query.lastIndexOf('/'), query.lastIndexOf('\\'))
+        : query.lastIndexOf('/');
     final typedParent =
         _cycle?.typedParent ?? (slash < 0 ? '' : query.substring(0, slash + 1));
     final stem =
@@ -2634,7 +2668,10 @@ class NewHarnessController extends ChangeNotifier {
       common = common.substring(0, i);
     }
     if (names.length == 1) {
-      final text = '$typedParent${names.single}/';
+      final separator = paths.style == p.Style.windows && slash >= 0
+          ? query[slash]
+          : '/';
+      final text = '$typedParent${names.single}$separator';
       setQuery(text);
       return text;
     }
@@ -3178,25 +3215,40 @@ class NewHarnessController extends ChangeNotifier {
       text.startsWith('./') ||
       text.startsWith('../') ||
       text == '.' ||
-      text == '..';
+      text == '..' ||
+      (_pathsFor(_machineId, text).style == p.Style.windows &&
+          (p.windows.isAbsolute(text) ||
+              text.startsWith('.\\') ||
+              text.startsWith('..\\')));
 
   String _expand(String text) {
     final home = _homeOf(_machineId);
+    final paths = _pathsFor(_machineId, text);
     if (home != null) {
       if (text == '~') return home;
       // `~/` keeps its slash: joined with nothing it came back as the home
       // folder itself, which then read as "the folder `me` under /home" — the
       // list showed one row, your own home, and Tab completed to `~/me/`.
-      if (text == '~/') return '$home/';
-      if (text.startsWith('~/')) return p.join(home, text.substring(2));
+      if (text == '~/' ||
+          paths.style == p.Style.windows && text == '~\\') {
+        return '$home${text.substring(1)}';
+      }
+      if (text.startsWith('~/') ||
+          paths.style == p.Style.windows && text.startsWith('~\\')) {
+        return paths.join(home, text.substring(2));
+      }
     }
     // `./x` and `../x` are relative to the project the line already names —
     // the box's only "here" — and to home when it names none.
     if (text.startsWith('.')) {
       final here = _project.folder ?? home;
       if (here != null) {
-        final trailing = text.endsWith('/') ? '/' : '';
-        return '${p.normalize(p.join(here, text))}$trailing';
+        final trailing = text.endsWith('/')
+            ? '/'
+            : paths.style == p.Style.windows && text.endsWith('\\')
+            ? '\\'
+            : '';
+        return '${paths.normalize(paths.join(here, text))}$trailing';
       }
     }
     return text;
@@ -3207,7 +3259,9 @@ class NewHarnessController extends ChangeNotifier {
     final seen = <String>{};
     // Worktrees Start made are temporary: their repository is the project.
     final home = _homeOf(id);
-    final worktrees = home == null ? null : p.join(home, 'harnesses/worktrees');
+    final worktrees = home == null
+        ? null
+        : _pathsFor(id, home).join(home, 'harnesses/worktrees');
     for (final folder in [
       if (id == _machineId) ?_project.folder,
       ...app.projectHistory.recent(id),
@@ -3218,16 +3272,17 @@ class NewHarnessController extends ChangeNotifier {
           if (!isInternalLaunchHarness(agent.dsh))
             ?machine.projectOf(agent)?.cwd,
     ]) {
-      if (!p.isAbsolute(folder) ||
+      final paths = _pathsFor(id, folder);
+      if (!paths.isAbsolute(folder) ||
           isInternalLaunchFolder(folder) ||
           folder.length > 4096 ||
           RegExp(r'[\x00-\x1f\x7f]').hasMatch(folder) ||
           folder != _project.folder &&
-              (worktrees != null && p.isWithin(worktrees, folder) ||
+              (worktrees != null && paths.isWithin(worktrees, folder) ||
                   folder.contains('/harnesses/worktrees/'))) {
         continue;
       }
-      if (seen.add(p.normalize(folder))) yield folder;
+      if (seen.add(paths.normalize(folder))) yield folder;
     }
   }
 
@@ -3242,10 +3297,14 @@ class NewHarnessController extends ChangeNotifier {
       final folders = _recentProjectFolders(id).toList();
       final names = <String, int>{};
       for (final folder in folders) {
-        names.update(p.basename(folder), (n) => n + 1, ifAbsent: () => 1);
+        names.update(
+          _pathsFor(id, folder).basename(folder),
+          (n) => n + 1,
+          ifAbsent: () => 1,
+        );
       }
       for (final folder in folders) {
-        final name = p.basename(folder);
+        final name = _pathsFor(id, folder).basename(folder);
         result.add(
           NewHarnessOption(
             id: 'project:$id:$folder',
@@ -3281,7 +3340,8 @@ class NewHarnessController extends ChangeNotifier {
     // Resolve the owning machine's home before offering an existing name.
     // The daemon still reserves a fresh name atomically on submission.
     final root = _expand('~/harnesses');
-    if (slug != null && p.isAbsolute(root)) {
+    final paths = _pathsFor(_machineId, root);
+    if (slug != null && paths.isAbsolute(root)) {
       if (_visibleFolder != root) {
         _visibleFolder = root;
         _requestListing(root);
@@ -3294,7 +3354,7 @@ class NewHarnessController extends ChangeNotifier {
         .firstOrNull;
     final existingFolder = existingName == null || keepSuggestion
         ? null
-        : p.join(root, existingName);
+        : paths.join(root, existingName);
     return [
       if (typed.isNotEmpty)
         NewHarnessOption(
@@ -3352,16 +3412,19 @@ class NewHarnessController extends ChangeNotifier {
   /// zsh's path completion: the folders under what has been typed so far.
   List<NewHarnessOption> _pathOptions(String typed) {
     final full = _expand(typed);
-    if (!p.isAbsolute(full)) {
+    final paths = _pathsFor(_machineId, full);
+    if (!paths.isAbsolute(full)) {
       _visibleFolder = folderRefreshError = null;
       total = 0;
       return [_browse, _changeMachine];
     }
-    final slash = full.lastIndexOf('/');
-    final parent = slash <= 0 ? '/' : full.substring(0, slash);
+    final trailing = full.endsWith('/') ||
+        paths.style == p.Style.windows && full.endsWith('\\');
+    final parent = trailing ? paths.normalize(full) : paths.dirname(full);
     // While Tab is cycling the candidates, the line holds one of them but the
     // list stays the list of the stem that was typed — a completion menu.
-    final stem = (_cycle?.stem ?? full.substring(slash + 1)).toLowerCase();
+    final stem = (_cycle?.stem ?? (trailing ? '' : paths.basename(full)))
+        .toLowerCase();
     final names = _listings[parent];
     if (_visibleFolder != parent) {
       _visibleFolder = parent;
@@ -3389,7 +3452,7 @@ class NewHarnessController extends ChangeNotifier {
       if (stem.isEmpty && parent != '/')
         NewHarnessOption(
           id: 'project:$parent',
-          title: p.basename(parent),
+          title: paths.basename(parent),
           detail: 'Use ${location(parent)}',
           project: NewHarnessProject.folder(parent, exact: true),
           synthetic: true,
@@ -3401,7 +3464,7 @@ class NewHarnessController extends ChangeNotifier {
       offered++;
       if (!name.toLowerCase().startsWith(stem)) continue;
       if (++matched > maxPathRows) continue;
-      final folder = p.join(parent, name);
+      final folder = paths.join(parent, name);
       rows.add(
         NewHarnessOption(
           id: 'project:$folder',
@@ -3430,7 +3493,11 @@ class NewHarnessController extends ChangeNotifier {
       try {
         final answer = await app.listRemoteFolder(id, null);
         final home = answer['path'];
-        if (_disposed || home is! String || !p.isAbsolute(home)) return null;
+        if (_disposed ||
+            home is! String ||
+            !_pathsFor(id, home).isAbsolute(home)) {
+          return null;
+        }
         _homes[id] = home;
         if (id == _machineId) _refresh();
         return home;
@@ -3745,8 +3812,9 @@ class NewHarnessController extends ChangeNotifier {
           (_machine?.agents ?? const []).any((agent) {
             final cwd = _machine?.projectOf(agent)?.cwd;
             final root = _gitProject.root ?? folder;
+            final paths = _pathsFor(_machineId, root);
             return cwd != null &&
-                (p.equals(cwd, root) || p.isWithin(root, cwd));
+                (paths.equals(cwd, root) || paths.isWithin(root, cwd));
           })) {
         return _fail(
           'A harness is working in this folder, so its branch can’t be switched. Turn Worktree on, or stay on $branchLabel.',

@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
 import { isTerminalEngine } from '../engines/types.js'
 import { atomicWriteJson, projectDisplayName, strictPersistedRow, type RegisteredSession } from './registry.js'
-import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
+import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
 import { sameProcessIdentity } from './terminalRuntime.js'
 
 const SAFE_ID = /^[a-zA-Z0-9_-]{1,128}$/
@@ -223,8 +223,7 @@ export class StoppedAgentStore {
   }
 
   private syncDirectory(): void {
-    const fd = openSync(this.directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
-    try { fsyncSync(fd) } finally { closeSync(fd) }
+    syncStateDirectory(this.directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
   }
 
   /** Permanent deletion is separate from Stop, which always retains this record. */

@@ -27,6 +27,7 @@ import '../core/permission_modes.dart';
 import '../core/project_folder.dart';
 import '../core/launch_setup.dart';
 import '../core/test_run.dart';
+import '../core/windows_status_tray.dart';
 import '../logging/debug_surface.dart';
 import '../models/api_connections_controller.dart' show agentOnApiModel;
 import '../models/models_panel.dart';
@@ -59,7 +60,7 @@ import '../state/account_phones.dart';
 import '../state/app_state.dart';
 import '../state/notification_inbox.dart';
 import '../state/status_menu.dart';
-import '../widgets/linux_menu_bar.dart'
+import '../widgets/in_window_menu_bar.dart'
     show LinuxTitleBar, linuxTitleBarActions;
 import '../widgets/account_menu.dart';
 import '../widgets/notification_inbox.dart';
@@ -191,6 +192,7 @@ class SwarmScreen extends StatefulWidget {
     this.daemonsPreview,
     this.experimentalFeatures,
     this.chrome,
+    this.statusTray,
   });
   final AppNotifier notifier;
   final bool? nativeTabs;
@@ -216,6 +218,10 @@ class SwarmScreen extends StatefulWidget {
 
   /// Extra tab-bar controls from a host composition (the web build's menu).
   final WorkspaceChrome? chrome;
+
+  /// The Windows tray (`harness/status_menu`): the macOS status menu's rows,
+  /// fed from the same payload. A test passes its own; null off Windows.
+  final WindowsStatusTray? statusTray;
   @override
   State<SwarmScreen> createState() => _SwarmScreenState();
 }
@@ -251,12 +257,20 @@ class _SwarmScreenState extends State<SwarmScreen> {
   late final bool _native =
       widget.nativeTabs ?? (RuntimePlatform.isMacOS && !kUnderTest);
 
-  /// A menu bar is listening: AppKit's on macOS, the in-window bar on Linux.
-  /// Not the same as [_native], which is whether AppKit also draws the tab
-  /// strip and the title-bar buttons. On Linux Flutter still draws those, so
-  /// the strip stays and only the menu state and actions cross the bus.
+  /// The Windows tray. A test passes its own.
+  late final WindowsStatusTray? _statusTray =
+      widget.statusTray ??
+      (RuntimePlatform.isWindows && !kUnderTest ? windowsStatusTray : null);
+
+  /// A menu bar is listening: AppKit's on macOS, the in-window bar on Linux
+  /// and Windows, the Windows tray. Not the same as [_native], which is
+  /// whether AppKit also draws the tab strip and the title-bar buttons. On
+  /// Linux and Windows Flutter still draws those, so the strip stays and only
+  /// the menu state and actions cross the bus.
   late final bool _menuHost =
-      _native || (RuntimePlatform.isLinux && !kUnderTest);
+      _native ||
+      _statusTray != null ||
+      ((RuntimePlatform.isLinux || RuntimePlatform.isWindows) && !kUnderTest);
 
   /// On Linux the in-window menu bar is the title bar, and search,
   /// notifications and Store sit at its right end instead of the tab strip's
@@ -341,6 +355,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _experimentalFeatures.enabled(ExperimentalFeature.focusBarCreature);
   late final _brain = DaemonBrain(
     send: _sendDaemonFrame,
+    trustedConnectionMissing: () => app.daemonTrustedConnectionMissing,
     storage: kUnderTest ? null : HarnessFileStore.shared,
     now: widget.daemonClock,
   );
@@ -790,6 +805,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
     if (_menuHost) {
       _menuBus.setHandler(_onNative);
+      // A row chosen in the tray follows the existing status-menu receipt path.
+      _statusTray?.onSelected = (receipt) =>
+          _onNative(MethodCall('openStatusHarness', receipt));
       app.addListener(_syncNative);
       app.agentMessages.addListener(_syncNative);
       app.sharedTabs.addListener(_syncNative);
@@ -970,6 +988,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
       app.sharedTabs.removeListener(_syncNative);
       _menuBus.setHandler(null);
       unawaited(_menuBus.send('update', {'tabs': [], 'enabled': false}));
+    }
+    if (_statusTray case final tray?) {
+      tray.onSelected = null;
+      unawaited(tray.clear());
     }
     if (widget.projectStore == null) _projects.dispose();
     // Dismissing notifies app listeners. Detach our views and catalogs first so
@@ -2204,6 +2226,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
       // the active tab: only those it offers.
       'tabShareActions': sharedTabMenu(app, app.activeSwarmId).actions,
     };
+    if (_statusTray case final tray?) {
+      unawaited(
+        tray.update(
+          entries: statusMenuEntries(app, colorForActivity: activityInk),
+          workingEntries: statusMenuWorkingEntries(
+            app,
+            colorForActivity: activityInk,
+          ),
+          workspaceAvailable: true,
+        ),
+      );
+    }
     final encoded = jsonEncode(payload);
     if (encoded == _nativeState) return;
     _nativeState = encoded;
@@ -4819,7 +4853,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   bool _noteKey(KeyEvent event) {
     // Paint hints only; the keymap still owns every shortcut and input event.
-    _tabShortcutHints.value = HardwareKeyboard.instance.isMetaPressed;
+    _tabShortcutHints.value = showsTabShortcutHints(HardwareKeyboard.instance);
     // Off, this is not here at all: every key goes where it went before.
     if (event is! KeyDownEvent || _zoo.daemons == DaemonsSwitch.off) {
       return false;
@@ -8005,11 +8039,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
                               ),
                               const SizedBox(width: 10),
                               Expanded(
-                                child: Text(
-                                  _projects.error ?? app.lastError!,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: grid.AppType.body(),
+                                // Plain text, so the banner never takes keyboard
+                                // focus from the terminal; the tooltip carries
+                                // the whole message when it is clipped.
+                                child: Tooltip(
+                                  message: _projects.error ?? app.lastError!,
+                                  child: Text(
+                                    _projects.error ?? app.lastError!,
+                                    maxLines: 4,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: grid.AppType.body(),
+                                  ),
                                 ),
                               ),
                               if (_projects.error == null &&

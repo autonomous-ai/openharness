@@ -57,6 +57,7 @@ describe('the person\'s OpenRouter key', () => {
   it('looks in ~/.config/typesafe/credentials when nothing names another file', async () => {
     const home = mkdtempSync(join(root, 'home-'))
     vi.stubEnv('HOME', home)
+    vi.stubEnv('USERPROFILE', home)
     expect(await resolveJevKey({})).toBeNull()
     mkdirSync(join(home, '.config', 'typesafe'), { recursive: true })
     writeFileSync(join(home, '.config', 'typesafe', 'credentials'), 'OPENROUTER_API_KEY=sk-or-home\n')

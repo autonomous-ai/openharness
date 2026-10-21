@@ -1050,9 +1050,12 @@ class TerminalSession extends ChangeNotifier {
   Terminal _newTerminal({bool bindCallbacks = true}) {
     final result = Terminal(
       maxLines: 10000,
-      platform: defaultTargetPlatform == TargetPlatform.linux
-          ? TerminalTargetPlatform.linux
-          : TerminalTargetPlatform.macos,
+      platform: switch (defaultTargetPlatform) {
+        TargetPlatform.linux => TerminalTargetPlatform.linux,
+        // The native app only: a browser on Windows keeps the keys it had.
+        TargetPlatform.windows when !kIsWeb => TerminalTargetPlatform.windows,
+        _ => TerminalTargetPlatform.macos,
+      },
       // ⌥⏎ and ⌥⌫ have to become Meta-prefixed before they reach the pty, or the engine's prompt
       // reads the first as the submit it is byte-identical to and never hears the second at all.
       // See [AltAsMetaInputHandler].
@@ -1068,6 +1071,9 @@ class TerminalSession extends ChangeNotifier {
 
   void _bindTerminal(Terminal result) {
     result.onOutput = _onTerminalOutput;
+    // tmux/the PTY host owns cursor-position replies. Sending the renderer's
+    // duplicate cursor reply to ConPTY makes PSReadLine eat the first key.
+    result.onCursorPositionReport = (_) {};
     result.onResize = (width, height, _, _) => resize(width, height);
   }
 

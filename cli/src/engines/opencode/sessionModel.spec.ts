@@ -11,6 +11,7 @@ import {
   switchOpencodeSessionModel,
   type OpencodeApiRun,
 } from './sessionModel.js'
+import * as sqliteBuiltin from '../../lib/sqliteBuiltin.js'
 
 const hasSqlite = (() => {
   try { execFileSync('sqlite3', ['-version'], { stdio: 'ignore' }); return true } catch { return false }
@@ -150,7 +151,60 @@ d('setOpencodeSessionModel (sqlite3 CLI)', () => {
     await expect(setOpencodeSessionModel(db, "ses_x'; --", NEW)).resolves.toMatchObject({ ok: false, code: 'OPENCODE_SESSION_NOT_FOUND' })
   })
 
-  it('reports OPENCODE_SQLITE_MISSING when the CLI is not on PATH, and writes nothing', async () => {
+  // node:sqlite would wait out busy_timeout (5 s) on the daemon's own thread while opencode holds the write lock;
+  // the CLI waits in its own process, so the daemon keeps serving and the write lands once the lock is let go.
+  it('prefers the sqlite3 CLI, so opencode holding the write lock does not stop the caller\'s thread', async () => {
+    schema(db)
+    seed(db)
+    const opencode = new (sqliteBuiltin.builtinSqlite()!)(db, { readOnly: false })
+    opencode.exec('BEGIN IMMEDIATE')
+    const started = Date.now()
+    const write = setOpencodeSessionModel(db, SID, NEW)
+    const returnedAfter = Date.now() - started
+    await new Promise((settle) => setTimeout(settle, 200))
+    opencode.exec('COMMIT')
+    opencode.close()
+    await expect(write).resolves.toEqual({ ok: true })
+    expect(returnedAfter).toBeLessThan(1000)
+    expect(messageData(db, 'u2')).toEqual({ role: 'user', model: NEW, text: 'second' })
+  }, 15_000)
+
+  // Windows ships no sqlite3 CLI; the installers' Node has node:sqlite, which writes the same transaction.
+  it('writes through node:sqlite when the sqlite3 CLI is not on PATH', async () => {
+    expect(sqliteBuiltin.builtinSqlite()).not.toBeNull()
+    schema(db)
+    seed(db)
+    const empty = mkdtempSync(join(tmpdir(), 'no-sqlite-'))
+    try {
+      process.env.PATH = empty
+      await expect(setOpencodeSessionModel(db, SID, NEW)).resolves.toEqual({ ok: true })
+    } finally {
+      process.env.PATH = realPath
+      rmSync(empty, { recursive: true, force: true })
+    }
+    expect(messageData(db, 'u2')).toEqual({ role: 'user', model: NEW, text: 'second' })
+    expect(sessionModel(db, SID)).toEqual({ id: NEW.modelID, providerID: NEW.providerID, variant: 'default' })
+    expect(messageData(db, 'u1')).toEqual({ role: 'user', model: OLD, text: 'first' })
+    expect(sessionModel(db, OTHER)).toEqual({ id: OLD.modelID, providerID: OLD.providerID, variant: 'default' })
+  })
+
+  it('through node:sqlite, a session with no user message is not found, and nothing is written', async () => {
+    schema(db)
+    insertSession(db, SID, { id: OLD.modelID, providerID: OLD.providerID, variant: 'default' })
+    insertMessage(db, SID, 'a1', 1, assistantMsg())
+    const empty = mkdtempSync(join(tmpdir(), 'no-sqlite-'))
+    try {
+      process.env.PATH = empty
+      await expect(setOpencodeSessionModel(db, SID, NEW)).resolves.toMatchObject({ ok: false, code: 'OPENCODE_SESSION_NOT_FOUND' })
+    } finally {
+      process.env.PATH = realPath
+      rmSync(empty, { recursive: true, force: true })
+    }
+    expect(sessionModel(db, SID)).toEqual({ id: OLD.modelID, providerID: OLD.providerID, variant: 'default' })
+  })
+
+  it('reports OPENCODE_SQLITE_MISSING when Node has no node:sqlite and the CLI is not on PATH, and writes nothing', async () => {
+    vi.spyOn(sqliteBuiltin, 'builtinSqlite').mockReturnValue(null)
     schema(db)
     seed(db)
     const empty = mkdtempSync(join(tmpdir(), 'no-sqlite-'))

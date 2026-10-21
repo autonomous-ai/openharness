@@ -8,8 +8,8 @@
  * its own login, spending the wrong account while looking identical. Written once so the three
  * callers cannot drift: the half that drifts is the half nobody ran today.
  *
- * Dependency-injected like restoreAgents.ts, because the two machine-specific parts (the tmux version
- * probe and the config directory writer) are exactly the parts worth stubbing in a spec.
+ * Dependency-injected like restoreAgents.ts, because the two machine-specific parts (the terminal
+ * backend's capabilities and the config directory writer) are exactly the parts worth stubbing in a spec.
  */
 
 import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../engines/nativeLaunch.js'
@@ -28,7 +28,8 @@ import {
   type GridLaunchRecord,
   type GridLaunchRequest,
 } from './gridLaunchWire.js'
-import { TMUX_SESSION_ENV_MIN } from './tmuxVersion.js'
+import type { TerminalBackendCapabilities } from './terminalTypes.js'
+import { tmuxTooOldForSessionEnv } from './tmuxVersion.js'
 import { harnessEnvToClear } from '../dsh/launch.js'
 import type { DshLaunchAnswer } from '../dsh/launchWire.js'
 import { scmLaunchEnv } from '../scm/scmProjects.js'
@@ -84,7 +85,8 @@ export interface LaunchOverridesDeps {
     files: NonNullable<GridEngineLaunch['configDir']>['files'],
     links: NonNullable<GridEngineLaunch['configDir']>['links'],
   ) => Promise<string>
-  tmuxSupportsSessionEnv: () => Promise<boolean>
+  /** What the backend the pane is made on can do (`TerminalBackend.capabilities`). */
+  capabilities: () => Promise<TerminalBackendCapabilities>
   /** Install the daemon's hooks into a non-default Codex profile. The caller decides whether hook
    *  installation is enabled at all. */
   installCodexHooks: (codexHome: string) => boolean | Promise<boolean>
@@ -158,7 +160,7 @@ const noOverrides = (): LaunchOverrides => ({ env: {}, extraArgs: [], clearEnv: 
  * builds — config directory included — once it holds the pane).
  */
 export async function validateLaunchOverrides(
-  deps: Pick<LaunchOverridesDeps, 'tmuxSupportsSessionEnv' | 'machine' | 'gridLaunch'>,
+  deps: Pick<LaunchOverridesDeps, 'capabilities' | 'machine' | 'gridLaunch'>,
   engine: AgentEngine,
   source: LaunchSource,
   native?: NativeLaunch,
@@ -171,14 +173,13 @@ export async function validateLaunchOverrides(
 
 /** Only a launch that SETS variables needs the tmux that can set them. */
 async function tmuxRefusal(
-  deps: Pick<LaunchOverridesDeps, 'tmuxSupportsSessionEnv'>, engine: AgentEngine, override: GridLaunchOverride,
+  deps: Pick<LaunchOverridesDeps, 'capabilities'>, engine: AgentEngine, override: GridLaunchOverride,
 ): Promise<{ ok: true } | { ok: false; error: string; detail: string }> {
-  if (await deps.tmuxSupportsSessionEnv()) return { ok: true }
+  if ((await deps.capabilities()).sessionEnv) return { ok: true }
   return {
     ok: false,
     error: 'TMUX_TOO_OLD_FOR_GRID',
-    detail: `this machine's tmux is older than ${TMUX_SESSION_ENV_MIN.major}.${TMUX_SESSION_ENV_MIN.minor}, `
-      + `which is the first version that can give a pane its own environment — so ${engine} could not be `
+    detail: `${tmuxTooOldForSessionEnv('a pane')} — so ${engine} could not be `
       + `pointed at grid ${override.networkName}.`,
   }
 }

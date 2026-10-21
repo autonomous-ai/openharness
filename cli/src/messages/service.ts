@@ -37,6 +37,7 @@ import { env } from '../config/env.js'
 import { agentProject } from '../lib/agentProject.js'
 import { agentSettingsPath, readAgentSettings } from '../lib/agentSettings.js'
 import type { RegisteredSession } from '../lib/registry.js'
+import { primaryRuntime, sessionForPaneId, terminalRouteKey } from '../lib/terminalRuntime.js'
 import { type DirectoryTab, MessageDirectory, POLL_MS, type Member } from './directory.js'
 import { PaneInbox } from './inbox.js'
 import { Mailbox, type MailboxAgent } from './mailbox.js'
@@ -138,7 +139,8 @@ export const MESSAGES_OFF_TEXT = 'Agent Messages are off. The person turns on "A
 
 /** How long the windows' `shared_tabs_changed` waits for more of the same change. */
 export const SHARES_COALESCE_MS = 250
-const PANE = /^%\d{1,9}$/
+/** `harness send`'s pane: `$TMUX_PANE` (`%N`, a tmux pane only) or a pty host pane's `<instance>:%N` (`$HARNESS_PANE`). */
+const PANE = /^(?:p\d{1,4}:)?%\d{1,9}$/
 /** The most messages `harness send` alone gives an agent at once, unread ones first. */
 const UNREAD_MAX = 20
 /** Whether `wanted` is the whole of a name the engine cut short: Codex titles its terminal with the folder cut to fit
@@ -247,6 +249,9 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
   })
 
   const live = (): RegisteredSession[] => core.agents.live().filter((s) => s.engine !== ('terminal' as string))
+  /** Where a harness's inbox is: its pane by route key (inbox.ts), so equal `%N` ids on two backends never share
+   *  one. None while it has no pane. */
+  const inboxPane = (session: RegisteredSession): string => session.runtimes.length ? terminalRouteKey(primaryRuntime(session)) : ''
   const localAgent = (agentId: string): RegisteredSession | undefined => live().find((s) => s.agentId === agentId)
   const machineName = (machineId: string): string => directory.machineName(machineId) ?? (machineId === self() ? hostname().replace(/\.local$/, '') : idStart(machineId))
 
@@ -257,7 +262,7 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
       if (!session) return null
       // The hook delivers only to this conversation: a Codex sub-agent runs its hooks from its parent's pane, and
       // a pane number tmux gives out again is another's. A Claude Code sub-agent says so itself (`agent_id`).
-      return { pane: session.tmuxPane, session: session.sessionId ?? '', available: session.active && core.agents.terminalAvailable(agentId) }
+      return { pane: inboxPane(session), session: session.sessionId ?? '', available: session.active && core.agents.terminalAvailable(agentId) }
     },
     deliver: (agentId, text, deliveryId) => { core.turns.deliver(agentId, text, deliveryId); options.changed?.() },
     refused: (delivery) => { const v = verdict(delivery); return v && 'refused' in v ? v.refused : null },
@@ -608,12 +613,13 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
       unknown.push(...directory.peers({ machineId: self(), agentId: session.agentId }).filter((m) => m.machineId !== self() && !teammate(m).known))
       if (store.state.noted[session.agentId] === roster.signature) { withdrawNote(session.agentId); continue }
       const current = store.state.notes[session.agentId]
-      if (current?.signature === roster.signature && current.pane === session.tmuxPane && inbox.waiting(current.pane, current.key)) continue
+      const pane = inboxPane(session)
+      if (current?.signature === roster.signature && current.pane === pane && inbox.waiting(current.pane, current.key)) continue
       withdrawNote(session.agentId)
       const noteKey = `0note-${roster.signature}`
       try {
-        inbox.put(session.tmuxPane, noteKey, { session: session.sessionId ?? '', text: roster.text })
-        store.state.notes[session.agentId] = { pane: session.tmuxPane, key: noteKey, signature: roster.signature }
+        inbox.put(pane, noteKey, { session: session.sessionId ?? '', text: roster.text })
+        store.state.notes[session.agentId] = { pane, key: noteKey, signature: roster.signature }
         saveQuietly()
       } catch { /* the next look puts it */ }
     }
@@ -625,7 +631,8 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
   async function send(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
     const pane = typeof payload.pane === 'string' ? payload.pane : ''
     if (!PANE.test(pane)) throw new MessageError('NOT_A_HARNESS', 'Run harness send from a harness pane.')
-    const session = live().find((s) => s.tmuxPane === pane)
+    // A bare `%N` is `$TMUX_PANE`, a tmux pane only (`sessionForPaneId`).
+    const session = sessionForPaneId(live(), pane)
     if (!session) throw new MessageError('NOT_A_HARNESS', 'This pane is not a harness Harness knows. Run harness send from an agent\'s pane.')
     // Off is the person's word, answered before the tabs are read: a backend that cannot be reached is not the reason.
     if (!directory.on()) throw new MessageError('MESSAGES_OFF', MESSAGES_OFF_TEXT)

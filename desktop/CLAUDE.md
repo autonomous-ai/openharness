@@ -9,7 +9,17 @@ agents running on them. **macOS and Linux (Ubuntu) are both real, released targe
 provisioning (`lib/bootstrap/environment_provisioner.dart`), self-update
 (`lib/update/desktop_updater.dart`), and packaging (`scripts/upload-desktop.sh` /
 `scripts/upload-desktop-linux.sh`, see RELEASE.md) all branch per-OS internally rather than being
-separate code paths. The Windows runner exists but is unexercised. Package name is `harness`
+separate code paths.
+
+Windows is a local desktop too, not a viewer (`lib/core/viewer_mode.dart`): `homeDir()`
+(`lib/core/home_dir.dart`) reads `USERPROFILE` there even when Git Bash set `HOME`, console
+children start through `lib/core/hidden_process.dart` so no window flashes, and the executable is
+`harness-desktop.exe` (the CLI owns `harness.exe`). `.github/workflows/windows-desktop.yml` builds
+and runs the whole suite on x64 and arm64 against `test/windows_known_failures.txt`. Self-update
+adds a version folder beside the running one and relaunches through `Harness.exe`
+(`lib/update/windows_update_swap.dart`).
+
+Package name is `harness`
 (`import 'package:harness/...'`). It lives under `desktop/` in the `autonomous-harness` repo, beside
 the CLI (`../cli`) and the backend (`../backend`); a few comments still point at `autonomous-code`,
 the older backend checkout, which is a sibling of this repo rather than part of it.
@@ -49,7 +59,15 @@ flutter run -d macos                              # or: flutter run -d linux
 bash scripts/build-macos-debug.sh                  # pins the host's release renderer
 flutter build macos --release
 flutter build linux --release                     # Ubuntu build host only — no cross-compiling
+flutter build windows --release                   # Windows host only
 ```
+
+Windows pipe unit tests need the native bridge built first (`flutter build windows --release`).
+In PowerShell, set `$env:HARNESS_DESKTOP_PIPE_IO_DLL = (Resolve-Path
+'build/windows/<arch>/runner/Release/harness_pipe_io.dll').Path` before `flutter test --no-pub`
+(`<arch>` is `x64` or `arm64`). Unit tests run in the SDK's flutter_tester, outside the app bundle.
+For `flutter run` and native integration, remove that override: each app build loads the DLL beside
+its executable, including Debug. The Windows workflow checks both paths.
 
 Native integration fixtures need a device and the test-mode environment:
 
@@ -265,14 +283,33 @@ The native desktop target uses the CLI for cloud access and SSO tokens:
   socket file exists, so a daemon restart does not strand the app on TCP. Windows and paths over 96
   bytes have no socket. The CLI, engine hooks and the dashboard stay on TCP. Under `flutter test`
   `LocalDaemonTransport.detect` finds no socket, so tests never reach a real daemon.
+- **On Windows the trusted routes go over the daemon's pipe** (`ws/trusted_pipe.dart`, B's §2):
+  `POST /api/auth/handoff`, and this computer's window connection (`WsConn.trustedLocal`), where
+  the daemon takes its `daemon_*` frames. Everything else stays on loopback TCP, relayed machines'
+  connections included. Reaching a Windows pipe is no trust: the app reads the pipe's name from
+  `daemon-<port>.json` and the token from `daemon-token` for every request (`ws/daemon_pipe_record.dart`),
+  each request carries `x-harness-auth`, and an answer counts only when its `x-harness-proof` proves the
+  token (`ws/windows_pipe_auth.dart`, held to the CLI's `__fixtures__/pipe-auth-vectors.json`). An
+  unproven pipe is no pipe: Add Phone shows its QR without the sign-in code, and the daemon's keys
+  and talk say harnessd's private connection is missing. The pipe client is kernel32 over FFI on two
+  background isolates (`ws/windows_pipe.dart`); its real-pipe test is
+  `integration_test/windows_pipe_test.dart`, on Windows CI. With no socket, the loopback port on
+  Windows is the one the daemon recorded in `daemon-<port>.json` (`LocalDaemonTransport.refreshTcpBase`):
+  another user's daemon may hold the configured one.
 - Besides viewer builds, a direct-to-backend test path is `LocalManualFixture` (`lib/main_local_manual.dart`), a
   compile-time-gated dev entrypoint fed by `scripts/start-terminal-local-manual.sh`. It fails closed
   unless every `--dart-define` is present.
 
 `lib/core/harness_cli_runner.dart` is how the app finds the CLI without a shell: prefer
 `~/.harness/runtime/current-node` + `~/.harness/cli/cli.js`, then `~/.local/bin/harness`, then PATH.
+On Windows it reads B's layout instead (`lib/core/windows_layout.dart`, the rules of B's own
+readers): `runtime\current-node` + `cli\current` → `cli\<ver>\cli.js`, then `bin\harness.exe`, then a
+`harness.exe` in a PATH folder.
 `lib/bootstrap/environment_provisioner.dart` installs the CLI and tmux (plus, on Linux, the clipboard
-helper) on first run (the `preparingEnvironment` status).
+helper) on first run (the `preparingEnvironment` status). On Windows the steps are the CLI and B's
+terminal host (`EnvironmentStep.tmux` stands for it, `runtime\pty\<ver>\harness-pty.exe`), both from
+one hidden `install.ps1 -Desktop` run (`windowsInstallCommand`), which fails in install.ps1's own
+sentence.
 
 Node is deliberately not the user's: it is a private, sha256-verified runtime under
 `~/.harness/runtime`, never Homebrew, nvm or PATH. **The app does not install it — `install.sh` does**,
@@ -757,6 +794,38 @@ add a kind there, not at the call site.
   `_linuxAltShortcuts`/`linuxAltCommandKeys` move the few that would land on a key a terminal
   program answers (Alt+Enter, Alt+T, Alt+F/B/D). The runner rewrites Super to Meta
   (`super_as_meta_cb`), so a Super chord a user binds still reads as `cmd`.
+  Native Windows (`ctrlWorkspacePrefix`, excluding web) keeps its existing shortcuts everywhere:
+  Ctrl+Shift for workspace letters, Alt+Shift for shifted twins, Alt(+Shift)+arrows for pane focus
+  and moves, Ctrl+Page Down/Up for tabs, and Ctrl+Shift+Z for zoom. Outside the terminal view,
+  eligible Mac ⌘[⇧]key defaults also have Ctrl[+Shift]+key aliases, such as Ctrl+T for New Tab,
+  Ctrl+W for Close Tab, Ctrl+N for New Harness, and Ctrl+R for Reload. Aliases follow each command's
+  existing keys and never replace another default in the same context. Mac chords containing
+  Alt get no alias (Ctrl+Alt can be AltGr), nor do ⌘⌃ chords (⌘⌃S would take ⌘S's Ctrl+S). Arrows, Enter/numpad Enter, Backspace, Delete, Home,
+  End, Tab, digits 1–9, comma, and A/C/V/X/Z/Y are excluded from alias generation; their existing
+  bindings remain. For example, Ctrl+Shift+G stays Find Next, so Find Previous keeps Alt+Shift+G.
+  In the terminal view, plain Ctrl+letter reaches the program except Ctrl+C with a selection
+  (copies, clears the selection, and sends no interrupt) and Ctrl+V (Harness text/image paste).
+  Native Windows local panes read clipboard PNG bytes through `NativeClipboard.readImagePng`
+  and the guarded `session.pasteImage` route. When a Windows clipboard writer is unavailable,
+  the existing CLI route saves the PNG and pastes its file path into the prompt.
+  With no selection, Ctrl+C still interrupts. Ctrl+Shift+C/V/A remain available; a pane this
+  window does not control still permits copying but blocks paste. The composer and find bar
+  count as text fields: editing keys win, and other aliases work. The terminal composer also
+  reserves Ctrl+W/U for line editing and routes Ctrl+V through Harness image/text paste;
+  Ctrl+T opens a tab there. IME composition does not dispatch aliases. Menu/tooltips retain
+  the keys that work everywhere; the Shortcuts sheet and command palette also list aliases
+  as “outside a terminal”. Only the Windows Edit menu follows focus: text fields show
+  Cut/Copy/Paste/Select All as Ctrl+X/C/V/A; terminals disable Cut and show Ctrl+C, Ctrl+V,
+  and Ctrl+Shift+A. Composer Edit-menu Paste uses the same image-aware path as Ctrl+V.
+  Holding Ctrl shows tab numbers. User bindings retain their behavior, including in terminals;
+  rebinding a command removes its default aliases, including bindings saved before aliases existed.
+  Windows stores keybindings in `%APPDATA%\harness\keybindings.jsonc` when APPDATA is absolute.
+  If that file is absent, the default store reads the previous configuration location (normally
+  `~/.config/harness/keybindings.jsonc`, respecting XDG_CONFIG_HOME). Editing/rebinding writes
+  the new path using the legacy content first and leaves the old file intact. With missing
+  or nonabsolute APPDATA, the previous path rule remains. macOS, Linux, and web are unchanged.
+  The [Windows shortcut acceptance record](../docs/testing/windows-desktop-e2e.md#windows-shortcuts)
+  identifies the tested source revisions and platform limits.
   Other workspace shortcuts are ⌘-based — Ctrl otherwise belongs to the shell/tmux, ⌥ is a
   Meta prefix for the pty (⌥⏎ and ⌥⌫ only — `AltAsMetaInputHandler` in
   `lib/terminal/terminal_input.dart` turns them into `ESC` + Return and `ESC` + `\x7f`, so the

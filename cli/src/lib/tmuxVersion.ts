@@ -68,6 +68,27 @@ export function atLeast(version: TmuxVersion | null, min: TmuxVersion): boolean 
   return version.minor >= min.minor
 }
 
+/** A version as people write it: `3.2`. */
+function versionText(min: TmuxVersion): string {
+  return `${min.major}.${min.minor}`
+}
+
+/** Why a launch with its own environment was refused on this tmux, in words a person can act on. */
+export function tmuxTooOldForEnv(min: TmuxVersion, what: string): string {
+  return `this machine's tmux is older than ${versionText(min)}, the first version that can give ${what} its own environment. Upgrade tmux.`
+}
+
+/**
+ * The start of a refusal of a launch that needs its own environment (a grid, a harness) on a tmux older
+ * than `TMUX_SESSION_ENV_MIN`, naming that version: the callers that check `capabilities().sessionEnv`
+ * finish the sentence with what could not be done. It lives here, not in the tmux backend, so that
+ * building a launch does not load the backend and everything it reaches.
+ */
+export function tmuxTooOldForSessionEnv(what: string): string {
+  return `this machine's tmux is older than ${versionText(TMUX_SESSION_ENV_MIN)}, `
+    + `which is the first version that can give ${what} its own environment`
+}
+
 export function supportsSessionEnv(version: TmuxVersion | null): boolean {
   return atLeast(version, TMUX_SESSION_ENV_MIN)
 }

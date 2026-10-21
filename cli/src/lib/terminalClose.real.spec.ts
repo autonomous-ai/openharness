@@ -38,7 +38,7 @@ it.runIf(process.env.RUN_REAL_TMUX_DISCOVERY === '1')('saves and closes an inact
     // running to rediscover. Its retained pane is still visible in the app.
     registry.setActive(row.agentId, false)
     await vi.waitFor(async () => {
-      const capture = await backend.capture(row.runtimes[0])
+      const capture = await backend.capture({ backend: 'tmux', paneId: pane })
       expect(capture).toMatchObject({ state: 'succeeded', value: expect.stringContaining('keep this unsent draft') })
     })
     expect(await control.captureTerminal(row.agentId)).toBeNull()
@@ -61,7 +61,7 @@ it.runIf(process.env.RUN_REAL_TMUX_DISCOVERY === '1')('saves and closes an inact
       return actualKill(runtime, allowed)
     })
     const stop = createStopAgentService({ registry, stoppedAgents,
-      restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), tmuxBackend: backend,
+      restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), backendFor: () => backend,
       agentReconciler: { suppress() {}, holdRoute() {}, releaseRoute() {}, trigger: async () => {} },
       forgetSession: id => registry.removeAgent(id), markDeleted() {}, clearDeleted() {}, stopNative: inlineNativeControls().stop,
     })

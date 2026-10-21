@@ -1,0 +1,61 @@
+Folder PATH listing
+Volume serial number is 00000094 341A:60C0
+C:\USERS\HXE2E\.HARNESS\BIN
+    harness-launch.exe
+    harness.exe
+    
+No subfolders exist 
+
+Folder PATH listing
+Volume serial number is 00000049 341A:60C0
+C:\USERS\HXE2E\.HARNESS\CLI
+|   current
+|   notify.mjs
+|   
++---0.4.18-dev.win1
+|       cli.js
+|       notify.mjs
+|       package.json
+|       
+\---data
+    |   adapter.pid
+    |   daemon-18474.json
+    |   daemon-token
+    |   harness.log
+    |   harnessd-status.json
+    |   harnessd-task.xml
+    |   hook-credential
+    |   machines.json
+    |   registry-boot
+    |   registry.json
+    |   session-search.db
+    |   session-search.db-shm
+    |   session-search.db-wal
+    |   
+    +---agent-creations
+    |       177c5c80….json
+    |       177c5c80….json.claim
+    |       177c5c80….json.result
+    |       4df4ac72….json
+    |       4df4ac72….json.claim
+    |       4df4ac72….json.result
+    |       aa169b03….json
+    |       aa169b03….json.claim
+    |       aa169b03….json.result
+    |       ad8bdfb2….json
+    |       ad8bdfb2….json.claim
+    |       ad8bdfb2….json.result
+    |       
+    +---agent-messages
+    |       state.json
+    |       
+    +---amp-sessions
+    +---bin
+    |       harness-browser
+    |       
+    \---e2e
+            identity.json
+            
+current= 
+0.4.18-dev.win1
+agent-messages

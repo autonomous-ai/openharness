@@ -97,8 +97,13 @@ class _SharedHarnessPanelState extends State<SharedHarnessPanel> {
   void _start() {
     final generation = ++_generation;
     final viewer = widget.notifier.viewer;
-    final uri = Uri.parse(widget.notifier.config.localCliBaseUrl)
-        .replace(scheme: 'ws', path: '/api/local-ws');
+    final base = Uri.parse(widget.notifier.config.localCliBaseUrl);
+    // Windows: the port this user's daemon recorded (LocalDaemonTransport.tcpBase).
+    final uri =
+        (viewer == null
+                ? widget.notifier.localDaemonTransport.tcpBase(base)
+                : base)
+            .replace(scheme: 'ws', path: '/api/local-ws');
     _terminal = TerminalSession(
       machineId: widget.pane.machineId,
       agentId: widget.grant.agentId,

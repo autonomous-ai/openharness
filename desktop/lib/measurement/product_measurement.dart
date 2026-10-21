@@ -599,13 +599,16 @@ class ProductMeasurement extends ChangeNotifier {
     );
   }
 
+  // Report days are UTC dates. Parsing a date without Z uses the machine's
+  // timezone and can make today's UTC report look like it is from the future.
+  DateTime _utcDayStart(String day) => DateTime.parse('${day}T00:00:00Z');
+
   void _count(String channel, String day, String metric) {
     final today = _now().toUtc();
-    final date = DateTime.parse(day);
+    final date = _utcDayStart(day);
     if (today.difference(date).inDays > 1 || date.isAfter(today)) return;
     _days.removeWhere(
-      (key, _) =>
-          today.difference(DateTime.parse(key.split(':')[1])).inDays > 1,
+      (key, _) => today.difference(_utcDayStart(key.split(':')[1])).inDays > 1,
     );
     final counters = _days.putIfAbsent('$channel:$day', () => {});
     if ((counters[metric] ?? 0) >= 1000 && healthEnabled && channel == 'ui') {
@@ -708,7 +711,7 @@ class ProductMeasurement extends ChangeNotifier {
       }
       if (_now()
               .toUtc()
-              .difference(DateTime.parse(report['day'] as String))
+              .difference(_utcDayStart(report['day'] as String))
               .inDays >
           1) {
         _pending.remove(channel);

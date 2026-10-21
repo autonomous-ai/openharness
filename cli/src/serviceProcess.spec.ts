@@ -4,7 +4,7 @@ import type { ServiceHost, ServiceHostOptions, ServiceProcess } from './services
 import { KNOWN_SERVICES, UPDATER_HOST } from './harnessd/services.js'
 
 const local = vi.hoisted(() => ({ socket: '/data/daemon-18473.sock' as string | null }))
-vi.mock('./lib/localSocket.js', async (real) => ({ ...await real<object>(), localSocketPath: () => local.socket }))
+vi.mock('./lib/localSocket.js', async (real) => ({ ...await real<object>(), unixSocketPath: () => local.socket }))
 // The test's own console stays as it is: it is shared with every other test in this worker.
 const stamped = vi.hoisted(() => ({ times: 0 }))
 vi.mock('./lib/log.js', async (real) => ({ ...await real<object>(), installTimestampedConsole: () => { stamped.times++ } }))

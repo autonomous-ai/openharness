@@ -22,8 +22,9 @@ import { HookPreparationHeld, inspectHookFile, runHookPreparation, type HookPrep
 import { isMessagesBlock } from './messagesHook.js'
 import { isOurs, type HookBlock, type Settings } from './notifyHooks.js'
 
-/** Harness's own: notify.mjs's blocks, and Agent Messages' (kit/messagesHook.ts). */
-const harnessOwn = (block: HookBlock): boolean => isOurs(block) || isMessagesBlock(block)
+/** Harness's own: notify.mjs's blocks, as [platform] reads a hook (a PowerShell line is ours on Windows only), and
+ *  Agent Messages' (kit/messagesHook.ts). */
+const harnessOwn = (block: HookBlock, platform: NodeJS.Platform): boolean => isOurs(block, platform) || isMessagesBlock(block)
 
 /** Every object's keys sorted, as the engine sorts them before it hashes. */
 function sortedKeys(value: unknown): unknown {
@@ -45,7 +46,8 @@ export function reviewHash(record: HookReviewRecord, event: string, matcher: str
 }
 
 /** The records Harness's own blocks in `settings` need: key → hash. */
-export function reviewRecords(record: HookReviewRecord, settingsFile: string, settings: Settings): Map<string, string> {
+export function reviewRecords(record: HookReviewRecord, settingsFile: string, settings: Settings,
+  platform: NodeJS.Platform = process.platform): Map<string, string> {
   const records = new Map<string, string>()
   for (const [event, label] of Object.entries(record.events)) {
     const blocks = settings.hooks?.[event]
@@ -53,9 +55,9 @@ export function reviewRecords(record: HookReviewRecord, settingsFile: string, se
     // An optional Messages block can precede a required notify block. Approving
     // only the first would report a prepared launch with SessionStart disabled.
     for (const [blockIndex, block] of blocks.entries()) {
-      if (!harnessOwn(block)) continue
+      if (!harnessOwn(block, platform)) continue
       for (const [hookIndex, hook] of block.hooks.entries()) {
-        if (!harnessOwn({ hooks: [hook] }) || hook.type !== 'command' || typeof hook.command !== 'string') continue
+        if (!harnessOwn({ hooks: [hook] }, platform) || hook.type !== 'command' || typeof hook.command !== 'string') continue
         // A hook edited into a shape Harness does not write is one the engine reads its own way: it asks.
         if ((hook.timeout !== undefined && typeof hook.timeout !== 'number') || (block.matcher !== undefined && typeof block.matcher !== 'string')) continue
         records.set(`${settingsFile}:${label}:${blockIndex}:${hookIndex}`, reviewHash(record, event, block.matcher, hook))
@@ -173,13 +175,43 @@ export function withReviewRecords(text: string, record: HookReviewRecord, record
   return next === text ? 'unchanged' : next
 }
 
+/**
+ * `harness uninstall`: the config file's text without each record [owned] calls Harness's (its key and hash), in the
+ * one form Harness, and the engine on "Trust all", writes it: its own table holding the hash and nothing else. The
+ * table goes with the blank lines after it, up to the next header; every other byte stays. A record with more in its
+ * table is the engine's or the person's and is kept.
+ */
+export function withoutReviewRecords(text: string, record: HookReviewRecord, owned: (key: string, hash: string) => boolean): { text: string; removed: number } {
+  const shape = structure(text)
+  const list = headers(shape)
+  const header = new RegExp(String.raw`^[ \t]*\[[ \t]*${tablePath(record.table)}[ \t]*\.[ \t]*("(?:[^"\\\r\n]|\\.)*"|'[^'\r\n]*')[ \t]*\][ \t]*\r?$`)
+  const only = new RegExp(String.raw`^\r?\n[ \t]*${segment(record.key)}[ \t]*=[ \t]*("(?:[^"\\\r\n]|\\.)*"|'[^'\r\n]*')[ \t]*\r?(?:\n[ \t\r]*)*$`)
+  const spans: Array<[number, number]> = []
+  for (const [i, line] of list.entries()) {
+    const match = header.exec(line.text)
+    const key = match ? tomlKey(match[1]) : null
+    if (key === null) continue
+    const end = list[i + 1]?.start ?? text.length
+    const body = only.exec(shape.slice(line.end, end))
+    const hash = body ? tomlKey(body[1]) : null
+    if (hash !== null && owned(key, hash)) spans.push([line.start, end])
+  }
+  let next = text
+  for (const [start, end] of [...spans].reverse()) next = next.slice(0, start) + next.slice(end)
+  // The installer appended a record after the text's trailing space, trimmed: taking the last one out ends the
+  // text where the person's did.
+  if (spans.at(-1)?.[1] === text.length) next = next.trim() ? next.replace(/\s*$/, '\n') : ''
+  return { text: next, removed: spans.length }
+}
+
 /** Inspect approvals before publishing hooks. An unreadable or conflicting
  * config cannot authorize even the first write of the installation. */
-export function prepareReviewed(record: HookReviewRecord, home: string, settingsFile: string, settings: Settings) {
+export function prepareReviewed(record: HookReviewRecord, home: string, settingsFile: string, settings: Settings,
+  platform: NodeJS.Platform = process.platform) {
   const config = join(home, record.file), observed = inspectHookFile(config, 0o600)
   // Codex uses the real home plus the literal hooks filename, even when that
   // leaf is an alias. The config's own leaf alias does not change that home.
-  const records = reviewRecords(record, join(observed.directory, basename(settingsFile)), settings)
+  const records = reviewRecords(record, join(observed.directory, basename(settingsFile)), settings, platform)
   if (records.size === 0) throw new HookPreparationHeld('the hooks have no verifiable approval records')
   const text = observed.content ?? ''
   try { parseToml(text, { integersAsBigInt: true, maxDepth: 64 }) }

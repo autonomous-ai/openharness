@@ -8,7 +8,9 @@ import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } fro
 import { listenLocalSocket } from './lib/localSocket.js'
 import { RelayConnectError } from './lib/relayFrames.js'
 import { mkdtempSync, rmSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
+import { newPipeNonce, newPipePath, PIPE_AUTH_HEADER, pipeAuthValue, pipeProven } from './lib/windows/pipeAuth.js'
 import { WindowForm } from './cable/windowForm.js'
 
 const machineId = 'machine-123'
@@ -165,6 +167,35 @@ describe('local CLI WebSocket', () => {
       local = null
       await unix.close()
       rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('over the Windows pipe, proves the daemon token in the upgrade and drops one without auth', async () => {
+    // A real pipe on Windows; elsewhere a Unix socket with a pipe's name.
+    const dir = process.platform === 'win32' ? null : mkdtempSync('/tmp/hsock-')
+    const pipePath = dir ? join(dir, `harness-${randomBytes(16).toString('hex')}`) : newPipePath()
+    const token = randomBytes(32)
+    const backend = new FakeBackend()
+    const pipe = await listenLocalSocket((_req, res) => { res.statusCode = 404; res.end() }, pipePath, { token })
+    await start(backend, { localSocketServer: pipe.server })
+    const createConnection = () => net.connect(pipePath)
+    try {
+      const nonce = newPipeNonce(pipePath)
+      const ws = new WebSocket('ws://localhost/api/local-ws', { createConnection, headers: { [PIPE_AUTH_HEADER]: pipeAuthValue(token, nonce) } })
+      const upgraded = new Promise<http.IncomingMessage>((resolve) => ws.once('upgrade', resolve))
+      await onceOpen(ws)
+      expect(pipeProven((await upgraded).headers, token, nonce)).toBe(true)
+      const connected = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+      expect(await connected).toMatchObject({ type: 'connected', payload: { machineId, transport: 'local' } })
+      ws.close()
+      const stranger = new WebSocket('ws://localhost/api/local-ws', { createConnection })
+      await expect(onceOpen(stranger)).rejects.toThrow()
+    } finally {
+      await local?.close()
+      local = null
+      await pipe.close()
+      if (dir) rmSync(dir, { recursive: true, force: true })
     }
   })
 

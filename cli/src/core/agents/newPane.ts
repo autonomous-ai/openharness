@@ -12,8 +12,10 @@ import type { engineInstallRecipe } from '../../lib/engineInstall.js'
 import { commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
 import { sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
-import type { TerminalRuntimeRef, TmuxRuntimeRef } from '../../lib/terminalTypes.js'
-import { clearPaneRemainOnExit, resolvePaneEngineProcess, tmuxPaneState } from '../../lib/tmux.js'
+import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
+import type { TerminalRuntimeRef } from '../../lib/terminalTypes.js'
+import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
+import { terminalRuntimeLabel } from '../../lib/terminalRuntime.js'
 import { createLaunchAuthority } from './launchAuthority.js'
 
 export interface PaneWatcherDeps {
@@ -22,8 +24,9 @@ export interface PaneWatcherDeps {
   /** Ask the reconciler to bind what now runs in a pane (TerminalAgentReconciler.triggerHint). */
   triggerHint: (runtime: TerminalRuntimeRef, engine: AgentEngine) => Promise<void>
   captureTerminal: (target: string, historyLines?: number) => Promise<string | null>
-  waitingPane?: (runtime: TmuxRuntimeRef, token: string) => Promise<boolean | 'unknown'>
   retainExitedSession: (session: RegisteredSession, announce: boolean) => void
+  /** The backend that holds a new pane: its process, state and hold (`isHeld`) are asked of it. */
+  terminals: Pick<TerminalBackendCoordinator, 'backendFor'>
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
@@ -31,12 +34,12 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
   timer.unref?.()
 })
 
-export function createPaneWatcher({ registry, announceSession, triggerHint, captureTerminal, retainExitedSession, waitingPane }: PaneWatcherDeps) {
+export function createPaneWatcher({ registry, announceSession, triggerHint, captureTerminal, retainExitedSession, terminals }: PaneWatcherDeps) {
   /**
    * Watch a pane this daemon just opened until its engine process shows up (ready), dies (failed), or
    * ten minutes pass. Shared by create and fork: the two open panes the same way and wait the same way.
    */
-  const watchNewPane = async (engine: AgentEngine, pending: RegisteredSession, spawned: { runtime: TmuxRuntimeRef }, command: string[], installIfMissing: ReturnType<typeof engineInstallRecipe> | undefined, budgetMs = 10 * 60_000): Promise<void> => {
+  const watchNewPane = async (engine: AgentEngine, pending: RegisteredSession, spawned: { runtime: TerminalRuntimeRef }, command: string[], installIfMissing: ReturnType<typeof engineInstallRecipe> | undefined, budgetMs = 10 * 60_000): Promise<void> => {
     const startedAt = Date.now()
     let delayMs = 50
     const nativeToken = pending.launch?.state === 'starting' ? pending.launch.nativeToken : undefined
@@ -45,14 +48,17 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
     const current = nativeToken ? createLaunchAuthority({ byAgent: id => registry.byAgent(id),
       revision: () => 0, cancelled: () => false })(pending.agentId, pending) : () => true
     try {
+      // Create and fork open the pane through this backend, so it is there; reported below if not.
+      const backend = terminals.backendFor(spawned.runtime)
+      if (!backend) throw new Error(`no terminal backend for ${terminalRuntimeLabel(spawned.runtime)}`)
       while (Date.now() - startedAt < budgetMs) {
         if (!registry.byAgent(pending.agentId) || !current()) return
-        const processIdentity = await resolvePaneEngineProcess(spawned.runtime.paneId, engine)
+        const processIdentity = await resolvePaneEngineProcess(backend, spawned.runtime, engine)
         if (!current()) return
         if (processIdentity) {
           registry.updateProcessIdentity(pending.agentId, processIdentity)
           const ready = registry.setLaunch(pending.agentId, { state: 'ready' })
-          await clearPaneRemainOnExit(spawned.runtime.paneId)
+          await backend.releaseHold(spawned.runtime)
           if (ready) announceSession(ready)
           void triggerHint(spawned.runtime, engine).catch((error) => {
             console.warn(`[agent] background bind failed · ${engine} · ${error instanceof Error ? error.message : error}`)
@@ -60,7 +66,7 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
           console.log(`[agent] create ready · ${engine} · agent ${pending.agentId} · ${Date.now() - startedAt}ms`)
           return
         }
-        const paneState = await tmuxPaneState(spawned.runtime.paneId)
+        const paneState = await backend.paneState(spawned.runtime)
         if (!current()) return
         if (paneState === 'gone') {
           registry.setTerminalAvailable(pending.agentId, false)
@@ -74,7 +80,10 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
           delayMs = Math.min(delayMs * 2, 750)
           continue
         }
-        const waiting = nativeToken && await waitingPane?.(spawned.runtime, nativeToken)
+        // A pane holds a launch by token on a backend that can say so (`TerminalBackend.isHeld`): tmux and the
+        // pty host. On the pty host the held shell has no tmux to respawn itself with; it stays inert there, and a
+        // restore replaces it through `respawn` with the token.
+        const waiting = nativeToken && await backend.isHeld?.(spawned.runtime, nativeToken)
         if (!current()) return
         if (waiting === true) {
           const held = registry.setLaunch(pending.agentId, { state: 'held', service: 'native', nativeToken,
@@ -120,7 +129,7 @@ export function createPaneWatcher({ registry, announceSession, triggerHint, capt
               processes: [],
               elapsedMs: Date.now() - startedAt,
             }))
-          await clearPaneRemainOnExit(spawned.runtime.paneId, current)
+          await backend.releaseHold(spawned.runtime, current)
           if (!current()) return
           // A hook may have bound a conversation while this watcher was awaiting its probe.
           // Archive the current row, not the pre-hook pending snapshot.

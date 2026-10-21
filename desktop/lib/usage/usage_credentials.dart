@@ -10,6 +10,8 @@
 /// no wrapper carrying it into an error message.
 library;
 
+import '../core/home_dir.dart';
+
 import 'dart:convert';
 import 'dart:io';
 
@@ -50,7 +52,7 @@ class UsageCredentials {
   /// Overridden by tests so nothing shells out to the real `security`.
   final Future<ProcessResult> Function(String, List<String>)? runProcess;
 
-  String? get _home => home ?? RuntimePlatform.environment['HOME'];
+  String? get _home => home ?? maybeHomeDir();
   Map<String, String> get _env => environment ?? RuntimePlatform.environment;
 
   /// The Keychain SERVICE Claude Code writes its OAuth token under — its own rule, read off

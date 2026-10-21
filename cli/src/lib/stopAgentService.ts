@@ -8,9 +8,10 @@ import type { registry as liveRegistry, RegisteredSession } from './registry.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import type { AgentRestartCoordinator } from './restartAgent.js'
 import type { TerminalBackend } from './terminalBackend.js'
-import type { TmuxRuntimeRef } from './terminalTypes.js'
+import type { TerminalRuntimeRef } from './terminalTypes.js'
 import { terminalRouteKey } from './terminalRuntime.js'
 import { checkPidRuntime, terminateDeletedAgent } from './deleteAgentFallback.js'
+import { signalAgentProcess } from './processSignals.js'
 
 export interface StopAgentServiceDeps {
   settlePane?: (agentId: string) => Promise<void>
@@ -19,7 +20,9 @@ export interface StopAgentServiceDeps {
   stoppedAgents: StoppedAgentStore
   restartJobs: AgentRestartCoordinator
   stopJobs: Map<string, Promise<void>>
-  tmuxBackend: Pick<TerminalBackend<TmuxRuntimeRef>, 'kill'> | null
+  /** The backend that holds [runtime] (`terminals.backendFor`): each of the row's panes is closed by its own. A pane on
+   *  a backend this daemon does not have is left alone, as a tmux pane was with no tmux. */
+  backendFor(runtime: TerminalRuntimeRef): Pick<TerminalBackend, 'kill'> | undefined
   agentReconciler: {
     suppress(session: RegisteredSession): void
     holdRoute(route: string): void
@@ -68,7 +71,7 @@ const bindingIdentity = (entry: RegisteredSession) => JSON.stringify([
 ])
 
 export function createStopAgentService(deps: StopAgentServiceDeps) {
-  const { registry, stoppedAgents, restartJobs, stopJobs, tmuxBackend, agentReconciler,
+  const { registry, stoppedAgents, restartJobs, stopJobs, backendFor, agentReconciler,
     forgetSession, markDeleted, clearDeleted, stopNative } = deps
   return (target: string, options: StopAgentOptions = {}) => {
     const sessionId = registry.resolve(target)?.agentId ?? target
@@ -150,7 +153,7 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
             kill: (pid, signal) => {
               verifyTranscript()
               if (!sameTarget() || options.current?.() === false) throw new AgentStopError('The close request was cancelled or changed.')
-              process.kill(pid, signal)
+              signalAgentProcess(pid, signal)
             },
             sleep: ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.() }),
             log: message => console.log(message),
@@ -171,14 +174,17 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
         if (!sameTarget() || options.current?.() === false) {
           throw new AgentStopError('The harness changed while pausing. Check its current state before trying again.')
         }
-        const panes = await Promise.allSettled(tmuxBackend
-          ? s.runtimes.filter((runtime): runtime is TmuxRuntimeRef => runtime.backend === 'tmux')
-            .map(runtime => tmuxBackend.kill(runtime, () => {
-              // tmux's notification gate can wait after the preceding check.
-              // Carry the original Close permission to the actual kill command.
-              verifyTranscript()
-              return sameTarget() && options.current?.() !== false
-            })) : [])
+        // Every pane on its own backend: tmux's as before, a pty host's through the host, whose kill ends the pane's
+        // whole process group (a Job object on Windows), so nothing the stopped harness started keeps running there.
+        const panes = await Promise.allSettled(s.runtimes.flatMap(runtime => {
+          const terminal = backendFor(runtime)
+          return terminal ? [terminal.kill(runtime, () => {
+            // tmux's notification gate can wait after the preceding check.
+            // Carry the original Close permission to the actual kill command.
+            verifyTranscript()
+            return sameTarget() && options.current?.() !== false
+          })] : []
+        }))
         if (nativeIdentityError) throw nativeIdentityError
         if (panes.some(result => result.status !== 'fulfilled' || result.value.state !== 'succeeded')
           || (isTerminalEngine(s.engine) && !panes.length)) {

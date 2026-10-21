@@ -142,7 +142,7 @@ for (const engine of PROCESS_ENGINES) it(`${engine}: prepare → spawn → tool 
   expect(JSON.parse(readFileSync(join(workspace, '.harness/verdict.json'), 'utf8'))).toEqual({ ready: true, artifact: 'scene.txt' })
   expect(readFileSync(join(workspace, 'scene.txt'), 'utf8')).toBe('drawn by test/portable\n')
   const restored = await buildLaunchOverrides({ machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(), writeGridConfigDir: async () => '/unused',
-    tmuxSupportsSessionEnv: async () => true, installCodexHooks: () => true,
+    capabilities: async () => ({ sessionEnv: true }), installCodexHooks: () => true,
     dshLaunch: async (_id, ws, selected, key) => ({ ok: true, launch: prepareHarnessLaunch(pkg, ws, selected, key) }) }, engine,
   { dsh: pkg.id, cwd: workspace, dshRuntime: 'created' }, 'registered')
   expect(restored.ok).toBe(true)

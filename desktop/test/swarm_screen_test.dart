@@ -10,6 +10,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/core/windows_status_tray.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
@@ -32,6 +33,7 @@ Future<void> mount(
   AppNotifier app, {
   SwarmProjectStore? projects,
   bool nativeTabs = false,
+  WindowsStatusTray? statusTray,
 }) async {
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = const Size(1280, 800);
@@ -45,6 +47,7 @@ Future<void> mount(
         notifier: app,
         nativeTabs: nativeTabs,
         projectStore: projects ?? SwarmProjectStore(),
+        statusTray: statusTray,
       ),
     ),
   );

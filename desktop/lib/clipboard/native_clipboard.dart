@@ -10,8 +10,9 @@ import '../core/runtime_platform.dart';
 /// `widgets/terminal_panel.dart`'s `_paste()`. Reading a real IMAGE off the clipboard (a
 /// screenshot, "Copy Image" from a browser, ...) needs a native round trip instead: NSPasteboard on
 /// macOS (`macos/Runner/MainFlutterWindow.swift`), the GTK clipboard on Linux
-/// (`linux/runner/my_application.cc`). Both answer over the same channel name and method, so this
-/// wrapper is the one place call sites need to know about.
+/// (`linux/runner/my_application.cc`), the Win32 clipboard on Windows
+/// (`windows/runner/clipboard_image.cpp`). All three answer over the same channel name and
+/// methods, so this wrapper is the one place call sites need to know about.
 class NativeClipboard {
   NativeClipboard._();
 
@@ -19,14 +20,20 @@ class NativeClipboard {
     'harness/clipboard_image',
   );
 
+  /// Whether this OS's runner answers `harness/clipboard_image`.
+  @visibleForTesting
+  static bool runnerAnswers(String operatingSystem) =>
+      const {'macos', 'linux', 'windows'}.contains(operatingSystem);
+
+  static bool get _hasRunner => runnerAnswers(RuntimePlatform.operatingSystem);
+
   /// Reads the system clipboard for an image, returned as PNG bytes.
   ///
-  /// Returns `null` on any platform without a native handler for this channel (Windows — the
-  /// runner is unexercised, see CLAUDE.md — and any platform that isn't macOS/Linux) or when the
+  /// Returns `null` on any platform without a native handler for this channel (a browser) or when the
   /// clipboard genuinely holds no image, so call sites can use one check to fall through to
   /// today's text-paste behavior either way.
   static Future<Uint8List?> readImagePng() async {
-    if (!RuntimePlatform.isMacOS && !RuntimePlatform.isLinux) return null;
+    if (!_hasRunner) return null;
     Uint8List? bytes;
     try {
       bytes = await _channel.invokeMethod<Uint8List>('readImagePng');
@@ -44,10 +51,10 @@ class NativeClipboard {
   /// The files the clipboard holds, as paths in the order they were copied —
   /// what a file manager's Copy puts there (Finder, Nautilus, Dolphin).
   ///
-  /// Empty when it holds none, and on a runner that does not answer: Windows,
+  /// Empty when it holds none, and on a runner that does not answer: a browser,
   /// or an app built before `readFilePaths` existed.
   static Future<List<String>> readFilePaths() async {
-    if (!RuntimePlatform.isMacOS && !RuntimePlatform.isLinux) return const [];
+    if (!_hasRunner) return const [];
     try {
       return await _channel.invokeListMethod<String>('readFilePaths') ??
           const [];
@@ -101,7 +108,7 @@ class NativeClipboard {
   /// native side could not decode/write the bytes — callers should treat that as "could not do
   /// the local shortcut" rather than surfacing a crash.
   static Future<bool> writeImagePng(Uint8List pngBytes) async {
-    if (!RuntimePlatform.isMacOS && !RuntimePlatform.isLinux) return false;
+    if (!_hasRunner) return false;
     try {
       final wrote = await _channel.invokeMethod<bool>(
         'writeImagePng',

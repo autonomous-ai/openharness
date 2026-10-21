@@ -144,7 +144,7 @@ it('refuses KILL when another writer durably binds the conversation during the T
   const owner = { engine: 'claude' as const, pid: 101, tty: '/dev/fixture-terminal', record: '/fixture/record' }
   const kill = vi.fn(), launch = vi.fn()
   let written = false
-  const controller = createExternalResumes({ registry, tmux: null, stopped: () => [], cancelled: () => false,
+  const controller = createExternalResumes({ registry, backend: null, backendFor: () => undefined, stopped: () => [], cancelled: () => false,
     generation: () => 1, waiting: async () => true, preflight: async () => null, announce: () => {}, forget: () => {}, launch,
     inspect: async request => ({ ok: true, request, session: fact(), owner, generation: 'ps:1', busy: false }),
     stopOwner: (target, control) => stopExternalOwner(target, { ...control, exists: () => true, generation: () => 'ps:1',

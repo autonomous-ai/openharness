@@ -59,7 +59,8 @@ echo ">> mirroring esptool $ESPTOOL_VER (as required by $(basename "$FLASHER"))"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 PINS=""
 
-# Every platform the flasher's esptool_asset() can ask for. Keep the two lists in step: a missing asset
+# Every platform the two flashers can ask for: flash-circle.sh's esptool_asset() and flash-circle.ps1's
+# $ESPTOOL_ASSET. Keep the lists in step: a missing asset
 # here becomes a silent fallback on exactly one kind of operator laptop — the sort of gap that only
 # shows up in the field.
 for asset in \
@@ -67,7 +68,8 @@ for asset in \
   "esptool-v${ESPTOOL_VER}-macos-amd64.tar.gz" \
   "esptool-v${ESPTOOL_VER}-linux-amd64.tar.gz" \
   "esptool-v${ESPTOOL_VER}-linux-aarch64.tar.gz" \
-  "esptool-v${ESPTOOL_VER}-linux-armv7.tar.gz" ; do
+  "esptool-v${ESPTOOL_VER}-linux-armv7.tar.gz" \
+  "esptool-v${ESPTOOL_VER}-windows-amd64.zip" ; do
   echo "   ↓ $asset"
   curl -fsSL --retry 2 -o "$TMP/$asset" "${ESPTOOL_RELEASE_BASE}/v${ESPTOOL_VER}/${asset}" \
     || { echo "error: could not download $asset — is v$ESPTOOL_VER the right esptool tag?" >&2; exit 1; }
@@ -84,6 +86,10 @@ done
 echo ""
 echo ">> paste into esptool_pinned_sha() in $(basename "$FLASHER"):"
 printf '%s' "$PINS"
+echo ""
+echo ">> paste into Get-PinnedEsptoolSha in flash-circle.ps1 (website/src/app/flash-circle.ps1/):"
+win="esptool-v${ESPTOOL_VER}-windows-amd64.zip"
+echo "    '${win}' { '$(awk '{print $1}' "$TMP/$win.sha256")' }"
 echo ""
 echo ">> done. The flasher prefers this mirror and falls back to the vendor release."
 exit 0

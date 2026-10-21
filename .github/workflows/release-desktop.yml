@@ -12,10 +12,10 @@ run-name: Desktop ${{ inputs.prepare_only && 'candidate' || inputs.test_candidat
 # The Flutter project lives under desktop/: the jobs that touch the tree run with
 # working-directory: desktop, and `desktop/scripts/...` below is what `scripts/...` used to mean.
 #
-# macOS and both Linux architectures build in parallel. The macOS coordinator compiles one
+# macOS, both Linux architectures and both Windows architectures build in parallel. The macOS coordinator compiles one
 # universal app, derives both renderer bundles, and packages/notarizes/uploads them in parallel.
 # Each variant writes its own scratch manifest under harness/desktop/.ci/<run id>/.
-# The publish job combines all four parts with a generation-conditional write and verifies every
+# The publish job combines every platform's parts with a generation-conditional write and verifies every
 # public download while holding the publication lock. Different releases may build concurrently.
 #
 # The tag IS the version — CI never auto-bumps. The scripts bump by reading the current version out
@@ -25,7 +25,9 @@ run-name: Desktop ${{ inputs.prepare_only && 'candidate' || inputs.test_candidat
 # Publishes the keys running apps poll (desktop/lib/update/desktop_updater.dart): desktop-macos and
 # desktop-macos-dmg (the Intel build, on Skia — also what every older install and the website read),
 # desktop-macos-arm64 and desktop-macos-arm64-dmg (Apple Silicon, on Impeller), desktop-linux-x64 and
-# desktop-linux-arm64. A MINOR bump (1.0.x -> 1.1.1) is a forced update — running apps block until it
+# desktop-linux-arm64, and Windows's desktop-windows-x64, desktop-windows-arm64 (the install-shaped zips the Windows
+# updater and install.ps1 -App take) and desktop-windows-installer (harness-install.exe, which the website serves).
+# A MINOR bump (1.0.x -> 1.1.1) is a forced update — running apps block until it
 # is installed. See RELEASE.md, "Two macOS builds" for why macOS is published twice.
 #
 # Dry run first: Actions -> Release -> Run workflow, with metadata_path = harness/desktop/
@@ -386,16 +388,131 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: bash scripts/upload-desktop-linux.sh "$VERSION"
 
+  # Each architecture on its own runner, like Linux (docs/superpowers/specs/2026-10-19-windows-installer-design.md
+  # §2.2). Not signed: there is no signing service yet. The x64 job also builds harness-install.exe, one x64
+  # program for every PC. upload-windows publishes the files from ubuntu, so these runners need no gcloud.
+  build-windows:
+    # The name desktop-release-candidate.py's check_jobs requires: without it GitHub would add the target too.
+    name: build-windows (${{ matrix.runner }}, ${{ matrix.arch }})
+    needs: [version, preflight]
+    if: needs.preflight.outputs.reused != 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: windows-latest, arch: x64, target: x86_64-pc-windows-msvc }
+          - { runner: windows-11-arm, arch: arm64, target: aarch64-pc-windows-msvc }
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The app, Harness.exe (pty/ and the crates it builds from) and harness-install.exe (installer/).
+          sparse-checkout: |
+            /desktop/
+            /installer/
+            /pty/
+            /term/
+            /tui/vendor/
+            /.github/actions/
+          sparse-checkout-cone-mode: false
+      # A clone of the pinned tag, as windows-desktop.yml does: Flutter's bootstrap then fetches the Dart SDK for the
+      # runner's architecture, arm64 included.
+      - name: Install Flutter ${{ env.FLUTTER_VERSION }}
+        working-directory: ${{ runner.temp }}
+        run: |
+          git clone --depth 1 --branch "$env:FLUTTER_VERSION" https://github.com/flutter/flutter.git flutter
+          if ($LASTEXITCODE -ne 0) { throw "Flutter clone failed ($LASTEXITCODE)" }
+          "$env:RUNNER_TEMP\flutter\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - name: Check the Flutter pin, and get packages
+        working-directory: desktop
+        run: |
+          flutter config --no-analytics
+          $version = flutter --version --machine | ConvertFrom-Json
+          if ($version.frameworkVersion -ne $env:FLUTTER_VERSION) { throw "Flutter is $($version.frameworkVersion), not $env:FLUTTER_VERSION" }
+          flutter pub get
+          if ($LASTEXITCODE -ne 0) { throw "Flutter pub get failed ($LASTEXITCODE)" }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build Harness.exe
+        working-directory: pty
+        run: |
+          cargo build --locked --release --target ${{ matrix.target }} --bin harness-desktop-launcher
+          if ($LASTEXITCODE -ne 0) { throw "Launcher build failed ($LASTEXITCODE)" }
+      - name: Build the app
+        working-directory: desktop
+        run: |
+          flutter build windows --release --build-name $env:VERSION --build-number ${{ github.run_number }}
+          if ($LASTEXITCODE -ne 0) { throw "App build failed ($LASTEXITCODE)" }
+      - name: Package
+        run: |
+          pwsh desktop/scripts/package-windows.ps1 -Version $env:VERSION -Arch ${{ matrix.arch }} -Launcher pty/target/${{ matrix.target }}/release/harness-desktop-launcher.exe
+          if ($LASTEXITCODE -ne 0) { throw "Windows package failed ($LASTEXITCODE)" }
+          New-Item -ItemType Directory -Force -Path windows-release | Out-Null
+          Move-Item -LiteralPath "desktop/build/windows-zip/harness-desktop-$env:VERSION-windows-${{ matrix.arch }}.zip" -Destination 'windows-release/Harness-windows-${{ matrix.arch }}.zip'
+      - name: Build harness-install.exe
+        if: matrix.arch == 'x64'
+        working-directory: installer
+        env:
+          HARNESS_INSTALL_BASE: https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/
+          HARNESS_INSTALL_VERSION: ${{ env.VERSION }}
+        run: |
+          cargo build --locked --release --target ${{ matrix.target }}
+          if ($LASTEXITCODE -ne 0) { throw "harness-install build failed ($LASTEXITCODE)" }
+          Copy-Item -LiteralPath 'target/${{ matrix.target }}/release/harness-install.exe' -Destination '../windows-release/harness-install.exe'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows-${{ matrix.arch }}
+          path: windows-release/
+          if-no-files-found: error
+
+  upload-windows:
+    needs: [version, build-windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      ARTIFACT_PREFIX: ${{ needs.version.outputs.artifact_prefix }}
+      CDN_ASSET_BASE_URL: ${{ needs.version.outputs.artifact_base_url }}
+      SCRATCH_PREFIX: ${{ needs.version.outputs.scratch_prefix }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /.github/actions/setup-gcloud/
+            /desktop/scripts/check-windows-zip.py
+            /desktop/scripts/upload-desktop-windows.sh
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-windows-*
+          path: windows-release
+          merge-multiple: true
+      - name: Authenticate to GCP (workload identity federation)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: ./.github/actions/setup-gcloud
+      - name: Upload the Windows files and write their parts
+        run: bash desktop/scripts/upload-desktop-windows.sh "$VERSION" windows-release
+
   # The only job that touches the REAL manifest, and the only one that can, because it is the only
   # one that runs after every build has finished.
   publish:
-    needs: [version, preflight, build-macos, build-linux]
-    if: ${{ always() && !inputs.prepare_only && needs.version.result == 'success' && needs.preflight.result == 'success' && (needs.preflight.outputs.reused == 'true' || (needs.build-macos.result == 'success' && needs.build-linux.result == 'success')) }}
+    needs: [version, preflight, build-macos, build-linux, build-windows, upload-windows]
+    if: ${{ always() && !inputs.prepare_only && needs.version.result == 'success' && needs.preflight.result == 'success' && (needs.preflight.outputs.reused == 'true' || (needs.build-macos.result == 'success' && needs.build-linux.result == 'success' && needs.upload-windows.result == 'success')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     concurrency:
       # Include verification: another release must not advance the live manifest
-      # between this publication and its six-download check. GCS's generation
+      # between this publication and its nine-download check. GCS's generation
       # condition also protects against writers outside this workflow.
       # Keep the historical group so a release already using the older workflow
       # still serializes with this publisher during the transition.
@@ -525,6 +642,9 @@ jobs:
           | macOS — Intel (also runs on Apple Silicon) | [Harness-macos.dmg](${base}/Harness-macos.dmg) |
           | Linux x64 | [Harness-linux-x64.AppImage](${base}/Harness-linux-x64.AppImage) |
           | Linux arm64 | [Harness-linux-arm64.AppImage](${base}/Harness-linux-arm64.AppImage) |
+          | Windows — installer (x64 and ARM64) | [harness-install.exe](${base}/harness-install.exe) |
+          | Windows x64 | [Harness-windows-x64.zip](${base}/Harness-windows-x64.zip) |
+          | Windows ARM64 | [Harness-windows-arm64.zip](${base}/Harness-windows-arm64.zip) |
 
           Already running Harness? It updates itself — no download needed.
           EOF
@@ -545,7 +665,7 @@ jobs:
   # precisely when scratch manifests are left behind — the builds that DID succeed have already
   # written theirs. `if: always()` here means the prefix is cleared whatever happened upstream.
   cleanup:
-    needs: [version, preflight, build-macos, build-linux, candidate, publish]
+    needs: [version, preflight, build-macos, build-linux, build-windows, upload-windows, candidate, publish]
     if: ${{ always() && needs.version.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
@@ -589,10 +709,10 @@ jobs:
           fi
 
   # Same build/signing path and production updater settings. Only the storage
-  # destination differs. A successful receipt binds six verified generations to
+  # destination differs. A successful receipt binds nine verified generations to
   # its full producer source tree, Desktop build inputs, version, run and attempt.
   candidate:
-    needs: [version, build-macos, build-linux]
+    needs: [version, build-macos, build-linux, upload-windows]
     if: ${{ inputs.prepare_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
@@ -611,7 +731,7 @@ jobs:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - uses: ./.github/actions/setup-gcloud
-      - name: Verify all six candidate downloads and seal their source identity
+      - name: Verify every candidate download and seal their source identity
         env:
           VERSION: ${{ needs.version.outputs.version }}
           PREFIX: ${{ needs.version.outputs.candidate_prefix }}

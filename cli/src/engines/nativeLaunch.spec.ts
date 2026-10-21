@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { inspectNativeLaunch } from './nativeLaunch.js'
 import { captureLaunchExecutable } from './kit/launchExecutable.js'
 import { engineHooks } from './hooks.js'
@@ -96,6 +96,36 @@ it('keeps installer-only work distinct from a confirmed executable', async () =>
   vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'install', recipe, environment: { HOME: '/fixture/home', PATH: '/fixture/bin' } })
   expect(await inspectNativeLaunch('opencode')).toMatchObject({ ok: false, unavailable: 'native', install: recipe })
   expect(hooks.installOpencodePlugin).not.toHaveBeenCalled()
+})
+const host = vi.hoisted(() => ({ win32: false }))
+vi.mock('./kit/windowsFiles.js', async original => {
+  const actual = await original<typeof import('./kit/windowsFiles.js')>()
+  return { ...actual, hostPlatform: () => host.win32 ? 'win32' : actual.hostPlatform() }
+})
+it.each(['codexHome', 'claudeHome'] as const)('refuses a creation whose %s is a network path on Windows, with the sentence naming the setting', async key => {
+  host.win32 = true
+  try {
+    const result = await inspectNativeLaunch(key === 'codexHome' ? 'codex' : 'claude', { [key]: '\\\\server\\share\\x' })
+    const variable = key === 'codexHome' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'
+    expect(result).toMatchObject({ ok: false, refusal: 'ENGINE_LAUNCH_REFUSED' })
+    expect((result as { detail: string }).detail).toMatch(new RegExp(`^${variable} names a network or device path, which Harness does not use for an engine home on Windows\\. Set it to`))
+  } finally { host.win32 = false }
+})
+it('does not let another engine\'s network setting, or its own sibling engine\'s, refuse a Codex create', async () => {
+  host.win32 = true
+  try {
+    const result = await inspectNativeLaunch('codex', {}, {})
+    expect(result).not.toMatchObject({ refusal: 'ENGINE_LAUNCH_REFUSED' })
+    vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'ready', executable: { command: '/fixture/engine', identity: 'fixture', current: () => true }, environment: { HOME: '/fixture/home', PATH: '/fixture/bin', OPENCODE_PLUGIN_DIR: '\\\\server\\share\\p' } } as never)
+    expect(await inspectNativeLaunch('codex')).not.toMatchObject({ refusal: 'ENGINE_LAUNCH_REFUSED' })
+    vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'ready', executable: { command: '/fixture/engine', identity: 'fixture', current: () => true }, environment: { HOME: '\\\\server\\share\\h', PATH: '/fixture/bin' } } as never)
+    const home = await inspectNativeLaunch('codex')
+    expect(home).toMatchObject({ refusal: 'ENGINE_LAUNCH_REFUSED' })
+    expect((home as { detail: string }).detail).toMatch(/^HOME names a network or device path.*such as /)
+  } finally { host.win32 = false }
+})
+it('does not refuse a double-slash location off Windows', async () => {
+  expect(await inspectNativeLaunch('codex', { codexHome: '//server/share/x' })).not.toMatchObject({ refusal: 'ENGINE_LAUNCH_REFUSED' })
 })
 it('holds incomplete capture and relative homes', async () => {
   vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'held', detail: 'fixture shell unavailable' })
@@ -276,4 +306,45 @@ it.each([
   expect(result.launch.environment[variable]).toBe(home)
   expect(await result.launch.prepareHooks(19473, () => true)).toBe(true)
   expect(confirmHome).not.toHaveBeenCalled()
+})
+
+// Windows has no launch script to probe Codex's owned-process flag before each run (engines/kit/launchStartup.ts):
+// the inspection reads the held executable's help once, and the flag rides in the argv (lib/windows/engineStart.ts).
+describe('the startup probe on Windows', () => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  beforeEach(() => { Object.defineProperty(process, 'platform', { ...platform, value: 'win32' }) })
+  afterEach(() => { Object.defineProperty(process, 'platform', platform) })
+
+  it('answers with the flag when the help lists it, and without when it does not', async () => {
+    fixture.help = 'Options:\n      --no-daemon   Run in this process'
+    expect(await inspectNativeLaunch('codex')).toMatchObject({ ok: true, launch: { startupArgs: ['--no-daemon'] } })
+    expect(fixture.calls).toEqual(['/fixture/engine'])
+    fixture.help = 'Options:\n      --no-daemonize'
+    expect(await inspectNativeLaunch('codex')).toMatchObject({ ok: true, launch: { startupArgs: [] } })
+    // On both streams, as the permission probe reads it.
+    fixture.help = ''; fixture.stderr = '--no-daemon'
+    expect(await inspectNativeLaunch('codex')).toMatchObject({ ok: true, launch: { startupArgs: ['--no-daemon'] } })
+  })
+
+  it('refuses a Codex whose help failed, and holds one that gave no answer', async () => {
+    fixture.exit = 2; fixture.stderr = 'Error: broken install'
+    expect(await inspectNativeLaunch('codex')).toMatchObject({ ok: false, refusal: 'ENGINE_CANNOT_RUN', detail: expect.stringContaining('broken install') })
+    fixture.current = false
+    expect(await inspectNativeLaunch('codex')).toMatchObject({ ok: false, unavailable: 'native' })
+    fixture.current = true; fixture.exit = 0; fixture.failed = true
+    expect(await inspectNativeLaunch('codex')).toMatchObject({ ok: false, unavailable: 'native', detail: 'Waiting to confirm the selected executable’s startup options.' })
+    fixture.failed = false; fixture.help = ''; fixture.stderr = ''
+    expect(await inspectNativeLaunch('codex')).toMatchObject({ ok: false, unavailable: 'native' })
+  })
+
+  it('probes no engine without a startup probe, and nothing elsewhere', async () => {
+    const claude = await inspectNativeLaunch('claude')
+    expect(claude.ok && claude.launch.startupArgs).toBeUndefined()
+    expect(fixture.calls).toEqual([])
+    Object.defineProperty(process, 'platform', platform)
+    if (process.platform === 'win32') return
+    const codex = await inspectNativeLaunch('codex')
+    expect(codex.ok && codex.launch.startupArgs).toBeUndefined()
+    expect(fixture.calls).toEqual([])
+  })
 })

@@ -234,7 +234,7 @@ export class Mailbox {
     for (const delivery of this.local) {
       if (delivery.state !== 'queued') continue
       if (delivery.reason === WAITING.team_waiting_idle) this.report(delivery, this.idleReason(delivery))
-      if (delivery.pane && taken.has(`${delivery.pane.slice(1)}-${delivery.key}`) && this.deps.inbox.claimed(delivery.pane, delivery.key)) { this.finish(delivery, 'hook'); continue }
+      if (delivery.pane && taken.has(this.deps.inbox.claimName(delivery.pane, delivery.key) ?? '') && this.deps.inbox.claimed(delivery.pane, delivery.key)) { this.finish(delivery, 'hook'); continue }
       if (delivery.attempt) {
         // A parked attempt is back in the hook's inbox: where its tab no longer carries it, the hook must not take it.
         if (!delivery.attempt.parked || !this.outside(delivery)) { this.watch(delivery); continue }

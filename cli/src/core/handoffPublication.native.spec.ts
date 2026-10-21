@@ -38,6 +38,7 @@ beforeEach(() => {
     'PI_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME']) {
     vi.stubEnv(name, join(root, name)); fs.mkdirSync(join(root, name), { recursive: true, mode: 0o700 })
   }
+  vi.stubEnv('USERPROFILE', join(root, 'HOME'))
   vi.stubEnv('TZ', 'UTC'); fs.mkdirSync(cwd)
   catalog = join(root, 'ADAPTER_DATA_DIR', 'engine-homes.json'); write(catalog, '{}')
   path = join(root, 'CODEX_HOME', 'sessions', `${ID}.jsonl`); write(path, transcript())

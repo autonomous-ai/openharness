@@ -1,0 +1,70 @@
+11:00:00.487 PASS Claude Code: engine input box is up — ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── | > Try "write a test for <filepath>" | ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── |   ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+11:00:06.521 PASS Claude Code: type a prompt, the engine answers — ● 42 | ✻ Brewed for 3s · done 4:00 AM | ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── | > | ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── |   ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+11:00:18.891 PASS Claude Code: paste 30 KB into the input box — [Pasted text #2 +299 lines] (settled after ~7622 ms)
+11:00:27.452 PASS Claude Code: paste Vietnamese/CJK/Korean/emoji into the input box — > Tiếng Việt: Xin chào thế giới — 中文：你好世界 — 日本語：こんにちは — 한국어: 안녕하세요 — 🎉🚀👍
+11:00:32.218 PASS Claude Code: resize 120x40 → 100x30 redraws at the new size — keyframe rows=30/30, widest line 100
+11:00:33.231 PASS Claude Code: resize back to 120x40 — keyframe rows=40
+11:00:34.244 --- claude final screen ---
+  Get to finished work sooner with Opus 5.5. Switch anytime with /model.
+  1 more notice hidden
+● Auto mode lets Claude handle permission prompts automatically — Claude checks each tool call for risky actions
+  and prompt injection before executing. Actions Claude identifies as safe are executed, while actions Claude
+  identifies as risky are blocked and Claude may try a different approach. Ideal for long-running tasks. Claude
+  can make mistakes that allow harmful commands to run, it's recommended to only use in isolated environments.
+  Shift+Tab to change mode.
+> What is 6 times 7? Reply with only the number.
+● 42
+✻ Brewed for 3s · done 4:00 AM
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+11:00:36.806 PASS Codex: engine input box is up — • 42 |   Worked for 3s • 3:58 AM | › [Pasted Content 5125 chars][Pasted Content 25241 chars] |   GPT-6.1-Sol default · C:\work\e2e\proj · Calculate 6 times 7
+11:00:38.815 PASS Codex: type a prompt, the engine answers —   /review - review any changes and find issues | › What is 6 times 7? Reply with only the number. | • 42 |   Worked for 3s • 3:58 AM | › [Pasted Content 5125 chars][Pasted Content 25241 chars]What is 6 times 7? Reply with only the number. |   GPT-6.1-Sol default · C:\work\e2e\proj · Calculate 6 times 7
+11:01:01.764 PASS Codex: paste 30 KB into the input box — [Pasted Content 1287 chars][Pasted Content 6142 chars] (settled after ~15726 ms)
+11:01:23.650 FAIL Codex: paste Vietnamese/CJK/Korean/emoji into the input box — timeout (20000 ms): unicode in input; last=undefined
+--- last screen ---
+    L002 /<IVcp},9FS`mz)6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/
+    …
+  ↳ L095 (5BO\iv%2?LYfs"/<IVcp},9FS`mz)6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(
+    L096 /<IVcp},9FS`mz)6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/
+    L097 6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/<IVcp},9FS`mz)6
+    …
+  ↳ L108 %2?LYfs"/<IVcp},9FS`mz)6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%
+    L109 ,9FS`mz)6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/<IVcp},
+    L110 3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/<IVcp},9FS`mz)6CP]jw&3
+    …
+› L114 O\iv%2?LYfs"/<IVcp},9FS`mz)6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO
+  L115 Vcp},9FS`mz)6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/<IV
+  L116 ]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/<IVcp},9FS`mz)6CP]
+  L117 dq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/<IVcp},9FS`mz)6CP]jw&3@MZgt#0=JWd
+  L118 kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/<IVcp},9FS`mz)6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^k
+  L119 r!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/<IVcp},9FS`mz)6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer
+  L120 y(5BO\iv%2?LYfs"/<IVcp},9FS`mz)6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly
+  L121 "/<IVcp},9FS`mz)6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"
+  L122 )6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/<IVcp},9FS`mz)
+  L123 0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/<IVcp},9FS`mz)6CP]jw&3@MZgt#0
+  L124 7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/<IVcp},9FS`mz)6CP]jw&3@MZgt#0=JWdq~-:GTan{*7
+  L125 >KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/<IVcp},9FS`mz)6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>
+  L126 ER_ly(5BO\iv%2?LYfs"/<IVcp},9FS`mz)6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8E
+  L127 LYfs"/<IVcp},9FS`mz)6CP
+  tab to queue message                                                                                99% context left
+11:01:29.179 PASS Codex: resize 120x40 → 100x30 redraws at the new size — keyframe rows=30/30, widest line 100
+11:01:30.190 PASS Codex: resize back to 120x40 — keyframe rows=40
+11:01:31.209 --- codex final screen ---
+CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/<  L116 ]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#
+4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/<IVcp},9FS`mz)6C  L117 dq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv
+%2?LYfs"/<IVcp},9FS`mz)6CP]jw&3@MZgt#0=J  L118 kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/<IVcp},9FS`mz)6CP]jw&3@MZg
+t#0=JWdq~-:GTan{*7DQ  L119 r!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/<IVcp},9FS`mz)6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KX
+  L120 y(5BO\iv%2?LYfs"/<IVcp},9FS`mz)6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_  L121 "/<IVcp},9FS`
+mz)6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYf  L122 )6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ
+^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/<IVcp},9FS`m  L123 0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5B
+O\iv%2?LYfs"/<IVcp},9FS`mz)6CP]jw&3@MZgt  L124 7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/<IVcp},9FS`mz)6CP]jw&3
+@MZgt#0=JWdq~-:GTan{  L125 >KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/<IVcp},9FS`mz)6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$
+  L126 ER_ly(5BO\iv%2?LYfs"/<IVcp},9FS`mz)6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+  L127 LYfs"/<IVcp},
+9FS`mz)6CP]jw&3@MZgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%2  L128 S`mz)6CP]jw&3@MZgt#0=JWdq~-:GTan{
+*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_ly(5BO\iv%2?LYfs"/<IVcp},9  L129 Zgt#0=JWdq~-:GTan{*7DQ^kx#4AN[hu$1>KXer!.;HUbo|+8ER_l
+y(5BO\iv%2?LYfs"/<IVcp},9FS`mz)6CP]jw&3@  tab to queue message
+                      99% context left                                                             ]jw&3@MZgt#
+11:01:31.214 SUMMARY 11/12 passed
+11:01:31.215   FAILED Codex: paste Vietnamese/CJK/Korean/emoji into the input box

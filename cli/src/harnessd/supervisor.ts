@@ -70,6 +70,18 @@ export interface SupervisorDeps {
    * never asks for a process that became on demand after its protocol, and expects it to run, as it did.
    */
   unasked?(protocol: number): void
+  /**
+   * Stop the core with `harnessd:shutdown` (./protocol.ts) rather than SIGTERM. Windows: Node's `kill` there is
+   * TerminateProcess, whatever the signal, and a core ended that way never flushes its registry or closes its
+   * servers. SIGKILL after the grace is TerminateProcess on the handle this master holds, so it can only end its
+   * own child. Left out, signals, as on macOS and Linux.
+   */
+  stopByMessage?: boolean
+  /**
+   * The core asked to stop everything (`harnessd:stop`: `harness stop` reached it over its pipe). The master stops
+   * its services beside the core, as on a signal (./master.ts); left out, the supervisor stops the core itself.
+   */
+  stopRequested?(why: string): void
 }
 
 /**
@@ -89,6 +101,9 @@ export interface ResumeState {
   /** Of those, how many since a core last came up: a master that keeps re-executing without one is
    *  in a loop, and stops (./reexec.ts `REEXEC_LIMIT`). */
   unproven: number
+  /** Windows, which has no exec: the master that handed over to this process, and the token its marker carries
+   *  (./reexec.ts `HandOverDeps`). This process claims the pid file and the marker as it starts (./master.ts). */
+  handover?: { from: number; token: string }
 }
 
 /**
@@ -188,8 +203,17 @@ type TimerName = 'bindTimer' | 'readyTimer' | 'heartbeatTimer' | 'killTimer' | '
  */
 export const HAND_OVER_GRACE_MS = 45_000
 
-const describeExit = (code: number | null, signal: NodeJS.Signals | null): string =>
-  signal ? `signal ${signal}` : `code ${code}`
+/**
+ * A child's exit code as its platform means it. Windows' is a DWORD, which Node gives unsigned: a process ended by
+ * TerminateProcess(-1) (Stop-Process, .NET's Process.Kill) showed as `code 4294967295`, and an NTSTATUS crash as a
+ * ten-digit number nobody looks up. Signed, they read as Windows' own tools print them. A Unix code is under 256.
+ */
+export const signedExitCode = (code: number | null): number | null =>
+  code !== null && code > 0x7fff_ffff ? code - 0x1_0000_0000 : code
+
+/** How a child ended, for the log and the status: `signal SIGKILL`, `code 1`, `code -1`. */
+export const describeExit = (code: number | null, signal: NodeJS.Signals | null): string =>
+  signal ? `signal ${signal}` : `code ${signedExitCode(code)}`
 
 /**
  * Whether why a core could not start names the disk rather than the build: no space left, a quota
@@ -453,6 +477,12 @@ export class Supervisor {
         // none, before or after.
         this.deps.want?.(message.service)
         return
+      case 'harnessd:stop': {
+        const why = 'the core asked to stop (harness stop)'
+        if (this.deps.stopRequested) this.deps.stopRequested(why)
+        else this.stop(why)
+        return
+      }
       case 'harnessd:heartbeat': {
         if (!this.bound) return
         this.watchHeartbeat()
@@ -603,13 +633,16 @@ export class Supervisor {
     core.kill('SIGKILL')
   }
 
-  /** End the running core: SIGTERM (or SIGKILL), and SIGKILL if it outlives the grace. */
+  /** End the running core: SIGTERM (or SIGKILL), and SIGKILL if it outlives the grace. On Windows the SIGTERM is
+   *  `harnessd:shutdown` (`stopByMessage`). */
   private end(why: 'stop' | 'restart', signal: NodeJS.Signals): void {
     const core = this.core!
     this.ending = why
     this.clearTimer('heartbeatTimer')
     this.clearTimer('readyTimer')
-    core.kill(signal)
+    // Every caller ends a core with SIGTERM; a second stop is SIGKILL through `stop`, never through here.
+    if (this.deps.stopByMessage) core.send({ type: 'harnessd:shutdown' })
+    else core.kill(signal)
     this.armTimer('killTimer', () => {
       this.deps.log(`[harnessd] core outlived its ${this.options.stopGraceMs} ms to stop — killing it`)
       core.kill('SIGKILL')

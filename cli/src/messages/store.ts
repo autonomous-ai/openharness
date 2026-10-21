@@ -9,6 +9,7 @@
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { inboxPaneKey } from './inbox.js'
 import { LIMITS, parseMessage, type DeliveryState, type DeliveryStatus, type Message } from './model.js'
 
 /** A delivery this machine makes to one of its own agents. */
@@ -17,7 +18,8 @@ export interface LocalDelivery {
   key: string
   messageId: string
   agentId: string
-  /** The pane the inbox file was put in, and the conversation it names; none while its harness is stopped. */
+  /** The pane the inbox file was put in, by its route key (inbox.ts), and the conversation it names; none while its
+   *  harness is stopped. */
   pane: string
   session?: string
   state: DeliveryState
@@ -76,12 +78,18 @@ export class MessageStore {
       const message = parseMessage(entry?.message)
       return message ? [{ message, statuses: Array.isArray(entry.statuses) ? entry.statuses : [] }] : []
     })
+    // Written before panes were keyed by their backend, a pane is a bare tmux `%N`: read as that tmux pane's key,
+    // so a delivery or a note made then is still the same inbox file, never one put again beside the hook's claim.
+    const local = Array.isArray(raw.local) ? raw.local.filter((d) => d && typeof d.key === 'string' && typeof d.pane === 'string') : []
+    for (const delivery of local) delivery.pane = inboxPaneKey(delivery.pane)
+    const notes = raw.notes && typeof raw.notes === 'object' && !Array.isArray(raw.notes) ? raw.notes : {}
+    for (const note of Object.values(notes)) if (note && typeof note.pane === 'string') note.pane = inboxPaneKey(note.pane)
     return {
       history,
-      local: Array.isArray(raw.local) ? raw.local.filter((d) => d && typeof d.key === 'string' && typeof d.pane === 'string') : [],
+      local,
       outbox: Array.isArray(raw.outbox) ? raw.outbox.filter((o) => o && typeof o.messageId === 'string' && (o.sharedTabId === undefined || typeof o.sharedTabId === 'string')) : [],
       noted: raw.noted && typeof raw.noted === 'object' ? raw.noted : {},
-      notes: raw.notes && typeof raw.notes === 'object' && !Array.isArray(raw.notes) ? raw.notes : {},
+      notes,
     }
   }
 

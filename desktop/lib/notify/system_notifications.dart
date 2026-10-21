@@ -1,6 +1,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert' show utf8;
 import 'dart:io' show Platform, Process, ProcessException, ProcessResult;
 import 'dart:isolate';
 
@@ -57,6 +58,58 @@ enum NotificationPermission {
   };
 }
 
+/// What a Windows toast opens when it is clicked:
+/// `harness://notification/<machineId>/<agentId>`, each part
+/// percent-encoded. The toast launches it like any other link (single
+/// instance, then `harness/community_links`), and
+/// [SystemNotifications.openLink] sends it where a macOS click goes. The bare
+/// link names no agent: it only brings Harness forward, which the runner has
+/// already done by the time Dart reads it.
+class NotificationLink {
+  const NotificationLink(this.machineId, this.agentId);
+
+  final String machineId;
+  final String agentId;
+
+  static const bare = 'harness://notification';
+
+  /// The runner hands Dart at most this many bytes of a link (the macOS and
+  /// Linux limit too).
+  static const maxLength = 240;
+
+  static String build(String machineId, String agentId) {
+    if (machineId.isEmpty || agentId.isEmpty) return bare;
+    final url =
+        '$bare/${Uri.encodeComponent(machineId)}/${Uri.encodeComponent(agentId)}';
+    return url.length > maxLength ? bare : url;
+  }
+
+  static NotificationLink? parse(String value) {
+    if (utf8.encode(value).length > maxLength) return null;
+    final uri = Uri.tryParse(value);
+    if (uri == null ||
+        uri.scheme != 'harness' ||
+        uri.host != 'notification' ||
+        uri.hasPort ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment) {
+      return null;
+    }
+    try {
+      final segments = uri.pathSegments;
+      if (segments.isEmpty) return const NotificationLink('', '');
+      if (segments.length != 2 || segments.any((segment) => segment.isEmpty)) {
+        return null;
+      }
+      return NotificationLink(segments[0], segments[1]);
+    } on FormatException {
+      // An external link can contain invalid UTF-8 percent escapes.
+      return null;
+    }
+  }
+}
+
 /// The operating-system half: what actually puts a notification on screen.
 ///
 /// Every call is best-effort. A platform that cannot post answers [unavailable]
@@ -93,7 +146,7 @@ abstract class SystemNotifier {
   set onTap(void Function(String machineId, String agentId)? handler);
 }
 
-/// No system notifications — Windows, tests, and anything else.
+/// No system notifications — tests, and anything else.
 class NoSystemNotifier implements SystemNotifier {
   const NoSystemNotifier();
 
@@ -195,17 +248,105 @@ class MacSystemNotifier implements SystemNotifier {
     );
   }
 
-  Future<NotificationPermission> _ask(String method, Object? args) async {
-    try {
-      return NotificationPermission.parse(
-        await _channel.invokeMethod<String>(method, args),
-      );
-    } on MissingPluginException {
-      return NotificationPermission.unavailable;
-    } catch (_) {
-      return NotificationPermission.unknown;
-    }
+  Future<NotificationPermission> _ask(String method, Object? args) =>
+      _askNotifications(_channel, method, args);
+}
+
+/// One call on `harness/notifications`, answered as the macOS and Windows
+/// runners answer: a missing runner is [NotificationPermission.unavailable],
+/// any other failure [NotificationPermission.unknown].
+Future<NotificationPermission> _askNotifications(
+  MethodChannel channel,
+  String method,
+  Object? args,
+) async {
+  try {
+    return NotificationPermission.parse(
+      await channel.invokeMethod<String>(method, args),
+    );
+  } on MissingPluginException {
+    return NotificationPermission.unavailable;
+  } catch (_) {
+    return NotificationPermission.unknown;
   }
+}
+
+/// The toast's tag for notification [id]: `harness-` and the FNV-1a 32-bit
+/// hash of its UTF-8, in hex. A toast posted under a tag replaces the one
+/// already there, as the Mac's identifier does, and Windows caps a tag at 64
+/// characters, which an agent's id can pass.
+String windowsToastTag(String id) {
+  var hash = 0x811c9dc5;
+  for (final byte in utf8.encode(id)) {
+    hash ^= byte;
+    hash = (hash * 0x01000193) & 0xffffffff;
+  }
+  return 'harness-${hash.toRadixString(16).padLeft(8, '0')}';
+}
+
+/// Windows: toasts through WinRT's `ToastNotificationManager`, in
+/// `windows/runner/notifications.cpp`.
+///
+/// They post under the AUMID `Autonomous.Harness`, which only the installed
+/// app's Start Menu shortcut carries. A copy run straight from the zip
+/// answers [NotificationPermission.unavailable], and the banner keeps doing
+/// the job. Windows has no permission prompt: [authorize] reports the switch
+/// in Settings ▸ System ▸ Notifications.
+///
+/// A click is not a channel call. The toast launches its
+/// `harness://notification/…` link ([NotificationLink]), which reaches the
+/// running app through the single instance and `harness/community_links`, and
+/// [SystemNotifications.openLink] sends it where a macOS click goes.
+class WindowsSystemNotifier implements SystemNotifier {
+  WindowsSystemNotifier({MethodChannel? channel})
+    : _channel = channel ?? const MethodChannel('harness/notifications');
+
+  final MethodChannel _channel;
+
+  @override
+  bool get supported => true;
+
+  @override
+  bool get clickOpensAgent => true;
+
+  @override
+  String get deniedAdvice =>
+      'Allow it in Windows Settings ▸ System ▸ Notifications ▸ Harness.';
+
+  @override
+  Future<NotificationPermission> authorize() =>
+      _askNotifications(_channel, 'authorize', null);
+
+  @override
+  Future<NotificationPermission> show({
+    required String id,
+    required String title,
+    required String body,
+    required String machineId,
+    required String agentId,
+  }) => _askNotifications(_channel, 'show', {
+    'id': id,
+    'title': title,
+    'body': body,
+    'machineId': machineId,
+    'agentId': agentId,
+    'tag': windowsToastTag(id),
+    'launch': NotificationLink.build(machineId, agentId),
+  });
+
+  @override
+  Future<void> withdraw(String id) async {
+    try {
+      await _channel.invokeMethod<void>('withdraw', {
+        'id': id,
+        'tag': windowsToastTag(id),
+      });
+    } catch (_) {}
+  }
+
+  /// Clicks come back as links ([SystemNotifications.openLink]), not here.
+  @override
+  set onTap(void Function(String machineId, String agentId)? handler) {}
 }
 
 /// Runs a command and hands back its result. Injected so a test can see what
@@ -319,12 +460,16 @@ class LinuxSystemNotifier implements SystemNotifier {
   set onTap(void Function(String machineId, String agentId)? handler) {}
 }
 
-/// The notifier for the platform this build runs on.
-SystemNotifier platformSystemNotifier() {
+/// The notifier for the platform this build runs on ([operatingSystem] is
+/// `Platform.operatingSystem` unless a test names one).
+SystemNotifier platformSystemNotifier({String? operatingSystem}) {
   if (kIsWeb) return browserSystemNotifier();
-  if (Platform.isMacOS) return MacSystemNotifier();
-  if (Platform.isLinux) return LinuxSystemNotifier();
-  return const NoSystemNotifier();
+  return switch (operatingSystem ?? Platform.operatingSystem) {
+    'macos' => MacSystemNotifier(),
+    'linux' => LinuxSystemNotifier(),
+    'windows' => WindowsSystemNotifier(),
+    _ => const NoSystemNotifier(),
+  };
 }
 
 /// The third channel beside the banner and the sound: news the operating system
@@ -446,9 +591,28 @@ class SystemNotifications {
     _ordered(id, () => notifier.withdraw(id));
   }
 
+  void Function(String machineId, String agentId)? _onTap;
+
   /// Where a click on a notification goes. Null stops listening.
-  set onTap(void Function(String machineId, String agentId)? handler) =>
-      notifier.onTap = handler;
+  set onTap(void Function(String machineId, String agentId)? handler) {
+    _onTap = handler;
+    notifier.onTap = handler;
+  }
+
+  /// A `harness://notification/…` link: what clicking a Windows toast opens.
+  /// True when [url] is one, whether or not anything was listening, because
+  /// such a link is never a community link. The click goes to [onTap], the
+  /// handler a macOS notification click calls. A link that names no agent (or
+  /// one that arrives before the workspace listens, which is a click that
+  /// launched Harness) only opens the app, as on macOS.
+  bool openLink(String url) {
+    final link = NotificationLink.parse(url);
+    if (link == null) return false;
+    if (link.machineId.isNotEmpty && link.agentId.isNotEmpty) {
+      _onTap?.call(link.machineId, link.agentId);
+    }
+    return true;
+  }
 }
 
 /// The store the app reads, loaded at start-up beside the other preferences.

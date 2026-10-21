@@ -2,7 +2,8 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { launchArgs, processArgs, processLaunchArgs, processRows, type ProcessRow } from './tmux.js'
+import * as table from './processTable.js'
+import { launchArgs, processArgs, processLaunchArgs, processRows, type ProcessRow } from './processTable.js'
 
 // The fake binaries below are /bin/sh scripts; their answers, not their speed, are what is tested
 // (testing/patientExecWithoutDeadline.ts).
@@ -93,5 +94,24 @@ describe('launchArgs', () => {
     expect(launchArgs([row(1, 0, "/bin/zsh -lic . '/d/1.sh' harness-engine /w /n/bin/codex resume x"), pi], pi)).toBe('')
     expect(launchArgs([row(3, 0, LAUNCHER), pi], pi)).toBe('')
     expect(launchArgs([row(1, 0, LAUNCHER), row(2, 1, '')], row(2, 1, ''))).toBe('')
+  })
+})
+
+describe('processTable module', () => {
+  it('owns the process table API', () => {
+    for (const name of ['processRows', 'parseProcessRow', 'argvTokens', 'engineProcessMatch',
+      'resumeSessionId', 'selectEngineProcess', 'setProcessTableSource'] as const) {
+      expect(typeof table[name]).toBe('function')
+    }
+  })
+
+  it('reads through an injected source', async () => {
+    const row = { pid: 7, parentPid: 1, executable: 'x', startMarker: 'w:1', args: 'x' }
+    table.setProcessTableSource(async () => [row])
+    try {
+      expect(await table.processRows()).toEqual([row])
+    } finally {
+      table.setProcessTableSource(null)
+    }
   })
 })

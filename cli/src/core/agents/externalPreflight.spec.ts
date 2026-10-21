@@ -5,6 +5,7 @@ import { buildEngineCommandArgv, refusePermissionFlagIfUnsupported } from '../..
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import { createExternalPreflight } from './externalPreflight.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
+import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 vi.mock('../../engines/inProcess.js', () => ({ loadEngine: vi.fn(async () => ({})) }))
 vi.mock('../../engines/hooks.js', () => ({ engineHooks: { codex: { installIn: vi.fn(async () => true) } } }))
 vi.mock('../../lib/engineLaunch.js', () => ({ buildEngineCommandArgv: vi.fn(() => []), refusePermissionFlagIfUnsupported: vi.fn(async () => null) }))
@@ -24,6 +25,12 @@ it('refuses a missing or changing folder or unsupported permissions before engin
   vi.mocked(refusePermissionFlagIfUnsupported).mockResolvedValueOnce({ error: 'PERMISSION_MODE_UNSUPPORTED', detail: 'permission unsupported' } as never)
   expect(await setup().prepare(row(), session)).toMatchObject({ detail: 'permission unsupported' })
   expect(buildEngineCommandArgv).not.toHaveBeenCalled()
+})
+it('holds a takeover Windows would launch through cmd.exe, saying why, before any owner is stopped', async () => {
+  vi.mocked(buildEngineCommandArgv).mockImplementationOnce(() => { throw new WindowsBatchLaunchRefused('claude', 'C:\\tools\\claude.cmd') })
+  expect(await setup().prepare(row(), session)).toEqual({ detail: expect.stringContaining('claude.cmd is a batch file') })
+  vi.mocked(buildEngineCommandArgv).mockImplementationOnce(() => { throw new Error('fixture') })
+  await expect(setup().prepare(row(), session)).rejects.toThrow('fixture')
 })
 it('requires OpenCode launch support and hooks before any external owner can be stopped', async () => {
   vi.mocked(loadEngine).mockResolvedValueOnce(null)

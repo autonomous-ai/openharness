@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:path/path.dart' as p;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/community/fork_link.dart';
@@ -272,12 +273,12 @@ void main() {
       });
       try {
         final importer = ForkProjectImporter(
-          root: Directory('${root.path}/metadata'),
-          projectsRoot: Directory('${root.path}/harnesses'),
+          root: Directory(p.join(root.path, 'metadata')),
+          projectsRoot: Directory(p.join(root.path, 'harnesses')),
           origin: 'http://127.0.0.1:${server.port}',
         );
         final first = await importer.prepare(link);
-        expect(first.folder, '${root.path}/harnesses/moonlight');
+        expect(first.folder, p.join(root.path, 'harnesses', 'moonlight'));
         expect(
           await File('${first.folder}/SESSION.md').readAsString(),
           contains('Make a game.'),

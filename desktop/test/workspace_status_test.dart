@@ -35,6 +35,7 @@ import 'package:harness/widgets/agent_drag.dart';
 import 'package:harness/widgets/status_line.dart';
 import 'package:harness/widgets/workspace_pull_request_label.dart';
 import 'package:harness/shared/theme/pull_request_icon.dart';
+import 'package:harness/shared/theme/workspace_bar_style.dart';
 import 'package:harness/widgets/pull_request_badge.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -623,6 +624,30 @@ void main() {
               lessThan(tester.getRect(context).left),
             );
             if (width == 1280) {
+              final cellWidth = workspaceBarCellSizeOf(tester.element(monitor))
+                  .width;
+              for (final (control, wordLength) in [
+                (monitor, 9),
+                (find.byKey(const ValueKey('workspace-machines')), 8),
+              ]) {
+                final paragraph = tester.renderObject<RenderParagraph>(
+                  find.descendant(of: control, matching: find.byType(RichText)),
+                );
+                final word = paragraph
+                    .getBoxesForSelection(
+                      TextSelection(baseOffset: 0, extentOffset: wordLength),
+                    )
+                    .last;
+                final count = paragraph
+                    .getBoxesForSelection(
+                      TextSelection(
+                        baseOffset: wordLength + 1,
+                        extentOffset: wordLength + 2,
+                      ),
+                    )
+                    .first;
+                expect(count.left - word.right, greaterThan(cellWidth));
+              }
               await captureControls(tester, 'inventory-allowance-footer');
             }
           }

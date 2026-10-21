@@ -446,9 +446,10 @@ export class TerminalStreamManager {
       this.sendError(connId, 'TERMINAL_ENGINE_UNSUPPORTED', { requestId })
       return
     }
-    const streamRuntime = session.runtimes.find((runtime) => runtime.backend === 'tmux'
-      && terminalRouteKey(runtime) === session.primaryRuntimeKey)
-      ?? session.runtimes.find((runtime) => runtime.backend === 'tmux')
+    // The agent's primary pane, on whichever backend holds it (tmux or the PTY host): the coordinator opens the
+    // stream through that backend.
+    const streamRuntime = session.runtimes.find((runtime) => terminalRouteKey(runtime) === session.primaryRuntimeKey)
+      ?? session.runtimes[0]
     if (!streamRuntime) {
       this.sendError(connId, 'TERMINAL_RUNTIME_UNAVAILABLE', { requestId })
       return

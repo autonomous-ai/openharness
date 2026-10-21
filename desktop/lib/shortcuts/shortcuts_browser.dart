@@ -470,8 +470,21 @@ class _ShortcutBrowserRow extends StatelessWidget {
   }
 
   Widget _practiceButton(BuildContext context) {
+    final bindings = [
+      ...lesson.bindings.where((binding) => !binding.outsideTerminal),
+      ...lesson.bindings.where((binding) => binding.outsideTerminal),
+    ];
+    final hasAliases = bindings.any((binding) => binding.outsideTerminal);
+    final spokenKeys = hasAliases
+        ? bindings
+              .map(
+                (binding) =>
+                    '${describeKeyBinding(binding)}${binding.outsideTerminal ? ' (outside a terminal)' : ''}',
+              )
+              .join(' / ')
+        : lesson.keys;
     final chords = [
-      for (final binding in lesson.bindings)
+      for (final binding in bindings)
         binding.keys.length == 1
             ? describeKeyStrokeKeys(binding.keys.single)
             : [describeKeyBinding(binding)],
@@ -480,7 +493,7 @@ class _ShortcutBrowserRow extends StatelessWidget {
       child: Semantics(
         button: true,
         selected: selected,
-        label: '${lesson.label}, ${lesson.keys}. Practice shortcut',
+        label: '${lesson.label}, $spokenKeys. Practice shortcut',
         child: TextButton(
           onPressed: onTap,
           style:
@@ -522,10 +535,48 @@ class _ShortcutBrowserRow extends StatelessWidget {
           child: ExcludeSemantics(
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final keys = KeyChordView(
-                  chords: chords,
-                  textStyle: DesktopChrome.control(),
-                );
+                final aliases = bindings
+                    .where((binding) => binding.outsideTerminal)
+                    .toList();
+                final Widget keys = aliases.isEmpty
+                    ? KeyChordView(
+                        chords: chords,
+                        textStyle: DesktopChrome.control(),
+                      )
+                    : Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          if (bindings.length > aliases.length)
+                            KeyChordView(
+                              chords: chords
+                                  .take(bindings.length - aliases.length)
+                                  .toList(),
+                              textStyle: DesktopChrome.control(),
+                            ),
+                          for (
+                            var i = bindings.length - aliases.length;
+                            i < bindings.length;
+                            i++
+                          )
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 4,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                KeyChordView(
+                                  chords: [chords[i]],
+                                  textStyle: DesktopChrome.control(),
+                                ),
+                                Text(
+                                  'Outside a terminal',
+                                  style: DesktopChrome.metadata(),
+                                ),
+                              ],
+                            ),
+                        ],
+                      );
                 final label = Text(
                   lesson.label,
                   style: DesktopChrome.control(),

@@ -1,0 +1,198 @@
+# Desktop tests that fail on Windows because they assume POSIX, one `<file>::<test name>` per line.
+# Written by `python tool/windows_test_baseline.py write` from a Windows desktop workflow run, then
+# reviewed: an entry belongs here only when its test exercises macOS or Linux behaviour. A failure
+# in a Windows branch is fixed, never recorded. Remove an entry once its test passes on Windows.
+# One-time initial run: 39111951009 (6e818410107c6ae9128eff14a3bccd095597b722).
+# Reviewed categories below; 26 neutral failures were fixed and excluded.
+
+# POSIX-LF-source-parser (2)
+# Source-contract test helpers expect LF-only delimiters; checkout on Windows has CRLF. community_hub_contract_test.dart:34 and swarm_screen_test.dart:63.
+test/community_hub_contract_test.dart::the limits and names are the backend's
+test/swarm_screen_test.dart::the store tab has a compact text label (native=true)
+
+# POSIX-font-fixture (88)
+# test/support/real_fonts.dart searches only /System/Library and /usr/share/fonts; print events explicitly report no sans font.
+test/api_connections_test.dart::(setUpAll)
+test/api_model_picker_test.dart::(setUpAll)
+test/app_select_field_review_test.dart::(setUpAll)
+test/button_hover_test.dart::(setUpAll)
+test/cloud_chat_pane_capture_test.dart::(setUpAll)
+test/coding_memory_view_test.dart::(setUpAll)
+test/command_picker_rendering_test.dart::(setUpAll)
+test/companion_home_test.dart::(setUpAll)
+test/daemon_review_render_test.dart::(setUpAll)
+test/desktop_guidance_layout_test.dart::(setUpAll)
+test/desktop_palette_layout_test.dart::(setUpAll)
+test/desktop_task_palette_test.dart::(setUpAll)
+test/desktop_workspace_tab_test.dart::(setUpAll)
+test/devices_screen_test.dart::(setUpAll)
+test/entry_surfaces_render_test.dart::(setUpAll)
+test/export_logs_dialog_test.dart::(setUpAll)
+test/grid_on_demand_test.dart::the models picker (setUpAll)
+test/group_a_identity_test.dart::(setUpAll)
+test/harness_comments_test.dart::(setUpAll)
+test/harness_customize_test.dart::(setUpAll)
+test/harness_picker_entry_test.dart::(setUpAll)
+test/icon_catalog_render_test.dart::(setUpAll)
+test/keyboard_practice_test.dart::practice stays readable at Size(1000.0, 800.0) and 1.0 text in Brightness.dark
+test/keyboard_practice_test.dart::practice stays readable at Size(1000.0, 800.0) and 1.0 text in Brightness.light
+test/keyboard_practice_test.dart::practice stays readable at Size(480.0, 420.0) and 1.7 text in Brightness.dark
+test/keyboard_practice_test.dart::practice stays readable at Size(480.0, 420.0) and 1.7 text in Brightness.light
+test/keyboard_practice_test.dart::quick start wraps beside a narrow workspace with enlarged text
+test/layout_palette_render_test.dart::(setUpAll)
+test/local_model_picker_test.dart::(setUpAll)
+test/login_fleet_map_test.dart::(setUpAll)
+test/machine_sharing_form_test.dart::(setUpAll)
+test/measurement_controls_test.dart::(setUpAll)
+test/memory_companion_recovery_test.dart::(setUpAll)
+test/models_panel_test.dart::(setUpAll)
+test/new_agent_choices_layout_test.dart::(setUpAll)
+test/notification_inbox_test.dart::(setUpAll)
+test/orchestrator_review_render_test.dart::(setUpAll)
+test/pane_focus_test.dart::(setUpAll)
+test/pane_machine_unknown_test.dart::(setUpAll)
+test/pane_menu_desktop_test.dart::(setUpAll)
+test/pane_model_status_test.dart::(setUpAll)
+test/pet_settings_test.dart::devices screen (setUpAll)
+test/resource_picker_test.dart::(setUpAll)
+test/resource_preview_actions_test.dart::(setUpAll)
+test/resting_model_picker_test.dart::(setUpAll)
+test/resting_models_panel_test.dart::(setUpAll)
+test/select_field_typing_test.dart::(setUpAll)
+test/session_work_dialog_test.dart::(setUpAll)
+test/settings_compact_test.dart::(setUpAll)
+test/settings_review_render_test.dart::(setUpAll)
+test/setup_privacy_flow_test.dart::(setUpAll)
+test/setup_review_render_test.dart::(setUpAll)
+test/share_harness_test.dart::(setUpAll)
+test/shared_agent_page_test.dart::(setUpAll)
+test/shared_harness_panel_test.dart::(setUpAll)
+test/shortcuts_browser_test.dart::lazy shortcuts keep keyboard paging visible at Size(1000.0, 700.0)/1.0/Brightness.dark
+test/shortcuts_browser_test.dart::lazy shortcuts keep keyboard paging visible at Size(1000.0, 700.0)/1.0/Brightness.light
+test/shortcuts_browser_test.dart::lazy shortcuts keep keyboard paging visible at Size(480.0, 420.0)/1.8/Brightness.dark
+test/shortcuts_browser_test.dart::lazy shortcuts keep keyboard paging visible at Size(480.0, 420.0)/1.8/Brightness.light
+test/sign_in_step_test.dart::(setUpAll)
+test/signout_recovery_test.dart::(setUpAll)
+test/status_line_test.dart::(setUpAll)
+test/store_demo_dialog_test.dart::(setUpAll)
+test/store_discover_test.dart::(setUpAll)
+test/store_experiments_test.dart::(setUpAll)
+test/store_harness_actions_test.dart::(setUpAll)
+test/store_page_test.dart::(setUpAll)
+test/store_search_test.dart::(setUpAll)
+test/swarm_rename_dialog_test.dart::(setUpAll)
+test/swarm_resize_test.dart::(setUpAll)
+test/swarm_search_preview_test.dart::(setUpAll)
+test/terminal_panel_header_test.dart::(setUpAll)
+test/terminal_panel_presentation_test.dart::(setUpAll)
+test/unavailable_harness_picker_test.dart::(setUpAll)
+test/usage_loading_test.dart::(setUpAll)
+test/usage_section_test.dart::(setUpAll)
+test/web_tab_switcher_test.dart::(setUpAll)
+test/welcome_entry_layout_test.dart::(setUpAll)
+test/welcome_wallpaper_shortcuts_test.dart::shortcut browser searches live bindings and practices the selected row
+test/welcome_wallpaper_shortcuts_test.dart::shortcut popup fits and closes with Escape
+test/welcome_wallpaper_shortcuts_test.dart::wallpaper gallery persists a choice and restores the blank default
+test/welcome_wallpaper_shortcuts_test.dart::wallpapers keep a centered welcome and the selected terminal type
+test/workspace_account_test.dart::(setUpAll)
+test/workspace_activity_test.dart::(setUpAll)
+test/workspace_expiry_screen_test.dart::(setUpAll)
+test/workspace_machine_prompt_test.dart::(setUpAll)
+test/workspace_pull_request_label_test.dart::(setUpAll)
+test/workspace_welcome_test.dart::(setUpAll)
+
+# POSIX-path-fixture (21)
+# Fixtures compare slash-only paths, POSIX HOME/XDG or /work and /home remote listings; local Git watch fakes key raw slash paths while production normalizes native paths.
+test/asset_paths_test.dart::every bundled asset is named by code, or is a licence beside one
+test/daemons/pair_rules_file_test.dart::a missing file is written once; an existing one is never touched
+test/keymap_store_test.dart::configuration path follows XDG and rejects a relative XDG root
+test/local_git_projects_test.dart::a changed worktree pointer follows the new metadata directory
+test/local_git_projects_test.dart::a delayed read serializes invalidation (dispose=false)
+test/local_git_projects_test.dart::a delayed read serializes invalidation (dispose=true)
+test/local_git_projects_test.dart::a watcher done refreshes stale metadata without retrying forever
+test/local_git_projects_test.dart::a watcher error refreshes stale metadata without retrying forever
+test/local_git_projects_test.dart::local Git metadata shares repository identity and watches worktree branches
+test/local_git_projects_test.dart::replacing a Git directory rebinds watches at the same path
+test/pet_settings_test.dart::a folder with pet.json previews under the pet’s own name
+test/pet_source_test.dart::a folder with pet.json: the sheet it names and the display name
+test/pet_source_test.dart::a pet.json file resolves like its folder
+test/pet_source_test.dart::without pet.json, exactly one spritesheet.(webp|png)
+test/terminal_link_opener_test.dart::hands the exact Unicode file URI to the OS without a shell
+test/terminal_link_opener_test.dart::opens a page the agent named, in its project folder
+test/terminal_link_opener_test.dart::resolves remote paths on their owner and opens only the local completed copy
+test/terminal_panel_links_test.dart::TargetPlatform.linux modifier-click opens media without terminal mouse input (variant: TargetPlatform.linux)
+test/terminal_panel_links_test.dart::TargetPlatform.linux remote preview shows progress then opens the downloaded file (variant: TargetPlatform.linux)
+test/terminal_panel_links_test.dart::TargetPlatform.macOS modifier-click opens media without terminal mouse input (variant: TargetPlatform.macOS)
+test/terminal_panel_links_test.dart::TargetPlatform.macOS remote preview shows progress then opens the downloaded file (variant: TargetPlatform.macOS)
+
+# POSIX-pubcache-fixture (2)
+# test helpers derive /.pub-cache from HOME; the Windows log reports Directory listing failed for that POSIX path.
+test/connection_review_render_test.dart::(setUpAll)
+test/desktop_welcome_composer_test.dart::(setUpAll)
+
+# POSIX-shell-or-installer-fixture (47)
+# These fixtures exercise POSIX setup/agent recipes, shell/tmux probes or Terminal/apt flows, rather than Windows terminal-host/PowerShell setup.
+test/environment_probe_lifecycle_test.dart::a process that starts after timeout is stopped without updating UI
+test/environment_probe_lifecycle_test.dart::an injected run-only check also has a bounded wait
+test/environment_probe_lifecycle_test.dart::an unreadable output pipe stops the owned check and offers retry
+test/environment_probe_lifecycle_test.dart::cli timeout is a failed check, and Retry can recover
+test/environment_probe_lifecycle_test.dart::inherited open pipes cannot hold a finished check forever
+test/environment_probe_lifecycle_test.dart::node timeout is a failed check, and Retry can recover
+test/environment_probe_lifecycle_test.dart::partial UTF-8 in tool output does not prevent a successful check
+test/environment_probe_lifecycle_test.dart::retrying a previous verification never reports ready before checking
+test/environment_probe_lifecycle_test.dart::shell timeout is a failed check, and Retry can recover
+test/environment_probe_lifecycle_test.dart::tmux timeout is a failed check, and Retry can recover
+test/environment_provisioner_test.dart::Terminal rechecks show recent output without loading the whole log
+test/environment_provisioner_test.dart::Wayland installs wl-clipboard in-app with passwordless sudo
+test/environment_provisioner_test.dart::Wayland wins when both Linux display variables exist
+test/environment_provisioner_test.dart::X11 with tmux ready still opens Terminal when xclip needs sudo
+test/environment_provisioner_test.dart::a Linux computer that runs tmux, ps and Harness is ready whatever else it lacks
+test/environment_provisioner_test.dart::a Terminal poll trusts live Linux probes when terminal.exit is absent
+test/environment_provisioner_test.dart::a Terminal recheck tolerates a partially written empty result
+test/environment_provisioner_test.dart::a Terminal recheck tolerates invalid UTF-8 in its log
+test/environment_provisioner_test.dart::a Terminal recheck tolerates invalid UTF-8 in its result
+test/environment_provisioner_test.dart::a completed host transaction that still misses clipboard fails without reopening Terminal
+test/environment_provisioner_test.dart::a computer with tmux is ready without Homebrew
+test/environment_provisioner_test.dart::a failed admin Terminal run surfaces its exit code and full log
+test/environment_provisioner_test.dart::a failed in-app tmux install fails the step with the installer as the manual command
+test/environment_provisioner_test.dart::a fully prepared machine passes a fresh read-only launch probe
+test/environment_provisioner_test.dart::a missing ps joins tmux in the one apt transaction
+test/environment_provisioner_test.dart::a running Linux Terminal setup is not opened a second time
+test/environment_provisioner_test.dart::an apt future-release error is reported as system clock skew
+test/environment_provisioner_test.dart::automatic setup installs Harness, then verifies
+test/environment_provisioner_test.dart::automatic setup obtains tmux in-app through the installer, never in Terminal
+test/environment_provisioner_test.dart::curl is added to the transaction only because Harness must be downloaded
+test/environment_provisioner_test.dart::debug desktop checks CLI 0.0.1-dev.7c3d6315c.startup-retry.dirty without replacing a local build
+test/environment_provisioner_test.dart::debug desktop checks CLI 0.2.48 without replacing a local build
+test/environment_provisioner_test.dart::explicit Retry clears the failed Terminal result and opens one new run
+test/environment_provisioner_test.dart::failed apt refresh does not retry with stale indexes
+test/environment_provisioner_test.dart::failed automatic clock sync stops with actionable guidance
+test/environment_provisioner_test.dart::failed background apt falls back to a visible Terminal
+test/environment_provisioner_test.dart::headless Linux does not require an OS clipboard helper
+test/environment_provisioner_test.dart::missing Linux base tools are installed before Harness
+test/environment_provisioner_test.dart::missing tmux and X11 clipboard share one Terminal transaction
+test/environment_provisioner_test.dart::missing tmux opens a real terminal before the CLI installer
+test/environment_provisioner_test.dart::non-apt Linux returns package-manager guidance
+test/environment_provisioner_test.dart::without tmux the plan is one in-app step, worded by whether Homebrew is here
+test/environment_setup_screen_test.dart::setup details and recovery text have readable contrast in dark
+test/environment_setup_screen_test.dart::setup details and recovery text have readable contrast in light
+test/harness_cli_runner_test.dart::remote-password status invokes cli.js as direct argv and reads its JSON result
+test/harness_cli_runner_test.dart::uses the explicit legacy launcher before PATH
+test/harness_cli_runner_test.dart::uses the managed Node runtime and CLI bundle without a shell
+
+# POSIX-unix-socket-fixture (3)
+# test/local_daemon_transport_test.dart creates Unix sockets; Windows uses an authenticated named pipe and never sends the credential over TCP.
+test/local_daemon_transport_test.dart::local credential goes with REST over the port, never down the socket
+test/local_daemon_transport_test.dart::local credential goes with the local WebSocket over the port
+test/local_daemon_transport_test.dart::local WebSocket falls back to the port when the socket is not there
+
+# POSIX-updater-or-appimage (8)
+# These tests exercise macOS updater keys/staging, or Linux AppImage Exec/chmod/install behavior; Windows updater is added later in C4.
+test/about_section_test.dart::names the app and version without claiming an untested update status
+test/desktop_updater_test.dart::Linux architecture packaging downloadAndStage stages the AppImage as-is and makes it executable
+test/desktop_updater_test.dart::Linux architecture packaging downloadAndStage verifies a large download off the UI isolate
+test/linux_app_image_test.dart::a path with spaces is quoted for the launcher
+test/linux_app_image_test.dart::an AppImage started from Downloads lands in the app list
+test/linux_app_image_test.dart::an entry for a copy still on disk is not taken over
+test/linux_app_image_test.dart::an entry whose AppImage is gone follows the one running
+test/linux_app_image_test.dart::an existing launcher for this copy gains the fork protocol

@@ -82,7 +82,9 @@ export interface StartupContract {
   /**
    * Before every run, ask the binary's own `--help` whether it takes `sharedServer.ownedFlag`, and pass it
    * first when it does: an older build lacks it. A probe that cannot answer ends the launch, saying
-   * `unverified`. It also gives the engine a POSIX shell to run in where the daemon has no login shell.
+   * `unverified`. It also gives the engine a POSIX shell to run in where the daemon has no login shell. Windows has
+   * none: there the daemon reads the help as it inspects the launch, and the flag goes in the argv
+   * (lib/windows/engineStart.ts).
    */
   ownedFlag?: { unverified: string }
   retry?: StartupRetry
