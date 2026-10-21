@@ -99,9 +99,11 @@ void main() {
       expect(find.text('Saved conversation'), findsOneWidget);
       expect(find.text('The verified total is 403.'), findsOneWidget);
       expect(find.byType(SessionTailView), findsOneWidget);
-      expect(connection.requests, [
-        ('session_tail', {'sessionId': 'saved-conversation'}),
-      ]);
+      expect(connection.requests, hasLength(1));
+      expect(connection.requests.single.$1, 'session_tail');
+      expect(connection.requests.single.$2, {
+        'sessionId': 'saved-conversation',
+      });
       expect(resumed, 0);
       await tester.tap(find.text('Resume'));
       expect(resumed, 1);

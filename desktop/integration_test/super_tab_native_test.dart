@@ -14,6 +14,7 @@ import 'package:harness/super_tabs/workspace.dart';
 import 'package:harness/widgets/pane_grid.dart';
 import 'package:harness/widgets/agent_drag.dart';
 import 'package:harness/widgets/terminal_panel.dart';
+import 'package:harness/ws/local_cli_discovery.dart';
 
 import '../test/super_tab_launch_test.dart'
     show SuperTabFixtureConnection, SuperTabLaunchFixture, tabId;
@@ -42,7 +43,17 @@ void main() {
       final f = SuperTabLaunchFixture();
       f.connection.nativeName = 'hi';
       f.connection.nativeSurface = true;
-      f.app.machineStates['m']!.terminalCapabilityAvailable = true;
+      f.app.machineStates['m']!
+        ..terminalCapabilityAvailable = true
+        // The fixture serves a local daemon's protocol. A local machine with
+        // no endpoint means offline to PaneGrid, even when its registry is set.
+        ..localEndpoint = LocalCliEndpoint(
+          computerId: 'fixture',
+          machineId: 'm',
+          wsUri: Uri.parse('ws://fixture.invalid'),
+          protocolVersion: 1,
+          terminalProtocolVersion: 3,
+        );
       await tester.runAsync(() async {
         final box = await f.box(engine: 'claude');
         expect(
@@ -273,8 +284,8 @@ void main() {
       await shot('add-machine');
       Navigator.of(tester.element(find.byType(AlertDialog))).pop();
       await tester.pumpAndSettle();
-      // An earlier app/daemon may already have cleaned up this member. Reopening
-      // must resume its exact saved conversation before preparing recording.
+      // Navigation preserves a stopped member. Only an explicit Resume may
+      // reopen its exact saved conversation before preparing recording.
       f.connection.native = {
         ...f.connection.native!,
         'status': 'stopped',
@@ -285,10 +296,20 @@ void main() {
       await tester.tap(
         find.byKey(ValueKey('super-member-${c.snapshot!.agents.single.id}')),
       );
+      for (var i = 0; i < 40 && find.text('Resume').evaluate().isEmpty; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(
+        f.connection.calls.where((call) => call.$1 == 'agent_resume'),
+        isEmpty,
+      );
+      expect(find.text('Resume'), findsOneWidget);
+      await tester.tap(find.text('Resume'));
       for (
         var i = 0;
         i < 120 &&
             (f.app.activeSwarm.panes.isEmpty ||
+                f.app.stateOf('m')!.agents.single.isStopped ||
                 f.app.activeSwarm.panes.single.session?.streamId == null);
         i++
       ) {

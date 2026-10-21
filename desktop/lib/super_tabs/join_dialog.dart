@@ -45,14 +45,15 @@ class _SwarmJoinHostState extends State<SwarmJoinHost> {
         _presenting ||
         swarmJoinInbox.pending.isEmpty ||
         app.status != AppStatus.authenticated ||
-        account == null) {
+        account?.id == null) {
       return;
     }
+    final accountId = account!.id!;
     final link = swarmJoinInbox.pending.first;
     bool current() =>
         mounted &&
         app.status == AppStatus.authenticated &&
-        app.currentUser?.id == account.id;
+        app.currentUser?.id == accountId;
     _presenting = true;
     try {
       await showAppDialog<void>(

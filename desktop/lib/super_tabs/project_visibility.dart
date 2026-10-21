@@ -43,9 +43,10 @@ class _ProjectVisibilityState extends State<ProjectVisibility> {
       childFocusNode: _focus,
       consumeOutsideTap: true,
       alignmentOffset: Offset(-width, grid.AppControl.menuGap),
-      style: grid.AppMenu.style(minWidth: width, maxWidth: width).copyWith(
-        alignment: AlignmentDirectional.bottomEnd,
-      ),
+      style: grid.AppMenu.style(
+        minWidth: width,
+        maxWidth: width,
+      ).copyWith(alignment: AlignmentDirectional.bottomEnd),
       menuChildren: [
         for (final (id, title, detail) in const [
           ('public', 'Public', 'Everyone in this swarm'),
@@ -60,6 +61,7 @@ class _ProjectVisibilityState extends State<ProjectVisibility> {
                 detail: detail,
                 icon: id == 'private' ? AppIcons.lock : AppIcons.users,
                 selected: id == widget.value,
+                expandLabel: true,
                 onPressed: () {
                   _menu.close();
                   widget.onChanged?.call(id);

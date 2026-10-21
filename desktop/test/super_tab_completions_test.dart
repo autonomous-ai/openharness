@@ -143,6 +143,18 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
     await tester.pump(const Duration(milliseconds: 250));
+    expect(c.draft('lead'), '#off');
+    expect(server.posts, isEmpty);
+    // The native text-input client delivers the newline separately from its
+    // key event. The completion handler must leave that edit untouched.
+    await tester.showKeyboard(composer);
+    tester.testTextInput.updateEditingValue(
+      const TextEditingValue(
+        text: '#off\n',
+        selection: TextSelection.collapsed(offset: 5),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 250));
     expect(c.draft('lead'), '#off\n');
     expect(server.posts, isEmpty);
     expect(picker, findsNothing);

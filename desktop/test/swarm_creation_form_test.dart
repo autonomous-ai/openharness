@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -23,7 +24,9 @@ final _start = find.byKey(const ValueKey('new-harness-field-start'));
 final _composer = find.byKey(const ValueKey('new-harness-composer'));
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   final capture = Platform.environment['HARNESS_SWARM_FORM_CAPTURE'];
+  final previousShadows = debugDisableShadows;
   setUpAll(() async {
     if (capture == null || !Platform.isMacOS) return;
     final bytes = ByteData.sublistView(
@@ -39,6 +42,7 @@ void main() {
         ))
         .load();
   });
+  tearDownAll(() => debugDisableShadows = previousShadows);
 
   Future<(NewHarnessController, GlobalKey)> mount(
     WidgetTester tester, {
@@ -52,6 +56,10 @@ void main() {
     final oldBrightness = grid.AppTheme.brightness.value;
     grid.AppTheme.brightness.value = brightness;
     addTearDown(() => grid.AppTheme.brightness.value = oldBrightness);
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    if (capture != null) debugDisableShadows = false;
+    addTearDown(() => debugDisableShadows = previousShadows);
     tester.view.physicalSize = Size(width, 600);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -80,6 +88,7 @@ void main() {
       RepaintBoundary(
         key: boundary,
         child: MaterialApp(
+          debugShowCheckedModeBanner: false,
           theme: grid.buildAppTheme(brightness: brightness),
           builder: (context, child) => MediaQuery(
             data: MediaQuery.of(context)
@@ -102,12 +111,25 @@ void main() {
     return (box, boundary);
   }
 
+  Future<void> unmount(WidgetTester tester) async {
+    await tester.pumpWidget(const SizedBox());
+    debugDefaultTargetPlatformOverride = null;
+    debugDisableShadows = previousShadows;
+  }
+
   Future<void> shot(
     WidgetTester tester,
     GlobalKey boundary,
     String name,
   ) async {
     if (capture == null) return;
+    await tester.runAsync(
+      () => precacheImage(
+        const AssetImage('assets/engine-icons/codex.png'),
+        tester.element(find.byType(NewHarnessForm)),
+      ),
+    );
+    await tester.pump();
     await tester.runAsync(() async {
       final render =
           boundary.currentContext!.findRenderObject()! as RenderRepaintBoundary;
@@ -152,6 +174,11 @@ void main() {
           findsOneWidget,
         );
         expect(find.byIcon(AppIcons.check), findsOneWidget);
+        final publicRow = find.widgetWithText(AppMenuItem, 'Public');
+        expect(
+          tester.getRect(find.byIcon(AppIcons.check)).right,
+          greaterThan(tester.getRect(publicRow).right - 24),
+        );
         await shot(
           tester,
           boundary,
@@ -163,7 +190,7 @@ void main() {
         expect(find.byType(AppMenuItem), findsNothing);
         expect(find.text('Private'), findsOneWidget);
         expect(tester.takeException(), isNull);
-        await tester.pumpWidget(const SizedBox());
+        await unmount(tester);
       },
     );
   }
@@ -188,7 +215,7 @@ void main() {
       await tester.tap(find.text('Private'));
       await tester.pumpAndSettle();
       expect(box.integration!.projectVisibility, 'private');
-      await tester.pumpWidget(const SizedBox());
+      await unmount(tester);
     },
   );
 
@@ -214,7 +241,7 @@ void main() {
         await tester.tap(find.text('Public'));
         await tester.pumpAndSettle();
         expect(find.byType(AppMenuItem), findsNothing);
-        await tester.pumpWidget(const SizedBox());
+        await unmount(tester);
       },
     );
   }
@@ -241,7 +268,7 @@ void main() {
         await tester.tap(find.text('Public'));
         await tester.pumpAndSettle();
         expect(find.byType(AppMenuItem), findsNWidgets(2));
-        await tester.pumpWidget(const SizedBox());
+        await unmount(tester);
       },
     );
   }
