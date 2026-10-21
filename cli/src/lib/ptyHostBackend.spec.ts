@@ -99,6 +99,7 @@ describe('PtyHostBackend prepare', () => {
     expect(await backend.prepare({ ownedPanes: new Map() }))
       .toEqual({ state: 'unavailable', code: 'PTY_HOST_UNAVAILABLE', reason: 'harness-pty is not installed' })
     expect(await backend.inventory()).toEqual({ state: 'unavailable', reason: 'pty host is unavailable' })
+    expect(backend.attached).toBe(false)
     expect(await backend.create({ command: ['/bin/sh'] })).toMatchObject({ state: 'failed', dispatch: 'not_started' })
   })
 
@@ -114,8 +115,12 @@ describe('PtyHostBackend create', () => {
   it('create passes the seed to a host with the seed feature', async () => {
     const { backend, calls } = await ready({ create: { state: 'ok', value: { pane: '%4' } } }, { features: ['seed'] })
     expect(backend.canSeed).toBe(true)
+    // Attached to its host, until the connection is let go.
+    expect(backend.attached).toBe(true)
     await backend.create({ command: ['claude'], seed: 'a\r\nb' })
     expect(calls[0]).toMatchObject({ op: 'create', seed: 'a\r\nb' })
+    backend.dispose()
+    expect(backend.attached).toBe(false)
   })
 
   it('create refuses a seed for a host without it', async () => {

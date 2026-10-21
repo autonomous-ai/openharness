@@ -13,8 +13,14 @@
  * backends (`TerminalBackendCoordinator.replaceBackends`). A drain host proven to have exited (the process table) is
  * gone, its panes with it: its inventory is then empty for certain, so the reconciler counts its rows' runtimes
  * missing, and the backend leaves once no row names its instance. Then the runtime's host binaries no running host
- * uses are deleted (launch.ts `removeUnusedPtyVersions`, which keeps every folder newer than `current-pty`).
+ * uses are deleted (launch.ts `removeUnusedPtyVersions`, which keeps every folder newer than `current-pty`). No drain
+ * host is shut down while the create backend has no host of its own (`createAvailable`): it may be the only one left.
+ *
+ * While a host is on probation (`ptyHostOnProbation`), the core is ready only once the create backend is attached to it
+ * (`untilHostAttached`): the master's probation judges the core's ready, and so the host's.
  */
+import { existsSync } from 'node:fs'
+import path from 'node:path'
 import type { TerminalBackend } from '../terminalBackend.js'
 import { terminalInstanceId } from '../terminalRuntime.js'
 import type { TerminalRuntimeRef } from '../terminalTypes.js'
@@ -108,6 +114,9 @@ export interface PtyHostDrainDeps {
   inUse: (instanceId: string) => boolean
   /** After a drained host has gone and its backend left: `removeUnusedPtyVersions`. */
   cleanup?: () => void
+  /** Whether the create backend is attached to its host. While it is not, no drain host is shut down: new panes have
+   *  nowhere else to go, and a probation that rolls the target back needs a host to come back to. Left out, always. */
+  createAvailable?: () => boolean
 }
 
 /** The drain, one `step` after each reconcile pass (main.ts `onReconciled`). */
@@ -150,6 +159,10 @@ export class PtyHostDrain {
       this.empty.delete(backend)
       return
     }
+    if (state === 'empty' && this.deps.createAvailable && !this.deps.createAvailable()) {
+      this.empty.delete(backend)
+      return
+    }
     const passes = (this.empty.get(backend) ?? 0) + 1
     this.empty.set(backend, passes)
     if (passes < EMPTY_PASSES) return
@@ -184,4 +197,23 @@ export class PtyHostDrain {
   dispose(): void {
     for (const backend of this.draining) backend.dispose()
   }
+}
+
+/** A host is on probation: `<runtime>/pty/pty-pending.json` (lib/windows/ptyInstall.ts `PTY_PENDING`) exists. */
+export function ptyHostOnProbation(runtimeDir: string): boolean {
+  return existsSync(path.join(runtimeDir, 'pty', 'pty-pending.json'))
+}
+
+/**
+ * Wait until [attached] (the create backend reached the target's host, [instance]; null when there is no target), polled
+ * every [pollMs]: how a core whose host is on probation holds back its ready (core/main.ts). The master judges the host
+ * by that ready, and a version that says it runs proves nothing about serving. One that never attaches keeps the core
+ * not ready for good: the master's ready timeout ends it, and its probation rolls the host back. Said once, if it waits.
+ */
+export async function untilHostAttached(attached: () => boolean, instance: string | null, log: (line: string) => void, pollMs = 250): Promise<void> {
+  if (attached()) return
+  const host = instance ?? 'no target'
+  log(`[terminal] ptyhost: the host on probation (${host}) is not attached — not ready until it is; the master rolls it back if it never is`)
+  while (!attached()) await new Promise((resolve) => setTimeout(resolve, pollMs))
+  log(`[terminal] ptyhost: the host on probation (${host}) is attached`)
 }

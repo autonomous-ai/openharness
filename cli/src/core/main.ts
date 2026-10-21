@@ -73,7 +73,7 @@ import { findLiveSession, findResumedTranscript } from '../lib/sessionRepair.js'
 import { processSessionOf } from '../engines/sessionStores.js'
 import { createHandoffDependencies } from './handoffDependencies.js'
 import { TmuxBackend } from '../lib/tmuxBackend.js'
-import { isDrainBackend, ptyHostBackends, PtyHostDrain, rowInstancesOf, rowsOnInstance, withoutCreateHost } from '../lib/ptyHost/drain.js'
+import { isDrainBackend, ptyHostBackends, ptyHostOnProbation, PtyHostDrain, rowInstancesOf, rowsOnInstance, untilHostAttached, withoutCreateHost } from '../lib/ptyHost/drain.js'
 import { removeUnusedPtyVersions, targetHost } from '../lib/ptyHost/launch.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from '../lib/hostTheme.js'
 import { restoreAgents, type RestoreAgentsDeps, type RestoreSummary } from '../lib/restoreAgents.js'
@@ -637,6 +637,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       coordinator: terminals,
       inUse: (instanceId) => rowsOnInstance(registry.list(), instanceId),
       cleanup: () => { removeUnusedPtyVersions(env.HARNESS_PTY_DIR) },
+      // An old host is not shut down while new panes have no host to go to: it may be the only one that serves.
+      createAvailable: () => createBackend === ptyHosts.create && ptyHosts.create.attached,
     })
     : null
   const sqliteWarning = sqlitePreflightMessage()
@@ -3094,6 +3096,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // answered now, in order, by the handlers meant to answer them (see BackendSocket.openRequests).
   // Only the end-to-end harness sets this: a start-up that hangs after binding, for the master's deadline.
   if (harnessd.HARNESSD_TEST_HOLD_READY === '1') await new Promise<never>(() => {})
+  // A terminal host on probation is judged by this ready: a host whose version answers may still fail to serve (its
+  // conpty.dll, its endpoint), and kept, every new pane would fail on it. Not ready until the create backend is attached
+  // to the target's host; never, if it cannot be, and the master's ready timeout rolls the host back (lib/ptyHost/drain.ts).
+  if (ptyHosts && coreLink.supervised && ptyHostOnProbation(env.ADAPTER_RUNTIME_DIR)) {
+    const create = ptyHosts.create
+    await untilHostAttached(() => ptyTarget !== null && createBackend === create && create.attached, ptyTarget?.instance ?? null, (line) => console.log(line))
+  }
   backend.openRequests()
   daemonBoot.openRequests = null
   coreLink.ready()

@@ -571,6 +571,12 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     return { sessionEnv: true }
   }
 
+  /** Whether a host is attached now: false before `prepare` reached one, while a lost connection is reconnecting, and
+   *  once disposed. With a target, the create backend attaches to the target's host alone. */
+  get attached(): boolean {
+    return this.client !== null && !this.disposed
+  }
+
   /** Whether the host attached now lists `seed`; read live, as the client is replaced on reconnect. False when unattached. */
   get canSeed(): boolean {
     return this.client?.features.includes(SEED_FEATURE) ?? false

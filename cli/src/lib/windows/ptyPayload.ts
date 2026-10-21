@@ -1,13 +1,18 @@
 /**
  * Delivery of a promoted PTY payload (six files in one zip): decide whether one is wanted, download and
- * verify it, unpack it beside the live install and prove it runs. Nothing here calls a Windows API, so it
- * is tested on every OS; only the default unzip tool differs by platform.
+ * verify it, unpack it beside the live install and prove it runs: each binary says its version, and the host serves
+ * one pane (`serveCanary`). Nothing here calls a Windows API, so it is tested on every OS; only the default unzip tool
+ * and the canary pane's command differ by platform.
  */
-import { execFile } from 'child_process'
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import { execFile, spawn, type ChildProcess } from 'child_process'
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
 import { join } from 'path'
-import { VERSION_COMMAND } from '../ptyHost/launch.js'
-import { PTY_PROTOCOL, SUPPORTED_PTY_PROTOCOLS } from '../ptyHost/protocol.js'
+import { PtyHostClient } from '../ptyHost/client.js'
+import { hostInstanceName } from '../ptyHost/instance.js'
+import { VERSION_COMMAND, readInstanceDiscovery } from '../ptyHost/launch.js'
+import { PTY_PROTOCOL, SHUTDOWN_PROTOCOL, SUPPORTED_PTY_PROTOCOLS } from '../ptyHost/protocol.js'
+import { scrubTerminalContext } from '../terminalEnvironment.js'
 import {
   DigestMismatchError, MANIFEST_LIMITS, downloadVerified, fetchWithin, isLocalDevBuild, semverGt,
   type FileRef, type TransferLimits,
@@ -20,6 +25,15 @@ export const PTY_PAYLOAD_FILES: readonly string[] = [
 
 /** Each canary run must answer within this; a hung binary must not hold the updater. */
 const CANARY_TIMEOUT_MS = 5_000
+/**
+ * The whole serve canary (`serveCanary`): its start and discovery file, the hello, one pane's create and exit, and the
+ * shutdown. Half the updater's 30 s heartbeat timeout (harnessd/services.ts), though the canary is asynchronous and the
+ * heartbeat goes on beside it; with the two version canaries (5 s each) a payload is proven in at most 25 s.
+ */
+export const SERVE_CANARY_TIMEOUT_MS = 15_000
+/** What a killed canary host gets to exit in before its temporary home is removed: a running program's folder cannot be
+ *  removed on Windows. On top of `SERVE_CANARY_TIMEOUT_MS`. */
+const SERVE_CANARY_CLEANUP_MS = 3_000
 
 export interface PtyEntry { version: string; url: string; sha256: string; size: number }
 
@@ -76,11 +90,27 @@ export class PtyPayloadRefused extends Error {
   constructor(readonly reason: string) { super(`pty payload refused: ${reason}`) }
 }
 
+/**
+ * A payload downloaded and verified that could not be unpacked (a tool that failed, a full disk, a scan holding a
+ * file): transient, as a network failure is, but its bytes are good. The poller keeps [zip] and hands it to the next
+ * check's prepare, which unpacks it again rather than download it again, as the CLI's updater keeps its `verified`.
+ */
+export class PtyPayloadUnpackFailed extends Error {
+  readonly reason: string
+  constructor(readonly zip: Buffer, cause: unknown) {
+    const reason = cause instanceof Error ? cause.message : String(cause)
+    super(`pty payload not unpacked: ${reason}`)
+    this.reason = reason
+  }
+}
+
 export interface PreparePtyDeps {
   download: (ref: FileRef) => Promise<Buffer>
   unzip: (zip: Buffer, dest: string) => Promise<void>
   /** Run `<binary> version` and return its one parsed JSON line. */
   probe: (binary: string) => Promise<unknown>
+  /** Prove the staged host serves (`serveCanary`); throws why not. */
+  serve: (binary: string, host: { protocol: number; version: string }) => Promise<void>
 }
 
 /** `tar.exe` is the bsdtar Windows ships (install.ps1's Expand-HarnessZip falls back to it too); `unzip`
@@ -114,7 +144,101 @@ export function probeVersionLine(binary: string): Promise<unknown> {
   })
 }
 
-const DEFAULT_DEPS: PreparePtyDeps = { download: (ref) => downloadVerified(ref), unzip: unzipWithTool, probe: probeVersionLine }
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+const reasonOf = (error: unknown): string => (error instanceof Error ? error.message : String(error))
+
+/** The canary pane's command: one that exits at once, with 0. */
+const CANARY_COMMAND = process.platform === 'win32' ? ['cmd.exe', '/d', '/c', 'exit 0'] : ['/bin/sh', '-c', 'exit 0']
+
+/**
+ * Prove a staged host serves, which `harness-pty version` does not: that never loads conpty.dll, never binds an
+ * endpoint and never starts a pane. `<binary> serve --home <a fresh temporary home> --no-reexec` (no copy outside a job,
+ * so the process started is the host), hidden; its discovery file; the hello; one pane running [command] (a shell that
+ * exits 0) and its exit; `shutdown`, and the process gone. A host of a protocol above this CLI's (a paired one) cannot
+ * be spoken to by any client here: for it the canary ends at the discovery file. Within [timeoutMs]; on every path the
+ * host is killed if it still runs and the temporary home is removed. Throws why it did not pass.
+ */
+export async function serveCanary(binary: string, host: { protocol: number; version: string }, options: {
+  timeoutMs?: number
+  /** Where the temporary home is made: the OS's temporary folder (`/tmp` off Windows) unless a test names one. */
+  tmpRoot?: string
+  command?: string[]
+} = {}): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? SERVE_CANARY_TIMEOUT_MS
+  // Off Windows (the tests) the host's endpoint is a Unix socket in the home, whose path must fit in about 100 bytes: a
+  // macOS temporary folder alone takes half of that.
+  const home = mkdtempSync(join(options.tmpRoot ?? (process.platform === 'win32' ? tmpdir() : '/tmp'), 'harness-pty-canary-'))
+  const instance = hostInstanceName(host.protocol, host.version)
+  let child: ChildProcess | null = null
+  let client: PtyHostClient | null = null
+  let ended: string | null = null
+  let done = false
+  const work = async (): Promise<void> => {
+    const started = spawn(binary, ['serve', '--home', home, '--no-reexec'], {
+      cwd: home, windowsHide: true, stdio: 'ignore', env: scrubTerminalContext({ ...process.env }),
+    })
+    child = started
+    started.once('error', (error) => { ended ??= `could not start (${error.message})` })
+    started.once('exit', (code, signal) => { ended ??= `exited with ${code === null ? `signal ${signal}` : `code ${code}`}` })
+    let discovery = readInstanceDiscovery(home, instance)
+    while (!discovery) {
+      if (ended) throw new Error(`it ${ended} before it published its discovery file`)
+      await sleep(25)
+      if (done) return
+      discovery = readInstanceDiscovery(home, instance)
+    }
+    if (!SUPPORTED_PTY_PROTOCOLS.includes(host.protocol)) return
+    const connected = await PtyHostClient.connect(discovery)
+    if (!(connected instanceof PtyHostClient)) throw new Error(connected ? `its hello was refused (${connected.incompatible})` : 'nothing answers at the endpoint it published')
+    client = connected
+    const exits = new Map<string, number | null>()
+    let wake: (() => void) | null = null
+    connected.onEvent((event) => {
+      if (event.event !== 'exit') return
+      exits.set(event.pane, event.status)
+      wake?.()
+    })
+    const created = await connected.call({ op: 'create', command: options.command ?? CANARY_COMMAND, cwd: home, cols: 80, rows: 24, owner: 'harness-pty-canary', hold: false })
+    if (created.state !== 'ok') throw new Error(`its create failed (${created.state === 'failed' ? `${created.code}: ${created.reason}` : created.reason})`)
+    const pane = created.value.pane
+    while (!exits.has(pane)) {
+      await new Promise<void>((resolve) => { wake = resolve; setTimeout(resolve, 100) })
+      if (done) return
+    }
+    const status = exits.get(pane)!
+    if (status !== null && status !== 0) throw new Error(`its pane exited with ${status}`)
+    // A host from before `shutdown` is ended by the cleanup, as the drain ends one.
+    if (connected.protocol < SHUTDOWN_PROTOCOL) return
+    const down = await connected.call({ op: 'shutdown' })
+    if (down.state !== 'ok') throw new Error(`its shutdown failed (${down.state === 'failed' ? `${down.code}: ${down.reason}` : down.reason})`)
+    while (!ended) {
+      await sleep(25)
+      if (done) return
+    }
+  }
+  let timer: NodeJS.Timeout | undefined
+  try {
+    await Promise.race([
+      work(),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer within ${timeoutMs} ms`)), timeoutMs) }),
+    ])
+  } finally {
+    done = true
+    clearTimeout(timer)
+    ;(client as PtyHostClient | null)?.close()
+    const running = child as ChildProcess | null
+    if (running && running.exitCode === null && running.signalCode === null) {
+      const gone = new Promise<void>((resolve) => { running.once('exit', () => resolve()); running.once('error', () => resolve()) })
+      try { running.kill('SIGKILL') } catch { /* gone meanwhile */ }
+      await Promise.race([gone, sleep(SERVE_CANARY_CLEANUP_MS)])
+    }
+    try { rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }) } catch { /* the OS's temporary folder keeps it */ }
+  }
+}
+
+const DEFAULT_DEPS: PreparePtyDeps = {
+  download: (ref) => downloadVerified(ref), unzip: unzipWithTool, probe: probeVersionLine, serve: (binary, host) => serveCanary(binary, host),
+}
 
 /** A probe that never answers must not stall the updater, whatever the injected probe does. */
 async function canary(probe: PreparePtyDeps['probe'], binary: string): Promise<unknown> {
@@ -131,20 +255,46 @@ async function canary(probe: PreparePtyDeps['probe'], binary: string): Promise<u
   }
 }
 
-/** Download, verify, unpack and canary a payload. On any failure the staging folder is removed. */
-export async function preparePtyPayload(entry: PtyEntry, runtimeDir: string, deps: Partial<PreparePtyDeps> = {}): Promise<PreparedPty> {
+/** [serve], bounded as `canary` bounds a probe (`serveCanary` bounds itself and cleans up; this is for any other), and
+ *  its failure a refusal. */
+async function serves(serve: PreparePtyDeps['serve'], binary: string, host: { protocol: number; version: string }): Promise<void> {
+  let timer: NodeJS.Timeout | undefined
+  const bound = SERVE_CANARY_TIMEOUT_MS + SERVE_CANARY_CLEANUP_MS
+  try {
+    await Promise.race([
+      serve(binary, host),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer within ${bound} ms`)), bound) }),
+    ])
+  } catch (e) {
+    throw new PtyPayloadRefused(`harness-pty serve failed: ${reasonOf(e)}`)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Download, verify, unpack and canary a payload; [verified]: its bytes from an earlier check, verified then, which are
+ *  unpacked without a download. A failure to unpack them is `PtyPayloadUnpackFailed`, which carries them. On any
+ *  failure the staging folder is removed. */
+export async function preparePtyPayload(entry: PtyEntry, runtimeDir: string, deps: Partial<PreparePtyDeps> = {}, verified?: Buffer): Promise<PreparedPty> {
   const d = { ...DEFAULT_DEPS, ...deps }
   const staging = join(runtimeDir, 'pty', `.staging-${process.pid}-${Date.now()}`)
   try {
     let zip: Buffer
-    try {
-      zip = await d.download({ url: entry.url, sha256: entry.sha256, size: entry.size })
-    } catch (e) {
-      if (e instanceof DigestMismatchError) throw new PtyPayloadRefused(`digest mismatch: ${e.message}`)
-      throw e
+    if (verified) zip = verified
+    else {
+      try {
+        zip = await d.download({ url: entry.url, sha256: entry.sha256, size: entry.size })
+      } catch (e) {
+        if (e instanceof DigestMismatchError) throw new PtyPayloadRefused(`digest mismatch: ${e.message}`)
+        throw e
+      }
     }
-    mkdirSync(staging, { recursive: true })
-    await d.unzip(zip, staging)
+    try {
+      mkdirSync(staging, { recursive: true })
+      await d.unzip(zip, staging)
+    } catch (e) {
+      throw new PtyPayloadUnpackFailed(zip, e)
+    }
     const found = readdirSync(staging).sort()
     const want = [...PTY_PAYLOAD_FILES].sort()
     if (found.length !== want.length || found.some((f, i) => f !== want[i])) {
@@ -166,6 +316,9 @@ export async function preparePtyPayload(entry: PtyEntry, runtimeDir: string, dep
     const serial = await canary(d.probe, join(staging, 'harness-serial.exe'))
     const sv = (serial as { version?: unknown } | null)?.version
     if (sv !== entry.version) throw new PtyPayloadRefused(`harness-serial reports version ${String(sv)}, expected ${entry.version}`)
+    // A version is no proof the host serves: one whose conpty.dll does not load, or that cannot bind or start a pane,
+    // would be kept by a probation that judges the core, and every new pane would fail on it.
+    await serves(d.serve, join(staging, 'harness-pty.exe'), { protocol: h.protocol, version: entry.version })
     return { version: entry.version, staging, protocol: h.protocol, features: h.features as string[], paired }
   } catch (e) {
     removeFolder(staging)

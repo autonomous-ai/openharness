@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -24,7 +24,7 @@ vi.mock('../processTable.js', async (importOriginal) => {
 })
 
 const { PtyHostBackend } = await import('../ptyHostBackend.js')
-const { EMPTY_PASSES, isDrainBackend, ptyHostBackends, PtyHostDrain, rowInstancesOf, rowsOnInstance, withoutCreateHost } = await import('./drain.js')
+const { EMPTY_PASSES, isDrainBackend, ptyHostBackends, ptyHostOnProbation, PtyHostDrain, rowInstancesOf, rowsOnInstance, untilHostAttached, withoutCreateHost } = await import('./drain.js')
 const { listDiscoveries, readInstanceDiscovery, removeUnusedPtyVersions, targetHost } = await import('./launch.js')
 const { setProcessTableSource } = await import('../processTable.js')
 
@@ -520,7 +520,7 @@ describe.runIf(PTY_PROTOCOL >= 2)('a drain backend', () => {
 })
 
 /** Drain backends stubbed by state, and a drain over them. */
-function drainFixture(options: { oldPanes?: unknown[]; inUse?: () => boolean } = {}) {
+function drainFixture(options: { oldPanes?: unknown[]; inUse?: () => boolean; createAvailable?: () => boolean } = {}) {
   type Stub = { instanceId: string; draining: true; mayShutDown: boolean; hostGone: string | null; shutdownCalled: boolean; disposed: boolean; panes: unknown[]; refuse: boolean; unknown: boolean
     drainState(): Promise<string>; shutdownHost(): Promise<string>; dispose(): void }
   const stub: Stub = {
@@ -552,9 +552,44 @@ function drainFixture(options: { oldPanes?: unknown[]; inUse?: () => boolean } =
     coordinator: { replaceBackends: (list) => { replaced.push([...list]) } },
     inUse: options.inUse ?? (() => false),
     cleanup: cleaned,
+    ...(options.createAvailable ? { createAvailable: options.createAvailable } : {}),
   })
   return { drain: [stub], drainer, step: () => drainer.step(), backends, create, replaced, cleaned }
 }
+
+describe('a host on probation', () => {
+  it('is one with a pty-pending.json', () => {
+    const runtime = mkdtempSync(path.join(tmpdir(), 'probation-'))
+    try {
+      expect(ptyHostOnProbation(runtime)).toBe(false)
+      mkdirSync(path.join(runtime, 'pty'))
+      writeFileSync(path.join(runtime, 'pty', 'pty-pending.json'), '{}')
+      expect(ptyHostOnProbation(runtime)).toBe(true)
+    } finally { rmSync(runtime, { recursive: true, force: true }) }
+  })
+
+  it('makes the core wait to be ready until the create backend is attached to it, said once, and forever when it never is', async () => {
+    vi.useFakeTimers()
+    try {
+      const lines: string[] = []
+      let attached = false
+      let ready = false
+      void untilHostAttached(() => attached, 'p2-0.11.0', (line) => lines.push(line)).then(() => { ready = true })
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(ready).toBe(false)
+      expect(lines).toEqual(['[terminal] ptyhost: the host on probation (p2-0.11.0) is not attached — not ready until it is; the master rolls it back if it never is'])
+      attached = true
+      await vi.advanceTimersByTimeAsync(250)
+      expect(ready).toBe(true)
+      expect(lines).toHaveLength(2)
+      expect(lines[1]).toBe('[terminal] ptyhost: the host on probation (p2-0.11.0) is attached')
+      // Attached from the start: ready at once, nothing said.
+      const quietLines: string[] = []
+      await untilHostAttached(() => true, null, (line) => quietLines.push(line))
+      expect(quietLines).toEqual([])
+    } finally { vi.useRealTimers() }
+  })
+})
 
 describe('PtyHostDrain', () => {
   it('shuts a drained host down after two empty passes', async () => {
@@ -606,6 +641,20 @@ describe('PtyHostDrain', () => {
     rows = false
     await step()
     expect([drain[0].shutdownCalled, backends.length, drain[0].hostGone]).toEqual([false, 1, null])
+  })
+
+  it('never shuts an old host down while the create backend is unavailable: it may be the only host that serves', async () => {
+    quiet()
+    let available = false
+    const { drain, step, backends } = drainFixture({ createAvailable: () => available })
+    for (let pass = 0; pass < EMPTY_PASSES + 2; pass++) await step()
+    expect([drain[0].shutdownCalled, backends.length]).toEqual([false, 2])
+    // Counted afresh once it is back: two empty passes with a create backend to go to.
+    available = true
+    await step()
+    expect(drain[0].shutdownCalled).toBe(false)
+    await step()
+    expect(drain[0].shutdownCalled).toBe(true)
   })
 
   it('counts empty passes in a row: a pass with a pane, or one that could not ask, starts again', async () => {

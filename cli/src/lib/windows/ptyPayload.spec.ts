@@ -1,12 +1,13 @@
 import { execFileSync } from 'child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PTY_PROTOCOL } from '../ptyHost/protocol.js'
 import { DigestMismatchError } from '../selfUpdate.js'
 import {
-  PTY_PAYLOAD_FILES, PtyPayloadRefused, fetchPtyEntry, preparePtyPayload, ptyManifestUrl, ptyPlatformKey, probeVersionLine, ptyUpdateWanted, sweepStagingFolders, type PtyEntry,
+  PTY_PAYLOAD_FILES, PtyPayloadRefused, PtyPayloadUnpackFailed, SERVE_CANARY_TIMEOUT_MS, fetchPtyEntry, preparePtyPayload, ptyManifestUrl, ptyPlatformKey,
+  probeVersionLine, ptyUpdateWanted, serveCanary, sweepStagingFolders, type PtyEntry,
 } from './ptyPayload.js'
 
 let tmp: string
@@ -33,7 +34,7 @@ const goodProbe = (host: object = {}, serial: object = {}) => async (bin: string
     ? { version: '0.11.0', protocol: 2, features: ['seed'], ...host }
     : { version: '0.11.0', ...serial }
 const run = (deps: Parameters<typeof preparePtyPayload>[2], files: readonly string[] = PTY_PAYLOAD_FILES) =>
-  preparePtyPayload(entry, tmp + '/rt', { download: async () => zipOf(files), probe: goodProbe(), ...deps })
+  preparePtyPayload(entry, tmp + '/rt', { download: async () => zipOf(files), probe: goodProbe(), serve: async () => {}, ...deps })
 const leftovers = () => (existsSync(join(tmp, 'rt', 'pty')) ? readdirSync(join(tmp, 'rt', 'pty')) : [])
 
 describe('ptyManifestUrl', () => {
@@ -129,16 +130,102 @@ describe('preparePtyPayload failure kinds', () => {
     expect(err).not.toBeInstanceOf(PtyPayloadRefused)
     expect(leftovers()).toEqual([])
   })
-  it('an unzip that fails to spawn is rethrown as it is, leaving no staging', async () => {
-    const boom = new Error('spawn unzip ENOENT')
-    const err = await run({ unzip: async () => { throw boom } }).catch((e) => e)
-    expect(err).toBe(boom)
+  it('an unzip that fails is no refusal: it carries the verified bytes, which a later prepare unpacks without a download', async () => {
+    const zip = zipOf(PTY_PAYLOAD_FILES)
+    let downloads = 0
+    const err = await run({ download: async () => { downloads++; return zip }, unzip: async () => { throw new Error('spawn unzip ENOENT') } }).catch((e) => e)
+    expect(err).toBeInstanceOf(PtyPayloadUnpackFailed)
+    expect(err).not.toBeInstanceOf(PtyPayloadRefused)
+    expect(err.reason).toBe('spawn unzip ENOENT')
+    expect(err.zip).toBe(zip)
     expect(leftovers()).toEqual([])
+    const again = await preparePtyPayload(entry, tmp + '/rt', { download: async () => { downloads++; return zip }, probe: goodProbe(), serve: async () => {} }, err.zip)
+    expect(downloads).toBe(1)
+    expect(readdirSync(again.staging).sort()).toEqual([...PTY_PAYLOAD_FILES].sort())
   })
   it('a probe that rejects is a refusal', async () => {
     await expect(run({ probe: async () => { throw new Error('exit 1') } })).rejects.toBeInstanceOf(PtyPayloadRefused)
     expect(leftovers()).toEqual([])
   })
+})
+
+describe('the serve canary', () => {
+  it('runs after the version checks, on the staged host with its protocol and version, and its failure is a refusal', async () => {
+    const asked: Array<{ binary: string; protocol: number; version: string }> = []
+    const p = await run({ serve: async (binary, host) => { asked.push({ binary, ...host }) } })
+    expect(asked).toEqual([{ binary: join(p.staging, 'harness-pty.exe'), protocol: 2, version: '0.11.0' }])
+    rmSync(p.staging, { recursive: true, force: true })
+    // Not reached for a payload a version check refused.
+    asked.length = 0
+    await expect(run({ probe: goodProbe({}, { version: '0.9.0' }), serve: async (binary, host) => { asked.push({ binary, ...host }) } })).rejects.toThrow(/harness-serial/)
+    expect(asked).toEqual([])
+    const err = await run({ serve: async () => { throw new Error('its create failed (spawn_failed: conpty.dll not found)') } }).catch((e) => e)
+    expect(err).toBeInstanceOf(PtyPayloadRefused)
+    expect(err.reason).toBe('harness-pty serve failed: its create failed (spawn_failed: conpty.dll not found)')
+    expect(leftovers()).toEqual([])
+  })
+
+  it('a serve canary that never ends is refused at its bound', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let started = false
+    const p = run({ serve: () => { started = true; return new Promise(() => {}) } })
+    const assertion = expect(p).rejects.toThrow(/harness-pty serve failed: no answer within/)
+    while (!started) await new Promise((r) => setImmediate(r))
+    await vi.advanceTimersByTimeAsync(SERVE_CANARY_TIMEOUT_MS + 5_000)
+    await assertion
+    expect(leftovers()).toEqual([])
+    // Well under the updater's 30 s heartbeat timeout (harnessd/services.ts).
+    expect(SERVE_CANARY_TIMEOUT_MS).toBeLessThanOrEqual(15_000)
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('serveCanary, against stand-in binaries', () => {
+  function script(name: string, body: string): string {
+    const file = join(tmp, name)
+    writeFileSync(file, `#!/bin/sh\n${body}\n`)
+    chmodSync(file, 0o755)
+    return file
+  }
+  const canaryHomes = (dir: string) => readdirSync(dir).filter((n) => n.startsWith('harness-pty-canary-'))
+
+  it('a host that exits before it publishes is a failure, and its temporary home is gone', async () => {
+    const homes = join(tmp, 'homes'); mkdirSync(homes)
+    await expect(serveCanary(script('exits', 'exit 3'), { protocol: 2, version: '0.11.0' }, { tmpRoot: homes }))
+      .rejects.toThrow(/exited with code 3 before it published its discovery file/)
+    expect(canaryHomes(homes)).toEqual([])
+  })
+
+  it('a host that hangs is killed at the bound, and its temporary home is gone', async () => {
+    const homes = join(tmp, 'homes'); mkdirSync(homes)
+    const pidFile = join(tmp, 'pid')
+    const binary = script('hangs', `echo $$ > '${pidFile}'\nexec sleep 30`)
+    await expect(serveCanary(binary, { protocol: 2, version: '0.11.0' }, { tmpRoot: homes, timeoutMs: 3_000 })).rejects.toThrow(/no answer within 3000 ms/)
+    const pid = Number(readFileSync(pidFile, 'utf8'))
+    expect(() => process.kill(pid, 0)).toThrow()
+    expect(canaryHomes(homes)).toEqual([])
+  })
+})
+
+// The real host (`cd pty && cargo build`, then HARNESS_PTY_BIN=<that harness-pty>): start, hello, one pane that exits, shutdown.
+const realHost = process.env.HARNESS_PTY_BIN
+describe.runIf(realHost)('serveCanary, against the real host', () => {
+  // Short off Windows: the host's Unix socket is in its home, and a macOS temporary folder is half a socket path already.
+  let homes: string
+  beforeEach(() => { homes = mkdtempSync(process.platform === 'win32' ? join(tmpdir(), 'hpc-') : '/tmp/hpc-') })
+  afterEach(() => { rmSync(homes, { recursive: true, force: true }) })
+
+  it('passes, and leaves no host and no home behind', async () => {
+    const said = await probeVersionLine(realHost!) as { version: string; protocol: number }
+    await serveCanary(realHost!, { protocol: said.protocol, version: said.version }, { tmpRoot: homes })
+    expect(readdirSync(homes)).toEqual([])
+  }, 30_000)
+
+  it('a host that cannot start a pane fails it', async () => {
+    const said = await probeVersionLine(realHost!) as { version: string; protocol: number }
+    await expect(serveCanary(realHost!, { protocol: said.protocol, version: said.version }, { tmpRoot: homes, command: [join(tmp, 'no-such-shell')] }))
+      .rejects.toThrow(/its create failed|its pane exited with/)
+    expect(readdirSync(homes)).toEqual([])
+  }, 30_000)
 })
 
 describe('probeVersionLine', () => {
