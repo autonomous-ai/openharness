@@ -121,7 +121,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         .where((p) => p.id == agent.projectId)
         .firstOrNull;
     final theme = terminalThemeFor(
-      grid.AppTheme.palette.value,
+      grid.AppTheme.surfacePalette,
       terminalThemeStore.value,
     );
     return GestureDetector(

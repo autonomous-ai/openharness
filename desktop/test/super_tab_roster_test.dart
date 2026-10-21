@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/notify/alert_sounds.dart';
@@ -23,6 +24,7 @@ class RosterFixture {
   late final controller = server.controller();
   SuperTabAgent? opened;
   final boundary = GlobalKey();
+  bool disposed = false;
 
   Future<void> initialize() async {
     server.state['projects'] = [
@@ -92,14 +94,34 @@ class RosterFixture {
       tester.widget<ActivityMark>(inRow(i, find.byType(ActivityMark))).activity;
 
   void dispose() {
+    if (disposed) return;
+    disposed = true;
     controller.dispose();
     app.dispose();
+  }
+
+  Future<void> close(WidgetTester tester) async {
+    await tester.pumpWidget(const SizedBox());
+    await controller.flush();
+    dispose();
   }
 }
 
 void main() {
   final captureDir = Platform.environment['HARNESS_ROSTER_CAPTURE_DIR'];
-  setUpAll(() => loadCaptureFonts(captureDir));
+  setUpAll(() async {
+    await loadCaptureFonts(captureDir);
+    if (captureDir != null && Platform.isMacOS) {
+      for (final font in [
+        ('.AppleSystemUIFontMonospaced', '/System/Library/Fonts/SFNSMono.ttf'),
+        ('Menlo', '/System/Library/Fonts/Menlo.ttc'),
+        ('Apple Symbols', '/System/Library/Fonts/Apple Symbols.ttf'),
+      ]) {
+        final bytes = ByteData.sublistView(await File(font.$2).readAsBytes());
+        await (FontLoader(font.$1)..addFont(Future.value(bytes))).load();
+      }
+    }
+  });
 
   Future<RosterFixture> fixture(WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(280, 700));
@@ -143,6 +165,7 @@ void main() {
     expect(f.opened?.harnessId, 'a1');
     expect(f.controller.selectedId, 'os-lead');
     expect(f.server.posts, isEmpty);
+    await f.close(tester);
   });
 
   testWidgets('live turns and unread changes update the same status cell', (
@@ -179,6 +202,7 @@ void main() {
     f.app.agentUnread.mark('m', 'a0', AlertKind.done);
     await tester.pump();
     expect(f.activity(tester, 0), HarnessActivity.done);
+    await f.close(tester);
   });
 
   testWidgets(
@@ -212,6 +236,7 @@ void main() {
         ];
       await f.show(tester);
       expect(f.activity(tester, 1), HarnessActivity.paused);
+      await f.close(tester);
     },
   );
 
@@ -245,7 +270,11 @@ void main() {
           expect(f.activity(tester, 2), HarnessActivity.needsInput);
           expect(f.activity(tester, 3), HarnessActivity.paused);
           final semantics = tester.ensureSemantics();
-          expect(find.bySemanticsLabel('Needs your input'), findsWidgets);
+          await tester.pump();
+          expect(
+            find.bySemanticsLabel(RegExp('Needs your input')),
+            findsWidgets,
+          );
           semantics.dispose();
           for (var i = 0; i < 4; i++) {
             final bounds = tester.getRect(f.row(i));
@@ -262,6 +291,7 @@ void main() {
             captureDir,
             'roster-${brightness.name}-${scale}x',
           );
+          await f.close(tester);
         },
       );
     }
