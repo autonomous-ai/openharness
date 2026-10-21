@@ -54,19 +54,31 @@ export async function readOpencodeMessages(
 ): Promise<OcMessage[]> {
   if (!ID_RE.test(sessionId)) return []
   if (!after || after.seq !== undefined) {
-    const v2 = await readV2Messages(dbPath, sessionId, Number.isFinite(after?.seq) ? Math.trunc(after!.seq!) : -1)
+    const afterSeq = Number.isFinite(after?.seq) ? Math.trunc(after!.seq!) : -1
+    const afterTimeCreated = after?.seq !== undefined ? after.tc : undefined
+    const v2 = await readV2Messages(dbPath, sessionId, afterSeq, afterTimeCreated)
     if (v2.length > 0 || after) return v2
   }
   return readLegacyMessages(dbPath, sessionId, after ?? null)
 }
 
 /** The user, assistant and idle rows of an OpenCode 2 session after `afterSeq`, in order. Empty for a v1 session. */
-async function readV2Messages(dbPath: string, sessionId: string, afterSeq: number): Promise<OcMessage[]> {
+async function readV2Messages(dbPath: string, sessionId: string, afterSeq: number, afterTimeCreated?: number): Promise<OcMessage[]> {
   const types = OC_V2_TURN_TYPES.map((type) => `'${type}'`).join(', ')
-  const sql =
-    'SELECT m.id AS mid, m.type AS mtype, m.seq AS mseq, m.time_created AS mtc, m.data AS mdata ' +
-    `FROM session_message m WHERE m.session_id = ? AND m.seq > ? AND m.type IN (${types}) ORDER BY m.seq;`
-  const result = await sqliteReadAll(dbPath, sql, [sessionId, afterSeq], { maxBuffer: MAX_BUFFER })
+  let sql: string
+  let params: (string | number)[]
+  if (afterTimeCreated !== undefined) {
+    sql =
+      'SELECT m.id AS mid, m.type AS mtype, m.seq AS mseq, m.time_created AS mtc, m.data AS mdata ' +
+      `FROM session_message m WHERE m.session_id = ? AND (m.time_created > ? OR (m.time_created = ? AND m.seq > ?)) AND m.type IN (${types}) ORDER BY m.time_created ASC, m.seq ASC;`
+    params = [sessionId, afterTimeCreated, afterTimeCreated, afterSeq]
+  } else {
+    sql =
+      'SELECT m.id AS mid, m.type AS mtype, m.seq AS mseq, m.time_created AS mtc, m.data AS mdata ' +
+      `FROM session_message m WHERE m.session_id = ? AND m.type IN (${types}) ORDER BY m.time_created ASC, m.seq ASC;`
+    params = [sessionId]
+  }
+  const result = await sqliteReadAll(dbPath, sql, params, { maxBuffer: MAX_BUFFER })
   if (!result.ok) {
     if (result.reason === 'missing') throw new OpencodeSqliteMissing()
     return [] // no `session_message` table (OpenCode 1), or locked / transient — the caller falls back or retries

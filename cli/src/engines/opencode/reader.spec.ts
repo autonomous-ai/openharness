@@ -240,14 +240,14 @@ d('OpencodeReader (OpenCode 2 session_message)', () => {
     expect(lastOpencodeTurnText(messages)).toEqual({ userMessage: 'list the files', assistantText: 'Two files.' })
   })
 
-  it('orders by seq, not by time or id, which tie or disagree in a real store', async () => {
+  it('orders by time_created, then seq — not by seq alone, which can disagree with real time in a real store', async () => {
     user(1, 'first', { id: 'msg_z', tc: 100 })
     assistant(2, [{ type: 'text', text: 'second' }], 'stop', { id: 'msg_a', tc: 100 })
     user(3, 'third', { id: 'msg_m', tc: 50 })
     const messages = await readOpencodeMessages(db, SID)
-    expect(messages.map((m) => m.id)).toEqual(['msg_z', 'msg_a', 'msg_m'])
+    expect(messages.map((m) => m.id)).toEqual(['msg_m', 'msg_z', 'msg_a'])
     const after = await readOpencodeMessages(db, SID, { tc: 100, id: 'msg_a', seq: 2 })
-    expect(after.map((m) => m.id)).toEqual(['msg_m'])
+    expect(after.map((m) => m.id)).toEqual([])
   })
 
   it('reports a failed tool by its error and finds a sub-agent in either spelling of its session id', async () => {
