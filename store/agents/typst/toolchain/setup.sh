@@ -7,21 +7,31 @@ cd "$(dirname "$0")/.."
 VERSION="$(cat TYPST_VERSION)"
 # GitHub's own digests for the release assets. They move with TYPST_VERSION: a bump pins them anew.
 SUMS_FOR=v0.15.1
+BINARY=typst
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) ASSET="typst-aarch64-apple-darwin.tar.xz" SUM=48f62ed034aa3a7978309579ac6ca00045e2ef0da73114e8af27cfd8e74dc05a ;;
   Darwin-x86_64) ASSET="typst-x86_64-apple-darwin.tar.xz" SUM=7f9fdd9584866245de9a79e0add8f9236fae6f40a8a45e2c4771ccc14db4e0fa ;;
   Linux-x86_64) ASSET="typst-x86_64-unknown-linux-musl.tar.xz" SUM=a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c ;;
   Linux-aarch64) ASSET="typst-aarch64-unknown-linux-musl.tar.xz" SUM=5aa8d74a3d906e60ea12a66ac2f37f8eef1b14cbad7182a745e393a10c23dcee ;;
+  MINGW*-x86_64|MSYS*-x86_64)
+    ASSET="typst-x86_64-pc-windows-msvc.zip" SUM=19ce3551153c2fe7ee9fa2f95208310c8f4d3209fedb699e0333faf8913f6736
+    BINARY=typst.exe ;;
   *) echo "miss no Typst release for $(uname -s)-$(uname -m)"; exit 1 ;;
 esac
-if [ -x bin/typst ] && bin/typst --version 2>/dev/null | grep -q "${VERSION#v}"; then echo "ok   typst ${VERSION} already here"; exit 0; fi
+if [ -x "bin/$BINARY" ] && "bin/$BINARY" --version 2>/dev/null | grep -q "${VERSION#v}"; then echo "ok   typst ${VERSION} already here"; exit 0; fi
 [ "$VERSION" = "$SUMS_FOR" ] || { echo "miss the checksums in toolchain/setup.sh are for typst ${SUMS_FOR}, not ${VERSION}"; exit 1; }
+if [ "$BINARY" = typst.exe ] && ! command -v unzip >/dev/null 2>&1; then
+  echo "miss unzip — install Git Bash with unzip to extract the Windows release"; exit 1
+fi
 mkdir -p bin tmp
 echo "     downloading typst ${VERSION} (${ASSET})"
 URL="https://github.com/typst/typst/releases/download/${VERSION}/${ASSET}"
 curl -fsSL --retry 3 -o "tmp/${ASSET}" "$URL" || { rm -rf tmp; echo "miss could not download $URL — check this machine's internet connection"; exit 1; }
 if command -v shasum >/dev/null 2>&1; then GOT="$(shasum -a 256 "tmp/${ASSET}" | cut -d' ' -f1)"; else GOT="$(sha256sum "tmp/${ASSET}" | cut -d' ' -f1)"; fi
 [ "$GOT" = "$SUM" ] || { rm -rf tmp; echo "miss ${ASSET} did not match its pinned checksum; nothing was installed"; exit 1; }
-tar -xJf "tmp/${ASSET}" -C tmp
-cp "tmp/${ASSET%.tar.xz}/typst" bin/typst && chmod +x bin/typst && rm -rf tmp
-echo "ok   $(bin/typst --version)"
+case "$ASSET" in
+  *.zip) unzip -q "tmp/${ASSET}" -d tmp; RELEASE_DIR="${ASSET%.zip}" ;;
+  *) tar -xJf "tmp/${ASSET}" -C tmp; RELEASE_DIR="${ASSET%.tar.xz}" ;;
+esac
+cp "tmp/${RELEASE_DIR}/${BINARY}" "bin/${BINARY}" && chmod +x "bin/${BINARY}" && rm -rf tmp
+echo "ok   $("bin/${BINARY}" --version)"
