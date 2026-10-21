@@ -15,9 +15,10 @@ import {
 } from './protocol.js'
 
 // A bump no longer needs a pin here: the updater holds a CLI whose `PTY_PROTOCOL` is above the installed host's back
-// until that host's payload is installed (lib/selfUpdate.ts `installedPtyProtocol`; the delivery rule is tested in
-// selfUpdate.spec.ts, "a build needing a newer pty protocol waits, then stages once the host has it"). What still
-// holds is that the daemon reaches the hosts of its own protocol.
+// until a payload of that protocol goes in first, in the same handover (lib/selfUpdate.ts `installedPtyProtocol`; the
+// delivery rule is tested in selfUpdate.spec.ts, "a build needing a newer pty protocol waits, then stages once the host
+// has it", and the pair in windows/ptyUpdate.spec.ts). What still holds is that the daemon reaches the hosts of its own
+// protocol.
 it('a CLI needing a protocol above the installed host\'s waits (the delivery rule replaces the pin)', () => {
   expect(SUPPORTED_PTY_PROTOCOLS).toContain(PTY_PROTOCOL)
 })

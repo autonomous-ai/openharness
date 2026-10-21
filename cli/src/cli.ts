@@ -78,7 +78,8 @@ import { askDataFolderServer, isLocalSocketName, localSocketPath, refuseServedDa
 import { legacyDaemonStatus, localDaemonCall, localDaemonStatus } from './lib/daemonEndpoint.js'
 import { PipeUnproven } from './lib/windows/pipeClient.js'
 import { ptyManifestUrl, ptyPlatformKey, type PtyEntry } from './lib/windows/ptyPayload.js'
-import { installPtyForUpdate, newerPtyForUpdate } from './lib/windows/ptyUpdateCommand.js'
+import { newerPtyForUpdate } from './lib/windows/ptyUpdateCommand.js'
+import { runUpdateSteps } from './lib/updateCommand.js'
 import { PTY_PROTOCOL } from './lib/ptyHost/protocol.js'
 import { runAutonomousDeviceCommand } from './lib/autonomous-device/command.js'
 import { E2eeStore, identitySpent, peekIdentityPub } from './lib/e2ee/store.js'
@@ -89,7 +90,7 @@ import { connectWithPassword, type PwConnectProgress } from './lib/e2ee/relayCli
 import type { LinkedPeer } from './lib/e2ee/manager.js'
 import { DeviceLogStore } from './lib/e2ee/deviceLogStore.js'
 import { TrustGroupStore } from './lib/e2ee/trustGroup.js'
-import { confirm as confirmUpdate, fetchManifest, downloadVerified, canary, stage, semverGt, isLocalDevBuild, type UpdateEntry } from './lib/selfUpdate.js'
+import { fetchManifest, semverGt, isLocalDevBuild, type UpdateEntry } from './lib/selfUpdate.js'
 import { managedNodePath } from './lib/nodeRuntime.js'
 import { updateManagedTui } from './tui/manage.js'
 import { ensureHnLauncher, ensureLauncher } from './lib/launchers.js'
@@ -1189,20 +1190,6 @@ async function resolveMachineIfUnknown(session: AuthSession): Promise<void> {
 }
 const RESOLVE_ON_START_TIMEOUT_MS = 10_000
 
-/** Download + sha256-verify + canary the manifest's cli.js/notify.mjs, then atomically swap them into
- *  the installed CLI dir (dropping the .prev backups on success). The freshly-written cli.js is what the
- *  NEXT spawned daemon (`node cli.js __run`) executes — so staging here = "update, then run the new build".
- *  Runs in the short-lived CLI process, distinct from the daemon's own background `startSelfUpdater`. */
-async function downloadCanaryStage(entry: UpdateEntry, dir: string, log: (m: string) => void): Promise<boolean> {
-  const cliBuf = await downloadVerified(entry.cli)
-  const notifyBuf = await downloadVerified(entry.notify)
-  if (!await canary(cliBuf, dir, entry.version)) { log(`  ✗ the new build failed its self-check — keeping v${VERSION}`); return false }
-  // Asked for by name, so a version this machine once rolled back is installed and no longer rejected.
-  stage(dir, cliBuf, notifyBuf, entry.version)
-  confirmUpdate(dir) // canary passed + bytes already verified ⇒ drop the .prev backups
-  return true
-}
-
 /** The terminal host payload newer than the one installed under [rootDir], or null (also when this platform or the
  *  update URL has none: the CLI's update goes on). */
 async function newerPtyFor(rootDir: string): Promise<PtyEntry | null> {
@@ -1285,30 +1272,24 @@ async function updateCommand(force: boolean): Promise<void> {
     }
     if (wasRunning) { console.log('  stopping the running adapter…'); await stopDaemonOrExit() }
 
-    // The host first, as the updater does: the CLI's update goes on whatever happens to it. Installed, it is on
-    // probation, and the master the relaunch (or the next `harness start`) brings up keeps it or rolls it back.
-    const ptyInstalled = pty !== null && ptyRoot !== null && await installPtyForUpdate(pty, { rootDir: ptyRoot })
-    if (!cliEntry) {
-      if (!ptyInstalled) {
-        if (wasRunning) await relaunch() // the old host stays → bring the daemon back so `update` never leaves it down
-        process.exit(1)
-      }
-      if (wasRunning) { await relaunch(); return }
-      console.log(`✓ Updated the terminal host to ${pty?.version}. Run \`harness start\` to connect.`)
-      process.exit(0)
+    // Download, verify and canary the host and the build, then put them in, the host first (lib/updateCommand.ts). The
+    // freshly-written cli.js is what the NEXT spawned daemon (`node cli.js __run`) executes — so staging here =
+    // "update, then run the new build". An installed host is on probation, and the master the relaunch (or the next
+    // `harness start`) brings up keeps it or rolls it back; with the build it was paired with, both.
+    const done = await runUpdateSteps({ cliEntry, pty, cliDir: resolve(env.ADAPTER_CLI_DIR), ptyRoot, currentVersion: VERSION })
+    // Nothing new went in: bring the OLD build back so `update` never leaves it down. A host only a newer build could
+    // use, left out, is no failure: there was nothing this build could take.
+    const nothing = done.cli === 'failed' || (done.cli === 'none' && done.pty !== 'installed')
+    if (nothing) {
+      const leftOut = done.cli === 'none' && done.pty === 'paired'
+      if (leftOut) console.log(`✓ Already on the latest version (v${VERSION}).`)
+      if (wasRunning) await relaunch()
+      process.exit(leftOut ? 0 : 1)
     }
-    const staged = cliEntry
-    console.log(`▸ Updating v${VERSION} → v${staged.version}…`)
-    let ok = false
-    try { ok = await downloadCanaryStage(staged, resolve(env.ADAPTER_CLI_DIR), (m) => console.log(m)) }
-    catch (e) { console.error(`✗ Update failed: ${e instanceof Error ? e.message : e}`); ok = false }
-    if (!ok) {
-      if (wasRunning) await relaunch() // staging failed → bring the OLD build back so `update` never leaves it down
-      process.exit(1)
-    }
-    console.log(`  ✓ installed v${staged.version}`)
     if (wasRunning) { await relaunch(); return }
-    console.log(`✓ Updated to v${staged.version}. Run \`harness start\` to connect.`)
+    console.log(done.cli === 'installed'
+      ? `✓ Updated to v${cliEntry?.version}. Run \`harness start\` to connect.`
+      : `✓ Updated the terminal host to ${pty?.version}. Run \`harness start\` to connect.`)
     process.exit(0)
   }, {
     onWaiting: (owner) => console.log(`  the daemon is ${describeSpawnLockOwner(owner)} — waiting for it to finish…`),

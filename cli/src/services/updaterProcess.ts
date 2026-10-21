@@ -129,7 +129,12 @@ export function runUpdaterService(_options?: unknown, deps: UpdaterServiceDeps =
         if (taken !== null) await handOver({ ptyVersion: taken })
       }
     }),
-    ...(pty ? { beforeStage: async () => (ptyTaken = await pty.readyToStage()) } : {}),
+    // A paired host (one of a protocol above this build's) goes in only for the build that needs it: the poller is told
+    // which protocol that is, and the CLI's protocol rule hears what is ready to go in first.
+    ...(pty ? {
+      beforeStage: async (ptyProtocol: number) => (ptyTaken = await pty.readyToStage(ptyProtocol)),
+      readyPtyProtocol: () => pty.readyProtocol(),
+    } : {}),
     onStaged: (version, ptyVersion) => {
       ptyTaken = null
       return handOver({ version, ...(ptyVersion ? { ptyVersion } : {}) })

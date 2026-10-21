@@ -51,7 +51,8 @@ It keeps the core and the services running, and nothing else.
    then says so (`harnessd:staged`); the master asks the core to hand over (`harnessd:update`) and judges
    the new core on probation, as before. On Windows it stages a terminal host payload too (`ptyVersion`,
    only under a master that sets `HARNESSD_JUDGES_PTY`), and the same probation rolls back or keeps both
-   (`../lib/windows/ptyUpdate.ts`). Only the updater's process (`UPDATER_PROCESS`) can start this, or
+   (`../lib/windows/ptyUpdate.ts`). A build that needs a host protocol above the installed host's is staged
+   only with a payload of that protocol, the host first, in one handover (spec §5's protocol and pairing rules). Only the updater's process (`UPDATER_PROCESS`) can start this, or
    exit 75 to be restarted at once. From any other service, `harnessd:staged` is logged once and ignored,
    and exit 75 counts as a crash. The master itself still makes no network call. Every core this
    master starts hears `HARNESSD_UPDATES=master`; a core under a master from before that runs the updater

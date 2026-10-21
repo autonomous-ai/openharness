@@ -7,7 +7,7 @@ import { execFile } from 'child_process'
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { VERSION_COMMAND } from '../ptyHost/launch.js'
-import { SUPPORTED_PTY_PROTOCOLS } from '../ptyHost/protocol.js'
+import { PTY_PROTOCOL, SUPPORTED_PTY_PROTOCOLS } from '../ptyHost/protocol.js'
 import {
   DigestMismatchError, MANIFEST_LIMITS, downloadVerified, fetchWithin, isLocalDevBuild, semverGt,
   type FileRef, type TransferLimits,
@@ -62,7 +62,15 @@ export function ptyUpdateWanted(entry: PtyEntry, installed: { pty: string | null
   return installed.pty !== null && semverGt(entry.version, installed.pty)
 }
 
-export interface PreparedPty { version: string; staging: string; protocol: number; features: string[] }
+export interface PreparedPty {
+  version: string
+  staging: string
+  protocol: number
+  features: string[]
+  /** Its host speaks a protocol above this CLI's (spec §5, the pairing rule): no daemon of this build could open a pane
+   *  on it, so it is installed only with a CLI build that needs exactly that protocol, in that build's handover. */
+  paired?: boolean
+}
 
 export class PtyPayloadRefused extends Error {
   constructor(readonly reason: string) { super(`pty payload refused: ${reason}`) }
@@ -146,7 +154,10 @@ export async function preparePtyPayload(entry: PtyEntry, runtimeDir: string, dep
     if (!host || typeof host !== 'object') throw new PtyPayloadRefused('harness-pty version is not a JSON object')
     const h = host as { version?: unknown; protocol?: unknown; features?: unknown }
     if (h.version !== entry.version) throw new PtyPayloadRefused(`harness-pty reports version ${String(h.version)}, expected ${entry.version}`)
-    if (typeof h.protocol !== 'number' || !SUPPORTED_PTY_PROTOCOLS.includes(h.protocol)) {
+    // Above this CLI's: the host of a protocol bump, kept for the CLI build that needs it. Below every supported one
+    // (or not a protocol at all): no build will ever need it.
+    const paired = Number.isSafeInteger(h.protocol) && (h.protocol as number) > PTY_PROTOCOL
+    if (typeof h.protocol !== 'number' || (!paired && !SUPPORTED_PTY_PROTOCOLS.includes(h.protocol))) {
       throw new PtyPayloadRefused(`harness-pty speaks unsupported protocol ${String(h.protocol)}`)
     }
     if (!Array.isArray(h.features) || !h.features.every((f) => typeof f === 'string')) {
@@ -155,7 +166,7 @@ export async function preparePtyPayload(entry: PtyEntry, runtimeDir: string, dep
     const serial = await canary(d.probe, join(staging, 'harness-serial.exe'))
     const sv = (serial as { version?: unknown } | null)?.version
     if (sv !== entry.version) throw new PtyPayloadRefused(`harness-serial reports version ${String(sv)}, expected ${entry.version}`)
-    return { version: entry.version, staging, protocol: h.protocol, features: h.features as string[] }
+    return { version: entry.version, staging, protocol: h.protocol, features: h.features as string[], paired }
   } catch (e) {
     removeFolder(staging)
     // Content failures are refusals (the caller backs off); anything else (network, disk, a missing unzip

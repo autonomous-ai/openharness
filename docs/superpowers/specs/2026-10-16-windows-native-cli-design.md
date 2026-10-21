@@ -243,9 +243,9 @@ process names stay `node` (`processName.ts` already does that).
    [the PTY host rollover](2026-10-20-pty-host-rollover-design.md) §5). The updater installs a promoted payload
    beside the CLI's check, under the same lock and handover, and the master's probation judges both;
    `harness update` installs one too. Fixes to `harness-pty.exe`, `harness-launch.exe` or `harness-serial.exe`
-   no longer wait for `install.ps1` to run again. A CLI release may raise `PTY_PROTOCOL` under the delivery
-   rule: the updater does not stage a build whose `version --json` names a protocol above the installed
-   host's, and waits until a payload of that protocol is installed.
+   no longer wait for `install.ps1` to run again. A CLI release may raise `PTY_PROTOCOL`: the updater stages
+   a build whose `version --json` names a protocol above the installed host's only together with a promoted
+   payload of exactly that protocol, the host first, in one handover and one probation.
 
 The Mac's rules stay: a dev build is never replaced, updates only move forward, rejected versions are
 remembered. Agents survive because the pty host is independent of the daemon (A).

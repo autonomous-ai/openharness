@@ -1,18 +1,22 @@
 /**
  * `harness update`'s half for the terminal host on Windows (spec §5): the command a person runs to take an update now
  * also installs a newer promoted PTY payload, under the same spawn lock and before the CLI, and with the CLI already
- * current it installs the host alone and restarts the daemon (cli.ts `updateCommand`).
+ * current it installs the host alone and restarts the daemon (../updateCommand.ts `runUpdateSteps`, from cli.ts).
  *
  * The same download, canary and install as the background updater's (./ptyPayload.ts, ./ptyInstall.ts), with the
  * differences a person asking by name makes, as for the CLI: the versions this machine rolled back
  * (`pty-rejected.json`) are installed anyway, and nothing is backed off. What it does not override is a version still
- * on probation: its marker names the version to go back to, and only the master's probation may settle it.
+ * on probation: its marker names the version to go back to, and only the master's probation may settle it. Nor the
+ * pairing rule: a host of a protocol above this CLI's goes in only with the CLI build that needs it.
  */
+import { renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { currentPtyVersion } from '../ptyHost/launch.js'
+import { PTY_PROTOCOL } from '../ptyHost/protocol.js'
 import { semverGt } from '../selfUpdate.js'
-import { installPreparedPty, readPtyPending, type PtyPending } from './ptyInstall.js'
+import { PTY_REJECTED, installPreparedPty, readPtyPending, rejectedPtyVersions, restorePty, type PtyPending } from './ptyInstall.js'
 import { fetchPtyEntry, preparePtyPayload, type PreparedPty, type PtyEntry } from './ptyPayload.js'
+import { putBackAside } from './ptyUpdate.js'
 
 export interface PtyUpdateCommandDeps {
   fetchEntry: (url: string, key: string) => Promise<PtyEntry | null>
@@ -29,6 +33,7 @@ const DEFAULT_DEPS: PtyUpdateCommandDeps = {
 }
 
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error))
+const runtimeOf = (rootDir: string): string => join(rootDir, 'runtime')
 
 const onProbation = (pending: PtyPending, entry: PtyEntry): string =>
   `  terminal host ${pending.version} is still on probation, so ${entry.version} is not installed now: run \`harness update\` again once the daemon has kept it or rolled it back`
@@ -53,7 +58,7 @@ export async function newerPtyForUpdate(o: {
     d.log(`  could not check for a terminal host update (${message(error)}); continuing with the CLI`)
     return null
   }
-  const installed = currentPtyVersion(join(o.rootDir, 'runtime'))
+  const installed = currentPtyVersion(runtimeOf(o.rootDir))
   if (!entry || installed === null || !semverGt(entry.version, installed)) return null
   const pending = readPtyPending(o.rootDir)
   if (pending) { d.log(onProbation(pending, entry)); return null }
@@ -61,25 +66,79 @@ export async function newerPtyForUpdate(o: {
 }
 
 /**
- * Under the spawn lock the command holds, with the daemon stopped: download, verify, canary and install [entry]. True
- * when it is installed, on probation for the next master to judge, as one the updater staged. Never throws: a payload
- * that fails is reported, the host in use stays, and the CLI's update goes on.
+ * Under the spawn lock the command holds, with the daemon stopped: download, verify and canary [entry], ready to
+ * install. Null when it cannot be (said): a version on probation since the check, or a payload that failed. Never
+ * throws: the CLI's update goes on.
  */
-export async function installPtyForUpdate(entry: PtyEntry, o: { rootDir: string; deps?: Partial<PtyUpdateCommandDeps> }): Promise<boolean> {
+export async function preparePtyForUpdate(entry: PtyEntry, o: { rootDir: string; deps?: Partial<PtyUpdateCommandDeps> }): Promise<PreparedPty | null> {
   const d: PtyUpdateCommandDeps = { ...DEFAULT_DEPS, ...o.deps }
   // A marker that appeared since the check (an updater's install before the stop): refused before any download.
   const pending = readPtyPending(o.rootDir)
-  if (pending) { d.log(onProbation(pending, entry)); return false }
-  const installed = currentPtyVersion(join(o.rootDir, 'runtime'))
+  if (pending) { d.log(onProbation(pending, entry)); return null }
+  const installed = currentPtyVersion(runtimeOf(o.rootDir))
   d.log(`▸ Updating the terminal host ${installed} → ${entry.version}…`)
   try {
-    const prepared = await d.prepare(entry, join(o.rootDir, 'runtime'))
-    // False: another installer put this very version in since the check, which is as good.
-    if (d.install(prepared, o.rootDir)) d.log(`  ✓ installed terminal host ${entry.version}`)
-    else d.log(`  terminal host ${entry.version} is already installed`)
-    return true
+    return await d.prepare(entry, runtimeOf(o.rootDir))
   } catch (error) {
     d.log(`  ✗ terminal host ${entry.version} was not installed (${message(error)}) — keeping ${installed}`)
-    return false
+    return null
+  }
+}
+
+/**
+ * Install [prepared], or leave a paired one out unless the CLI build being installed needs exactly its protocol
+ * ([cliPtyProtocol], null with none). `installed` is on probation for the next master to judge, as one the updater
+ * staged; `paired` was left out (its staging folder removed). Never throws.
+ */
+export function installPtyForUpdate(
+  prepared: PreparedPty,
+  o: { rootDir: string; cliPtyProtocol: number | null; deps?: Partial<PtyUpdateCommandDeps> },
+): 'installed' | 'paired' | 'failed' {
+  const d: PtyUpdateCommandDeps = { ...DEFAULT_DEPS, ...o.deps }
+  if (prepared.paired && o.cliPtyProtocol !== prepared.protocol) {
+    // A just-run canary can hold a file a moment; what is left is the updater's start sweep's.
+    try { rmSync(prepared.staging, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }) } catch { /* swept later */ }
+    d.log(`  terminal host ${prepared.version} speaks protocol ${prepared.protocol}, above this CLI's ${PTY_PROTOCOL} — it goes in only with a CLI build that needs it`)
+    return 'paired'
+  }
+  const installed = currentPtyVersion(runtimeOf(o.rootDir))
+  try {
+    // False: another installer put this very version in since the check, which is as good.
+    if (d.install(prepared, o.rootDir)) d.log(`  ✓ installed terminal host ${prepared.version}`)
+    else d.log(`  terminal host ${prepared.version} is already installed`)
+    return 'installed'
+  } catch (error) {
+    d.log(`  ✗ terminal host ${prepared.version} was not installed (${message(error)}) — keeping ${installed}`)
+    return 'failed'
+  }
+}
+
+/**
+ * A paired host whose CLI build then failed to go in: taken back out before the old build is relaunched, which could
+ * not open a pane on it. Nothing was wrong with the host, so it is not remembered as rolled back (restorePty records
+ * it): it pairs with the next build. Never throws.
+ */
+export function takeBackPtyForUpdate(rootDir: string, log: (line: string) => void): void {
+  const pending = readPtyPending(rootDir)
+  // Only the rejection this restore adds is taken back: one from before this run (installed anyway, by name) stays.
+  const rejectedBefore = rejectedPtyVersions(rootDir)
+  try {
+    const result = restorePty(rootDir)
+    // Before anything sweeps: the aside file is the only copy of that path's bytes.
+    const put = putBackAside(rootDir, result.missing)
+    for (const { name, from, error } of put.failed) log(`  ✗ bin\\${name} is missing and ${from} could not be put back (${message(error)})`)
+    if (pending) {
+      const rejected = rejectedPtyVersions(rootDir)
+      const kept = rejected.filter((version) => version !== pending.version)
+      if (!rejectedBefore.includes(pending.version) && kept.length !== rejected.length) {
+        const file = join(rootDir, 'runtime', 'pty', PTY_REJECTED)
+        const temporary = `${file}.tmp-${process.pid}`
+        writeFileSync(temporary, JSON.stringify(kept))
+        renameSync(temporary, file)
+      }
+      log(`  terminal host ${pending.version} taken back out with the build it came with — back to ${pending.previous}`)
+    }
+  } catch (error) {
+    log(`  ✗ could not take terminal host ${pending?.version ?? '(unreadable marker)'} back out (${message(error)}) — the next master's probation rolls it back`)
   }
 }

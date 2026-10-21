@@ -20,6 +20,7 @@ import { dirname, join } from 'path'
 import { SpawnLockBusyError, describeSpawnLockFailure } from './daemonSpawnLock.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { patientDeadline } from './patientExec.js'
+import { PTY_PROTOCOL } from './ptyHost/protocol.js'
 import { currentCli } from './windows/installLayout.js'
 import { isVersionFolder, retireUnused, switchTo, versionsOnDisk, writeVersionFolder, type RetireDeps } from './windows/cliVersions.js'
 
@@ -613,8 +614,9 @@ export function startSelfUpdater(opts: {
    *  terminal host `beforeStage` installed into the same handover, or null. */
   onStaged: (version: string, ptyVersion: string | null) => void | Promise<void>
   /** Called under the lock right before `stage`: what else goes into this handover, first (Windows: a terminal host
-   *  payload already prepared, ./windows/ptyUpdate.ts `readyToStage`). Its version reaches `onStaged`. */
-  beforeStage?: () => Promise<string | null>
+   *  payload already prepared, ./windows/ptyUpdate.ts `readyToStage`). Its version reaches `onStaged`. It hears the
+   *  host protocol the build needs, so a paired host goes in only with the build that needs it. */
+  beforeStage?: (ptyProtocol: number) => Promise<string | null>
   /** Wrap the swap + `onStaged` in a mutual exclusion with every other process that writes the
    *  bundle or spawns the daemon. Default: none (tests, and callers that hold their own). */
   withLock?: <T>(fn: () => Promise<T>) => Promise<T>
@@ -634,10 +636,15 @@ export function startSelfUpdater(opts: {
   /**
    * Windows: the protocol of the terminal host `current-pty` names (lib/windows/ptyUpdate.ts `installedPtyProtocol`).
    * A build whose canary says it needs a higher one is not staged: it would come up with no host it can open a pane
-   * on. It waits, verified, until a payload of that protocol is installed (the PTY check or install.ps1). Null, or
-   * left out (macOS and Linux, a host that cannot be read), holds nothing back.
+   * on. It waits, verified, until a payload of that protocol is installed (install.ps1), or is ready to go in first
+   * (`readyPtyProtocol`). On Windows a host that cannot be read (no pointer, a `version` that failed or timed out)
+   * counts as this CLI's own `PTY_PROTOCOL`: unknown must not let a build that raises it through. Left out (macOS and
+   * Linux), nothing is held back.
    */
   installedPtyProtocol?: () => number | null
+  /** The protocol of a terminal host payload prepared and waiting to go into this handover first (`beforeStage`), or
+   *  null. A build that needs exactly that protocol goes ahead with it, as one pair. */
+  readyPtyProtocol?: () => number | null
 }): Poller {
   let checking = false
   let done = false
@@ -654,6 +661,17 @@ export function startSelfUpdater(opts: {
   let toldRejected: string | null = null
   let toldWaiting: string | null = null
   let toldProtocol: string | null = null
+  /** What the protocol rule says of a build that needs host protocol [needs]: null when it may be staged, else the
+   *  protocol the installed host speaks. */
+  const hostShortOf = (needs: number): number | null => {
+    if (!opts.installedPtyProtocol) return null
+    const host = opts.installedPtyProtocol() ?? (platform === 'win32' ? PTY_PROTOCOL : null)
+    return host !== null && needs > host ? host : null
+  }
+  const waitForHost = (version: string, needs: number, host: number): void => {
+    if (toldProtocol !== version) console.log(`[update] ${version} needs pty protocol ${needs}; this machine's host speaks ${host} — waiting for its payload`)
+    toldProtocol = version
+  }
 
   const now = opts.now ?? Date.now
   const platform = opts.platform ?? process.platform
@@ -737,13 +755,10 @@ export function startSelfUpdater(opts: {
       }
       const ready = verified
       // The protocol rule: no CLI that no installed host can serve. Asked at every check, with the bytes kept, so the
-      // build goes ahead at the first check after its payload is installed.
-      const hostProtocol = opts.installedPtyProtocol?.() ?? null
-      if (hostProtocol !== null && ready.ptyProtocol > hostProtocol) {
-        if (toldProtocol !== ready.version) console.log(`[update] ${ready.version} needs pty protocol ${ready.ptyProtocol}; this machine's host speaks ${hostProtocol} — waiting for its payload`)
-        toldProtocol = ready.version
-        return
-      }
+      // build goes ahead at the first check after its payload is installed, or once one of that protocol is ready to go
+      // in first, in this handover (the pairing rule).
+      const short = hostShortOf(ready.ptyProtocol)
+      if (short !== null && opts.readyPtyProtocol?.() !== ready.ptyProtocol) { waitForHost(ready.version, ready.ptyProtocol, short); return }
       if (opts.stageWhileJudged === false && unjudgedUpdate(opts.dir, liveSha256(opts.dir, platform))) {
         if (toldWaiting !== ready.version) console.log(`[update] ${ready.version} is ready — waiting for this build to be kept before staging it`)
         toldWaiting = ready.version
@@ -762,7 +777,11 @@ export function startSelfUpdater(opts: {
           return
         }
         // The terminal host first, in this same lock hold and handover (spec §5): one restart for both.
-        const ptyVersion = opts.beforeStage ? await opts.beforeStage() : null
+        const ptyVersion = opts.beforeStage ? await opts.beforeStage(ready.ptyProtocol) : null
+        // Asked again with the host this build would come up on: the paired one may have failed to go in, or a rollback
+        // may have moved the pointer since the check. A host that did go in is the caller's to hand over (`withLock`).
+        const shortNow = hostShortOf(ready.ptyProtocol)
+        if (shortNow !== null) { waitForHost(ready.version, ready.ptyProtocol, shortNow); return }
         stage(opts.dir, ready.cliBuf, ready.notifyBuf, ready.version, platform)
         done = true
         stop()

@@ -5,6 +5,11 @@
  * it on the CLI's probation. When both have an update, the CLI's poller takes the prepared payload into its own lock
  * hold and handover, first (`readyToStage`), so the daemon restarts once.
  *
+ * A payload whose host speaks a protocol above this CLI's (a protocol bump's) is canaried like any other but never
+ * installed on its own: no daemon of this build could open a pane on it. It waits, prepared, for the CLI build whose
+ * `version --json` needs exactly that protocol, and goes into that build's handover, first; one probation judges the
+ * pair (spec §5, the pairing rule beside the protocol rule).
+ *
  * Also the master's half: what its probation runs when the new core fails (`rollBackStaged`) or stays up
  * (`keepStaged`), for the CLI build and the host alike, and the start-of-updater sweep of what installs leave behind.
  * Nothing here calls a Windows API, so it is tested on every OS.
@@ -13,6 +18,7 @@ import { existsSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { SpawnLockBusyError, describeSpawnLockFailure } from '../daemonSpawnLock.js'
 import { binaryVersion, currentPtyVersion } from '../ptyHost/launch.js'
+import { PTY_PROTOCOL } from '../ptyHost/protocol.js'
 import { REFUSED_RETRY_MAX_MS, msUntilSlot, type Poller } from '../selfUpdate.js'
 import {
   BIN_FILES, PTY_PENDING, confirmPty, defaultPtyInstallFs, installPreparedPty, readPtyPending, rejectedPtyVersions, restorePty,
@@ -51,8 +57,13 @@ const DEFAULT_DEPS: PtyUpdaterDeps = {
 
 export type PtyPoller = Poller & {
   /** Under a lock the caller already holds: install the payload already prepared and return its version, or null
-   *  when there is none (or it can no longer be installed). Never throws: the CLI's stage goes on either way. */
-  readyToStage(): Promise<string | null>
+   *  when there is none (or it can no longer be installed). [forPtyProtocol]: the host protocol the CLI build being
+   *  staged needs; a paired payload (./ptyPayload.ts `PreparedPty.paired`) goes in only for a build that needs exactly
+   *  its protocol. Never throws: the CLI's stage goes on either way, under the protocol rule. */
+  readyToStage(forPtyProtocol?: number): Promise<string | null>
+  /** The protocol of the payload prepared and waiting, or null: what lets a CLI build that needs it go ahead
+   *  (lib/selfUpdate.ts `readyPtyProtocol`), with it first. */
+  readyProtocol(): number | null
 }
 
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error))
@@ -128,10 +139,12 @@ export function startPtyUpdater(opts: {
     return false
   }
 
-  /** Under the lock: install what is ready. Null when nothing was installed. */
-  const installReady = (): string | null => {
+  /** Under the lock: install what is ready. Null when nothing was installed. A paired payload only for a CLI build that
+   *  needs its protocol ([forPtyProtocol]), never on its own: it stays ready for that build. */
+  const installReady = (forPtyProtocol?: number): string | null => {
     if (halted || !ready) return null
     const { key, entry, prepared } = ready
+    if (prepared.paired && forPtyProtocol !== prepared.protocol) return null
     // Another installer may have moved the pointer, or put a version on probation, since the download began.
     if (!wanted(entry)) return null
     if (existsSync(marker)) { drop(); return null }
@@ -185,6 +198,11 @@ export function startPtyUpdater(opts: {
         ready = { key, entry, prepared, fresh: true }
         if (halted) { drop(); return }
       }
+      if (ready.prepared.paired) {
+        const { version, protocol } = ready.prepared
+        once('paired', version, () => d.log(`[update] terminal host ${version} speaks protocol ${protocol}, above this CLI's ${PTY_PROTOCOL} — it goes in only with a CLI build that needs it`))
+        return
+      }
       if (ready.fresh) { ready.fresh = false; return }
       const version = ready.entry.version
       await opts.withLock(async () => {
@@ -211,10 +229,11 @@ export function startPtyUpdater(opts: {
       // A download under way finds `halted` and discards what it prepared; one already waiting goes now.
       if (!checking) drop()
     },
-    readyToStage: async () => {
+    readyProtocol: () => ready?.prepared.protocol ?? null,
+    readyToStage: async (forPtyProtocol?: number) => {
       const version = ready?.entry.version
       try {
-        return installReady()
+        return installReady(forPtyProtocol)
       } catch (error) {
         d.error(`[update] terminal host ${version} could not be installed (${message(error)}) — trying again next check`)
         return null

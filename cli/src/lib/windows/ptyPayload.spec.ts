@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { PTY_PROTOCOL } from '../ptyHost/protocol.js'
 import { DigestMismatchError } from '../selfUpdate.js'
 import {
   PTY_PAYLOAD_FILES, PtyPayloadRefused, fetchPtyEntry, preparePtyPayload, ptyManifestUrl, ptyPlatformKey, probeVersionLine, ptyUpdateWanted, sweepStagingFolders, type PtyEntry,
@@ -79,8 +80,23 @@ describe('preparePtyPayload', () => {
     await expect(run({ probe: goodProbe({ version: '0.9.0' }) })).rejects.toThrow(/harness-pty reports version 0.9.0/)
     expect(leftovers()).toEqual([])
   })
-  it('an unsupported protocol is refused', async () => {
-    await expect(run({ probe: goodProbe({ protocol: 9 }) })).rejects.toThrow(/protocol 9/)
+  it('a protocol this CLI does not support is refused when it is below, and paired when it is above', async () => {
+    // Supported: installed on its own, with any CLI build.
+    const supported = await run({})
+    expect(supported.paired).toBe(false)
+    rmSync(supported.staging, { recursive: true, force: true })
+    // Above: a host for a CLI build that needs it (spec §5, the pairing rule), canaried like any other and installed
+    // only in that build's handover.
+    const above = await run({ probe: goodProbe({ protocol: PTY_PROTOCOL + 1 }) })
+    expect(above).toMatchObject({ version: '0.11.0', protocol: PTY_PROTOCOL + 1, paired: true })
+    expect(readdirSync(above.staging).sort()).toEqual([...PTY_PAYLOAD_FILES].sort())
+    rmSync(above.staging, { recursive: true, force: true })
+    await expect(run({ probe: goodProbe({ protocol: PTY_PROTOCOL + 1 }, { version: '0.9.0' }) })).rejects.toThrow(/harness-serial reports version 0.9.0/)
+    await expect(run({ probe: goodProbe({ protocol: PTY_PROTOCOL + 1, features: 'seed' }) })).rejects.toThrow(/features/)
+    // Below every supported one, or not a protocol: no CLI will ever need it.
+    await expect(run({ probe: goodProbe({ protocol: 0 }) })).rejects.toThrow(/protocol 0/)
+    await expect(run({ probe: goodProbe({ protocol: 2.5 }) })).rejects.toThrow(/protocol 2.5/)
+    expect(leftovers()).toEqual([])
   })
   it('a serial binary that names another version is refused', async () => {
     await expect(run({ probe: goodProbe({}, { version: '0.9.0' }) })).rejects.toThrow(/harness-serial reports version 0.9.0/)

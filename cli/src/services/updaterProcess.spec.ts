@@ -60,7 +60,11 @@ describe('the updater in its own process', () => {
       ptyRootDir: join(tmpdir(), 'updater-pty-root'),
       startPty: (options) => {
         pty = options
-        return { stop: () => calls.push('stop pty'), readyToStage: async () => { const version = ready.pty; ready.pty = null; return version } }
+        return {
+          stop: () => calls.push('stop pty'),
+          readyToStage: async (forPtyProtocol?: number) => { calls.push(`ready for ${forPtyProtocol}`); const version = ready.pty; ready.pty = null; return version },
+          readyProtocol: () => (ready.pty ? 3 : null),
+        }
       },
     }
     return { deps, windows, calls, told, ready, cli: () => cli!, hn: () => hn!, pty: () => pty, sent: () => sent! }
@@ -144,7 +148,7 @@ describe('the updater in its own process', () => {
     m.ready.pty = '0.11.0'
     // The CLI poller's handover (lib/selfUpdate.ts): under its lock, the host first, then the CLI.
     await m.cli().withLock!(async () => {
-      const ptyVersion = await m.cli().beforeStage!()
+      const ptyVersion = await m.cli().beforeStage!(2)
       const staged = m.cli().onStaged('9.9.9', ptyVersion) as Promise<void>
       m.sent()()
       await staged
@@ -158,7 +162,7 @@ describe('the updater in its own process', () => {
     runUpdaterService(undefined, { ...m.deps, ...m.windows })
     m.ready.pty = '0.11.0'
     const handover = m.cli().withLock!(async () => {
-      await m.cli().beforeStage!()
+      await m.cli().beforeStage!(2)
       throw new Error('ENOSPC')
     })
     await vi.waitFor(() => expect(m.told).toEqual([{ type: 'harnessd:staged', ptyVersion: '0.11.0' }]))
@@ -204,6 +208,16 @@ describe('the updater in its own process', () => {
     expect(processUpdaterDeps('linux').startPty).toBeUndefined()
     expect(processUpdaterDeps('win32', join(tmpdir(), 'x', 'cli')).ptyRootDir).toBe(join(tmpdir(), 'x'))
   })
+
+  it('tells the host poller the protocol the build needs, and the CLI\'s rule what is ready to go in first', () => judgingPty(async () => {
+    const m = make()
+    runUpdaterService(undefined, { ...m.deps, ...m.windows })
+    expect(m.cli().readyPtyProtocol?.()).toBeNull()
+    m.ready.pty = '0.11.0'
+    expect(m.cli().readyPtyProtocol?.()).toBe(3)
+    expect(await m.cli().beforeStage?.(3)).toBe('0.11.0')
+    expect(m.calls).toContain('ready for 3')
+  }))
 
   it('holds a CLI build back by the installed host\'s protocol on Windows, whatever the master, and nowhere else', () => {
     // Not gated on HARNESSD_JUDGES_PTY: a build with no host to open a pane on is no fix under any master.
