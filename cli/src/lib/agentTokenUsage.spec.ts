@@ -279,6 +279,39 @@ describe('owning-machine token cache', () => {
     expect(query).toHaveBeenCalledTimes(1)
   })
 
+  /**
+   * OpenCode 2 keeps a session in `session_v2` and no longer writes `session`: for a session v2 began the v1
+   * table has no row, and a fresh store has no such table at all. v1's row is the answer for what 1.x wrote.
+   */
+  it('reads an OpenCode 2 session from session_v2, and falls back to the v1 row and to its older schema', async () => {
+    const usage = (input: number) => ({ tokens_input: input, tokens_output: 20, tokens_reasoning: 5, tokens_cache_read: 80, tokens_cache_write: 10 })
+    const ok = (rows: unknown[]) => ({ ok: true as const, via: 'builtin' as const, rows })
+    const fail = { ok: false as const, reason: 'transient' as const, error: new Error('no such table') }
+    const totalWith = async (answers: Record<string, unknown>) => {
+      const query = vi.fn(async (_db: string, sql: string) => {
+        const key = sql.includes('FROM session_v2') ? 'v2' : sql.includes('0 AS tokens_cache_write') ? 'old' : 'v1'
+        return answers[key] ?? fail
+      })
+      store.dispose()
+      store = new AgentTokenUsageCache(join(dir, `cache-${Math.random()}`), { readSqlite: query as never, now: () => now })
+      target.engine = 'opencode'
+      target.transcriptPath = null
+      return { total: (await read())?.totalTokens ?? null, sql: query.mock.calls.map(call => call[1].match(/FROM (\w+)|0 AS/)?.[0]) }
+    }
+
+    // v2's own row, one query; it is not asked of v1.
+    expect(await totalWith({ v2: ok([usage(100)]), v1: ok([usage(1)]) })).toEqual({ total: 215, sql: ['FROM session_v2'] })
+    // A session 1.x wrote: v2 has no row of it.
+    expect(await totalWith({ v2: ok([]), v1: ok([usage(200)]) })).toEqual({ total: 315, sql: ['FROM session_v2', 'FROM session'] })
+    // A store that has no `session_v2` is OpenCode 1's.
+    expect(await totalWith({ v1: ok([usage(300)]) })).toEqual({ total: 415, sql: ['FROM session_v2', 'FROM session'] })
+    // 1.x before it counted cache writes, which has no such column.
+    expect(await totalWith({ old: ok([{ ...usage(400), tokens_cache_write: 0 }]) })).toEqual({ total: 505, sql: ['FROM session_v2', 'FROM session', '0 AS'] })
+    // v1 only holds a session when it holds it once; neither store knows it.
+    expect((await totalWith({ v2: ok([]), v1: ok([]) })).total).toBeNull()
+    expect((await totalWith({})).total).toBeNull()
+  })
+
   it('collects output in the same incremental pass, persists it, and does not credit inherited work', async () => {
     const receipt = (id: string, timestamp = at) => [
       { type: 'assistant', timestamp, sessionId: 'conversation', message: { content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'gh pr create --body-file /tmp/body' } }] } },

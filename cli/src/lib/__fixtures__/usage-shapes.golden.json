@@ -195,7 +195,7 @@
       },
       "queries": [
         {
-          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session WHERE id = ?",
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session_v2 WHERE id = ?",
           "args": [
             "conversation"
           ]
@@ -213,13 +213,13 @@
       },
       "queries": [
         {
-          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session WHERE id = ?",
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session_v2 WHERE id = ?",
           "args": [
             "conversation"
           ]
         },
         {
-          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, 0 AS tokens_cache_write FROM session WHERE id = ?",
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session WHERE id = ?",
           "args": [
             "conversation"
           ]
@@ -230,6 +230,12 @@
     "opencode/unreadable": {
       "value": null,
       "queries": [
+        {
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session_v2 WHERE id = ?",
+          "args": [
+            "conversation"
+          ]
+        },
         {
           "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session WHERE id = ?",
           "args": [
@@ -249,7 +255,7 @@
       "value": null,
       "queries": [
         {
-          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session WHERE id = ?",
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session_v2 WHERE id = ?",
           "args": [
             "conversation"
           ]
@@ -453,7 +459,7 @@
       },
       "queries": [
         {
-          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session WHERE id = ?",
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session_v2 WHERE id = ?",
           "args": [
             "conversation"
           ]
@@ -471,13 +477,13 @@
       },
       "queries": [
         {
-          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session WHERE id = ?",
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session_v2 WHERE id = ?",
           "args": [
             "conversation"
           ]
         },
         {
-          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, 0 AS tokens_cache_write FROM session WHERE id = ?",
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session WHERE id = ?",
           "args": [
             "conversation"
           ]
@@ -488,6 +494,12 @@
     "opencode/unreadable": {
       "value": null,
       "queries": [
+        {
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session_v2 WHERE id = ?",
+          "args": [
+            "conversation"
+          ]
+        },
         {
           "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session WHERE id = ?",
           "args": [
@@ -507,7 +519,7 @@
       "value": null,
       "queries": [
         {
-          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session WHERE id = ?",
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session_v2 WHERE id = ?",
           "args": [
             "conversation"
           ]
