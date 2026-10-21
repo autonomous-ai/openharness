@@ -18,6 +18,12 @@ vi.mock('node:child_process', () => {
   return { execFile, execFileSync: forbidden, exec: forbidden, execSync: forbidden,
     spawn: forbidden, spawnSync: forbidden, fork: forbidden }
 })
+const summaryFault = vi.hoisted(() => ({ fail: false }))
+vi.mock('../lib/compactSummary.js', async original => {
+  const actual = await original<typeof import('../lib/compactSummary.js')>()
+  return { ...actual, readCompactSummary: (...args: Parameters<typeof actual.readCompactSummary>) =>
+    summaryFault.fail ? Promise.reject(new Error('fixture summary fault')) : actual.readCompactSummary(...args) }
+})
 vi.mock('node:fs/promises', async original => ({ ...await original<object>() }))
 vi.mock('node:fs', async original => ({ ...await original<object>() }))
 const ID = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', OTHER = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'
@@ -33,6 +39,7 @@ const transcript = (id = ID, text = 'Keep the reviewed conversation', source: un
 
 beforeEach(() => {
   fixtureGit.enabled = false
+  summaryFault.fail = false
   root = fs.realpathSync(fs.mkdtempSync(join(tmpdir(), 'native-handoff-authority-'))); cwd = join(root, 'project')
   for (const name of ['HOME', 'ADAPTER_DATA_DIR', 'ADAPTER_RUNTIME_DIR', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR',
     'PI_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME']) {
@@ -442,4 +449,39 @@ it('keeps the complete intermediate fork chain authoritative after the history r
   const ctx = await setup([row, intermediate, parent])
   const result = await processPrepare(ctx, () => { ctx.current.get(intermediate.agentId)!.forkedFrom = { agentId: 'other-parent', name: 'Other' } })
   expect(result).toMatchObject({ error: 'IDENTITY_UNAVAILABLE', held: true }); noPublication()
+})
+
+// Claude Code writes what it remembered of a compacted conversation as a flagged record; the handoff reads the
+// latest one from the descriptor it verified (lib/compactSummary.ts). Codex's compaction is encrypted: none.
+it('reads the latest compaction summary from a verified Claude transcript, and none from Codex', async () => {
+  vi.stubEnv('CLAUDE_PROJECTS_DIR', join(root, 'CLAUDE_CONFIG_DIR', 'projects'))
+  const claude = join(root, 'CLAUDE_CONFIG_DIR', 'projects', 'project', `${ID}.jsonl`)
+  write(claude, [
+    { type: 'user', sessionId: ID, cwd, isSidechain: false, timestamp: '2026-10-10T07:00:00Z', message: { role: 'user', content: 'start' } },
+    { type: 'user', sessionId: ID, cwd, isCompactSummary: true, timestamp: '2026-10-10T07:10:00Z', message: { role: 'user', content: 'old summary' } },
+    { type: 'user', sessionId: ID, cwd, isCompactSummary: true, timestamp: '2026-10-10T07:20:00Z', message: { role: 'user', content: [{ type: 'text', text: 'We chose Postgres.' }] } },
+    { type: 'user', sessionId: ID, cwd, timestamp: '2026-10-10T07:21:00Z', message: { role: 'user', content: 'next?' } },
+  ].map(line => JSON.stringify(line)).join('\n') + '\n')
+  const { readNativeHandoff } = await import('../lib/nativeHandoffRead.js')
+  const read = await readNativeHandoff({ engine: 'claude', sessionId: ID, transcriptPath: claude }, 'selected', undefined, cwd, {})
+  expect(read.summary).toEqual({ text: 'We chose Postgres.', failed: false })
+  expect((await readNativeHandoff({ engine: 'codex', sessionId: ID, transcriptPath: path }, 'selected', undefined, cwd, {})).summary)
+    .toEqual({ text: null, failed: false })
+})
+
+// Core validates what it publishes. A summary that could not be read is optional context left out of the record:
+// it must be published as degraded, never refused (a refusal held the switch the summary was only meant to help).
+it('publishes through core with a summary that could not be read', async () => {
+  vi.stubEnv('CLAUDE_PROJECTS_DIR', join(root, 'CLAUDE_CONFIG_DIR', 'projects'))
+  const claude = join(root, 'CLAUDE_CONFIG_DIR', 'projects', 'project', `${ID}.jsonl`)
+  write(claude, [
+    { type: 'user', sessionId: ID, cwd, isSidechain: false, timestamp: '2026-10-10T07:00:00Z', message: { role: 'user', content: 'pick a database' } },
+    { type: 'assistant', sessionId: ID, cwd, timestamp: '2026-10-10T07:00:05Z', message: { role: 'assistant', content: [{ type: 'text', text: 'Postgres' }] } },
+  ].map(line => JSON.stringify(line)).join('\n') + '\n')
+  row = { ...row, engine: 'claude', transcriptPath: claude } as RegisteredSession
+  summaryFault.fail = true
+  const { prepare } = await setup([row])
+  const result = await prepare()
+  expect(result.degraded).toContain('summary')
+  expect(result.file).toMatch(/^\.harness\/handoff\/selected-/)
 })

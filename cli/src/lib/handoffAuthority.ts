@@ -31,7 +31,7 @@ export function handoffSessionFact(session: RegisteredSession): HandoffSessionFa
 export const nativeContentVersion = (info: BigIntStats): string =>
   `${info.dev}:${info.ino}:${info.mode}:${info.uid}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
 export type HandoffIntent = { agentId: string; changeId: string; targetEngine: string }
-export type HandoffOutcome = { file: string | null; gitRepo: boolean; cwd: string; degraded: Array<'transcript' | 'git' | 'file'> }
+export type HandoffOutcome = { file: string | null; gitRepo: boolean; cwd: string; degraded: Array<'transcript' | 'git' | 'file' | 'summary'> }
 export type HandoffProject = { cwd: string; path: string; fileKey: string; route: NativePathFact[] }
 export type HandoffExclude = { path: string; before: string | null; after: string; route: NativePathFact[]; version: string | null }
 export type HandoffGit = { exclude: string | null; route: NativePathFact[]; files: Array<{ path: string; version: string }> }
