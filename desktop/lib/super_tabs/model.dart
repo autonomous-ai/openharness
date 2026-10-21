@@ -12,6 +12,16 @@ List<T> _list<T>(Object? value, T Function(Map<String, dynamic>) read) =>
     ? List.unmodifiable(value.map((row) => read(superTabMap(row))))
     : throw const FormatException('Invalid Swarm list.');
 
+/// Work that waits on a person: the agent needs a decision (`needs_human`) or
+/// is stuck (`blocked`). Both stay active work until the agent moves on.
+bool superTabWorkWaits(Object? status) =>
+    status == 'needs_human' || status == 'blocked';
+
+/// How a work status reads in the app. `blocked` is what the agent calls it;
+/// people read Stuck. Statuses this build does not know read as sent.
+String superTabWorkStatusLabel(String status) =>
+    status == 'blocked' ? 'stuck' : status.replaceAll('_', ' ');
+
 class SuperTabPerson {
   SuperTabPerson.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),

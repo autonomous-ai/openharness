@@ -624,7 +624,7 @@ class _SuperTabViewState extends State<SuperTabView> {
                 group.agentIds.contains(agent.id) &&
                 (widget.app?.questionFor(agent.machineId, agent.harnessId) !=
                         null ||
-                    (group.assignment?['status'] == 'needs_human' &&
+                    (superTabWorkWaits(group.assignment?['status']) &&
                         group.assignment?['agentId'] == agent.id)),
           )
           .toList() ??

@@ -59,7 +59,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           (group) =>
               !group.archived &&
               group.assignment?['agentId'] == agent.id &&
-              group.assignment?['status'] == 'needs_human',
+              superTabWorkWaits(group.assignment?['status']),
         ) ==
         true) {
       return HarnessActivity.needsInput;

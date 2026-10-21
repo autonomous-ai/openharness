@@ -863,6 +863,22 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await store.hostTabs(host, 'test-host')).find(t => t.tabId === tab)?.observers).not.toContainEqual({ email: peer.email, userId: peer.sub })
   })
 
+  it('tells the execution host which of its agents need a decision or are stuck', async () => {
+    const { tab } = await fixture()
+    const group = (await run(tab, { type: 'conversation.create', title: 'Release', brief: 'Ship it.', checks: [{ description: 'Shipped.', independent: false }] })).result.conversationId as string
+    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Builder', configuration: config, lead: false })).result.agentId as string
+    const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
+    const row = async () => (await store.hostTabs(host, 'test-host')).find(t => t.tabId === tab && t.agent.id === worker)!
+    expect(await row()).toMatchObject({ tabName: 'Pilot', attention: null })
+    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'blocked', result: 'No access to staging.' } as Command, host, worker)
+    expect((await row()).attention).toEqual({ assignmentId, status: 'blocked', result: 'No access to staging.' })
+    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', result: null } as Command, host, worker)
+    expect((await row()).attention).toEqual({ assignmentId, status: 'needs_human', result: null })
+    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'working', result: null } as Command, host, worker)
+    expect((await row()).attention).toBeNull()
+  })
+
   it('marks members of only archived groups inactive for host retention', async () => {
     const { tab, lead } = await fixture()
     const group = (await run(tab, { type: 'conversation.create', title: 'Done work', brief: '', checks: [] })).result.conversationId as string

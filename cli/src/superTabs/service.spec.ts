@@ -377,3 +377,10 @@ describe('post --attach steps', () => {
       .toEqual({ ok: true, value: { agentId: t.agentId, attachmentIds: null } })
   })
 })
+
+it('teaches agents to say when their work needs a person or is stuck', async () => {
+  const t = setup()
+  const help = (await t.ask({ action: 'help' }, owner)) as { help: { command: string; commands: Array<Record<string, unknown>> } }
+  expect(help.help.commands.filter(c => c.type === 'work.status').map(c => c.status)).toEqual(['working', 'needs_human', 'blocked', 'done'])
+  expect(help.help.command).toContain('needs_human')
+})

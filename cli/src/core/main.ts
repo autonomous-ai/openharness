@@ -198,6 +198,7 @@ import { createTerminalWatch } from './terminalWatch.js'
 import { createSharingLink } from './sharingLink.js'
 import { createAgentSettingsSync, createExperimentHooks, wakeExperiments } from './experiments.js'
 import { answerExperimentQuery, createForExperiment, creationForExperiment } from './experimentQueries.js'
+import { createSuperTabAttention } from './superTabAttention.js'
 import { answerConnectorsQuery } from './connectorsQueries.js'
 import { answerSharedMachinesQuery } from './sharedMachinesQueries.js'
 import { inlineSharedMachinesPort } from '../lib/sharedMachinesPort.js'
@@ -794,6 +795,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ask: (agentId, requestId, question) => cloudAgents?.doors.ask(agentId, requestId, question),
     unask: (agentId, requestId) => cloudAgents?.doors.unask(agentId, requestId),
   }
+  // The Super Tab members here waiting on a person, on the devices alone (core/superTabAttention.ts). Read only once
+  // the questions exist, below: the service starts after them.
+  const superTabWaits = createSuperTabAttention({
+    send: (frame) => ports.devices?.card(frame),
+    asking: (agentId) => [...openQuestions.values()].some((asked) => asked.agentId === agentId),
+  })
   // Shared tabs' relay, a socket per shared tab held by the gateway (gateway/tabRelay.ts), and which of them the core saw
   // opened: opened again after a gateway-only restart, closed when Agent Messages' process goes (core/gatewayLink.ts).
   const tabRelay = tabRelayOf(() => gatewayOps.tabRelay)
@@ -803,6 +810,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const coreApi = createCoreApi({
     nativeTurns: async (agentId, cursor) => nativeTurns.read(agentId, cursor),
     cloud: cloudDoors,
+    superTabs: { attention: (items) => superTabWaits.attention(items) },
     cloudRows: () => (cloudAgents?.dialRows() ?? []) as unknown as RegisteredSession[],
     // Agents' terminals: a literal-argv launch, and a read-only view for Share's observers (core/terminalWatch.ts).
     terminals: { ...TERMINALS_OFF, ...createTerminalOpener({ createBackend, registry, announceSession, blocksFolder: (cwd) => !!backendRef?.purgeAgentService?.blocksFolder(cwd), noBackendCode: createUnavailable }), watch: terminalWatch.watch },
@@ -892,6 +900,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (attached) for (const frame of openQuestions.values()) ports.devices?.card(frame)
       if (attached) void mirror.liveCards().then((cards) => { for (const frame of cards) ports.devices?.card(frame) })
       if (attached) for (const frame of cloudAgents?.liveCards() ?? []) ports.devices?.card(frame)
+      if (attached) superTabWaits.replay()
     },
     // What a device or another machine asks of an agent here: the SAME handlers the backend socket
     // drives, called directly — the slash-command adaptation and the turn and question plumbing live there.
@@ -2962,7 +2971,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const payload = card.payload as Record<string, unknown> | undefined
     const full = card.type === 'commander_event' && payload?.kind === 'summary' && typeof card.agentId === 'string'
       ? mirror.lastFullText(registry.byAgent(card.agentId)?.sessionId ?? card.agentId) ?? cloudAgents?.said(card.agentId) : undefined
+    // An engine's question takes the place of a Super Tab wait on the devices, which shows again once it closes.
+    superTabWaits.before(card)
     ports.devices?.card(full ? { ...card, payload: { ...payload, fullText: full } } : card)
+    superTabWaits.after(card)
   }
 
   // Last: every handler is wired and the restored agents are confirmed, so requests that arrived while

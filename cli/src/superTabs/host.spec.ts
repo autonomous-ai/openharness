@@ -418,3 +418,76 @@ describe('Super Tab attachments in delivered input', () => {
     expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toMatch(/from Collaborator:\nAttached files:\n/)
   })
 })
+
+describe('Super Tab waits for the Harness Pro', () => {
+  it('hands the core the roster\'s waits on the first roster and on each change, and takes them back on stop', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
+    const waiting = { tabId: 'tab', tabName: 'Pilot', attention: { assignmentId: 'as-1', status: 'blocked', result: 'No key' },
+      agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }
+    let rows: unknown[] = [waiting], offline = false
+    const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) => {
+      if (offline) throw new Error('Host offline')
+      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }
+    })
+    const superTabs = { attention: vi.fn() }
+    const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
+      agents: { byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
+    const open = () => { const host = new SuperTabHost(core, 'machine-1', { log: vi.fn() }); hosts.push(host); return host }
+    const first = open()
+    await first.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(1)
+    expect(superTabs.attention).toHaveBeenLastCalledWith([{ agentId: 'harness', requestId: 'supertab:as-1:blocked', superTab: 'Pilot', attention: 'stuck', text: 'Stuck: No key' }])
+    await first.tick()
+    // A failed roster read closes nothing.
+    offline = true
+    await first.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(1)
+    offline = false
+    rows = [{ ...waiting, attention: null }]
+    await first.tick()
+    expect(superTabs.attention).toHaveBeenLastCalledWith([])
+    first.stop()
+    expect(superTabs.attention).toHaveBeenCalledTimes(2)
+    // A new host always hands over its first roster, so it closes what an earlier one raised; stopping takes its own back.
+    const next = open()
+    await next.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(3)
+    rows = [waiting]
+    await next.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(4)
+    superTabs.attention.mockImplementationOnce(() => { throw new Error('Core gone') })
+    next.stop()
+    expect(superTabs.attention).toHaveBeenLastCalledWith([])
+  })
+
+  it('keeps a wait through a moment its harness is missing from the live agents, and closes it after 3 s', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
+    const rows = [{ tabId: 'tab', tabName: 'Pilot', attention: { assignmentId: 'as-1', status: 'needs_human', result: 'Ship it?' },
+      agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }]
+    const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }))
+    let here = true, clock = 0
+    const superTabs = { attention: vi.fn() }
+    const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
+      agents: { byAgent: vi.fn(() => (here ? { agentId: 'harness' } : undefined) as never), terminalAvailable: vi.fn(() => true) } })
+    const host = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(host)
+    await host.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(1)
+    here = false
+    await host.tick()
+    clock += 2_000
+    await host.tick()
+    here = true
+    await host.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(1)   // back within 3 s: the same wait, never closed
+    here = false
+    await host.tick()
+    clock += 3_000
+    await host.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(2)
+    expect(superTabs.attention).toHaveBeenLastCalledWith([])
+    // Never raised while missing: a harness the core does not have is not waited on.
+    clock += 10_000
+    await host.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(2)
+  })
+})

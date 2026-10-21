@@ -57,7 +57,9 @@ export interface AgentStart {
   dispatched: boolean
   error: string | null
 }
-export type WorkStatus = 'planned' | 'working' | 'needs_human' | 'review' | 'done' | 'stopped' | 'reconciling'
+/** `needs_human`: the agent needs a person's decision (its result is the question). `blocked`: it cannot go on (its result
+ * says why). Both stay active work; the machine running the agent alerts its Harness Pro (cli/src/superTabs/attention.ts). */
+export type WorkStatus = 'planned' | 'working' | 'needs_human' | 'blocked' | 'review' | 'done' | 'stopped' | 'reconciling'
 export interface Check {
   id: string
   description: string

@@ -684,7 +684,12 @@ export class SuperTabStore {
           catch (error) { if (error instanceof SuperTabError) continue; throw error }
           // `active` lets the host release members that are only in archived groups to automatic cleanup.
           const active = state.conversations.some(c => !c.archived && c.agentIds.includes(target.id))
-          result.push({ tabId: row.id, revision: row.revision, paused: state.paused, active, agent: target,
+          // The agent's own work waiting on a person, for this host's Harness Pro (cli/src/superTabs/attention.ts): the
+          // assignment it runs here that needs a decision or is stuck, and what it said. Nothing the agent cannot read itself.
+          const waiting = state.conversations.find(c => activeWork(c) && c.assignment!.agentId === target.id &&
+            c.assignment!.execution.machineId === machineId && ['needs_human', 'blocked'].includes(c.assignment!.status))?.assignment
+          const attention = waiting ? { assignmentId: waiting.id, status: waiting.status, result: waiting.result?.slice(0, 500) ?? null } : null
+          result.push({ tabId: row.id, tabName: state.name, revision: row.revision, paused: state.paused, active, attention, agent: target,
             observers: people.filter(p => p.id !== user.sub &&
               canReadAgent(state, { kind: 'person', userId: p.id, email: p.email }, target))
               .map(p => ({ email: p.email, userId: p.id })) })

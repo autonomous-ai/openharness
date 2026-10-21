@@ -19,7 +19,7 @@
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
-import { DEVICES_REQUESTS, type CoreApi, type CorePorts, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
+import { DEVICES_REQUESTS, SUPER_TAB_REQUEST_PREFIX, type CoreApi, type CorePorts, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/cableFleet.js'
 import { isLocalOnly } from '../lib/cardUpdate.js'
 import { TurnStats, type TurnStatsFields } from '../cable/turnStats.js'
@@ -82,6 +82,7 @@ const sid = (id: string): string => id.slice(0, 8)
 export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps): ServiceRequests {
   const log = deps.log ?? ((line: string) => console.log(line))
   const monotonic = deps.now ?? (() => performance.now())
+  const superTabWait = (requestId: unknown): boolean => typeof requestId === 'string' && requestId.startsWith(SUPER_TAB_REQUEST_PREFIX)
   const tally = createTally((line) => log(`[cable] ${line}`))
   const tierOf = deps.decideTier ?? createTierDecider({
     tally,
@@ -180,8 +181,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // these only when it routes by itself, with the fleet off.
     sendTurn: (agentId, text) => core.turns.send(agentId, text),
     stopTurn: (agentId) => core.turns.stop(agentId),
-    answer: (agentId, requestId, answers) => core.questions.answer(agentId, requestId, answers),
-    answerReviewed: (answer) => core.questions.answerReviewed(answer),
+    // A Super Tab wait is shown, never answered here: its id is no pane's, and nothing is typed for it.
+    answer: (agentId, requestId, answers) => { if (!superTabWait(requestId)) core.questions.answer(agentId, requestId, answers) },
+    answerReviewed: (answer) => superTabWait(answer.requestId) ? Promise.resolve(false) : core.questions.answerReviewed(answer),
     recent: (agentId, n) => core.turns.recent(agentId, n),
     recentAsks: (agentId) => core.turns.asks(agentId),
     runtimeProfile: (session) => core.agents.runtimeProfile(session),
@@ -402,7 +404,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       const close = cableQuestionCloseFor(frame as Parameters<typeof cableQuestionCloseFor>[0])
       if (close) { inOrder(close.agentId, () => { void cable.questionClose(close.agentId, close.requestId) }); return }
       const question = cableQuestionFor(frame as Parameters<typeof cableQuestionFor>[0])
-      if (question) { tally(cableHost.describe(question.agentId)?.name ?? '', 'alert', 'rule:question', 'question', 0); inOrder(question.agentId, () => { void cable.question(question.agentId, question.requestId, question.questions) }); return }
+      // A Super Tab member waiting on a person (core/superTabAttention.ts) is an alert as any question is.
+      if (question) { tally(cableHost.describe(question.agentId)?.name ?? '', 'alert', question.superTab ? 'rule:super-tab' : 'rule:question', 'question', 0); inOrder(question.agentId, () => { void cable.question(question.agentId, question.requestId, question.questions, question.superTab) }); return }
       // A shell result is only the stats' input: the dial is told the sums when the turn ends.
       const ran = frame as { type?: string; agentId?: string; payload?: { kind?: string; id?: string; command?: string; isError?: boolean; outputTail?: string } }
       if (ran.payload?.kind === 'reply_text' && ran.agentId) {

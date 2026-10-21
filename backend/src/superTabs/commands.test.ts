@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
-import { createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
+import { activeWork, createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -167,6 +167,24 @@ describe('Super Tab collaboration policy', () => {
     const retry = f.run({ type: 'work.assign', conversationId: group, agentId: worker })
     expect(retry.previousAttempts[0]!.assignment).toMatchObject({ id: assignmentId, status: 'done', configuration: config })
     expect(f.state.conversations[1]!.checks[0]!.evidence).toBeNull()
+  })
+
+  it('tells the Lead when the assignee is stuck and keeps the work active', () => {
+    const f = fixture()
+    const lead = f.add('lead', 'owner', 'lead', true)
+    const group = f.group()
+    const worker = f.add('worker', 'owner', group)
+    const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
+    const as: Actor = { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }
+    const stuck = f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'blocked', result: 'The staging database refuses my key.' }, as)
+    expect(stuck.messages[0]).toMatchObject({ conversationId: group, text: 'Stuck\n\nThe staging database refuses my key.', recipients: [lead] })
+    expect(f.state.conversations[1]!.assignment!.status).toBe('blocked')
+    expect(activeWork(f.state.conversations[1]!)).toBe(true)
+    expect(() => f.run({ type: 'work.assign', conversationId: f.group(), agentId: worker })).toThrow('active assignment')
+    const decision = f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', result: 'Ship to everyone, or behind a flag?' }, as)
+    expect(decision.messages[0]).toMatchObject({ text: 'Needs a human\n\nShip to everyone, or behind a flag?', recipients: [lead] })
+    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'working', result: null }, as)
+    expect(f.state.conversations[1]!.assignment!.status).toBe('working')
   })
 
   it('allows discussion while paused and refuses new work, without mutating rejected state', () => {

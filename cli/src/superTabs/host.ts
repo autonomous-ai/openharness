@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path'
 import type { CoreApi, TurnDelivery } from '../core/api.js'
 import { shellQuote } from '../orchestrator/prompts.js'
 import { noticeReason, WithheldDeliveries } from './withheld.js'
+import { attentionOf } from './attention.js'
 
 type Json = Record<string, unknown>
 export class SuperTabHostError extends Error {
@@ -96,6 +97,12 @@ export class SuperTabHost {
   private timer: ReturnType<typeof setTimeout> | null = null
   private native: NativeRecorder | null = null
   private machines: ContributedMachines | null = null
+  /** The waits last handed to the core (superTabs/attention.ts); null until the first roster, which is always handed
+   *  over whole, so a restarted service closes what its predecessor raised and no longer holds. */
+  private attention: string | null = null
+  /** The harnesses last handed over waiting, and since when each has been missing from the core's live agents. */
+  private waiting = new Set<string>()
+  private missing = new Map<string, number>()
 
   constructor(private readonly core: CoreApi, readonly machineId: string, options: SuperTabHostOptions = {}) {
     if (!identifier(machineId)) throw new SuperTabHostError('MACHINE_UNAVAILABLE', 'This machine is not signed in.')
@@ -153,6 +160,14 @@ export class SuperTabHost {
     this.machines?.stop()
     this.authorized.clear()
     try { this.observers(this.core.dataDir, this.machineId, [], 0) } catch { /* The old snapshot expires. */ }
+    // Signed out or another machine: this host's alerts are no longer anyone's. A core that is gone heard nothing, and
+    // the next host's first roster replaces them anyway.
+    if (this.attention !== null && this.attention !== '[]') {
+      try { this.core.superTabs?.attention([]) } catch { /* The next host's first roster replaces them. */ }
+    }
+    this.attention = null
+    this.waiting.clear()
+    this.missing.clear()
     void this.core.turns.leaseDeliveries('superTabs', {})
     for (const id of this.active) this.core.turns.cancelDelivery(id)
     this.active.clear()
@@ -250,6 +265,7 @@ export class SuperTabHost {
       this.retentionError = message
     }
     this.observers(this.core.dataDir, this.machineId, data, requestedAt + 2500)
+    this.publishAttention(data)
     // Runtime observations cannot delay the live input leases. A stale host
     // observation is fenced by the backend's per-agent configuration version.
     if (!this.configurationsRunning && this.now() >= this.nextConfigurationsAt) {
@@ -301,6 +317,27 @@ export class SuperTabHost {
       }
     }
     await this.leases()
+  }
+
+  /** Hands the core this roster's waits when they changed (or on the first roster). A failed roster read changes
+   *  nothing: a network blip does not close an alert. */
+  private publishAttention(rows: unknown[]): void {
+    // A harness the core's live list misses for a moment (a process-side snapshot between reads, a restart of its
+    // terminal) keeps its wait for 3 s: closing and raising it again would alert twice for the same wait.
+    const now = this.now(), missing = new Map<string, number>()
+    const live = (harnessId: string) => {
+      if (this.core.agents.byAgent(harnessId)) return true
+      const since = this.missing.get(harnessId) ?? now
+      missing.set(harnessId, since)
+      return this.waiting.has(harnessId) && now - since < 3_000
+    }
+    const items = attentionOf(rows, this.machineId, live)
+    this.missing = missing
+    const key = JSON.stringify(items)
+    if (key === this.attention) return
+    this.attention = key
+    this.waiting = new Set(items.map(item => item.agentId))
+    this.core.superTabs?.attention(items)
   }
 
   private retire(deliveryId: string): void {

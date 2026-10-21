@@ -28,7 +28,7 @@ import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
 
 import { PLAYER_STATES, type PlayerSession } from './playerLibrary.js'
-import type { ActivitySnapshot, AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
+import type { ActivitySnapshot, AppSwarms, SuperTabAsk, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
 import type { WindowRoute } from './windowRoute.js'
 import type { SelectionCommand, SelectionResult } from './windowSelection.js'
 import type { VisitCommand, VisitResult } from './windowVisit.js'
@@ -925,13 +925,16 @@ export function cableEventFor(
  * question screen was complete, wired and unreachable: nothing on this side ever produced the message.
  */
 export function cableQuestionFor(
-  frame: { type?: string; agentId?: string; payload?: { requestId?: string; questions?: unknown } },
-): { agentId: string; requestId: string; questions: unknown } | null {
+  frame: { type?: string; agentId?: string; payload?: { requestId?: string; questions?: unknown; superTab?: unknown; attention?: unknown } },
+): { agentId: string; requestId: string; questions: unknown; superTab?: SuperTabAsk } | null {
   if (frame.type !== 'commander_question' || !frame.agentId) return null
   const requestId = frame.payload?.requestId
   const questions = frame.payload?.questions
   if (typeof requestId !== 'string' || !requestId || !Array.isArray(questions)) return null
-  return { agentId: frame.agentId, requestId, questions }
+  // A Super Tab member waiting on a person (core/superTabAttention.ts): the tab's name and what it needs ride along.
+  const superTab = frame.payload?.superTab, attention = frame.payload?.attention
+  const tab = typeof superTab === 'string' && superTab && (attention === 'decision' || attention === 'stuck') ? { superTab, attention } as SuperTabAsk : null
+  return { agentId: frame.agentId, requestId, questions, ...(tab ? { superTab: tab } : {}) }
 }
 
 /**

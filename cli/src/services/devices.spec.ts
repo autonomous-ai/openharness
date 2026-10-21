@@ -271,6 +271,11 @@ describe('the dial\'s host, wired to the core', () => {
     expect(core.agents.setRuntime).toHaveBeenCalledWith('a1', 'opus', 'high')
     expect(core.agents.runtimeModels).toHaveBeenCalledWith('a1')
     expect(core.agents.fork).toHaveBeenCalledWith('a1')
+    // A Super Tab wait is shown, never answered: nothing reaches the pane.
+    w.answer('a1', 'supertab:as-1:needs_human', { q: 'Yes' })
+    expect(await w.answerReviewed!({ agentId: 'a1', requestId: 'supertab:as-1:needs_human' } as never)).toBe(false)
+    expect(core.questions.answer).toHaveBeenCalledTimes(1)
+    expect(core.questions.answerReviewed).toHaveBeenCalledTimes(1)
   })
 
   it('tells the windows on this computer what a hand at this desk did, and the owner\'s apps the device status', () => {
@@ -548,6 +553,15 @@ describe('what the windows say, reaching the dial', () => {
     port.card({ type: 'commander_question_close', agentId: 'a1', payload: { requestId: 'r1' } })
     port.card({ type: 'agent_deleted', payload: {} })
     expect(seen.cable.calls.map(([name]) => name)).toEqual(['start', 'turnStarted', 'turnDone', 'turnError', 'turnStep', 'question', 'questionClose'])
+  })
+
+  it('hands the dial a Super Tab wait with its tab and what it needs, as an alert', () => {
+    const { port } = start()
+    port.card({ type: 'commander_question', agentId: 'a1', payload: { requestId: 'supertab:as-1:blocked', questions: [{ q: 'Stuck: no key' }], superTab: 'Pilot', attention: 'stuck' } })
+    port.card({ type: 'commander_question', agentId: 'a2', payload: { requestId: 'r2', questions: [], superTab: 'Pilot', attention: 'urgent' } })
+    expect(calls('question')).toEqual([['a1', 'supertab:as-1:blocked', [{ q: 'Stuck: no key' }], { superTab: 'Pilot', attention: 'stuck' }],
+      ['a2', 'r2', [], undefined]])
+    expect(logs.some((l) => /notify · .* · alert · rule:super-tab · question/.test(l))).toBe(true)
   })
 
   it('hands the dial a tool card as a step, and a processing card\'s latest sentence beside the status', () => {

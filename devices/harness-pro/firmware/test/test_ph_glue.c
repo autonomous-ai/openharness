@@ -1023,6 +1023,83 @@ static void toast_shows_and_expires(void) {
     CHECK(pod_ui_notify(&U, "a2", POD_TIER_ALERT, true, 3000));
     CHECK(!strcmp(U.ban_agent, "a2") && U.ban_until == 8000 && pod_ui_banner_shown_ms(&U) == 3000);
 }
+// A Super Tab's question (decision or stuck) raises a toast that does not run out: it stays past POD_TOAST_MS with no 66 ms
+// beat after its slide, and goes when swiped up, when the question closes, or once Notices is on screen. A plain question's runs out.
+static void supertab_ask(const char *id, const char *q, pod_attention_t attn, uint32_t t) {
+    pod_ui_question(&U, id, q, attn == POD_ATTN_NONE ? NULL : "Launch v2", attn);
+    pod_ui_notify_text(&U, id, POD_TIER_ALERT, q, true, true, t);
+}
+static void supertab_toast_stays(void) {
+    fresh();
+    calm();
+    to_agent(0, 2);   // a3's Recap: a still room
+    supertab_ask("a1", "Staging first, or straight to prod?", POD_ATTN_DECISION, 1000);
+    CHECK(U.ban_on && U.ban_stay && pod_ui_banner_shown_ms(&U) == 1000);
+    for (uint32_t t = 1000; t < 1000 + POD_TOAST_SLIDE_MS; t += 7) { render(t); CHECK(U.frame.banner && pod_ui_wake_ms(&U, t) <= 66); }
+    {   // after the slide nothing on the toast moves: the room's own beat, as if there were no toast
+        render(3000);
+        const uint32_t with = pod_ui_wake_ms(&U, 3000);
+        U.ban_on = false;
+        const uint32_t without = pod_ui_wake_ms(&U, 3000);
+        U.ban_on = true;
+        CHECK(with == without);
+    }
+    render(6000);
+    CHECK(U.frame.banner && U.ban_on);   // past the 5 s of a plain toast
+    render(600000);
+    CHECK(U.frame.banner && U.ban_on && find(POD_A_BANNER) && !strcmp(find(POD_A_BANNER)->id, "a1"));
+    pod_ui_question_close(&U, "a1");   // answered elsewhere: its entry goes, and the toast with it
+    render(600100);
+    CHECK(!U.frame.banner && !U.ban_on && !pod_model_unread_find(&U.model, "a1"));
+
+    // a stuck agent's stays too; a swipe up dismisses it, the entry stays listed
+    supertab_ask("a2", "Stuck: no write access to staging", POD_ATTN_STUCK, 700000);
+    render(700000);
+    render(800000);
+    CHECK(U.frame.banner && U.ban_stay);
+    t_(true, 360, 110, 800100); t_(true, 360, 80, 800140); t_(false, 360, 40, 800180);
+    render(800200);
+    CHECK(!U.ban_on && !U.frame.banner && pod_model_unread_find(&U.model, "a2") && top()->view == POD_V_RECAP);
+
+    // Notices on screen ends it: back in the room it does not return
+    fresh();
+    calm();
+    to_agent(0, 2);
+    supertab_ask("a1", "Staging first, or straight to prod?", POD_ATTN_DECISION, 1000);
+    render(9000);
+    CHECK(U.frame.banner);
+    const int depth = U.nav.depth;
+    act(POD_A_INBOX, 0);
+    render(9100);
+    CHECK(!U.ban_on && !U.frame.banner && top()->view == POD_V_INBOX);
+    act(POD_A_BACK, 0);
+    render(9200);
+    CHECK(U.nav.depth == depth && top()->view == POD_V_RECAP && !U.frame.banner && pod_model_unread_find(&U.model, "a1"));
+
+    // a plain question's toast runs out as before
+    fresh();
+    calm();
+    to_agent(0, 2);
+    supertab_ask("a1", "Which branch?", POD_ATTN_NONE, 1000);
+    CHECK(U.ban_on && !U.ban_stay);
+    render(5999);
+    CHECK(U.frame.banner);
+    render(6000);
+    CHECK(!U.frame.banner && !U.ban_on && pod_model_unread_find(&U.model, "a1"));
+    // and a newer plain notice replaces a staying toast (and runs out)
+    supertab_ask("a2", "Staging first, or straight to prod?", POD_ATTN_DECISION, 7000);
+    CHECK(U.ban_stay);
+    CHECK(pod_ui_notify(&U, "a4", POD_TIER_ALERT, true, 8000));
+    CHECK(!strcmp(U.ban_agent, "a4") && !U.ban_stay);
+    // not while talking: no toast is raised for it at all (as for any alert)
+    fresh();
+    calm();
+    to_agent(0, 2);
+    act(POD_A_TALK, 0);
+    CHECK(top()->view == POD_V_TALK);
+    supertab_ask("a1", "Staging first, or straight to prod?", POD_ATTN_DECISION, 1000);
+    CHECK(!U.ban_on);
+}
 static void toast_tap_opens_notices(void) {
     fresh();
     calm();
@@ -1584,6 +1661,7 @@ int main(void) {
     toast_shows_and_expires();
     toast_tap_opens_notices();
     toast_swipe_up_dismisses();
+    supertab_toast_stays();
     toast_not_here();
     home_notices_pages();
     home_notices_come_and_go();

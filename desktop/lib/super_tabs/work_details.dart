@@ -6,6 +6,7 @@ import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'message_text.dart';
+import 'model.dart';
 
 Future<void> showSuperTabWork(
   BuildContext context,
@@ -35,7 +36,7 @@ Future<void> showSuperTabWork(
                 if (assignment != null) ...[
                   const SizedBox(height: 16),
                   Text(
-                    '${c.snapshot?.agentName(assignment['agentId'] as String, fallback: 'Agent unavailable') ?? 'Agent unavailable'} · ${(assignment['status'] as String).replaceAll('_', ' ')}',
+                    '${c.snapshot?.agentName(assignment['agentId'] as String, fallback: 'Agent unavailable') ?? 'Agent unavailable'} · ${superTabWorkStatusLabel(assignment['status'] as String)}',
                   ),
                 ],
                 for (final check
