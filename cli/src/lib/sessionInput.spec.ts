@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SessionInputController } from './sessionInput.js'
+import { MoveGate } from './hostMove/gate.js'
 import type { RegisteredSession } from './registry.js'
 import { TERMINAL_LEASE_REFUSED, type ProcessIdentity, type TerminalActionResult } from './terminalTypes.js'
 import { createScreens } from '../core/engines/screens.js'
@@ -1445,5 +1446,37 @@ describe('what became of a person\'s message, for its measurement', () => {
     expect(inject).toHaveBeenCalledTimes(1)
     expect(onError).not.toHaveBeenCalled()
     controller.forget('s1')
+  })
+})
+
+describe('while the agent changes host', () => {
+  const controllerWith = (gate: MoveGate, inject: (target: string, content: string) => Promise<boolean>) =>
+    new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: (id) => id === 's1' ? session() : id === 's2' ? { ...session(), sessionId: 's2', agentId: 'h2' } : undefined,
+      validateRuntime: async () => true, inject, sendKey: async () => true,
+      capture: async () => codexComposer(''), onError: vi.fn(), moveGate: gate })
+
+  it('a harness send during a hold is delivered after release', async () => {
+    const gate = new MoveGate()
+    const injected: string[] = []
+    const controller = controllerWith(gate, async (_target, content) => { injected.push(content); return true })
+    gate.hold('h1')
+    controller.submit('s1', 'sent while it moves')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(injected).toEqual([])
+    await gate.release('h1')
+    await vi.waitFor(() => expect(injected).toEqual(['sent while it moves']))
+    controller.forget('s1')
+  })
+
+  it('nothing is held for other agents', async () => {
+    const gate = new MoveGate()
+    const injected: string[] = []
+    const controller = controllerWith(gate, async (_target, content) => { injected.push(content); return true })
+    gate.hold('h1')
+    controller.submit('s2', 'to the other agent')
+    await vi.waitFor(() => expect(injected).toEqual(['to the other agent']))
+    controller.forget('s1')
+    controller.forget('s2')
   })
 })

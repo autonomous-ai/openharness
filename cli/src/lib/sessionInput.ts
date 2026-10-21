@@ -6,6 +6,7 @@ import { launchBound } from '../core/engines/sessionBinding.js'
 import type { RegisteredSession } from './registry.js'
 import { sid } from './log.js'
 import { isMessageHold, messageHoldText, messageWithheldText, passingHold, type MessageHold } from './messageHolds.js'
+import type { MoveGate } from './hostMove/gate.js'
 import { enterWithheldReason, TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
 
 const MAX_QUEUE_ITEMS = 8
@@ -154,6 +155,9 @@ export interface SessionInputDeps {
   /** Clock and timer for the lease wait; real ones by default. */
   now?: () => number
   sleep?: (ms: number) => Promise<void>
+  /** While an agent changes host, its messages wait here and are typed into the pane it ends on. Absent: none
+   *  is ever held. */
+  moveGate?: MoveGate
 }
 
 /** A message not typed because of what the pane showed (messageHold.ts): nothing was written. */
@@ -295,12 +299,30 @@ export class SessionInputController {
   /** [receipt]: what became of a person's message (one with no [deliveryId]), for its measurement. */
   submit(sessionId: string, content: string, deliveryId?: string, inputContext?: string, receipt?: MessageReceipt): void {
     const said = sayOnce(receipt)
+    // An agent changing host has no pane to type into until the move ends: the message waits, as itself, and
+    // is submitted then, through every check `submitNow` makes, into the pane the row then names.
+    const agentId = this.controlSession(sessionId)?.agentId
+    const gate = this.deps.moveGate
+    if (agentId && gate?.holding(agentId)) {
+      console.log(`[inject] ${sid(sessionId)} held · the agent is changing host`)
+      gate.enqueue(agentId, () => this.submitNow(sessionId, content, deliveryId, inputContext, said))
+      return
+    }
+    void this.submitNow(sessionId, content, deliveryId, inputContext, said)
+  }
+
+  /**
+   * `submit` past the move gate. Resolves once this message's write is done, or at once when it is queued
+   * here or refused: the gate delivers what it held one at a time, and a keystroke held behind this message
+   * must not land between its paste and its Enter.
+   */
+  private submitNow(sessionId: string, content: string, deliveryId?: string, inputContext?: string, said?: MessageReceipt): Promise<void> {
     const session = this.controlSession(sessionId)
     if (!session) {
       said?.('agent_gone')
       this.delivery(sessionId, deliveryId, 'rejected', 'agent_gone')
       if (!deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This harness is no longer available.')
-      return
+      return Promise.resolve()
     }
     const state = this.state(sessionId)
     this.dropExpired(sessionId, state)
@@ -309,7 +331,7 @@ export class SessionInputController {
       || (!this.typesWhileBusy(session.engine) && (state.turnOpen || state.awaitingFingerprint || state.settling))) {
       console.log(`[inject] ${sid(sessionId)} queued · engine=${session.engine} · depth=${state.queue.length + 1}`)
       this.enqueue(sessionId, state, content, deliveryId, inputContext, said)
-      return
+      return Promise.resolve()
     }
     this.delivery(sessionId, deliveryId, 'queued')
     // One write at a time per agent, in the order the messages arrived. Claude Code and Codex take
@@ -324,6 +346,7 @@ export class SessionInputController {
     const running = state.writes ? state.writes.then(write, write) : write()
     const settled: Promise<void> = running.catch(() => {}).then(() => { if (state.writes === settled) state.writes = undefined })
     state.writes = settled
+    return settled
   }
 
   /** Reserve this pane for a short native control interaction such as `/model`. */
@@ -929,6 +952,17 @@ export class SessionInputController {
   }
 
   private drainOne(sessionId: string, state: InputState): void {
+    // A queued message whose turn is due while the agent changes host goes behind what the gate holds.
+    const agentId = this.controlSession(sessionId)?.agentId
+    const gate = this.deps.moveGate
+    if (agentId && gate?.holding(agentId)) {
+      gate.enqueue(agentId, async () => { const current = this.states.get(sessionId); if (current) await this.drainNow(sessionId, current) })
+      return
+    }
+    void this.drainNow(sessionId, state)
+  }
+
+  private async drainNow(sessionId: string, state: InputState): Promise<void> {
     this.dropExpired(sessionId, state)
     if (state.controlLocked || state.turnOpen || state.awaitingFingerprint || state.settling) return
     if (state.queue[0]?.deliveryId && (state.dispatching || state.deliveryId)) return
@@ -941,7 +975,7 @@ export class SessionInputController {
       if (!next.deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This harness is no longer available.')
       return
     }
-    void this.inject(sessionId, session, next.content, next.deliveryId, next.inputContext, next.receipt)
+    await this.inject(sessionId, session, next.content, next.deliveryId, next.inputContext, next.receipt)
   }
 
   private enqueue(sessionId: string, state: InputState, content: string, deliveryId?: string, inputContext?: string, receipt?: MessageReceipt): void {

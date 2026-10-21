@@ -11,7 +11,15 @@ import { sleptFor } from './sleepAware.js'
 import { writePasteDropFile, writePasteImageFile } from './pasteDropFiles.js'
 import type { TerminalBackendCoordinator } from './terminalBackendCoordinator.js'
 import { terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
-import { KEYFRAME_MAX_BYTES, type TerminalStreamHandle, type TerminalStreamSize } from './terminalTypes.js'
+import {
+  KEYFRAME_MAX_BYTES,
+  terminalActionNotStarted,
+  type TerminalActionResult,
+  type TerminalRuntimeRef,
+  type TerminalStreamHandle,
+  type TerminalStreamSize,
+} from './terminalTypes.js'
+import type { MoveGate } from './hostMove/gate.js'
 import {
   TerminalBinaryKind,
   TERMINAL_LOCAL_IMAGE_PASTE_MAX_PAYLOAD_BYTES,
@@ -128,6 +136,13 @@ interface ActiveStream {
   engineId: string
   placementKey: string
   handle: TerminalStreamHandle
+  /** Which of the stream's subscriptions `handle` is: 0 for the one it opened with, then one more for each
+   *  `retarget`. A sink answers only while it is the current one, so a pane left behind can neither write
+   *  to the stream nor close it. `subscriptions` is the last one handed out. */
+  subscription: number
+  subscriptions: number
+  /** The size the stream last asked its pane for (open, then each resize): a retarget opens the new pane at it. */
+  size: TerminalStreamSize
   compression: 'none' | 'zlib'
   /** Whether this stream serves the desktop on this computer (see `TerminalStreamManagerDeps.isLoopback`). */
   loopback: boolean
@@ -195,6 +210,14 @@ export interface TerminalStreamManagerDeps {
    * pane opens can go to the phone the person is typing on (core/terminals/browser.ts).
    */
   onInput?: (agentId: string, typed: boolean, from: { connId: string, kind: string | null; inputContext?: string; submitted?: boolean }) => void
+  /** While an agent changes host, its input frames and stream opens wait here, and go to the pane it ends on.
+   *  Absent: none is ever held. */
+  moveGate?: MoveGate
+}
+
+/** The row's primary pane, on whichever backend holds it (tmux or the PTY host). */
+function primaryRuntimeOf(session: RegisteredSession): TerminalRuntimeRef | undefined {
+  return session.runtimes.find((runtime) => terminalRouteKey(runtime) === session.primaryRuntimeKey) ?? session.runtimes[0]
 }
 
 function sizeFrom(payload: FramePayload): TerminalStreamSize | null {
@@ -239,6 +262,9 @@ export class TerminalStreamManager {
   // The agents whose tiles each loopback window shows (`app_focus.visibleAgents`). A window that never
   // sent a list is absent, and counts as looking at everything it streams (older desktops).
   private readonly visibleByConn = new Map<string, ReadonlySet<string>>()
+  // Held agents that input or an open has reached since the hold began: someone is using them, whatever
+  // their windows show (`isLookedAt`). Forgotten once the gate lets the agent go.
+  private readonly touchedWhileHeld = new Set<string>()
   private readonly now: () => number
   private readonly expiryTimer: ReturnType<typeof setInterval>
   private lastSweepAt: number
@@ -440,19 +466,30 @@ export class TerminalStreamManager {
       this.sendError(connId, 'TERMINAL_RUNTIME_UNAVAILABLE', { requestId })
       return
     }
-    const session = this.deps.resolveAgent(agentId)
-    if (!session) {
+    let found = this.deps.resolveAgent(agentId)
+    if (!found) {
       this.sendError(connId, 'TERMINAL_AGENT_NOT_FOUND', { requestId })
       return
     }
+    // An agent changing host is between panes: the open waits for the move to end, then opens on the pane the
+    // row names by then, the new one or the old one it fell back to.
+    const gate = this.deps.moveGate
+    if (gate?.holding(found.agentId)) {
+      this.touchedWhileHeld.add(found.agentId)
+      await gate.whenOpen(found.agentId)
+      found = this.deps.resolveAgent(agentId)
+      if (!found) {
+        this.sendError(connId, 'TERMINAL_AGENT_NOT_FOUND', { requestId })
+        return
+      }
+    }
+    const session = found
     if (!TERMINAL_ENGINES.has(session.engine)) {
       this.sendError(connId, 'TERMINAL_ENGINE_UNSUPPORTED', { requestId })
       return
     }
-    // The agent's primary pane, on whichever backend holds it (tmux or the PTY host): the coordinator opens the
-    // stream through that backend.
-    const streamRuntime = session.runtimes.find((runtime) => terminalRouteKey(runtime) === session.primaryRuntimeKey)
-      ?? session.runtimes[0]
+    // The agent's primary pane: the coordinator opens the stream through the backend that holds it.
+    const streamRuntime = primaryRuntimeOf(session)
     if (!streamRuntime) {
       this.sendError(connId, 'TERMINAL_RUNTIME_UNAVAILABLE', { requestId })
       return
@@ -521,12 +558,13 @@ export class TerminalStreamManager {
       let opened: Awaited<ReturnType<TerminalBackendCoordinator['openStream']>>
       try {
         opened = await this.deps.terminals.openStream(session, size, {
+          // Subscription 0: once a retarget has moved the stream to another pane, this one is ignored.
           onData: (bytes) => {
-            if (state) this.onOutput(state, bytes)
-            else buffered.push(Buffer.from(bytes))
+            if (!state) buffered.push(Buffer.from(bytes))
+            else if (state.subscription === 0) this.onOutput(state, bytes)
           },
           onClose: (reason) => {
-            if (state) void this.closeStream(state, reason, true)
+            if (state?.subscription === 0) void this.closeStream(state, reason, true)
           },
         }, this.deps.readOnly || watching)
       } catch {
@@ -576,6 +614,9 @@ export class TerminalStreamManager {
         engineId: session.engine,
         placementKey,
         handle: opened.value,
+        subscription: 0,
+        subscriptions: 0,
+        size,
         compression: wantsZlib ? 'zlib' : 'none',
         loopback,
         flushMs: this.flushWindow(connId, session.agentId, loopback),
@@ -699,6 +740,15 @@ export class TerminalStreamManager {
     state.lastInputSeq = inputSeq
     state.expiresAt = this.now() + HEARTBEAT_TIMEOUT_MS
     this.tookInput(state, typedByPerson(bytes), nativeSubmitKey(bytes))
+    // The agent is changing host: the pane this stream writes to is going away. The keystrokes wait, in order,
+    // and are written to the pane the row names once the move ends. The seq is spent either way.
+    const gate = this.deps.moveGate
+    if (gate?.holding(state.agentId)) {
+      this.touchedWhileHeld.add(state.agentId)
+      const held = Uint8Array.from(bytes)
+      gate.enqueue(state.agentId, () => this.writeHeldInput(state, held))
+      return
+    }
     // Not awaited. `writeRaw` hands its `send-keys` to the control client's FIFO synchronously, so
     // keystroke order is already fixed by the time it returns its promise — and the seq above is
     // spent, so the next frame cannot race this one. Awaiting the reply held the whole local
@@ -725,6 +775,28 @@ export class TerminalStreamManager {
     })
   }
 
+  /**
+   * Input held while its agent changed host, written to the row's pane as it is now, through the backend's raw
+   * write: the stream it came on may have closed meanwhile, and the input is still the person's. A backend
+   * with no such write (tmux, which never moves) gets it through the stream, retargeted by then.
+   */
+  private async writeHeldInput(state: ActiveStream, bytes: Uint8Array): Promise<void> {
+    const session = this.deps.resolveAgent(state.agentId)
+    const runtime = session ? primaryRuntimeOf(session) : undefined
+    const backend = runtime ? this.deps.terminals.backendFor(runtime) : undefined
+    let result: TerminalActionResult
+    try {
+      result = runtime && backend?.writeInput ? await backend.writeInput(runtime, bytes)
+        : !state.closing ? await state.handle.writeRaw(bytes)
+          : terminalActionNotStarted('the agent has no pane to write to')
+    } catch (error) {
+      result = terminalActionNotStarted(error instanceof Error ? error.message : String(error))
+    }
+    if (result.state === 'succeeded') return
+    this.diagnostic(state, 'held_input_failed', { reason: result.reason })
+    if (!state.closing) this.sendError(state.connId, 'TERMINAL_INPUT_FAILED', { streamId: state.streamId, message: result.reason })
+  }
+
   /** See `TerminalStreamManagerDeps.onInput`. A listener's failure is its own: input is never held by it. */
   private tookInput(state: ActiveStream, typed: boolean, submitted = false): void {
     try { this.deps.onInput?.(state.agentId, typed, { connId: state.connId, kind: state.client?.kind ?? null,
@@ -746,6 +818,7 @@ export class TerminalStreamManager {
       this.sendError(connId, 'TERMINAL_RESIZE_FAILED', { streamId: state.streamId, message: result.reason })
       return
     }
+    state.size = size
     await this.sendKeyframe(state, 'resize')
   }
 
@@ -1169,13 +1242,23 @@ export class TerminalStreamManager {
    * which the snapshot then waits out, or `ended`.
    */
   private async sendKeyframe(
-    state: ActiveStream, reason: 'open' | 'resize' | 'resync' | 'input' | 'repaint', print?: 'printing' | 'ended',
+    state: ActiveStream, reason: 'open' | 'resize' | 'resync' | 'input' | 'repaint' | 'retarget', print?: 'printing' | 'ended',
   ): Promise<void> {
     if (state.closing || state.resyncing) return
     const startedAt = this.now()
+    // The pane this keyframe is taken from. A retarget while it is taken moves the stream to another pane: what
+    // this one shows is then not the stream's, and the keyframe is taken again from the new one (`moved`).
+    const handle = state.handle
+    const moved = (): boolean => {
+      if (state.handle === handle) return false
+      handle.endSnapshot()
+      state.snapshotting = false
+      state.resyncing = false
+      return true
+    }
     state.resyncing = true
     state.snapshotting = true
-    state.handle.beginSnapshot()
+    handle.beginSnapshot()
     state.output = []
     state.outputBytes = 0
     if (state.outputPaused) {
@@ -1184,13 +1267,14 @@ export class TerminalStreamManager {
       state.pausedAt = null
       if (state.stallTimer) clearTimeout(state.stallTimer)
       state.stallTimer = null
-      const resumed = await state.handle.resumeOutput().catch(() => ({
+      const resumed = await handle.resumeOutput().catch(() => ({
         state: 'failed' as const,
         dispatch: 'not_started' as const,
         reason: 'resume failed',
       }))
+      if (moved()) return this.sendKeyframe(state, 'retarget')
       if (resumed.state !== 'succeeded') {
-        state.handle.endSnapshot()
+        handle.endSnapshot()
         state.snapshotting = false
         state.resyncing = false
         this.sendError(state.connId, 'TERMINAL_BACKPRESSURE_FAILED', {
@@ -1220,7 +1304,7 @@ export class TerminalStreamManager {
         state.repaintWatchUntil = this.now() + REPAINT_GUARD_MS
         state.repaintTail = Buffer.alloc(0)
       }
-      snapshot = await state.handle.snapshot(
+      snapshot = await handle.snapshot(
         state.engineId === 'grok' ? { tuiOwnsScrollback: true }
           : screen ? { conversationHistory: true, ...(repaint ? { repaint } : {}) }
             : undefined,
@@ -1228,8 +1312,9 @@ export class TerminalStreamManager {
     } catch (error) {
       snapshot = { state: 'failed', reason: error instanceof Error ? error.message : 'tmux snapshot failed' }
     }
+    if (moved()) return this.sendKeyframe(state, 'retarget')
     if (snapshot.state !== 'succeeded') {
-      state.handle.endSnapshot()
+      handle.endSnapshot()
       state.snapshotting = false
       state.resyncing = false
       this.diagnostic(state, 'snapshot_failed', { reason: snapshot.reason })
@@ -1238,7 +1323,7 @@ export class TerminalStreamManager {
       return
     }
     if (snapshot.value.bytes.length > KEYFRAME_MAX_BYTES) {
-      state.handle.endSnapshot()
+      handle.endSnapshot()
       state.snapshotting = false
       state.resyncing = false
       this.diagnostic(state, 'snapshot_too_large', { plainBytes: snapshot.value.bytes.length })
@@ -1261,7 +1346,7 @@ export class TerminalStreamManager {
       bytes: body.bytes,
     })
     if (!sent) {
-      state.handle.endSnapshot()
+      handle.endSnapshot()
       state.snapshotting = false
       state.resyncing = false
       await this.closeStream(state, 'backend disconnected', false)
@@ -1284,7 +1369,7 @@ export class TerminalStreamManager {
     // the viewer while the keyframe was still marked as being taken. The print's keyframe can begin from it here.
     state.snapshotting = false
     state.resyncing = false
-    state.handle.endSnapshot()
+    handle.endSnapshot()
     this.flushOutput(state)
     if (state.pendingBytes > PAUSE_HIGH_WATERMARK_BYTES && !state.outputPaused) void this.pauseOutput(state)
   }
@@ -1468,6 +1553,12 @@ export class TerminalStreamManager {
    * window counts when it lists the agent, or never listed anything.
    */
   isLookedAt(agentId: string): boolean {
+    // A held agent someone typed into or opened is in use, whether or not a window lists it: the mover reads
+    // this on its next tick, and stops before a swap it has not yet begun.
+    if (this.touchedWhileHeld.has(agentId)) {
+      if (this.deps.moveGate?.holding(agentId)) return true
+      this.touchedWhileHeld.delete(agentId)
+    }
     for (const state of this.streams.values()) {
       if (state.agentId !== agentId || state.closing || state.watchOnly) continue
       if (!state.loopback) return true
@@ -1475,6 +1566,76 @@ export class TerminalStreamManager {
       if (!visible || visible.has(agentId)) return true
     }
     return false
+  }
+
+  /**
+   * Move every open stream of [agentId], of any kind, to the pane [to]: the agent changed host. Each stream is
+   * subscribed on `to` through the same coordinator call an open makes, at its own size and mode, and keeps its
+   * connection, stream id, lease and seq. The client sees only frames it already knows: a keyframe of the new
+   * pane in place of the old one, then the new pane's output. No close, and no new frame type. A stream that
+   * cannot follow is closed as a stream whose pane went away is, and its client opens it again.
+   */
+  async retarget(agentId: string, to: TerminalRuntimeRef): Promise<void> {
+    const streams = [...this.streams.values()].filter((state) => state.agentId === agentId && !state.closing)
+    if (streams.length === 0) return
+    const session = this.deps.resolveAgent(agentId)
+    // The row as the coordinator reads it, naming only `to`: the open path's own call, on the pane asked for.
+    const target = session ? { ...session, runtimes: [to], primaryRuntimeKey: terminalRouteKey(to) } : null
+    await Promise.all(streams.map((state) => this.retargetStream(state, target)))
+  }
+
+  private async retargetStream(state: ActiveStream, target: RegisteredSession | null): Promise<void> {
+    if (!target) {
+      await this.closeStream(state, 'the agent is no longer registered', true)
+      return
+    }
+    const subscription = ++state.subscriptions
+    let opened: Awaited<ReturnType<TerminalBackendCoordinator['openStream']>>
+    try {
+      opened = await this.deps.terminals.openStream(target, state.size, {
+        onData: (bytes) => { if (state.subscription === subscription) this.onOutput(state, bytes) },
+        onClose: (reason) => { if (state.subscription === subscription) void this.closeStream(state, reason, true) },
+      }, this.deps.readOnly === true || state.watching)
+    } catch (error) {
+      opened = { state: 'failed', reason: error instanceof Error ? error.message : String(error) }
+    }
+    // Closed while the new pane was being opened, or moved again past this one by a later retarget.
+    if (state.closing || state.subscription > subscription) {
+      if (opened.state === 'succeeded') await opened.value.close().catch(() => { /* best effort */ })
+      return
+    }
+    if (opened.state !== 'succeeded') {
+      this.diagnostic(state, 'retarget_failed', { reason: opened.reason })
+      await this.closeStream(state, opened.reason, true)
+      return
+    }
+    const previous = state.handle
+    const previousPaused = state.outputPaused
+    state.subscription = subscription
+    state.handle = opened.value
+    const placementKey = terminalPlacementKey(opened.value.runtime)
+    if (placementKey !== state.placementKey) {
+      if (this.controllerByPlacement.get(state.placementKey) === state.ownerId) {
+        this.controllerByPlacement.delete(state.placementKey)
+        this.controllerByPlacement.set(placementKey, state.ownerId)
+      }
+      state.placementKey = placementKey
+    }
+    // The new pane was never paused, and no print after a resize is awaited from it.
+    if (state.outputPaused) {
+      state.outputPaused = false
+      if (state.pausedAt != null) state.pausedMs += Math.max(0, this.now() - state.pausedAt)
+      state.pausedAt = null
+      if (state.stallTimer) clearTimeout(state.stallTimer)
+      state.stallTimer = null
+    }
+    state.repaintWatchUntil = 0
+    state.repaintTail = Buffer.alloc(0)
+    this.diagnostic(state, 'retargeted', { watching: state.watching })
+    if (previousPaused) await previous.resumeOutput().catch(() => { /* best effort */ })
+    await previous.close().catch(() => { /* best effort */ })
+    // What the client shows is the old pane's: the keyframe replaces it, and the new pane's output follows it.
+    await this.sendKeyframe(state, 'retarget')
   }
 
   private flushWindow(connId: string, agentId: string, loopback: boolean): number {

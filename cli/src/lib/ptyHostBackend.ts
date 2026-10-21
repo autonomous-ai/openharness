@@ -739,6 +739,13 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
     return actionOf(await client.call({ op: 'key', pane: runtime.paneId, key: 'Enter' }))
   }
 
+  /** The host's raw `write`: the bytes a stream's input frame carries, sent as they are. */
+  async writeInput(runtime: PtyRuntimeRef, bytes: Uint8Array): Promise<TerminalActionResult> {
+    const client = this.clientFor(runtime)
+    if (!client) return terminalActionNotStarted(UNAVAILABLE)
+    return actionOf(await client.call({ op: 'write', pane: runtime.paneId, data: Buffer.from(bytes).toString('base64') }))
+  }
+
   async sendKey(runtime: PtyRuntimeRef, key: TerminalLogicalKey): Promise<TerminalActionResult> {
     const client = this.clientFor(runtime)
     if (!client) return terminalActionNotStarted(UNAVAILABLE)

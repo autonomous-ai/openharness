@@ -375,6 +375,12 @@ describe('PtyHostBackend input', () => {
     expect(calls).toEqual([{ op: 'paste', pane: '%1', text: 'héllo', bracketed: false }])
   })
 
+  it('writeInput sends the bytes as they are, through the host\'s raw write', async () => {
+    const { backend, calls } = await ready()
+    expect(await backend.writeInput(PANE, Uint8Array.of(0x1b, 0x5b, 0x41, 0x0d))).toEqual({ state: 'succeeded', dispatch: 'executed' })
+    expect(calls).toEqual([{ op: 'write', pane: '%1', data: Buffer.from([0x1b, 0x5b, 0x41, 0x0d]).toString('base64') }])
+  })
+
   it('sendKey sends the tmux name of the key', async () => {
     const { backend, calls } = await ready()
     await backend.sendKey(PANE, 'backtab')
