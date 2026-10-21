@@ -75,6 +75,37 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
     super.dispose();
   }
 
+  /// Unlocked and online again after the restart: the rest of the update. hn and the CLI waiting
+  /// with it are activated by the first check after a restart, a few minutes in; asked for now,
+  /// under the same spinner, until each part says its new version.
+  Future<void> _unlock(String hotspot) async {
+    await Navigator.of(context).push(
+      phoneRoute(
+        (_) => UnlockComputerPage(
+          notifier: _app,
+          machineId: _id,
+          hotspotName: hotspot,
+        ),
+      ),
+    );
+    // Back without it online (the person left the Unlock page): nothing to finish yet.
+    if (!mounted || !_isOnline()) return;
+    setState(() {
+      _restarting = false;
+      _wentDown = false;
+      _finished = '';
+      _started = 'Finishing the update…';
+    });
+    await _app.refreshOsStatus(_id, force: true);
+    if (!mounted) return;
+    if (_app.updateAvailable(_id) && !_app.updateRestarts(_id)) {
+      await _app.osDevice(_id, {'action': 'update'});
+      if (!mounted) return;
+      setState(() => _started = 'Finishing the update: hn and the CLI…');
+    }
+    _follow(encrypted: true);
+  }
+
   /// From going down to its Wi-Fi up at the password: how long the computer's startup takes.
   static const _hotspotAfter = Duration(seconds: 20);
 
@@ -412,15 +443,7 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
                       TtyPrimaryButton(
                         key: const Key('version-unlock'),
                         label: 'Unlock…',
-                        onPressed: () => Navigator.of(context).push(
-                          phoneRoute(
-                            (_) => UnlockComputerPage(
-                              notifier: _app,
-                              machineId: _id,
-                              hotspotName: computer.hotspot,
-                            ),
-                          ),
-                        ),
+                        onPressed: () => unawaited(_unlock(computer.hotspot)),
                       ),
                   ],
                 ),

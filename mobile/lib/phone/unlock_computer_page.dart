@@ -274,7 +274,11 @@ class _UnlockComputerPageState extends State<UnlockComputerPage> {
       if (machine?.status == 'running') {
         _poll?.cancel();
         unawaited(_app.refreshOsStatus(widget.machineId, force: true));
-        _show(_Step.done);
+        // Nothing left to do here: back where the person came from, told it is online. The page
+        // that opened this one goes on from there (Version finishes its update).
+        ScaffoldMessenger.maybeOf(context)
+            ?.showSnackBar(SnackBar(content: Text('$_name is online.')));
+        Navigator.of(context).maybePop();
         return;
       }
       if (DateTime.now().isAfter(deadline)) {
