@@ -339,9 +339,11 @@ async function storeSession(
   opts?: { bornOnly?: boolean; excludedSessionId?: string; pid?: number; codexHome?: string; expectedProcess?: ProcessIdentity; nativeBudget?: NativeEvidenceBudget },
 ): Promise<RepairedSession | null> {
   const scan = scanMeta(engine, store.scan, cwd)
-  if ('record' in store.live) {
-    const exact = opts?.pid ? await processSessionOf(engine, opts.pid, cwd, startedAtMs) : null
-    if (exact) return exact
+  if ('record' in store.live && opts?.pid) {
+    const exact = await processSessionEvidence(engine, opts.pid, cwd, startedAtMs)
+    exact.verify()
+    // A process that names a conversation it has not written yet has none: a folder scan would guess a sibling's.
+    if (exact.session || exact.unwritten) return exact.session
   }
   const sessions = repairRoots(engine, opts?.codexHome)
   const found = opts?.pid && 'open' in store.live
@@ -616,17 +618,18 @@ export async function processSessionOf(engine: AgentEngine, pid: number, cwd: st
   return proof.session
 }
 
-/** Stop retains this proof across its final process probe and any fallback lookup. */
+/** Stop retains this proof across its final process probe and any fallback lookup. `unwritten` is the conversation
+ * the process names before its first prompt writes it: there is no session yet, and nothing to look for elsewhere. */
 export async function processSessionEvidence(engine: AgentEngine, pid: number, cwd: string, startedAtMs: number,
   budget = new NativeEvidenceBudget(),
-): Promise<{ session: RepairedSession | null; verify(): void }> {
+): Promise<{ session: RepairedSession | null; unwritten?: string; verify(): void }> {
   const live = sessionStoreOf(engine)?.live
   if (!live || !('record' in live) || !Number.isSafeInteger(pid) || pid <= 0 || !Number.isFinite(startedAtMs)) {
     return { session: null, verify() {} }
   }
   const paths = new NativePaths(budget)
   const rule = live.record
-  let result: RepairedSession | null = null
+  let result: { sessionId: string; transcriptPath: string | null } | null = null
   let selected: string | undefined
   const roots = repairRoots(engine)
   const records: { file: string; text: string | null }[] = []
@@ -663,12 +666,14 @@ export async function processSessionEvidence(engine: AgentEngine, pid: number, c
     // No asynchronous work follows the selected record. This includes negative and stale claims.
     for (const { file, text } of recheck) verifyProcessRecord(file, text, budget)
   }
-  return { session: result, verify }
+  return result?.transcriptPath
+    ? { session: { sessionId: result.sessionId, transcriptPath: result.transcriptPath }, verify }
+    : { session: null, ...(result ? { unwritten: result.sessionId } : {}), verify }
 }
 
 type ProcessRecordRule = Extract<SessionStoreContract['live'], { record: unknown }>['record']
 
-async function processRecord(engine: AgentEngine, rule: ProcessRecordRule, text: string, pid: number, cwd: string, startedAtMs: number): Promise<RepairedSession | null> {
+async function processRecord(engine: AgentEngine, rule: ProcessRecordRule, text: string, pid: number, cwd: string, startedAtMs: number): Promise<{ sessionId: string; transcriptPath: string | null } | null> {
   try {
     const record = JSON.parse(text)
     if (!record || typeof record !== 'object' || Array.isArray(record)
@@ -685,9 +690,11 @@ async function processRecord(engine: AgentEngine, rule: ProcessRecordRule, text:
     // Both represent the exact second, not the metadata file's modification time or a recycled PID.
     if (record[rule.pid] !== pid || ![Date.parse(start), Date.parse(`${start} UTC`)].includes(startedAtMs)) return null
     if (!await sameDir(folder, cwd)) throw new IdentityReadUnavailable('the current process record names a different working directory')
-    const transcriptPath = await findResumedTranscript(engine, sessionId)
-    if (!transcriptPath) throw new IdentityReadUnavailable('the process names a conversation whose transcript is unavailable')
-    return { sessionId, transcriptPath }
+    // Claude Code writes the transcript with the first prompt, so a harness opened and never used has none. Held, its
+    // Change agent waited forever (2026-10-21). A lookup that cannot finish still throws; only a missing file is null.
+    // The lookup's own id test answers null too, and a malformed id is no proof the conversation is empty.
+    if (!/^[0-9a-f-]{16,128}$/i.test(sessionId)) throw new IdentityReadUnavailable('the process record is incomplete or invalid')
+    return { sessionId, transcriptPath: await findResumedTranscript(engine, sessionId) }
   } catch (error) {
     if (error instanceof IdentityReadUnavailable) throw error
     if (error instanceof SyntaxError) throw new IdentityReadUnavailable('the process record is incomplete or invalid')

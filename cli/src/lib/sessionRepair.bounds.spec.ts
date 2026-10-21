@@ -304,7 +304,10 @@ describe('bounded native metadata', () => {
         return actual.open(name, flags, mode)
       })
     }
-    await expect(repair.findLiveSession('claude', CWD, START, { pid: 77 })).rejects.toThrow('Conversation identity is held')
+    const found = repair.findLiveSession('claude', CWD, START, { pid: 77 })
+    // A valid record whose conversation is not written yet names no session: still never the sibling's.
+    if (mode === 'missing transcript') await expect(found).resolves.toBeNull()
+    else await expect(found).rejects.toThrow('Conversation identity is held')
   })
 
   it.each(['unreadable', 'conflicting'])('does not accept the first home before checking a %s moved-home record', async mode => {
