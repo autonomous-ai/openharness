@@ -170,7 +170,7 @@ describe('startPtyUpdater', () => {
     const h = harness({ withLock: async () => { throw new SpawnLockBusyError(null) } })
     expect(await h.poller.readyToStage()).toBeNull()
     await vi.waitFor(() => expect(h.events).toContain('prepare 0.11.0 unlocked'), { timeout: 2_000 })
-    expect(await h.poller.readyToStage()).toBe('0.11.0')
+    expect(await h.poller.readyToStage()).toEqual({ version: '0.11.0', protocol: 2, paired: false })
     expect(pointer()).toBe('0.11.0')
     // Taken into the CLI's handover: the poller stages nothing more, on its own or for the CLI.
     expect(h.staged).toEqual([])
@@ -250,7 +250,7 @@ describe('a host for a CLI build that needs it (the pairing rule)', () => {
     expect(await h.poller.readyToStage()).toBeNull()
     expect(await h.poller.readyToStage(PTY_PROTOCOL)).toBeNull()
     expect(pointer()).toBe('0.10.0')
-    expect(await h.poller.readyToStage(above)).toBe('0.11.0')
+    expect(await h.poller.readyToStage(above)).toEqual({ version: '0.11.0', protocol: above, paired: true })
     expect(pointer()).toBe('0.11.0')
     expect(h.poller.readyProtocol()).toBeNull()
   })
@@ -260,7 +260,7 @@ describe('a host for a CLI build that needs it (the pairing rule)', () => {
     expect(h.poller.readyProtocol()).toBeNull()
     await vi.waitFor(() => expect(h.events).toContain('prepare 0.11.0 unlocked'), { timeout: 2_000 })
     expect(h.poller.readyProtocol()).toBe(2)
-    expect(await h.poller.readyToStage(above)).toBe('0.11.0')
+    expect(await h.poller.readyToStage(above)).toEqual({ version: '0.11.0', protocol: 2, paired: false })
   })
 
   describe('with the CLI updater beside it', () => {

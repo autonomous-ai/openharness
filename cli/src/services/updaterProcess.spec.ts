@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -47,7 +47,7 @@ describe('the updater in its own process', () => {
     let hn: HnOptions | null = null
     let pty: PtyOptions | null = null
     let sent: (() => void) | null = null
-    const ready = { pty: null as string | null }
+    const ready = { pty: null as string | null, paired: false }
     const deps: UpdaterServiceDeps = {
       tell: (message, done) => { told.push(message); sent = done },
       exit: (code) => { calls.push(`exit ${code}`) },
@@ -62,8 +62,13 @@ describe('the updater in its own process', () => {
         pty = options
         return {
           stop: () => calls.push('stop pty'),
-          readyToStage: async (forPtyProtocol?: number) => { calls.push(`ready for ${forPtyProtocol}`); const version = ready.pty; ready.pty = null; return version },
-          readyProtocol: () => (ready.pty ? 3 : null),
+          readyToStage: async (forPtyProtocol?: number) => {
+            calls.push(`ready for ${forPtyProtocol}`)
+            const version = ready.pty
+            ready.pty = null
+            return version === null ? null : { version, protocol: ready.paired ? 3 : 2, paired: ready.paired }
+          },
+          readyProtocol: () => (ready.pty ? (ready.paired ? 3 : 2) : null),
         }
       },
     }
@@ -148,8 +153,8 @@ describe('the updater in its own process', () => {
     m.ready.pty = '0.11.0'
     // The CLI poller's handover (lib/selfUpdate.ts): under its lock, the host first, then the CLI.
     await m.cli().withLock!(async () => {
-      const ptyVersion = await m.cli().beforeStage!(2)
-      const staged = m.cli().onStaged('9.9.9', ptyVersion) as Promise<void>
+      const host = await m.cli().beforeStage!(2)
+      const staged = m.cli().onStaged('9.9.9', host?.version ?? null) as Promise<void>
       m.sent()()
       await staged
     })
@@ -209,13 +214,47 @@ describe('the updater in its own process', () => {
     expect(processUpdaterDeps('win32', join(tmpdir(), 'x', 'cli')).ptyRootDir).toBe(join(tmpdir(), 'x'))
   })
 
+  it('a paired host whose build then fails to stage is taken back out, and nothing is handed over', () => judgingPty(async () => {
+    // Handed over alone, a CLI-2 master would judge host 3 with a CLI-2 core, likely keep it, and no pane could open.
+    const root = mkdtempSync(join(tmpdir(), 'updater-paired-'))
+    try {
+      const ptyRoot = join(root, 'runtime', 'pty')
+      // As readyToStage(3) leaves it: 0.11.0 (protocol 3) in use and on probation, 0.10.0 to go back to.
+      for (const version of ['0.10.0', '0.11.0']) {
+        mkdirSync(join(ptyRoot, version), { recursive: true })
+        for (const name of ['harness-pty.exe', 'harness.exe', 'harness-launch.exe']) writeFileSync(join(ptyRoot, version, name), `${version} ${name}`)
+      }
+      writeFileSync(join(ptyRoot, 'current-pty'), '0.11.0')
+      writeFileSync(join(ptyRoot, 'pty-pending.json'), JSON.stringify({ version: '0.11.0', previous: '0.10.0' }))
+      mkdirSync(join(root, 'bin'))
+      for (const name of ['harness.exe', 'harness-launch.exe']) writeFileSync(join(root, 'bin', name), `0.11.0 ${name}`)
+      const m = make()
+      runUpdaterService(undefined, { ...m.deps, ...m.windows, ptyRootDir: root })
+      m.ready.pty = '0.11.0'
+      m.ready.paired = true
+      await expect(m.cli().withLock!(async () => {
+        await m.cli().beforeStage!(3)
+        throw new Error('ENOSPC')
+      })).rejects.toThrow('ENOSPC')
+      expect(m.told).toEqual([])
+      expect(m.calls).not.toContain(`exit ${SERVICE_EXIT_RESTART}`)
+      expect(readFileSync(join(ptyRoot, 'current-pty'), 'utf8').trim()).toBe('0.10.0')
+      expect(readFileSync(join(root, 'bin', 'harness.exe'), 'utf8')).toBe('0.10.0 harness.exe')
+      expect(existsSync(join(ptyRoot, 'pty-pending.json'))).toBe(false)
+      // Nothing was wrong with the host: it pairs with the next build.
+      expect(existsSync(join(ptyRoot, 'pty-rejected.json')) ? JSON.parse(readFileSync(join(ptyRoot, 'pty-rejected.json'), 'utf8')) : []).toEqual([])
+      expect(m.calls).toContain('[update] terminal host 0.11.0 taken back out with the build it came with — back to 0.10.0')
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  }))
+
   it('tells the host poller the protocol the build needs, and the CLI\'s rule what is ready to go in first', () => judgingPty(async () => {
     const m = make()
     runUpdaterService(undefined, { ...m.deps, ...m.windows })
     expect(m.cli().readyPtyProtocol?.()).toBeNull()
     m.ready.pty = '0.11.0'
+    m.ready.paired = true
     expect(m.cli().readyPtyProtocol?.()).toBe(3)
-    expect(await m.cli().beforeStage?.(3)).toBe('0.11.0')
+    expect(await m.cli().beforeStage?.(3)).toEqual({ version: '0.11.0', protocol: 3 })
     expect(m.calls).toContain('ready for 3')
   }))
 
@@ -228,7 +267,8 @@ describe('the updater in its own process', () => {
     runUpdaterService(undefined, linux.deps).stop()
     expect(linux.cli().installedPtyProtocol).toBeUndefined()
     expect(processUpdaterDeps('linux').installedPtyProtocol).toBeUndefined()
-    // No current-pty in this root: nothing to read, which holds nothing back.
+    // No current-pty in this root: nothing to read. The CLI's updater (lib/selfUpdate.ts) counts that as this CLI's own
+    // PTY_PROTOCOL on Windows, so a build that needs more is still held back.
     expect(processUpdaterDeps('win32', join(tmpdir(), 'no-such-install', 'cli')).installedPtyProtocol!()).toBeNull()
   })
 

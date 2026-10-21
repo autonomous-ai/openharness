@@ -16,7 +16,9 @@
  * On Windows it checks the terminal host's payload too (lib/windows/ptyUpdate.ts), under a master that judges one
  * (`HARNESSD_JUDGES_PTY`). A host alone is staged and told as `ptyVersion`; a host and a build found at one check go
  * in one lock hold and one message, the host first. Either staging ends this process the same way, and the next run
- * checks both again.
+ * checks both again. A host of a protocol above this build's (a paired one) goes in only with the build that needs it;
+ * if that build then fails to stage, the host is taken back out and nothing is told (lib/windows/ptyUpdate.ts
+ * `takeBackPty`).
  */
 import { env } from '../config/env.js'
 import { SERVICE_EXIT_RESTART, type StagedUpdate, type UpdaterMessage } from '../harnessd/protocol.js'
@@ -25,7 +27,7 @@ import { DOWNLOAD_LIMITS, downloadVerified, isLocalDevBuild, retireCliVersions, 
 import { currentCli } from '../lib/windows/installLayout.js'
 import { processRetireDeps } from '../lib/windows/cliVersions.js'
 import { preparePtyPayload, ptyManifestUrl, ptyPlatformKey } from '../lib/windows/ptyPayload.js'
-import { installedPtyProtocol, startPtyUpdater, sweepPtyLeftovers } from '../lib/windows/ptyUpdate.js'
+import { installedPtyProtocol, startPtyUpdater, sweepPtyLeftovers, takeBackPty, type StagedHost } from '../lib/windows/ptyUpdate.js'
 import { startTuiUpdater } from '../tui/update.js'
 import { VERSION } from '../version.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
@@ -109,8 +111,9 @@ export function runUpdaterService(_options?: unknown, deps: UpdaterServiceDeps =
     void withLock(async () => { sweepPtyLeftovers(root, deps.log) })
       .catch((error: unknown) => deps.log(`[update] could not sweep the terminal host's leftovers (${error instanceof Error ? error.message : String(error)}) — the next start tries again`))
   }
-  // A host the CLI's handover took (`beforeStage`) and has not told yet: told on its own if that stage fails.
-  let ptyTaken: string | null = null
+  // A host the CLI's handover took (`beforeStage`) and has not told yet: if that stage fails, a supported one is told on
+  // its own, and a paired one taken back out.
+  let ptyTaken: StagedHost | null = null
   const cli = deps.startCli({
     currentVersion: VERSION,
     url: env.ADAPTER_UPDATE_URL,
@@ -122,17 +125,23 @@ export function runUpdaterService(_options?: unknown, deps: UpdaterServiceDeps =
       try {
         return await fn()
       } finally {
-        // Installed for this handover and then the build's stage failed: the host is on disk, on probation, and must
-        // still be handed over, or no master would judge it.
+        // Installed for this handover and then the build's stage failed. A supported host is on disk, on probation, and
+        // must still be handed over, or no master would judge it. A paired one would come up under this build, which
+        // cannot open a pane on it, and a master judging it with this build's core would likely keep it: it is taken
+        // back out, and nothing is handed over. A later updater start prepares it again for the next check.
         const taken = ptyTaken
         ptyTaken = null
-        if (taken !== null) await handOver({ ptyVersion: taken })
+        if (taken?.paired && deps.ptyRootDir !== undefined) takeBackPty(deps.ptyRootDir, deps.log, '[update] ')
+        else if (taken !== null) await handOver({ ptyVersion: taken.version })
       }
     }),
     // A paired host (one of a protocol above this build's) goes in only for the build that needs it: the poller is told
     // which protocol that is, and the CLI's protocol rule hears what is ready to go in first.
     ...(pty ? {
-      beforeStage: async (ptyProtocol: number) => (ptyTaken = await pty.readyToStage(ptyProtocol)),
+      beforeStage: async (ptyProtocol: number) => {
+        ptyTaken = await pty.readyToStage(ptyProtocol)
+        return ptyTaken && { version: ptyTaken.version, protocol: ptyTaken.protocol }
+      },
       readyPtyProtocol: () => pty.readyProtocol(),
     } : {}),
     onStaged: (version, ptyVersion) => {

@@ -615,8 +615,9 @@ export function startSelfUpdater(opts: {
   onStaged: (version: string, ptyVersion: string | null) => void | Promise<void>
   /** Called under the lock right before `stage`: what else goes into this handover, first (Windows: a terminal host
    *  payload already prepared, ./windows/ptyUpdate.ts `readyToStage`). Its version reaches `onStaged`. It hears the
-   *  host protocol the build needs, so a paired host goes in only with the build that needs it. */
-  beforeStage?: (ptyProtocol: number) => Promise<string | null>
+   *  host protocol the build needs, so a paired host goes in only with the build that needs it, and says the protocol
+   *  of a host it installed (from that host's canary), which the rule then trusts. */
+  beforeStage?: (ptyProtocol: number) => Promise<{ version: string; protocol: number } | null>
   /** Wrap the swap + `onStaged` in a mutual exclusion with every other process that writes the
    *  bundle or spawns the daemon. Default: none (tests, and callers that hold their own). */
   withLock?: <T>(fn: () => Promise<T>) => Promise<T>
@@ -777,10 +778,12 @@ export function startSelfUpdater(opts: {
           return
         }
         // The terminal host first, in this same lock hold and handover (spec §5): one restart for both.
-        const ptyVersion = opts.beforeStage ? await opts.beforeStage(ready.ptyProtocol) : null
+        const host = opts.beforeStage ? await opts.beforeStage(ready.ptyProtocol) : null
+        const ptyVersion = host?.version ?? null
         // Asked again with the host this build would come up on: the paired one may have failed to go in, or a rollback
-        // may have moved the pointer since the check. A host that did go in is the caller's to hand over (`withLock`).
-        const shortNow = hostShortOf(ready.ptyProtocol)
+        // may have moved the pointer since the check. A host that just went in is known from its canary: its binary,
+        // read again now, could fail and count as this CLI's protocol. One that went in is the caller's (`withLock`).
+        const shortNow = host ? (ready.ptyProtocol > host.protocol ? host.protocol : null) : hostShortOf(ready.ptyProtocol)
         if (shortNow !== null) { waitForHost(ready.version, ready.ptyProtocol, shortNow); return }
         stage(opts.dir, ready.cliBuf, ready.notifyBuf, ready.version, platform)
         done = true

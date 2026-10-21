@@ -9,14 +9,14 @@
  * on probation: its marker names the version to go back to, and only the master's probation may settle it. Nor the
  * pairing rule: a host of a protocol above this CLI's goes in only with the CLI build that needs it.
  */
-import { renameSync, rmSync, writeFileSync } from 'node:fs'
+import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { currentPtyVersion } from '../ptyHost/launch.js'
 import { PTY_PROTOCOL } from '../ptyHost/protocol.js'
 import { semverGt } from '../selfUpdate.js'
-import { PTY_REJECTED, installPreparedPty, readPtyPending, rejectedPtyVersions, restorePty, type PtyPending } from './ptyInstall.js'
+import { installPreparedPty, readPtyPending, type PtyPending } from './ptyInstall.js'
 import { fetchPtyEntry, preparePtyPayload, type PreparedPty, type PtyEntry } from './ptyPayload.js'
-import { putBackAside } from './ptyUpdate.js'
+import { takeBackPty } from './ptyUpdate.js'
 
 export interface PtyUpdateCommandDeps {
   fetchEntry: (url: string, key: string) => Promise<PtyEntry | null>
@@ -115,30 +115,8 @@ export function installPtyForUpdate(
 
 /**
  * A paired host whose CLI build then failed to go in: taken back out before the old build is relaunched, which could
- * not open a pane on it. Nothing was wrong with the host, so it is not remembered as rolled back (restorePty records
- * it): it pairs with the next build. Never throws.
+ * not open a pane on it, and not remembered as rolled back (./ptyUpdate.ts `takeBackPty`). Never throws.
  */
 export function takeBackPtyForUpdate(rootDir: string, log: (line: string) => void): void {
-  const pending = readPtyPending(rootDir)
-  // Only the rejection this restore adds is taken back: one from before this run (installed anyway, by name) stays.
-  const rejectedBefore = rejectedPtyVersions(rootDir)
-  try {
-    const result = restorePty(rootDir)
-    // Before anything sweeps: the aside file is the only copy of that path's bytes.
-    const put = putBackAside(rootDir, result.missing)
-    for (const { name, from, error } of put.failed) log(`  ✗ bin\\${name} is missing and ${from} could not be put back (${message(error)})`)
-    if (pending) {
-      const rejected = rejectedPtyVersions(rootDir)
-      const kept = rejected.filter((version) => version !== pending.version)
-      if (!rejectedBefore.includes(pending.version) && kept.length !== rejected.length) {
-        const file = join(rootDir, 'runtime', 'pty', PTY_REJECTED)
-        const temporary = `${file}.tmp-${process.pid}`
-        writeFileSync(temporary, JSON.stringify(kept))
-        renameSync(temporary, file)
-      }
-      log(`  terminal host ${pending.version} taken back out with the build it came with — back to ${pending.previous}`)
-    }
-  } catch (error) {
-    log(`  ✗ could not take terminal host ${pending?.version ?? '(unreadable marker)'} back out (${message(error)}) — the next master's probation rolls it back`)
-  }
+  takeBackPty(rootDir, log, '  ')
 }

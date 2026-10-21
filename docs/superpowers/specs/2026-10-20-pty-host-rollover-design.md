@@ -280,7 +280,7 @@ bump there would leave the G daemon with no host it can speak to. So:
 - moves start once the target host is a G build, which §5 brings within one check of its promotion.
 
 Raising `PTY_PROTOCOL` later stays possible: once G's updaters are on the machines, §5's protocol rule holds a
-protocol-bumped CLI back until its payload is promoted.
+protocol-bumped CLI back until its payload is promoted, and its pairing rule then delivers the two together.
 
 ### 5. The self-update installs a promoted payload
 
@@ -302,8 +302,10 @@ makes. The PTY check and the CLI check are independent:
 2. Unpack it into a temporary folder beside `<runtime>/pty/`. Check that all six files are there: `harness-pty.exe`,
    `harness-launch.exe`, `harness.exe`, `conpty.dll`, `OpenConsole.exe`, `harness-serial.exe`.
 3. Run a canary: the new `harness-pty.exe version` (and `harness-serial.exe version`) must answer with the entry's
-   version. The new host must speak a protocol the installed CLI supports (`SUPPORTED_PTY_PROTOCOLS`). A payload
-   that fails is refused.
+   version. A payload that fails is refused. A host whose protocol the installed CLI supports
+   (`SUPPORTED_PTY_PROTOCOLS`) is installed as below. A host whose protocol is above the running CLI's
+   (`PTY_PROTOCOL`), the host of a protocol bump, is canaried the same way but kept *paired*: it is never installed
+   on its own, only under the pairing rule below. A host below every supported protocol is refused.
 4. Under the daemon spawn lock, the one the CLI update holds:
    - rename the temporary folder to `<runtime>/pty/<version>/`;
    - replace `bin\harness.exe` and `bin\harness-launch.exe`. A running executable cannot be overwritten on Windows,
@@ -327,8 +329,16 @@ makes. The PTY check and the CLI check are independent:
 **The protocol rule.**
 - A CLI build is not staged when it needs a host protocol that no installed payload offers. That is, `PTY_PROTOCOL`
   of the new build is above the protocol of the host `current-pty` names.
-- The CLI waits, with a log line once per version, until a payload with that protocol is installed (the PTY check
-  above, or `install.ps1`). Then it updates.
+- The CLI waits, with a log line once per version, until a payload with that protocol is ready to go in with it
+  (the pairing rule below), or `install.ps1` has installed one. Then it updates. A host whose protocol cannot be read
+  (no `current-pty`, or a `version` that fails or times out) counts as the running CLI's own `PTY_PROTOCOL`.
+- **The pairing rule.** A payload whose host protocol is above the running CLI's goes in only in the same lock hold
+  and the same handover (`harnessd:staged` with both versions) as a canaried CLI build that needs exactly that
+  protocol, the host first, and one probation judges the pair: a failure rolls both back. If the build does not go
+  in after the host did, the host is taken back out (not recorded as rejected) and nothing is handed over.
+- `harness update` follows the same rules: it installs a paired host only with the build that needs it, refuses a
+  build that needs a protocol above the host's (read after its host step), leaves a pair on probation for the next
+  master, and takes a paired host back out when its build fails to go in.
 - The owner's order stays the one `desktop/RELEASE.md` gives. If a protocol bump's CLI is released before its payload
   is promoted, machines keep the older CLI until the promotion. They never get a CLI with no host to talk to.
 - How the updater learns a new build's protocol (from its canary's `version` output, or from the CLI manifest

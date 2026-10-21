@@ -14,14 +14,14 @@
  * (`keepStaged`), for the CLI build and the host alike, and the start-of-updater sweep of what installs leave behind.
  * Nothing here calls a Windows API, so it is tested on every OS.
  */
-import { existsSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { SpawnLockBusyError, describeSpawnLockFailure } from '../daemonSpawnLock.js'
 import { binaryVersion, currentPtyVersion } from '../ptyHost/launch.js'
 import { PTY_PROTOCOL } from '../ptyHost/protocol.js'
 import { REFUSED_RETRY_MAX_MS, msUntilSlot, type Poller } from '../selfUpdate.js'
 import {
-  BIN_FILES, PTY_PENDING, confirmPty, defaultPtyInstallFs, installPreparedPty, readPtyPending, rejectedPtyVersions, restorePty,
+  BIN_FILES, PTY_PENDING, PTY_REJECTED, confirmPty, defaultPtyInstallFs, installPreparedPty, readPtyPending, rejectedPtyVersions, restorePty,
   sweepAsideFiles, type PtyInstallFs, type PtyPending, type PtyRestore,
 } from './ptyInstall.js'
 import {
@@ -55,12 +55,15 @@ const DEFAULT_DEPS: PtyUpdaterDeps = {
   error: (line) => console.error(line),
 }
 
+/** A host `readyToStage` installed: its protocol, from its canary, and whether it was a paired one. */
+export interface StagedHost { version: string; protocol: number; paired: boolean }
+
 export type PtyPoller = Poller & {
   /** Under a lock the caller already holds: install the payload already prepared and return its version, or null
    *  when there is none (or it can no longer be installed). [forPtyProtocol]: the host protocol the CLI build being
    *  staged needs; a paired payload (./ptyPayload.ts `PreparedPty.paired`) goes in only for a build that needs exactly
    *  its protocol. Never throws: the CLI's stage goes on either way, under the protocol rule. */
-  readyToStage(forPtyProtocol?: number): Promise<string | null>
+  readyToStage(forPtyProtocol?: number): Promise<StagedHost | null>
   /** The protocol of the payload prepared and waiting, or null: what lets a CLI build that needs it go ahead
    *  (lib/selfUpdate.ts `readyPtyProtocol`), with it first. */
   readyProtocol(): number | null
@@ -141,7 +144,7 @@ export function startPtyUpdater(opts: {
 
   /** Under the lock: install what is ready. Null when nothing was installed. A paired payload only for a CLI build that
    *  needs its protocol ([forPtyProtocol]), never on its own: it stays ready for that build. */
-  const installReady = (forPtyProtocol?: number): string | null => {
+  const installReady = (forPtyProtocol?: number): StagedHost | null => {
     if (halted || !ready) return null
     const { key, entry, prepared } = ready
     if (prepared.paired && forPtyProtocol !== prepared.protocol) return null
@@ -161,7 +164,7 @@ export function startPtyUpdater(opts: {
     if (!installed) return null
     finish()
     d.log(`[update] staged terminal host ${entry.version} — handing over`)
-    return entry.version
+    return { version: entry.version, protocol: prepared.protocol, paired: prepared.paired === true }
   }
 
   // At the updater's start, before any check prepares a staging folder the sweep would take for a stale one.
@@ -209,7 +212,7 @@ export function startPtyUpdater(opts: {
         const staged = installReady()
         // From the marker's write to the master hearing `harnessd:staged` is one IPC send: an updater killed in that
         // window leaves a host on probation this master never judges, until a master's start does (`unjudgedUpdate`).
-        if (staged !== null) await opts.onStaged(staged)
+        if (staged !== null) await opts.onStaged(staged.version)
       }).catch((error: unknown) => {
         // A busy lock is no failed check: the payload is good and waiting, and the next tick tries again.
         if (!(error instanceof SpawnLockBusyError)) throw error
@@ -351,6 +354,36 @@ export function ptyOnProbation(rootDir: string): string | null {
   const pending = readPtyPending(rootDir)
   if (pending) return `terminal host ${pending.version}`
   return existsSync(join(rootDir, 'runtime', 'pty', PTY_PENDING)) ? 'terminal host (unreadable marker)' : null
+}
+
+/**
+ * Take a paired host back out whose CLI build did not go in with it (spec §5, the pairing rule): left in, the daemon this
+ * build runs could open no pane on it, and a master judging it with this build's core would likely keep it. The host
+ * goes back as a probation rollback puts it (./ptyInstall.ts `restorePty`, with any missing bin path put back from its
+ * aside file), but nothing was wrong with it, so the rejection that rollback records is taken back: it pairs with the
+ * next build. Under the lock the install held. Never throws; each line starts with [prefix].
+ */
+export function takeBackPty(rootDir: string, log: (line: string) => void, prefix: string): void {
+  const pending = readPtyPending(rootDir)
+  // Only the rejection this restore adds is taken back: one from before (a version installed anyway, by name) stays.
+  const rejectedBefore = rejectedPtyVersions(rootDir)
+  try {
+    const result = restorePty(rootDir)
+    // Before anything sweeps: the aside file is the only copy of that path's bytes.
+    const put = putBackAside(rootDir, result.missing)
+    for (const { name, from, error } of put.failed) log(`${prefix}bin\\${name} is missing and ${from} could not be put back (${message(error)})`)
+    if (!pending) return
+    const rejected = rejectedPtyVersions(rootDir)
+    if (!rejectedBefore.includes(pending.version) && rejected.includes(pending.version)) {
+      const file = join(rootDir, 'runtime', 'pty', PTY_REJECTED)
+      const temporary = `${file}.tmp-${process.pid}`
+      writeFileSync(temporary, JSON.stringify(rejected.filter((version) => version !== pending.version)))
+      renameSync(temporary, file)
+    }
+    log(`${prefix}terminal host ${pending.version} taken back out with the build it came with — back to ${pending.previous}`)
+  } catch (error) {
+    log(`${prefix}could not take terminal host ${pending?.version ?? '(unreadable marker)'} back out (${message(error)}) — the next master's probation rolls it back`)
+  }
 }
 
 /** The master's keep (its probation's `confirmUpdate`): the CLI build and the host both stay. */

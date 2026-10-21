@@ -179,7 +179,7 @@ describe('startSelfUpdater', () => {
       currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir, intervalMs: 20,
       withLock: async (fn) => { locked = true; try { return await fn() } finally { locked = false } },
       // The terminal host goes first, in the same lock hold: the CLI is not on disk yet.
-      beforeStage: async () => { events.push(`before ${locked ? 'locked' : 'unlocked'} ${existsSync(join(dir, 'cli.js')) ? 'staged' : 'unstaged'}`); return '0.11.0' },
+      beforeStage: async () => { events.push(`before ${locked ? 'locked' : 'unlocked'} ${existsSync(join(dir, 'cli.js')) ? 'staged' : 'unstaged'}`); return { version: '0.11.0', protocol: 2 } },
       onStaged: (version, ptyVersion) => { staged.push([version, ptyVersion]) },
     })
     await vi.waitFor(() => expect(staged).toEqual([['9.9.9', '0.11.0']]), { timeout: 5_000 })
@@ -871,6 +871,24 @@ describe('the terminal host protocol a build needs (spec §5, the protocol rule)
     } finally { poller.stop() }
   })
 
+  it('under the lock, trusts the protocol of the host that just went in from its canary, not a fresh read of it', async () => {
+    // A just-installed harness-pty.exe whose `version` fails or times out reads as null, which on Windows counts as 2:
+    // re-read, it would hold back the very build the paired host came for, with the host already in.
+    serve(build('9.9.9', 3))
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const staged: Array<[string, string | null]> = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: tempDir(), intervalMs: 10,
+      installedPtyProtocol: () => 2,
+      readyPtyProtocol: () => 3,
+      beforeStage: async () => ({ version: '0.11.0', protocol: 3 }),
+      onStaged: (version, ptyVersion) => { staged.push([version, ptyVersion]) },
+    })
+    try {
+      await vi.waitFor(() => expect(staged).toEqual([['9.9.9', '0.11.0']]), { timeout: 5_000 })
+    } finally { poller.stop() }
+  })
+
   it('a paired host of the protocol the build needs lets it go ahead, the host first in the same lock hold', async () => {
     serve(build('9.9.9', 3))
     vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -889,7 +907,7 @@ describe('the terminal host protocol a build needs (spec §5, the protocol rule)
         order.push(`host ${existsSync(join(dir, 'cli.js')) ? 'after' : 'before'} the build`)
         host = 3
         ready = null
-        return '0.11.0'
+        return { version: '0.11.0', protocol: 3 }
       },
       onStaged: (version, ptyVersion) => { staged.push([version, ptyVersion]) },
     })
