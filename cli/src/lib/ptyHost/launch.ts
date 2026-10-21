@@ -529,6 +529,13 @@ export function forgetExitedHost(home: string, instance: string, pid: number): v
   const file = discoveryPath(home, instance)
   if (!discovery || !file || discovery.pid !== pid || pidAlive(pid)) return
   rmSync(file, { force: true })
+  // The host's lock and pane-id counter sit beside its discovery file under the same name. The host cannot delete the
+  // lock itself: removing it before the lock is released lets a host starting meanwhile lock an unlinked file while
+  // another makes a new one. Here the host is proven gone, so no one holds either; one a scanner still holds stays
+  // for the next time.
+  for (const ext of ['lock', 'panes']) {
+    try { rmSync(file.replace(/\.json$/, `.${ext}`), { force: true }) } catch { /* held for now */ }
+  }
   if (process.platform !== 'win32' && path.isAbsolute(discovery.endpoint)
     && path.dirname(discovery.endpoint) === path.join(home, 'run')) rmSync(discovery.endpoint, { force: true })
 }

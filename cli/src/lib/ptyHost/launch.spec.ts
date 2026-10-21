@@ -592,6 +592,37 @@ describe('forgetExitedHost', () => {
     forgetExitedHost(dir, instance, dead)
     expect([existsSync(own), existsSync(file)]).toEqual([false, true])
   })
+
+  it('takes the lock and pane-id files of the exited instance with it, and never while the host runs or another instance\'s', () => {
+    const dir = tempDir('h-')
+    const instance = `p${PTY_PROTOCOL}-0.4.21`
+    const other = `p${PTY_PROTOCOL}-0.4.22`
+    const run = path.join(dir, 'run')
+    const files = (name: string) => ['json', 'lock', 'panes'].map((ext) => path.join(run, `pty-host-${name}.${ext}`))
+    const dead = deadPid()
+    writeDiscoveryOf(dir, PTY_PROTOCOL, { endpoint: path.join(run, 'x.sock'), pid: process.pid }, instance)
+    for (const file of [...files(instance).slice(1), ...files(other)]) writeFileSync(file, '1')
+    // A live host keeps all of them.
+    forgetExitedHost(dir, instance, process.pid)
+    expect(files(instance).map((file) => existsSync(file))).toEqual([true, true, true])
+    writeDiscoveryOf(dir, PTY_PROTOCOL, { endpoint: path.join(run, 'x.sock'), pid: dead }, instance)
+    forgetExitedHost(dir, instance, dead)
+    expect(files(instance).map((file) => existsSync(file))).toEqual([false, false, false])
+    expect(files(other).map((file) => existsSync(file))).toEqual([true, true, true])
+  })
+
+  it('goes on when a lock file cannot be removed', () => {
+    const dir = tempDir('h-')
+    const instance = `p${PTY_PROTOCOL}-0.4.23`
+    const run = path.join(dir, 'run')
+    const dead = deadPid()
+    writeDiscoveryOf(dir, PTY_PROTOCOL, { endpoint: path.join(run, 'x.sock'), pid: dead }, instance)
+    // A directory in the lock's place cannot be removed as a file, as a lock a scanner still holds on Windows.
+    mkdirSync(path.join(run, `pty-host-${instance}.lock`))
+    writeFileSync(path.join(run, `pty-host-${instance}.panes`), '1')
+    forgetExitedHost(dir, instance, dead)
+    expect([existsSync(path.join(run, `pty-host-${instance}.json`)), existsSync(path.join(run, `pty-host-${instance}.panes`))]).toEqual([false, false])
+  })
 })
 
 const SEED_LINE = (version: string) => JSON.stringify({ version, protocol: PTY_PROTOCOL, features: ['seed'] })
