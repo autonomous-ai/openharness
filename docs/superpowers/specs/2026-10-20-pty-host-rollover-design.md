@@ -1,7 +1,7 @@
 # PTY host updates while agents run (sub-project G)
 
 Date: 2026-10-20, delivery added 2026-10-21
-Status: draft, for review
+Status: implemented on feat/windows-pty-rollover; E2E in docs/testing/pty-rollover-e2e.md
 
 ## Why
 
@@ -490,3 +490,18 @@ These calls are this design's, not yet confirmed by the owner:
 - **The phone's prefetched neighbours count as looked at; a closed window's watch does not.**
 - **After a downgrade or rollback the newer host is drained and its agents moved back**, its folder kept.
 - **`install.ps1` restarts the daemon when only the PTY changed.**
+
+## Known limits
+
+Found by the ARM64 VM end to end ([results](../../testing/pty-rollover-e2e.md)) and not fixed.
+
+- **A terminal's row reads `offline` after a payload handover**, though its shell answers input. The same was seen on
+  a CLI-only update in the Windows CLI run (G3 there), so it is not new to this work.
+- **An agent with no session id never moves and keeps its old host alive** until its pane ends (by design: it cannot
+  resume). On the VM an engine at its sign-in screen was such a pane.
+- **A shell pane appeared under the draining host when a stopped agent row was opened** through the driver. It had no
+  row and kept the host running until it was killed. Not root-caused; the stopped row may still name the old host.
+- **A drained host leaves its `.lock` and `.panes` files in `run/`**; only the discovery file and the version folder go.
+- **The moves of idle agents and the desktop-only cases are unproven on a real machine**: they need a signed-in
+  engine and the desktop UI. The protocol rule's "updates once the payload lands" half needs a host build of
+  protocol 3.
