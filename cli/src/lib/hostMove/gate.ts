@@ -13,6 +13,8 @@ interface Hold {
   draining: boolean
   /** Whether input, a stream open or a message reached the agent during this hold: someone is using it. */
   touched: boolean
+  /** Settles once the release that drains this hold has let the agent go. */
+  done?: Promise<void>
 }
 
 export class MoveGate {
@@ -65,11 +67,29 @@ export class MoveGate {
     const hold = this.holds.get(agentId)
     if (!hold || hold.draining) return
     hold.draining = true
+    let finished!: () => void
+    hold.done = new Promise<void>((resolve) => { finished = resolve })
     for (let next = hold.queue.shift(); next; next = hold.queue.shift()) {
       try { await next() } catch { /* reported by the deliverer */ }
     }
     // No await between the empty queue and this: nothing can be queued that would then never run.
     this.holds.delete(agentId)
+    finished()
+  }
+
+  /** The agents held now. */
+  held(): string[] {
+    return [...this.holds.keys()]
+  }
+
+  /**
+   * Release every agent held, as `release` does each: what waits for it is written to the pane its row names now. For a
+   * hand-over that cannot wait any longer for a move to finish (mover.ts `settleMovesForHandOver`): the connection the
+   * deliveries are written through is about to close. Resolves once every agent is let go, a release already under way
+   * (the move's own) included.
+   */
+  async releaseAll(): Promise<void> {
+    await Promise.all([...this.holds].map(([agentId, hold]) => (hold.draining ? hold.done : this.release(agentId))))
   }
 }
 
@@ -80,8 +100,9 @@ const HOLD_POLL_MS = 100
 /**
  * [acquire] (a control of the agent's pane, `acquireTerminalControl`), asked again once [agentId]'s move lets it go
  * when it was refused because a move holds it: the /model picker then waits out a move it never sees, rather than
- * answering BUSY. A refusal for any other reason is the answer at once. The first ask counts the agent as in use
- * (`touch`), which cancels a move that has not yet stopped the engine. Waits at most [boundMs].
+ * answering BUSY. A refusal for any other reason is the answer at once. Nothing here touches the gate: [acquire] itself
+ * counts a held agent as in use when it refuses it (lib/sessionInput.ts `acquireControl` calls `touch`), which cancels
+ * a move that has not yet stopped the engine. Waits at most [boundMs].
  */
 export async function acquireAfterHold<T>(gate: Pick<MoveGate, 'holding'>, agentId: string, acquire: () => T | null,
   boundMs = HOLD_WAIT_MS): Promise<T | null> {

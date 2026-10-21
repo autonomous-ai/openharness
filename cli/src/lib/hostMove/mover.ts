@@ -11,8 +11,14 @@
 import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import type { RegisteredSession } from '../registry.js'
 import type { ActivityState } from '../turnActivity.js'
+import type { MoveGate } from './gate.js'
 import type { MoveOutcome } from './moveAgent.js'
 import { QUIET_MS, type QuietClock } from './quiet.js'
+
+/** How long a hand-over waits for a move that holds input to finish (`settleMovesForHandOver`). */
+export const HAND_OVER_MOVE_WAIT_MS = 20_000
+/** How long it then gives the held input to be written, when it could not wait the move out. */
+export const HAND_OVER_FLUSH_MS = 5_000
 
 export interface HostMoverDeps {
   /** The registry's rows, read on each step. */
@@ -39,6 +45,9 @@ export interface HostMoverDeps {
 
 export class HostMover {
   private moving = false
+  /** The move in flight, settled once it has ended (its gate released). */
+  private inFlight: Promise<void> | null = null
+  private halted = false
   /** Agents whose move failed since this core started: not tried again until the next start (spec §4). */
   private readonly failed = new Set<string>()
   /** The reason each agent was last said to be skipped, so a skip is logged once per change, not every tick. */
@@ -48,7 +57,22 @@ export class HostMover {
 
   constructor(private readonly deps: HostMoverDeps) {}
 
+  /** No move starts from now on: the core is handing over (`settleMovesForHandOver`). One in flight goes on. */
+  stop(): void {
+    this.halted = true
+  }
+
+  get stopped(): boolean {
+    return this.halted
+  }
+
+  /** Settles once the move in flight, if any, has ended. */
+  settled(): Promise<void> {
+    return this.inFlight ?? Promise.resolve()
+  }
+
   async step(): Promise<void> {
+    if (this.halted) return
     if (!this.deps.targetCanSeed()) {
       if (!this.toldCannotSeed) {
         this.toldCannotSeed = true
@@ -79,6 +103,8 @@ export class HostMover {
     const { row } = pick
     this.skipped.delete(row.agentId)
     this.moving = true
+    let ended!: () => void
+    this.inFlight = new Promise<void>((resolve) => { ended = resolve })
     try {
       let outcome: MoveOutcome
       try { outcome = await this.deps.move(row) } catch (error) {
@@ -96,6 +122,8 @@ export class HostMover {
       }
     } finally {
       this.moving = false
+      this.inFlight = null
+      ended()
     }
   }
 
@@ -123,5 +151,40 @@ export class HostMover {
     if (this.skipped.get(agentId) === reason) return
     this.skipped.set(agentId, reason)
     this.deps.log(`[terminal] move ${agentId}: skipped (${reason})`)
+  }
+}
+
+/**
+ * What a hand-over does first, before its teardown closes the connections held input would be written through: no move
+ * starts any more ([mover] stopped: one not yet past its old engine's stop cancels itself there, core/main.ts
+ * `eligible`), and a move that holds input is waited for, at most [waitMs]: its own release then writes what was held
+ * to the pane that stays. Past the bound, every held input is written to the pane each row names now (`releaseAll`),
+ * within [flushMs], and the hand-over goes on. Nothing held: nothing to wait for. Both bounds and the teardown's own
+ * (core/updateHandoff.ts `TEARDOWN_DEADLINE_MS`) fit in the master's hand-over grace (harnessd/supervisor.ts).
+ */
+export async function settleMovesForHandOver(o: {
+  mover: Pick<HostMover, 'stop' | 'settled'> | null
+  gate: Pick<MoveGate, 'held' | 'releaseAll'>
+  log: (line: string) => void
+  waitMs?: number
+  flushMs?: number
+}): Promise<void> {
+  o.mover?.stop()
+  if (o.gate.held().length === 0) return
+  const waitMs = o.waitMs ?? HAND_OVER_MOVE_WAIT_MS
+  if (o.mover) await within(o.mover.settled(), waitMs)
+  const held = o.gate.held()
+  if (held.length === 0) return
+  o.log(`[terminal] move: a move still holds the input of ${held.join(', ')} after ${waitMs / 1000} s — delivering it to the pane the row names before handing over`)
+  await within(o.gate.releaseAll(), o.flushMs ?? HAND_OVER_FLUSH_MS)
+}
+
+/** [work], or nothing once [ms] have passed. */
+async function within(work: Promise<void>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([work, new Promise<void>((resolve) => { timer = setTimeout(resolve, ms) })])
+  } finally {
+    clearTimeout(timer)
   }
 }

@@ -70,6 +70,32 @@ describe('MoveGate', () => {
   })
 })
 
+describe('MoveGate.releaseAll', () => {
+  it('delivers what every held agent has waiting, in order, and lets all go; a hold already draining is waited for', async () => {
+    const gate = new MoveGate()
+    const written: string[] = []
+    let unblock!: () => void
+    gate.hold('a')
+    gate.hold('b')
+    gate.enqueue('a', async () => { written.push('a1') })
+    gate.enqueue('b', async () => { await new Promise<void>((resolve) => { unblock = resolve }); written.push('b1') })
+    gate.enqueue('b', async () => { written.push('b2') })
+    expect(gate.held().sort()).toEqual(['a', 'b'])
+    // b's own release is under way: releaseAll waits for it too.
+    const draining = gate.release('b')
+    let done = false
+    const all = gate.releaseAll().then(() => { done = true })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(written).toEqual(['a1'])
+    expect(done).toBe(false)
+    unblock()
+    await all
+    await draining
+    expect(written).toEqual(['a1', 'b1', 'b2'])
+    expect(gate.held()).toEqual([])
+  })
+})
+
 describe('acquireAfterHold', () => {
   afterEach(() => { vi.useRealTimers() })
 

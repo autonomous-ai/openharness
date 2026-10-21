@@ -3,7 +3,8 @@ import type { RegisteredSession } from '../registry.js'
 import { resumesConversation } from '../resumeCapability.js'
 import type { ActivityState } from '../turnActivity.js'
 import type { TerminalRuntimeRef } from '../terminalTypes.js'
-import { HostMover, type HostMoverDeps } from './mover.js'
+import { MoveGate } from './gate.js'
+import { HAND_OVER_FLUSH_MS, HAND_OVER_MOVE_WAIT_MS, HostMover, settleMovesForHandOver, type HostMoverDeps } from './mover.js'
 import type { MoveOutcome } from './moveAgent.js'
 import { QUIET_MS, QuietClock } from './quiet.js'
 
@@ -295,5 +296,75 @@ describe('HostMover', () => {
       "[terminal] move g1: skipped (a guest's harness)",
       '[terminal] move p1: skipped (no engine process)',
     ]))
+  })
+})
+
+describe('a hand-over while a move holds input', () => {
+  /** A mover whose one move holds [gate] for a1 until the test lets it finish, then releases it as moveAgent does. */
+  async function holding(gate: MoveGate) {
+    const h = harness([row('a1'), row('a2')])
+    let finish!: () => void
+    h.setOutcome(async (agentId) => {
+      gate.hold(agentId)
+      await new Promise<void>((resolve) => { finish = resolve })
+      await gate.release(agentId)
+      return { moved: true, resumed: true }
+    })
+    await h.settle()
+    const moving = h.mover.step()
+    await vi.waitFor(() => expect(gate.holding('a1') || gate.holding('a2')).toBe(true))
+    const held = gate.holding('a1') ? 'a1' : 'a2'
+    return { h, moving, held, finish: () => finish() }
+  }
+
+  it('waits for the move to finish, and its own release delivers the held keystrokes; no move starts after', async () => {
+    const gate = new MoveGate()
+    const { h, moving, held, finish } = await holding(gate)
+    const written: string[] = []
+    gate.enqueue(held, async () => { written.push('k1') })
+    gate.enqueue(held, async () => { written.push('k2') })
+    const lines: string[] = []
+    const settled = settleMovesForHandOver({ mover: h.mover, gate, log: (line) => lines.push(line) })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(written).toEqual([])
+    finish()
+    await settled
+    await moving
+    expect(written).toEqual(['k1', 'k2'])
+    expect(lines).toEqual([])
+    // Stopped: the other agent, as eligible as before, does not move.
+    expect(h.mover.stopped).toBe(true)
+    await h.mover.step()
+    expect(h.moves).toHaveLength(1)
+  })
+
+  it('past its bound, writes every held keystroke to the row\'s current pane before the hand-over goes on', async () => {
+    const gate = new MoveGate()
+    const { h, held, finish } = await holding(gate)
+    const written: string[] = []
+    gate.enqueue(held, async () => { written.push('k1') })
+    gate.enqueue(held, async () => { written.push('k2') })
+    const lines: string[] = []
+    await settleMovesForHandOver({ mover: h.mover, gate, log: (line) => lines.push(line), waitMs: 30 })
+    expect(written).toEqual(['k1', 'k2'])
+    expect(gate.holding(held)).toBe(false)
+    expect(lines).toEqual([`[terminal] move: a move still holds the input of ${held} after 0.03 s — delivering it to the pane the row names before handing over`])
+    // The move's own release later finds nothing left.
+    finish()
+    expect(HAND_OVER_MOVE_WAIT_MS + HAND_OVER_FLUSH_MS).toBeLessThanOrEqual(25_000)
+  })
+
+  it('does not wait with nothing held, nor without a mover', async () => {
+    const gate = new MoveGate()
+    const h = harness([row('a1')])
+    let started = false
+    h.setOutcome(async () => { started = true; return new Promise<MoveOutcome>(() => {}) })
+    await h.settle()
+    void h.mover.step()
+    await vi.waitFor(() => expect(started).toBe(true))
+    const before = Date.now()
+    await settleMovesForHandOver({ mover: h.mover, gate, log: () => {} })
+    await settleMovesForHandOver({ mover: null, gate, log: () => {} })
+    expect(Date.now() - before).toBeLessThan(1_000)
   })
 })

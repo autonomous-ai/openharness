@@ -79,7 +79,7 @@ import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from
 import { restoreAgents, type RestoreAgentsDeps, type RestoreSummary } from '../lib/restoreAgents.js'
 import { restoreTerminals } from '../lib/restoreTerminals.js'
 import { acquireAfterHold, MoveGate } from '../lib/hostMove/gate.js'
-import { HostMover } from '../lib/hostMove/mover.js'
+import { HostMover, settleMovesForHandOver } from '../lib/hostMove/mover.js'
 import { moveHeldLine, removeOrphanMovePanes, type MoveOutcome } from '../lib/hostMove/moveAgent.js'
 import { QUIET_MS, QuietClock } from '../lib/hostMove/quiet.js'
 import { resumesConversation } from '../lib/resumeCapability.js'
@@ -528,6 +528,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     probeMaster: () => probeStagedMaster((done) => execFile(managedNodePath(), [SCRIPT_PATH, PROBE_COMMAND], { encoding: 'utf8', env: harnessdEnv() }, (error, stdout) => done(error, stdout))),
     handOff: () => { startMasterHere(); process.exit(0) },
     log: (line) => console.log(line), error: (line) => console.error(line),
+    // A move to another pty host that holds input: waited for, or its input written out, before the teardown closes the
+    // pty host connection the held keystrokes would be written through (lib/hostMove/mover.ts).
+    beforeTeardown: () => settleMovesForHandOver({ mover: hostMover, gate: moveGate, log: (line) => console.log(line) }),
   })
 
   // Another daemon serves this data folder: leave before reading or writing anything of its — its
@@ -2783,6 +2786,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       gate: moveGate,
       // What the mover picked the agent for, asked again up to the old engine's stop: still idle, quiet, unwatched.
       eligible: (agentId) => {
+        // Handing over: a move not yet past the old engine's stop cancels itself (`settleMovesForHandOver`).
+        if (hostMover?.stopped) return false
         const row = registry.byAgent(agentId)
         return !!row && moveActivity(row) === 'idle' && hostQuiet.quietFor(agentId) >= QUIET_MS && !moveLookedAt(agentId)
       },
