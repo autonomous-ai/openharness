@@ -10,9 +10,10 @@ import { canReadAgent, canReadProject, groupProject, projectsOf, readConversatio
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
+import { attachmentsForSend, attachToMessage, SuperTabAttachmentStore } from './attachments.js'
 import {
   activeWork, actorKey, agent, author, conversation, createSuperTab, fail, person, stableId, visibleState,
-  SuperTabError, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
+  SuperTabError, type Actor, type Agent, type Assignment, type AttachmentMeta, type Author, type MessageDraft, type SuperTabState,
 } from './model.js'
 import { holdNoticeText, type HoldReason } from './holdNotice.js'
 import { closeAssignment, readDecision, recentRoutes, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
@@ -47,12 +48,19 @@ async function transaction<T>(db: PrismaClient, body: (tx: Transaction) => Promi
 /** Persistent coordination. Host adapters own execution and must confirm their local session grants. */
 export class SuperTabStore {
   readonly native: SuperTabNativeStore
+  readonly attachments: SuperTabAttachmentStore
   constructor(private readonly db: PrismaClient, private readonly now: () => number = Date.now) {
     this.native = new SuperTabNativeStore({
       transaction: body => transaction(db, body),
       row: async (tx, user, tabId) => { const row = await this.row(tx, user, tabId); return { row, state: stateOf(row) } },
       agentGrant: (tx, state, target) => this.agentGrant(tx, state, target),
       contribution: (tx, state, actor, command) => this.contribution(tx, state, actor, command),
+    })
+    this.attachments = new SuperTabAttachmentStore({
+      transaction: body => transaction(db, body),
+      row: async (tx, user, tabId) => { const row = await this.row(tx, user, tabId); return { row, state: stateOf(row) } },
+      actor: (tx, user, state, asAgentId) => this.actor(tx, user, state, asAgentId),
+      now: () => this.now(),
     })
   }
 
@@ -348,7 +356,8 @@ export class SuperTabStore {
           }
           await this.agentGrant(tx, original, agent(original, delivery.agentId))
         }
-        context.delivery = { ...delivery, text: message.text }
+        // A resend carries the original's images with its text.
+        context.delivery = { ...delivery, text: message.text, attachments: (message.attachments ?? undefined) as AttachmentMeta[] | undefined }
         await tx.superTabDelivery.update({ where: { id: delivery.id }, data: {
           status: command.resolution === 'received' ? 'confirmed' : command.resolution === 'resend' ? 'superseded' : 'cancelled',
           // The native receipt remains intact; the operation records the person's resolution.
@@ -361,6 +370,9 @@ export class SuperTabStore {
       if (command.type === 'agent.started' || command.type === 'agent.startDispatch') {
         const start = original.starts?.find(s => s.id === command.startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
         context.contribution = await this.contribution(tx, original, actor, start.request, true)
+      }
+      if (command.type === 'message.send' && command.attachmentIds?.length) {
+        context.attachments = await attachmentsForSend(tx, tabId, actor, command.attachmentIds)
       }
       if (command.type === 'message.send' && command.replyTo) {
         const reply = await tx.superTabMessage.findFirst({ where: { id: command.replyTo, tabId, conversationId: command.conversationId } })
@@ -430,6 +442,9 @@ export class SuperTabStore {
         await closeAssignment(tx, tabId, command.assignmentId, command.status, context.now)
       }
       await this.writeMessages(tx, tabId, effects.state, effects.messages, revision)
+      if (command.type === 'message.send' && command.attachmentIds?.length) {
+        await attachToMessage(tx, tabId, command.attachmentIds, command.conversationId, effects.result.messageId as string)
+      }
       // On 2026-10-20 a Lead answered a message it had already read, then answered it again when the held
       // delivery was finally typed. An agent's reply settles that agent's own deliveries of the message.
       if (command.type === 'message.send' && command.replyTo && actor.kind === 'agent') {
@@ -468,6 +483,7 @@ export class SuperTabStore {
     for (const message of messages) {
       await tx.superTabMessage.create({ data: { id: message.id, tabId, conversationId: message.conversationId,
         sequence: revision, author: json(message.author), ...(message.source ? { source: json(message.source) } : {}),
+        ...(message.attachments?.length ? { attachments: json(message.attachments) } : {}),
         text: message.text, replyTo: message.replyTo, recipientIds: message.recipients } })
       for (const recipient of message.recipients) {
         const target = agent(state, recipient)

@@ -11,6 +11,7 @@ import { nativeEventSchema, openNativeSchema } from '../superTabs/native.js'
 import { machineObservationSchema } from '../superTabs/machines.js'
 import { joinSwarmSchema, previewJoinSchema, saveSharingSchema } from '../superTabs/sharing.js'
 import { holdReason } from '../superTabs/holdNotice.js'
+import { ATTACHMENT_BODY_LIMIT, attachmentPartSchema, uploadAttachmentSchema } from '../superTabs/attachments.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const tabParams = z.object({ tabId: id })
@@ -25,6 +26,8 @@ const messageQuery = agentQuery.extend({ after: z.coerce.number().int().nonnegat
   before: z.coerce.number().int().nonnegative().safe().optional(), messageId: id.optional() })
   .refine(q => [q.after, q.before, q.messageId].filter(value => value !== undefined).length <= 1, 'Choose one message cursor or exact message.')
 const decisionParams = tabParams.extend({ decisionId: id })
+const attachmentParams = tabParams.extend({ attachmentId: id })
+const partParams = attachmentParams.extend({ index: z.coerce.number().int().min(0).max(63) })
 const hostParams = z.object({ machineId: id })
 const hostStartParams = hostParams.extend({ tabId: id, startId: id })
 const machineParams = hostParams.extend({ tabId: id })
@@ -128,6 +131,22 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof deliveryActionParams> }>('/api/super-tabs/:tabId/agents/:agentId/deliveries/:deliveryId',
     { preHandler: validateParams(deliveryActionParams) },
     (req, reply) => respond(reply, () => store.deliveryReceipt(req.user!, req.params.tabId, req.params.agentId, req.params.deliveryId)))
+  // Images travel in parts (attachments.ts `ATTACHMENT_PART_BYTES`); each request carries at most one part as base64.
+  app.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery>; Body: z.infer<typeof uploadAttachmentSchema> }>('/api/super-tabs/:tabId/attachments',
+    { bodyLimit: ATTACHMENT_BODY_LIMIT, preHandler: [validateParams(tabParams), validateQuery(agentQuery), validateBody(uploadAttachmentSchema)] },
+    (req, reply) => respond(reply, () => store.attachments.upload(req.user!, req.params.tabId, req.body, req.query.asAgentId)))
+  app.get<{ Params: z.infer<typeof attachmentParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/attachments/:attachmentId',
+    { preHandler: [validateParams(attachmentParams), validateQuery(agentQuery)] },
+    (req, reply) => respond(reply, () => store.attachments.read(req.user!, req.params.tabId, req.params.attachmentId, req.query.asAgentId)))
+  app.delete<{ Params: z.infer<typeof attachmentParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/attachments/:attachmentId',
+    { preHandler: [validateParams(attachmentParams), validateQuery(agentQuery)] },
+    (req, reply) => respond(reply, () => store.attachments.remove(req.user!, req.params.tabId, req.params.attachmentId, req.query.asAgentId)))
+  app.post<{ Params: z.infer<typeof partParams>; Querystring: z.infer<typeof agentQuery>; Body: z.infer<typeof attachmentPartSchema> }>('/api/super-tabs/:tabId/attachments/:attachmentId/parts/:index',
+    { bodyLimit: ATTACHMENT_BODY_LIMIT, preHandler: [validateParams(partParams), validateQuery(agentQuery), validateBody(attachmentPartSchema)] },
+    (req, reply) => respond(reply, () => store.attachments.uploadPart(req.user!, req.params.tabId, req.params.attachmentId, req.params.index, req.body, req.query.asAgentId)))
+  app.get<{ Params: z.infer<typeof partParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/attachments/:attachmentId/parts/:index',
+    { preHandler: [validateParams(partParams), validateQuery(agentQuery)] },
+    (req, reply) => respond(reply, () => store.attachments.readPart(req.user!, req.params.tabId, req.params.attachmentId, req.params.index, req.query.asAgentId)))
   app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof stop> }>('/api/super-tabs/:tabId/stopped',
     { preHandler: [validateParams(tabParams), validateBody(stop)] },
     (req, reply) => respond(reply, () => store.stopped(req.user!, req.params.tabId, req.body.assignmentId, req.body.receipt)))

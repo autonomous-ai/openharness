@@ -42,6 +42,16 @@ class ConversationServer {
   final routeDecisions = <String, Map<String, dynamic>>{};
   // The effective routing policy answered by GET .../routing-policy.
   Map<String, dynamic>? routingPolicy;
+  // Uploaded images by id: their metadata and base64 parts in order.
+  final attachments = <String, Map<String, dynamic>>{};
+  final attachmentParts = <String, List<String?>>{};
+  // Every attachment upload body, apart from [posts].
+  final uploads = <Map<String, dynamic>>[];
+  // Unsent uploads the client deleted.
+  final deletedAttachments = <String>[];
+  bool failUploads = false;
+  // Fails the upload request with this 1-based number, once.
+  int? failUploadAt;
   final state = <String, dynamic>{
     'version': 1,
     'id': 'tab',
@@ -84,6 +94,10 @@ class ConversationServer {
     String path, {
     Map<String, dynamic>? body,
   }) async {
+    final segments = Uri.parse(path).pathSegments;
+    if (segments.length > 3 && segments[3] == 'attachments') {
+      return _attachment(method, segments, body);
+    }
     if (method == 'POST') {
       posts.add(Map<String, dynamic>.from(body!));
       if (reject) {
@@ -105,11 +119,19 @@ class ConversationServer {
       final command = body['command'] as Map;
       final output = <String, dynamic>{};
       if (command['type'] == 'message.send') {
+        final images = (command['attachmentIds'] as List? ?? const []).length;
+        // As the backend stores a message of images alone.
         append(
-          command['text'] as String,
+          (command['text'] as String).isEmpty && images > 0
+              ? (images == 1 ? '[image]' : '[$images images]')
+              : command['text'] as String,
           conversationId: command['conversationId'] as String,
         );
         messages.last['replyTo'] = command['replyTo'];
+        messages.last['attachments'] = [
+          for (final id in command['attachmentIds'] as List? ?? const [])
+            attachments[id],
+        ];
         output['messageId'] = 'message-$revision';
       } else if (command['type'] == 'conversation.create') {
         revision++;
@@ -227,6 +249,60 @@ class ConversationServer {
     }
     return jsonDecode(jsonEncode({'revision': revision, 'state': state}))
         as Map<String, dynamic>;
+  }
+
+  Map<String, dynamic> _attachment(
+    String method,
+    List<String> segments,
+    Map<String, dynamic>? body,
+  ) {
+    final parts = segments.length > 4 ? attachmentParts[segments[4]] : null;
+    if (segments.length > 4 && parts == null) {
+      throw const SuperTabFailure('NOT_FOUND', 'This image is unavailable.');
+    }
+    if (method == 'DELETE') {
+      attachments.remove(segments[4]);
+      attachmentParts.remove(segments[4]);
+      deletedAttachments.add(segments[4]);
+      return {'id': segments[4], 'deleted': true};
+    }
+    if (method == 'GET' && segments.length == 5) {
+      final missing = [
+        for (var i = 0; i < parts!.length; i++)
+          if (parts[i] == null) i,
+      ];
+      return {
+        ...attachments[segments[4]]!,
+        'complete': missing.isEmpty,
+        if (missing.isNotEmpty) 'missing': missing,
+      };
+    }
+    if (method == 'GET') return {'data': parts![int.parse(segments[6])]};
+    uploads.add(Map<String, dynamic>.from(body!));
+    if (failUploads || failUploadAt == uploads.length) {
+      failUploadAt = null;
+      throw StateError('Connection lost');
+    }
+    if (segments.length == 4) {
+      final id = 'image-${uploads.where((u) => u.containsKey('name')).length}';
+      final size = body['size'] as int;
+      attachments[id] = {
+        'id': id,
+        'name': body['name'],
+        'mime': 'image/png',
+        'size': size,
+        'width': null,
+        'height': null,
+        'parts': (size / (256 * 1024)).ceil(),
+      };
+      attachmentParts[id] = [
+        body['data'] as String,
+        for (var i = 1; i < (attachments[id]!['parts'] as int); i++) null,
+      ];
+      return {...attachments[id]!, 'complete': size <= 256 * 1024};
+    }
+    parts![int.parse(segments[6])] = body['data'] as String;
+    return {'id': segments[4], 'complete': !parts.contains(null)};
   }
 
   SuperTabController controller({

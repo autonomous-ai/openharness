@@ -7,6 +7,8 @@ it('keeps an explicit stable receipt for agent messages and arbitrary work comma
   expect(parseSuperTabArgs([...prefix, 'command', 'op-2', '{"type":"work.assign"}'], where).payload).toMatchObject({ command: { type: 'work.assign' } })
   expect(parseSuperTabArgs(['--port', '14002', '--machine', 'target', ...prefix, 'messages', 'lead'], where)).toMatchObject({ where: { port: 14002, machineId: 'target' }, payload: { conversationId: 'lead' } })
   expect(parseSuperTabArgs(['help'], where).payload.action).toBe('help')
+  expect(parseSuperTabArgs([...prefix, 'attachment', 'img1'], where).payload).toMatchObject({ action: 'attachment', attachmentId: 'img1' })
+  expect(() => parseSuperTabArgs([...prefix, 'attachment', '../img'], where)).toThrow('attachment ATTACHMENT_ID')
   expect(parseSuperTabArgs([...prefix, 'message', 'lead', 'old-question'], where).payload)
     .toMatchObject({ action: 'message', conversationId: 'lead', messageId: 'old-question' })
   expect(parseSuperTabArgs([...prefix, 'post', 'lead', '--tab', 'literal'], where).payload.command).toMatchObject({ text: '--tab' })

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import { superTabService } from './service.js'
@@ -46,6 +47,9 @@ it('limits the owner proxy to Super Tab endpoints and preserves backend failures
     expect(await t.ask({ action: 'backend', method: 'GET', path }, owner)).toMatchObject({ error: 'INVALID_REQUEST' })
   }
   expect(await t.ask({ action: 'backend', method: 'DELETE', path: '/api/super-tabs' }, owner)).toMatchObject({ error: 'INVALID_REQUEST' })
+  for (const path of ['/api/super-tabs/tab', '/api/super-tabs/tab/attachments', '/api/super-tabs/tab/attachments/img1/parts/0', '/api/super-tabs/tab/attachments/img1?x=1']) {
+    expect(await t.ask({ action: 'backend', method: 'DELETE', path }, owner)).toMatchObject({ error: 'INVALID_REQUEST' })
+  }
   expect(t.call).not.toHaveBeenCalled()
   expect(await t.ask({ action: 'backend', method: 'GET', path: '/api/super-tabs/tab?asAgentId=agent' }, owner)).toMatchObject({ ok: true })
   vi.mocked(t.core.account.backend).mockResolvedValueOnce({ status: 403, body: { success: false, error: { code: 'FORBIDDEN', message: 'Access withdrawn' } } })
@@ -69,6 +73,31 @@ it('resolves a native caller to its exact contribution and rechecks it before ev
   expect(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).toMatchObject({ error: 'AGENT_UNAVAILABLE' })
   t.agent.machineId = 'machine-1'; vi.mocked(t.core.agents.byAgent).mockReturnValue(undefined)
   expect(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).toMatchObject({ error: 'AGENT_UNAVAILABLE' })
+})
+
+it('relays the image routes to the backend, and saves an attached image for its agent', async () => {
+  const t = setup()
+  for (const path of ['/api/super-tabs/tab/attachments', '/api/super-tabs/tab/attachments/img1/parts/3']) {
+    expect(await t.ask({ action: 'backend', method: 'POST', path, body: { data: 'AAAA' } }, owner)).toMatchObject({ ok: true })
+    expect(t.call).toHaveBeenLastCalledWith('POST', path, { data: 'AAAA' })
+  }
+  expect(await t.ask({ action: 'backend', method: 'DELETE', path: '/api/super-tabs/tab/attachments/img1' }, owner)).toMatchObject({ ok: true })
+  expect(t.call).toHaveBeenLastCalledWith('DELETE', '/api/super-tabs/tab/attachments/img1', undefined)
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2])
+  const meta = { id: 'img1', name: 'diagram.webp', mime: 'image/png', size: png.length, width: 1, height: 1, parts: 1, complete: true }
+  vi.mocked(t.call).mockImplementation((async (_method: string, path: string) => ({ status: 200, body: { success: true,
+    data: path.includes('/parts/0') ? { data: png.toString('base64') } : path.includes('/attachments/') ? meta : { state: { agents: [t.agent] } } } })) as never)
+  const saved = await t.ask({ action: 'attachment', tabId: 'tab', agentId: t.agentId, attachmentId: 'img1' }, owner)
+  expect(saved).toMatchObject({ ok: true, value: { id: 'img1', name: 'diagram.webp', mime: 'image/png', size: png.length } })
+  const file = (saved.value as { path: string }).path
+  expect(file).toMatch(/-diagram\.png$/)
+  expect(readFileSync(file).equals(png)).toBe(true)
+  expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/attachments/img1?asAgentId=${t.agentId}`, undefined)
+  expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/attachments/img1/parts/0?asAgentId=${t.agentId}`, undefined)
+  vi.mocked(t.call).mockImplementation((async (_method: string, path: string) => ({ status: 200, body: { success: true,
+    data: path.includes('/attachments/') ? { ...meta, mime: 'image/gif' } : { state: { agents: [t.agent] } } } })) as never)
+  expect(await t.ask({ action: 'attachment', tabId: 'tab', agentId: t.agentId, attachmentId: 'img1' }, owner)).toMatchObject({ error: 'ATTACHMENT_UNAVAILABLE' })
+  expect((await t.ask({ action: 'help' }, owner)).help).toMatchObject({ attachment: expect.stringContaining('file-reading tool') })
 })
 
 it('keeps host capacity separate from account authority and closes it on disconnect or identity change', async () => {

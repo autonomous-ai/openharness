@@ -8,7 +8,10 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/new_harness_attachments.dart';
+import '../widgets/new_harness_paste.dart';
 import '../state/app_state.dart';
+import 'attachments.dart';
 import 'roster.dart';
 import 'recording_notice.dart';
 import 'pull_requests.dart';
@@ -230,7 +233,7 @@ class _SuperTabViewState extends State<SuperTabView> {
         c.selected!.archived ||
         c.saving ||
         c.hasPendingAction ||
-        _composer.text.trim().isEmpty) {
+        (_composer.text.trim().isEmpty && c.images(c.selectedId).isEmpty)) {
       return;
     }
     final id = c.selectedId;
@@ -926,6 +929,7 @@ class _SuperTabViewState extends State<SuperTabView> {
       grouped: grouped,
       reply: reply,
       replyAuthor: reply == null ? null : _shownAuthor(c, reply),
+      loadAttachment: c.attachmentBytes,
       onReply: c.canWrite && c.selected?.archived == false
           ? () {
               setState(() => _replies[c.selectedId] = message);
@@ -1019,6 +1023,8 @@ class _SuperTabViewState extends State<SuperTabView> {
         : messages.where((message) => message.sequence > newAfter).length;
     final reply = _replies[c.selectedId];
     final choices = _completionChoices;
+    final images = c.images(c.selectedId);
+    final writable = c.canWrite && group != null && !group.archived;
     return Column(
       children: [
         if (c.error != null)
@@ -1181,7 +1187,7 @@ class _SuperTabViewState extends State<SuperTabView> {
                 Expanded(
                   child: SuperTabReplyPreview(
                     author: 'Replying to ${_authorName(reply)}',
-                    text: reply.text,
+                    text: reply.preview,
                   ),
                 ),
                 AppIconButton(
@@ -1322,91 +1328,120 @@ class _SuperTabViewState extends State<SuperTabView> {
               }
               return KeyEventResult.ignored;
             },
-            child: DecoratedBox(
-              key: const ValueKey('super-message-composer-surface'),
-              decoration: BoxDecoration(
-                color: DesktopChrome.field,
-                borderRadius: BorderRadius.circular(
-                  DesktopChrome.controlRadius,
+            child: NewHarnessDropZone(
+              attachments: images,
+              enabled: writable && !c.saving,
+              child: DecoratedBox(
+                key: const ValueKey('super-message-composer-surface'),
+                decoration: BoxDecoration(
+                  color: DesktopChrome.field,
+                  borderRadius: BorderRadius.circular(
+                    DesktopChrome.controlRadius,
+                  ),
+                  border: Border.all(color: DesktopChrome.rim),
                 ),
-                border: Border.all(color: DesktopChrome.rim),
-              ),
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: c.canWrite && group != null && !group.archived
-                    ? _focus.requestFocus
-                    : null,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minHeight: grid.AppControl.heightFieldScaled,
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: c.canWrite && group != null && !group.archived
+                      ? _focus.requestFocus
+                      : null,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: TextField(
-                            key: const ValueKey('super-message-composer'),
-                            controller: _composer,
-                            focusNode: _focus,
-                            autofocus: !_terminalsVisible,
-                            enabled:
-                                c.canWrite && group != null && !group.archived,
-                            minLines: 1,
-                            maxLines: MediaQuery.sizeOf(context).height < 600
-                                ? 3
-                                : 8,
-                            maxLength: 32000,
-                            keyboardType: TextInputType.multiline,
-                            textAlignVertical: TextAlignVertical.center,
-                            style: DesktopChrome.text(),
-                            decoration: InputDecoration(
-                              // The row centers the line. Inheriting a decorated
-                              // field's minimum height leaves slack below its text.
-                              isCollapsed: true,
-                              constraints: const BoxConstraints(),
-                              visualDensity: VisualDensity.standard,
-                              hintStyle: DesktopChrome.text(
-                                color: DesktopChrome.muted,
-                              ),
-                              contentPadding: EdgeInsets.zero,
-                              hintText: group == null
-                                  ? 'Loading conversation…'
-                                  : c.canWrite
-                                  ? 'Message ${group.title}'
-                                  : 'Read-only conversation',
-                              border: InputBorder.none,
-                              enabledBorder: InputBorder.none,
-                              focusedBorder: InputBorder.none,
-                              disabledBorder: InputBorder.none,
-                              filled: false,
-                              counterText: '',
+                        if (!images.isEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 8, right: 8),
+                            child: NewHarnessAttachmentChips(
+                              key: const ValueKey('super-composer-images'),
+                              attachments: images,
+                              enabled: !c.saving,
                             ),
-                            onChanged: (text) {
-                              c.setDraft(c.selectedId, text);
-                              setState(() {
-                                _mentionIndex = 0;
-                                _dismissedMention = null;
-                              });
-                            },
                           ),
-                        ),
-                        ValueListenableBuilder(
-                          valueListenable: _composer,
-                          builder: (context, value, _) => AppIconButton(
-                            icon: AppIcons.arrowUp,
-                            tooltip: 'Send message',
-                            color: DesktopChrome.accent,
-                            onPressed:
-                                c.canWrite &&
-                                    group != null &&
-                                    !group.archived &&
-                                    !c.saving &&
-                                    !c.hasPendingAction &&
-                                    value.text.trim().isNotEmpty
-                                ? () => unawaited(_send())
-                                : null,
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            minHeight: grid.AppControl.heightFieldScaled,
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Expanded(
+                                child: NewHarnessPasteTarget(
+                                  attachments: images,
+                                  enabled: writable && !c.saving,
+                                  focusNode: _focus,
+                                  readFiles: superTabCopiedImages,
+                                  child: TextField(
+                                    key: const ValueKey(
+                                      'super-message-composer',
+                                    ),
+                                    controller: _composer,
+                                    focusNode: _focus,
+                                    autofocus: !_terminalsVisible,
+                                    enabled:
+                                        c.canWrite &&
+                                        group != null &&
+                                        !group.archived,
+                                    minLines: 1,
+                                    maxLines:
+                                        MediaQuery.sizeOf(context).height < 600
+                                        ? 3
+                                        : 8,
+                                    maxLength: 32000,
+                                    keyboardType: TextInputType.multiline,
+                                    textAlignVertical: TextAlignVertical.center,
+                                    style: DesktopChrome.text(),
+                                    decoration: InputDecoration(
+                                      // The row centers the line. Inheriting a decorated
+                                      // field's minimum height leaves slack below its text.
+                                      isCollapsed: true,
+                                      constraints: const BoxConstraints(),
+                                      visualDensity: VisualDensity.standard,
+                                      hintStyle: DesktopChrome.text(
+                                        color: DesktopChrome.muted,
+                                      ),
+                                      contentPadding: EdgeInsets.zero,
+                                      hintText: group == null
+                                          ? 'Loading conversation…'
+                                          : c.canWrite
+                                          ? 'Message ${group.title}'
+                                          : 'Read-only conversation',
+                                      border: InputBorder.none,
+                                      enabledBorder: InputBorder.none,
+                                      focusedBorder: InputBorder.none,
+                                      disabledBorder: InputBorder.none,
+                                      filled: false,
+                                      counterText: '',
+                                    ),
+                                    onChanged: (text) {
+                                      c.setDraft(c.selectedId, text);
+                                      setState(() {
+                                        _mentionIndex = 0;
+                                        _dismissedMention = null;
+                                      });
+                                    },
+                                  ),
+                                ),
+                              ),
+                              ValueListenableBuilder(
+                                valueListenable: _composer,
+                                builder: (context, value, _) => AppIconButton(
+                                  icon: AppIcons.arrowUp,
+                                  tooltip: 'Send message',
+                                  color: DesktopChrome.accent,
+                                  onPressed:
+                                      writable &&
+                                          !c.saving &&
+                                          !c.hasPendingAction &&
+                                          (value.text.trim().isNotEmpty ||
+                                              !images.isEmpty)
+                                      ? () => unawaited(_send())
+                                      : null,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],

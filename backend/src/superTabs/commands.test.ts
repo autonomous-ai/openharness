@@ -96,6 +96,23 @@ describe('Super Tab collaboration policy', () => {
       { reply: { id: posted.id, conversationId: 'elsewhere', author: posted.author } })).toThrow('Reply to a message in this conversation')
   })
 
+  it('sends images the store checked, with or without text, and refuses a message with neither', () => {
+    const f = fixture()
+    const lead = f.add('lead', 'owner', 'lead', true)
+    const image = { id: 'img1', name: 'screen.png', mime: 'image/png', size: 10, width: 2, height: 1, parts: 1 }
+    const send = (text: string, attachmentIds?: string[]): Command =>
+      ({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [], ...(attachmentIds ? { attachmentIds } : {}) })
+    const only = f.run(send('', ['img1']), owner, { attachments: [image] }).messages[0]!
+    expect(only).toMatchObject({ text: '[image]', recipients: [lead], attachments: [image] })
+    expect(f.run(send('', ['img1', 'img2']), owner, { attachments: [image, { ...image, id: 'img2' }] }).messages[0]!.text).toBe('[2 images]')
+    expect(f.run(send('Plain text')).messages[0]!).not.toHaveProperty('attachments')
+    expect(() => f.run(send(''))).toThrow('Write a message or attach an image')
+    expect(() => f.run(send('Hi', ['img1']))).toThrow('no longer available')
+    expect(() => f.run(send('Hi', ['img2']), owner, { attachments: [image] })).toThrow('no longer available')
+    expect(commandSchema.safeParse(send('Five', ['a', 'b', 'c', 'd', 'e'])).success).toBe(false)
+    expect(commandSchema.safeParse(send('Old client')).success).toBe(true)
+  })
+
   it('lets a viewer read and leave, but not send, assign, attach or invite', () => {
     const f = fixture()
     f.invite('viewer')
