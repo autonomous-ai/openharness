@@ -46,6 +46,9 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
   /// It went offline for its restart.
   bool _wentDown = false;
 
+  /// The update started here carried a new OS: named with the rest once it is in.
+  bool _systemUpdate = false;
+
   /// A new OS on a computer that does not restart itself: done when the update is in, waiting for it.
   bool _manualRestart = false;
 
@@ -159,10 +162,14 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
   String _versionsNow() {
     final parts = _app.osParts(_id);
     String? of(String key) => parts[key]?['running'] as String?;
+    // A daemon that does not name its parts (released before them) still says which CLI it runs.
+    final update = _app.osStatus[_id]?['update'];
+    final cli =
+        of('cli') ?? (update is Map ? update['runtime'] as String? : null);
     final named = [
-      if (of('os') != null && _restarting) 'Harness OS ${of('os')}',
+      if (of('os') != null && _systemUpdate) 'Harness OS ${of('os')}',
       if (of('hn') != null) 'hn ${of('hn')}',
-      if (of('cli') != null) 'CLI ${of('cli')}',
+      if (cli != null) 'CLI $cli',
     ];
     return named.isEmpty ? '' : ': ${named.join(', ')}';
   }
@@ -287,6 +294,7 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
     if (reply['started'] == true) {
       setState(() {
         _restarting = restarts && restartsItself;
+        _systemUpdate = restarts;
         _manualRestart = restarts && !restartsItself;
         _wentDown = false;
         _finished = '';
