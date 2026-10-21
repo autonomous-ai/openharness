@@ -638,6 +638,22 @@ describe.skipIf(process.platform === 'win32')('targetHost', () => {
     expect(targetHost({ env: { HARNESS_PTY_BIN: path.join(runtime, 'missing') }, runtimeDir: runtime, besideDir: '/nowhere' })).toBeNull()
   })
 
+  it('targetHost is unknown, said once, for a host of a protocol this daemon does not speak: the newest supported host is used', () => {
+    const runtime = tempDir('rt-')
+    // A paired host left in current-pty without its CLI build: above this daemon's protocol, or below every supported one.
+    fakeBinary('serve', { file: path.join(runtime, 'pty', '0.5.0', exe), versionLine: JSON.stringify({ version: '0.5.0', protocol: PTY_PROTOCOL + 1, features: ['seed'] }) })
+    writeFileSync(path.join(runtime, 'pty', 'current-pty'), '0.5.0\n')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      expect(targetHost({ env: {}, runtimeDir: runtime, besideDir: '/nowhere' })).toBeNull()
+      expect(targetHost({ env: {}, runtimeDir: runtime, besideDir: '/nowhere' })).toBeNull()
+      const said = error.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('0.5.0'))
+      expect(said).toEqual([`[terminal] ptyhost: the host 0.5.0 speaks protocol ${PTY_PROTOCOL + 1}, which this daemon does not (it speaks ${SUPPORTED_PTY_PROTOCOLS.join(' and ')}): target unknown, the newest running host of protocol ${PTY_PROTOCOL} is used`])
+      const old = fakeBinary('serve', { versionLine: JSON.stringify({ version: '0.0.9', protocol: 0, features: [] }) })
+      expect(targetHost({ env: { HARNESS_PTY_BIN: old }, runtimeDir: runtime, besideDir: '/nowhere' })).toBeNull()
+    } finally { error.mockRestore() }
+  })
+
   it('binaryVersion runs the binary once per build: cached by its path and mtime', () => {
     const runs = path.join(tempDir('runs-'), 'runs')
     vi.stubEnv('FAKE_PTY_RUNS', runs)

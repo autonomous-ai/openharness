@@ -366,7 +366,8 @@ Nothing reaches any client.
 - No administrator rights, no UAC prompt, per user. These are the same as A, B and C.
 - Scope is Windows. tmux is not touched.
 - Seeding a pane (§4) is an optional op on protocol 2, not a protocol bump. Any later bump follows
-  `ptyHost/protocol.ts`'s rule (the daemon keeps a client for the protocol before it) and §5's protocol rule.
+  `ptyHost/protocol.ts`'s rule (the daemon keeps a client for the protocol before it), §5's protocol rule, and §5's
+  pairing rule (the bumped host goes in only with the CLI build that needs it, in one handover and one probation).
 - Hosts and daemons of today's builds keep working: a G daemon drains a `p<protocol>` host. A pre-G daemon still
   running beside a G host (its stop failed during an update) keeps its own `p<protocol>` host; that is accepted.
 - Never test against the developer's own machine: the real `~/.harness`, the daemon on 18473, the engine homes,

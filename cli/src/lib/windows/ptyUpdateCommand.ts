@@ -118,5 +118,6 @@ export function installPtyForUpdate(
  * not open a pane on it, and not remembered as rolled back (./ptyUpdate.ts `takeBackPty`). Never throws.
  */
 export function takeBackPtyForUpdate(rootDir: string, log: (line: string) => void): void {
-  takeBackPty(rootDir, log, '  ')
+  // What did not happen is marked ✗, as every other failure `harness update` reports.
+  takeBackPty(rootDir, log, '  ', '  ✗ ')
 }

@@ -69,6 +69,7 @@ describe('the updater in its own process', () => {
             return version === null ? null : { version, protocol: ready.paired ? 3 : 2, paired: ready.paired }
           },
           readyProtocol: () => (ready.pty ? (ready.paired ? 3 : 2) : null),
+          takenBack: () => { calls.push('pty taken back') },
         }
       },
     }
@@ -244,6 +245,8 @@ describe('the updater in its own process', () => {
       // Nothing was wrong with the host: it pairs with the next build.
       expect(existsSync(join(ptyRoot, 'pty-rejected.json')) ? JSON.parse(readFileSync(join(ptyRoot, 'pty-rejected.json'), 'utf8')) : []).toEqual([])
       expect(m.calls).toContain('[update] terminal host 0.11.0 taken back out with the build it came with — back to 0.10.0')
+      // And its poller, finished by that install, checks again (backed off) rather than wait for the next updater start.
+      expect(m.calls.indexOf('pty taken back')).toBeGreaterThan(m.calls.indexOf('[update] terminal host 0.11.0 taken back out with the build it came with — back to 0.10.0'))
     } finally { rmSync(root, { recursive: true, force: true }) }
   }))
 

@@ -7,7 +7,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { PTY_PAYLOAD_FILES, type PtyEntry } from './ptyPayload.js'
-import { newerPtyForUpdate, preparePtyForUpdate, type PtyUpdateCommandDeps } from './ptyUpdateCommand.js'
+import { newerPtyForUpdate, preparePtyForUpdate, takeBackPtyForUpdate, type PtyUpdateCommandDeps } from './ptyUpdateCommand.js'
 
 let root: string
 let ptyRoot: string
@@ -69,6 +69,22 @@ describe('harness update, for the terminal host (Windows)', () => {
       '▸ Updating the terminal host 0.10.0 → 0.11.0…',
       '  ✗ terminal host 0.11.0 was not installed (pty payload refused: harness-pty reports version 0.9.9, expected 0.11.0) — keeping 0.10.0',
     ])
+    expect(pointer()).toBe('0.10.0')
+  })
+
+  it('takes a paired host back out after its build failed to go in, marking with ✗ what did not happen', () => {
+    mkdirSync(join(ptyRoot, '0.11.0'))
+    writeFileSync(join(ptyRoot, 'current-pty'), '0.11.0')
+    writeFileSync(join(ptyRoot, 'pty-pending.json'), JSON.stringify({ version: '0.11.0', previous: '0.10.0' }))
+    // The rejection the restore records first cannot be written.
+    mkdirSync(join(ptyRoot, 'pty-rejected.json'))
+    const lines: string[] = []
+    takeBackPtyForUpdate(root, (line) => lines.push(line))
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toMatch(/^ {2}✗ could not take terminal host 0\.11\.0 back out/)
+    rmSync(join(ptyRoot, 'pty-rejected.json'), { recursive: true })
+    takeBackPtyForUpdate(root, (line) => lines.push(line))
+    expect(lines[1]).toBe('  terminal host 0.11.0 taken back out with the build it came with — back to 0.10.0')
     expect(pointer()).toBe('0.10.0')
   })
 })

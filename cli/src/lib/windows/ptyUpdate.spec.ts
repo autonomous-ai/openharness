@@ -7,8 +7,11 @@ import { SpawnLockBusyError } from '../daemonSpawnLock.js'
 import { PTY_PROTOCOL } from '../ptyHost/protocol.js'
 import { restore as restoreCli, startSelfUpdater } from '../selfUpdate.js'
 import { installPreparedPty, rejectedPtyVersions } from './ptyInstall.js'
-import { PTY_PAYLOAD_FILES, PtyPayloadRefused, type PreparedPty, type PtyEntry } from './ptyPayload.js'
-import { installedPtyProtocol, keepStaged, ptyOnProbation, rollBackStaged, startPtyUpdater, sweepPtyLeftovers, type PtyPoller, type PtyUpdaterDeps } from './ptyUpdate.js'
+import { PTY_PAYLOAD_FILES, PtyPayloadRefused, PtyPayloadUnpackFailed, type PreparedPty, type PtyEntry } from './ptyPayload.js'
+import {
+  installedPtyProtocol, keepStaged, ptyOnProbation, ptyUnjudged, rollBackStaged, startPtyUpdater, sweepPtyLeftovers, takeBackPty,
+  type PtyPoller, type PtyUpdaterDeps,
+} from './ptyUpdate.js'
 
 let root: string
 let ptyRoot: string
@@ -150,6 +153,33 @@ describe('startPtyUpdater', () => {
     expect(h.lines.some((l) => l.includes('not trying it again'))).toBe(false)
   })
 
+  it('a payload verified but not unpacked is unpacked again next check from the bytes kept, not downloaded again', async () => {
+    const zip = Buffer.from('verified zip')
+    const given: Array<Buffer | undefined> = []
+    let sha = 'a'
+    const h = harness({
+      entry: () => entryOf('0.11.0', sha),
+      prepare: async (entry, _runtimeDir, verified) => {
+        given.push(verified)
+        if (given.length === 1) throw new PtyPayloadUnpackFailed(zip, new Error('tar exited 1'))
+        if (given.length === 3) throw new PtyPayloadUnpackFailed(Buffer.from('other zip'), new Error('EBUSY'))
+        return stagingFor(entry.version)
+      },
+      withLock: async (fn) => { if (given.length >= 2 && sha === 'a') throw new SpawnLockBusyError(null); return fn() },
+    })
+    await vi.waitFor(() => expect(given).toHaveLength(2), { timeout: 2_000 })
+    expect(given[0]).toBeUndefined()
+    expect(given[1]).toBe(zip)
+    expect(h.lines).toContain('[update] terminal host 0.11.0 was downloaded but could not be unpacked (tar exited 1) — unpacking it again next check, from the bytes already verified')
+    expect(h.lines.some((l) => l.includes('not trying it again'))).toBe(false)
+    // Another entry's bytes are never handed to it.
+    sha = 'b'
+    await vi.waitFor(() => expect(given).toHaveLength(4), { timeout: 2_000 })
+    expect(given[2]).toBeUndefined()
+    expect(given[3]?.toString()).toBe('other zip')
+    await vi.waitFor(() => expect(h.staged).toEqual(['0.11.0']), { timeout: 2_000 })
+  })
+
   it('a busy lock retries the install next tick without downloading again', async () => {
     let busy = 0
     const h = harness({
@@ -253,6 +283,36 @@ describe('a host for a CLI build that needs it (the pairing rule)', () => {
     expect(await h.poller.readyToStage(above)).toEqual({ version: '0.11.0', protocol: above, paired: true })
     expect(pointer()).toBe('0.11.0')
     expect(h.poller.readyProtocol()).toBeNull()
+  })
+
+  it('a host taken back out after its build failed to stage is prepared again once the back-off has passed', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const h = harness({ intervalMs: 1_000, prepare: async (entry) => { h.events.push(`prepare ${entry.version}`); return stagingFor(entry.version, above) } })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(await h.poller.readyToStage(above)).toEqual({ version: '0.11.0', protocol: above, paired: true })
+    // The CLI build did not stage: the host goes back out (services/updaterProcess.ts), and the poller is told.
+    takeBackPty(root, () => {}, '[update] ')
+    expect(pointer()).toBe('0.10.0')
+    h.poller.takenBack()
+    expect(h.lines).toContain('[update] terminal host 0.11.0 was taken back out with the build it came with — preparing it again in 2 s')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(h.events.filter((e) => e.startsWith('prepare'))).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(h.events.filter((e) => e.startsWith('prepare'))).toHaveLength(2)
+    expect(h.poller.readyProtocol()).toBe(above)
+    // Taken back again: the back-off doubles, as a refusal's does.
+    expect(await h.poller.readyToStage(above)).not.toBeNull()
+    takeBackPty(root, () => {}, '[update] ')
+    h.poller.takenBack()
+    expect(h.lines).toContain('[update] terminal host 0.11.0 was taken back out with the build it came with — preparing it again in 4 s')
+    // Nothing to re-arm once stopped, or with nothing installed.
+    h.poller.stop()
+    h.poller.takenBack()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(h.events.filter((e) => e.startsWith('prepare'))).toHaveLength(2)
+    const fresh = harness({ intervalMs: 1_000 })
+    fresh.poller.takenBack()
+    expect(fresh.lines.filter((l) => l.includes('taken back'))).toEqual([])
   })
 
   it('a supported payload says its protocol too, and goes in with any build', async () => {
@@ -453,6 +513,36 @@ describe("the master's rollback and keep", () => {
     expect(ptyOnProbation(root)).toBeNull()
   })
 
+  it('rolls back and keeps the host under the spawn lock, taken only while a host is on probation', () => {
+    const calls: string[] = []
+    const lock = () => { calls.push('lock'); return () => calls.push('release') }
+    const restorePty = (rootDir: string) => { calls.push('restore pty'); return { found: false, pointer: false, restored: [], kept: [], missing: [], rootDir } }
+    rollBackStaged({ cliPending: () => true, restoreCli: () => calls.push('restore cli'), ptyRoot: root, log: () => {}, lock, restorePty })
+    expect(calls).toEqual(['restore cli'])
+    onProbation()
+    calls.length = 0
+    rollBackStaged({ cliPending: () => true, restoreCli: () => calls.push('restore cli'), ptyRoot: root, log: () => {}, lock, restorePty })
+    expect(calls).toEqual(['lock', 'restore pty', 'release', 'restore cli'])
+    calls.length = 0
+    keepStaged({ confirmCli: () => calls.push('confirm cli'), ptyRoot: root, lock, confirmPty: () => calls.push('confirm pty') })
+    expect(calls).toEqual(['confirm cli', 'lock', 'confirm pty', 'release'])
+    // A lock that stays busy: said, and the host judged all the same, as before the lock.
+    const lines: string[] = []
+    calls.length = 0
+    keepStaged({ confirmCli: () => {}, ptyRoot: root, lock: () => null, log: (l) => lines.push(l), confirmPty: () => calls.push('confirm pty') })
+    rollBackStaged({ cliPending: () => false, restoreCli: () => {}, ptyRoot: root, log: (l) => lines.push(l), lock: () => null, restorePty })
+    expect(calls).toEqual(['confirm pty', 'restore pty'])
+    expect(lines).toEqual([
+      '[harnessd] the daemon spawn lock is busy — keeping terminal host 0.11.0 without it',
+      '[harnessd] the daemon spawn lock is busy — rolling terminal host 0.11.0 back without it',
+    ])
+    // A keep with nothing on probation takes no lock.
+    calls.length = 0
+    rmSync(join(ptyRoot, 'pty-pending.json'))
+    keepStaged({ confirmCli: () => {}, ptyRoot: root, lock, confirmPty: () => calls.push('confirm pty') })
+    expect(calls).toEqual(['confirm pty'])
+  })
+
   it('keeps both', () => {
     onProbation()
     const calls: string[] = []
@@ -460,6 +550,94 @@ describe("the master's rollback and keep", () => {
     expect(calls).toEqual(['confirm cli'])
     expect(existsSync(join(ptyRoot, 'pty-pending.json'))).toBe(false)
     expect(pointer()).toBe('0.11.0')
+  })
+})
+
+describe('takeBackPty', () => {
+  /** A paired 0.11.0 installed over 0.10.0, as `readyToStage` leaves it, and rejected nowhere yet. */
+  function pairedIn(): void {
+    mkdirSync(join(ptyRoot, '0.11.0'))
+    for (const name of PTY_PAYLOAD_FILES) writeFileSync(join(ptyRoot, '0.11.0', name), `new ${name}`)
+    writeFileSync(join(ptyRoot, 'current-pty'), '0.11.0')
+    writeFileSync(join(ptyRoot, 'pty-pending.json'), JSON.stringify({ version: '0.11.0', previous: '0.10.0' }))
+  }
+
+  it('puts the previous host back, takes back the rejection the restore records, and says so', () => {
+    pairedIn()
+    const lines: string[] = []
+    takeBackPty(root, (l) => lines.push(l), '[update] ')
+    expect(pointer()).toBe('0.10.0')
+    expect(existsSync(join(ptyRoot, 'pty-pending.json'))).toBe(false)
+    expect(rejectedPtyVersions(root)).toEqual([])
+    expect(lines).toEqual(['[update] terminal host 0.11.0 taken back out with the build it came with — back to 0.10.0'])
+  })
+
+  it('says the host stays when the version before it is no longer there to go back to', () => {
+    pairedIn()
+    rmSync(join(ptyRoot, '0.10.0'), { recursive: true })
+    const lines: string[] = []
+    takeBackPty(root, (l) => lines.push(l), '  ', '  ✗ ')
+    expect(pointer()).toBe('0.11.0')
+    expect(lines).toEqual(['  ✗ terminal host 0.11.0 could not be taken back out: 0.10.0 is no longer there to go back to — it stays'])
+  })
+
+  it('on a failure, says the marker stays for the next master, which may keep it', () => {
+    pairedIn()
+    // The rejection the restore records first cannot be written: a folder stands where it goes.
+    mkdirSync(join(ptyRoot, 'pty-rejected.json'))
+    const lines: string[] = []
+    takeBackPty(root, (l) => lines.push(l), '  ', '  ✗ ')
+    expect(existsSync(join(ptyRoot, 'pty-pending.json'))).toBe(true)
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toMatch(/^ {2}✗ could not take terminal host 0\.11\.0 back out \(.+\) — it stays on probation: the next master takes it back out, or judges it and may keep it$/)
+  })
+})
+
+describe("a master's start: a host this build cannot speak on probation (ptyUnjudged)", () => {
+  function onProbation(): void {
+    mkdirSync(join(ptyRoot, '0.11.0'))
+    for (const name of PTY_PAYLOAD_FILES) writeFileSync(join(ptyRoot, '0.11.0', name), `new ${name}`)
+    writeFileSync(join(ptyRoot, 'current-pty'), '0.11.0')
+    writeFileSync(join(ptyRoot, 'pty-pending.json'), JSON.stringify({ version: '0.11.0', previous: '0.10.0' }))
+  }
+  const speaks = (protocol: number | null) => () => protocol
+
+  it('takes back a host of a protocol it does not support, with no CLI build pending, instead of judging it', () => {
+    onProbation()
+    const lines: string[] = []
+    const calls: string[] = []
+    const lock = () => { calls.push('lock'); return () => calls.push('release') }
+    expect(ptyUnjudged(root, { cliPending: false, log: (l) => lines.push(l), protocol: speaks(PTY_PROTOCOL + 1), lock })).toBeNull()
+    expect(calls).toEqual(['lock', 'release'])
+    expect(pointer()).toBe('0.10.0')
+    expect(rejectedPtyVersions(root)).toEqual([])
+    expect(lines).toEqual([
+      `[harnessd] terminal host 0.11.0 is on probation with no CLI build, and speaks protocol ${PTY_PROTOCOL + 1}, which this build does not — taking it back out rather than judging it`,
+      '[harnessd] terminal host 0.11.0 taken back out with the build it came with — back to 0.10.0',
+    ])
+  })
+
+  it('judges it as before when it speaks a supported protocol, a CLI build is pending, its protocol cannot be read, or the take-back fails', () => {
+    onProbation()
+    const lines: string[] = []
+    expect(ptyUnjudged(root, { cliPending: false, log: (l) => lines.push(l), protocol: speaks(PTY_PROTOCOL), lock: () => () => {} })).toBe('terminal host 0.11.0')
+    expect(ptyUnjudged(root, { cliPending: true, log: (l) => lines.push(l), protocol: speaks(PTY_PROTOCOL + 1), lock: () => () => {} })).toBe('terminal host 0.11.0')
+    expect(ptyUnjudged(root, { cliPending: false, log: (l) => lines.push(l), protocol: speaks(null), lock: () => () => {} })).toBe('terminal host 0.11.0')
+    expect(lines).toEqual([])
+    mkdirSync(join(ptyRoot, 'pty-rejected.json'))
+    expect(ptyUnjudged(root, { cliPending: false, log: (l) => lines.push(l), protocol: speaks(PTY_PROTOCOL + 1), lock: () => null })).toBe('terminal host 0.11.0')
+    expect(lines[0]).toBe('[harnessd] the daemon spawn lock is busy — taking terminal host 0.11.0 back out without it')
+    expect(lines.at(-1)).toMatch(/could not take terminal host 0\.11\.0 back out/)
+    expect(pointer()).toBe('0.11.0')
+  })
+
+  it('takes no lock and reads nothing with no host on probation', () => {
+    const calls: string[] = []
+    expect(ptyUnjudged(root, { cliPending: false, log: () => {}, protocol: () => { calls.push('protocol'); return 3 }, lock: () => { calls.push('lock'); return null } })).toBeNull()
+    expect(calls).toEqual([])
+    writeFileSync(join(ptyRoot, 'pty-pending.json'), '{ not json')
+    expect(ptyUnjudged(root, { cliPending: false, log: () => {}, protocol: () => { calls.push('protocol'); return 3 } , lock: () => { calls.push('lock'); return () => {} } })).toBe('terminal host (unreadable marker)')
+    expect(calls).toEqual([])
   })
 })
 

@@ -12,7 +12,7 @@ import { env } from '../../config/env.js'
 import { scrubTerminalContext } from '../terminalEnvironment.js'
 import { PtyHostClient, type PtyHostDiscovery } from './client.js'
 import { discoveryFileName, hostInstanceName, instanceProtocol } from './instance.js'
-import { PTY_PROTOCOL } from './protocol.js'
+import { PTY_PROTOCOL, SUPPORTED_PTY_PROTOCOLS } from './protocol.js'
 import { pidAlive, recordedProcessDead, startMarkerMs, type HostLiveness, type HostProcessRow } from '../processProof.js'
 
 // Moved to ../processProof.ts with the daemon's own record; still exported from here for the pty host's callers.
@@ -250,6 +250,9 @@ function probationPrevious(ptyRoot: string): string | null {
   }
 }
 
+/** The builds `targetHost` said it would not target, by path and version: said once each. */
+const toldUnsupported = new Set<string>()
+
 /** The host build new panes go to: the one this daemon would start. */
 export interface PtyHostTarget {
   protocol: number
@@ -268,12 +271,24 @@ export interface PtyHostTarget {
  *
  * The instance is the one the host will publish: named from the binary's own version (instance.rs names it so), and
  * `p<protocol>` for a build from before features, which predates versioned instances too.
+ *
+ * A build of a protocol outside `SUPPORTED_PTY_PROTOCOLS` is no target either (said once per binary): a paired host left
+ * in `current-pty` without the CLI build that needs it (spec §5, the pairing rule), which `ensurePtyHost` would only
+ * find incompatible. Unknown, the daemon takes the newest running host it speaks, as it did before targets.
  */
 export function targetHost(options: PtyHostBinaryOptions = {}): PtyHostTarget | null {
   const binary = ptyHostBinary(options)
   if (!binary) return null
   const read = readBinaryVersion(binary)
   if (!read) return null
+  if (!SUPPORTED_PTY_PROTOCOLS.includes(read.protocol)) {
+    const key = `${path.resolve(binary)}\u0000${read.version}`
+    if (!toldUnsupported.has(key)) {
+      toldUnsupported.add(key)
+      console.error(`[terminal] ptyhost: the host ${read.version} speaks protocol ${read.protocol}, which this daemon does not (it speaks ${SUPPORTED_PTY_PROTOCOLS.join(' and ')}): target unknown, the newest running host of protocol ${PTY_PROTOCOL} is used`)
+    }
+    return null
+  }
   const runtimeDir = options.runtimeDir ?? env.ADAPTER_RUNTIME_DIR
   const current = currentPtyVersion(runtimeDir)
   const installed = current !== null && path.resolve(binary) === path.resolve(runtimeDir, 'pty', current, BINARY)

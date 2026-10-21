@@ -128,11 +128,14 @@ export function runUpdaterService(_options?: unknown, deps: UpdaterServiceDeps =
         // Installed for this handover and then the build's stage failed. A supported host is on disk, on probation, and
         // must still be handed over, or no master would judge it. A paired one would come up under this build, which
         // cannot open a pane on it, and a master judging it with this build's core would likely keep it: it is taken
-        // back out, and nothing is handed over. A later updater start prepares it again for the next check.
+        // back out, and nothing is handed over; its poller, finished by that install, checks again, backed off as a
+        // refused payload is, and prepares it again for the build after.
         const taken = ptyTaken
         ptyTaken = null
-        if (taken?.paired && deps.ptyRootDir !== undefined) takeBackPty(deps.ptyRootDir, deps.log, '[update] ')
-        else if (taken !== null) await handOver({ ptyVersion: taken.version })
+        if (taken?.paired && deps.ptyRootDir !== undefined) {
+          takeBackPty(deps.ptyRootDir, deps.log, '[update] ')
+          pty?.takenBack()
+        } else if (taken !== null) await handOver({ ptyVersion: taken.version })
       }
     }),
     // A paired host (one of a protocol above this build's) goes in only for the build that needs it: the poller is told
@@ -198,6 +201,6 @@ function startPty(
     installedCli: () => deps.installedVersion?.() ?? installed,
     withLock,
     onStaged: (ptyVersion) => handOver({ ptyVersion }),
-    deps: { prepare: (entry, runtimeDir) => preparePtyPayload(entry, runtimeDir, { download: (ref) => downloadVerified(ref, limits) }) },
+    deps: { prepare: (entry, runtimeDir, verified) => preparePtyPayload(entry, runtimeDir, { download: (ref) => downloadVerified(ref, limits) }, verified) },
   })
 }
