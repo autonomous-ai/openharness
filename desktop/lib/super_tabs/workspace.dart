@@ -371,7 +371,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                         key: ValueKey('super-agent-group-${group.id}'),
                         title: Text(
                           controller.snapshot!.isProjectLead(group.id)
-                              ? '${controller.snapshot!.projectFor(group.id)!.name} lead'
+                              ? '${controller.snapshot!.projectFor(group.id)!.name} product manager'
                               : group.label,
                         ),
                         onTap: () => Navigator.pop(context, group.id),
@@ -435,7 +435,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
             final terminal = SuperPane(
               machineId: lead?.machineId ?? '',
               harnessId: lead?.harnessId ?? '',
-              title: 'Lead',
+              title: 'Product Manager',
               titles: {
                 for (final a in agents)
                   (a.machineId, a.harnessId): controller.snapshot!.agentName(

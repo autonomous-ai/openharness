@@ -68,6 +68,9 @@ void main() {
       f.app.machineStates['m']!.agents = [Agent.fromJson(f.connection.native!)];
       final server = f.connection.server;
       server.state['name'] = 'Company';
+      for (final agent in server.state['agents'] as List) {
+        agent['displayName'] = agent['id'] == 'lead-agent' ? 'Atlas' : 'Sage';
+      }
       server.state['projects'] = [
         projectFixture('lead', 'Lamp OS', 'lead'),
         projectFixture(
@@ -145,6 +148,7 @@ void main() {
         'kind': 'agent',
         'id': 'lead-agent',
         'name': 'Lead',
+        'displayName': 'Atlas',
       };
       server.append(
         'Keep changes on the device and sync when the connection returns.',
@@ -202,6 +206,19 @@ void main() {
       expect(find.byTooltip('Invite people'), findsOneWidget);
       expect(find.text('CHATS'), findsNothing);
       expect(find.text('New group'), findsNothing);
+      expect(find.text('New project'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey('super-project-expand-design')),
+      );
+      await tester.pumpAndSettle();
+      expect(c!.selectedId, 'design-lead');
+      expect(c.expandedProjects.contains('design'), isFalse);
+      await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+      await tester.pumpAndSettle();
+      expect(c.selectedId, 'lead');
+      await tester.tap(find.byKey(const ValueKey('super-your-devices')));
+      await tester.pumpAndSettle();
+      expect(f.app.takeMachinesRequest(), (devicePub: null, phones: false));
       final folder = Platform.environment['SUPER_TAB_NATIVE_SHOTS'];
       Future<void> shot(String name) async {
         if (folder == null) return;
@@ -237,7 +254,7 @@ void main() {
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       await tester.tap(
-        find.byKey(ValueKey('super-member-${c!.snapshot!.agents.single.id}')),
+        find.byKey(ValueKey('super-member-${c.snapshot!.agents.single.id}')),
       );
       debugPrint('Swarm fixture: terminal requested');
       for (var i = 0; i < 30 && f.app.activeSwarm.panes.isEmpty; i++) {
@@ -274,7 +291,7 @@ void main() {
         tester
             .widget<Text>(find.byKey(const ValueKey('terminal-pane-title')))
             .data,
-        'Lead',
+        'Atlas',
       );
       var reviews = 0;
       f.app.reviewSessionClose = (_, {tabName, canStop}) async {

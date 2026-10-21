@@ -476,7 +476,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                       const SizedBox(height: 16),
                       if (own.isNotEmpty)
                         Text(
-                          'Let the lead run agents here using this machine’s signed-in accounts.',
+                          'Let the product manager run agents here using this machine’s signed-in accounts.',
                           style: DesktopChrome.text(),
                         )
                       else ...[
@@ -668,13 +668,19 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           );
     String available(double? used) =>
         resourcePercent(used == null ? null : (100 - used).clamp(0, 100));
-    String compactBytes(num? bytes) =>
-        resourceBytes(bytes?.toDouble())
-            .replaceAll(' GB', 'G')
-            .replaceAll(' TB', 'T')
-            .replaceAll(' MB', 'M');
+    final metrics = [
+      if (value?.cpuPercent != null) 'CPU ${available(value!.cpuPercent)}',
+      if (value?.busiestGpu?.utilizationPercent != null)
+        'GPU ${available(value!.busiestGpu!.utilizationPercent)}',
+      if (memoryFree != null) 'RAM ${resourceBytes(memoryFree.toDouble())}',
+      if (diskFree != null) 'SSD ${resourceBytes(diskFree)}',
+    ];
+    final visibleAccounts = usage.accounts
+        .where((a) => a.figure != '—')
+        .toList();
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+      key: ValueKey('super-machine-row-$id'),
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -752,71 +758,72 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             ),
             child: Tooltip(
               message: [name, if (person != null) person.email].join('\n'),
-              child: Row(
-                children: [
-                  Flexible(
-                    flex: 3,
-                    child: Text(
-                      name,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: 32),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 2,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      superTabMachineName(name),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: DesktopChrome.control(medium: true),
-                    ),
-                  ),
-                  if (person != null) ...[
-                    const SizedBox(width: 8),
-                    Flexible(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 64),
-                        child: Text(
-                          superTabPersonName(person.email),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: DesktopChrome.metadata(),
-                        ),
+                      style: DesktopChrome.control(
+                        medium: true,
+                        color: online ? null : DesktopChrome.muted,
                       ),
                     ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (person != null) ...[
+                          Flexible(
+                            child: Text(
+                              superTabPersonName(person.email),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: DesktopChrome.metadata(),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
+                        Text(
+                          paused
+                              ? 'Paused'
+                              : !online
+                              ? 'Offline'
+                              : '$running ${running == 1 ? 'agent' : 'agents'}',
+                          style: DesktopChrome.metadata(),
+                        ),
+                      ],
+                    ),
                   ],
-                  const SizedBox(width: 8),
-                  Text(
-                    paused
-                        ? 'Paused'
-                        : !online
-                        ? 'Offline'
-                        : '$running ${running == 1 ? 'agent' : 'agents'}',
-                    style: DesktopChrome.metadata(),
-                  ),
-                ],
+                ),
               ),
             ),
           ),
-          const SizedBox(height: 4),
-          Tooltip(
-            message:
-                'Available capacity\nCPU and GPU: idle percentage at the latest reading\nRAM: ${resourceBytes(memoryFree?.toDouble())} free of ${resourceBytes(value?.memoryTotalBytes)}\nSSD: ${resourceBytes(diskFree)} free of ${resourceBytes(diskTotal)}',
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 4,
-              children: [
-                for (final metric in [
-                  'CPU ${available(value?.cpuPercent)}',
-                  'GPU ${available(value?.busiestGpu?.utilizationPercent)}',
-                  'RAM ${compactBytes(memoryFree)}',
-                  'SSD ${compactBytes(diskFree)}',
-                ])
-                  Text(metric, style: DesktopChrome.metadata()),
-              ],
+          if (metrics.isNotEmpty) ...[
+            Tooltip(
+              message:
+                  'Available capacity\nCPU and GPU: idle percentage at the latest reading\nRAM: ${resourceBytes(memoryFree?.toDouble())} free of ${resourceBytes(value?.memoryTotalBytes)}\nSSD: ${resourceBytes(diskFree)} free of ${resourceBytes(diskTotal)}',
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  for (final metric in metrics)
+                    Text(metric, style: DesktopChrome.metadata()),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: 4),
-          if (usage.accounts.isEmpty)
-            Text('—', style: DesktopChrome.control())
-          else
+          ],
+          if (visibleAccounts.isNotEmpty) ...[
+            const SizedBox(height: 4),
             Wrap(
               spacing: 16,
               runSpacing: 8,
               children: [
-                for (final account in usage.accounts)
+                for (final account in visibleAccounts)
                   Tooltip(
                     message: account.detail,
                     child: Row(
@@ -838,6 +845,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   ),
               ],
             ),
+          ],
         ],
       ),
     );
@@ -857,7 +865,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
           child: Text(
-            'Add a machine for the lead to use.',
+            'Add a machine for the product manager to use.',
             style: DesktopChrome.metadata(),
           ),
         )

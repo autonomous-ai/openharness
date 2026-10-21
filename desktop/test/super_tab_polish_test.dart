@@ -30,6 +30,7 @@ void gap(ConversationServer server, {String author = 'lead-agent'}) {
       'kind': 'agent',
       'id': author,
       'name': 'Lead',
+      'displayName': author == 'lead-agent' ? 'Atlas' : 'Sage',
     }
     ..['source'] = {'kind': 'native', 'phase': 'gap'};
 }
@@ -60,6 +61,11 @@ ConversationServer polishFixture() {
       {
         'id': pair.$1,
         'name': pair.$2,
+        'displayName': switch (pair.$1) {
+          'lead-agent' => 'Atlas',
+          'builder' => 'Nova',
+          _ => 'Sage',
+        },
         'projectId': 'lead',
         'machineId': 'm',
         'harnessId': pair.$1,
@@ -85,6 +91,11 @@ ConversationServer polishFixture() {
     {...conversationFixture('long-lead', 'Lead'), 'projectId': 'long'},
   ]);
   server.state['machines'] = [
+    {
+      'machineId': 'offline',
+      'name': 'MacBooks-MacBook-Pro-19.local',
+      'contributorId': 'leo',
+    },
     {
       'machineId': 'm',
       'name': 'M2',
@@ -121,13 +132,14 @@ ConversationServer polishFixture() {
       'kind': 'agent',
       'id': 'lead-agent',
       'name': 'Lead',
+      'displayName': 'Atlas',
     };
   }
 
   server.append('How is offline editing coming along?');
   lead(
-    'The implementation is ready. Builder is checking reconnects, '
-    'and Reviewer is testing restart recovery.',
+    'The implementation is ready. Nova is checking reconnects, '
+    'and Sage is testing restart recovery.',
   );
   lead(
     '**Progress**\n- Edits survive a restart.\n- Reconnecting syncs each edit once.\n\n'

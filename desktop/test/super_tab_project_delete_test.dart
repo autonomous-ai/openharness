@@ -126,7 +126,7 @@ void main() {
       expect(find.text('Loading conversation…'), findsNothing);
       expect(composer, findsNothing);
       expect(find.byTooltip('Project options'), findsNothing);
-      expect(find.text('New Project'), findsOneWidget);
+      expect(find.text('New project'), findsOneWidget);
       expect(find.byTooltip('Chat'), findsNothing);
       await finish(tester);
     },

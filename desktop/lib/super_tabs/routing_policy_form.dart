@@ -250,7 +250,7 @@ class _RoutingPolicyFormState extends State<RoutingPolicyForm> {
         _block(
           'notes',
           'Notes for Jev',
-          'Anything the Lead should weigh when choosing, in plain words.',
+          'Anything the product manager should weigh when choosing, in plain words.',
           TextFormField(
             key: const ValueKey('routing-notes'),
             initialValue: _value.notes,

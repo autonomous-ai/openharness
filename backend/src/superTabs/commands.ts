@@ -1,4 +1,5 @@
 import { admitMachineStart, machineContribution } from './machines.js'
+import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
   activeWork, actorKey, agent, author, conversation, fail, person, stableId, numberConversations, nextConversationNumber,
@@ -155,6 +156,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   const command = commandSchema.parse(input)
   const state = structuredClone(original)
   numberConversations(state)
+  assignAgentDisplayNames(state.agents)
   const result: Record<string, unknown> = {}
   const effects: CommandEffects = { state, messages: [], cancelledAgents: [], previousAttempts: [], routeDecisions: [], result }
   const operationId = stableId(state.id, actorKey(actor), context.operationId)
@@ -719,6 +721,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
   }
   // MongoDB limits a document to 16 MiB. Leave room for indexes and metadata, and refuse before losing state.
+  assignAgentDisplayNames(state.agents)
   if (Buffer.byteLength(JSON.stringify(state)) > 8 * 1024 * 1024) fail('TAB_TOO_LARGE', 'This Super Tab has reached its metadata limit.', 413)
   return effects
 }

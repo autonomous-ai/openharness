@@ -610,6 +610,12 @@ class _SuperTabViewState extends State<SuperTabView> {
   Widget _sidebar() => ProjectSidebar(
     controller: c,
     onNewProject: widget.onNewProject,
+    onYourDevices: widget.app == null
+        ? null
+        : () {
+            _closeSidebar();
+            widget.app!.requestMachines();
+          },
     needsHuman: (group) => _needsHuman(group).length,
     onSelect: (id) {
       c.select(id);
@@ -1053,8 +1059,8 @@ class _SuperTabViewState extends State<SuperTabView> {
                         ? 'Conversation unavailable.'
                         : group == null
                         ? 'Loading conversation…'
-                        : group.id == 'lead'
-                        ? 'Discuss the plan with your lead.'
+                        : c.snapshot!.isProjectLead(group.id)
+                        ? 'Discuss the plan with your product manager.'
                         : 'Start the conversation.',
                     style: DesktopChrome.text(color: DesktopChrome.muted),
                   ),
@@ -1410,7 +1416,9 @@ class _SuperTabViewState extends State<SuperTabView> {
                                       hintText: group == null
                                           ? 'Loading conversation…'
                                           : c.canWrite
-                                          ? 'Message ${group.title}'
+                                          ? c.snapshot!.isProjectLead(group.id)
+                                                ? 'Message Product Manager'
+                                                : 'Message ${group.title}'
                                           : 'Read-only conversation',
                                       border: InputBorder.none,
                                       enabledBorder: InputBorder.none,

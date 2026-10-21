@@ -9,8 +9,8 @@ import 'package:harness/notify/alert_sounds.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/harness_activity.dart';
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/roster.dart';
-import 'package:harness/widgets/engine_identity.dart';
 import 'package:harness/widgets/harness_activity_mark.dart';
 
 import 'harness_activity_test.dart' show activityQuestion;
@@ -37,6 +37,7 @@ class RosterFixture {
           'id': 'agent-$i',
           'projectId': i == 2 ? 'os' : 'lead',
           'name': ['Lead', 'Multiply', 'Lead', 'Divide'][i],
+          'displayName': ['Atlas', 'Sage', 'Nova', 'Finn'][i],
           'machineId': 'm',
           'harnessId': 'a$i',
           'contributorId': 'owner',
@@ -146,7 +147,11 @@ void main() {
     ];
     await f.show(tester);
     for (var i = 0; i < 4; i++) {
-      expect(f.inRow(i, find.byType(EngineMark)), findsOneWidget);
+      expect(f.inRow(i, find.byType(SuperTabAvatar)), findsOneWidget);
+      expect(
+        f.inRow(i, find.text(i == 0 || i == 2 ? 'PM' : 'Dev')),
+        findsOneWidget,
+      );
       expect(
         f.inRow(i, find.text(i == 2 ? 'autonomous-os' : 'openharness')),
         findsOneWidget,
@@ -154,9 +159,19 @@ void main() {
     }
     expect(find.text('Join Super Tab roster'), findsNothing);
     expect(find.text('Ready'), findsNothing);
-    final nameX = tester.getTopLeft(f.inRow(0, find.text('Lead'))).dx;
+    final nameX = tester.getTopLeft(f.inRow(0, find.text('Atlas'))).dx;
     final projectX = tester.getTopLeft(f.inRow(0, find.text('openharness'))).dx;
     expect(projectX, nameX);
+    expect(
+      tester.getCenter(f.inRow(0, find.text('Atlas'))).dy,
+      lessThan(tester.getCenter(f.inRow(0, find.text('openharness'))).dy),
+    );
+    expect(tester.getSize(f.row(0)).height, lessThanOrEqualTo(60));
+    expect(
+      tester.getTopLeft(find.text('owner').first).dx,
+      projectX,
+      reason: 'People and agent identity use the same text column',
+    );
     f.controller.select('os-lead');
     await tester.pumpAndSettle();
     expect(f.inRow(0, find.text('openharness')), findsOneWidget);

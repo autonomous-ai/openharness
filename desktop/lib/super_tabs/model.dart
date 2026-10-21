@@ -36,11 +36,13 @@ class SuperTabAgent {
     : id = _text(row, 'id'),
       projectId = row['projectId'] as String? ?? 'lead',
       name = _text(row, 'name'),
+      displayName = row['displayName'] as String?,
       machineId = _text(row, 'machineId'),
       harnessId = _text(row, 'harnessId'),
       contributorId = _text(row, 'contributorId'),
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
+  final String? displayName;
   final Map<String, dynamic> configuration;
   String get engine => configuration['engine'] as String? ?? '';
 }
@@ -166,12 +168,9 @@ class SuperTabSnapshot {
   );
 
   String agentName(String id, {String fallback = 'Agent'}) =>
-      isLead(id) ? 'Lead' : agent(id)?.name ?? fallback;
+      agent(id)?.displayName ?? agent(id)?.name ?? fallback;
 
-  String authorName(SuperTabMessage message) =>
-      message.fromAgent && isLead(message.authorId)
-      ? 'Lead'
-      : message.authorName;
+  String authorName(SuperTabMessage message) => message.authorName;
 }
 
 class SuperTabRouteChoice {
@@ -290,7 +289,12 @@ class SuperTabMessage {
   final DateTime? createdAt;
   final List<SuperTabAttachment> attachments;
   final List<Map<String, dynamic>> deliveries;
-  String get authorName => author['name'] as String? ?? 'Unknown';
+  // History and message grouping use the identity recorded at send time, even
+  // after removal. Legacy messages retain their original author label.
+  String get authorName =>
+      (fromAgent ? author['displayName'] as String? : null) ??
+      author['name'] as String? ??
+      'Unknown';
   String get authorId => author['id'] as String? ?? '';
   bool get fromAgent => author['kind'] == 'agent';
   bool get fromTerminal => source['kind'] == 'native';

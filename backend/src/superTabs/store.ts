@@ -838,11 +838,12 @@ export class SuperTabStore {
     const id = stableId('hold-notice', delivery.tabId, delivery.id)
     if (delivery.status !== 'claimed' || await tx.superTabMessage.findUnique({ where: { id } })) return { noticed: false }
     const group = conversation(state, delivery.conversationId), waiting = agent(state, delivery.agentId)
+    const sender = author(state, { kind: 'agent', agentId: waiting.id, machineOwnerId: waiting.machineOwnerId })
     const revision = row.revision + 1
     group.lastMessageSequence = revision
     await tx.superTab.update({ where: { id: row.id, revision: row.revision }, data: { revision, state: json(state) } })
-    await this.writeMessages(tx, row.id, state, [{ id, conversationId: group.id, replyTo: null, recipients: [], text: holdNoticeText(waiting.name, reason),
-      author: { kind: 'agent', id: waiting.id, name: waiting.name, membershipGeneration: waiting.membershipGeneration } }], revision)
+    await this.writeMessages(tx, row.id, state, [{ id, conversationId: group.id, replyTo: null, recipients: [],
+      text: holdNoticeText(sender.displayName ?? sender.name, reason), author: sender }], revision)
     return { noticed: true }
   }
 
@@ -877,7 +878,7 @@ export class SuperTabStore {
         if (worker) {
           const lead = group.leadId && group.leadId !== worker.id && group.agentIds.includes(group.leadId) ? group.leadId : null
           notices.push({ id: stableId('stop-notice', tabId, assignmentId), conversationId: group.id,
-            author: { kind: 'agent', id: worker.id, name: worker.name, membershipGeneration: worker.membershipGeneration },
+            author: author(state, { kind: 'agent', agentId: worker.id, machineOwnerId: worker.machineOwnerId }),
             text: `Stopped\n\n${assignment.result} If this work should continue, assign a new attempt.`, replyTo: null, recipients: lead ? [lead] : [] })
           group.lastMessageSequence = revision
         }

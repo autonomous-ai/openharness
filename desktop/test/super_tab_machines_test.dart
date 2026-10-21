@@ -6,11 +6,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/machines.dart';
+import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/widgets/engine_identity.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
+import 'support/super_tab_fixture.dart';
 
 Future<void> _openAddMachineDialog(
   WidgetTester tester,
@@ -52,6 +54,109 @@ final _picker = find.byKey(const ValueKey('swarm-machine-picker'));
 Finder _option(String id) => find.byKey(ValueKey('swarm-machine-option-$id'));
 
 void main() {
+  test(
+    'generated computer names are readable and custom names stay intact',
+    () {
+      for (final hostname in [
+        'MacBookPro2021.local',
+        'MacBooks-MacBook-Pro-19.local',
+        'MacbookPro.local',
+      ]) {
+        expect(superTabMachineName(hostname), 'MacBook Pro');
+      }
+      expect(superTabMachineName('Mac-mini.local'), 'Mac mini');
+      expect(superTabMachineName('build-server.local'), 'build-server');
+      for (final name in [
+        'Ada’s Mac',
+        'M2',
+        'MacBook Pro lab',
+        'Build server',
+      ]) {
+        expect(superTabMachineName(name), name);
+      }
+    },
+  );
+  testWidgets(
+    'offline machines have one row and only available readings are shown',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(280, 700));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final server = ConversationServer();
+      final now = DateTime.now().millisecondsSinceEpoch;
+      server.state['machines'] = [
+        for (final live in [true, false])
+          {
+            'machineId': live ? 'online' : 'offline',
+            'name': live ? 'Studio Mac' : 'Offline Mac',
+            'contributorId': 'owner',
+            'observation': {
+              'receivedAt': now - (live ? 0 : 60000),
+              'resources': {
+                'cpuPercent': 0,
+                'memoryTotalBytes': 32000000000,
+                'memoryUsedBytes': 32000000000,
+                'diskTotalBytes': 1000000000000,
+                'diskFreeBytes': 141000000000,
+              },
+              'quotas': [
+                {'engine': 'claude', 'known': false, 'windows': []},
+                {
+                  'engine': 'codex',
+                  'known': true,
+                  'windows': [
+                    {'name': '5-hour', 'usedPercent': 0},
+                  ],
+                },
+              ],
+            },
+          },
+      ];
+      final c = server.controller();
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SuperTabMachines(controller: c, onAddAgent: (_) {}),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final offline = find.byKey(const ValueKey('super-machine-row-offline'));
+      expect(
+        find.descendant(of: offline, matching: find.text('Offline')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: offline, matching: find.byType(EngineMark)),
+        findsNothing,
+      );
+      expect(
+        find.descendant(of: offline, matching: find.textContaining('CPU')),
+        findsNothing,
+      );
+      expect(tester.getSize(offline).height, lessThanOrEqualTo(40));
+      expect(find.text('CPU 100%'), findsOneWidget);
+      expect(find.text('RAM 0 GB'), findsOneWidget);
+      expect(find.text('SSD 141 GB'), findsOneWidget);
+      expect(find.textContaining('GPU'), findsNothing);
+      expect(find.text('—'), findsNothing);
+      expect(find.text('100%'), findsOneWidget);
+      expect(
+        tester.widget<EngineMark>(find.byType(EngineMark)).engine,
+        'codex',
+      );
+      // The complete identity and actions remain accessible from the compact row.
+      await tester.tap(find.byKey(const ValueKey('super-machine-offline')));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(AlertDialog, 'Offline Mac'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    },
+  );
+
   test('shared repository metadata excludes embedded credentials', () {
     expect(
       superTabRepositoryUrl('https://token@github.com/example/project'),
@@ -499,7 +604,7 @@ void main() {
     );
   }
 
-  testWidgets('A machine card shows quota for Claude Code and Codex only', (
+  testWidgets('A machine card omits unknown subscription allowances', (
     tester,
   ) async {
     final f = SuperTabLaunchFixture();
@@ -546,7 +651,7 @@ void main() {
           .widgetList<EngineMark>(find.byType(EngineMark))
           .map((mark) => mark.engine)
           .toSet(),
-      {'claude', 'codex'},
+      {'claude'},
     );
 
     await tester.pumpWidget(const SizedBox());

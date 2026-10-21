@@ -13,11 +13,17 @@ class ProjectSidebar extends StatelessWidget {
     required this.onSelect,
     required this.needsHuman,
     this.onNewProject,
+    this.onYourDevices,
   });
   final SuperTabController controller;
   final ValueChanged<String> onSelect;
   final int Function(SuperTabConversation group) needsHuman;
   final VoidCallback? onNewProject;
+  final VoidCallback? onYourDevices;
+
+  // Actions, project names and workgroup names share one text column.
+  static const _iconColumn = 32.0;
+  static const _textGap = 4.0;
 
   Widget _row(SuperTabConversation group, {SuperTabProject? project}) {
     final selected = controller.selectedId == group.id;
@@ -28,10 +34,11 @@ class ProjectSidebar extends StatelessWidget {
           );
     final waiting = groups.any((g) => needsHuman(g) > 0);
     final unread = groups.any(controller.unread);
-    final expanded = controller.expandedProjects.contains(project?.id);
     final hasChildren =
         project != null &&
         groups.any((g) => g.id != project.leadConversationId);
+    final expanded =
+        hasChildren && controller.expandedProjects.contains(project.id);
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
       child: Material(
@@ -46,7 +53,7 @@ class ProjectSidebar extends StatelessWidget {
           borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
           child: Row(
             children: [
-              if (project != null && hasChildren)
+              if (project != null)
                 IconButton(
                   key: ValueKey('super-project-expand-${project.id}'),
                   icon: Icon(
@@ -64,12 +71,15 @@ class ProjectSidebar extends StatelessWidget {
                     overlayColor: WidgetStatePropertyAll(Colors.transparent),
                     backgroundColor: WidgetStatePropertyAll(Colors.transparent),
                   ),
-                  tooltip:
-                      '${expanded ? 'Collapse' : 'Expand'} ${project.name}',
-                  onPressed: () => controller.toggleProject(project.id),
+                  tooltip: hasChildren
+                      ? '${expanded ? 'Collapse' : 'Expand'} ${project.name}'
+                      : 'Chat with ${project.name} product manager',
+                  onPressed: () => hasChildren
+                      ? controller.toggleProject(project.id)
+                      : onSelect(group.id),
                 )
-              else if (project != null)
-                const SizedBox(width: 32),
+              else
+                const SizedBox(width: _iconColumn),
               Expanded(
                 child: Semantics(
                   label: project?.isPrivate == true ? 'Private project' : null,
@@ -79,35 +89,33 @@ class ProjectSidebar extends StatelessWidget {
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(minHeight: 36),
                       child: Padding(
-                        padding: EdgeInsets.fromLTRB(
-                          project == null ? 44 : 4,
-                          8,
-                          12,
-                          8,
-                        ),
+                        padding: const EdgeInsets.fromLTRB(_textGap, 8, 12, 8),
                         child: Row(
                           children: [
-                            if (project?.isPrivate == true) ...[
-                              Icon(
-                                AppIcons.lock,
-                                size: 14,
-                                color: DesktopChrome.muted,
-                              ),
-                              const SizedBox(width: 6),
-                            ],
                             Expanded(
                               child: Text(
                                 project?.name ?? group.label,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: DesktopChrome.control(
-                                  medium: project != null || unread || selected,
+                                  medium: unread || selected,
                                   color: selected || unread || project != null
                                       ? DesktopChrome.foreground
                                       : DesktopChrome.muted,
                                 ),
                               ),
                             ),
+                            if (project?.isPrivate == true) ...[
+                              const SizedBox(width: 8),
+                              Tooltip(
+                                message: 'Private project',
+                                child: Icon(
+                                  AppIcons.lock,
+                                  size: 14,
+                                  color: DesktopChrome.muted,
+                                ),
+                              ),
+                            ],
                             if (waiting) ...[
                               const SizedBox(width: 8),
                               Tooltip(
@@ -148,6 +156,47 @@ class ProjectSidebar extends StatelessWidget {
     );
   }
 
+  Widget _action({
+    required String key,
+    required IconData icon,
+    required String label,
+    required VoidCallback? onPressed,
+  }) => TextButton(
+    key: ValueKey(key),
+    onPressed: onPressed,
+    style:
+        TextButton.styleFrom(
+          foregroundColor: DesktopChrome.foreground,
+          backgroundColor: Colors.transparent,
+          disabledBackgroundColor: Colors.transparent,
+          minimumSize: const Size(0, 36),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          alignment: Alignment.centerLeft,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+          ),
+          textStyle: DesktopChrome.control(),
+        ).copyWith(
+          side: WidgetStateProperty.resolveWith(
+            (states) => states.contains(WidgetState.focused)
+                ? BorderSide(color: DesktopChrome.accent, width: 1.5)
+                : BorderSide.none,
+          ),
+        ),
+    child: Row(
+      children: [
+        SizedBox(
+          width: _iconColumn,
+          child: Icon(icon, size: AppIcons.inlineSize),
+        ),
+        const SizedBox(width: _textGap),
+        Expanded(child: Text(label)),
+        const SizedBox(width: 12),
+      ],
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     final snapshot = controller.snapshot;
@@ -157,32 +206,25 @@ class ProjectSidebar extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
-            child: OutlinedButton(
-              key: const ValueKey('super-new-project'),
-              onPressed: controller.canWrite ? onNewProject : null,
-              style: OutlinedButton.styleFrom(
-                foregroundColor: DesktopChrome.muted,
-                backgroundColor: Colors.transparent,
-                disabledBackgroundColor: Colors.transparent,
-                alignment: Alignment.centerLeft,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
+            child: Column(
+              children: [
+                _action(
+                  key: 'super-new-project',
+                  icon: AppIcons.plus,
+                  label: 'New project',
+                  onPressed: controller.canWrite ? onNewProject : null,
                 ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+                const SizedBox(height: 2),
+                _action(
+                  key: 'super-your-devices',
+                  icon: AppIcons.circle,
+                  label: 'Your devices',
+                  onPressed: onYourDevices,
                 ),
-                textStyle: DesktopChrome.control(),
-              ),
-              child: const Row(
-                children: [
-                  Icon(AppIcons.plus, size: 16),
-                  SizedBox(width: 8),
-                  Flexible(child: Text('New Project')),
-                ],
-              ),
+              ],
             ),
           ),
+          const SizedBox(height: 12),
           Expanded(
             child: ListView(
               padding: const EdgeInsets.all(8),

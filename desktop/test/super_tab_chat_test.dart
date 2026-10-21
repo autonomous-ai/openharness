@@ -49,12 +49,13 @@ void main() {
   }
 
   testWidgets(
-    'an existing lead named after a greeting is Lead in messages, replies and participants',
+    'an agent keeps its individual name in messages, replies and participants',
     (tester) async {
       final server = ConversationServer();
       (server.state['agents'] as List).add({
         'id': 'lead-agent',
         'name': 'hi',
+        'displayName': 'Atlas',
         'machineId': 'm',
         'harnessId': 'native-lead',
         'contributorId': 'owner',
@@ -68,11 +69,12 @@ void main() {
         'kind': 'agent',
         'id': 'lead-agent',
         'name': 'hi',
+        'displayName': 'Atlas',
       };
       final c = await show(tester, server);
       final row = find.byKey(const ValueKey('super-message-message-1'));
       expect(
-        find.descendant(of: row, matching: find.text('Lead')),
+        find.descendant(of: row, matching: find.text('Atlas')),
         findsOneWidget,
       );
       expect(find.text('hi'), findsNothing);
@@ -85,7 +87,7 @@ void main() {
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.keyR);
       await tester.pump();
-      expect(find.text('Replying to Lead'), findsOneWidget);
+      expect(find.text('Replying to Atlas'), findsOneWidget);
       final composer = find.byKey(const ValueKey('super-message-composer'));
       await tester.enterText(composer, 'Let’s discuss the plan.');
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -94,13 +96,13 @@ void main() {
       await tester.pumpAndSettle();
       final reply = find.byKey(const ValueKey('super-message-message-2'));
       expect(
-        find.descendant(of: reply, matching: find.text('Lead')),
+        find.descendant(of: reply, matching: find.text('Atlas')),
         findsOneWidget,
       );
       await tester.tap(find.byTooltip('Members and machines'));
       await tester.pumpAndSettle();
       expect(find.text('hi'), findsNothing);
-      expect(find.text('Lead'), findsWidgets);
+      expect(find.text('Atlas'), findsWidgets);
       expect(
         find.byKey(const ValueKey('super-member-lead-agent')),
         findsOneWidget,
@@ -128,6 +130,49 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('owner@example.com'), findsNothing);
+  });
+
+  testWidgets('a removed agent keeps its recorded individual name', (
+    tester,
+  ) async {
+    final server = ConversationServer()..append('The review is complete.');
+    server.messages.last['author'] = {
+      'kind': 'agent',
+      'id': 'removed-agent',
+      'name': 'Builder',
+      'displayName': 'Sage',
+    };
+    await show(tester, server);
+    expect(find.text('Sage'), findsOneWidget);
+    expect(find.text('Builder'), findsNothing);
+  });
+
+  test('legacy author labels stay the same before and after removal', () {
+    final server = ConversationServer()..append('An older message');
+    (server.state['agents'] as List).add({
+      'id': 'old-agent',
+      'name': 'Builder',
+      'displayName': 'Sage',
+      'machineId': 'm',
+      'harnessId': 'native',
+      'contributorId': 'owner',
+      'configuration': {'engine': 'codex'},
+    });
+    server.messages.last['author'] = {
+      'kind': 'agent',
+      'id': 'old-agent',
+      'name': 'Builder',
+    };
+    final message = SuperTabMessage.fromJson(server.messages.last);
+    expect(
+      SuperTabSnapshot.fromJson(server.state).authorName(message),
+      'Builder',
+    );
+    server.state['agents'] = <Object>[];
+    expect(
+      SuperTabSnapshot.fromJson(server.state).authorName(message),
+      'Builder',
+    );
   });
 
   testWidgets(
@@ -341,8 +386,9 @@ void main() {
       final links = <TextSpan>[];
       for (final text in tester.widgetList<RichText>(find.byType(RichText))) {
         text.text.visitChildren((span) {
-          if (span is TextSpan && span.recognizer is TapGestureRecognizer)
+          if (span is TextSpan && span.recognizer is TapGestureRecognizer) {
             links.add(span);
+          }
           return true;
         });
       }
@@ -412,6 +458,19 @@ void main() {
       expect(SuperTabMessageRow.groupsWith(message(1), message(0)), isFalse);
     },
   );
+
+  test('a new display name starts its own message heading', () {
+    final server = ConversationServer()
+      ..append('Older update')
+      ..append('Newer update');
+    for (final row in server.messages) {
+      row['author'] = {'kind': 'agent', 'id': 'same-agent', 'name': 'Lead'};
+    }
+    server.messages[1]['author']['displayName'] = 'Atlas';
+    final messages = server.messages.map(SuperTabMessage.fromJson).toList();
+    expect(messages.map((m) => m.authorName), ['Lead', 'Atlas']);
+    expect(SuperTabMessageRow.groupsWith(messages[1], messages[0]), isFalse);
+  });
 
   test(
     'reading loaded messages cannot mark an unfetched tail as read',
