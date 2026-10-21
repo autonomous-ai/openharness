@@ -962,6 +962,9 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed) return;
     final wasForeground = foreground.value;
     foreground.value = state == null || state == AppLifecycleState.resumed;
+    // Every transition, not only the three the listener has callbacks for: hidden -> inactive fires
+    // onShow, and a window shown again without focus must not keep telling the daemon it shows nothing.
+    _announceVisibleAgents();
     if (wasForeground && !foreground.value) {
       _awaySince = phoneOfferClock();
       _missedWhileAway = null;

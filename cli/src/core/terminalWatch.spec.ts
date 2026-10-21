@@ -18,6 +18,7 @@ function manager() {
       handleFrame: vi.fn(async (viewer: string, type: string, payload: Record<string, unknown>) => { handled.push([viewer, type, payload]); return true }),
       closeConnection: vi.fn(async (viewer: string) => { closed.push(viewer) }),
       stop,
+      isLookedAt: vi.fn(() => false),
     }
   }
   return { built, handled, closed, stop, make }

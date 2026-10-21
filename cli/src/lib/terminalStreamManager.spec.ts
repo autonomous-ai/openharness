@@ -1548,6 +1548,13 @@ describe('TerminalStreamManager', () => {
       expect(manager.isLookedAt('agent-1')).toBe(false)
     })
 
+    it('a Share observer on a read-only manager counts even when it asks for watch:true', async () => {
+      await manager.stop()
+      manager = newManager({ readOnly: true })
+      await open('observer:ken', { watch: true })
+      expect(manager.isLookedAt('agent-1')).toBe(true)
+    })
+
     it('a minimized window\'s empty list frees its agents', async () => {
       await open('local:desktop')
       manager.setVisibleAgents('local:desktop', [])

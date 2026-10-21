@@ -87,10 +87,25 @@ void main() {
     expect(lastList(), ['a1', 'a2']);
   });
 
+  test('the real lifecycle path re-announces on every state change', () {
+    final binding = TestWidgetsFlutterBinding.instance;
+    final listener = AppLifecycleListener(
+      onStateChange: app.appLifecycleChanged,
+    );
+    addTearDown(listener.dispose);
+    app.lifecycle = () => binding.lifecycleState;
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    expect(lastList(), isEmpty);
+    // hidden -> inactive fires onShow, not onInactive: a window brought back without focus.
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    expect(lastList(), ['a1', 'a2']);
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+  });
+
   test('a repeat of the same list is not sent again', () {
     app.announceWindowForeground();
     app.announceWindowForeground();
-    expect(conn.sent.length, lessThanOrEqualTo(1));
+    expect(conn.sent, isEmpty);
   });
 
   test('a super tab whose terminal canvas is not shown lists nothing', () {
