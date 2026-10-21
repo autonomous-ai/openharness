@@ -75,6 +75,35 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
     super.dispose();
   }
 
+  /// From going down to its Wi-Fi up at the password: how long the computer's startup takes.
+  static const _hotspotAfter = Duration(seconds: 20);
+
+  /// Counted down under the spinner once it went down, then Unlock.
+  void _awaitHotspot() {
+    final hotspot = _app.harnessOsComputers[_id]?.hotspot ?? 'Harness-…';
+    var left = _hotspotAfter.inSeconds;
+    void say() => setState(
+      () => _started =
+          '$_name is restarting. Its Wi-Fi "$hotspot" opens in about ${left}s…',
+    );
+    say();
+    _watch = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      left--;
+      if (left > 0) {
+        say();
+        return;
+      }
+      _watch?.cancel();
+      setState(() {
+        _started = '';
+        _finishedWell = true;
+        _finished =
+            '$_name updated and restarted. It waits for its password on "$hotspot": unlock it here.';
+      });
+    });
+  }
+
   /// Online both ways: the account says it runs, and this phone's own line to it is not down — the
   /// first to know when it restarts (a clean restart tells the relay at once; the account's list
   /// is only as fresh as its last read).
@@ -121,14 +150,10 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
         if (_restarting && !_isOnline()) {
           _wentDown = true;
           if (encrypted) {
-            // Waiting at its password now: the rest is the Unlock page's.
+            // Down for its restart: its startup opens its Wi-Fi some 20 seconds later, waiting
+            // for its password. The rest is the Unlock page's.
             _watch?.cancel();
-            setState(() {
-              _started = '';
-              _finishedWell = true;
-              _finished =
-                  '$_name updated and restarted. It waits for its password: unlock it here.';
-            });
+            _awaitHotspot();
             return;
           }
         }
@@ -380,7 +405,10 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
                             ? () => unawaited(_update())
                             : null,
                       ),
-                    if (!online && computer != null && computer.encrypted)
+                    if (!online &&
+                        _started.isEmpty &&
+                        computer != null &&
+                        computer.encrypted)
                       TtyPrimaryButton(
                         key: const Key('version-unlock'),
                         label: 'Unlock…',
