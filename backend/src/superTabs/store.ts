@@ -16,6 +16,8 @@ import {
 } from './model.js'
 import { closeAssignment, readDecision, recentRoutes, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
+import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
+  saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
 
 type Transaction = Prisma.TransactionClient
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
@@ -175,6 +177,80 @@ export class SuperTabStore {
       const state = stateOf(row)
       return state.invitations.filter(i => i.email === email && i.expiresAt > this.now())
         .map(i => ({ tabId: row.id, name: state.name, inviteId: i.id, role: i.role, expiresAt: i.expiresAt }))
+    })
+  }
+
+  async sharing(user: AuthUser, tabId: string) {
+    return transaction(this.db, async tx => {
+      const state = stateOf(await this.row(tx, user, tabId))
+      requireSharingOwner(state, user.sub)
+      return sharingDetails(state)
+    })
+  }
+
+  async saveSharing(user: AuthUser, tabId: string, input: SaveSharing) {
+    const request = saveSharingSchema.parse(input)
+    return transaction(this.db, async tx => {
+      const row = await this.row(tx, user, tabId), state = stateOf(row)
+      requireSharingOwner(state, user.sub)
+      const receiptId = stableId('swarm-sharing', tabId, user.sub, request.operationId), requestHash = hash(request)
+      const prior = await tx.superTabOperation.findUnique({ where: { id: receiptId } })
+      if (prior) {
+        if (prior.requestHash !== requestHash) fail('OPERATION_REUSED', 'Use a new operation ID for a different request.')
+        const result = prior.result as Record<string, unknown>
+        if (state.sharing?.generation !== result.generation) fail('SHARING_CHANGED', 'Sharing changed after this request. Reload it and try again.')
+        return sharingDetails(state)
+      }
+      if ((state.sharing?.revision ?? 0) !== request.revision) fail('REVISION_CHANGED', 'Sharing changed elsewhere. Reload it and try again.')
+      state.sharing = configureSharing(state.sharing, request.access, request.rotateLink)
+      const revision = row.revision + 1
+      await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: { revision, state: json(state) } })
+      await tx.superTabOperation.create({ data: { id: receiptId, tabId, actorKey: `person:${user.sub}`, requestHash,
+        revision, result: { generation: state.sharing.generation } } })
+      return sharingDetails(state)
+    })
+  }
+
+  /** A signed-in preview contains no projects, people, machines, or conversation data. It never joins. */
+  async previewJoin(user: AuthUser, tabId: string, token?: string) {
+    return transaction(this.db, async tx => {
+      const state = stateOf(await this.row(tx, user, tabId))
+      const sharing = authorizeSwarmJoin(state, user.email, token)
+      const member = state.people.find(p => p.id === user.sub)
+      return { id: tabId, name: state.name, role: member?.role ?? sharing.access.role, alreadyMember: !!member }
+    })
+  }
+
+  async join(user: AuthUser, tabId: string, input: JoinSwarm) {
+    const request = joinSwarmSchema.parse(input)
+    return transaction(this.db, async tx => {
+      const row = await this.row(tx, user, tabId), state = stateOf(row)
+      // Recheck the current grant before an old receipt. Disabling, replacing, or
+      // changing access can never revive a removed membership through a retry.
+      const sharing = authorizeSwarmJoin(state, user.email, request.token)
+      const receiptId = stableId('swarm-join', tabId, user.sub, request.operationId), requestHash = hash(request)
+      const prior = await tx.superTabOperation.findUnique({ where: { id: receiptId } })
+      let member = state.people.find(p => p.id === user.sub)
+      if (prior) {
+        if (prior.requestHash !== requestHash) fail('OPERATION_REUSED', 'Use a new operation ID for a different request.')
+        const result = prior.result as Record<string, unknown>
+        if (result.sharingGeneration !== sharing.generation || !member || (member.generation ?? null) !== result.membershipGeneration) {
+          fail('JOIN_CHANGED', 'This join request is no longer current. Open the latest Swarm link again.')
+        }
+        return { id: tabId, revision: prior.revision, role: member.role, alreadyMember: result.alreadyMember === true }
+      }
+      const alreadyMember = !!member
+      if (!member) {
+        member = { id: user.sub, email: authenticatedEmail(user.email)!, role: sharing.access.role, generation: receiptId }
+        state.people.push(member)
+      }
+      // Existing people retain their role and private-project grants. A general
+      // access link does not promote a viewer or grant a private project.
+      const revision = row.revision + 1
+      await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: { revision, state: json(state), ...indexes(state) } })
+      await tx.superTabOperation.create({ data: { id: receiptId, tabId, actorKey: `person:${user.sub}`, requestHash, revision,
+        result: { sharingGeneration: sharing.generation, membershipGeneration: member.generation ?? null, alreadyMember } } })
+      return { id: tabId, revision, role: member.role, alreadyMember }
     })
   }
 

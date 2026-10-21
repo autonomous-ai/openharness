@@ -104,6 +104,8 @@ export interface SuperTabState {
   environment: string
   /** Fields this tab overrides from its owner's account routing policy (routingPolicy.ts). */
   routingPolicy?: import('./routingPolicy.js').RoutingOverride
+  /** Owner-only sharing configuration; visibleState always removes it. */
+  sharing?: import('./sharing.js').SwarmSharing
   paused: boolean
   people: Person[]
   agents: Agent[]
@@ -196,6 +198,7 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
 export function visibleState(state: SuperTabState, actor: Actor): SuperTabState {
   author(state, actor)
   const visible = structuredClone(state)
+  delete visible.sharing
   numberConversations(visible)
   if (visible.projects) {
     visible.projects = visible.projects.filter(p => canReadProject(state, actor, p))

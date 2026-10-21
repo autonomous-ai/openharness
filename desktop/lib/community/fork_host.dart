@@ -6,11 +6,15 @@ import '../core/harness_file_store.dart';
 import '../core/test_run.dart';
 import '../core/models.dart';
 import '../state/app_state.dart';
+import '../super_tabs/join_link.dart';
 import 'fork_controller.dart';
 import 'fork_inbox.dart';
 import 'fork_project.dart';
 
-final communityForkInbox = ForkInbox(HarnessFileStore.shared);
+final communityForkInbox = ForkInbox(
+  HarnessFileStore.shared,
+  onUnhandledLink: swarmJoinInbox.accept,
+);
 Future<void>? _inboxReady;
 
 /// Mounted around every native screen, so links survive setup and sign-in.

@@ -37,6 +37,7 @@ class SuperTabFixtureConnection extends WsConn {
   final joins = <Map<String, dynamic>>[];
   bool loseCreate = false, loseJoin = false;
   bool failNative = false;
+  WsRequestFailure? backendFailure;
   bool failResume = false;
   bool nativeSurface = false;
   bool failFiles = false, failCreation = false, changeAccountOnUpload = false;
@@ -123,6 +124,9 @@ class SuperTabFixtureConnection extends WsConn {
       };
     }
     if (type == 'super_tabs') {
+      if (payload['action'] == 'backend' && backendFailure != null) {
+        throw backendFailure!;
+      }
       if (payload['action'] == 'wake') return {'ok': true};
       if (payload['action'] == 'prepareContribution') {
         return {
@@ -392,7 +396,7 @@ void main() {
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
       final localId = f.app.activeSwarmId;
       final box = await f.box(newProject: true);
-      expect(box.actionLabel, 'New project');
+      expect(box.actionLabel, 'New Project');
       box.integration!.projectVisibility = 'private';
       expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
       expect(f.app.swarms, hasLength(1));
@@ -414,6 +418,66 @@ void main() {
       expect(
         f.connection.calls.where((c) => c.$2['path'] == '/api/super-tabs'),
         isEmpty,
+      );
+    },
+  );
+
+  test(
+    'an unsupported project request keeps its draft and unlocks visibility',
+    () async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true);
+      f.connection.backendFailure = const WsRequestFailure(
+        responseType: 'super_tabs_result',
+        code: 'VALIDATION_ERROR',
+        detail: 'command.type: Invalid discriminator value. Expected machine.contribute',
+        payload: {'status': 400},
+      );
+      final task = box.task;
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(box.error, contains('Swarm service needs an update'));
+      expect(box.error, isNot(contains('discriminator')));
+      expect(box.task, task);
+      expect(box.integration!.projectVisibilityLocked, isFalse);
+      expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
+
+      f.connection.backendFailure = null;
+      box.integration!.projectVisibility = 'private';
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect(
+        f.app.superTabs.peek(tabId)!.snapshot!.projects.last.isPrivate,
+        isTrue,
+      );
+      expect(
+        f.connection.calls.where((c) => c.$1 == 'agent_create'),
+        hasLength(1),
+      );
+    },
+  );
+
+  test(
+    'Swarm websocket refusals preserve authorization status and detail',
+    () async {
+      final f = SuperTabLaunchFixture();
+      f.connection.backendFailure = const WsRequestFailure(
+        responseType: 'super_tabs_result',
+        code: 'FORBIDDEN',
+        detail: 'You no longer have access to this Swarm.',
+        payload: {'status': 403},
+      );
+      await expectLater(
+        f.app.superTabMachineRequest('m', {'action': 'backend'}),
+        throwsA(
+          isA<SuperTabFailure>()
+              .having((e) => e.code, 'code', 'FORBIDDEN')
+              .having((e) => e.statusCode, 'status', 403)
+              .having(
+                (e) => e.message,
+                'message',
+                'You no longer have access to this Swarm.',
+              ),
+        ),
       );
     },
   );

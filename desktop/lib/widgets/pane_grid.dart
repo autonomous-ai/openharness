@@ -1,4 +1,5 @@
 import '../super_tabs/pane.dart';
+import '../super_tabs/saved_session.dart';
 import '../sharing/shared_harness_panel.dart';
 
 import 'dart:async';
@@ -1761,12 +1762,28 @@ class _PaneContent extends StatelessWidget {
           pane.machineId,
           wantedAgentId!,
         );
+        final resume = superPane?.onResume;
+        final canResume = resume != null && !machine.belongsToOtherAccount;
         notice = terminalNotice(
           label: opening?.busy == true ? 'Opening' : 'Stopped',
           icon: AppIcons.terminal,
-          detail: opening?.result?.error ?? 'Open to continue your saved conversation. Retained output is read only.',
-          actionLabel: opening?.busy == true ? null : 'Open',
-          onAction: () => notifier.openSavedPane(pane.id).ignore(),
+          detail:
+              opening?.result?.error ??
+              (superPane != null
+                  ? 'This agent is stopped. Retained output is read only.'
+                  : 'Open to continue your saved conversation. Retained output is read only.'),
+          actionLabel: opening?.busy == true
+              ? null
+              : superPane == null
+              ? 'Open'
+              : canResume
+              ? 'Resume'
+              : null,
+          onAction: superPane == null
+              ? () => notifier.openSavedPane(pane.id).ignore()
+              : canResume
+              ? () => resume(pane.machineId, wantedAgentId)
+              : null,
           banner: true,
         );
       } else if (agent != null && agent.launchState == 'held') {
@@ -2015,6 +2032,31 @@ class _PaneContent extends StatelessWidget {
       );
     }
     if (agent?.isStopped == true) {
+      if (superPane != null) {
+        final resume = superPane.onResume;
+        return Column(
+          children: [
+            _PaneHeader(
+              title:
+                  superPane.titleFor(pane.machineId, wantedAgentId) ??
+                  agentName,
+              activity: activityMark,
+            ),
+            Divider(height: 1, color: AppColors.border),
+            Expanded(
+              child: SuperTabSavedSession(
+                key: ValueKey((pane.machineId, wantedAgentId)),
+                app: notifier,
+                machineId: pane.machineId,
+                harnessId: wantedAgentId,
+                onResume: resume != null && !machine.belongsToOtherAccount
+                    ? () => resume(pane.machineId, wantedAgentId)
+                    : null,
+              ),
+            ),
+          ],
+        );
+      }
       final opening = notifier.pendingAgentRestart(
         pane.machineId,
         wantedAgentId,

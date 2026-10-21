@@ -125,6 +125,7 @@ abstract final class AppIcons {
   static const messageCircleQuestionMark =
       LucideIcons.messageCircleQuestionMark400;
   static const messagesSquare = LucideIcons.messagesSquare400;
+  static const messageSquare = LucideIcons.messageSquare400;
   static const messageSquareText = LucideIcons.messageSquareText400;
   static const minimize = LucideIcons.minimize400;
   static const minus = LucideIcons.minus400;

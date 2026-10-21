@@ -53,7 +53,7 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **A harness** in the workspace | A running agent session with its own conversation and working context. | Start three Codex harnesses. |
 | **A harness** in the Store | A reusable setup containing agent instructions, tools, and an optional viewer. | Install the Blender harness. |
 | **Tab** | A workspace group of harnesses. | Frontend and Backend tabs. |
-| **Swarm** | An invite-only collaborative tab containing projects, people, agents and contributed machines. | Open your company Swarm beside your regular tabs. |
+| **Swarm** | A collaborative tab containing projects, people, agents and contributed machines. Invite-only by default; its owner can enable joining by email domain or a shared link. | Open your company Swarm beside your regular tabs. |
 | **Project in a Swarm** | An initiative with its own lead, repository, sharing and workgroups. | Discuss Lamp OS with its lead; expand it to follow a workgroup. |
 | **Workgroup** | A numbered conversation for an independently assignable outcome within a project. | Follow #12 Offline editing. |
 | **Pane** | A visible view of a harness, terminal, or viewer. | Split right; close pane. |
@@ -84,8 +84,10 @@ running harness. Adding harnesses to a tab groups them without a separate team
 setup. A **Swarm** occupies one tab in that same tab bar. A person can belong to several Swarms.
 Its project names open their lead chats; a separate chevron reveals each project's workgroups.
 People, agents and machines belong to the Swarm. A project's **Public** visibility means everyone
-in that Swarm; **Private** means its owner and explicitly invited project members. Swarms themselves
-are invite-only. Public communities and a compute marketplace are outside this version.
+in that Swarm; **Private** means its owner and explicitly invited project members. Swarms are
+invite-only by default. Their owner can allow signed-in people with a chosen email domain or a
+shared link to join as viewers or collaborators. Joining a Swarm does not grant access to its
+private projects. Public discovery and a compute marketplace are outside this version.
 Cmd-S opens the existing lead creation form for a new Swarm and its first project; **+ Project**
 reuses that form inside the current Swarm. Store uses Cmd-Control-S. Existing ordinary tabs keep
 their behavior. The internal `superTab` identifiers, `harness super-tab` protocol and stored account

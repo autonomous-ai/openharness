@@ -6,7 +6,7 @@ export interface SwarmProject {
   name: string
   ownerId: string
   leadConversationId: string
-  /** Public means every member of this invite-only swarm. */
+  /** Public means every member of this swarm, never anonymous internet access. */
   visibility: ProjectVisibility
   members: Array<{ id: string; generation: string }>
   updateMinutes: 1 | 5 | 15 | 30

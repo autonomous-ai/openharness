@@ -6211,10 +6211,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
       harnessContext: superTabTarget == null
           ? null
           : HarnessPickerContext(
-              title: 'Add agent to ${groupTitle ?? 'conversation'}',
+              title:
+                  'Add agent to ${contribution?.snapshot?.name ?? app.activeSwarm.name}',
               description: contributionProject?.isPrivate == true
-                  ? 'Shared with members of ${contributionProject!.name}.'
-                  : 'Shared with everyone in ${app.activeSwarm.name}.',
+                  ? 'Starts in ${groupTitle ?? 'Lead'}. Only members of ${contributionProject!.name} can access it.'
+                  : 'Starts in ${groupTitle ?? 'Lead'}.',
               action: 'Add agent',
               unavailable: (row) {
                 final shared = app.superTabs

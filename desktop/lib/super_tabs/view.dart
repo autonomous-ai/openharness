@@ -21,6 +21,8 @@ import 'work_details.dart';
 import 'project_sidebar.dart';
 import 'project_options.dart';
 
+typedef _ComposerChoice = ({String label, String? detail, VoidCallback choose});
+
 /// The contents of one app tab. Its title stays in the app's existing tab bar.
 /// [terminal] is the existing native pane, with its own controls and input.
 class SuperTabView extends StatefulWidget {
@@ -72,6 +74,8 @@ class _SuperTabViewState extends State<SuperTabView> {
   final _loadingOlder = <String>{};
   int _mentionIndex = 0;
   String? _dismissedMention;
+  String? _completionPrefix;
+  final _completionKeys = List.generate(6, (_) => GlobalKey());
   SuperTabController get c => widget.controller;
 
   String _agentName(SuperTabAgent agent) =>
@@ -89,6 +93,7 @@ class _SuperTabViewState extends State<SuperTabView> {
   @override
   void initState() {
     super.initState();
+    _composer.addListener(_composerMoved);
     c.addListener(_changed);
     _changed();
   }
@@ -215,9 +220,9 @@ class _SuperTabViewState extends State<SuperTabView> {
   }
 
   Future<void> _send() async {
-    final mentions = _mentionChoices;
-    if (mentions.isNotEmpty) {
-      _chooseMention(mentions[_mentionIndex.clamp(0, mentions.length - 1)]);
+    final choices = _completionChoices;
+    if (choices.isNotEmpty) {
+      choices[_mentionIndex.clamp(0, choices.length - 1)].choose();
       return;
     }
     if (!c.canWrite ||
@@ -231,6 +236,132 @@ class _SuperTabViewState extends State<SuperTabView> {
     final id = c.selectedId;
     final result = await c.send(replyTo: _replies[id]?.id);
     if (mounted && result != null) setState(() => _replies.remove(id));
+  }
+
+  void _composerMoved() {
+    if (!mounted) return;
+    final value = _composer.value;
+    final prefix = value.selection.isValid
+        ? value.text.substring(0, value.selection.baseOffset)
+        : null;
+    setState(() {
+      if (_completionPrefix != prefix) _mentionIndex = 0;
+      _completionPrefix = prefix;
+    });
+  }
+
+  ({int start, int end, String query})? get _workgroupAtCursor {
+    final value = _composer.value;
+    if (!value.selection.isValid ||
+        !value.selection.isCollapsed ||
+        (value.composing.isValid && !value.composing.isCollapsed)) {
+      return null;
+    }
+    final end = value.selection.baseOffset;
+    final prefix = value.text.substring(0, end);
+    if (prefix == _dismissedMention) return null;
+    final match = RegExp(r'(?:^|[\s(])#([^\s#`()]*)$').firstMatch(prefix);
+    if (match == null) return null;
+    // A reference picker must not interrupt Markdown code or URL fragments.
+    String? fence;
+    for (final line in prefix.split('\n')) {
+      final delimiter = RegExp(r'^ {0,3}(`{3,}|~{3,})').firstMatch(line)?[1];
+      if (delimiter == null) continue;
+      if (fence == null) {
+        fence = delimiter;
+      } else if (delimiter[0] == fence[0] && delimiter.length >= fence.length) {
+        fence = null;
+      }
+    }
+    if (fence != null) return null;
+    int? ticks;
+    for (final run in RegExp(
+      r'(?<!\\)`+',
+    ).allMatches(prefix.split('\n').last)) {
+      if (ticks == null) {
+        ticks = run[0]!.length;
+      } else if (ticks == run[0]!.length) {
+        ticks = null;
+      }
+    }
+    if (ticks != null) return null;
+    return (
+      start: prefix.lastIndexOf('#'),
+      end: end,
+      query: match[1]!.toLowerCase(),
+    );
+  }
+
+  List<_ComposerChoice> get _completionChoices {
+    if (!c.canWrite || c.selected?.archived != false) return const [];
+    final reference = _workgroupAtCursor;
+    final snapshot = c.snapshot;
+    if (reference != null && snapshot != null) {
+      final projectId = c.selected?.projectId;
+      final groups = snapshot.conversations
+          .where(
+            (group) =>
+                group.number != null &&
+                !snapshot.isProjectLead(group.id) &&
+                (group.number.toString().startsWith(reference.query) ||
+                    group.title.toLowerCase().contains(reference.query)),
+          )
+          .toList();
+      groups.sort((a, b) {
+        final active = (a.archived ? 1 : 0).compareTo(b.archived ? 1 : 0);
+        if (active != 0) return active;
+        final project = (a.projectId == projectId ? 0 : 1).compareTo(
+          b.projectId == projectId ? 0 : 1,
+        );
+        return project != 0 ? project : a.number!.compareTo(b.number!);
+      });
+      return groups.take(6).map((group) {
+        final context = <String>[
+          if (group.projectId != projectId)
+            snapshot.projectFor(group.id)?.name ?? 'Project',
+          if (group.archived) 'Archived',
+        ];
+        return (
+          label: group.label,
+          detail: context.isEmpty ? null : context.join(' — '),
+          choose: () => _chooseWorkgroup(group),
+        );
+      }).toList();
+    }
+    return _mentionChoices
+        .map(
+          (agent) => (
+            label: _agentName(agent),
+            detail: '${agent.engine}  ${widget.machineName(agent.machineId)}',
+            choose: () => _chooseMention(agent),
+          ),
+        )
+        .toList();
+  }
+
+  void _chooseWorkgroup(SuperTabConversation group) {
+    final at = _workgroupAtCursor;
+    if (at == null || group.number == null) return;
+    final suffix = _composer.text.substring(at.end);
+    final token =
+        '#${group.number}${suffix.startsWith(RegExp(r'\s')) ? '' : ' '}';
+    final text = _composer.text.replaceRange(at.start, at.end, token);
+    c.setDraft(c.selectedId, text);
+    _composer.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: at.start + token.length),
+    );
+    _focus.requestFocus();
+  }
+
+  void _moveCompletion(int index) {
+    setState(() => _mentionIndex = index);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final context = _completionKeys[index].currentContext;
+      if (mounted && context != null) {
+        Scrollable.ensureVisible(context, alignment: .5);
+      }
+    });
   }
 
   void _closeRoster() {
@@ -530,12 +661,12 @@ class _SuperTabViewState extends State<SuperTabView> {
             ),
             AppIconButton(
               key: const ValueKey('super-chat'),
-              icon: AppIcons.messageSquareText,
-              size: 20,
+              icon: AppIcons.messageSquare,
+              size: AppIcons.inlineSize,
               tooltip: 'Chat',
               selected: !_terminalsVisible && !_showPullRequests,
               color: !_terminalsVisible && !_showPullRequests
-                  ? DesktopChrome.accent
+                  ? DesktopChrome.foreground
                   : DesktopChrome.muted,
               onPressed: () {
                 setState(() => _showPullRequests = false);
@@ -549,11 +680,11 @@ class _SuperTabViewState extends State<SuperTabView> {
             AppIconButton(
               key: const ValueKey('super-terminals'),
               icon: AppIcons.terminal,
-              size: 20,
+              size: AppIcons.inlineSize,
               tooltip: 'Group terminals (${group?.agentIds.length ?? 0})',
               selected: _terminalsVisible,
               color: _terminalsVisible
-                  ? DesktopChrome.accent
+                  ? DesktopChrome.foreground
                   : DesktopChrome.muted,
               onPressed: group?.agentIds.isNotEmpty == true
                   ? () {
@@ -566,11 +697,11 @@ class _SuperTabViewState extends State<SuperTabView> {
             AppIconButton(
               key: const ValueKey('super-pull-requests'),
               icon: AppIcons.gitPullRequest,
-              size: 20,
+              size: AppIcons.inlineSize,
               tooltip: 'Pull requests',
               selected: !_terminalsVisible && _showPullRequests,
               color: !_terminalsVisible && _showPullRequests
-                  ? DesktopChrome.accent
+                  ? DesktopChrome.foreground
                   : DesktopChrome.muted,
               onPressed: () {
                 widget.onCloseTerminal?.call();
@@ -850,7 +981,7 @@ class _SuperTabViewState extends State<SuperTabView> {
         ? 0
         : messages.where((message) => message.sequence > newAfter).length;
     final reply = _replies[c.selectedId];
-    final mentions = _mentionChoices;
+    final choices = _completionChoices;
     return Column(
       children: [
         if (c.error != null)
@@ -1049,26 +1180,56 @@ class _SuperTabViewState extends State<SuperTabView> {
                 onTap: () => _openAgent(agent),
               ),
             ),
-        if (mentions.isNotEmpty)
+        if (choices.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
             child: Material(
               color: DesktopChrome.surface,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (var i = 0; i < mentions.length; i++)
-                    ListTile(
-                      dense: true,
-                      selected:
-                          i == _mentionIndex.clamp(0, mentions.length - 1),
-                      title: Text(_agentName(mentions[i])),
-                      subtitle: Text(
-                        '${mentions[i].engine} · ${widget.machineName(mentions[i].machineId)}',
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(
+                  DesktopChrome.controlRadius,
+                ),
+                side: BorderSide(color: DesktopChrome.rim),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.sizeOf(context).height * .3,
+                ),
+                child: ListView(
+                  key: const ValueKey('super-composer-completions'),
+                  shrinkWrap: true,
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  children: [
+                    for (var i = 0; i < choices.length; i++)
+                      ListTile(
+                        key: _completionKeys[i],
+                        dense: true,
+                        selected:
+                            i == _mentionIndex.clamp(0, choices.length - 1),
+                        selectedTileColor: grid.AppSurface.selectedFill,
+                        selectedColor: DesktopChrome.foreground,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                        ),
+                        title: Text(
+                          choices[i].label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: DesktopChrome.control(),
+                        ),
+                        subtitle: choices[i].detail == null
+                            ? null
+                            : Text(
+                                choices[i].detail!,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: DesktopChrome.metadata(),
+                              ),
+                        onTap: choices[i].choose,
                       ),
-                      onTap: () => _chooseMention(mentions[i]),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -1080,7 +1241,7 @@ class _SuperTabViewState extends State<SuperTabView> {
               final composing = _composer.value.composing;
               if (_focus.hasFocus &&
                   event is KeyDownEvent &&
-                  mentions.isNotEmpty &&
+                  choices.isNotEmpty &&
                   !keys.isControlPressed &&
                   !keys.isMetaPressed &&
                   !keys.isAltPressed &&
@@ -1089,19 +1250,16 @@ class _SuperTabViewState extends State<SuperTabView> {
                 final key = event.logicalKey;
                 if (key == LogicalKeyboardKey.arrowDown ||
                     key == LogicalKeyboardKey.arrowUp) {
-                  setState(
-                    () => _mentionIndex =
-                        (_mentionIndex +
+                  _moveCompletion(
+                    (_mentionIndex +
                             (key == LogicalKeyboardKey.arrowDown ? 1 : -1)) %
-                        mentions.length,
+                        choices.length,
                   );
                   return KeyEventResult.handled;
                 }
                 if (key == LogicalKeyboardKey.tab ||
                     key == LogicalKeyboardKey.enter) {
-                  _chooseMention(
-                    mentions[_mentionIndex.clamp(0, mentions.length - 1)],
-                  );
+                  choices[_mentionIndex.clamp(0, choices.length - 1)].choose();
                   return KeyEventResult.handled;
                 }
                 if (key == LogicalKeyboardKey.escape) {
@@ -1138,7 +1296,7 @@ class _SuperTabViewState extends State<SuperTabView> {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
                 child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     Expanded(
                       child: TextField(
@@ -1153,9 +1311,13 @@ class _SuperTabViewState extends State<SuperTabView> {
                             : 8,
                         maxLength: 32000,
                         keyboardType: TextInputType.multiline,
+                        textAlignVertical: TextAlignVertical.center,
                         style: DesktopChrome.text(),
                         decoration: InputDecoration(
                           isDense: true,
+                          hintStyle: DesktopChrome.text(
+                            color: DesktopChrome.muted,
+                          ),
                           contentPadding: const EdgeInsets.symmetric(
                             vertical: 6,
                           ),

@@ -57,7 +57,7 @@ class SuperTabLaunch {
     integration = HarnessLaunchIntegration(
       creationId: saved['creationId'] as String? ?? superTabOperationId(),
       actionLabel: saved['newProject'] == true
-          ? 'New project'
+          ? 'New Project'
           : saved['lead'] == true
           ? 'New Swarm'
           : 'New Harness',
@@ -73,6 +73,20 @@ class SuperTabLaunch {
         }
         try {
           return await launch.prepare(machine, task);
+        } on SuperTabFailure catch (failure) {
+          // Validation rejects the request before applying it. A lost response
+          // stays locked so retrying cannot create a second project or change
+          // the visibility of a project that may already exist.
+          if (saved['projectPrepared'] != true &&
+              const {
+                'VALIDATION_ERROR',
+                'UPDATE_REQUIRED',
+              }.contains(failure.code)) {
+            saved.remove('creationRequest');
+            saved['operationId'] = superTabOperationId();
+            await launch.persist();
+          }
+          rethrow;
         } finally {
           integration.projectVisibilityLocked =
               saved['projectPrepared'] == true ||

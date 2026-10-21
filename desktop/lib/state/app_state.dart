@@ -1757,19 +1757,53 @@ class AppNotifier extends ChangeNotifier {
     Map<String, dynamic> payload,
   ) async {
     final revision = _authRevision;
-    final result = await _conn(machineId).request(
-      'super_tabs',
-      payload: payload,
-      timeout: const Duration(seconds: 30),
-    );
+    SuperTabFailure refusal(String code, String? detail, int status) {
+      if (!_authWorkCurrent(revision)) {
+        return const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+      }
+      final body = payload['body'];
+      final command = body is Map ? body['command'] : null;
+      if (payload['action'] == 'backend' &&
+          command is Map &&
+          command['type'] == 'project.create' &&
+          code == 'VALIDATION_ERROR' &&
+          detail?.contains('command.type') == true &&
+          detail?.contains('discriminator') == true) {
+        return SuperTabFailure(
+          'UPDATE_REQUIRED',
+          'The Swarm service needs an update before you can create a project. Your draft is saved.',
+          statusCode: status,
+        );
+      }
+      return SuperTabFailure(
+        code,
+        detail ?? 'Could not reach this Swarm.',
+        statusCode: status,
+      );
+    }
+
+    final Map<String, dynamic> result;
+    try {
+      result = await _conn(machineId).request(
+        'super_tabs',
+        payload: payload,
+        timeout: const Duration(seconds: 30),
+      );
+    } on WsRequestFailure catch (failure) {
+      throw refusal(
+        failure.code,
+        failure.detail,
+        (failure.payload['status'] as num?)?.toInt() ?? 0,
+      );
+    }
     if (!_authWorkCurrent(revision)) {
       throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
     }
     if (result['error'] != null) {
-      throw SuperTabFailure(
+      throw refusal(
         result['error'].toString(),
-        result['detail'] as String? ?? 'Could not reach this Swarm.',
-        statusCode: (result['status'] as num?)?.toInt() ?? 0,
+        result['detail'] as String?,
+        (result['status'] as num?)?.toInt() ?? 0,
       );
     }
     return result;

@@ -12,6 +12,7 @@ class SuperPane extends InheritedWidget {
     this.titles = const {},
     this.failures = const {},
     this.onRetry,
+    this.onResume,
     required super.child,
   });
 
@@ -19,6 +20,7 @@ class SuperPane extends InheritedWidget {
   final String? title;
   final Map<(String, String?), String> titles, failures;
   final VoidCallback? onRetry;
+  final void Function(String machineId, String harnessId)? onResume;
 
   static SuperPane? maybeOf(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<SuperPane>();
@@ -33,5 +35,6 @@ class SuperPane extends InheritedWidget {
       harnessId != oldWidget.harnessId ||
       title != oldWidget.title ||
       titles != oldWidget.titles ||
-      failures != oldWidget.failures;
+      failures != oldWidget.failures ||
+      onResume != oldWidget.onResume;
 }

@@ -198,7 +198,7 @@ class ProjectSidebar extends StatelessWidget {
                 children: [
                   Icon(AppIcons.plus, size: 16),
                   SizedBox(width: 8),
-                  Flexible(child: Text('New project')),
+                  Flexible(child: Text('New Project')),
                 ],
               ),
             ),

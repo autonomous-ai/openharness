@@ -193,7 +193,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       final calls = f.connection.calls;
-      // Participants → Open terminal, the only way to relaunch a stopped member.
+      // Opening a pane only navigates. Resume is a separate explicit action.
       Future<void> openTerminal() async {
         tester
             .widget<SuperTabView>(find.byType(SuperTabView))
@@ -210,6 +210,14 @@ void main() {
         expect(f.app.activeSwarm.panes.single.agentId, 'native-worker');
       }
       await openTerminal();
+      expect(calls.where((call) => call.$1 == 'agent_resume'), isEmpty);
+      final superPane = tester.widget<SuperPane>(find.byType(SuperPane));
+      if (scenario.viewer) {
+        expect(superPane.onResume, isNull);
+      } else {
+        superPane.onResume!('m', 'native-worker');
+        await tester.pumpAndSettle();
+      }
       expect(calls.where((call) => call.$1 == 'agent_create'), isEmpty);
       expect(
         calls.where((call) => call.$1 == 'agent_resume'),
