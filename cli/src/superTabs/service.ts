@@ -9,11 +9,13 @@ import { machineChoices } from '../lib/newCommand.js'
 import { START_REQUIREMENTS } from './capacity.js'
 import { CapacityReservations, type ReservationBook } from './reservations.js'
 import { ContributionPreparations, prepareContribution } from './contribution.js'
+import { attachmentsOf, saveAttachment } from './attachments.js'
 
 const HELP = {
   status: 'Read the shared tab roster and work.',
-  messages: 'messages GROUP: read recent messages in a conversation.',
+  messages: 'messages GROUP: read recent messages in a conversation. A message with images lists them under attachments.',
   message: 'message GROUP MESSAGE_ID: read one exact message, including an earlier question or result referenced by a reply.',
+  attachment: 'attachment ATTACHMENT_ID: save an image attached to a message on this machine and print its path. Open that path with your file-reading tool to see it.',
   post: 'post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID]: reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID.',
   start: 'start OPERATION_ID JSON: create one agent in a conversation on a machine you can access. Repeat exactly after an interruption; it follows the same native creation receipt. It does not assign work.',
   resume: 'resume START_ID: finish a pending start without creating another agent.',
@@ -103,8 +105,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'prepareContribution') return preparations.read(payload)
         if (payload.action === 'backend') {
           const { method, path } = payload
-          if (!['GET', 'POST'].includes(String(method)) || typeof path !== 'string'
-            || !/^\/api\/super-tabs(?:\/[A-Za-z0-9_-]+)*(?:\?[A-Za-z0-9_=&%-]+)?$/.test(path)) {
+          // DELETE only takes back one's own unsent image; every other route reads or writes.
+          if (typeof path !== 'string' || !/^\/api\/super-tabs(?:\/[A-Za-z0-9_-]+)*(?:\?[A-Za-z0-9_=&%-]+)?$/.test(path)
+            || !(['GET', 'POST'].includes(String(method))
+              || (method === 'DELETE' && /^\/api\/super-tabs\/[A-Za-z0-9_-]+\/attachments\/[A-Za-z0-9_-]+$/.test(path)))) {
             return { error: 'INVALID_REQUEST', detail: 'Choose a Super Tab endpoint.' }
           }
           const value = await backend(core, method as string, path, payload.body)
@@ -205,6 +209,12 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             const later = object(await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}&after=${sent.sequence}`)).messages
             return { ok: true, value: markAnswered(page, list(later), agentId) }
           } catch { return { ok: true, value: page } }
+        }
+        if (payload.action === 'attachment' && identifier(payload.attachmentId)) {
+          const [attachment] = attachmentsOf({ attachments: [await backend(core, 'GET', `${path}/attachments/${payload.attachmentId}?${identity}`)] })
+          if (!attachment) return { error: 'ATTACHMENT_UNAVAILABLE', detail: 'This image cannot be read.' }
+          const file = await saveAttachment(target => backend(core, 'GET', target), payload.tabId, agentId, attachment)
+          return { ok: true, value: { id: attachment.id, name: attachment.name, mime: attachment.mime, size: attachment.size, path: file } }
         }
         if (payload.action === 'command' && identifier(payload.operationId) && payload.command && typeof payload.command === 'object' && !Array.isArray(payload.command)) {
           return { ok: true, operationId: payload.operationId, value: await backend(core, 'POST', `${path}/commands`,

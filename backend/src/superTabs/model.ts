@@ -120,6 +120,8 @@ export type Actor =
   | { kind: 'person'; userId: string; email: string }
   | { kind: 'agent'; agentId: string; machineOwnerId: string }
 export interface Author { kind: 'person' | 'agent'; id: string; name: string; membershipGeneration: string }
+/** What a message read carries about an attached image (attachments.ts); its bytes are read separately, part by part. */
+export interface AttachmentMeta { id: string; name: string; mime: string; size: number; width: number | null; height: number | null; parts: number }
 export interface MessageDraft {
   id: string
   conversationId: string
@@ -127,6 +129,7 @@ export interface MessageDraft {
   text: string
   replyTo: string | null
   recipients: string[]
+  attachments?: AttachmentMeta[]
   /** Structured row kind for clients; `native` is written by native.ts, `route`/`route-override` by commands. */
   source?: Record<string, unknown>
 }

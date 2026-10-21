@@ -1063,3 +1063,122 @@ it('allocates workgroup numbers transactionally and replays the same number afte
   expect((await run(tab, command, owner, undefined, operations[0])).result).toEqual(results[0]!.result)
   expect((await store.read(owner, tab)).state.conversations.map(c => c.number)).toEqual([undefined, 1, 2, 3])
 })
+
+describe('images attached to Swarm messages', () => {
+  const PART = 256 * 1024
+  const png = (size: number) => {
+    const bytes = Buffer.alloc(size, 7)
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 3, 0, 0, 0, 2]).copy(bytes)
+    return bytes
+  }
+  const http = (user: AuthUser, method: 'GET' | 'POST' | 'DELETE', url: string, payload?: object) =>
+    app.inject({ method, url, headers: { authorization: `Bearer ${user.sub}` }, ...(payload ? { payload } : {}) })
+  const upload = (user: AuthUser, tab: string, bytes: Buffer, name = 'screen.png') =>
+    http(user, 'POST', `/api/super-tabs/${tab}/attachments`, { name, size: bytes.length, data: bytes.subarray(0, PART).toString('base64') })
+  const send = (attachmentIds: string[], text = ''): Command =>
+    ({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [], attachmentIds })
+
+  it('uploads in parts, sends image-only messages, and lets only readers of the conversation see the bytes', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const bytes = png(PART + 10)
+    const created = await upload(owner, tab, bytes)
+    expect(created.statusCode).toBe(200)
+    const image = created.json().data
+    expect(image).toMatchObject({ name: 'screen.png', mime: 'image/png', size: PART + 10, width: 3, height: 2, parts: 2, complete: false })
+    await expect(run(tab, send([image.id]))).rejects.toMatchObject({ code: 'ATTACHMENT_INCOMPLETE' })
+    const part = (data: Buffer, index = 1) => http(owner, 'POST', `/api/super-tabs/${tab}/attachments/${image.id}/parts/${index}`, { data: data.toString('base64') })
+    expect((await part(bytes.subarray(PART, PART + 5))).json().error.code).toBe('INVALID_ATTACHMENT')
+    expect((await part(bytes.subarray(PART), 2)).json().error.code).toBe('INVALID_ATTACHMENT')
+    // Unsent, the upload is its uploader's alone, to read or to send.
+    expect((await http(peer, 'GET', `/api/super-tabs/${tab}/attachments/${image.id}`)).statusCode).toBe(404)
+    expect((await http(peer, 'POST', `/api/super-tabs/${tab}/attachments/${image.id}/parts/1`, { data: bytes.subarray(PART).toString('base64') })).statusCode).toBe(404)
+    expect((await part(bytes.subarray(PART))).json().data).toEqual({ id: image.id, complete: true })
+    expect((await part(bytes.subarray(PART))).json().data).toEqual({ id: image.id, complete: true })
+    await expect(run(tab, send([image.id]), peer)).rejects.toMatchObject({ code: 'INVALID_ATTACHMENT' })
+
+    const operationId = randomUUID()
+    const sent = await run(tab, send([image.id]), owner, undefined, operationId)
+    expect((await run(tab, send([image.id]), owner, undefined, operationId)).result).toEqual(sent.result)
+    await expect(run(tab, send([image.id], 'Again'))).rejects.toMatchObject({ code: 'INVALID_ATTACHMENT' })
+    const meta = { id: image.id, name: 'screen.png', mime: 'image/png', size: PART + 10, width: 3, height: 2, parts: 2 }
+    const [row] = (await store.messages(peer, tab, 'lead', { messageId: sent.result.messageId as string })).messages
+    expect(row).toMatchObject({ text: '[image]', attachments: [meta] })
+    expect(JSON.stringify(row)).not.toContain(bytes.subarray(0, 64).toString('base64'))
+
+    // Sent, it is read with its conversation: a member, and the agent the message was delivered to.
+    const read = async (user: AuthUser, index: number, asAgentId?: string) => {
+      const response = await http(user, 'GET', `/api/super-tabs/${tab}/attachments/${image.id}/parts/${index}${asAgentId ? `?asAgentId=${asAgentId}` : ''}`)
+      return response.statusCode === 200 ? Buffer.from(response.json().data.data, 'base64') : response.statusCode
+    }
+    expect(Buffer.concat([await read(peer, 0) as Buffer, await read(host, 1, lead) as Buffer]).equals(bytes)).toBe(true)
+    expect(await read(peer, 2)).toBe(404)
+    expect((await http(peer, 'GET', `/api/super-tabs/${tab}/attachments/${image.id}`)).json().data).toEqual({ ...meta, complete: true })
+    const delivery = (await store.deliveries(host, tab, lead))[0]!
+    const claimed = await store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: 'claim' })
+    expect(claimed.message).toMatchObject({ id: sent.result.messageId, attachments: [meta] })
+
+    // Another tab cannot name it, and leaving the tab ends access.
+    const other = (await store.create(owner, randomUUID(), 'Other')).id
+    await expect(run(other, send([image.id]))).rejects.toMatchObject({ code: 'INVALID_ATTACHMENT' })
+    expect((await http(owner, 'GET', `/api/super-tabs/${other}/attachments/${image.id}`)).statusCode).toBe(404)
+    await run(tab, { type: 'member.remove', userId: peer.sub }, peer)
+    expect(await read(peer, 0)).toBe(403)
+  })
+
+  it('takes only PNG, JPEG and WebP within 5 MB, and keeps an image out of a private project it was not sent to', async () => {
+    const { tab } = await fixture()
+    expect((await upload(owner, tab, Buffer.from('GIF89a-and-more'), 'cat.png')).json().error.code).toBe('UNSUPPORTED_ATTACHMENT')
+    const tooLarge = await http(owner, 'POST', `/api/super-tabs/${tab}/attachments`, { name: 'big.png', size: 5 * 1024 * 1024 + 1, data: png(PART).toString('base64') })
+    expect(tooLarge.statusCode).toBe(400)
+    const short = await http(owner, 'POST', `/api/super-tabs/${tab}/attachments`, { name: 'short.png', size: 100, data: png(50).toString('base64') })
+    expect(short.json().error.code).toBe('INVALID_ATTACHMENT')
+    const { conversationId } = (await run(tab, { type: 'project.create', name: 'Private', visibility: 'private', brief: '' })).result as { conversationId: string }
+    const image = (await upload(owner, tab, png(100))).json().data
+    expect(image.complete).toBe(true)
+    await run(tab, { ...send([image.id], 'For the private project'), conversationId } as Command)
+    await invite(tab)
+    expect((await http(peer, 'GET', `/api/super-tabs/${tab}/attachments/${image.id}/parts/0`)).statusCode).toBe(404)
+    expect((await http(owner, 'GET', `/api/super-tabs/${tab}/attachments/${image.id}/parts/0`)).statusCode).toBe(200)
+    expect((await upload(peer, tab, png(100))).json().data.complete).toBe(true)
+  })
+
+  it('lets the uploader resume or delete an unsent image, and prunes unfinished uploads after an hour', async () => {
+    const { tab } = await fixture()
+    await invite(tab)
+    const bytes = png(2 * PART + 5)
+    const image = (await upload(owner, tab, bytes)).json().data
+    const meta = async (user = owner) => (await http(user, 'GET', `/api/super-tabs/${tab}/attachments/${image.id}`)).json()
+    expect((await meta()).data).toMatchObject({ parts: 3, complete: false, missing: [1, 2] })
+    await http(owner, 'POST', `/api/super-tabs/${tab}/attachments/${image.id}/parts/2`, { data: bytes.subarray(2 * PART).toString('base64') })
+    expect((await meta()).data.missing).toEqual([1])
+    const remove = (user: AuthUser, id = image.id) => http(user, 'DELETE', `/api/super-tabs/${tab}/attachments/${id}`)
+    expect((await remove(peer)).statusCode).toBe(404)
+    expect((await remove(owner)).json().data).toEqual({ id: image.id, deleted: true })
+    expect((await meta()).error.code).toBe('NOT_FOUND')
+    expect(await db.superTabAttachmentPart.count({ where: { attachmentId: image.id } })).toBe(0)
+    const sent = (await upload(owner, tab, png(100))).json().data
+    await run(tab, send([sent.id]))
+    expect((await remove(owner, sent.id)).json().error.code).toBe('ATTACHMENT_SENT')
+
+    const unfinished = (await upload(owner, tab, png(PART + 1))).json().data
+    const finished = (await upload(owner, tab, png(100))).json().data
+    await new SuperTabStore(db, () => Date.now() + 2 * 3_600_000).attachments.upload(owner, tab,
+      { name: 'later.png', size: 100, data: png(100).toString('base64') })
+    expect(await db.superTabAttachment.findUnique({ where: { id: unfinished.id } })).toBeNull()
+    expect(await db.superTabAttachment.findUnique({ where: { id: finished.id } })).not.toBeNull()
+  })
+
+  it('refuses an empty message and carries the images when a person resends an uncertain delivery', async () => {
+    const { tab, lead } = await fixture()
+    await expect(run(tab, message('   '))).rejects.toMatchObject({ code: 'EMPTY_MESSAGE' })
+    const image = (await upload(owner, tab, png(100))).json().data
+    await run(tab, send([image.id], 'Look at this'))
+    const first = (await store.deliveries(host, tab, lead))[0]!
+    await store.delivery(host, tab, lead, first.id, { type: 'claim', claimId: 'claim' })
+    await store.delivery(host, tab, lead, first.id, { type: 'ack', claimId: 'claim', receipt: 'lost', uncertain: true })
+    await run(tab, { type: 'delivery.resolve', deliveryId: first.id, resolution: 'resend' })
+    const rows = (await store.messages(owner, tab, 'lead', {})).messages
+    expect(rows.at(-1)).toMatchObject({ text: 'Look at this', replyTo: rows.at(-2)!.id, attachments: [expect.objectContaining({ id: image.id })] })
+  })
+})

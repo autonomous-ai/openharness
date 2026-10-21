@@ -2,8 +2,9 @@ import { admitMachineStart, machineContribution } from './machines.js'
 import { z } from 'zod'
 import {
   activeWork, actorKey, agent, author, conversation, fail, person, stableId, numberConversations, nextConversationNumber,
-  type Actor, type Agent, type Author, type CommandEffects, type SuperTabState,
+  type Actor, type Agent, type AttachmentMeta, type Author, type CommandEffects, type SuperTabState,
 } from './model.js'
+import { attachmentIdsSchema, imagesPlaceholder } from './attachments.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSchema } from './routingPolicy.js'
 import { agentProjectId, deleteProject, groupProject, manageProject, mutableProjects, projectMembers, projectOf, readAgent, readConversation, readProject, sameProject } from './projects.js'
@@ -70,7 +71,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('invite.revoke'), inviteId: id }).strict(),
   z.object({ type: z.literal('invite.accept'), inviteId: id }).strict(),
   z.object({ type: z.literal('member.remove'), userId: id }).strict(),
-  z.object({ type: z.literal('message.send'), conversationId: id, text, replyTo: id.nullable(), recipientIds: z.array(id).max(16) }).strict(),
+  // Text may be empty when the message carries an image; applyCommand refuses a message with neither.
+  z.object({ type: z.literal('message.send'), conversationId: id, text: z.string().trim().max(32_000), replyTo: id.nullable(),
+    recipientIds: z.array(id).max(16), attachmentIds: attachmentIdsSchema.optional() }).strict(),
   z.object({ type: z.literal('delivery.resolve'), deliveryId: id, resolution: z.enum(['received', 'resend', 'cancel']) }).strict(),
   z.object({ type: z.literal('work.define'), conversationId: id, brief: text, checks: z.array(check).min(1).max(40) }).strict(),
   z.object({ type: z.literal('work.assign'), conversationId: id, agentId: id, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
@@ -94,7 +97,9 @@ export interface CommandContext {
   /** A host's receipt, not an elapsed lease, proves that an assignment stopped. */
   confirmedStopped?: boolean
   /** An uncertain receipt and its original message, read transactionally. */
-  delivery?: { id: string; conversationId: string; agentId: string; messageId: string; text: string }
+  delivery?: { id: string; conversationId: string; agentId: string; messageId: string; text: string; attachments?: AttachmentMeta[] }
+  /** The images a message.send names, checked by the store (attachments.ts `attachmentsForSend`). */
+  attachments?: AttachmentMeta[]
   /** Route decisions this tab recorded in the last hour, counted by the store. */
   recentRoutes?: number
   /** The decision a command names, read from SuperTabRouteDecision by the store. */
@@ -169,8 +174,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     if (group.assignment) effects.previousAttempts.push(structuredClone({ conversationId: group.id,
       brief: group.brief, checks: group.checks, assignment: group.assignment }))
   }
-  const message = (conversationId: string, body: string, recipients: string[] = [], replyTo: string | null = null, source?: Record<string, unknown>) => {
-    effects.messages.push({ id: operationId, conversationId, author: sender, text: body, replyTo, recipients, ...(source ? { source } : {}) })
+  const message = (conversationId: string, body: string, recipients: string[] = [], replyTo: string | null = null, source?: Record<string, unknown>,
+    attachments: AttachmentMeta[] = []) => {
+    effects.messages.push({ id: operationId, conversationId, author: sender, text: body, replyTo, recipients, ...(source ? { source } : {}),
+      ...(attachments.length ? { attachments } : {}) })
     result.messageId = operationId
   }
   const openDecision = (): RouteDecision => {
@@ -541,8 +548,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         agent(state, id)
         if (!group.agentIds.includes(id)) fail('INVALID_RECIPIENT', 'Choose an agent in this conversation.', 400)
       }
+      const attachments = command.attachmentIds?.length ? context.attachments ?? [] : []
+      if (attachments.length !== (command.attachmentIds?.length ?? 0) || attachments.some((a, i) => a.id !== command.attachmentIds![i])) {
+        fail('INVALID_ATTACHMENT', 'This image is no longer available. Attach it again.', 400)
+      }
+      if (!command.text && !attachments.length) fail('EMPTY_MESSAGE', 'Write a message or attach an image.', 400)
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
-      message(group.id, command.text, recipients, command.replyTo)
+      message(group.id, command.text || imagesPlaceholder(attachments.length), recipients, command.replyTo, undefined, attachments)
       break
     }
     case 'delivery.resolve': {
@@ -554,7 +566,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.resolution === 'resend') {
         open(state, group.id)
         if (!group.agentIds.includes(target.id)) fail('INVALID_RECIPIENT', 'This agent is no longer in the conversation.', 400)
-        message(group.id, delivery.text, [target.id], delivery.messageId)
+        message(group.id, delivery.text, [target.id], delivery.messageId, undefined, delivery.attachments ?? [])
       } else {
         message(group.id, command.resolution === 'received'
           ? `Checked ${target.name}’s terminal and confirmed the earlier instruction was received.`
