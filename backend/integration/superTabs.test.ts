@@ -970,6 +970,22 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(response.statusCode).toBe(200)
   })
 
+  it('returns the receipt of a recorded agent start after its machine stops being listed', async () => {
+    const { tab, lead } = await fixture()
+    const machineId = `second-${randomUUID()}`
+    await db.machine.create({ data: { machineId, userId: host.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    await db.machineShare.create({ data: { machineId, ownerId: host.sub, autonomousEnv: 'prod', emails: [owner.email] } })
+    const helper = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'Helper', configuration: config, lead: false })).result.agentId as string
+    const request = { conversationId: 'lead', machineId, engine: 'codex', name: 'Builder', cwd: '/work', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    const operationId = randomUUID(), command: Command = { type: 'agent.start', request }
+    const first = await run(tab, command, host, lead, operationId)
+    await run(tab, { type: 'agent.remove', agentId: helper })
+    // A new start on the machine is refused now, but the recorded one keeps its receipt.
+    await expect(run(tab, command, host, lead)).rejects.toMatchObject({ code: 'MACHINE_NOT_LISTED' })
+    expect((await run(tab, command, host, lead, operationId)).result.startId).toBe(first.result.startId)
+  })
+
   it('corrects the log to the model that ran when the routed switch failed, and reads the times of one decision', async () => {
     const { tab, lead } = await fixture()
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Docs.' },

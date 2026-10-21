@@ -397,6 +397,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       controls(state, actor, command.request.conversationId)
       open(state, command.request.conversationId)
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
+      // The Lead's account has machines the Swarm never prepared (no clone of the project), so a Lead may start only where the
+      // Swarm already lists a machine: a contributed one, or one an agent of the Swarm runs on. A person's start may name any
+      // machine of theirs, because the first Lead is created before anything is listed.
+      if (actor.kind === 'agent' && !state.machines?.some(m => m.machineId === command.request.machineId)
+        && !state.agents.some(a => a.machineId === command.request.machineId)) fail('MACHINE_NOT_LISTED', 'Add this machine to the Swarm first.', 403)
       const grant = context.contribution ?? fail('HOST_REQUIRED', 'Choose a machine shared with the contributor.', 403)
       const contributor = person(state, grant.contributorId)
       if (contributor.role === 'viewer') fail('READ_ONLY', 'A viewer cannot start agents.', 403)

@@ -17,6 +17,8 @@ const ENGINES = ['claude', 'codex']
 // validation) is the answer and must reach the Lead.
 const TRANSPORT = new Set(['AGENT_UNAVAILABLE', 'SUPER_TAB_UNAVAILABLE', 'BACKEND_UNAVAILABLE', 'BACKEND_TIMEOUT', 'BACKEND_UNREACHABLE'])
 const MACHINES_UNREADABLE = "The account's machine list could not be read; only known machines were considered."
+const DISK_UNVERIFIED = 'Project disk space could not be verified.'
+const NO_PROJECT_FOLDER = 'This machine does not have the project folder. Add it to the Swarm so it can clone the project.'
 const OFFLINE = 'Machine is offline or unreachable.'
 const UNKNOWN_QUOTA: Probe['quota'] = { known: false, leftPercent: null, resetsAt: null }
 const UNKNOWN_LOAD: NonNullable<Probe['load']> = { agents: null, freeMemoryBytes: null, hasFolder: null }
@@ -117,10 +119,14 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const busy = new Set([String(group.leadId), String(conversations.find(c => c.id === 'lead')?.leadId),
     ...conversations.filter(c => active(c.assignment)).map(c => String(object(c.assignment).agentId))])
   const members = agents.filter(a => !busy.has(String(a.id)) && ENGINES.includes(String(object(a.configuration).engine))).map(a => withLaunchEffort(a, list(state.starts)))
-  // The account's machines can start a new agent. A member may run on a machine only its collaborator can
-  // open; the Lead tries that machine too, but a member there is unknown, never offline.
+  // A new agent starts only on a machine in the Swarm's Machines list (the backend refuses any other): a contributed machine, or
+  // one an agent of the Swarm runs on. The Lead runs here, so its own machine is always listed. Of the account's machines
+  // only those count; the rest were never prepared with the project and would only be excluded for a missing folder
+  // (production, 2026-10-21). A member may run on a machine only its collaborator can open; the Lead tries that machine
+  // too, but a member there is unknown, never offline.
+  const swarmMachines = new Set([where.machineId, ...list(state.machines).map(m => String(m.machineId)), ...agents.map(a => String(a.machineId))])
   const machines = new Map<string, { name: string; status: string; account: boolean; pool?: Json }>()
-  for (const m of list(value.machines)) machines.set(String(m.machineId), { name: String(m.name), status: String(m.status ?? 'unknown'), account: true })
+  for (const m of list(value.machines)) if (swarmMachines.has(String(m.machineId))) machines.set(String(m.machineId), { name: String(m.name), status: String(m.status ?? 'unknown'), account: true })
   // The Lead's own machine is the account's even when the list could not be read.
   if (!machines.has(where.machineId)) machines.set(where.machineId, { name: where.machineId, status: 'unknown', account: true })
   for (const m of members) if (!machines.has(String(m.machineId))) machines.set(String(m.machineId), { name: String(m.machineId), status: 'unknown', account: false })
@@ -267,7 +273,11 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       const load = { agents: Array.isArray(listed.agents) ? frames.length : null,
         freeMemoryBytes: finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes) ? resources.memoryTotalBytes - resources.memoryUsedBytes : null,
         hasFolder: a.needs.cwd ? finite(resources.projectDiskFreeBytes) : null }
-      probes.push(newProbe(m, inspected.allowed ? [] : inspected.reasons, quotaOf2(inspected.quota), inspected.unknown.length === 0 && inspected.quota.known, load))
+      // A machine listed only because an agent runs there may never have cloned the project. When its capacity read succeeded but
+      // could not measure the named folder's disk, a missing folder is the likely cause; a failed or unsupported read says nothing.
+      const noFolder = !!a.needs.cwd && machineId !== where.machineId && object(inspected.capacity).ok === true && !finite(resources.projectDiskFreeBytes)
+      const reasons = noFolder ? inspected.reasons.map(r => r === DISK_UNVERIFIED ? NO_PROJECT_FOLDER : r) : inspected.reasons
+      probes.push(newProbe(m, inspected.allowed ? [] : reasons, quotaOf2(inspected.quota), inspected.unknown.length === 0 && inspected.quota.known, load))
     }
     return probes
   } finally { target.close() }
