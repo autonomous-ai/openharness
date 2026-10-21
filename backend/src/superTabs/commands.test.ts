@@ -201,7 +201,7 @@ it('starts only in the chosen conversation, captures authority, and never assign
   const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
   const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
   const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
-  const request = { conversationId: group, machineId: 'target', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
+  const request = { conversationId: group, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
   const startId = f.run({ type: 'agent.start', request }, actor, { contribution }).result.startId as string
   expect(f.state.starts![0]).toMatchObject({ request, hostGrant: 'grant-1', dispatched: false })
@@ -216,6 +216,42 @@ it('starts only in the chosen conversation, captures authority, and never assign
   expect(f.state.conversations[0]!.agentIds).toEqual([lead])
   f.run({ type: 'tab.pause', paused: true })
   expect(() => f.run({ type: 'agent.start', request }, actor, { contribution })).toThrow('paused')
+})
+
+describe('agent.start on the Swarm\'s listed machines', () => {
+  const request = (group: string, machineId: string) => ({ conversationId: group, machineId, engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
+    requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } })
+  const grant = { machineOwnerId: 'target-owner', contributorId: 'owner' }
+
+  it('refuses an agent\'s start on a machine nobody listed, and records nothing', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+    const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    expect(() => f.run({ type: 'agent.start', request: request(group, 'account-vm') }, actor, { contribution: grant }))
+      .toThrow(expect.objectContaining({ code: 'MACHINE_NOT_LISTED', status: 403, message: 'Add this machine to the Swarm first.' }))
+    expect(f.state.starts ?? []).toEqual([])
+  })
+
+  it('lets an agent start on the Lead\'s own machine, where an agent of the Swarm runs', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+    const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    f.run({ type: 'agent.start', request: request(group, 'host') }, actor, { contribution: grant })
+    expect(f.state.starts).toHaveLength(1)
+  })
+
+  it('lets an agent start on a contributed machine', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+    const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    f.state.machines = [{ machineId: 'contributed', name: 'Mini', contributorId: 'owner', membershipGeneration: f.state.people[0]!.generation, generation: 'g1',
+      cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false, observation: { receivedAt: 1000 } } as never]
+    f.run({ type: 'agent.start', request: request(group, 'contributed') }, actor, { contribution: grant })
+    expect(f.state.starts).toHaveLength(1)
+  })
+
+  it('keeps a person\'s start on a machine of their own, before anything is listed', () => {
+    const f = fixture(), group = f.group()
+    f.run({ type: 'agent.start', request: request(group, 'my-laptop') }, owner, { contribution: grant })
+    expect(f.state.starts).toHaveLength(1)
+  })
 })
 
 describe('tab.routingPolicy', () => {
@@ -244,6 +280,9 @@ const record = (patch: Record<string, unknown> = {}) => ({ assessment: { difficu
 function routed() {
   const f = fixture()
   const lead = f.add('lead', 'owner', 'lead', true), worker = f.add('worker')
+  // An agent runs on 'machine', so the Swarm lists it and a start there is allowed.
+  f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'machine', harnessId: 'remote', name: 'Remote', configuration: config, lead: false },
+    owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } })
   const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
   const define = (group: string) => f.run({ type: 'work.define', conversationId: group, brief: 'Build it.', checks: [{ description: 'Tests pass.', independent: false }] })
   /** Records a completed native start for an agent, as the decision's `new` final refers to it. */

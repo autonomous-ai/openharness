@@ -56,6 +56,12 @@ it('documents how a lead shares its project repository for other machines', asyn
   const answer = await t.ask({ action: 'help' }, owner) as { help: { commands: Array<Record<string, unknown>> } }
   expect(answer.help.commands).toContainEqual({ type: 'project.repository', projectId: 'PROJECT', repositoryUrl: 'https://github.com/OWNER/REPOSITORY' })
 })
+it('tells the Lead that start works only on a machine in the Swarm\'s Machines list', async () => {
+  const t = setup()
+  const answer = await t.ask({ action: 'help' }, owner) as { help: { start: string } }
+  expect(answer.help.start).toContain('create one agent in a conversation on a machine in this Swarm\'s Machines list; to use another machine, a person adds it to the Swarm first.')
+  expect(answer.help.start).toContain('Repeat exactly after an interruption')
+})
 it('resolves a native caller to its exact contribution and rechecks it before every agent command', async () => {
   const t = setup()
   expect(await t.ask({ action: 'status', tabId: 'tab', harnessId: 'native' }, owner)).toMatchObject({ ok: true })

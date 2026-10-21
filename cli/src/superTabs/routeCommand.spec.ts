@@ -15,6 +15,8 @@ const policy = { version: 1, floor: { low: 1, medium: 2, high: 3 }, quotaReserve
 const agents = [
   { id: 'a1', name: 'Multiply', machineId: 'm1', harnessId: 'h1', configuration: { engine: 'claude', model: 'sonnet', effort: 'medium' } },
   { id: 'lead', name: 'Lead', machineId: 'm1', harnessId: 'hl', configuration: { engine: 'claude', model: 'opus', effort: 'high' } },
+  // An engine the route does not offer: it only puts m2 in the Swarm's Machines list, as a person adding the machine does.
+  { id: 'a2', name: 'Elsewhere', machineId: 'm2', harnessId: 'h2', configuration: { engine: 'pi', model: 'default', effort: 'default' } },
 ]
 const conversations = (assignment: unknown = null) => [
   { id: 'lead', title: 'Lead', leadId: 'lead', agentIds: ['lead', 'a1'], archived: false, brief: '', checks: [], assignment: null },
@@ -131,6 +133,54 @@ describe('routeTask', () => {
     expect(result).toMatchObject({ ok: true, warnings: ['w', "The account's machine list could not be read; only known machines were considered."] })
     const fine = await routeTask(input, scoped(), where as never, opener(), () => 'op')
     expect(fine.warnings).toEqual(['w'])
+  })
+  it('considers only the account machines the Swarm lists, and always the Lead\'s own', async () => {
+    const context = { ok: true, value: { agentId: 'lead', tab: tab(), policy: { policy }, machines: [{ machineId: 'm1', name: 'remote-1' }, { machineId: 'm2', name: 'mac' }, { machineId: 'm9', name: 'vm' }] } }
+    const s = scoped({ context }), open = opener()
+    await routeTask(input, s, where as never, open, () => 'op')
+    // m9 is the account's but not in the Swarm's list: it is neither probed nor a candidate nor an exclusion.
+    expect(open.mock.calls.map(c => c[1]).sort()).toEqual(['m1', 'm2'])
+    const decision = recorded(s).command.decision
+    expect([...decision.candidates, ...decision.excluded].some((c: { title: string }) => c.title.includes('vm'))).toBe(false)
+    expect(decision.candidates.some((c: { machineId?: string; title: string }) => c.title.includes('mac'))).toBe(true)
+  })
+  it('offers new agents on the Lead\'s own machine when the account list could not be read', async () => {
+    const context = { ok: true, value: { agentId: 'lead', tab: tab(), policy: { policy }, machines: [], machinesUnreadable: true } }
+    const s = scoped({ context }), open = opener()
+    await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'high' } }, s, where as never, open, () => 'op')
+    expect(open.mock.calls.map(c => c[1])).toEqual(['m1'])
+    expect(recorded(s).command.decision.candidates.some((c: { title: string }) => c.title.startsWith('New agent') && c.title.includes('m1'))).toBe(true)
+  })
+  it('says a listed machine without the project folder needs it cloned, not that its disk could not be verified', async () => {
+    const needs = { cwd: '/repo/api' }
+    const noFolder = { ok: true, resources: { memoryTotalBytes: 8e9, memoryUsedBytes: 1e9, cpuPercent: 10 }, tools: {}, devices: {} }
+    const s = scoped()
+    await routeTask({ ...input, assessment: { ...input.assessment, needs } }, s, where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], capacity: id === 'm1' ? { ...noFolder, tools: { git: true } } : noFolder })), () => 'op')
+    const excluded = recorded(s).command.decision.excluded as Array<{ title: string; reason: string }>
+    const reasonOf = (machine: string) => excluded.filter(e => e.title.includes(machine)).map(e => e.reason)
+    expect(reasonOf('mac').some(r => r.includes('This machine does not have the project folder. Add it to the Swarm so it can clone the project.'))).toBe(true)
+    expect(reasonOf('mac').some(r => /Project disk space/.test(r))).toBe(false)
+    // Its other reasons stay.
+    expect(reasonOf('mac').some(r => /Required tool unavailable: git/.test(r))).toBe(true)
+    // The Lead's own machine keeps the plain reason: its folder was named by the Lead itself.
+    expect(reasonOf('remote-1').some(r => r.includes('Project disk space could not be verified.'))).toBe(true)
+  })
+  it('offers a listed machine whose capacity read measured the project folder', async () => {
+    const s = scoped()
+    await routeTask({ ...input, assessment: { ...input.assessment, needs: { cwd: '/repo/api' } } }, s, where as never,
+      opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], capacity: { ok: true, resources: { memoryTotalBytes: 8e9, memoryUsedBytes: 1e9, cpuPercent: 10, projectDiskFreeBytes: 1e11 }, tools: { git: true }, devices: {} } })), () => 'op')
+    expect(recorded(s).command.decision.candidates.some((c: { title: string }) => c.title.startsWith('New agent') && c.title.includes('mac'))).toBe(true)
+  })
+  it('keeps "could not be verified" on a listed machine whose capacity read failed, because a failed read says nothing about the folder', async () => {
+    const s = scoped()
+    await routeTask({ ...input, assessment: { ...input.assessment, needs: { cwd: '/repo/api' } } }, s, where as never,
+      opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], ...(id === 'm2' ? { capacity: { ok: false, error: 'UNSUPPORTED' } } : {}) })), () => 'op')
+    const reasons = (recorded(s).command.decision.excluded as Array<{ title: string; reason: string }>).filter(e => e.title.includes('mac')).map(e => e.reason)
+    expect(reasons.length).toBeGreaterThan(0)
+    for (const reason of reasons) {
+      expect(reason).toContain('Project disk space could not be verified.')
+      expect(reason).not.toContain('does not have the project folder')
+    }
   })
   it('names a member that has no name, model or effort of its own, and leaves the decision blank when it is unrecorded', async () => {
     const plain = tab(); plain.state.agents = [{ id: 'a1', machineId: 'm1', harnessId: 'h1', configuration: { engine: 'claude' } }, agents[1]] as never

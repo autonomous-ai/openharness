@@ -16,7 +16,7 @@ const HELP = {
   messages: 'messages GROUP: read recent messages in a conversation.',
   message: 'message GROUP MESSAGE_ID: read one exact message, including an earlier question or result referenced by a reply.',
   post: 'post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]...: reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID. --attach sends a file (a screenshot, a log; up to 10 files of 10 MB each), and TEXT may then be empty.',
-  start: 'start OPERATION_ID JSON: create one agent in a conversation on a machine you can access. Repeat exactly after an interruption; it follows the same native creation receipt. It does not assign work.',
+  start: 'start OPERATION_ID JSON: create one agent in a conversation on a machine in this Swarm\'s Machines list; to use another machine, a person adds it to the Swarm first. Repeat exactly after an interruption; it follows the same native creation receipt. It does not assign work.',
   resume: 'resume START_ID: finish a pending start without creating another agent.',
   route: 'route GROUP JSON: before starting or assigning work, choose who does it. JSON: {"difficulty":"low|medium|high","risk":"low|medium|high","why":"one sentence","needs":{"tools":[],"devices":[],"cwd":"/absolute/repo"}}. Start or assign the pick with its routeDecisionId; to choose otherwise, pass overrideReason.',
   capacity: 'capacity MACHINE_ID JSON: inspect machine, engine and quota headroom. JSON uses the start request fields below. Unknown allowances are not reported as free tokens.',
