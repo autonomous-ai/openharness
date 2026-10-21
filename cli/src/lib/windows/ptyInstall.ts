@@ -22,7 +22,7 @@ export const PTY_POINTER = 'current-pty'
 export const PTY_PENDING = 'pty-pending.json'
 export const PTY_REJECTED = 'pty-rejected.json'
 /** The bin files that come out of the payload, in the order they are replaced. */
-const BIN_FILES = ['harness.exe', 'harness-launch.exe'] as const
+export const BIN_FILES = ['harness.exe', 'harness-launch.exe'] as const
 /** What a sweep of bin\ removes: our aside files and install.ps1's (`.<name>.old-*`), our temporary copies, and the
  *  `<name>~RF<hex>.TMP` backups that File.Replace leaves when install.ps1 replaces a running program. */
 const SWEPT = [/\.old-/, /^\..+\.new-\d+-\d+$/, /~RF.*\.TMP$/i]
@@ -282,7 +282,13 @@ export function installPreparedPty(prepared: PreparedPty, rootDir: string, fs: P
   }
 }
 
-interface Pending { version: string; previous: string }
+export interface PtyPending { version: string; previous: string }
+type Pending = PtyPending
+
+/** The version on probation and the one it replaced, or null when none is (or its marker cannot be read). */
+export function readPtyPending(rootDir: string): PtyPending | null {
+  return readPending(ptyRootOf(rootDir))
+}
 
 function readPending(ptyRoot: string): Pending | null {
   try {

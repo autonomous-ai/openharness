@@ -190,11 +190,8 @@ function readBinaryVersion(binary: string): ReadVersion | null {
   if (known && known.mtimeMs === mtimeMs) return known.value
   let value: ReadVersion | null = null
   try {
-    // Synchronous: once per build. An argument array, so no shell reads the path.
-    const out = execFileSync(binary, ['version'], {
-      encoding: 'utf8', timeout: VERSION_TIMEOUT_MS, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'],
-    })
-    const parsed = JSON.parse(out.trim()) as Record<string, unknown> | null
+    // Synchronous: once per build.
+    const parsed = JSON.parse(runVersionCommand(binary).trim()) as Record<string, unknown> | null
     const features = parsed?.features
     if (
       parsed && typeof parsed === 'object'
@@ -215,6 +212,17 @@ function readBinaryVersion(binary: string): ReadVersion | null {
 }
 
 /**
+ * What `<binary> version` prints, or a throw when it fails to run, exits non-zero or takes longer than 5 s. An
+ * argument array, so no shell reads the path; hidden, so no console flashes on Windows. The one way this CLI asks a
+ * PTY build what it is: `binaryVersion` here, and the payload canary (lib/windows/ptyPayload.ts `probeVersionLine`).
+ */
+export function runVersionCommand(binary: string): string {
+  return execFileSync(binary, ['version'], {
+    encoding: 'utf8', timeout: VERSION_TIMEOUT_MS, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'],
+  })
+}
+
+/**
  * What [binary] says it is (`harness-pty version`: `{"version","protocol","features"}`), or null when it cannot be
  * run or says something else. A build from before features lists none: `[]`. Run with a 5 s timeout, hidden, and
  * cached by path and mtime.
@@ -222,6 +230,19 @@ function readBinaryVersion(binary: string): ReadVersion | null {
 export function binaryVersion(binary: string): PtyHostBinaryVersion | null {
   const read = readBinaryVersion(binary)
   return read ? { version: read.version, protocol: read.protocol, features: [...read.features] } : null
+}
+
+/**
+ * `previous` of `pty-pending.json` (lib/windows/ptyInstall.ts `PTY_PENDING`), or null with no marker. Read here rather
+ * than imported: ptyInstall.ts imports this module.
+ */
+function probationPrevious(ptyRoot: string): string | null {
+  try {
+    const previous: unknown = JSON.parse(readFileSync(path.join(ptyRoot, 'pty-pending.json'), 'utf8'))?.previous
+    return typeof previous === 'string' && previous !== '' ? previous : null
+  } catch {
+    return null
+  }
 }
 
 /** The host build new panes go to: the one this daemon would start. */
@@ -496,7 +517,8 @@ export function forgetExitedHost(home: string, instance: string, pid: number): v
  * Delete the `<runtime>/pty/<version>/` directories no host runs from any more, after a drained host has gone: every
  * version older than the one `current-pty` names (the installed CLI's) whose version no running host of [home] has
  * (any instance's discovery file, legacy or versioned: its `version`, its pid alive). The current one, newer ones (another install's, perhaps not
- * finished), and anything that is not a version directory stay. Nothing goes without a `current-pty`: with no
+ * finished), the one a version on probation would roll back to (`pty-pending.json`'s `previous`), and anything that
+ * is not a version directory stay. Nothing goes without a `current-pty`: with no
  * installed CLI's word, no version is known to be old. A directory that cannot be removed (a running .exe on
  * Windows, of some other home's host) stays for the next time. Returns the versions removed.
  */
@@ -505,6 +527,9 @@ export function removeUnusedPtyVersions(home: string, runtimeDir: string = env.A
   if (!current) return []
   const root = path.join(runtimeDir, 'pty')
   const running = new Set(listDiscoveries(home).filter((host) => pidAlive(host.pid)).map((host) => host.version))
+  // While a version is on probation, the one it replaced is what a rollback puts back, host or not.
+  const rollback = probationPrevious(root)
+  if (rollback) running.add(rollback)
   let names: string[]
   try {
     names = readdirSync(root)

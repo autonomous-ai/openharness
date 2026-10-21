@@ -1,6 +1,6 @@
 import { once } from 'node:events'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -738,6 +738,19 @@ describe('removeUnusedPtyVersions', () => {
     expect(removeUnusedPtyVersions(dir, runtime)).toEqual(['0.4.19'])
     // Newer than current-pty stays, as before.
     expect(readdirSync(path.join(runtime, 'pty')).sort()).toEqual(['0.4.20', '0.4.21', '0.4.22', 'current-pty'])
+  })
+
+  it('removeUnusedPtyVersions keeps the version a host on probation would roll back to', () => {
+    const runtime = tempDir('rt-')
+    const dir = tempDir('h-')
+    for (const version of ['0.4.19', '0.4.20', '0.4.21']) executable(path.join(runtime, 'pty', version, exe))
+    writeFileSync(path.join(runtime, 'pty', 'current-pty'), '0.4.21')
+    // 0.4.21 is on probation (lib/windows/ptyInstall.ts): no host runs from 0.4.20, and it is the rollback target.
+    writeFileSync(path.join(runtime, 'pty', 'pty-pending.json'), JSON.stringify({ version: '0.4.21', previous: '0.4.20' }))
+    expect(removeUnusedPtyVersions(dir, runtime)).toEqual(['0.4.19'])
+    // Once it is kept, the marker goes, and so may the folder.
+    rmSync(path.join(runtime, 'pty', 'pty-pending.json'))
+    expect(removeUnusedPtyVersions(dir, runtime)).toEqual(['0.4.20'])
   })
 })
 

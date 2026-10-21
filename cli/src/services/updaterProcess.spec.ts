@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SERVICE_EXIT_RESTART, type UpdaterMessage } from '../harnessd/protocol.js'
 import type { startSelfUpdater } from '../lib/selfUpdate.js'
+import type { startPtyUpdater } from '../lib/windows/ptyUpdate.js'
 import type { startTuiUpdater } from '../tui/update.js'
 import { VERSION } from '../version.js'
 import { processUpdaterDeps, runUpdaterService, type UpdaterServiceDeps } from './updaterProcess.js'
@@ -24,6 +25,17 @@ vi.mock('../lib/windows/processTable.js', () => ({ windowsProcessRows: async () 
 
 type CliOptions = Parameters<typeof startSelfUpdater>[0]
 type HnOptions = Parameters<typeof startTuiUpdater>[0]
+type PtyOptions = Parameters<typeof startPtyUpdater>[0]
+
+/** Run [fn] under a master that judges a terminal host it staged (harnessd/master.ts). */
+async function judgingPty(fn: () => Promise<void> | void): Promise<void> {
+  const saved = process.env.HARNESSD_JUDGES_PTY
+  process.env.HARNESSD_JUDGES_PTY = '1'
+  try { await fn() } finally {
+    if (saved === undefined) delete process.env.HARNESSD_JUDGES_PTY
+    else process.env.HARNESSD_JUDGES_PTY = saved
+  }
+}
 
 describe('the updater in its own process', () => {
   afterEach(() => { vi.restoreAllMocks() })
@@ -33,7 +45,9 @@ describe('the updater in its own process', () => {
     const told: UpdaterMessage[] = []
     let cli: CliOptions | null = null
     let hn: HnOptions | null = null
+    let pty: PtyOptions | null = null
     let sent: (() => void) | null = null
+    const ready = { pty: null as string | null }
     const deps: UpdaterServiceDeps = {
       tell: (message, done) => { told.push(message); sent = done },
       exit: (code) => { calls.push(`exit ${code}`) },
@@ -41,7 +55,15 @@ describe('the updater in its own process', () => {
       startHn: (options) => { hn = options; return { stop: () => calls.push('stop hn') } },
       log: (line) => calls.push(line),
     }
-    return { deps, calls, told, cli: () => cli!, hn: () => hn!, sent: () => sent! }
+    // Windows: the terminal host's poller beside them, in the install root the CLI folder sits in.
+    const windows: Partial<UpdaterServiceDeps> = {
+      ptyRootDir: join(tmpdir(), 'updater-pty-root'),
+      startPty: (options) => {
+        pty = options
+        return { stop: () => calls.push('stop pty'), readyToStage: async () => { const version = ready.pty; ready.pty = null; return version } }
+      },
+    }
+    return { deps, windows, calls, told, ready, cli: () => cli!, hn: () => hn!, pty: () => pty, sent: () => sent! }
   }
 
   it('checks for this build\'s successor, and hn\'s, on the installed copy, and stops both', () => {
@@ -88,12 +110,75 @@ describe('the updater in its own process', () => {
   it('tells the master what it staged, and only once that has left asks to be started again as the new build', async () => {
     const m = make()
     runUpdaterService(undefined, m.deps)
-    const staged = m.cli().onStaged('9.9.9') as Promise<void>
+    const staged = m.cli().onStaged('9.9.9', null) as Promise<void>
     expect(m.told).toEqual([{ type: 'harnessd:staged', version: '9.9.9' }])
     expect(m.calls).not.toContain(`exit ${SERVICE_EXIT_RESTART}`)
     m.sent()()
     await staged
     expect(m.calls).toContain(`exit ${SERVICE_EXIT_RESTART}`)
+  })
+
+  it('a PTY-only staging tells the master ptyVersion alone, and the next run checks the CLI', () => judgingPty(async () => {
+    const m = make()
+    const service = runUpdaterService(undefined, { ...m.deps, ...m.windows })
+    expect(m.pty()).toMatchObject({ rootDir: m.windows.ptyRootDir, url: expect.stringMatching(/\/pty\/metadata\.json$/) })
+    expect(m.pty()!.key).toMatch(/^win32-(x64|arm64)$/)
+    const staged = m.pty()!.onStaged('0.11.0') as Promise<void>
+    expect(m.told).toEqual([{ type: 'harnessd:staged', ptyVersion: '0.11.0' }])
+    expect(m.calls).not.toContain(`exit ${SERVICE_EXIT_RESTART}`)
+    m.sent()()
+    await staged
+    expect(m.calls).toContain(`exit ${SERVICE_EXIT_RESTART}`)
+    service.stop()
+    expect(m.calls.slice(-3)).toEqual(['stop cli', 'stop hn', 'stop pty'])
+    // The master starts it again at once: that run checks the CLI, and the host, again.
+    const next = make()
+    runUpdaterService(undefined, { ...next.deps, ...next.windows }).stop()
+    expect(next.cli()).toMatchObject({ currentVersion: VERSION })
+    expect(next.pty()).not.toBeNull()
+  }))
+
+  it('CLI and PTY in one check send one message with both', () => judgingPty(async () => {
+    const m = make()
+    runUpdaterService(undefined, { ...m.deps, ...m.windows })
+    m.ready.pty = '0.11.0'
+    // The CLI poller's handover (lib/selfUpdate.ts): under its lock, the host first, then the CLI.
+    await m.cli().withLock!(async () => {
+      const ptyVersion = await m.cli().beforeStage!()
+      const staged = m.cli().onStaged('9.9.9', ptyVersion) as Promise<void>
+      m.sent()()
+      await staged
+    })
+    expect(m.told).toEqual([{ type: 'harnessd:staged', version: '9.9.9', ptyVersion: '0.11.0' }])
+    expect(m.calls.filter((line) => line === `exit ${SERVICE_EXIT_RESTART}`)).toHaveLength(1)
+  }))
+
+  it('a host taken into a CLI handover that then fails is still handed over, alone', () => judgingPty(async () => {
+    const m = make()
+    runUpdaterService(undefined, { ...m.deps, ...m.windows })
+    m.ready.pty = '0.11.0'
+    const handover = m.cli().withLock!(async () => {
+      await m.cli().beforeStage!()
+      throw new Error('ENOSPC')
+    })
+    await vi.waitFor(() => expect(m.told).toEqual([{ type: 'harnessd:staged', ptyVersion: '0.11.0' }]))
+    m.sent()()
+    await expect(handover).rejects.toThrow('ENOSPC')
+    expect(m.calls).toContain(`exit ${SERVICE_EXIT_RESTART}`)
+  }))
+
+  it('runs no terminal host poller off Windows, or under a master that would not judge it', async () => {
+    const plain = make()
+    runUpdaterService(undefined, { ...plain.deps, ...plain.windows }).stop()
+    expect(plain.pty()).toBeNull()
+    expect(plain.cli().beforeStage).toBeUndefined()
+    await judgingPty(() => {
+      const linux = make()
+      runUpdaterService(undefined, linux.deps).stop()
+      expect(linux.cli().beforeStage).toBeUndefined()
+    })
+    expect(processUpdaterDeps('linux').startPty).toBeUndefined()
+    expect(processUpdaterDeps('win32', join(tmpdir(), 'x', 'cli')).ptyRootDir).toBe(join(tmpdir(), 'x'))
   })
 
   it('stages under the spawn lock, saying who holds it while it waits', async () => {

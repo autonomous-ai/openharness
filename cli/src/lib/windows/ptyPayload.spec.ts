@@ -5,7 +5,7 @@ import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DigestMismatchError } from '../selfUpdate.js'
 import {
-  PTY_PAYLOAD_FILES, PtyPayloadRefused, fetchPtyEntry, preparePtyPayload, ptyManifestUrl, ptyPlatformKey, ptyUpdateWanted, sweepStagingFolders, type PtyEntry,
+  PTY_PAYLOAD_FILES, PtyPayloadRefused, fetchPtyEntry, preparePtyPayload, ptyManifestUrl, ptyPlatformKey, probeVersionLine, ptyUpdateWanted, sweepStagingFolders, type PtyEntry,
 } from './ptyPayload.js'
 
 let tmp: string
@@ -55,7 +55,8 @@ describe('ptyUpdateWanted', () => {
   })
   it('a dev CLI never updates', () => expect(ptyUpdateWanted(entry, { pty: '0.10.0', cli: '1.2.3-dev.abc' }, [])).toBe(false))
   it('a rejected version is not', () => expect(ptyUpdateWanted(entry, { pty: '0.10.0', cli }, ['0.11.0'])).toBe(false))
-  it('no installed pty wants any', () => expect(ptyUpdateWanted(entry, { pty: null, cli }, [])).toBe(true))
+  // Without a current-pty there is no previous version for probation to roll back to (install.ps1 installs the first).
+  it('no installed pty wants none', () => expect(ptyUpdateWanted(entry, { pty: null, cli }, [])).toBe(false))
 })
 
 describe('preparePtyPayload', () => {
@@ -115,6 +116,18 @@ describe('preparePtyPayload failure kinds', () => {
   it('a probe that rejects is a refusal', async () => {
     await expect(run({ probe: async () => { throw new Error('exit 1') } })).rejects.toBeInstanceOf(PtyPayloadRefused)
     expect(leftovers()).toEqual([])
+  })
+})
+
+describe('probeVersionLine', () => {
+  // The same `<bin> version` run as ptyHost/launch.ts binaryVersion's (one implementation, 5 s, hidden).
+  it.skipIf(process.platform === 'win32')('parses the last line a binary prints, and rejects one that fails', async () => {
+    const good = join(tmp, 'good')
+    writeFileSync(good, '#!/bin/sh\necho "starting"\necho \'{"version":"0.11.0"}\'\n', { mode: 0o755 })
+    await expect(probeVersionLine(good)).resolves.toEqual({ version: '0.11.0' })
+    const bad = join(tmp, 'bad')
+    writeFileSync(bad, '#!/bin/sh\nexit 3\n', { mode: 0o755 })
+    await expect(probeVersionLine(bad)).rejects.toThrow()
   })
 })
 

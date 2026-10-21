@@ -1,6 +1,6 @@
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from './config/env.js'
 import { PROBE_ANSWER } from './harnessd/reexec.js'
@@ -418,6 +418,31 @@ describe('starting the master', () => {
     expect((runMaster.mock.calls[0][0] as { updater: boolean }).updater).toBe(true)
     expect(LEAN_DIR).toMatch(/[\\/]lean$/)
     expect(LEAN_OFF_FILE).toMatch(/[\\/]lean-off$/)
+  })
+
+  it('on Windows, judges a terminal host on probation with the build: unjudged at start, rolled back, kept', () => {
+    // The suite's own home (config/testIsolation.ts): the install root the CLI folder sits in.
+    const root = dirname(env.ADAPTER_CLI_DIR)
+    const ptyRoot = join(root, 'runtime', 'pty')
+    try {
+      mkdirSync(join(ptyRoot, '0.10.0'), { recursive: true })
+      writeFileSync(join(ptyRoot, '0.10.0', 'harness-pty.exe'), 'old')
+      writeFileSync(join(ptyRoot, 'current-pty'), '0.11.0')
+      writeFileSync(join(ptyRoot, 'pty-pending.json'), JSON.stringify({ version: '0.11.0', previous: '0.10.0' }))
+      runMaster.mockClear()
+      startMaster({ scriptPath: '/cli/cli.js' }, () => {}, 'win32', () => ({}))
+      const config = runMaster.mock.calls[0][0] as { restoreUpdate(): void; confirmUpdate(): void; unjudgedUpdate(bundle: string | null): string | null }
+      expect(config.unjudgedUpdate(null)).toBe('terminal host 0.11.0')
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      try { config.restoreUpdate() } finally { log.mockRestore() }
+      expect(readFileSync(join(ptyRoot, 'current-pty'), 'utf8').trim()).toBe('0.10.0')
+      expect(existsSync(join(ptyRoot, 'pty-pending.json'))).toBe(false)
+      expect(JSON.parse(readFileSync(join(ptyRoot, 'pty-rejected.json'), 'utf8'))).toEqual(['0.11.0'])
+      expect(config.unjudgedUpdate(null)).toBeNull()
+      writeFileSync(join(ptyRoot, 'pty-pending.json'), JSON.stringify({ version: '0.12.0', previous: '0.10.0' }))
+      config.confirmUpdate()
+      expect(existsSync(join(ptyRoot, 'pty-pending.json'))).toBe(false)
+    } finally { rmSync(join(root, 'runtime', 'pty'), { recursive: true, force: true }) }
   })
 
   it('keeps the services in the core when the core will have no local socket for them to reach it by', () => {

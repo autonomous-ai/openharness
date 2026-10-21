@@ -6,6 +6,7 @@
 import { execFile } from 'child_process'
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
+import { runVersionCommand } from '../ptyHost/launch.js'
 import { SUPPORTED_PTY_PROTOCOLS } from '../ptyHost/protocol.js'
 import {
   DigestMismatchError, MANIFEST_LIMITS, downloadVerified, fetchWithin, isLocalDevBuild, semverGt,
@@ -53,11 +54,12 @@ export async function fetchPtyEntry(url: string, key: string, limits: TransferLi
   return { version: e.version, url: e.url, sha256: e.sha256, size: e.size }
 }
 
-/** A machine with no installed host takes any entry; a dev CLI never updates, as for the CLI itself. */
+/** Only over an installed host: with no `current-pty` there is no version for probation to roll back to, and the
+ *  first host is install.ps1's to put in. A dev CLI never updates, as for the CLI itself. */
 export function ptyUpdateWanted(entry: PtyEntry, installed: { pty: string | null; cli: string }, rejected: readonly string[]): boolean {
   if (isLocalDevBuild(installed.cli)) return false
   if (rejected.includes(entry.version)) return false
-  return installed.pty === null || semverGt(entry.version, installed.pty)
+  return installed.pty !== null && semverGt(entry.version, installed.pty)
 }
 
 export interface PreparedPty { version: string; staging: string; protocol: number; features: string[] }
@@ -92,14 +94,10 @@ async function unzipWithTool(zip: Buffer, dest: string): Promise<void> {
   }
 }
 
-/** The line a binary prints for `version`, parsed. Argument array, never a shell. */
-export function probeVersionLine(binary: string): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    execFile(binary, ['version'], { timeout: CANARY_TIMEOUT_MS, windowsHide: true }, (err, stdout) => {
-      if (err) return reject(err)
-      try { resolve(JSON.parse(String(stdout).trim().split(/\r?\n/).filter(Boolean).pop() ?? '')) } catch (e) { reject(e) }
-    })
-  })
+/** The last line a binary prints for `version`, parsed. Run by ptyHost/launch.ts `runVersionCommand`, the one
+ *  `binaryVersion` uses: an argument array, never a shell, hidden, within the same 5 s. */
+export async function probeVersionLine(binary: string): Promise<unknown> {
+  return JSON.parse(runVersionCommand(binary).trim().split(/\r?\n/).filter(Boolean).pop() ?? '')
 }
 
 const DEFAULT_DEPS: PreparePtyDeps = { download: (ref) => downloadVerified(ref), unzip: unzipWithTool, probe: probeVersionLine }

@@ -382,9 +382,11 @@ export function runMaster(config: MasterConfig): Supervisor {
     setTimer: (run, ms) => setTimeout(run, ms),
     clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
     log,
-    // The updater staged a build: the core is asked to hand over for it, and the new core judged.
-    staged: (version) => supervisor?.updateStaged(version),
-  }, serviceOptions(env), { HARNESSD_SERVICE_TOKEN: token })
+    // The updater staged a build, a terminal host or both: the core is asked to hand over, and the new core judged.
+    staged: (staged) => supervisor?.updateStaged(staged),
+    // HARNESSD_JUDGES_PTY: this master takes a terminal host's staging and judges it on its probation (Windows,
+    // services/updaterProcess.ts). An updater under a master from before stages no host: no one would roll it back.
+  }, serviceOptions(env), { HARNESSD_SERVICE_TOKEN: token, HARNESSD_JUDGES_PTY: '1' })
   // The pid file is this master's to remove as it ends: the supervisor says so once it claimed it, and so does a claim
   // as this master hands over (Windows), which the supervisor does not know of.
   let releaseOnExit = false

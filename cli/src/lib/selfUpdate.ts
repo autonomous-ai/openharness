@@ -91,7 +91,8 @@ const liveSha256 = (dir: string, platform: NodeJS.Platform): string | null => {
   return file === null ? null : fileSha256(file)
 }
 
-function pendingVersion(dir: string): string | null {
+/** The version of a staged build not yet kept or rolled back (its pending note), or null when there is none. */
+export function pendingVersion(dir: string): string | null {
   return readPending(dir)?.version ?? null
 }
 
@@ -561,7 +562,7 @@ export function msUntilSlot(nowMs: number, slotSecond: number | undefined, inter
 
 /**
  * Poll on an interval; on the first build {@link shouldAutoUpdate} allows that also verifies and
- * passes its canary, STAGE it and call `onStaged(version)` exactly once, then stop polling (the
+ * passes its canary, STAGE it and call `onStaged(version, ptyVersion)` exactly once, then stop polling (the
  * caller restarts immediately). Every failure
  * (fetch/parse/sha/canary/disk) is swallowed and simply retried next tick — the daemon never crashes
  * on a bad update.
@@ -590,8 +591,12 @@ export function startSelfUpdater(opts: {
   /** The clock (tests). */
   now?: () => number
   /** Awaited: the section from the byte swap through whatever `onStaged` does (the daemon's restart
-   *  handoff) is ONE critical section, and the lock `withLock` takes must outlive all of it. */
-  onStaged: (version: string) => void | Promise<void>
+   *  handoff) is ONE critical section, and the lock `withLock` takes must outlive all of it. `ptyVersion`: the
+   *  terminal host `beforeStage` installed into the same handover, or null. */
+  onStaged: (version: string, ptyVersion: string | null) => void | Promise<void>
+  /** Called under the lock right before `stage`: what else goes into this handover, first (Windows: a terminal host
+   *  payload already prepared, ./windows/ptyUpdate.ts `readyToStage`). Its version reaches `onStaged`. */
+  beforeStage?: () => Promise<string | null>
   /** Wrap the swap + `onStaged` in a mutual exclusion with every other process that writes the
    *  bundle or spawns the daemon. Default: none (tests, and callers that hold their own). */
   withLock?: <T>(fn: () => Promise<T>) => Promise<T>
@@ -721,11 +726,13 @@ export function startSelfUpdater(opts: {
           console.log(`[update] ${ready.version} is no longer an update: the installed build is now ${pointedNow}. Nothing was staged.`)
           return
         }
+        // The terminal host first, in this same lock hold and handover (spec §5): one restart for both.
+        const ptyVersion = opts.beforeStage ? await opts.beforeStage() : null
         stage(opts.dir, ready.cliBuf, ready.notifyBuf, ready.version, platform)
         done = true
         stop()
         console.log(`[update] staged ${ready.version} — restarting now`)
-        await opts.onStaged(ready.version)
+        await opts.onStaged(ready.version, ptyVersion)
       }).catch((err: unknown) => {
         // A busy lock is not a failed check: the bytes are good and waiting, and the next tick tries
         // the swap again. Say so, or a minute of "check failed" reads as the updater being broken.

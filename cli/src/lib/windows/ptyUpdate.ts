@@ -1,0 +1,315 @@
+/**
+ * The terminal host's self-update on Windows (spec §5): the updater process (services/updaterProcess.ts) polls the PTY
+ * manifest beside the CLI's, downloads and canaries a promoted payload outside the lock (./ptyPayload.ts), installs it
+ * under the daemon spawn lock (./ptyInstall.ts) and tells harnessd's master, which hands over to a new core and judges
+ * it on the CLI's probation. When both have an update, the CLI's poller takes the prepared payload into its own lock
+ * hold and handover, first (`readyToStage`), so the daemon restarts once.
+ *
+ * Also the master's half: what its probation runs when the new core fails (`rollBackStaged`) or stays up
+ * (`keepStaged`), for the CLI build and the host alike, and the start-of-updater sweep of what installs leave behind.
+ * Nothing here calls a Windows API, so it is tested on every OS.
+ */
+import { existsSync, readdirSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { SpawnLockBusyError, describeSpawnLockFailure } from '../daemonSpawnLock.js'
+import { currentPtyVersion } from '../ptyHost/launch.js'
+import { REFUSED_RETRY_MAX_MS, msUntilSlot, type Poller } from '../selfUpdate.js'
+import {
+  BIN_FILES, PTY_PENDING, confirmPty, defaultPtyInstallFs, installPreparedPty, readPtyPending, rejectedPtyVersions, restorePty,
+  sweepAsideFiles, type PtyInstallFs, type PtyPending, type PtyRestore,
+} from './ptyInstall.js'
+import {
+  PtyPayloadRefused, fetchPtyEntry, preparePtyPayload, ptyUpdateWanted, sweepStagingFolders, type PreparedPty, type PtyEntry,
+} from './ptyPayload.js'
+
+export interface PtyUpdaterDeps {
+  fetchEntry: (url: string, key: string) => Promise<PtyEntry | null>
+  prepare: (entry: PtyEntry, runtimeDir: string) => Promise<PreparedPty>
+  install: (prepared: PreparedPty, rootDir: string) => boolean
+  /** Remove the staging folder of a payload that will not be installed. */
+  discard: (prepared: PreparedPty) => void
+  /** What the poller runs once, under the lock, before its first check. */
+  sweep: (rootDir: string, log: (line: string) => void) => void
+  now: () => number
+  log: (line: string) => void
+  error: (line: string) => void
+}
+
+const DEFAULT_DEPS: PtyUpdaterDeps = {
+  fetchEntry: (url, key) => fetchPtyEntry(url, key),
+  prepare: (entry, runtimeDir) => preparePtyPayload(entry, runtimeDir),
+  install: (prepared, rootDir) => installPreparedPty(prepared, rootDir),
+  discard: (prepared) => {
+    // A just-run canary can hold a file a moment; what is left is the next start's sweep's.
+    try { rmSync(prepared.staging, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }) } catch { /* swept later */ }
+  },
+  sweep: (rootDir, log) => sweepPtyLeftovers(rootDir, log),
+  now: () => Date.now(),
+  log: (line) => console.log(line),
+  error: (line) => console.error(line),
+}
+
+export type PtyPoller = Poller & {
+  /** Under a lock the caller already holds: install the payload already prepared and return its version, or null
+   *  when there is none (or it can no longer be installed). Never throws: the CLI's stage goes on either way. */
+  readyToStage(): Promise<string | null>
+}
+
+const message = (error: unknown): string => (error instanceof Error ? error.message : String(error))
+
+/**
+ * Poll on the CLI's schedule (scheduled ticks on the same slot), for a payload newer than `current-pty`. A download
+ * outside the lock; a refused payload backed off as the CLI's (`refuse` in lib/selfUpdate.ts `startSelfUpdater`),
+ * a transient failure retried at the next check; under the lock, asked again whether `current-pty` is still older
+ * (install.ps1 or `harness update` may have moved it), then installed and handed over (`onStaged`, awaited inside the
+ * lock). Nothing is checked while a version is on probation: the master keeps it or rolls it back first.
+ *
+ * A payload prepared at a check is installed on its own at the next one, not at once: the CLI's check runs on the same
+ * slot, and when it stages a build too it takes the payload into its handover (`readyToStage`), so the daemon restarts
+ * once for both, the host first. Each log line is said once per version.
+ */
+export function startPtyUpdater(opts: {
+  url: string
+  key: string
+  /** The install root: `bin\` and `runtime\pty\` are in it. */
+  rootDir: string
+  intervalMs: number
+  /** Wall-clock second the ticks land on, as the CLI's; omit or negative for a plain interval. */
+  slotSecond?: number
+  /** The CLI build installed: a development one never takes an update (lib/selfUpdate.ts `isLocalDevBuild`). */
+  installedCli: () => string
+  /** The daemon spawn lock, around the install and `onStaged`. */
+  withLock: <T>(fn: () => Promise<T>) => Promise<T>
+  onStaged: (ptyVersion: string) => void | Promise<void>
+  deps?: Partial<PtyUpdaterDeps>
+}): PtyPoller {
+  const d: PtyUpdaterDeps = { ...DEFAULT_DEPS, ...opts.deps }
+  const runtimeDir = join(opts.rootDir, 'runtime')
+  const marker = join(runtimeDir, 'pty', PTY_PENDING)
+  let timer: NodeJS.Timeout | null = null
+  let checking = false
+  let halted = false
+  // Downloaded, verified and canaried, waiting for the lock. `fresh`: prepared at this check, left for the CLI's.
+  let ready: { key: string; entry: PtyEntry; prepared: PreparedPty; fresh: boolean } | null = null
+  let refused: { key: string; tries: number; until: number } | null = null
+  const told = new Map<string, string>()
+  const once = (kind: string, version: string, say: () => void): void => {
+    if (told.get(kind) === version) return
+    told.set(kind, version)
+    say()
+  }
+
+  const stop = (): void => { if (timer) { clearTimeout(timer); timer = null } }
+  const schedule = (): void => {
+    stop()
+    timer = setTimeout(() => void tick(), msUntilSlot(d.now(), opts.slotSecond, opts.intervalMs))
+    timer.unref?.()
+  }
+  const finish = (): void => { halted = true; stop() }
+
+  const drop = (): void => {
+    if (ready) d.discard(ready.prepared)
+    ready = null
+  }
+  const refuse = (key: string, version: string, reason: string): void => {
+    const tries = refused?.key === key ? refused.tries + 1 : 1
+    const wait = Math.min(opts.intervalMs * 2 ** tries, REFUSED_RETRY_MAX_MS)
+    refused = { key, tries, until: d.now() + wait }
+    once('refused', version, () => d.error(`[update] terminal host ${version} was refused (${reason}) — not trying it again for ${wait >= 1000 ? `${Math.round(wait / 1000)} s` : `${wait} ms`}`))
+  }
+  /** Whether [entry] is still an update over what is installed now; said once when it no longer is. */
+  const wanted = (entry: PtyEntry): boolean => {
+    const installed = currentPtyVersion(runtimeDir)
+    if (ptyUpdateWanted(entry, { pty: installed, cli: opts.installedCli() }, rejectedPtyVersions(opts.rootDir))) return true
+    if (ready?.entry.version === entry.version) {
+      drop()
+      once('gone', entry.version, () => d.log(`[update] terminal host ${entry.version} is no longer an update: the installed host is now ${installed ?? 'none'}. Nothing was staged.`))
+    }
+    return false
+  }
+
+  /** Under the lock: install what is ready. Null when nothing was installed. */
+  const installReady = (): string | null => {
+    if (halted || !ready) return null
+    const { key, entry, prepared } = ready
+    // Another installer may have moved the pointer, or put a version on probation, since the download began.
+    if (!wanted(entry)) return null
+    if (existsSync(marker)) { drop(); return null }
+    // The install owns the staging folder from here, whatever happens to it.
+    ready = null
+    let installed: boolean
+    try {
+      installed = d.install(prepared, opts.rootDir)
+    } catch (error) {
+      d.discard(prepared)
+      if (error instanceof PtyPayloadRefused) { refuse(key, entry.version, error.reason); return null }
+      throw error
+    }
+    if (!installed) return null
+    finish()
+    d.log(`[update] staged terminal host ${entry.version} — handing over`)
+    return entry.version
+  }
+
+  // At the updater's start, before any check prepares a staging folder the sweep would take for a stale one.
+  const swept = opts.withLock(async () => { d.sweep(opts.rootDir, d.log) })
+    .catch((error: unknown) => d.error(`[update] could not sweep the terminal host's leftovers (${message(error)}) — the next start tries again`))
+
+  const tick = async (): Promise<void> => {
+    // Booked first, from the clock, as the CLI's: a slow download neither drifts the slot nor ends the chain.
+    schedule()
+    if (checking) return
+    checking = true
+    try {
+      await swept
+      if (halted) return
+      if (existsSync(marker)) return
+      const entry = await d.fetchEntry(opts.url, opts.key)
+      if (halted || !entry || !wanted(entry)) return
+      const key = `${entry.version} ${entry.sha256}`
+      if (ready && ready.key !== key) drop()
+      if (!ready) {
+        if (refused?.key === key && d.now() < refused.until) return
+        once('available', entry.version, () => d.log(`[update] newer terminal host available: ${currentPtyVersion(runtimeDir)} → ${entry.version}`))
+        let prepared: PreparedPty
+        try {
+          prepared = await d.prepare(entry, runtimeDir)
+        } catch (error) {
+          if (!(error instanceof PtyPayloadRefused)) throw error
+          refuse(key, entry.version, error.reason)
+          return
+        }
+        ready = { key, entry, prepared, fresh: true }
+        if (halted) { drop(); return }
+      }
+      if (ready.fresh) { ready.fresh = false; return }
+      const version = ready.entry.version
+      await opts.withLock(async () => {
+        const staged = installReady()
+        if (staged !== null) await opts.onStaged(staged)
+      }).catch((error: unknown) => {
+        // A busy lock is no failed check: the payload is good and waiting, and the next tick tries again.
+        if (!(error instanceof SpawnLockBusyError)) throw error
+        once('busy', version, () => d.log(`[update] terminal host ${version} is ready but the daemon spawn lock is ${describeSpawnLockFailure(error)} — trying again next check`))
+      })
+    } catch (error) {
+      d.error(`[update] terminal host check failed (will retry): ${message(error)}`)
+    } finally {
+      checking = false
+    }
+  }
+
+  schedule()
+  return {
+    stop: () => {
+      finish()
+      // A download under way finds `halted` and discards what it prepared; one already waiting goes now.
+      if (!checking) drop()
+    },
+    readyToStage: async () => {
+      const version = ready?.entry.version
+      try {
+        return installReady()
+      } catch (error) {
+        d.error(`[update] terminal host ${version} could not be installed (${message(error)}) — trying again next check`)
+        return null
+      }
+    },
+  }
+}
+
+/** The aside files (`<name>.old-<pid>-<ms>`) of bin\[name], newest first. */
+function asideFiles(bin: string, name: string): string[] {
+  const pattern = new RegExp(`^${name.replace(/[.]/g, '\\.')}\\.old-(\\d+)-(\\d+)$`)
+  let names: string[]
+  try { names = readdirSync(bin) } catch { return [] }
+  return names.map((n) => ({ n, m: pattern.exec(n) })).filter((x) => x.m)
+    .sort((a, b) => Number(b.m![2]) - Number(a.m![2]) || Number(b.m![1]) - Number(a.m![1])).map((x) => x.n)
+}
+
+interface PutBack { restored: Array<{ name: string; from: string }>; failed: Array<{ name: string; from: string; error: unknown }> }
+
+/**
+ * Put bin\[name] back from its newest aside file, for each of [names] that is missing and has one: a rollback whose
+ * copy back failed, undo and all, leaves the path missing and its last bytes aside (./ptyInstall.ts `PtyRestore`).
+ */
+export function putBackAside(rootDir: string, names: readonly string[], fs: Pick<PtyInstallFs, 'rename'> = defaultPtyInstallFs): PutBack {
+  const bin = join(rootDir, 'bin')
+  const result: PutBack = { restored: [], failed: [] }
+  for (const name of names) {
+    if (existsSync(join(bin, name))) continue
+    const from = asideFiles(bin, name)[0]
+    if (!from) continue
+    try {
+      fs.rename(join(bin, from), join(bin, name))
+      result.restored.push({ name, from })
+    } catch (error) {
+      result.failed.push({ name, from, error })
+    }
+  }
+  return result
+}
+
+/**
+ * What an updater sweeps as it starts, under the lock: staging folders an interrupted check left, and bin\'s aside and
+ * temporary files (./ptyInstall.ts `sweepAsideFiles`). A bin file that is missing is put back from its aside file
+ * first; while one cannot be, nothing in bin\ is swept, as its aside file holds the only copy of its bytes.
+ */
+export function sweepPtyLeftovers(rootDir: string, log: (line: string) => void, fs: Partial<PtyInstallFs> = {}): void {
+  const all: PtyInstallFs = { ...defaultPtyInstallFs, ...fs }
+  sweepStagingFolders(join(rootDir, 'runtime'))
+  const put = putBackAside(rootDir, BIN_FILES, all)
+  for (const { name, from } of put.restored) log(`[update] put bin\\${name} back from ${from}`)
+  for (const { name, from, error } of put.failed) {
+    log(`[update] bin\\${name} is missing and ${from} could not be put back (${message(error)}) — nothing is swept until it is`)
+  }
+  if (put.failed.length === 0) sweepAsideFiles(rootDir, all)
+}
+
+/**
+ * The master's rollback (its probation's `restoreUpdate`): the CLI build only when one is pending (Windows; off it
+ * there is no host payload, and the CLI is restored as it always was), and the host whenever `pty-pending.json`
+ * exists. Never throws: the supervisor calls it on its way to the next core.
+ */
+export function rollBackStaged(o: {
+  cliPending: () => boolean
+  restoreCli: () => void
+  /** The install root on Windows; null elsewhere. */
+  ptyRoot: string | null
+  log: (line: string) => void
+  restorePty?: (rootDir: string) => PtyRestore
+  readPending?: (rootDir: string) => PtyPending | null
+}): void {
+  if (o.ptyRoot !== null) {
+    const root = o.ptyRoot
+    const pending = (o.readPending ?? readPtyPending)(root)
+    if (pending || existsSync(join(root, 'runtime', 'pty', PTY_PENDING))) {
+      try {
+        const result = (o.restorePty ?? restorePty)(root)
+        if (pending && result.found) {
+          o.log(result.pointer
+            ? `[harnessd] terminal host ${pending.version} did not come back healthy — back to ${pending.previous}`
+            : `[harnessd] terminal host ${pending.version} did not come back healthy — rejected, but ${pending.previous} is no longer there to go back to`)
+        }
+        // Before anything sweeps: the aside file is the only copy of that path's bytes.
+        const put = putBackAside(root, result.missing)
+        for (const { name, from } of put.restored) o.log(`[harnessd] put bin\\${name} back from ${from}`)
+        for (const { name, from, error } of put.failed) {
+          o.log(`[harnessd] bin\\${name} is missing and ${from} could not be put back (${message(error)}) — the updater sweeps nothing until it is`)
+        }
+      } catch (error) {
+        o.log(`[harnessd] could not roll terminal host ${pending?.version ?? '(unreadable marker)'} back (${message(error)}) — the next probation tries again`)
+      }
+    }
+  }
+  if (o.ptyRoot === null || o.cliPending()) o.restoreCli()
+}
+
+/** The master's keep (its probation's `confirmUpdate`): the CLI build and the host both stay. */
+export function keepStaged(o: { confirmCli: () => void; ptyRoot: string | null; confirmPty?: (rootDir: string) => void }): void {
+  o.confirmCli()
+  if (o.ptyRoot === null) return
+  try {
+    (o.confirmPty ?? confirmPty)(o.ptyRoot)
+  } catch { /* the marker stays: the host is judged again with the next probation */ }
+}

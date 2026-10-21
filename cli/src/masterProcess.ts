@@ -28,7 +28,9 @@ import { currentCli, harnessLaunchPath } from './lib/windows/installLayout.js'
 import { launchDetached } from './lib/windows/launcher.js'
 import { leanFingerprint, readLeanBundle, releaseLeanClaim, writeLeanBundle, type LeanBundle } from './harnessd/leanBundle.js'
 import { ts } from './lib/log.js'
-import { confirm as confirmUpdate, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
+import { confirm as confirmUpdate, pendingVersion, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
+import { readPtyPending } from './lib/windows/ptyInstall.js'
+import { keepStaged, rollBackStaged } from './lib/windows/ptyUpdate.js'
 import { VERSION } from './version.js'
 
 /** Where a master re-executing on a new bundle leaves word of it, until that master's core is up. */
@@ -241,6 +243,8 @@ export function startMaster(
   // Windows, before the master says anything: harness-launch.exe gave it no output, and its console is the daemon's log
   // from here on, `masterEnv`'s line among the rest.
   const windowsConfig = platform === 'win32' ? windows() : {}
+  // The install root a terminal host payload is installed in (lib/windows/ptyInstall.ts); none elsewhere.
+  const ptyRoot = platform === 'win32' ? dirname(env.ADAPTER_CLI_DIR) : null
   return runMaster({
     env: masterEnv(process.env, unixSocketPath(env.ADAPTER_DATA_DIR, env.PORT), undefined, platform),
     nodePath: baseNode(process.execPath),
@@ -251,11 +255,20 @@ export function startMaster(
     pidFile: PID_FILE,
     statusFile: HARNESSD_STATUS_FILE,
     logFile: DAEMON_LOG_FILE,
-    restoreUpdate: () => restoreUpdate(env.ADAPTER_CLI_DIR),
-    confirmUpdate: () => confirmUpdate(env.ADAPTER_CLI_DIR),
+    // One probation for whatever the updater staged: the CLI build, the terminal host (Windows), or both.
+    restoreUpdate: () => rollBackStaged({
+      cliPending: () => pendingVersion(env.ADAPTER_CLI_DIR) !== null, restoreCli: () => restoreUpdate(env.ADAPTER_CLI_DIR),
+      ptyRoot, log: (line) => console.log(`${ts()} ${line}`),
+    }),
+    confirmUpdate: () => keepStaged({ confirmCli: () => confirmUpdate(env.ADAPTER_CLI_DIR), ptyRoot }),
     version: VERSION,
     reexecMarkerFile: HARNESSD_REEXEC_FILE,
-    unjudgedUpdate: (bundle) => unjudgedUpdate(env.ADAPTER_CLI_DIR, bundle),
+    // A host still on probation when the master judging it died (a power cut) is judged by the first core too: left
+    // unjudged, its marker would hold every later host update back.
+    unjudgedUpdate: (bundle) => {
+      const host = ptyRoot === null ? null : readPtyPending(ptyRoot)
+      return unjudgedUpdate(env.ADAPTER_CLI_DIR, bundle) ?? (host ? `terminal host ${host.version}` : null)
+    },
     // The updater runs for the installed copy alone (lib/installedCopy.ts), beside the core, never in it.
     updater: !env.ADAPTER_UPDATE_DISABLE && isInstalledCopy(start.scriptPath, env.ADAPTER_CLI_DIR),
     // A master that ends cleanly gives up its claim on its lean bundle, so the next one to start can

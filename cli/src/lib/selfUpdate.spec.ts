@@ -168,6 +168,34 @@ describe('startSelfUpdater', () => {
     expect(events).toEqual(['lock', 'staged:9.9.9', 'handoff-done', 'unlock'])
   })
 
+  it('beforeStage runs under the lock before stage, and its version reaches onStaged', async () => {
+    serveUpdate()
+    const dir = tempDir()
+    const events: string[] = []
+    let locked = false
+    const staged: Array<[string, string | null]> = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir, intervalMs: 20,
+      withLock: async (fn) => { locked = true; try { return await fn() } finally { locked = false } },
+      // The terminal host goes first, in the same lock hold: the CLI is not on disk yet.
+      beforeStage: async () => { events.push(`before ${locked ? 'locked' : 'unlocked'} ${existsSync(join(dir, 'cli.js')) ? 'staged' : 'unstaged'}`); return '0.11.0' },
+      onStaged: (version, ptyVersion) => { staged.push([version, ptyVersion]) },
+    })
+    await vi.waitFor(() => expect(staged).toEqual([['9.9.9', '0.11.0']]), { timeout: 5_000 })
+    poller.stop()
+    expect(events).toEqual(['before locked unstaged'])
+    // Without one, the second argument is null.
+    serveUpdate()
+    const other = tempDir()
+    const alone: Array<[string, string | null]> = []
+    const plain = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: other, intervalMs: 20,
+      onStaged: (version, ptyVersion) => { alone.push([version, ptyVersion]) },
+    })
+    await vi.waitFor(() => expect(alone).toEqual([['9.9.9', null]]), { timeout: 5_000 })
+    plain.stop()
+  })
+
   it('stopped while a check is under way, swaps nothing and hands nothing over', async () => {
     // A daemon shutting down (`harness stop`, a sign-out) while the updater waits on a download or a
     // canary. Here the canary: the build answers after a moment, and the stop lands before it does.
