@@ -8500,7 +8500,11 @@ class AppNotifier extends ChangeNotifier {
           change,
           'handoff refused (${failure.code}); the old agent keeps running',
         );
-        return waiting;
+        return agentHandoffHeldMessage(
+          failure.code,
+          failure.hold,
+          engineIdentity(source.engine).label,
+        );
       }
       _logChange(
         change,

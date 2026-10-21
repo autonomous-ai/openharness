@@ -79,6 +79,23 @@ describe('exact resume uses complete native evidence', () => {
     })
     await expect(repair.findResumedTranscript('claude', ID)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   })
+  // A working Claude Code appends to its transcript all the time. The readability check demanded an unchanged size, so a
+  // busy session was held on every pass and Change agent refused it (a lamp-tasks agent, 2026-10-21).
+  it('accepts a transcript its engine appends to while it is checked, but not one replaced by another file', async () => {
+    const transcript = claude()
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+    vi.mocked(fs.open).mockImplementation(async (name, flags, mode) => {
+      if (String(name) === transcript) await actual.appendFile(transcript, '{"type":"assistant"}\n')
+      return actual.open(name, flags, mode)
+    })
+    await expect(repair.findResumedTranscript('claude', ID)).resolves.toBe(transcript)
+    vi.mocked(fs.open).mockImplementation(async (name, flags, mode) => {
+      // Moved aside, not deleted: Linux hands a freed inode straight to the next file, which would look like the same one.
+      if (String(name) === transcript) { renameSync(transcript, `${transcript}.old`); writeFileSync(transcript, '{}\n') }
+      return actual.open(name, flags, mode)
+    })
+    await expect(repair.findResumedTranscript('claude', ID)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+  })
   it('uses the Codex header id rather than a coincidental filename substring', async () => {
     codex('wrong', OTHER)
     await expect(repair.findResumedTranscript('codex', ID)).resolves.toBeNull()

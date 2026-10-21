@@ -48,9 +48,11 @@ export interface PreparedHandoff {
 /** In process this closure belongs to the trusted service request handler. Across processes
  * only the routed request id travels; core reconstructs its own live request witness. */
 export type HandoffPermit = { requestId?: string; current(request: HandoffIntent): boolean }
+/** Why an identity hold will not clear by retrying, as a code the reply may carry: PROGRAM_REPLACED needs a restart. */
+export type HandoffHold = 'PROGRAM_REPLACED'
 export class HandoffError extends Error {
   constructor(readonly code: 'UNKNOWN_AGENT' | 'NO_PROJECT' | 'BAD_CHANGE_ID' | 'BUSY' | 'TIMEOUT'
-    | 'IDENTITY_UNAVAILABLE' | 'HANDOFF_UNAVAILABLE' | 'CHANGE_CONFLICT') {
+    | 'IDENTITY_UNAVAILABLE' | 'HANDOFF_UNAVAILABLE' | 'CHANGE_CONFLICT', readonly hold?: HandoffHold) {
     super(`handoff: ${code}`)
     this.name = 'HandoffError'
   }

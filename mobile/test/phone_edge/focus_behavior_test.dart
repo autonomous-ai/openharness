@@ -1168,7 +1168,7 @@ void main() {
 
       expect(find.text('Rename'), findsNothing, reason: 'the menu went');
       expect(
-        find.text('Waiting for the conversation handoff. Try switching again.'),
+        find.text('Preparing the handoff took too long. Try switching again.'),
         findsOneWidget,
       );
       expect(find.text('switching to Codex…'), findsNothing);

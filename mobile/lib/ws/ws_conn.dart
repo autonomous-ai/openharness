@@ -66,6 +66,7 @@ class WsRequestFailure implements Exception {
     required this.responseType,
     required this.code,
     this.detail,
+    this.hold,
   });
 
   /// The frame that carried the refusal — `agent_create_result`, say.
@@ -77,6 +78,10 @@ class WsRequestFailure implements Exception {
   /// The underlying cause behind the code, when the peer sends one — the tmux message behind
   /// SPAWN_FAILED. Already reads as a sentence; prefer it to anything rewritten from [code].
   final String? detail;
+
+  /// A code naming why the peer holds the request, when it sends one — `PROGRAM_REPLACED` from a
+  /// Change agent handoff. A code, never words to show: the caller picks its own sentence.
+  final String? hold;
 
   @override
   String toString() => detail == null || detail!.isEmpty
@@ -838,11 +843,13 @@ class WsConn {
         // message behind SPAWN_FAILED, say. Without it an error code alone sends the user to a log file
         // on a machine that is not the one in front of them.
         final detail = payload['detail'];
+        final hold = payload['hold'];
         pending.completer.completeError(
           WsRequestFailure(
             responseType: message['type'] as String? ?? 'unknown_result',
             code: '${payload['error']}',
             detail: detail is String && detail.isNotEmpty ? detail : null,
+            hold: hold is String && hold.isNotEmpty ? hold : null,
           ),
         );
       } else {

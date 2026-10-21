@@ -32,6 +32,7 @@
 import { HandoffError, handoffBaseName, handoffExcludeText, handoffSessionFact, type HandoffPermit, type PreparedHandoff, type NativeHandoffRead } from './handoffAuthority.js'
 import { readNativeHandoff } from './nativeHandoffRead.js'
 import { NativeFiles } from '../engines/kit/nativeFiles.js'
+import { REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
 import { nativeFileKey } from '../engines/kit/nativePaths.js'
 import { handoffGitRoute } from './handoffGit.js'
 import { readHandoffFile } from './handoffFiles.js'
@@ -543,7 +544,9 @@ export function prepareAgentHandoff(deps: HandoffDeps, req: HandoffRequest): Pro
     const session = found && structuredClone(found)
     if (expired()) throw new HandoffError('TIMEOUT')
     if (!session) throw new HandoffError('UNKNOWN_AGENT')
-    if (session.identityHold) throw new HandoffError('IDENTITY_UNAVAILABLE')
+    if (session.identityHold) {
+      throw new HandoffError('IDENTITY_UNAVAILABLE', session.identityHold.includes(REPLACED_PROGRAM) ? 'PROGRAM_REPLACED' : undefined)
+    }
     const cwd = session.cwd
     if (!cwd || !isAbsolute(cwd) || !isDirectory(cwd)) throw new HandoffError('NO_PROJECT')
     const running = inFlight.get(session.agentId)
