@@ -189,7 +189,7 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
           if (encrypted)
             'After the restart it waits for its password: unlock it from this phone near it, on its Wi-Fi "$hotspot".',
         ].join(' '),
-        confirmLabel: 'Update and restart',
+        confirmLabel: 'Update',
       );
       if (!confirmed || !mounted) return;
     }
@@ -234,6 +234,11 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
     final restartRequired =
         (_app.osStatus[_id]?['update'] as Map?)?['restartRequired'] == true;
     final computer = _app.harnessOsComputers[_id];
+    // Gone down for its restart, or offline to the account: what it last said, nothing to start.
+    final online =
+        !(_restarting && _wentDown) &&
+        _app.machines.where((m) => m.machineId == _id).firstOrNull?.status ==
+            'running';
     Text say(String text) => Text(text, style: tty.style(color: tty.dim));
 
     SettingsRow row(String key, String title) {
@@ -340,7 +345,9 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
                         ),
                       ),
                     const SizedBox(height: 20),
-                    if (_started.isEmpty)
+                    // Restarted and locked, or offline: nothing to update until it is back. An
+                    // encrypted one is unlocked from here.
+                    if (online && _started.isEmpty)
                       TtyPrimaryButton(
                         key: const Key('version-update'),
                         label: restartRequired && !available
@@ -356,10 +363,10 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
                             ? () => unawaited(_update())
                             : null,
                       ),
-                    if (_restarting && computer != null && computer.encrypted)
-                      TtyTextButton(
+                    if (!online && computer != null && computer.encrypted)
+                      TtyPrimaryButton(
                         key: const Key('version-unlock'),
-                        label: 'Unlock after the restart…',
+                        label: 'Unlock…',
                         onPressed: () => Navigator.of(context).push(
                           phoneRoute(
                             (_) => UnlockComputerPage(
