@@ -231,7 +231,7 @@ pub fn serve(home: &Path, history_limit: usize, reexec: bool) -> std::io::Result
     }
 }
 
-/// Move `pty-host-<P>.json` to `pty-host-<P>.json.stale`, when there is one.
+/// Move this build's `pty-host-<instance>.json` to `.json.stale`, when there is one.
 fn set_discovery_aside(run: &Path) {
     let file = crate::discovery::file_path(run);
     let mut aside = file.clone().into_os_string();
@@ -276,7 +276,7 @@ fn publish_and_serve<L: crate::transport::Listener>(
 ) -> std::io::Result<()> {
     let info = crate::server::HostInfo {
         token: uuid::Uuid::new_v4().to_string(),
-        instance: crate::discovery::instance(),
+        instance: crate::instance::current(),
         version: VERSION.to_owned(),
         pid: std::process::id(),
     };

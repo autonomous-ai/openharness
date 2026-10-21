@@ -72,7 +72,7 @@ fn a_hello_needs_the_auth_not_the_token_and_a_reflected_proof_is_refused() {
 fn discovery_names_the_host() {
     let (mut h, disc) = start();
     assert_eq!(disc["protocol"], PROTOCOL);
-    assert_eq!(disc["instance"], format!("p{PROTOCOL}"));
+    assert_eq!(disc["instance"], harness_pty::instance::current());
     assert_eq!(disc["version"], env!("CARGO_PKG_VERSION"));
     if disc["pid"] != h.child.id() {
         // On Windows a host started inside a job serves from a copy of itself started outside it;
@@ -90,7 +90,7 @@ fn discovery_names_the_host() {
         let endpoint = std::path::Path::new(&endpoint);
         assert_eq!(
             endpoint,
-            h.home.path().join(format!("run/pty-host-{PROTOCOL}.sock"))
+            harness_pty::instance::socket_path(&h.home.path().join("run"), &harness_pty::instance::current())
         );
         let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&discovery_file(h.home.path())), 0o600);
@@ -98,10 +98,10 @@ fn discovery_names_the_host() {
     }
     #[cfg(windows)]
     {
-        // `\\.\pipe\harness-pty-<16 hex of the user and home>-<16 random hex>-p<protocol>`.
+        // `\\.\pipe\harness-pty-<16 hex of the user and home>-<16 random hex>-<instance>`.
         let parts: Vec<&str> = endpoint
             .strip_prefix(r"\\.\pipe\harness-pty-")
-            .and_then(|rest| rest.strip_suffix(&format!("-p{PROTOCOL}")))
+            .and_then(|rest| rest.strip_suffix(&format!("-{}", harness_pty::instance::current())))
             .unwrap_or_else(|| panic!("{endpoint}"))
             .split('-')
             .collect();
@@ -124,7 +124,7 @@ fn discovery_names_the_host() {
     let mut line = String::new();
     BufReader::new(s).read_line(&mut line).unwrap();
     let v: serde_json::Value = serde_json::from_str(&line).unwrap();
-    assert_eq!(v["hello"]["instance"], format!("p{PROTOCOL}"));
+    assert_eq!(v["hello"]["instance"], harness_pty::instance::current());
     assert_eq!(v["hello"]["pid"], disc["pid"]);
 }
 
@@ -331,7 +331,7 @@ fn second_host_exits_cleanly() {
 
 /// The pane counter's ceiling: how many ids the hosts of a home have reserved.
 fn reserved(home: &std::path::Path) -> String {
-    std::fs::read_to_string(home.join(format!("run/pty-host-{PROTOCOL}.panes"))).unwrap()
+    std::fs::read_to_string(harness_pty::instance::run_file(&home.join("run"), &harness_pty::instance::current(), "panes")).unwrap()
 }
 
 #[test]
@@ -344,7 +344,7 @@ fn hosts_started_together_serve_once() {
         let run = home.path().join("run");
         std::fs::create_dir_all(&run).unwrap();
         drop(
-            std::os::unix::net::UnixListener::bind(run.join(format!("pty-host-{PROTOCOL}.sock")))
+            std::os::unix::net::UnixListener::bind(harness_pty::instance::socket_path(&run, &harness_pty::instance::current()))
                 .unwrap(),
         );
     }
@@ -427,11 +427,11 @@ fn a_squatter_on_the_endpoint_fails_the_start_and_the_discovery_file_is_set_asid
     let run = home.path().join("run");
     std::fs::create_dir_all(&run).unwrap();
     // A dead host's discovery file, naming the endpoint.
-    let file = run.join(format!("pty-host-{PROTOCOL}.json"));
+    let file = harness_pty::instance::run_file(&run, &harness_pty::instance::current(), "json");
     std::fs::write(&file, r#"{"stale":true}"#).unwrap();
     // Another process has the endpoint while no host holds the home's lock.
     let _squatter =
-        std::os::unix::net::UnixListener::bind(run.join(format!("pty-host-{PROTOCOL}.sock")))
+        std::os::unix::net::UnixListener::bind(harness_pty::instance::socket_path(&run, &harness_pty::instance::current()))
             .unwrap();
     // `--no-reexec`: the status is this host's own, not that of a first host that started it.
     let out = host_command(home.path())
@@ -715,7 +715,7 @@ fn stale_socket_is_replaced() {
     let run = home.path().join("run");
     std::fs::create_dir_all(&run).unwrap();
     // A socket file nobody listens on, as a crashed host leaves it.
-    let path = run.join(format!("pty-host-{PROTOCOL}.sock"));
+    let path = harness_pty::instance::socket_path(&run, &harness_pty::instance::current());
     drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
     // A child another test forks just now holds the listener until it execs: wait for refusal.
     let end = Instant::now() + Duration::from_secs(5);
@@ -904,7 +904,7 @@ fn children_see_harness_pane() {
         .to_string(),
     );
     let pane = created["pane"].as_str().unwrap().to_string();
-    let want = format!("hp=p{PROTOCOL}:{pane}.");
+    let want = format!("hp={}:{pane}.", harness_pty::instance::current());
     let end = Instant::now() + WAIT;
     loop {
         let cap = call(
@@ -1010,4 +1010,68 @@ fn bad_requests_get_error_replies() {
     );
     // The spawn itself may succeed (env execs the command): either an error or a pane that exits.
     assert!(v["ok"] == true || v["code"] == "spawn_failed", "{v}");
+}
+
+/// Two builds of one protocol serve one home side by side, each with its own discovery file.
+/// Runs only when `HARNESS_PTY_BIN_OLD` names a build of this source made with another
+/// `HARNESS_PTY_VERSION`; otherwise there is no second build to start.
+#[test]
+fn two_versions_serve_side_by_side() {
+    let Some(old) = std::env::var_os("HARNESS_PTY_BIN_OLD") else {
+        return;
+    };
+    // The other build says its own version; that, not a guess, names its discovery file.
+    let out = std::process::Command::new(&old).arg("version").output().unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let old_instance = harness_pty::instance::instance_name(
+        v["protocol"].as_u64().unwrap() as u32,
+        v["version"].as_str().unwrap(),
+    );
+    assert_ne!(old_instance, harness_pty::instance::current());
+
+    let home = tempfile::tempdir().unwrap();
+    let mut old_host = std::process::Command::new(&old);
+    old_host.args(["serve", "--home"]).arg(home.path());
+    let mut old_child = old_host.spawn().unwrap();
+    let mut new_child = host_command(home.path()).spawn().unwrap();
+
+    let run = home.path().join("run");
+    let read = |instance: &str| -> serde_json::Value {
+        let file = harness_pty::instance::run_file(&run, instance, "json");
+        let end = Instant::now() + WAIT;
+        loop {
+            if let Ok(bytes) = std::fs::read(&file)
+                && let Ok(disc) = serde_json::from_slice(&bytes)
+            {
+                return disc;
+            }
+            assert!(Instant::now() < end, "no discovery file {}", file.display());
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    let old_disc = read(&old_instance);
+    let new_disc = read(&harness_pty::instance::current());
+    let mut pids = vec![];
+    for (disc, instance) in [
+        (&old_disc, old_instance.clone()),
+        (&new_disc, harness_pty::instance::current()),
+    ] {
+        let s = dial(disc);
+        s.set_read_timeout(Some(WAIT)).unwrap();
+        let mut w = s.try_clone().unwrap();
+        writeln!(w, "{}", hello(disc["token"].as_str().unwrap(), "control")).unwrap();
+        let mut line = String::new();
+        BufReader::new(s).read_line(&mut line).unwrap();
+        let reply: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(reply["hello"]["instance"], instance, "{line}");
+        pids.push(disc["pid"].as_u64().unwrap() as u32);
+    }
+    assert_ne!(old_disc["endpoint"], new_disc["endpoint"]);
+    let _ = old_child.kill();
+    let _ = new_child.kill();
+    let _ = old_child.wait();
+    let _ = new_child.wait();
+    for pid in pids {
+        common::kill_pid(pid);
+    }
 }

@@ -2,9 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 
-/// The wire protocol this host speaks, fixed at build time. Each value is its own host instance
-/// (`p<PROTOCOL>`: its discovery file, endpoint, lock and pane ids), so a host of the next protocol
-/// starts beside a running one and the old one drains: the daemon lists, streams and controls its
+/// The wire protocol this host speaks, fixed at build time. Each (protocol, version) is its own
+/// instance (`p<PROTOCOL>-<tag>`, `instance.rs`: its discovery file, endpoint, lock and pane ids), so a
+/// host of another build starts beside a running one and the old one drains: the daemon lists, streams and controls its
 /// panes, makes new ones on the new host, and shuts the old one down once it has none
 /// (cli/src/lib/ptyHost/drain.ts).
 ///
