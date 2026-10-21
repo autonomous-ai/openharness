@@ -1,12 +1,12 @@
 import { admitMachineStart, machineContribution } from './machines.js'
 import { z } from 'zod'
 import {
-  activeWork, actorKey, agent, author, conversation, fail, person, stableId, numberConversations,
+  activeWork, actorKey, agent, author, conversation, fail, person, stableId, numberConversations, nextConversationNumber,
   type Actor, type Agent, type Author, type CommandEffects, type SuperTabState,
 } from './model.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSchema } from './routingPolicy.js'
-import { agentProjectId, groupProject, manageProject, mutableProjects, projectMembers, projectOf, readAgent, readConversation, readProject, sameProject } from './projects.js'
+import { agentProjectId, deleteProject, groupProject, manageProject, mutableProjects, projectMembers, projectOf, readAgent, readConversation, readProject, sameProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -48,6 +48,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('tab.routingPolicy'), policy: routingOverrideSchema.nullable() }).strict(),
   z.object({ type: z.literal('project.create'), name: title, visibility: z.enum(['public', 'private']), brief: z.string().trim().max(8000).default('') }).strict(),
   z.object({ type: z.literal('project.rename'), projectId: id, name: title }).strict(),
+  z.object({ type: z.literal('project.delete'), projectId: id }).strict(),
   z.object({ type: z.literal('project.sharing'), projectId: id, visibility: z.enum(['public', 'private']), memberIds: z.array(id).max(200) }).strict(),
   z.object({ type: z.literal('project.cadence'), projectId: id, minutes: z.union([z.literal(1), z.literal(5), z.literal(15), z.literal(30)]) }).strict(),
   z.object({ type: z.literal('project.report'), projectId: id, throughRevision: z.number().int().nonnegative().safe(), text: text.nullable() }).strict(),
@@ -230,6 +231,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       project.name = command.name
       break
     }
+    case 'project.delete':
+      deleteProject(state, actor, command.projectId)
+      break
     case 'project.sharing': {
       const project = manageProject(state, actor, command.projectId)
       project.members = projectMembers(state, command.memberIds)
@@ -269,11 +273,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     }
     case 'tab.rename':
-      controls(state, actor)
+      // Writable people manage the swarm even when its original project is
+      // gone. Agents retain the existing Lead-conversation authority.
+      if (actor.kind === 'agent') controls(state, actor)
       state.name = command.name
       break
     case 'tab.pause':
-      controls(state, actor)
+      if (actor.kind === 'agent') controls(state, actor)
       state.paused = command.paused
       break
     case 'tab.routingPolicy':
@@ -290,7 +296,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('BRIEF_REQUIRED', 'Delegated work needs a brief and acceptance checks.', 400)
       }
       const leadId = conversation(state, project.leadConversationId).leadId
-      const number = Math.max(0, ...state.conversations.map(c => c.number ?? 0)) + 1
+      const number = nextConversationNumber(state)
       state.conversations.push({ id: operationId, ...(state.projects ? { projectId: project.id } : {}),
         number, title: command.title, leadId, agentIds: leadId ? [leadId] : [],
         archived: false, brief: command.brief, assignment: null, lastMessageSequence: 0,

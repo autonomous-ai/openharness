@@ -69,6 +69,113 @@ afterAll(async () => {
   await replica?.stop()
 })
 
+describe('deleting abandoned swarm projects', () => {
+  it('deletes the project through the API, fences stale requests, and replays only the deletion receipt', async () => {
+    const { tab } = await fixture()
+    const createId = randomUUID()
+    const create = { type: 'project.create' as const, name: 'Abandoned private project', visibility: 'private' as const, brief: '' }
+    const { projectId, conversationId } = (await run(tab, create, owner, undefined, createId)).result as { projectId: string; conversationId: string }
+    const group = String((await run(tab, { type: 'conversation.create', projectId, title: 'Offline work', brief: '', checks: [] })).result.conversationId)
+    const send = { ...message('Private unfinished draft'), conversationId: group } as Command
+    const sendId = randomUUID()
+    await run(tab, send, owner, undefined, sendId)
+    await run(tab, { type: 'invite.create', email: 'abandoned@example.com', role: 'collaborator', conversationId })
+    const deleteId = randomUUID(), command = { type: 'project.delete' as const, projectId }
+    const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`,
+      headers: { authorization: `Bearer ${owner.sub}` }, payload: { operationId: deleteId, command } })
+    expect(response.statusCode).toBe(200)
+    expect(response.json().data.result).toEqual({})
+    expect(await run(tab, command, owner, undefined, deleteId)).toEqual(response.json().data)
+    const state = (await store.read(owner, tab)).state
+    expect(state.projects!.map(p => p.id)).toEqual(['lead'])
+    expect(state.conversations.map(c => c.id)).toEqual(['lead'])
+    expect(state.invitations).toEqual([])
+    for (const id of [conversationId, group]) {
+      await expect(store.messages(owner, tab, id, {})).rejects.toMatchObject({ code: 'NOT_FOUND' })
+      await expect(store.attempts(owner, tab, id)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    }
+    await expect(run(tab, send, owner, undefined, sendId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(run(tab, create, owner, undefined, createId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(run(tab, { type: 'project.rename', projectId, name: 'Revived' })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(run(tab, { type: 'agent.add', conversationId, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Late lead', configuration: config, lead: true })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect((await store.read(owner, tab)).state.projects!.map(p => p.id)).toEqual(['lead'])
+  })
+
+  it('allows an empty swarm and never assigns a deleted workgroup number again', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Empty swarm')).id
+    const old = (await run(tab, { type: 'conversation.create', title: 'Old work', brief: '', checks: [] })).result
+    await run(tab, { type: 'project.delete', projectId: 'lead' })
+    const empty = (await store.read(owner, tab)).state
+    expect(empty.projects).toEqual([])
+    expect(empty.conversations).toEqual([])
+    expect(empty.agents).toEqual([])
+    expect(empty.people).toHaveLength(1)
+    const projectId = String((await run(tab, { type: 'project.create', name: 'Fresh project', visibility: 'public', brief: '' })).result.projectId)
+    const next = (await run(tab, { type: 'conversation.create', projectId, title: 'Fresh work', brief: '', checks: [] })).result
+    expect(next.number).toBe(Number(old.number) + 1)
+    await expect(store.messages(owner, tab, String(old.conversationId), {})).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+
+  it('lets only the project owner delete it, and removal revokes receipt replay', async () => {
+    const { tab } = await fixture()
+    await invite(tab)
+    const publicId = String((await run(tab, { type: 'project.create', name: 'Peer project', visibility: 'public', brief: '' }, peer)).result.projectId)
+    const privateId = String((await run(tab, { type: 'project.create', name: 'Peer private project', visibility: 'private', brief: '' }, peer)).result.projectId)
+    await expect(run(tab, { type: 'project.delete', projectId: publicId })).rejects.toMatchObject({ code: 'PROJECT_OWNER_REQUIRED' })
+    await expect(run(tab, { type: 'project.delete', projectId: privateId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    const operationId = randomUUID(), command = { type: 'project.delete' as const, projectId: publicId }
+    const deleted = await run(tab, command, peer, undefined, operationId)
+    expect(await run(tab, command, peer, undefined, operationId)).toEqual(deleted)
+    await run(tab, { type: 'member.remove', userId: peer.sub })
+    await expect(run(tab, command, peer, undefined, operationId)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+  })
+
+  it('refuses pending starts and prevents a failed start from joining after deletion', async () => {
+    const { tab } = await fixture()
+    const { projectId, conversationId } = (await run(tab, { type: 'project.create', name: 'Failed start', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
+    const request = { conversationId, machineId: 'test-host', engine: 'codex', name: 'Builder', cwd: '/work', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    const startId = String((await run(tab, { type: 'agent.start', request })).result.startId)
+    await expect(run(tab, { type: 'project.delete', projectId })).rejects.toMatchObject({ code: 'STARTS_PENDING' })
+    await run(tab, { type: 'agent.startFailed', startId, error: 'The machine refused the prompt before launch.' })
+    await run(tab, { type: 'project.delete', projectId })
+    await expect(store.start(owner, tab, startId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(run(tab, { type: 'agent.started', startId, harnessId: randomUUID(), configuration: config })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+
+  it('does not erase a removed terminal’s private history restriction', async () => {
+    const { tab } = await fixture()
+    const { projectId, conversationId } = (await run(tab, { type: 'project.create', name: 'Private work', visibility: 'private', brief: '' })).result as { projectId: string; conversationId: string }
+    const harnessId = randomUUID()
+    const agentId = String((await run(tab, { type: 'agent.add', conversationId, machineId: 'test-host', harnessId,
+      name: 'Private lead', configuration: config, lead: true })).result.agentId)
+    const context = await store.native.open(owner, tab, { operationId: randomUUID(), conversationId, agentId })
+    await expect(run(tab, { type: 'project.delete', projectId })).rejects.toMatchObject({ code: 'PROJECT_HAS_AGENTS' })
+    await run(tab, { type: 'agent.remove', agentId })
+    await run(tab, { type: 'project.delete', projectId })
+    await expect(store.native.read(host, tab, context.contextId)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
+    expect(await store.mayObserve(owner, tab, 'test-host', harnessId, host.sub)).toBe(false)
+    await expect(run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId,
+      name: 'Moved lead', configuration: config, lead: false })).rejects.toMatchObject({ code: 'PROJECT_SESSION' })
+  })
+
+  it('serializes deletion against a late lead contribution', async () => {
+    const { tab } = await fixture()
+    const { projectId, conversationId } = (await run(tab, { type: 'project.create', name: 'Race', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
+    const results = await Promise.allSettled([
+      run(tab, { type: 'project.delete', projectId }),
+      run(tab, { type: 'agent.add', conversationId, machineId: 'test-host', harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true }),
+    ])
+    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter(r => r.status === 'rejected')).toHaveLength(1)
+    const state = (await store.read(owner, tab)).state
+    const exists = state.projects!.some(p => p.id === projectId)
+    expect(state.agents.some(a => a.projectId === projectId)).toBe(exists)
+    expect(state.conversations.some(c => c.id === conversationId)).toBe(exists)
+  })
+})
+
 describe('private swarm projects on the real control API', () => {
   it('uses one contributed machine across projects with a separate authorized checkout for each', async () => {
     const { tab } = await fixture()

@@ -291,7 +291,7 @@ void main() {
       '>Pilot',
     );
     await tester.pumpAndSettle();
-    expect(find.text('Closed Swarms'), findsWidgets);
+    expect(find.text('Recent Swarms'), findsWidgets);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
     expect(app.activeSwarm.superTabId, tab.superTabId);
@@ -312,10 +312,10 @@ void main() {
     await _close(first, tab);
     final app = _computer(catalog, store)..newSwarm(newTabPage: true);
     await mount(tester, app);
-    expect(find.text('Closed Swarms'), findsNothing);
+    expect(find.text('Recent Swarms'), findsNothing);
     await app.superTabs.refreshTabs();
     await tester.pump();
-    expect(find.text('Closed Swarms'), findsOneWidget);
+    expect(find.text('Recent Swarms'), findsOneWidget);
     await tester.tap(
       find.byKey(ValueKey('welcome-closed-super-tab-${tab.superTabId}')),
     );

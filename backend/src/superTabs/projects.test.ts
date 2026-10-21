@@ -83,4 +83,120 @@ describe('projects inside an invite-only swarm', () => {
     expect(projectsOf(f.state).map(p => p.updateMinutes)).toEqual([5, 15])
     expect(() => f.run({ type: 'project.cadence', projectId: p.projectId, minutes: 1 }, peer)).toThrow('unavailable')
   })
+
+  it('deletes an empty legacy project without recreating a fallback or reusing its workgroup numbers', () => {
+    const f = setup()
+    const old = f.run({ type: 'conversation.create', title: 'Abandoned', brief: '', checks: [] })
+    f.state.project = { machineId: 'machine', cwd: '/old', repositoryUrl: null }
+    const machine = { machineId: 'old', name: 'Old', contributorId: 'owner', membershipGeneration: 'swarm',
+      generation: 'g', cwd: '/old', engines: ['codex'], maxAgents: 2, paused: false }
+    f.state.machines = [machine, { ...machine, machineId: 'shared', scope: 'swarm' }]
+    f.run({ type: 'invite.create', email: 'new@example.com', role: 'collaborator', conversationId: 'lead' })
+    expect(f.run({ type: 'project.delete', projectId: 'lead' })).toEqual({})
+    expect(projectsOf(f.state)).toEqual([])
+    expect(f.state.conversations).toEqual([])
+    expect(f.state.invitations).toEqual([])
+    expect(f.state.project).toBeUndefined()
+    expect(f.state.machines?.map(m => m.machineId)).toEqual(['shared'])
+    expect(f.state.people).toHaveLength(2)
+    expect(visibleState(f.state, owner)).not.toHaveProperty('retiredConversationNumber')
+    expect(() => readConversation(f.state, owner, 'lead')).toThrow('unavailable')
+    const p = f.project('public')
+    const next = f.run({ type: 'conversation.create', projectId: p.projectId, title: 'New work', brief: '', checks: [] })
+    expect(next.number).toBe(Number(old.number) + 1)
+    expect(f.state.conversations.map(c => c.id)).not.toContain(old.conversationId)
+  })
+
+  it('requires the project owner and preserves private-project boundaries during deletion', () => {
+    const f = setup(), publicProject = f.project('public', peer), privateProject = f.project('private', peer)
+    expect(() => f.run({ type: 'project.delete', projectId: publicProject.projectId })).toThrow('Only the project owner')
+    expect(() => f.run({ type: 'project.delete', projectId: privateProject.projectId })).toThrow('unavailable')
+    f.state.people.find(p => p.id === 'peer')!.role = 'viewer'
+    expect(() => f.run({ type: 'project.delete', projectId: publicProject.projectId }, peer)).toThrow('read-only')
+    f.state.people.find(p => p.id === 'peer')!.role = 'collaborator'
+    f.run({ type: 'project.delete', projectId: publicProject.projectId }, peer)
+    expect(projectsOf(f.state).map(p => p.id)).toEqual(['lead', privateProject.projectId])
+  })
+
+  it('lets a person unpause an empty swarm and create its next project', () => {
+    const f = setup()
+    f.run({ type: 'tab.pause', paused: true })
+    f.run({ type: 'project.delete', projectId: 'lead' })
+    expect(projectsOf(f.state)).toEqual([])
+    expect(() => f.project()).toThrow('paused')
+    f.run({ type: 'tab.pause', paused: false }, peer)
+    const next = f.project('public')
+    expect(projectsOf(f.state).map(p => p.id)).toEqual([next.projectId])
+  })
+
+  it('keeps human swarm controls separate from private projects and rejects viewers', () => {
+    const f = setup(), privateProject = f.project('private', peer)
+    f.run({ type: 'project.delete', projectId: 'lead' })
+    f.run({ type: 'tab.rename', name: 'Renamed swarm' })
+    f.run({ type: 'tab.pause', paused: true })
+    expect(f.state.name).toBe('Renamed swarm')
+    expect(visibleState(f.state, owner).projects).toEqual([])
+    expect(() => readConversation(f.state, owner, privateProject.conversationId)).toThrow('unavailable')
+    f.state.people.find(p => p.id === 'peer')!.role = 'viewer'
+    expect(() => f.run({ type: 'tab.rename', name: 'Forbidden' }, peer)).toThrow('read-only')
+    expect(() => f.run({ type: 'tab.pause', paused: false }, peer)).toThrow('read-only')
+    expect(f.state.name).toBe('Renamed swarm')
+    expect(f.state.paused).toBe(true)
+  })
+
+  it('does not grant swarm controls to another project’s agent when the original Lead is deleted', () => {
+    const f = setup(), p = f.project()
+    const leadId = f.add('lead', 'original-lead'), workerId = f.add('lead', 'worker', false)
+    const otherId = f.add(p.conversationId, 'other-lead')
+    const actor = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host' })
+    f.run({ type: 'tab.rename', name: 'Lead renamed' }, actor(leadId))
+    f.run({ type: 'tab.pause', paused: true }, actor(leadId))
+    for (const command of [{ type: 'tab.rename', name: 'Forbidden' }, { type: 'tab.pause', paused: false }] as Command[]) {
+      expect(() => f.run(command, actor(workerId))).toThrow('coordinating lead')
+      expect(() => f.run(command, actor(otherId))).toThrow('unavailable')
+    }
+    f.run({ type: 'agent.remove', agentId: leadId })
+    f.run({ type: 'agent.remove', agentId: workerId })
+    f.run({ type: 'project.delete', projectId: 'lead' })
+    expect(() => f.run({ type: 'tab.rename', name: 'Forbidden' }, actor(otherId))).toThrow('unavailable')
+    expect(() => f.run({ type: 'tab.pause', paused: false }, actor(otherId))).toThrow('unavailable')
+    f.run({ type: 'tab.pause', paused: false })
+    expect(f.state.name).toBe('Lead renamed')
+  })
+
+  it('refuses any project agent, even after it leaves every workgroup', () => {
+    const f = setup(), p = f.project(), agentId = f.add(p.conversationId, 'idle')
+    f.run({ type: 'conversation.agent', conversationId: p.conversationId, agentId, present: false, lead: false })
+    expect(() => f.run({ type: 'project.delete', projectId: p.projectId })).toThrow('Stop and remove')
+    f.run({ type: 'agent.remove', agentId })
+    f.run({ type: 'project.delete', projectId: p.projectId })
+    expect(projectsOf(f.state).map(p => p.id)).toEqual(['lead'])
+  })
+
+  it.each(['queued', 'dispatched', 'settling'] as const)('refuses %s starts and removes only settled project history', phase => {
+    const f = setup(), p = f.project()
+    const request = { conversationId: p.conversationId, machineId: 'machine', engine: 'codex', name: 'Builder',
+      cwd: '/work', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    const startId = String(f.run({ type: 'agent.start', request }).startId)
+    const start = f.state.starts!.find(s => s.id === startId)!
+    start.dispatched = phase !== 'queued'
+    if (phase === 'settling') { start.poolGeneration = 'pool'; start.harnessId = 'native'; start.poolSettled = false }
+    expect(() => f.run({ type: 'project.delete', projectId: p.projectId })).toThrow('pending agent starts')
+    if (phase === 'settling') start.poolSettled = true
+    else f.run({ type: 'agent.startFailed', startId, error: 'The machine confirmed nothing started.' })
+    f.run({ type: 'project.delete', projectId: p.projectId })
+    expect(f.state.starts).toEqual([])
+    expect(() => f.run({ type: 'agent.started', startId, harnessId: 'late', configuration })).toThrow('unavailable')
+  })
+
+  it('keeps active work visible after its contributed agent is removed', () => {
+    const f = setup(), p = f.project(), agentId = f.add(p.conversationId, 'worker')
+    f.run({ type: 'work.define', conversationId: p.conversationId, brief: 'Finish the task',
+      checks: [{ description: 'Verified', independent: false }] })
+    f.run({ type: 'work.assign', conversationId: p.conversationId, agentId })
+    f.run({ type: 'agent.remove', agentId })
+    expect(() => f.run({ type: 'project.delete', projectId: p.projectId })).toThrow('active work')
+    expect(readConversation(f.state, owner, p.conversationId).assignment?.status).toBe('reconciling')
+  })
 })

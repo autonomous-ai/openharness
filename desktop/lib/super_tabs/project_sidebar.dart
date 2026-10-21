@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'model.dart';
@@ -34,37 +33,54 @@ class ProjectSidebar extends StatelessWidget {
         project != null &&
         groups.any((g) => g.id != project.leadConversationId);
     return Padding(
-      padding: EdgeInsets.only(left: project == null ? 40 : 0, bottom: 2),
+      padding: const EdgeInsets.only(bottom: 2),
       child: Material(
         color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
         borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
         clipBehavior: Clip.antiAlias,
-        child: Row(
-          children: [
-            if (project != null && hasChildren)
-              AppIconButton(
-                key: ValueKey('super-project-expand-${project.id}'),
-                icon: expanded ? AppIcons.chevronDown : AppIcons.chevronRight,
-                tooltip: '${expanded ? 'Collapse' : 'Expand'} ${project.name}',
-                onPressed: () => controller.toggleProject(project.id),
-              )
-            else if (project != null)
-              const SizedBox(width: 32),
-            Expanded(
-              child: Semantics(
-                label: project?.isPrivate == true ? 'Private project' : null,
-                selected: selected,
-                child: Tooltip(
-                  message: project?.name ?? group.label,
-                  child: InkWell(
-                    key: ValueKey('super-group-${group.id}'),
-                    onTap: () => onSelect(group.id),
-                    hoverColor: grid.AppSurface.hoverFill,
+        child: InkWell(
+          key: ValueKey('super-group-${group.id}'),
+          onTap: () => onSelect(group.id),
+          hoverColor: grid.AppSurface.hoverFill,
+          focusColor: grid.AppSurface.hoverFill,
+          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+          child: Row(
+            children: [
+              if (project != null && hasChildren)
+                IconButton(
+                  key: ValueKey('super-project-expand-${project.id}'),
+                  icon: Icon(
+                    expanded ? AppIcons.chevronDown : AppIcons.chevronRight,
+                    size: AppIcons.inlineSize,
+                  ),
+                  color: DesktopChrome.muted,
+                  // The row owns hover/press feedback. Keep the themed focus
+                  // boundary for this independent disclosure action.
+                  style: const ButtonStyle(
+                    minimumSize: WidgetStatePropertyAll(Size.square(32)),
+                    padding: WidgetStatePropertyAll(EdgeInsets.all(6)),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.standard,
+                    overlayColor: WidgetStatePropertyAll(Colors.transparent),
+                    backgroundColor: WidgetStatePropertyAll(Colors.transparent),
+                  ),
+                  tooltip:
+                      '${expanded ? 'Collapse' : 'Expand'} ${project.name}',
+                  onPressed: () => controller.toggleProject(project.id),
+                )
+              else if (project != null)
+                const SizedBox(width: 32),
+              Expanded(
+                child: Semantics(
+                  label: project?.isPrivate == true ? 'Private project' : null,
+                  selected: selected,
+                  child: Tooltip(
+                    message: project?.name ?? group.label,
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(minHeight: 36),
                       child: Padding(
                         padding: EdgeInsets.fromLTRB(
-                          project == null ? 12 : 4,
+                          project == null ? 44 : 4,
                           8,
                           12,
                           8,
@@ -125,8 +141,8 @@ class ProjectSidebar extends StatelessWidget {
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -140,20 +156,36 @@ class ProjectSidebar extends StatelessWidget {
       child: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 18, 16, 12),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                'Projects',
-                style: DesktopChrome.metadata().copyWith(
-                  fontWeight: FontWeight.w600,
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+            child: OutlinedButton(
+              key: const ValueKey('super-new-project'),
+              onPressed: controller.canWrite ? onNewProject : null,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: DesktopChrome.muted,
+                backgroundColor: Colors.transparent,
+                disabledBackgroundColor: Colors.transparent,
+                alignment: Alignment.centerLeft,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
                 ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+                ),
+                textStyle: DesktopChrome.control(),
+              ),
+              child: const Row(
+                children: [
+                  Icon(AppIcons.plus, size: 16),
+                  SizedBox(width: 8),
+                  Flexible(child: Text('New Project')),
+                ],
               ),
             ),
           ),
           Expanded(
             child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              padding: const EdgeInsets.all(8),
               children: [
                 for (final project
                     in snapshot?.projects ?? const <SuperTabProject>[])
@@ -172,35 +204,6 @@ class ProjectSidebar extends StatelessWidget {
                       ],
                     ),
               ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(8, 8, 8, 16),
-            child: TextButton(
-              key: const ValueKey('super-new-project'),
-              onPressed: controller.canWrite ? onNewProject : null,
-              style: TextButton.styleFrom(
-                foregroundColor: DesktopChrome.muted,
-                backgroundColor: Colors.transparent,
-                disabledBackgroundColor: Colors.transparent,
-                alignment: Alignment.centerLeft,
-                side: BorderSide.none,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-                ),
-                textStyle: DesktopChrome.control(),
-              ),
-              child: const Row(
-                children: [
-                  Icon(AppIcons.plus, size: 16),
-                  SizedBox(width: 8),
-                  Flexible(child: Text('New Project')),
-                ],
-              ),
             ),
           ),
         ],

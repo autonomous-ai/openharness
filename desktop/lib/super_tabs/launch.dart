@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../core/first_task.dart';
 import '../core/models.dart';
 import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
@@ -7,6 +8,7 @@ import '../state/harness_launch_integration.dart';
 import '../state/swarm.dart';
 import 'controller.dart';
 import 'model.dart';
+import 'launch_prompt.dart';
 
 /// Captures a conversation before opening New Harness. Its journal survives a
 /// closed form or process; a recovered launch only reads the native receipt.
@@ -56,6 +58,7 @@ class SuperTabLaunch {
     late final HarnessLaunchIntegration integration;
     integration = HarnessLaunchIntegration(
       creationId: saved['creationId'] as String? ?? superTabOperationId(),
+      initialTask: saved['initialMessage'] as String?,
       actionLabel: saved['newProject'] == true
           ? 'New Project'
           : saved['lead'] == true
@@ -191,28 +194,32 @@ class SuperTabLaunch {
       await persist();
     }
     app.superTabs.deferTabDiscovery(saved['tabId'] as String);
-    final command = 'harness super-tab --tab ${saved['tabId']}';
-    final prompt =
-        'You are an agent in a Harness Swarm. '
-        '${saved['lead'] == true ? 'You are this project’s coordinating lead. Start by discussing the person’s request; build after they authorize it.' : 'Join the conversation before beginning the person’s request.'}\n'
-        'First run `$command status`. Registration may still be finishing: if it reports AGENT_UNAVAILABLE, wait briefly and retry. '
-        'Do not start work or post until it confirms your participation.\n'
-        'Read the conversation: `$command messages ${saved['conversationId']}`. '
-        'Post explanations, questions and results with `$command post ${saved['conversationId']} "message" UNIQUE_OPERATION_ID [--reply-to MESSAGE_ID]`. '
-        'Reuse that operation ID and exact message after a lost reply. Your native terminal is not the shared conversation.\n'
-        'If sandbox restrictions block this local Harness command, request permission to run it outside the sandbox. '
-        'For work groups, assignments, acceptance evidence and messages to other agents, use `$command help`. '
-        '${saved['lead'] == true ? 'Before starting or assigning work, run `$command route GROUP JSON` with your difficulty and risk assessment, then start or assign its pick with the routeDecisionId it returns. To choose otherwise, pass overrideReason. If it answers NO_CANDIDATE, tell the person in the group why, using its reasons; do not guess another machine. ' : ''}'
-        'Use a group for an independently assignable outcome with acceptance checks. Reuse existing groups and agents. '
-        'Engine-native helper subagents do not need a group. Questions stay in the conversation where the work happens. '
-        'Write to the people in this tab like a helpful colleague. Answer first, in plain words and in the language they used. '
-        'Keep it short: a few sentences, under about 150 words, unless they ask for detail. '
-        'Do not show commands, message or sequence ids, field names or error codes. '
-        'Do not describe your own tools or permission prompts unless that blocks what they asked. '
-        'Answer each message once: post with --reply-to MESSAGE_ID. If you have already answered a message, do not post again. '
-        'When you hand over finished work, give the result with the revision and links they need.\n\n'
-        '${saved['lead'] == true ? 'Keep people informed in your project Lead conversation ${saved['conversationId']}: explain your plan, substantive progress, blockers and next steps. Consolidate new workgroup reports about every five minutes while active; the project setting controls scheduled requests. Answer human questions, serious blockers and completion immediately. A scheduled update request tells you which reports are new; read them and use project.report to post one useful update, or acknowledge with text:null when nothing merits repeating. Do not run an extra summarizer over every terminal turn. Workgroups you create belong to your project; each project has separate agent sessions. ' : ''}'
-        'The person’s request:\n${task.isEmpty ? 'Ask what they would like to work on.' : task}';
+    // Revalidate a journal's destination before native submission. A project
+    // deleted on another computer must not leave an unattached native session.
+    final current = await app.superTabs.map(
+      'GET',
+      '/api/super-tabs/${saved['tabId']}',
+    );
+    checkAccount();
+    final groups =
+        superTabMap(current['state'])['conversations'] as List? ?? const [];
+    if (!groups.any((g) => (g as Map)['id'] == saved['conversationId'])) {
+      if (saved['phase'] != 'starting' && saved['phase'] != 'joining') {
+        // Nothing can still be starting: reopening New Project should get a
+        // fresh destination instead of loading this deleted project forever.
+        await app.superTabs.storage.delete(key);
+        checkAccount();
+      }
+      throw const SuperTabFailure(
+        'PROJECT_UNAVAILABLE',
+        'This project is no longer available. Close this form and create a new project.',
+      );
+    }
+    final prompt = superTabLaunchPrompt(
+      tabId: saved['tabId'] as String,
+      conversationId: saved['conversationId'] as String,
+      lead: saved['lead'] == true,
+    );
     saved['launchPrompt'] = prompt;
     await persist();
     return prompt;
@@ -369,6 +376,11 @@ class SuperTabLaunch {
     final native = await app.recoverSuperTabCreation(
       machine,
       saved['creationId'] as String,
+      cancelIfMissing:
+          saved['phase'] == 'starting' &&
+          (saved['launchPrompt'] as String? ?? '').trim().length >
+              kFirstTaskMaxLength &&
+          (saved['files'] as List? ?? const []).isEmpty,
     );
     await complete(machine, native.id, recovered: native);
   }

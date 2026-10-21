@@ -1,4 +1,4 @@
-import { agent, author, conversation, fail, person, type Actor, type Agent, type Conversation, type SuperTabState } from './model.js'
+import { activeWork, agent, author, conversation, fail, nextConversationNumber, person, type Actor, type Agent, type Conversation, type SuperTabState } from './model.js'
 
 export type ProjectVisibility = 'public' | 'private'
 export interface SwarmProject {
@@ -91,10 +91,35 @@ export function manageProject(state: SuperTabState, actor: Actor, projectId: str
   const project = readProject(state, actor, projectId)
   author(state, actor, true)
   if (actor.kind !== 'person' || actor.userId !== project.ownerId) {
-    fail('PROJECT_OWNER_REQUIRED', 'Only the project owner can change its sharing.', 403)
+    fail('PROJECT_OWNER_REQUIRED', 'Only the project owner can manage this project.', 403)
   }
   mutableProjects(state)
   return projectOf(state, projectId)
+}
+
+/** Removes coordination only. Native sessions and pending starts must be
+ * reconciled first; their terminal-history privacy bindings remain permanent. */
+export function deleteProject(state: SuperTabState, actor: Actor, projectId: string): void {
+  const project = manageProject(state, actor, projectId)
+  const groups = state.conversations.filter(c => groupProject(state, c).id === project.id)
+  const groupIds = new Set(groups.map(c => c.id))
+  if (state.agents.some(a => agentProjectId(state, a) === project.id)) {
+    fail('PROJECT_HAS_AGENTS', 'Stop and remove this project’s agents before deleting it.')
+  }
+  if (state.starts?.some(s => groupIds.has(s.request.conversationId) && !s.error &&
+    (!s.harnessId || s.poolGeneration && !s.poolSettled))) {
+    fail('STARTS_PENDING', 'Resolve this project’s pending agent starts before deleting it.')
+  }
+  if (groups.some(activeWork)) fail('WORK_ACTIVE', 'Resolve this project’s active work before deleting it.')
+  state.retiredConversationNumber = nextConversationNumber(state) - 1
+  state.projects = state.projects!.filter(p => p.id !== project.id)
+  state.conversations = state.conversations.filter(c => !groupIds.has(c.id))
+  state.starts = state.starts?.filter(s => !groupIds.has(s.request.conversationId))
+  state.invitations = state.invitations.filter(i => !groupIds.has(i.conversationId))
+  if (project.id === 'lead') {
+    delete state.project
+    state.machines = state.machines?.filter(m => m.scope === 'swarm')
+  }
 }
 
 /** Capture current swarm membership so leaving and rejoining does not restore

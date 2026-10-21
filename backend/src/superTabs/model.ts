@@ -110,6 +110,8 @@ export interface SuperTabState {
   people: Person[]
   agents: Agent[]
   conversations: Conversation[]
+  /** Deleting a project never makes its old # references name new work. */
+  retiredConversationNumber?: number
   invitations: Invitation[]
   starts?: AgentStart[]
   machines?: import('./machines.js').ContributedMachine[]
@@ -165,11 +167,14 @@ export function conversation(state: SuperTabState, id: string): Conversation {
 /** Legacy groups keep their append order, including archived groups. Persisted
  * numbers are never reassigned; the store serializes concurrent additions. */
 export function numberConversations(state: SuperTabState): void {
-  let next = Math.max(0, ...state.conversations.map(c => c.number ?? 0)) + 1
+  let next = nextConversationNumber(state)
   const leads = new Set(projectsOf(state).map(p => p.leadConversationId))
   for (const group of state.conversations) {
     if (!leads.has(group.id) && group.number == null) group.number = next++
   }
+}
+export function nextConversationNumber(state: SuperTabState): number {
+  return Math.max(state.retiredConversationNumber ?? 0, 0, ...state.conversations.map(c => c.number ?? 0)) + 1
 }
 export function author(state: SuperTabState, actor: Actor, write = false): Author {
   if (actor.kind === 'person') {
@@ -200,6 +205,7 @@ export function visibleState(state: SuperTabState, actor: Actor): SuperTabState 
   const visible = structuredClone(state)
   delete visible.sharing
   numberConversations(visible)
+  delete visible.retiredConversationNumber
   if (visible.projects) {
     visible.projects = visible.projects.filter(p => canReadProject(state, actor, p))
     visible.conversations = visible.conversations.filter(c => canReadProject(state, actor, groupProject(state, c)))

@@ -1948,16 +1948,40 @@ class AppNotifier extends ChangeNotifier {
 
   Future<Agent> recoverSuperTabCreation(
     String machineId,
-    String creationId,
-  ) async {
-    final revision = _authRevision;
-    final result = await _conn(machineId).request(
+    String creationId, {
+    bool cancelIfMissing = false,
+  }) async {
+    final revision = _authRevision, account = currentUser?.id;
+    var result = await _conn(machineId).request(
       'agent_create_status',
       payload: {'creationId': creationId},
       timeout: const Duration(seconds: 10),
     );
-    if (!_authWorkCurrent(revision)) {
+    if (!_authWorkCurrent(revision) || currentUser?.id != account) {
       throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+    }
+    // Older Swarm bootstraps exceeded the native prompt limit, which rejects
+    // before writing a receipt. Fence that exact missing intent durably before
+    // allowing a retry; an uncertain/mismatched response must stay locked.
+    if (cancelIfMissing &&
+        result['creationId'] == creationId &&
+        result['state'] == 'missing') {
+      result = await _conn(machineId).request(
+        'agent_create_cancel',
+        payload: {'creationId': creationId},
+        timeout: const Duration(seconds: 10),
+      );
+      if (!_authWorkCurrent(revision) || currentUser?.id != account) {
+        throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+      }
+    }
+    if (cancelIfMissing &&
+        result['creationId'] == creationId &&
+        result['state'] == 'cancelled') {
+      throw const SuperTabFailure(
+        'CREATION_FAILED',
+        'The previous startup request was cancelled. Try again to start this project.',
+      );
     }
     if (result['creationId'] == creationId && result['state'] == 'failed') {
       final failure = result['failure'] is Map

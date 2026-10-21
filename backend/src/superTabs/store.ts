@@ -304,9 +304,10 @@ export class SuperTabStore {
         // A leave may be retried by its original author. Nothing except that operation's receipt is returned.
         const selfLeave = actor.kind === 'person' && command.type === 'member.remove' && command.userId === actor.userId
         if (!selfLeave) {
-          if (command.type === 'agent.remove' && !original.agents.some(a => a.id === command.agentId)) {
+          if (command.type === 'agent.remove' && !original.agents.some(a => a.id === command.agentId) ||
+              command.type === 'project.delete' && !projectsOf(original).some(p => p.id === command.projectId)) {
             // Retrying one's own completed removal returns only its empty
-            // receipt. The removed agent no longer exists to authorize against.
+            // receipt. The removed object no longer exists to authorize against.
             author(original, actor, true)
           } else {
             authorizeCommandAccess(original, actor, command)
@@ -320,6 +321,10 @@ export class SuperTabStore {
             const decision = await readDecision(tx, tabId, command.decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
             readConversation(original, actor, decision.conversationId)
           }
+        }
+        if (command.type === 'project.create' &&
+            !projectsOf(original).some(p => p.id === (prior.result as Record<string, unknown>).projectId)) {
+          fail('NOT_FOUND', 'This project was deleted. Create a new project.', 404)
         }
         return { revision: prior.revision, result: prior.result }
       }
@@ -379,6 +384,13 @@ export class SuperTabStore {
         await makeProjectPrivate(tx, effects.state, command.projectId)
       }
       await revokeNativeContexts(tx, original, effects.state)
+      const removedGroups = original.conversations.filter(c => !effects.state.conversations.some(n => n.id === c.id))
+      if (removedGroups.length) {
+        // Keep immutable history and operation receipts for audit/replay; all
+        // reads require a live conversation. No removed group can deliver work.
+        await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: { in: removedGroups.map(c => c.id) },
+          status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled' } })
+      }
       const revision = row.revision + 1
       if (command.type === 'agent.add' || command.type === 'agent.started' || command.type === 'agent.configuration') {
         for (const target of effects.state.agents) {

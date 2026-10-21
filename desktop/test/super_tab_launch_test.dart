@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/first_task.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
@@ -47,6 +48,9 @@ class SuperTabFixtureConnection extends WsConn {
   static const streamId = '00112233-4455-6677-8899-aabbccddeeff';
   Map<String, dynamic>? native;
   String nativeName = 'Lead';
+  bool cancelledCreation = false;
+  Future<Map<String, dynamic>> Function(String, Map<String, dynamic>)?
+  creationRecovery;
 
   Future<void> event(String type, Map<String, dynamic> payload) =>
       app.handleMachineEventForTest('m', {'type': type, 'payload': payload});
@@ -232,7 +236,29 @@ class SuperTabFixtureConnection extends WsConn {
         'agent': native,
       };
     }
+    if (type == 'agent_create_status' || type == 'agent_create_cancel') {
+      if (creationRecovery case final recover?) return recover(type, payload);
+    }
+    if (type == 'agent_create_cancel') {
+      cancelledCreation = native == null;
+      return {
+        'creationId': payload['creationId'],
+        'state': cancelledCreation ? 'cancelled' : 'created',
+        'agent': native,
+      };
+    }
     if (type == 'agent_create') {
+      // Match the native daemon: this refusal happens before a receipt or pane.
+      if ((payload['prompt'] as String? ?? '').trim().length >
+          kFirstTaskMaxLength) {
+        throw const WsRequestFailure(
+          responseType: 'agent_create_result',
+          code: 'PROMPT_TOO_LONG',
+          detail: 'First task exceeds the native limit.',
+          payload: {},
+        );
+      }
+      cancelledCreation = false;
       final records = store.values.entries.where(
         (e) => e.key.startsWith('super_tab.launch.'),
       );
@@ -263,7 +289,11 @@ class SuperTabFixtureConnection extends WsConn {
       }
       return {
         'creationId': payload['creationId'],
-        'state': native == null ? 'missing' : 'created',
+        'state': cancelledCreation
+            ? 'cancelled'
+            : native == null
+            ? 'missing'
+            : 'created',
         'agent': native,
       };
     }
@@ -316,6 +346,7 @@ class SuperTabLaunchFixture {
     String engine = 'codex',
     HarnessAttachments? attachments,
     bool newProject = false,
+    String? task = 'Discuss the architecture.',
   }) async {
     final integration = await SuperTabLaunch.open(
       app,
@@ -328,7 +359,7 @@ class SuperTabLaunchFixture {
       machineId: 'm',
       engine: engine,
       folder: '/work/project',
-      task: 'Discuss the architecture.',
+      task: task,
       integration: integration,
       attachments: attachments,
     );
@@ -592,7 +623,7 @@ void main() {
           f.connection.terminalCalls
               .singleWhere((c) => c.$1 == 'message')
               .$2['content'],
-          contains('Discuss the architecture.'),
+          contains('messages lead'),
         );
         expect(f.connection.terminalCalls.last.$1, 'terminal_close');
         expect(f.app.activeSwarm.panes, isEmpty);
@@ -681,10 +712,7 @@ void main() {
         expect(creates, hasLength(1));
         expect(creates.single.$2['engine'], engine);
         expect(f.connection.joins.single['command']['name'], 'Lead');
-        expect(
-          creates.single.$2['prompt'],
-          contains('Discuss the architecture.'),
-        );
+        expect(creates.single.$2['prompt'], contains('messages lead'));
         expect(
           creates.single.$2['prompt'],
           contains('harness super-tab --tab $tabId'),
@@ -728,7 +756,7 @@ void main() {
     expect(prompt, contains('like a helpful colleague'));
     expect(prompt, contains('under about 150 words'));
     expect(prompt, contains('UNIQUE_OPERATION_ID [--reply-to MESSAGE_ID]`'));
-    expect(prompt, contains('post with --reply-to MESSAGE_ID'));
+    expect(prompt, contains('answer each message once'));
     expect(prompt, contains('do not post again'));
     expect(prompt, isNot(contains('Report exact revisions')));
     expect(prompt, isNot(contains('email addresses')));

@@ -7862,11 +7862,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
         SwarmDestination(
           id: 'command:$_closedSuperTabCommand${tab.id}',
           title: tab.name,
-          detail: 'Closed Swarms',
+          detail: 'Recent Swarms',
           swarmId: null,
           current: false,
           commandId: '$_closedSuperTabCommand${tab.id}',
-          searchFields: ['closed', 'reopen', 'super tab'],
+          searchFields: ['recent', 'closed', 'reopen', 'super tab'],
         ),
     if (_canExecuteCommand('app.settings'))
       for (final group in settingsGroups)

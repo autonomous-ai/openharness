@@ -479,7 +479,7 @@ class NewHarnessController extends ChangeNotifier {
         : _autoProject
         ? _generatedProject()
         : const NewHarnessProject.fresh();
-    if (task != null) this.task = task;
+    this.task = this.integration?.initialTask ?? task ?? '';
     _worktree = draft?.worktree;
     _recoveredWorktreePreference = draft?.worktreePreference;
     _branchRef = draft?.branchRef;

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -67,8 +68,17 @@ void main() {
         findsNothing,
       );
       expect(find.text('Leads'), findsNothing);
+      expect(find.text('Projects'), findsNothing);
       expect(find.text('Humans'), findsOneWidget);
       expect(find.text('Agents'), findsOneWidget);
+      final create = find.byKey(const ValueKey('super-new-project'));
+      final project = find.byKey(const ValueKey('super-group-lead'));
+      expect(
+        tester.getBottomLeft(create).dy,
+        lessThan(tester.getTopLeft(project).dy),
+      );
+      expect(tester.getRect(create).left, tester.getRect(project).left);
+      expect(tester.getRect(create).right, tester.getRect(project).right);
       await tester.tap(find.byKey(const ValueKey('super-project-expand-lead')));
       await tester.pumpAndSettle();
       expect(c.selectedId, 'lead');
@@ -87,6 +97,59 @@ void main() {
       expect(creations, 1);
       expect(server.posts, isEmpty);
       expect(tester.takeException(), isNull);
+      await unmount(tester, c);
+    },
+  );
+
+  testWidgets(
+    'project and workgroup rows align while both project actions remain keyboard accessible',
+    (tester) async {
+      final server = projectsServer(), c = server.controller();
+      await mount(tester, c);
+      final project = find.byKey(const ValueKey('super-group-lead'));
+      final disclosure = find.byKey(
+        const ValueKey('super-project-expand-lead'),
+      );
+      final icon = find.descendant(of: disclosure, matching: find.byType(Icon));
+      Focus.of(tester.element(icon)).requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(c.expandedProjects, {'lead'});
+      expect(c.selectedId, 'lead');
+
+      final workgroup = find.byKey(const ValueKey('super-group-offline'));
+      final projectBounds = tester.getRect(project);
+      final workgroupBounds = tester.getRect(workgroup);
+      expect(workgroupBounds.left, projectBounds.left);
+      expect(workgroupBounds.right, projectBounds.right);
+      final projectName = find.descendant(
+        of: project,
+        matching: find.text('Lamp OS'),
+      );
+      expect(
+        tester.getTopLeft(find.text('#12 Offline editing')).dx -
+            tester.getTopLeft(projectName).dx,
+        8,
+      );
+
+      // A child row's formerly empty inset is part of its one click target.
+      await tester.tapAt(workgroupBounds.centerLeft + const Offset(8, 0));
+      await tester.pumpAndSettle();
+      expect(c.selectedId, 'offline');
+      Focus.of(tester.element(icon)).requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.space);
+      await tester.pumpAndSettle();
+      expect(c.expandedProjects, isEmpty);
+      expect(c.selectedId, 'offline');
+      Focus.of(tester.element(projectName)).requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(c.selectedId, 'lead');
+      expect(c.expandedProjects, isEmpty);
+      expect(server.posts, isEmpty);
       await unmount(tester, c);
     },
   );

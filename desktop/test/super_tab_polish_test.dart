@@ -393,6 +393,26 @@ void main() {
             ),
           );
         }
+        // Capture one row treatment across disclosure, label and nested work.
+        final mouse = await tester.createGesture(
+          kind: ui.PointerDeviceKind.mouse,
+        );
+        await mouse.addPointer(location: Offset.zero);
+        for (final target in [
+          ('project-hover', const ValueKey('super-group-lead')),
+          ('disclosure-hover', const ValueKey('super-project-expand-lead')),
+          ('workgroup-hover', const ValueKey('super-group-offline')),
+        ]) {
+          await mouse.moveTo(tester.getCenter(find.byKey(target.$2)));
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 200));
+          await shot('-${target.$1}');
+        }
+        c.select('offline');
+        await tester.pumpAndSettle();
+        await shot('-workgroup-selected');
+        await mouse.removePointer();
+        expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox());
         await c.flush();
         c.dispose();

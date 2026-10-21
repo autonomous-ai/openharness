@@ -223,7 +223,7 @@ void main() {
   );
 
   testWidgets(
-    'projects stay collapsed and creation stays in the sidebar footer',
+    'projects stay collapsed and creation remains in the sidebar',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1100, 700));
       addTearDown(() => tester.binding.setSurfaceSize(null));

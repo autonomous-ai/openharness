@@ -139,6 +139,22 @@ class ConversationServer {
           'brief': command['brief'] ?? '',
         });
         output.addAll({'projectId': id, 'conversationId': leadId});
+      } else if (command['type'] == 'project.delete') {
+        final projectId = command['projectId'];
+        final projects =
+            state['projects'] ??
+            [projectFixture('lead', state['name'] as String, 'lead')];
+        state['projects'] = (projects as List)
+            .where((p) => p['id'] != projectId)
+            .toList();
+        final groups = state['conversations'] as List;
+        final removed = groups
+            .where((g) => (g['projectId'] ?? 'lead') == projectId)
+            .map((g) => g['id'])
+            .toSet();
+        groups.removeWhere((g) => removed.contains(g['id']));
+        messages.removeWhere((m) => removed.contains(m['conversationId']));
+        revision++;
       } else if ([
         'project.rename',
         'project.cadence',

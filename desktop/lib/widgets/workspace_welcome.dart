@@ -423,18 +423,39 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
           padding: const EdgeInsets.only(bottom: 8, left: 10),
           child: Semantics(
             header: true,
-            child: Text('Closed Swarms', style: headerStyle),
+            child: Text('Recent Swarms', style: headerStyle),
           ),
         ),
         for (final tab in widget.closedSuperTabs)
           TextButton(
             key: ValueKey('welcome-closed-super-tab-${tab.id}'),
             onPressed: () => open(tab.id),
-            style: TextButton.styleFrom(
-              foregroundColor: color,
-              alignment: Alignment.centerLeft,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            ),
+            style:
+                TextButton.styleFrom(
+                  foregroundColor: color,
+                  backgroundColor: Colors.transparent,
+                  alignment: Alignment.centerLeft,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(
+                      grid.AppDesktop.rowRadius,
+                    ),
+                  ),
+                ).copyWith(
+                  side: WidgetStateProperty.resolveWith(
+                    (states) => BorderSide(
+                      width: 1.5,
+                      color: states.contains(WidgetState.focused)
+                          ? (MediaQuery.highContrastOf(context)
+                                ? DesktopChrome.accent
+                                : DesktopChrome.focusRing)
+                          : Colors.transparent,
+                    ),
+                  ),
+                ),
             child: Text(
               tab.name,
               maxLines: 1,

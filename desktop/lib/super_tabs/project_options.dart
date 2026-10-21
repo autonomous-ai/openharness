@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
@@ -13,6 +14,10 @@ Future<void> showProjectAction(
   SuperTabProject project,
   String action,
 ) async {
+  if (action == 'delete') {
+    await _deleteProject(context, c, project);
+    return;
+  }
   var name = project.name;
   var visibility = project.isPrivate ? 'private' : 'public';
   final members = project.memberIds.toSet();
@@ -203,6 +208,104 @@ Future<void> showProjectAction(
                     child: const Text('Save'),
                   ),
               ],
+            );
+          },
+        ),
+      ),
+    ),
+  );
+}
+
+Future<void> _deleteProject(
+  BuildContext context,
+  SuperTabController c,
+  SuperTabProject project,
+) async {
+  var busy = false;
+  await showAppDialog<void>(
+    context: context,
+    builder: (context) => SuperTabDialogScope(
+      controller: c,
+      // A confirmed deletion removes this project before command() returns.
+      // Keep the account fence while allowing its original receipt to settle.
+      child: StatefulBuilder(
+        builder: (context, update) => ListenableBuilder(
+          listenable: c,
+          builder: (context, _) {
+            final current = c.snapshot?.projects
+                .where((p) => p.id == project.id)
+                .firstOrNull;
+            final pending = c.pendingCommand;
+            final checking =
+                pending?['type'] == 'project.delete' &&
+                pending?['projectId'] == project.id;
+            final available = current != null || checking;
+            final canDelete =
+                !busy &&
+                !c.saving &&
+                c.canWrite &&
+                (checking ||
+                    !c.hasPendingAction && current?.ownerId == c.accountId);
+            return PopScope(
+              canPop: !busy,
+              child: AlertDialog(
+                title: Text(
+                  available ? 'Delete Project?' : 'Project unavailable',
+                ),
+                content: SizedBox(
+                  width: 400,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          available
+                              ? '“${current?.name ?? project.name}” and all of its conversations will be permanently deleted. This can’t be undone.'
+                              : 'This project is no longer available.',
+                          style: DesktopChrome.text(),
+                        ),
+                        if (c.operationError != null && available) ...[
+                          const SizedBox(height: 12),
+                          Text(
+                            c.operationError!,
+                            style: DesktopChrome.metadata(),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    autofocus: true,
+                    onPressed: busy ? null : () => Navigator.pop(context),
+                    child: Text(available && !checking ? 'Cancel' : 'Close'),
+                  ),
+                  if (available)
+                    FilledButton(
+                      style: grid.dangerButtonStyle(),
+                      onPressed: !canDelete
+                          ? null
+                          : () async {
+                              update(() => busy = true);
+                              final result = checking
+                                  ? await c.retry()
+                                  : await c.command({
+                                      'type': 'project.delete',
+                                      'projectId': project.id,
+                                    });
+                              if (!context.mounted) return;
+                              if (result != null) {
+                                Navigator.pop(context);
+                              } else {
+                                update(() => busy = false);
+                              }
+                            },
+                      child: Text(checking ? 'Retry' : 'Delete Project'),
+                    ),
+                ],
+              ),
             );
           },
         ),
