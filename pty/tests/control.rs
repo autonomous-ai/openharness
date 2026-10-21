@@ -90,7 +90,10 @@ fn discovery_names_the_host() {
         let endpoint = std::path::Path::new(&endpoint);
         assert_eq!(
             endpoint,
-            harness_pty::instance::socket_path(&h.home.path().join("run"), &harness_pty::instance::current())
+            harness_pty::instance::socket_path(
+                &h.home.path().join("run"),
+                &harness_pty::instance::current()
+            )
         );
         let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&discovery_file(h.home.path())), 0o600);
@@ -333,7 +336,12 @@ fn second_host_exits_cleanly() {
 
 /// The pane counter's ceiling: how many ids the hosts of a home have reserved.
 fn reserved(home: &std::path::Path) -> String {
-    std::fs::read_to_string(harness_pty::instance::run_file(&home.join("run"), &harness_pty::instance::current(), "panes")).unwrap()
+    std::fs::read_to_string(harness_pty::instance::run_file(
+        &home.join("run"),
+        &harness_pty::instance::current(),
+        "panes",
+    ))
+    .unwrap()
 }
 
 #[test]
@@ -346,8 +354,11 @@ fn hosts_started_together_serve_once() {
         let run = home.path().join("run");
         std::fs::create_dir_all(&run).unwrap();
         drop(
-            std::os::unix::net::UnixListener::bind(harness_pty::instance::socket_path(&run, &harness_pty::instance::current()))
-                .unwrap(),
+            std::os::unix::net::UnixListener::bind(harness_pty::instance::socket_path(
+                &run,
+                &harness_pty::instance::current(),
+            ))
+            .unwrap(),
         );
     }
     let mut children: Vec<_> = (0..8)
@@ -432,9 +443,11 @@ fn a_squatter_on_the_endpoint_fails_the_start_and_the_discovery_file_is_set_asid
     let file = harness_pty::instance::run_file(&run, &harness_pty::instance::current(), "json");
     std::fs::write(&file, r#"{"stale":true}"#).unwrap();
     // Another process has the endpoint while no host holds the home's lock.
-    let _squatter =
-        std::os::unix::net::UnixListener::bind(harness_pty::instance::socket_path(&run, &harness_pty::instance::current()))
-            .unwrap();
+    let _squatter = std::os::unix::net::UnixListener::bind(harness_pty::instance::socket_path(
+        &run,
+        &harness_pty::instance::current(),
+    ))
+    .unwrap();
     // `--no-reexec`: the status is this host's own, not that of a first host that started it.
     let out = host_command(home.path())
         .arg("--no-reexec")
@@ -489,9 +502,21 @@ fn a_pipe_name_is_new_each_start_and_a_squatter_on_an_old_one_is_passed_by() {
     };
     let new = second["endpoint"].as_str().unwrap();
     assert_ne!(new, old);
-    // Same user and home: only the random part differs.
-    let home_part = |name: &str| name.rsplitn(3, '-').nth(2).unwrap().to_owned();
-    assert_eq!(home_part(new), home_part(&old));
+    // Same user and home, and the same instance: only the random part differs. Parsed from the front, and the
+    // instance stripped whole: it has dashes of its own (`p2-0.4.31`).
+    let suffix = format!("-{}", harness_pty::instance::current());
+    let parts = |name: &str| -> (String, String) {
+        let rest = name
+            .strip_prefix(r"\\.\pipe\harness-pty-")
+            .and_then(|rest| rest.strip_suffix(&suffix))
+            .unwrap_or_else(|| panic!("{name} does not end in {suffix}"));
+        let (home, random) = rest.split_once('-').unwrap_or_else(|| panic!("{name}"));
+        (home.to_owned(), random.to_owned())
+    };
+    let (old_home, old_random) = parts(&old);
+    let (new_home, new_random) = parts(new);
+    assert_eq!(new_home, old_home, "{old} -> {new}");
+    assert_ne!(new_random, old_random, "{old} -> {new}");
     let (mut w, mut r) = connect(&second);
     assert_eq!(
         call(&mut w, &mut r, r#"{"id":1,"op":"titles"}"#)["ok"],
@@ -1016,14 +1041,23 @@ fn bad_requests_get_error_replies() {
 
 /// Two builds of one protocol serve one home side by side, each with its own discovery file.
 /// Runs only when `HARNESS_PTY_BIN_OLD` names a build of this source made with another
-/// `HARNESS_PTY_VERSION`; otherwise there is no second build to start.
+/// `HARNESS_PTY_VERSION`; otherwise there is no second build to start. Set, it must name a file: a
+/// CI step that builds it in the wrong place must fail here, not pass with nothing tested.
 #[test]
 fn two_versions_serve_side_by_side() {
     let Some(old) = std::env::var_os("HARNESS_PTY_BIN_OLD") else {
         return;
     };
+    assert!(
+        std::path::Path::new(&old).is_file(),
+        "HARNESS_PTY_BIN_OLD names no file: {}",
+        std::path::Path::new(&old).display()
+    );
     // The other build says its own version; that, not a guess, names its discovery file.
-    let out = std::process::Command::new(&old).arg("version").output().unwrap();
+    let out = std::process::Command::new(&old)
+        .arg("version")
+        .output()
+        .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let old_instance = harness_pty::instance::instance_name(
         v["protocol"].as_u64().unwrap() as u32,

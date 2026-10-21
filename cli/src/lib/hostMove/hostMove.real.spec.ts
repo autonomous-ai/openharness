@@ -381,8 +381,10 @@ describe.runIf(!!realBinary && !!previousBinary)('the pty host rollover on two r
     expect(await until(() => alive(rig.oldPid), (up) => !up)).toBe(false)
     expect(readInstanceDiscovery(rig.home, rig.drain.instanceId.replace(/^ptyhost:/, ''))).toBeNull()
     // Its binaries are deleted with it; the installed build's stay, and its host runs the moved agent.
-    expect(removed).toEqual([rig.oldVersion])
-    expect(existsSync(rig.oldDir)).toBe(false)
+    // A folder that could not be removed (a file still locked on Windows) is said on console.error, stubbed here.
+    const said = vi.mocked(console.error).mock.calls.map((call) => call.join(' ')).join('\n')
+    expect(removed, said).toEqual([rig.oldVersion])
+    expect(existsSync(rig.oldDir), said).toBe(false)
     expect(existsSync(path.join(rig.newDir, BINARY))).toBe(true)
     expect(await rig.create.paneState(rowPane(rig))).toMatchObject({ dead: false })
   }, CASE_TIMEOUT_MS)

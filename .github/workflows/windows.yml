@@ -99,6 +99,14 @@ jobs:
           New-Item -ItemType Directory -Force $previous | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/harness-pty.exe", "vendor/conpty/${{ matrix.arch }}/conpty.dll", "vendor/conpty/${{ matrix.arch }}/OpenConsole.exe" $previous
           & "$previous/harness-pty.exe" version
+      # The Rust side of the two builds: both hosts serve one home side by side, each with its own discovery file
+      # (pty/tests/control.rs). Set, HARNESS_PTY_BIN_OLD must name a file, or the test fails rather than skips.
+      - name: 'Rust: two versions side by side'
+        if: ${{ !inputs.release }}
+        working-directory: pty
+        env:
+          HARNESS_PTY_BIN_OLD: ${{ github.workspace }}\pty\target\${{ matrix.target }}\previous\harness-pty.exe
+        run: cargo test --locked --target ${{ matrix.target }} --test control two_versions_serve_side_by_side -- --nocapture
       # harness-serial (serial/, sub-project E): the dial's serial port. Tested on each architecture.
       - name: 'Serial: Rust tests'
         if: ${{ !inputs.release }}

@@ -902,9 +902,11 @@ Windows API.
 
 **Interfaces:**
 - Consumes everything above.
-- `HARNESS_PTY_BIN` is the new build. `HARNESS_PTY_BIN_OLD` is the same source built with
-  `HARNESS_PTY_VERSION=0.0.1-old`. Build the old one first, copy it aside, then build the new one: the env change
-  recompiles only the crate.
+- `HARNESS_PTY_BIN` is the new build. The old build is the same source built with `HARNESS_PTY_VERSION=0.0.1`: a
+  number, because it names its version folder under `<runtime>/pty/` as an install's does (`VERSION_DIR`). The TS
+  specs read it as `HARNESS_PTY_BIN_PREV` (the drain spec's name), the Rust `two_versions_serve_side_by_side` as
+  `HARNESS_PTY_BIN_OLD`. Build the old one first, copy it aside, then build the new one: the env change recompiles
+  only the crate.
 
 - [ ] **Step 1: Write the real spec**, run only when both env vars are set. Use a temp home and a stand-in engine
   that resumes: a script that prints its argv and waits for input. Cases:
@@ -913,12 +915,13 @@ Windows API.
   - `the old host shuts down after its last pane goes, and its version folder is removed`;
   - `input sent during the swap arrives in the new pane`.
 - [ ] **Step 2: Run locally first** (the fast loop; Windows CI is the proof).
-  - Run: `cd pty && HARNESS_PTY_VERSION=0.0.1-old cargo +stable build && cp target/debug/harness-pty <scratch>/harness-pty-old && cargo +stable build`.
-  - Then: `cd cli && HARNESS_PTY_BIN=$(pwd)/../pty/target/debug/harness-pty HARNESS_PTY_BIN_OLD=<the copy> npx vitest run src/lib/hostMove/hostMove.real.spec.ts src/lib/ptyHost/drain.spec.ts`.
+  - Run: `cd pty && HARNESS_PTY_VERSION=0.0.1 cargo +stable build && cp target/debug/harness-pty <scratch>/harness-pty-old && cargo +stable build`.
+  - Then: `cd cli && HARNESS_PTY_BIN=$(pwd)/../pty/target/debug/harness-pty HARNESS_PTY_BIN_PREV=<the copy> npx vitest run src/lib/hostMove/hostMove.real.spec.ts src/lib/ptyHost/drain.spec.ts`.
   - Expected: PASS.
 - [ ] **Step 3: Windows CI.**
   - In `windows.yml`'s `windows-pty` job, after the Rust tests:
-    - add the old build to the same target, and run the real spec with both binaries;
+    - add the old build to the same target, run `two_versions_serve_side_by_side` with it (`HARNESS_PTY_BIN_OLD`),
+      and run the real spec with both binaries;
     - run `src/lib/windows/ptyInstall.windows.real.spec.ts` and `src/scripts/installPs1.spec.ts`.
   - `windows.yml` runs on demand: push the branch once, then `gh workflow run windows.yml --ref feat/windows-pty-rollover`
     with `release=false`. Watch it on x64 and arm64: `gh run watch <run> --exit-status`.
