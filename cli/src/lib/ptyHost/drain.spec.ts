@@ -739,7 +739,7 @@ describe.runIf(!!realBinary)('shutdown on the real host', () => {
 })
 
 // Two builds of one protocol with real hosts: HARNESS_PTY_BIN_PREV is the previous version, the same source built
-// with `HARNESS_PTY_VERSION=0.0.1-old` and copied aside first (as G5.1 builds it), HARNESS_PTY_BIN this one's.
+// with `HARNESS_PTY_VERSION=0.0.1` and copied aside first (as windows.yml builds it), HARNESS_PTY_BIN this one's.
 describe.runIf(!!realBinary && !!previousBinary)('a previous version with the real hosts', () => {
   it('streams the old host\'s pane, makes new panes on the target, and shuts the old one down once its pane closes', async () => {
     quiet()
