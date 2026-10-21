@@ -497,6 +497,25 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(await db.superTabConfiguration.count({ where: { tabId: tab } })).toBe(3)
   })
 
+  it('tells the group once, in plain words, that a claimed delivery is waiting, and only for the claim holder', async () => {
+    const { tab, lead } = await fixture()
+    await run(tab, message('Please start.'))
+    const delivery = (await store.deliveries(host, tab, lead))[0]!
+    await expect(store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_draft' }))
+      .rejects.toMatchObject({ code: 'NOT_CLAIMED' })
+    await store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: 'claim' })
+    await expect(store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'another', reason: 'team_waiting_draft' }))
+      .rejects.toMatchObject({ code: 'CLAIM_CONFLICT' })
+    expect(await store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_draft' })).toEqual({ noticed: true })
+    expect(await store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })).toEqual({ noticed: false })
+    const rows = (await store.messages(owner, tab, 'lead', {})).messages
+    expect(rows).toHaveLength(2)
+    expect(rows[1]).toMatchObject({ author: { kind: 'agent', id: lead }, recipientIds: [], deliveries: [],
+      text: expect.stringContaining('A message for Lead is waiting. There is unsent text in Lead\'s input box.') })
+    await store.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'done', uncertain: false })
+    expect(await store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })).toEqual({ noticed: false })
+  })
+
   it('a withdrawn host can retire its receipt without regaining conversation access', async () => {
     const { tab, lead } = await fixture()
     await run(tab, message('Keep the execution receipt after removal.'))

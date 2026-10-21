@@ -14,6 +14,7 @@ import {
   activeWork, actorKey, agent, author, conversation, createSuperTab, fail, person, stableId, visibleState,
   SuperTabError, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
 } from './model.js'
+import { holdNoticeText, type HoldReason } from './holdNotice.js'
 import { closeAssignment, readDecision, recentRoutes, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
@@ -726,7 +727,8 @@ export class SuperTabStore {
 
   /** No timeout reclaims an instruction: the same durable claim resumes, or the host reconciles it. */
   async delivery(user: AuthUser, tabId: string, agentId: string, deliveryId: string,
-    action: { type: 'claim'; claimId: string } | { type: 'ack'; claimId: string; receipt: string; uncertain: boolean }) {
+    action: { type: 'claim'; claimId: string } | { type: 'ack'; claimId: string; receipt: string; uncertain: boolean }
+      | { type: 'hold'; claimId: string; reason: HoldReason }) {
     return transaction(this.db, async tx => {
       const row = await this.row(tx, user, tabId)
       const state = stateOf(row)
@@ -739,7 +741,8 @@ export class SuperTabStore {
         fail('DELIVERY_RESOLVED', 'A person has already resolved this delivery.')
       }
       if (delivery.claimId && delivery.claimId !== action.claimId) fail('CLAIM_CONFLICT', 'Reconcile the existing delivery before claiming it again.')
-      if (action.type === 'ack' && !delivery.claimId) fail('NOT_CLAIMED', 'Claim this instruction before acknowledging it.')
+      if (action.type !== 'claim' && !delivery.claimId) fail('NOT_CLAIMED', 'Claim this instruction before acknowledging it.')
+      if (action.type === 'hold') return this.holdNotice(tx, row, state, delivery, action.reason)
       const status = action.type === 'claim' ? delivery.status === 'queued' ? 'claimed' : delivery.status : action.uncertain ? 'uncertain' : 'delivered'
       if (delivery.status === 'delivered' && action.type === 'ack' && (action.uncertain || delivery.receipt !== action.receipt)) {
         fail('RECEIPT_CONFLICT', 'A delivered instruction keeps its original host receipt.')
@@ -751,6 +754,19 @@ export class SuperTabStore {
       const message = await tx.superTabMessage.findUnique({ where: { id: delivery.messageId } })
       return { delivery: updated, message }
     })
+  }
+
+  /** The host cannot type a claimed instruction yet. Say so once in the group, as the waiting agent; nobody is asked to act on it. */
+  private async holdNotice(tx: Transaction, row: SuperTab, state: SuperTabState, delivery: SuperTabDelivery, reason: HoldReason) {
+    const id = stableId('hold-notice', delivery.tabId, delivery.id)
+    if (delivery.status !== 'claimed' || await tx.superTabMessage.findUnique({ where: { id } })) return { noticed: false }
+    const group = conversation(state, delivery.conversationId), waiting = agent(state, delivery.agentId)
+    const revision = row.revision + 1
+    group.lastMessageSequence = revision
+    await tx.superTab.update({ where: { id: row.id, revision: row.revision }, data: { revision, state: json(state) } })
+    await this.writeMessages(tx, row.id, state, [{ id, conversationId: group.id, replyTo: null, recipients: [], text: holdNoticeText(waiting.name, reason),
+      author: { kind: 'agent', id: waiting.id, name: waiting.name, membershipGeneration: waiting.membershipGeneration } }], revision)
+    return { noticed: true }
   }
 
   /** Only the recorded execution host may attest that the actual session/attempt has stopped. */

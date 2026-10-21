@@ -229,10 +229,19 @@ export function inspectPane(engine: AgentEngine, capture: string, takeover: Take
   const rawMarker = prompt.search(marks)
   const rawTail = rawMarker >= 0 ? prompt.slice(rawMarker + 1) : ''
   const placeholder = hasPlaceholderSgr(rawTail)
-  if (placeholder) visible = ''
+  if (placeholder || IDE_CONTEXT_CHIPS.test(visible)) visible = ''
   const draft = visible.length > 0
   return { idle: !!prompt && !dialog && !draft, plan, dialog, draft }
 }
+
+/**
+ * Claude Code shows what the connected IDE has open or selected as a chip in the empty composer, `❯ [⧉ In .env]` or
+ * `❯ [⧉ Selected 3 lines from a.ts]`, in a colour of its own (not dim, not grey). It is context sent with the next
+ * message, not text anyone typed. Read as a draft, an idle pane held every Super Tab delivery as
+ * `team_waiting_draft`, and the same message was retried every second (2026-10-21, 10:44-10:49, 266 times).
+ * ONLY chips and nothing else: any word typed beside one is a real draft and still holds.
+ */
+const IDE_CONTEXT_CHIPS = /^(?:\[⧉ [^\]]+\]\s*)+$/u
 
 /** The latest composer prompt line; picker rows use the same glyphs, but numbered rows are not prompts. */
 function latestPromptLine(rawLines: string[], marks: RegExp): number {
