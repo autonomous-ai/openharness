@@ -33,6 +33,14 @@ impl Identity {
             && app.fleet.agent(&self.machine, &self.agent).is_some_and(|a| a.session_id == self.session && a.created_at_wire == self.created)
     }
 
+    /// The reviewed harness, as it is now: the same agent, and the reviewed conversation or, reviewed before its
+    /// engine bound one (Codex's first seconds), the one it bound since. The row may now be stopped. Desktop's
+    /// `Agent.continuesSession`; a Stop still names the reviewed identity and the daemon decides (cli `matches`).
+    pub fn continues(&self, app: &App) -> bool {
+        self.connection_matches(app) && app.fleet.agent(&self.machine, &self.agent)
+            .is_some_and(|a| a.created_at_wire == self.created && (a.session_id == self.session || self.session.is_empty()))
+    }
+
     pub fn connection_matches(&self, app: &App) -> bool {
         self.owner_matches(app) && self.generation == app.connection_generation(&self.machine)
     }
@@ -61,7 +69,11 @@ impl View {
 
     fn matches(&self, app: &App) -> bool {
         self.owner == app.fleet.local_id && app.panes.get(&self.pane).is_some_and(|p| p.machine_id == self.machine && p.agent_id == self.agent)
-            && self.epoch == app.fleet.agent(&self.machine, &self.agent).map(|a| (a.session_id.clone(), a.created_at_wire.clone()))
+            && match (&self.epoch, app.fleet.agent(&self.machine, &self.agent)) {
+                // (Captured before its first conversation bound: the same view of it once one has.)
+                (Some((session, created)), Some(a)) => *created == a.created_at_wire && (session.is_empty() || *session == a.session_id),
+                (epoch, agent) => epoch.is_none() && agent.is_none(),
+            }
     }
 }
 
@@ -200,7 +212,7 @@ fn advance(app: &mut App, id: &str) {
     let Some(op) = &app.session_close.operation else { return };
     if op.id != id { return }
     if op.stage == Stage::Inspect && !showing(app, id) { app.session_close.operation = None; return }
-    if !op.targets.iter().filter(|t| !t.closed).all(|t| t.identity.matches(app)) {
+    if !op.targets.iter().filter(|t| !t.closed).all(|t| t.identity.continues(app)) {
         fail(app, "The session or connection changed. Check it before trying again.".into()); return;
     }
     if op.at >= op.targets.len() {
@@ -244,10 +256,13 @@ fn received(app: &mut App, id: &str, index: usize, mode: &str, reply: Result<Val
     let Some(op) = &app.session_close.operation else { return };
     if op.id != id || op.at != index { return }
     if mode == "inspect" && !showing(app, id) { app.session_close.operation = None; return }
-    let identity = op.targets[index].identity.clone();
-    let removed_before_ack = mode != "inspect" && identity.connection_matches(app)
+    let mut identity = op.targets[index].identity.clone();
+    // Closed and its row already gone: an inspect can answer that too, when it was closed elsewhere first.
+    let removed_before_ack = identity.connection_matches(app)
         && app.fleet.agent(&identity.machine, &identity.agent).is_none() && reply.as_ref().is_ok_and(|r| r["closed"] == true);
-    if !identity.matches(app) && !removed_before_ack { fail(app, "The session or connection changed. No replacement was stopped.".into()); return }
+    if !identity.continues(app) && !removed_before_ack { fail(app, "The session or connection changed. No replacement was stopped.".into()); return }
+    // From here on, the conversation it bound since the review (if it did): the views and other clients know that one.
+    if let Some(a) = app.fleet.agent(&identity.machine, &identity.agent) { identity.session = a.session_id.clone(); }
     let reply = match reply {
         Ok(reply) => reply,
         Err(error) => {
@@ -272,14 +287,16 @@ fn received(app: &mut App, id: &str, index: usize, mode: &str, reply: Result<Val
         fail(app, format!("Stop not confirmed: {}", reply["detail"].as_str().filter(|s| !s.is_empty()).unwrap_or(error)));
         return;
     }
-    if mode != "inspect" && reply["closed"] != true {
+    // An inspect can answer closed too: stopped already (by another window, or a close whose answer was lost).
+    let closed = reply["closed"] == true;
+    if mode != "inspect" && !closed {
         fail(app, "Stop not confirmed. The pane is still here.".into()); return;
     }
     let op = app.session_close.operation.as_mut().unwrap();
     let target = &mut op.targets[index];
-    if mode == "inspect" { target.activity = activity; } else { target.closed = true; }
+    if closed { target.closed = true; target.identity = identity.clone(); } else { target.activity = activity; }
     op.at += 1;
-    if mode != "inspect" {
+    if closed {
         crate::workspace_events::publish(app, &identity, None);
         remove_confirmed(app, &identity);
     }
@@ -588,6 +605,68 @@ mod tests {
         app.fleet.agents.remove(&("local".into(), "a1".into()));
         answer(&mut app, "idle", json!({"closed":true}));
         assert!(!app.panes.contains_key(&1)); assert!(app.panes.contains_key(&2));
+    }
+
+    #[tokio::test]
+    async fn a_harness_that_bound_its_first_conversation_while_stopping_is_stopped() {
+        // Codex's first seconds: reviewed with no conversation; the daemon waits for the bind (agent_synced),
+        // stops it (agent_deleted marks the row stopped), then answers closed.
+        let mut app = app();
+        app.fleet.agents.get_mut(&("local".into(), "a1".into())).unwrap().session_id.clear();
+        pane(&mut app, 1);
+        answer(&mut app, "inspect", json!({"activity":"idle"}));
+        assert_eq!(app.session_close.sent[1].1["sessionId"], "");
+        let row = app.fleet.agents.get_mut(&("local".into(), "a1".into())).unwrap();
+        row.session_id = "codex-bound".into();
+        row.status = "stopped".into();
+        answer(&mut app, "idle", json!({"closed":true}));
+        assert!(app.session_close.operation.is_none(), "the stop is done");
+        assert!(!app.panes.contains_key(&1)); assert!(app.panes.contains_key(&2));
+        assert!(app.modal.is_none());
+        assert!(app.toast.as_ref().is_none_or(|t| !t.0.contains("changed")));
+    }
+
+    #[tokio::test]
+    async fn another_conversation_after_a_bound_one_is_still_a_change() {
+        let mut app = app();
+        pane(&mut app, 1);
+        answer(&mut app, "inspect", json!({"activity":"idle"}));
+        app.fleet.agents.get_mut(&("local".into(), "a1".into())).unwrap().session_id = "replacement".into();
+        answer(&mut app, "idle", json!({"closed":true}));
+        assert!(app.panes.contains_key(&1));
+        assert!(app.session_close.operation.as_ref().is_some_and(|op| op.stage == Stage::Failed));
+    }
+
+    #[tokio::test]
+    async fn inspecting_an_already_closed_harness_finishes_the_close() {
+        let mut app = app();
+        pane(&mut app, 1);
+        answer(&mut app, "inspect", json!({"closed":true}));
+        assert_eq!(modes(&app), ["inspect"], "nothing left to stop");
+        assert!(app.session_close.operation.is_none());
+        assert!(!app.panes.contains_key(&1)); assert!(app.panes.contains_key(&2));
+        assert_eq!(app.fleet.agent("local", "a1").unwrap().status, "stopped");
+        assert!(app.modal.is_none());
+    }
+
+    #[tokio::test]
+    async fn inspecting_a_harness_already_closed_and_gone_from_the_list_finishes_the_close() {
+        // Closed elsewhere, and its row removed before the inspect's answer: closed, not "changed".
+        let mut app = app();
+        pane(&mut app, 1);
+        app.fleet.agents.remove(&("local".into(), "a1".into()));
+        answer(&mut app, "inspect", json!({"closed":true}));
+        assert_eq!(modes(&app), ["inspect"], "nothing left to stop");
+        assert!(app.session_close.operation.is_none());
+        assert!(!app.panes.contains_key(&1)); assert!(app.panes.contains_key(&2));
+        assert!(app.toast.as_ref().is_none_or(|t| !t.0.contains("changed")));
+        // A row gone with an inspect answering what it is doing is still a change.
+        let mut app = self::app();
+        pane(&mut app, 1);
+        app.fleet.agents.remove(&("local".into(), "a1".into()));
+        answer(&mut app, "inspect", json!({"activity":"idle"}));
+        assert!(app.panes.contains_key(&1));
+        assert!(app.session_close.operation.as_ref().is_some_and(|op| op.stage == Stage::Failed));
     }
 
     #[tokio::test]

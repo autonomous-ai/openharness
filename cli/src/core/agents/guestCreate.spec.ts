@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { GuestLaunch } from '../api.js'
 import type { RegisteredSession } from '../../lib/registry.js'
+import type { TmuxRuntimeRef } from '../../lib/terminalTypes.js'
 import { createGuestCreate, type GuestCreateDeps } from './guestCreate.js'
 
 // A guest's New Harness: the launch shared machines builds, opened as a pane and recorded as the guest's
 // (docs/plans/2026-10-19-guest-machine-sharing-plan.md). The pane is a fake tmux's; nothing runs.
-const runtime = { kind: 'tmux' as const, sessionName: 'harness-claude-1', paneId: '%7' }
+const runtime = { backend: 'tmux', paneId: '%7' } satisfies TmuxRuntimeRef
 const launched: GuestLaunch = { ok: true, workspace: '/Users/Shared/HarnessGuests/hg_0123456789ab/work', argv: ['/bin/sh', '-c', 'boot'], env: { TERM: 'xterm-256color' } }
 
 function setup(over: Partial<GuestCreateDeps> & { answer?: GuestLaunch; spawn?: 'ok' | 'fail'; register?: boolean } = {}) {

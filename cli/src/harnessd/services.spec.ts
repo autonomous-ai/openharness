@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DEFAULT_SERVICE_OPTIONS, ENGINE_LIVE_ENV, ENGINE_RUNTIME_ENV, ENGINE_SCREEN_ENV, ENGINE_MODEL_CONTROL_ENV, masterRunsEngineModelControl, ENGINE_QUESTION_CONTROL_ENV, masterRunsEngineQuestionControl, ENGINE_SUBMISSION_ENV, masterRunsEngineSubmission, ENGINE_NATIVE_CONTROL_ENV, masterRunsEngineNativeControl, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, ServiceSupervisor, UPDATER_HOST, masterRunsLiveEngines, masterRunsEngineRuntime, masterRunsEngineScreen, serviceOptions, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns,
-  type ServiceSpec, type ServiceSupervisorOptions,
+  type ServiceSpec, type ServiceSupervisorDeps, type ServiceSupervisorOptions,
 } from './services.js'
 import type { CoreHandle } from './supervisor.js'
 
@@ -12,7 +12,8 @@ class FakeService implements CoreHandle {
   private messageListeners: Array<(message: unknown) => void> = []
   private exitListeners: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = []
   constructor(readonly pid: number | undefined, readonly spec: ServiceSpec, readonly env: Record<string, string>) {}
-  send(): void {}
+  readonly sent: unknown[] = []
+  send(message: unknown): void { this.sent.push(message) }
   kill(signal: NodeJS.Signals): void { this.kills.push(signal) }
   onMessage(listener: (message: unknown) => void): void { this.messageListeners.push(listener) }
   onExit(listener: (code: number | null, signal: NodeJS.Signals | null) => void): void { this.exitListeners.push(listener) }
@@ -41,7 +42,7 @@ describe('ServiceSupervisor', () => {
   let lines: string[]
   const latest = (name = 'search') => children.filter((child) => child.spec.name === name).at(-1)!
   const staged: string[] = []
-  const make = (specs: ServiceSpec[] = [search], overrides: Partial<ServiceSupervisorOptions> = {}, env: Record<string, string> = {}, tell = true) =>
+  const make = (specs: ServiceSpec[] = [search], overrides: Partial<ServiceSupervisorOptions> = {}, env: Record<string, string> = {}, tell = true, more: Partial<ServiceSupervisorDeps> = {}) =>
     new ServiceSupervisor(specs, {
       ...(tell ? { staged: (version: string) => { staged.push(version) } } : {}),
       spawnService: (spec, extra) => {
@@ -54,6 +55,7 @@ describe('ServiceSupervisor', () => {
       setTimer: (run, ms) => setTimeout(run, ms),
       clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
       log: (line) => lines.push(line),
+      ...more,
     }, { ...options, ...overrides }, env)
 
   beforeEach(() => {
@@ -62,6 +64,19 @@ describe('ServiceSupervisor', () => {
     lines = []
   })
   afterEach(() => vi.useRealTimers())
+
+  it('on Windows, asks each service to leave rather than signalling it, and ends it after the grace', () => {
+    const supervisor = make([search], {}, {}, true, { stopByMessage: true })
+    supervisor.start()
+    const done = vi.fn()
+    supervisor.stop(done)
+    expect(latest().kills).toEqual([])
+    expect(latest().sent).toEqual([{ type: 'harnessd:shutdown' }])
+    vi.advanceTimersByTime(options.stopGraceMs)
+    expect(latest().kills).toEqual(['SIGKILL'])
+    latest().exit(null, 'SIGKILL')
+    expect(done).toHaveBeenCalledOnce()
+  })
 
   it('starts every service with its name, its token and its watchdog, and none waits on another', () => {
     const supervisor = make([search, devices], {}, { HARNESSD_SERVICE_TOKEN: 'secret' })
@@ -124,6 +139,15 @@ describe('ServiceSupervisor', () => {
     expect(children).toHaveLength(2)
     latest().exit(75)
     expect(supervisor.status()[0].state).toBe('parked')
+  })
+
+  it('says a Windows exit code signed: a service TerminateProcess ended exited -1', () => {
+    const supervisor = make([search], { parkCrashes: 99 })
+    supervisor.start()
+    latest().beat()
+    latest().exit(0xffff_ffff)
+    expect(supervisor.status()[0]).toMatchObject({ lastExit: 'code -1', lastExitReason: 'crashed' })
+    expect(lines.some((line) => line.includes('exited (code -1, crashed) — restarting in'))).toBe(true)
   })
 
   it('restarts a crashed service with a backoff that doubles, caps, and is forgiven after a long run', () => {

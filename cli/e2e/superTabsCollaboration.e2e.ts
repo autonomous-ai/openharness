@@ -22,7 +22,7 @@ afterEach(async () => {
   await backend?.close(); backend = undefined
 })
 
-it('lets one person’s lead use a teammate’s shared machine while preserving account and conversation boundaries', async () => {
+it('coordinates an owner-contributed agent while keeping guest machine access separate', async () => {
   const relay = await FakeBackend.start(); backend = relay
   const specs = [
     { machineId: 'a6'.repeat(16), computerId: 'super-tab-starter', name: 'Starter Mac', token: 'fixture-starter-token', account: 'starter', email: 'starter@example.com', identity: newIdentity() },
@@ -55,7 +55,7 @@ it('lets one person’s lead use a teammate’s shared machine while preserving 
     }
     if (!contributionAllowed) return failure()
     if (path === `/api/super-tabs/${TAB}/native` && method === 'POST') {
-      expect(caller.account).toBe(starter.account)
+      expect(caller.account).toBe(member.account)
       const target = agents.find(agent => agent.id === body.agentId)!
       contexts.set(body.operationId, { contextId: body.operationId, tabId: TAB, conversationId: body.conversationId,
         harnessId: target.harnessId, machineId: target.machineId, operatorAccount: caller.account, lastEventId: null })
@@ -78,6 +78,14 @@ it('lets one person’s lead use a teammate’s shared machine while preserving 
     if (path.endsWith('/commands')) {
       const command = body.command, author = body.asAgentId ? agents.find(agent => agent.id === body.asAgentId)! : null
       if (author) expect(author.machineId).toBe(caller.machineId)
+      if (command.type === 'agent.add') {
+        expect(caller.account).toBe(member.account)
+        expect(command.machineId).toBe(member.machineId)
+        const id = agentId(command.machineId, command.harnessId)
+        agents.push({ id, machineId: command.machineId, harnessId: command.harnessId, configuration: command.configuration })
+        groups.get(GROUP)!.add(id)
+        return { data: { result: { agentId: id } } }
+      }
       if (command.type === 'agent.start') {
         const startId = `start-${body.operationId}`
         if (!starts.has(startId)) starts.set(startId, { id: startId, creationId: `super-${startId}`, request: command.request, dispatched: false, harnessId: null })
@@ -146,19 +154,27 @@ it('lets one person’s lead use a teammate’s shared machine while preserving 
   }
   const request = { conversationId: GROUP, machineId: member.machineId, engine: 'codex', name: 'Member builder', cwd: projectB,
     worktree: false, permissionMode: 'auto', requirements: { memoryBytes: 0, diskBytes: 1, maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false } }
-  let started = await run(['start', 'remote-builder', JSON.stringify(request)])
-  if (started.answer.error === 'START_PENDING') started = await until('remote creation receipt', async () => {
-    const next = await run(['resume', 'start-remote-builder']); return next.answer.error === 'START_PENDING' ? null : next
-  }, 60_000, 500)
-  expect(started.code, JSON.stringify(started.answer)).toBe(0)
-  expect((await run(['start', 'remote-builder', JSON.stringify(request)])).answer.harnessId).toBe(started.answer.harnessId)
-  const workerId = agentId(member.machineId, started.answer.harnessId)
+  const attempted = await run(['start', 'remote-builder', JSON.stringify(request)])
+  expect(attempted.answer).toMatchObject({ error: 'CONTRIBUTION_REQUIRED', detail: expect.stringContaining('Add machine') })
+  expect((await onB.request('agents_list')).agents).toHaveLength(0)
+  // Sharing now gives a guest its own OS user, not the owner's Swarm controls.
+  // The owner can contribute a running agent; owner-dispatched machine starts
+  // are exercised separately in superTabMachines.e2e.ts.
+  const owned = await onB.request('agent_create', { engine: 'codex', cwd: projectB }, 90_000)
+  expect(owned.error, JSON.stringify(owned)).toBeUndefined()
+  const harnessId = owned.agent.id as string
+  const workerId = agentId(member.machineId, harnessId)
+  expect(await onB.request('super_tabs', { action: 'backend', method: 'POST', path: `/api/super-tabs/${TAB}/commands`,
+    body: { operationId: 'contribute-worker', command: { type: 'agent.add', conversationId: GROUP,
+      machineId: member.machineId, harnessId, name: 'Member builder', configuration: { engine: 'codex' }, lead: false } } }))
+    .toMatchObject({ value: { result: { agentId: workerId } } })
+  await onB.request('super_tabs', { action: 'wake' })
   expect((await onB.request('agents_list')).agents).toHaveLength(1)
   expect((await onA.request('agents_list')).agents).toHaveLength(1)
   const viaA = await LocalClient.connect(a, { machineId: member.machineId }); clients.push(viaA)
   // Machine control does not make the member's account a proxy for the starter.
   expect(await viaA.request('super_tabs', { action: 'backend', method: 'GET', path: `/api/super-tabs/${TAB}` }))
-    .toMatchObject({ error: 'OWNER_REQUIRED' })
+    .toMatchObject({ error: 'GUEST_NOT_ALLOWED' })
   expect((await run(['command', 'assign-instruction', JSON.stringify({ type: 'message.send', conversationId: GROUP,
     text: 'Verify offline editing on the member machine', replyTo: null, recipientIds: [workerId] })])).code).toBe(0)
   await until('member host delivers the lead instruction', () => pending.get(workerId)?.status === 'delivered' || null, 45_000)
@@ -171,19 +187,20 @@ it('lets one person’s lead use a teammate’s shared machine while preserving 
   expect((await run(['command', 'reuse-member', JSON.stringify({ type: 'conversation.agent', conversationId: 'onboarding', agentId: workerId, present: true, lead: false })])).code).toBe(0)
   expect(groups.get('onboarding')!.has(workerId)).toBe(true)
   expect((await onB.request('agents_list')).agents).toHaveLength(1)
-  const contextId = 'starter-on-member-terminal'
-  expect(await onA.request('super_tabs', { action: 'backend', method: 'POST', path: `/api/super-tabs/${TAB}/native`,
+  const contextId = 'member-on-own-terminal'
+  expect(await onB.request('super_tabs', { action: 'backend', method: 'POST', path: `/api/super-tabs/${TAB}/native`,
     body: { operationId: contextId, conversationId: GROUP, agentId: workerId } })).toMatchObject({ value: { contextId } })
-  expect(await viaA.request('super_tabs', { action: 'prepareNative', tabId: TAB, contextId })).toMatchObject({ inputContext: contextId })
-  const ready = viaA.next(frame => frame.type === 'terminal_ready' && frame.payload?.requestId === 'member-terminal')
-  viaA.send('terminal_open', { requestId: 'member-terminal', protocolVersion: 3, agentId: started.answer.harnessId, cols: 100, rows: 30, inputContext: contextId })
+  expect(await viaA.request('super_tabs', { action: 'prepareNative', tabId: TAB, contextId })).toMatchObject({ error: 'GUEST_NOT_ALLOWED' })
+  expect(await onB.request('super_tabs', { action: 'prepareNative', tabId: TAB, contextId })).toMatchObject({ inputContext: contextId })
+  const ready = onB.next(frame => frame.type === 'terminal_ready' && frame.payload?.requestId === 'member-terminal')
+  onB.send('terminal_open', { requestId: 'member-terminal', protocolVersion: 3, agentId: harnessId, cols: 100, rows: 30, inputContext: contextId })
   const streamId = (await ready).payload!.streamId as string
-  await viaA.waitForBinary(frame => frame.streamId === streamId && frame.kind === TerminalBinaryKind.keyframe)
-  viaA.sendBinary({ kind: TerminalBinaryKind.input, streamId, seq: 0, compressed: false, bytes: Buffer.from('Keep this change focused') })
-  viaA.sendBinary({ kind: TerminalBinaryKind.input, streamId, seq: 1, compressed: false, bytes: Buffer.from('\r') })
+  await onB.waitForBinary(frame => frame.streamId === streamId && frame.kind === TerminalBinaryKind.keyframe)
+  onB.sendBinary({ kind: TerminalBinaryKind.input, streamId, seq: 0, compressed: false, bytes: Buffer.from('Keep this change focused') })
+  onB.sendBinary({ kind: TerminalBinaryKind.input, streamId, seq: 1, compressed: false, bytes: Buffer.from('\r') })
   await until('remote terminal observation', () => observations.length >= 2 || null, 30_000)
   expect(observations.map(row => row.kind)).toEqual(['prompt', 'answer'])
-  expect(observations.every(row => row.operatorAccount === starter.account && row.executionAccount === member.account && row.conversationId === GROUP)).toBe(true)
+  expect(observations.every(row => row.operatorAccount === member.account && row.executionAccount === member.account && row.conversationId === GROUP)).toBe(true)
   expect([...relay.webSent.values()].flat().filter(frame => ['super_tabs', 'agent_create', 'terminal_open'].includes(String(frame.type)))
     .every(frame => !!(frame.payload as any)?.__e2e)).toBe(true)
   contributionAllowed = false

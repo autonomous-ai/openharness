@@ -1,0 +1,53 @@
+# s2 reboot with autologon (Mac 2026-10-18 07:56:58 +07)
+AutoAdminLogon : '1' (String)
+DefaultUserName : 'hxe2e' (String)
+DefaultDomainName : 'WIN-TESTVM' (String)
+DefaultPassword : (present, String, not shown)
+AutoLogonCount : (absent)
+ForceAutoLogon : (absent)
+VM up (ssh) at Mac 08:22:21; last boot (VM clock) 2026-10-17 18:21:47
+running at VM 18:23:11 (Mac 08:23:12)
+
+  machine · remote machine
+  ─────────────────────────────────────
+   status     ● running · this computer only (not signed in)
+   version    v0.4.18-dev.win1
+   backend    not signed in · harness login
+   account    prod
+   state      ~\.harness\cli\data
+   auth       ~\.harness\auth
+   agents     0 available
+   pid        7356
+   logs       ~\.harness\cli\data\harness.log
+   dial log   ~\.harness\logs\dial-YYYYMMDD.log
+   local api  http://127.0.0.1:18474
+  ─────────────────────────────────────
+  running in background · stop with: harness stop
+
+'query' is not recognized as an internal or external command,
+operable program or batch file.
+Logon Mode:                           Interactive only
+Last Run Time:                        10/17/2026 6:22:14 PM
+Last Result:                          0
+Logon Mode:                           Interactive only
+Last Run Time:                        10/17/2026 6:22:14 PM
+Last Result:                          0
+2026-10-17 17:49:55.582 [harnessd] core ready (pid 9652)
+2026-10-17 18:22:37.736 [harnessd] on Windows the services run in the core's process
+2026-10-17 18:22:38.929 [harnessd] core started (pid 8032)
+2026-10-17 18:22:38.956 [harnessd] service updater started (pid 8056)
+2026-10-17 18:23:01.991 [harnessd] core bound (pid 8032, protocol 6)
+2026-10-17 18:23:03.398 [harnessd] core ready (pid 8032)
+
+ProcessId ParentProcessId Name            Start    Cmd                                                                                                           
+--------- --------------- ----            -----    ---                                                                                                           
+     7356            7336 node.exe        18:22:35 "C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe" C:\Users\hxe2e\.harness\cli\0.4.18-dev.wi
+     8032            7356 node.exe        18:22:38 C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe --max-semi-space-size=4 --max-old-space-siz
+     8056            7356 node.exe        18:22:38 C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe --max-semi-space-size=4 --max-old-space-siz
+     9672            9404 harness-pty.exe 18:22:54 "C:\Users\hxe2e\.harness\runtime\pty\0.4.18\harness-pty.exe" serve --home C:\Users\hxe2e\.harness\pty --histor
+
+
+
+pid 7356 (node.exe) parent 7336
+parent 7336 is gone (the launcher exited)
+sshd: 3700 3748 6596

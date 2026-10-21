@@ -33,7 +33,8 @@ function setup(over: Partial<LifecycleDeps> = {}) {
     } as unknown as LifecycleDeps['registry'],
     stoppedAgents: { list: vi.fn(() => [row({ agentId: 'a2' })]), get: vi.fn(() => undefined) } as unknown as LifecycleDeps['stoppedAgents'],
     restartJobs: { busy: vi.fn(() => false) } as unknown as LifecycleDeps['restartJobs'],
-    tmuxBackend: null,
+    createBackend: null,
+    backendFor: vi.fn(() => undefined),
     agentReconciler: {} as never,
     forgetSession: vi.fn(),
     markDeleted: vi.fn(),
@@ -65,11 +66,11 @@ describe('stopping, purging and resuming an agent', () => {
     const { deps, lifecycle } = setup()
     expect(createStopAgentService).toHaveBeenCalledWith({
       registry: deps.registry, stoppedAgents: deps.stoppedAgents, restartJobs: deps.restartJobs, stopJobs: lifecycle.stopJobs,
-      tmuxBackend: null, agentReconciler: deps.agentReconciler, forgetSession: deps.forgetSession,
+      backendFor: deps.backendFor, agentReconciler: deps.agentReconciler, forgetSession: deps.forgetSession,
       markDeleted: deps.markDeleted, clearDeleted: deps.clearDeleted, stopNative: deps.stopNative,
     })
     expect(createResumeAgentService).toHaveBeenCalledWith({
-      registry: deps.registry, stoppedAgents: deps.stoppedAgents, tmuxBackend: null, restartJobs: deps.restartJobs,
+      registry: deps.registry, stoppedAgents: deps.stoppedAgents, createBackend: null, backendFor: deps.backendFor, restartJobs: deps.restartJobs,
       stopJobs: lifecycle.stopJobs, pinnedControls: deps.pinnedControls, retainExitedSession: deps.retainExitedSession,
       announceSession: deps.announceSession, relaunchOverrides: deps.relaunchOverrides, prepareSessionResume: deps.prepareSessionResume,
       refreshGridWebSearch: deps.refreshGridWebSearch, clearDeleted: deps.clearDeleted, attachDsh: deps.attachDsh,

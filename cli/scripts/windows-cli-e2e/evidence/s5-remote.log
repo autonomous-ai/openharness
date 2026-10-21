@@ -1,0 +1,49 @@
+# the Mac reads the VM as a remote machine: harness ps --machine 7e92c45a… --all --json (08:52:53)
+{
+ "machine": "WIN-TESTVM",
+ "harnesses": [
+  {
+   "name": "Kilo CLI",
+   "id": "29c3a0f0…",
+   "agent": "Kilo",
+   "machine": "WIN-TESTVM",
+   "state": "idle",
+   "folder": "C:\\Users\\hxe2e\\proj",
+   "branch": null,
+   "startedBy": "person",
+   "yours": false,
+   "self": false,
+   "lastActive": "2026-10-18T01:51:47.883Z",
+   "asks": [
+    "Reply with only the number: what is 6 times 7?"
+   ],
+   "about": "42"
+  },
+  {
+   "name": "Codex harness 10-17 18:51",
+   "id": "dac87568…",
+   "agent": "Codex",
+   "machine": "WIN-TESTVM",
+   "state": "unknown",
+   "folder": "C:\\Users\\hxe2e\\proj",
+   "branch": null,
+   "startedBy": "person",
+   "yours": false,
+   "self": false,
+   "lastActive": "2026-10-18T01:51:02.073Z"
+  },
+  {
+   "name": "Claude harness 10-17 18:43",
+   "id": "47324568…",
+   "agent": "Claude Code",
+   "machine": "WIN-TESTVM",
+   "state": "unknown",
+   "folder": "C:\\Users\\hxe2e\\proj",
+   "branch": null,
+   "startedBy": "person",
+   "yours": false,
+   "self": false,
+   "lastActive": "2026-10-18T01:43:06.127Z"
+  }
+ ]
+}

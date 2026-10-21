@@ -5,9 +5,28 @@ import { createHash } from 'crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   DOWNLOAD_LIMITS, MANIFEST_LIMITS, REFUSED_RETRY_MAX_MS, RUNTIME_DOWNLOAD_LIMITS, TransferStalledError, canary, confirm, downloadVerified, fetchManifest, isLocalDevBuild,
-  msUntilSlot, rejectedVersions, restore, runCanary, semverGt, settleRolledBack, shouldAutoUpdate, stage, startSelfUpdater, unjudgedUpdate,
+  msUntilSlot, rejectedVersions, restore as restoreOn, retireCliVersions, runCanary, semverGt, settleRolledBack as settleRolledBackOn, shouldAutoUpdate, stage as stageOn,
+  startSelfUpdater as startSelfUpdaterOn, unjudgedUpdate,
 } from './selfUpdate.js'
 import { SpawnLockBusyError } from './daemonSpawnLock.js'
+import { versionsOnDisk } from './windows/cliVersions.js'
+
+// The pointer file's writer (B1), with a switch to make it fail.
+const pointer = vi.hoisted(() => ({ fail: false }))
+vi.mock('./windows/installLayout.js', async (real) => {
+  const actual = await real<typeof import('./windows/installLayout.js')>()
+  return { ...actual, writePointer: (...args: Parameters<typeof actual.writePointer>) => { if (pointer.fail) throw new Error('EPERM'); actual.writePointer(...args) } }
+})
+
+// The cases below that pass no platform are about the macOS and Linux layout (files swapped in place, `.prev`
+// backups). Left to the default, `process.platform`, they took the Windows version-folder path when the suite
+// ran on Windows; pinned here, they test the same layout on every host. The Windows cases pass 'win32'.
+const stage = (dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: string, platform: NodeJS.Platform = 'darwin'): void =>
+  stageOn(dir, cliBuf, notifyBuf, version, platform)
+const restore = (dir: string, platform: NodeJS.Platform = 'darwin'): void => restoreOn(dir, platform)
+const settleRolledBack = (dir: string, platform: NodeJS.Platform = 'darwin'): string | null => settleRolledBackOn(dir, platform)
+const startSelfUpdater = (opts: Parameters<typeof startSelfUpdaterOn>[0]): ReturnType<typeof startSelfUpdaterOn> =>
+  startSelfUpdaterOn({ platform: 'darwin', ...opts })
 
 let dirs: string[] = []
 
@@ -554,7 +573,7 @@ describe('staging, all or nothing (e2e/updateHostile.e2e.ts)', () => {
       const { stage: stageCopying } = await import('./selfUpdate.js')
       const dir = installed()
       const before = statSync(join(dir, 'cli.js')).ino
-      stageCopying(dir, Buffer.from('v2'), Buffer.from('n2'), '2.0.0')
+      stageCopying(dir, Buffer.from('v2'), Buffer.from('n2'), '2.0.0', 'darwin')
       expect(readFileSync(join(dir, 'cli.js.prev'), 'utf8')).toBe('v1')
       expect(statSync(join(dir, 'cli.js.prev')).ino).not.toBe(before)
       expect(readdirSync(dir).filter((name) => name.endsWith('.tmp'))).toEqual([])
@@ -1014,5 +1033,238 @@ describe('a link that stalls without dropping (e2e/updateHostile.e2e.ts)', () =>
       expect(errors).toEqual(['[update] check failed (will retry): https://updates.test/cli.js sent nothing for 50 ms'])
     } finally { poller.stop() }
     expect(MANIFEST_LIMITS.deadlineMs).toBeLessThan(DOWNLOAD_LIMITS.deadlineMs)
+  })
+})
+
+describe('self-update on Windows, over version folders', () => {
+  afterEach(() => { for (const dir of dirs) rmSync(dir, { recursive: true, force: true }); dirs = []; pointer.fail = false })
+  const sha = (text: string) => createHash('sha256').update(text).digest('hex')
+  const read = (cli: string, ...parts: string[]) => readFileSync(join(cli, ...parts), 'utf8')
+  const layout = (current: string) => {
+    const cli = join(tempDir(), 'cli')
+    mkdirSync(join(cli, current), { recursive: true })
+    writeFileSync(join(cli, current, 'cli.js'), `cli ${current}`)
+    writeFileSync(join(cli, current, 'notify.mjs'), `notify ${current}`)
+    writeFileSync(join(cli, 'current'), `${current}\n`)
+    return cli
+  }
+  const stageWin = (cli: string, version: string) => stage(cli, Buffer.from(`cli ${version}`), Buffer.from(`notify ${version}`), version, 'win32')
+
+  it('stages a build into its own folder and points cli\\current at it, never touching the build that runs', () => {
+    const cli = layout('0.5.0')
+    stageWin(cli, '0.5.1')
+    expect(read(cli, '0.5.1', 'cli.js')).toBe('cli 0.5.1')
+    expect(read(cli, 'current').trim()).toBe('0.5.1')
+    expect(read(cli, 'notify.mjs')).toBe('notify 0.5.1')
+    expect(read(cli, '0.5.0', 'cli.js')).toBe('cli 0.5.0')
+    expect(existsSync(join(cli, 'cli.js'))).toBe(false)
+    expect(readdirSync(cli).filter((name) => name.startsWith('.'))).toEqual([])
+    // The bundle a master fingerprints is the one cli\current names: the update is still to be judged.
+    expect(unjudgedUpdate(cli, sha('cli 0.5.1'))).toBe('0.5.1')
+  })
+
+  it('rolls back by pointing cli\\current at the build before, and remembers the one that failed', () => {
+    const cli = layout('0.5.0')
+    stageWin(cli, '0.5.1')
+    restore(cli, 'win32')
+    expect(read(cli, 'current').trim()).toBe('0.5.0')
+    expect(read(cli, 'notify.mjs')).toBe('notify 0.5.0')
+    expect(rejectedVersions(cli)).toEqual(['0.5.1'])
+    expect(existsSync(join(cli, 'update-pending.json'))).toBe(false)
+    // Nothing to go back to: the failure is still remembered.
+    const fresh = layout('0.6.0')
+    writeFileSync(join(fresh, 'update-pending.json'), JSON.stringify({ version: '0.6.0', sha256: sha('cli 0.6.0') }))
+    restore(fresh, 'win32')
+    expect(read(fresh, 'current').trim()).toBe('0.6.0')
+    expect(rejectedVersions(fresh)).toEqual(['0.6.0'])
+  })
+
+  it('keeps the pending note when the pointer cannot be moved back, so the next start judges and rolls back again', () => {
+    const cli = layout('0.5.0')
+    stageWin(cli, '0.5.1')
+    pointer.fail = true
+    restore(cli, 'win32')
+    expect(read(cli, 'current').trim()).toBe('0.5.1')
+    expect(rejectedVersions(cli)).toEqual(['0.5.1'])
+    expect(unjudgedUpdate(cli, sha('cli 0.5.1'))).toBe('0.5.1')
+    expect(settleRolledBack(cli, 'win32')).toBeNull()
+    pointer.fail = false
+    restore(cli, 'win32')
+    expect(read(cli, 'current').trim()).toBe('0.5.0')
+    expect(rejectedVersions(cli)).toEqual(['0.5.1'])
+    expect(existsSync(join(cli, 'update-pending.json'))).toBe(false)
+  })
+
+  it('rolls back to the last build kept when a newer one was staged during probation', () => {
+    const cli = layout('0.5.0')
+    stageWin(cli, '0.5.1')
+    stageWin(cli, '0.5.2')
+    restore(cli, 'win32')
+    expect(read(cli, 'current').trim()).toBe('0.5.0')
+    stageWin(cli, '0.5.3')
+    confirm(cli)
+    stageWin(cli, '0.5.4')
+    restore(cli, 'win32')
+    expect(read(cli, 'current').trim()).toBe('0.5.3')
+  })
+
+  it('needs the version, and puts the pending note back when the pointer cannot be moved', () => {
+    const cli = layout('0.5.0')
+    expect(() => stage(cli, Buffer.from(''), Buffer.from(''), undefined, 'win32')).toThrow(/needs its version/)
+    pointer.fail = true
+    expect(() => stageWin(cli, '0.5.1')).toThrow('EPERM')
+    expect(existsSync(join(cli, 'update-pending.json'))).toBe(false)
+    writeFileSync(join(cli, 'update-pending.json'), '{"version":"0.4.9"}\n')
+    expect(() => stageWin(cli, '0.5.1')).toThrow('EPERM')
+    expect(read(cli, 'update-pending.json')).toBe('{"version":"0.4.9"}\n')
+    expect(read(cli, 'current').trim()).toBe('0.5.0')
+  })
+
+  it('keeps the build in use and the one to roll back to, and retires the rest', async () => {
+    const cli = layout('0.5.0')
+    for (const version of ['0.4.0', '0.4.1', '0.4.2']) stageWin(cli, version)
+    writeFileSync(join(cli, 'current'), '0.5.0\n')
+    rmSync(join(cli, 'update-pending.json'))
+    writeFileSync(join(cli, 'update-rejected.json'), '["0.4.2"]\n')
+    const remove = (path: string) => rmSync(path, { recursive: true, force: true })
+    expect((await retireCliVersions(cli, { rows: async () => [], remove, log: () => {} })).sort()).toEqual(['0.4.0', '0.4.2'])
+    expect(versionsOnDisk(cli).sort()).toEqual(['0.4.1', '0.5.0'])
+    // On probation, the build to roll back to is the pending note's.
+    stageWin(cli, '0.5.1')
+    expect(await retireCliVersions(cli, { rows: async () => [], remove, log: () => {} })).toEqual(['0.4.1'])
+    // No pointer: nothing proves which build is in use.
+    rmSync(join(cli, 'current'))
+    expect(await retireCliVersions(cli, { rows: async () => [], remove, log: () => {} })).toEqual([])
+  })
+
+  it('judges what to keep after reading the process table: a stage meanwhile keeps the build it points at', async () => {
+    const cli = layout('0.5.0')
+    for (const version of ['0.4.0', '0.3.0', '0.2.0']) stageWin(cli, version)
+    writeFileSync(join(cli, 'current'), '0.5.0\n')
+    rmSync(join(cli, 'update-pending.json'))
+    const remove = (path: string) => rmSync(path, { recursive: true, force: true })
+    // The updater's own stage, inside the read (the spawn lock nests within a process): cli\current moves to 0.3.0,
+    // a build already on disk that was neither in use nor the one to roll back to.
+    const rows = async () => { stageWin(cli, '0.3.0'); return [] }
+    expect((await retireCliVersions(cli, { rows, remove, log: () => {} })).sort()).toEqual(['0.2.0', '0.4.0'])
+    expect(read(cli, 'current').trim()).toBe('0.3.0')
+    expect(versionsOnDisk(cli).sort()).toEqual(['0.3.0', '0.5.0'])
+  })
+
+  it('settles a build rolled back without remembering it, against the build cli\\current names', () => {
+    const cli = layout('0.5.0')
+    stageWin(cli, '0.5.1')
+    expect(settleRolledBack(cli, 'win32')).toBeNull()
+    writeFileSync(join(cli, 'current'), '0.5.0\n')
+    expect(settleRolledBack(cli, 'win32')).toBe('0.5.1')
+    expect(rejectedVersions(cli)).toEqual(['0.5.1'])
+    rmSync(join(cli, 'current'))
+    writeFileSync(join(cli, 'update-pending.json'), JSON.stringify({ version: '0.5.2', sha256: 'x' }))
+    expect(settleRolledBack(cli, 'win32')).toBe('0.5.2')
+  })
+})
+
+describe('the automatic updater on Windows, judged against the build cli\\current names', () => {
+  // A master superseded by a newer build (another process's update, or the installer) still runs from its
+  // old version folder. Its own version says nothing about what is installed: the pointer does.
+  const cliSource = Buffer.from('console.log("9.9.9")\n')
+  const notifySource = Buffer.from('export {}\n')
+  const sha = (b: Buffer): string => createHash('sha256').update(b).digest('hex')
+  let manifestChecks = 0
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
+    dirs = []
+    manifestChecks = 0
+  })
+
+  function serveUpdate(): void {
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (url.endsWith('/metadata.json')) {
+        manifestChecks++
+        return new Response(JSON.stringify({ adapter: {
+          version: '9.9.9',
+          cli: { url: 'https://updates.test/cli.js', sha256: sha(cliSource) },
+          notify: { url: 'https://updates.test/notify.mjs', sha256: sha(notifySource) },
+        } }))
+      }
+      return new Response(url.endsWith('cli.js') ? cliSource : notifySource)
+    })
+  }
+
+  const installed = (version: string): string => {
+    const cli = join(tempDir(), 'cli')
+    mkdirSync(join(cli, version), { recursive: true })
+    writeFileSync(join(cli, version, 'cli.js'), `cli ${version}`)
+    writeFileSync(join(cli, version, 'notify.mjs'), `notify ${version}`)
+    writeFileSync(join(cli, 'current'), `${version}\r\n`)
+    return cli
+  }
+
+  it('stages nothing older than the build cli\\current names, however old the running build is', async () => {
+    serveUpdate()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const cli = installed('9.9.10')
+    const staged: string[] = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: cli, intervalMs: 10, platform: 'win32',
+      onStaged: (version) => { staged.push(version) },
+    })
+    try {
+      await vi.waitFor(() => expect(manifestChecks).toBeGreaterThanOrEqual(3), { timeout: 5_000 })
+    } finally { poller.stop() }
+    expect(staged).toEqual([])
+    expect(readFileSync(join(cli, 'current'), 'utf8')).toBe('9.9.10\r\n')
+    expect(existsSync(join(cli, '9.9.9'))).toBe(false)
+    expect(existsSync(join(cli, 'update-pending.json'))).toBe(false)
+  })
+
+  it('stages nothing when cli\\current moves past the build while it downloads, and says so once', async () => {
+    // The gate saw 9.9.8 installed; by the time the lock is held, the installer or another process put in 9.9.10.
+    serveUpdate()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const cli = installed('9.9.8')
+    const staged: string[] = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: cli, intervalMs: 10, platform: 'win32',
+      withLock: async (fn) => {
+        mkdirSync(join(cli, '9.9.10'))
+        writeFileSync(join(cli, '9.9.10', 'cli.js'), 'cli 9.9.10')
+        writeFileSync(join(cli, '9.9.10', 'notify.mjs'), 'notify 9.9.10')
+        writeFileSync(join(cli, 'current'), '9.9.10\r\n')
+        return fn()
+      },
+      onStaged: (version) => { staged.push(version) },
+    })
+    const said = (): unknown[][] => log.mock.calls.filter(([line]) => String(line).includes('is no longer an update'))
+    try {
+      await vi.waitFor(() => expect(said()).toHaveLength(1), { timeout: 5_000 })
+      const checks = manifestChecks
+      await vi.waitFor(() => expect(manifestChecks).toBeGreaterThanOrEqual(checks + 3), { timeout: 5_000 })
+    } finally { poller.stop() }
+    expect(said()).toEqual([['[update] 9.9.9 is no longer an update: the installed build is now 9.9.10. Nothing was staged.']])
+    expect(staged).toEqual([])
+    expect(readFileSync(join(cli, 'current'), 'utf8')).toBe('9.9.10\r\n')
+    expect(existsSync(join(cli, '9.9.9'))).toBe(false)
+    expect(existsSync(join(cli, 'update-pending.json'))).toBe(false)
+  })
+
+  it('judges against its own version when cli\\current cannot be read', async () => {
+    serveUpdate()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const cli = installed('9.9.10')
+    writeFileSync(join(cli, 'current'), '..\r\n')
+    const staged: string[] = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: cli, intervalMs: 10, platform: 'win32',
+      onStaged: (version) => { staged.push(version) },
+    })
+    try {
+      await vi.waitFor(() => expect(staged).toEqual(['9.9.9']), { timeout: 5_000 })
+    } finally { poller.stop() }
+    expect(readFileSync(join(cli, 'current'), 'utf8')).toBe('9.9.9\r\n')
+    expect(readFileSync(join(cli, '9.9.9', 'cli.js'))).toEqual(cliSource)
   })
 })

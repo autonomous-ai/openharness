@@ -1,3 +1,4 @@
+import '../core/home_dir.dart';
 import '../measurement/product_measurement.dart';
 import '../measurement/product_runtime_health.dart';
 import '../measurement/product_connections.dart';
@@ -58,6 +59,7 @@ import '../auth/cli_login.dart';
 import '../bootstrap/agent_prefetch.dart';
 import '../bootstrap/environment_provisioner.dart';
 import '../bootstrap/setup_progress.dart';
+import '../bootstrap/windows_self_install.dart';
 import '../core/viewer_mode.dart';
 import '../core/config.dart';
 import '../core/sleep_aware.dart';
@@ -72,6 +74,7 @@ import '../core/browser_label.dart';
 import '../core/local_hostname.dart';
 import '../core/local_git_projects.dart';
 import '../core/test_run.dart';
+import '../core/runtime_platform.dart';
 import '../core/agent_activity.dart';
 import '../core/models.dart';
 import '../core/harness_resources.dart';
@@ -85,6 +88,7 @@ import '../core/repository_clone.dart';
 import '../core/retry.dart';
 import '../core/process_responsibility.dart';
 import '../core/serial_port_lease.dart';
+import '../core/uninstall_marker.dart';
 import '../autonomous_device/autonomous_device_cli.dart';
 import '../settings/config_store.dart';
 import '../settings/experimental_features.dart';
@@ -803,10 +807,25 @@ class AppNotifier extends ChangeNotifier {
       if (!machine.usesLocalTransport) continue;
       final connection = _pool?[machine.machine.machineId];
       if (connection == null || !connection.isReady) return false;
+      // Windows accepts these frames only over its private pipe.
+      if (connection.trustedPipeMissing) {
+        return false;
+      }
       unawaited(
         connection.sendTerminalFrame(type, payload).catchError((_) => false),
       );
       return true;
+    }
+    return false;
+  }
+
+  /// Whether this computer's daemon pipe was missing or failed proof at the
+  /// last connection attempt. Never true on macOS or Linux.
+  bool get daemonTrustedConnectionMissing {
+    for (final machine in machineStates.values) {
+      if (!machine.usesLocalTransport) continue;
+      final connection = _pool?[machine.machine.machineId];
+      return connection != null && connection.trustedPipeMissing;
     }
     return false;
   }
@@ -828,6 +847,7 @@ class AppNotifier extends ChangeNotifier {
     connection = LocalCodingMemoryConnection(
       endpoint: endpoint,
       machineId: id,
+      localTransport: localDaemonTransport,
       isCurrent: () =>
           _authWorkCurrent(auth) &&
           currentUser?.id == owner &&
@@ -874,8 +894,11 @@ class AppNotifier extends ChangeNotifier {
       ? DaemonOwnerGuard(
           probe: MacResponsibilityProbe(),
           ownPid: pid,
+          // An uninstall at work as well: this restart is a `harness stop` and a start beside it.
           paused: () =>
-              SerialPortLease.held || SerialPortLease.heldByAnotherProcess(),
+              SerialPortLease.held ||
+              SerialPortLease.heldByAnotherProcess() ||
+              UninstallMarker.held(),
           restart: () async {
             final probe = await _discovery.restart();
             return probe.ready ? probe.pid : null;
@@ -908,6 +931,10 @@ class AppNotifier extends ChangeNotifier {
   /// unless a test passes one, so nothing there runs `curl`.
   final AgentPrefetch? agentPrefetch;
   final DesktopUpdater? desktopUpdater;
+
+  /// Windows release builds hand a zip copy to its launcher before setup.
+  final WindowsSelfInstall? windowsSelfInstall;
+  final void Function(int code) _exitApp;
   @visibleForTesting
   final WsConn Function(String machineId)? connectionForTest;
   final Map<String, Timer> _turnActivityWatchdogs = {};
@@ -1079,6 +1106,8 @@ class AppNotifier extends ChangeNotifier {
   // Update checks do not depend on the daemon or SSO. A signed-out user should
   // still be able to replace a broken desktop build from the login screen.
   Timer? _updateCheckTimer;
+  // A zip copy whose installer did not start can run, but cannot update itself.
+  bool _selfInstallUnavailable = false;
 
   /// Ends the window in which a restored tile may still claim its terminal —
   /// see [TerminalPane.claimOnFirstAttach]. Without it a machine that only
@@ -1088,7 +1117,8 @@ class AppNotifier extends ChangeNotifier {
   late final DesktopUpdater _updater = desktopUpdater ?? DesktopUpdater();
   Future<ManualUpdateCheck>? _manualUpdateCheckInFlight;
   DesktopUpdateCheck? lastUpdateCheck;
-  bool get updateChecksEnabled => viewer == null && _updater.canCheck;
+  bool get updateChecksEnabled =>
+      viewer == null && !_selfInstallUnavailable && _updater.canCheck;
   String? _skippedDesktopUpdateVersion;
   UpdateInfo? availableUpdate;
   bool isCheckingForUpdate = false;
@@ -1100,6 +1130,7 @@ class AppNotifier extends ChangeNotifier {
   /// than sitting at a 100% that has not finished anything.
   double? updateDownloadFraction;
   String? updateError;
+  bool windowsUpdatePartiallyPublished = false;
   final Set<String> _offlinePollsInFlight = {};
   final Map<String, Object> _offlineRecoveryInFlight = {};
   bool _disposed = false;
@@ -1381,6 +1412,8 @@ class AppNotifier extends ChangeNotifier {
       _closeOwnerMemories();
       deviceHosts.clear();
       _deviceReads.clear();
+      // Names and membership belong to the account that discovered them.
+      _superTabNames = {};
     }
     _currentUser = profile;
     final id = profile?.id;
@@ -1665,8 +1698,15 @@ class AppNotifier extends ChangeNotifier {
         return;
       }
       var changed = false;
+      // Membership and names for the closed list: a tab hidden before a
+      // restart has no open view to take its name from.
+      final names = {for (final tab in tabs) tab.id: tab.name};
+      final namesChanged = !mapEquals(names, _superTabNames);
+      _superTabNames = names;
       for (final tab in tabs) {
-        final existing = swarms.where((s) => s.superTabId == tab.id).firstOrNull;
+        final existing = swarms
+            .where((s) => s.superTabId == tab.id)
+            .firstOrNull;
         if (existing != null) {
           if (existing.name != tab.name || !existing.nameIsCustom) {
             existing.name = tab.name;
@@ -1685,10 +1725,9 @@ class AppNotifier extends ChangeNotifier {
           changed = true;
         }
       }
-      if (changed) {
-        _persistLayout();
-        notifyListeners();
-      }
+      if (changed) _persistLayout();
+      // The closed list is read from these names, so it can change on its own.
+      if (changed || namesChanged) notifyListeners();
     },
     onSnapshot: (controller) {
       if (_disposed || controller.accountId != currentUser?.id) return;
@@ -1708,7 +1747,7 @@ class AppNotifier extends ChangeNotifier {
       if (target == null) {
         throw const SuperTabFailure(
           'MACHINE_UNAVAILABLE',
-          'Connect one of your machines to open Super Tab.',
+          'Connect one of your machines to open Swarm.',
         );
       }
       final result = await superTabMachineRequest(target.machine.machineId, {
@@ -1721,24 +1760,82 @@ class AppNotifier extends ChangeNotifier {
     },
   );
 
+  Map<String, String> _superTabNames = {};
+  final StreamController<String> _superTabClosures =
+      StreamController<String>.broadcast();
+
+  /// Closing a Swarm only hides it here, which looks like losing it. Each
+  /// closure announces its history id so the screen can offer to reopen it.
+  Stream<String> get superTabClosures => _superTabClosures.stream;
+
+  /// Swarms hidden on this computer that the account still belongs to,
+  /// by name. Saved with the hidden set, so a restart keeps them.
+  List<({String id, String name})> get closedSuperTabs {
+    final open = {for (final s in swarms) s.superTabId};
+    return [
+      for (final id in superTabs.hiddenIds)
+        if (!open.contains(id) && _superTabNames.containsKey(id))
+          (
+            id: id,
+            name: _superTabNames[id]!.trim().isEmpty
+                ? 'Swarm'
+                : _superTabNames[id]!,
+          ),
+    ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+  }
+
   Future<Map<String, dynamic>> superTabMachineRequest(
     String machineId,
     Map<String, dynamic> payload,
   ) async {
     final revision = _authRevision;
-    final result = await _conn(machineId).request(
-      'super_tabs',
-      payload: payload,
-      timeout: const Duration(seconds: 30),
-    );
+    SuperTabFailure refusal(String code, String? detail, int status) {
+      if (!_authWorkCurrent(revision)) {
+        return const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+      }
+      final body = payload['body'];
+      final command = body is Map ? body['command'] : null;
+      if (payload['action'] == 'backend' &&
+          command is Map &&
+          command['type'] == 'project.create' &&
+          code == 'VALIDATION_ERROR' &&
+          detail?.contains('command.type') == true &&
+          detail?.contains('discriminator') == true) {
+        return SuperTabFailure(
+          'UPDATE_REQUIRED',
+          'The Swarm service needs an update before you can create a project. Your draft is saved.',
+          statusCode: status,
+        );
+      }
+      return SuperTabFailure(
+        code,
+        detail ?? 'Could not reach this Swarm.',
+        statusCode: status,
+      );
+    }
+
+    final Map<String, dynamic> result;
+    try {
+      result = await _conn(machineId).request(
+        'super_tabs',
+        payload: payload,
+        timeout: const Duration(seconds: 30),
+      );
+    } on WsRequestFailure catch (failure) {
+      throw refusal(
+        failure.code,
+        failure.detail,
+        (failure.payload['status'] as num?)?.toInt() ?? 0,
+      );
+    }
     if (!_authWorkCurrent(revision)) {
       throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
     }
     if (result['error'] != null) {
-      throw SuperTabFailure(
+      throw refusal(
         result['error'].toString(),
-        result['detail'] as String? ?? 'Could not reach this Super Tab.',
-        statusCode: (result['status'] as num?)?.toInt() ?? 0,
+        result['detail'] as String?,
+        (result['status'] as num?)?.toInt() ?? 0,
       );
     }
     return result;
@@ -1756,9 +1853,10 @@ class AppNotifier extends ChangeNotifier {
     if (swarm == null) return;
     // A discovery response can beat the creation response back to this
     // computer. Keep the lead form's tab and retain any already-open panes.
-    for (final duplicate in swarms
-        .where((s) => s.id != swarmId && s.superTabId == tabId)
-        .toList()) {
+    for (final duplicate
+        in swarms
+            .where((s) => s.id != swarmId && s.superTabId == tabId)
+            .toList()) {
       for (final pane in duplicate.panes) {
         if (!swarm.panes.contains(pane)) swarm.panes.add(pane);
       }
@@ -1770,27 +1868,60 @@ class AppNotifier extends ChangeNotifier {
     swarm.name = name;
     swarm.nameIsCustom = true;
     swarm.isNewTabPage = false;
+    // A tab bound here is one the person belongs to.
+    _superTabNames[tabId] = name;
     _rememberSuperTabVisibility(tabId, true);
     _persistLayout();
     notifyListeners();
   }
 
-  void openSuperTab(String tabId, String name) {
+  /// The one way to show a Swarm: focus its view if it is open, else give
+  /// it one. An untouched New Tab page named by [intoSwarmId] becomes the view
+  /// instead of being left behind. Any history entry for the tab is dropped, so
+  /// Reopen later cannot add a second view.
+  void openSuperTab(String tabId, String name, {String? intoSwarmId}) {
     _rememberSuperTabVisibility(tabId, true);
+    _closedHistory.removeWhere(
+      (entry) => entry is ClosedSwarm && entry.superTabId == tabId,
+    );
     final existing = swarms.where((s) => s.superTabId == tabId).firstOrNull;
     if (existing != null) {
       selectSwarm(existing.id);
+      return;
+    }
+    final page = swarms
+        .where(
+          (s) =>
+              s.id == intoSwarmId &&
+              s.panes.isEmpty &&
+              (s.isNewTabPage || (s.isSuperTab && s.superTabId == null)),
+        )
+        .firstOrNull;
+    if (page != null) {
+      bindSuperTab(page.id, tabId, name);
+      selectSwarm(page.id);
       return;
     }
     newSwarm(newTabPage: true);
     bindSuperTab(activeSwarmId, tabId, name);
   }
 
+  /// Opens a tab from [closedSuperTabs]. False when it is no longer listed
+  /// (open already, or the account has left it).
+  bool openClosedSuperTab(String tabId, {String? intoSwarmId}) {
+    final closed = closedSuperTabs.where((tab) => tab.id == tabId).firstOrNull;
+    if (closed == null) return false;
+    openSuperTab(closed.id, closed.name, intoSwarmId: intoSwarmId);
+    return true;
+  }
+
   void _rememberSuperTabVisibility(String tabId, bool visible) {
     if (localStore == null) return;
-    unawaited(superTabs.setTabVisible(tabId, visible).catchError((Object error) {
-      appLog.warn('super-tab', 'Could not save tab visibility: $error');
-    }));
+    unawaited(
+      superTabs.setTabVisible(tabId, visible).catchError((Object error) {
+        appLog.warn('super-tab', 'Could not save tab visibility: $error');
+      }),
+    );
   }
 
   void markSuperTabDraft(String swarmId) {
@@ -1818,16 +1949,40 @@ class AppNotifier extends ChangeNotifier {
 
   Future<Agent> recoverSuperTabCreation(
     String machineId,
-    String creationId,
-  ) async {
-    final revision = _authRevision;
-    final result = await _conn(machineId).request(
+    String creationId, {
+    bool cancelIfMissing = false,
+  }) async {
+    final revision = _authRevision, account = currentUser?.id;
+    var result = await _conn(machineId).request(
       'agent_create_status',
       payload: {'creationId': creationId},
       timeout: const Duration(seconds: 10),
     );
-    if (!_authWorkCurrent(revision)) {
+    if (!_authWorkCurrent(revision) || currentUser?.id != account) {
       throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+    }
+    // Older Swarm bootstraps exceeded the native prompt limit, which rejects
+    // before writing a receipt. Fence that exact missing intent durably before
+    // allowing a retry; an uncertain/mismatched response must stay locked.
+    if (cancelIfMissing &&
+        result['creationId'] == creationId &&
+        result['state'] == 'missing') {
+      result = await _conn(machineId).request(
+        'agent_create_cancel',
+        payload: {'creationId': creationId},
+        timeout: const Duration(seconds: 10),
+      );
+      if (!_authWorkCurrent(revision) || currentUser?.id != account) {
+        throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+      }
+    }
+    if (cancelIfMissing &&
+        result['creationId'] == creationId &&
+        result['state'] == 'cancelled') {
+      throw const SuperTabFailure(
+        'CREATION_FAILED',
+        'The previous startup request was cancelled. Try again to start this project.',
+      );
     }
     if (result['creationId'] == creationId && result['state'] == 'failed') {
       final failure = result['failure'] is Map
@@ -3065,10 +3220,14 @@ class AppNotifier extends ChangeNotifier {
       replacement = Swarm(id: 'swarm-${_nextSwarmId++}');
       swarms.add(replacement);
     }
+    final historyId = 'closed-${_nextClosedHistoryId++}';
+    if (removed.superTabId != null && !_disposed) {
+      _superTabClosures.add(historyId);
+    }
     _rememberClosed(
       ClosedSwarm(
         removed,
-        historyId: 'closed-${_nextClosedHistoryId++}',
+        historyId: historyId,
         index: index,
         replacement: replacement,
         engine: removed.panes.length == 1
@@ -3119,7 +3278,7 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// Close removes these views. Super Tabs own work independently of their
+  /// Close removes these views. Swarms own work independently of their
   /// views; ordinary tabs stop a session only when its last view closes.
   Future<void> requestCloseSwarm(String id) {
     final tab = swarms.where((s) => s.id == id).firstOrNull;
@@ -3205,9 +3364,9 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed) return Future.value();
     if (_viewCloseRequests[key] case final pending?) return pending;
     bool canStop(String machineId, String agentId) {
-      // A Super Tab pane is only a view into shared work. This guard also covers
+      // A Swarm pane is only a view into shared work. This guard also covers
       // the close shortcut, native menu and whole-tab dismissal, including a
-      // regular tab becoming a Super Tab while a close review is pending.
+      // regular tab becoming a Swarm while a close review is pending.
       if (tab.isSuperTab) return false;
       if (!swarms.contains(tab) ||
           (wholeTab &&
@@ -3424,6 +3583,15 @@ class AppNotifier extends ChangeNotifier {
     );
     if (index < 0) return;
     final saved = _closedHistory[index] as ClosedSwarm;
+    // The tab may have been opened another way since: focus that view.
+    if (saved.superTabId case final tabId?) {
+      final open = swarms.where((s) => s.superTabId == tabId).firstOrNull;
+      if (open != null) {
+        _closedHistory.removeAt(index);
+        selectSwarm(open.id);
+        return;
+      }
+    }
     if (!_canReopenSwarm(saved)) return;
     _closedHistory.removeAt(index);
     if (saved.superTabId case final tabId?) {
@@ -3954,6 +4122,8 @@ class AppNotifier extends ChangeNotifier {
     this.environmentProvisioner,
     AgentPrefetch? agentPrefetch,
     this.desktopUpdater,
+    WindowsSelfInstall? windowsSelfInstall,
+    void Function(int code)? exitApp,
     this.connectionForTest,
     ProductMeasurement? productMeasurement,
     SignInClient? cliLogin,
@@ -3973,6 +4143,12 @@ class AppNotifier extends ChangeNotifier {
            (kUnderTest
                ? null
                : AgentPrefetch(log: (line) => appLog.info('setup', line))),
+       windowsSelfInstall =
+           windowsSelfInstall ??
+           (RuntimePlatform.isWindows && kReleaseMode && !kUnderTest && !kViewerMode
+               ? WindowsSelfInstall()
+               : null),
+       _exitApp = exitApp ?? exit,
        alerts = alerts ?? AlertSounds(store: alertSoundStore),
        agentAlerts = agentAlerts ?? AgentAlerts(),
        systemNotifications =
@@ -4291,9 +4467,12 @@ class AppNotifier extends ChangeNotifier {
   bool Function() harnessInstalledBefore = kUnderTest
       ? () => false
       : () {
-          final home = Platform.environment['HOME'];
+          final home = maybeHomeDir();
           return home == null ||
-              FileSystemEntity.typeSync('$home/.harness/cli') !=
+              FileSystemEntity.typeSync(
+                    '$home${Platform.pathSeparator}.harness'
+                    '${Platform.pathSeparator}cli',
+                  ) !=
                   FileSystemEntityType.notFound;
         };
 
@@ -5471,7 +5650,10 @@ class AppNotifier extends ChangeNotifier {
       // serve a computer that runs the harness CLI. The updater is not merely useless there — it
       // throws on an architecture it has no channel for (`ios_arm64`), from inside bootstrap.
       if (viewer == null) {
-        _startUpdateChecking();
+        if (await _selfInstallTookOver()) return;
+        if (!_selfInstallUnavailable) {
+          _startUpdateChecking();
+        }
         final environmentReady = await _prepareEnvironment();
         if (!environmentReady) return;
       }
@@ -5484,6 +5666,25 @@ class AppNotifier extends ChangeNotifier {
         _lastError = 'Could not complete sign-in. Please sign in again.';
       }
       notifyListeners();
+    }
+  }
+
+  /// A zip copy yields to Harness.exe; installed copies schedule cleanup.
+  Future<bool> _selfInstallTookOver() async {
+    final selfInstall = windowsSelfInstall;
+    if (selfInstall == null) return false;
+    switch (await selfInstall.ensureInstalled()) {
+      case Relaunching():
+        appLog.info('setup', 'handing over to Harness.exe --install');
+        flushAppLog(durable: true);
+        _exitApp(0);
+        return true;
+      case SelfInstallFailed(:final message):
+        _selfInstallUnavailable = true;
+        appLog.warn('setup', message);
+        return false;
+      case AlreadyInstalled():
+        return false;
     }
   }
 
@@ -6783,6 +6984,7 @@ class AppNotifier extends ChangeNotifier {
   void _recordUpdateCheck(DesktopUpdateCheck result, {bool manual = false}) {
     if (_disposed) return;
     lastUpdateCheck = result;
+    if (windowsUpdatePartiallyPublished) return;
     if (isInstallingUpdate) return;
     final info = result.update;
     if (info != null) {
@@ -6810,7 +7012,7 @@ class AppNotifier extends ChangeNotifier {
   Future<ManualUpdateCheck> checkForUpdates() {
     // Viewer builds are updated by their app store. Do not even construct a
     // desktop updater there: those platforms have no desktop artifact channel.
-    if (viewer != null) {
+    if (viewer != null || _selfInstallUnavailable) {
       return Future.value(
         const ManualUpdateCheck(check: DesktopUpdateCheck.disabled()),
       );
@@ -6895,7 +7097,8 @@ class AppNotifier extends ChangeNotifier {
     return result.status == DesktopUpdateCheckStatus.upToDate ? null : captured;
   }
 
-  /// Clears a failed install without burying the offer.
+  /// Clears an untouched-install failure without burying the offer. A partial
+  /// Windows publication clears the offer so it cannot prompt the same retry.
   ///
   /// Skipping is permanent — it records the version so the background check
   /// stops raising it. A failure is not a decision about the version, so the
@@ -6903,6 +7106,7 @@ class AppNotifier extends ChangeNotifier {
   void dismissUpdateError() {
     if (updateError == null) return;
     updateError = null;
+    if (windowsUpdatePartiallyPublished) availableUpdate = null;
     notifyListeners();
   }
 
@@ -6920,10 +7124,16 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// Downloads, verifies, and installs only after an explicit user action.
-  /// A failed operation leaves the running app untouched and retryable.
+  /// A Windows publication failure may leave installed files changed and
+  /// requires a restart or launcher repair before another attempt.
   Future<bool> installAvailableUpdate({UpdateInfo? update}) async {
     final chosen = update ?? availableUpdate;
-    if (_disposed || viewer != null || chosen == null || isInstallingUpdate) {
+    if (_disposed ||
+        viewer != null ||
+        _selfInstallUnavailable ||
+        chosen == null ||
+        isInstallingUpdate ||
+        windowsUpdatePartiallyPublished) {
       return false;
     }
     // Reassigned once the manifest has been re-read below; the failure messages
@@ -7005,6 +7215,17 @@ class AppNotifier extends ChangeNotifier {
       flushAppLog(durable: true);
       productRuntimeHealth?.cleanExit();
       exit(0);
+    } on WindowsPartialUpdateException catch (error) {
+      finish(ProductOutcome.failed);
+      finishApply?.call(ProductOutcome.failed);
+      productRuntimeHealth?.cancelUpdate();
+      windowsUpdatePartiallyPublished = true;
+      updateError = error.launcherNeedsRepair
+          ? 'Harness changed update files but could not finish. Close Harness, rename Harness.exe.old to Harness.exe in the install folder, then open Harness again.'
+          : error.publicationIncomplete
+          ? 'Harness changed update files but could not finish. Close Harness and open it again. The update may not be installed.'
+          : 'Harness installed update files but could not open. Close Harness and open it again.';
+      return false;
     } catch (error) {
       finish(ProductOutcome.failed);
       finishApply?.call(ProductOutcome.failed);
@@ -10201,7 +10422,12 @@ class AppNotifier extends ChangeNotifier {
         timeout: const Duration(seconds: 30),
       );
     } on WsRequestFailure catch (failure) {
-      _reportRetargetRefusal(machineId, agentId, failure.code);
+      _reportRetargetRefusal(
+        machineId,
+        agentId,
+        failure.code,
+        detail: failure.detail,
+      );
     } catch (_) {
       // A transport failure or a timeout: the daemon may well have done the move, and the frame
       // that follows says where the agent is. A guess here would tell a story the pane contradicts.
@@ -10258,7 +10484,12 @@ class AppNotifier extends ChangeNotifier {
         timeout: const Duration(seconds: 30),
       );
     } on WsRequestFailure catch (failure) {
-      _reportRetargetRefusal(machineId, agentId, failure.code);
+      _reportRetargetRefusal(
+        machineId,
+        agentId,
+        failure.code,
+        detail: failure.detail,
+      );
     } catch (_) {
       // See `clearAgentGrid`: a transport failure is not a refusal, and the next frame is the truth.
     }
@@ -10708,6 +10939,9 @@ class AppNotifier extends ChangeNotifier {
                 machineStates[machineId]?.isLocalMachine == true
                 ? localDaemonReconnectDelay
                 : null,
+            // This computer's window connection carries the daemon_* frames, which on Windows the
+            // daemon takes only over its pipe (WsConn.trustedLocal). A relayed machine needs no trust.
+            trustedLocal: machineStates[machineId]?.isLocalMachine == true,
           );
     _wireConnectionHooks(connection, machineId);
     return connection;
@@ -13402,6 +13636,17 @@ class AppNotifier extends ChangeNotifier {
     'TMUX_UNAVAILABLE' =>
       'Harness needs tmux to start harnesses on $machine. '
           'Install tmux there, then try again.',
+    // Windows: the terminal service (the pty host) did not answer. Its own
+    // reason is written for the log; the person needs the one fix.
+    'PTY_HOST_UNAVAILABLE' =>
+      'Harness could not open a terminal on $machine. '
+          'Run harness start on that computer, then try again.',
+    // Refused before any pane opened, in words the machine wrote for the
+    // person (an engine Windows cannot start as asked).
+    'ENGINE_LAUNCH_REFUSED' =>
+      detail != null && detail.isNotEmpty
+      ? detail
+      : 'This engine cannot start on $machine. Nothing was started.',
     'CODEX_CLI_TOO_OLD' =>
       detail ??
           'The installed Codex CLI on $machine is too old for Auto approvals. '
@@ -13456,7 +13701,7 @@ class AppNotifier extends ChangeNotifier {
   /// from the apps. The form offers "Use the existing folder" beside this.
   String _projectExistsMessage(String folder, String machine) {
     final name = folder
-        .split('/')
+        .split(RegExp(r'[\\/]'))
         .lastWhere((part) => part.isNotEmpty, orElse: () => folder);
     return '“$name” already exists on $machine. '
         'Choose another name, or use the existing folder.';
@@ -13736,6 +13981,8 @@ class AppNotifier extends ChangeNotifier {
         'INVALID_AGENT',
         'INVALID_PERMISSION_MODE',
         'TMUX_UNAVAILABLE',
+        'PTY_HOST_UNAVAILABLE',
+        'ENGINE_LAUNCH_REFUSED',
         'CODEX_CLI_TOO_OLD',
         'TMUX_TOO_OLD_FOR_GRID',
         'GRID_CONFIG_FAILED',
@@ -13851,7 +14098,9 @@ class AppNotifier extends ChangeNotifier {
         // open (CLI `existingFolder`): said so, and offered to the person.
         if (failure['existingFolder'] case final String folder
             when failure['code'] == 'PROJECT_EXISTS' &&
-                folder.startsWith('/')) {
+                (folder.startsWith('/') ||
+                    RegExp(r'^[A-Za-z]:[\\/]').hasMatch(folder) ||
+                    folder.startsWith(r'\\'))) {
           creation._existingFolder = folder;
           return creation._complete(_projectExistsMessage(folder, machineName));
         }
@@ -14876,9 +15125,16 @@ class AppNotifier extends ChangeNotifier {
     String code,
     Object? detail, {
     bool resuming = false,
-  }) => detail is String && detail.isNotEmpty
+  }) => code == 'PTY_HOST_UNAVAILABLE'
+      // Its detail is written for the log.
+      ? 'Harness could not open a terminal on this machine. Run harness start on it, then try again.'
+      : detail is String && detail.isNotEmpty
       ? detail
       : switch (code) {
+          'ENGINE_LAUNCH_REFUSED' =>
+            resuming
+                ? 'This engine cannot start on this machine. Nothing was started.'
+                : 'This engine cannot start on this machine. Nothing was stopped.',
           'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
             resuming
                 ? 'Update the harness CLI on this machine to open saved harnesses.'
@@ -20277,6 +20533,7 @@ class AppNotifier extends ChangeNotifier {
     unawaited(_zooPushes.close());
     unawaited(_daemonFrames.close());
     unawaited(_modelsRequests.close());
+    unawaited(_superTabClosures.close());
     super.dispose();
   }
 }

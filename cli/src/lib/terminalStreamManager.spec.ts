@@ -132,6 +132,19 @@ describe('TerminalStreamManager', () => {
     expect(stream.writes).toEqual([frame.bytes])
   })
 
+  it('streams an agent on the PTY host as one on tmux', async () => {
+    agents.set('agent-pty', {
+      ...session('codex', 'agent-pty'),
+      runtimes: [{ backend: 'ptyhost', instance: 'p1', paneId: '%3' }],
+      primaryRuntimeKey: 'ptyhost:p1:%3',
+    } as unknown as RegisteredSession)
+    agents.set('agent-none', { ...session('codex', 'agent-none'), runtimes: [], primaryRuntimeKey: '' } as unknown as RegisteredSession)
+    await manager.handleFrame('web-1', 'terminal_open', { requestId: 'pty', protocolVersion: 3, agentId: 'agent-pty', cols: 100, rows: 30 })
+    expect(sent.findLast(f => f.payload.requestId === 'pty')?.type).toBe('terminal_ready')
+    await manager.handleFrame('web-1', 'terminal_open', { requestId: 'none', protocolVersion: 3, agentId: 'agent-none', cols: 100, rows: 30 })
+    expect(sent.findLast(f => f.payload.requestId === 'none')).toMatchObject({ type: 'terminal_error', payload: { code: 'TERMINAL_RUNTIME_UNAVAILABLE' } })
+  })
+
   it('uses the same generic path for every current engine', async () => {
     for (const [index, engine] of ENGINES.entries()) {
       const agentId = `agent-generic-${index}`

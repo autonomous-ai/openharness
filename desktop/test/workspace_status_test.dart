@@ -10,6 +10,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/models/model_search_catalog.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/shared/theme/appearance_prefs_store.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -34,6 +35,7 @@ import 'package:harness/widgets/agent_drag.dart';
 import 'package:harness/widgets/status_line.dart';
 import 'package:harness/widgets/workspace_pull_request_label.dart';
 import 'package:harness/shared/theme/pull_request_icon.dart';
+import 'package:harness/shared/theme/workspace_bar_style.dart';
 import 'package:harness/widgets/pull_request_badge.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -622,6 +624,30 @@ void main() {
               lessThan(tester.getRect(context).left),
             );
             if (width == 1280) {
+              final cellWidth = workspaceBarCellSizeOf(tester.element(monitor))
+                  .width;
+              for (final (control, wordLength) in [
+                (monitor, 9),
+                (find.byKey(const ValueKey('workspace-machines')), 8),
+              ]) {
+                final paragraph = tester.renderObject<RenderParagraph>(
+                  find.descendant(of: control, matching: find.byType(RichText)),
+                );
+                final word = paragraph
+                    .getBoxesForSelection(
+                      TextSelection(baseOffset: 0, extentOffset: wordLength),
+                    )
+                    .last;
+                final count = paragraph
+                    .getBoxesForSelection(
+                      TextSelection(
+                        baseOffset: wordLength + 1,
+                        extentOffset: wordLength + 2,
+                      ),
+                    )
+                    .first;
+                expect(count.left - word.right, greaterThan(cellWidth));
+              }
               await captureControls(tester, 'inventory-allowance-footer');
             }
           }
@@ -640,8 +666,28 @@ void main() {
           await tester.pumpAndSettle();
           await tester.tap(find.byKey(const ValueKey('workspace-models')));
           await tester.pumpAndSettle();
-          expect(picker().search.query, ':local');
+          // Nothing typed for the person to delete: Models opens on its
+          // section (local_model_picker_test) instead of filtering to it.
+          expect(picker().search.query, ':');
           picker().onClose();
+          await tester.pumpAndSettle();
+          tester.view.physicalSize = const Size(480, 800);
+          await tester.pumpAndSettle();
+          await tester.tap(
+            find.byKey(const ValueKey('workspace-subscriptions-overflow')),
+          );
+          await tester.pumpAndSettle();
+          expect(picker().search.query, ':');
+          expect(
+            picker().search.selected?.id,
+            startsWith('model:subscription:'),
+          );
+          expect(
+            picker().search.modelSection(picker().search.selected!),
+            ModelSearchSection.subscriptions,
+          );
+          picker().onClose();
+          tester.view.physicalSize = const Size(1280, 800);
           await tester.pumpAndSettle();
           await tester.tap(
             find.byKey(
@@ -691,7 +737,7 @@ void main() {
       find.descendant(of: close.first, matching: find.byIcon(AppIcons.close)),
     );
     expect(restingIcon.size, AppIcons.closeSize);
-    expect(restingIcon.color!.a, .45);
+    expect(restingIcon.color!.a, AppIcons.closeInk);
     final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await mouse.addPointer(location: Offset.zero);
     await mouse.moveTo(tester.getCenter(titles.first));

@@ -4,10 +4,107 @@ import 'package:harness/core/models.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/super_tabs/pane.dart';
 import 'package:harness/super_tabs/workspace.dart';
+import 'package:harness/widgets/pane_grid.dart';
+import 'package:harness/ws/local_cli_discovery.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 
 void main() {
+  testWidgets(
+    'a stopped native stream keeps its Resume action after a chat round trip',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final f = SuperTabLaunchFixture();
+      f.connection.nativeSurface = true;
+      f.app.machineStates['m']!
+        ..terminalCapabilityAvailable = true
+        ..localEndpoint = LocalCliEndpoint(
+          computerId: 'fixture',
+          machineId: 'm',
+          wsUri: Uri.parse('ws://fixture.invalid'),
+          protocolVersion: 1,
+          terminalProtocolVersion: 3,
+        );
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.native = {
+        'id': 'native-lead',
+        'name': 'Lead',
+        'engine': 'claude',
+        'terminal': {'available': true},
+      };
+      f.connection.server.state['agents'] = [
+        {
+          'id': 'lead-agent',
+          'name': 'Lead',
+          'machineId': 'm',
+          'harnessId': 'native-lead',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'claude'},
+        },
+      ];
+      (f.connection.server.state['conversations'] as List)[0]['agentIds'] = [
+        'lead-agent',
+      ];
+      f.app.machineStates['m']!.agents = [Agent.fromJson(f.connection.native!)];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: f.app,
+              builder: (_, _) => SuperTabWorkspace(
+                app: f.app,
+                canvas: PaneGrid(notifier: f.app, swarmMode: true),
+                onAddAgent: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      c.selectTerminal('lead', c.snapshot!.agents.single.id);
+      for (
+        var i = 0;
+        i < 40 && f.app.panes.firstOrNull?.session?.streamId == null;
+        i++
+      ) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(f.app.panes.single.session?.streamId, isNotNull);
+      c.selectTerminal('lead', null);
+      await tester.pump(const Duration(milliseconds: 100));
+      f.connection.native = {
+        ...f.connection.native!,
+        'status': 'stopped',
+        'sessionId': 'saved-native',
+        'terminal': {'available': false},
+      };
+      f.app.machineStates['m']!.agents = [Agent.fromJson(f.connection.native!)];
+      tester
+          .widget<SuperTabView>(find.byType(SuperTabView))
+          .onChooseAgentTerminal!(c.snapshot!.agents.single);
+      for (var i = 0; i < 40 && find.text('Resume').evaluate().isEmpty; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(
+        f.connection.calls.where((call) => call.$1 == 'agent_resume'),
+        isEmpty,
+      );
+      expect(
+        find.text('Resume'),
+        findsOneWidget,
+        reason:
+            '${tester.widgetList<Text>(find.byType(Text)).map((text) => text.data).whereType<String>().join("\n")}\n${f.connection.calls}\n${f.app.panes.single.session?.status}',
+      );
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
   testWidgets(
     'group terminals keep all members when opening one and ignore pane close',
     (tester) async {
@@ -26,6 +123,7 @@ void main() {
           },
       ];
       (state['conversations'] as List)[1]['agentIds'] = ['a', 'b', 'c', 'd'];
+      (state['conversations'] as List)[0]['agentIds'] = ['b'];
       f.app.machineStates['m']!.agents = [
         for (final id in ['a', 'b', 'c', 'd'])
           Agent.fromJson({
@@ -114,6 +212,26 @@ void main() {
         ),
         isEmpty,
       );
+      // The global roster asks for context when a session belongs to more
+      // than one workgroup. The needs-human action above already knew its
+      // group and opened the waiting pane directly.
+      tester
+          .widget<SuperTabView>(find.byType(SuperTabView))
+          .onChooseAgentTerminal!(c.snapshot!.agent('b')!);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('super-agent-group-lead')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('super-agent-group-offline')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const ValueKey('super-agent-group-lead')));
+      await tester.pumpAndSettle();
+      expect(c.selectedId, 'lead');
+      expect(f.app.activeSwarm.panes.single.agentId, 'native-b');
+      expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
       await tester.pumpWidget(const SizedBox());
       await c.flush();
       f.app.superTabs.dispose();
@@ -172,7 +290,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       final calls = f.connection.calls;
-      // Participants → Open terminal, the only way to relaunch a stopped member.
+      // Opening a pane only navigates. Resume is a separate explicit action.
       Future<void> openTerminal() async {
         tester
             .widget<SuperTabView>(find.byType(SuperTabView))
@@ -189,6 +307,14 @@ void main() {
         expect(f.app.activeSwarm.panes.single.agentId, 'native-worker');
       }
       await openTerminal();
+      expect(calls.where((call) => call.$1 == 'agent_resume'), isEmpty);
+      final superPane = tester.widget<SuperPane>(find.byType(SuperPane));
+      if (scenario.viewer) {
+        expect(superPane.onResume, isNull);
+      } else {
+        superPane.onResume!('m', 'native-worker');
+        await tester.pumpAndSettle();
+      }
       expect(calls.where((call) => call.$1 == 'agent_create'), isEmpty);
       expect(
         calls.where((call) => call.$1 == 'agent_resume'),

@@ -6,6 +6,7 @@ import 'support/new_agent_project.dart';
 import 'dart:async';
 
 import 'package:file_selector_platform_interface/file_selector_platform_interface.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -15,13 +16,19 @@ import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/settings/settings_screen.dart';
+import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/widgets/app_choice_picker.dart';
 import 'package:harness/shared/widgets/app_select_field.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/terminal/terminal_binary.dart';
+import 'package:harness/models/models_panel.dart';
 import 'package:harness/widgets/codex_profile_field.dart';
+import 'package:harness/widgets/account_menu.dart';
+import 'package:harness/widgets/agent_drag.dart' show PaneCloseButton;
 import 'package:harness/widgets/new_agent_dialog.dart';
+import 'package:harness/widgets/notification_inbox.dart';
 import 'package:harness/widgets/swarm_dialogs.dart';
 import 'package:harness/widgets/terminal_find_bar.dart';
 
@@ -446,7 +453,7 @@ void main() {
     },
   );
 
-  testWidgets('native Tab commands cannot mutate the view behind Settings', (
+  testWidgets('native Tab commands cannot mutate the view behind a dialog', (
     tester,
   ) async {
     const channel = MethodChannel('harness/swarm_tabs');
@@ -463,11 +470,11 @@ void main() {
         null,
       ),
     );
-    Future<void> native(String method) {
+    Future<void> native(String method, [Object? args]) {
       final result = Completer<void>();
       tester.binding.defaultBinaryMessenger.handlePlatformMessage(
         channel.name,
-        const StandardMethodCodec().encodeMethodCall(MethodCall(method)),
+        const StandardMethodCodec().encodeMethodCall(MethodCall(method, args)),
         (_) => result.complete(),
       );
       return result.future;
@@ -489,12 +496,30 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.byType(SettingsScreen), findsOneWidget);
+    // Settings alone leaves the tab row live (the next test); menus and
+    // shortcuts stay off behind it.
     expect(updates.last['enabled'], isFalse);
+    expect(updates.last['stripEnabled'], isTrue);
+    // A dialog over Settings is modal: the row waits with everything else.
+    final confirm = showDialog<void>(
+      context: tester.element(find.byType(SettingsScreen)),
+      builder: (_) => const AlertDialog(title: Text('Over Settings')),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(updates.last['enabled'], isFalse);
+    expect(updates.last['stripEnabled'], isFalse);
     await native('new');
     await native('closeActive');
     await native('notifications');
+    await native('rowAction', {'method': 'new'});
+    await native('rowAction', {'method': 'notifications'});
     expect(find.text('Needs input'), findsNothing);
     expect(app.swarms.single.id, 'swarm-1');
+    expect(find.byType(SettingsScreen), findsOneWidget);
+    Navigator.of(tester.element(find.byType(AlertDialog))).pop();
+    await tester.pump(const Duration(milliseconds: 300));
+    await confirm;
+    expect(updates.last['stripEnabled'], isTrue);
     Navigator.of(tester.element(find.byType(SettingsScreen))).pop();
     await tester.pump(const Duration(milliseconds: 300));
     await opening;
@@ -575,6 +600,374 @@ void main() {
     projects.dispose();
     app.dispose();
   });
+
+  testWidgets(
+    'with Settings open, choosing a tab or a title-bar icon closes Settings and acts',
+    (tester) async {
+      const channel = MethodChannel('harness/swarm_tabs');
+      final updates = <Map>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+        call,
+      ) async {
+        if (call.method == 'update') updates.add(call.arguments as Map);
+        return null;
+      });
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          null,
+        ),
+      );
+      Future<void> native(String method, [Map<String, Object?>? args]) {
+        final result = Completer<void>();
+        tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          channel.name,
+          const StandardMethodCodec().encodeMethodCall(
+            MethodCall(method, args),
+          ),
+          (_) => result.complete(),
+        );
+        return result.future;
+      }
+
+      final app = createApp();
+      final projects = SwarmProjectStore();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SwarmScreen(
+            notifier: app,
+            nativeTabs: true,
+            projectStore: projects,
+          ),
+        ),
+      );
+      await tester.pump();
+      final first = app.activeSwarmId;
+      app.newSwarm(newTabPage: true);
+      await tester.pump();
+      final second = app.activeSwarmId;
+      expect(second, isNot(first));
+
+      Future<void> openSettings() async {
+        unawaited(native('settings'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(find.byType(SettingsScreen), findsOneWidget);
+        expect(updates.last['stripEnabled'], isTrue);
+      }
+
+      // AppKit sends the row's actions as `rowAction` while the menus are off.
+      // Its reply waits for Settings to close and the action to land.
+      Future<void> act(String method, [Map<String, Object?>? args]) async {
+        final reply = native('rowAction', {
+          'method': method,
+          'arguments': ?args,
+        });
+        var answered = false;
+        unawaited(reply.then((_) => answered = true));
+        for (var frame = 0; frame < 5 && !answered; frame++) {
+          await tester.pump();
+        }
+        expect(answered, isTrue, reason: '$method must answer');
+        await tester.pump(const Duration(milliseconds: 300));
+      }
+
+      await openSettings();
+      await act('select', {'id': first});
+      expect(find.byType(SettingsScreen), findsNothing);
+      expect(app.activeSwarmId, first);
+      expect(updates.last['enabled'], isTrue);
+
+      await openSettings();
+      await act('notifications');
+      expect(find.byType(SettingsScreen), findsNothing);
+      expect(resourceScope(''), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+
+      await openSettings();
+      await act('close', {'id': second});
+      expect(find.byType(SettingsScreen), findsNothing);
+      expect(app.swarms.map((swarm) => swarm.id), [first]);
+
+      // Menus stay off behind Settings: a plain menu action is still dropped.
+      await openSettings();
+      await native('new');
+      expect(find.byType(SettingsScreen), findsOneWidget);
+      expect(app.swarms, hasLength(1));
+      // The pointer over the daemon is not an ask: Settings stays.
+      await act('daemonHover', {'hovered': true});
+      expect(find.byType(SettingsScreen), findsOneWidget);
+      Navigator.of(tester.element(find.byType(SettingsScreen))).pop();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      projects.dispose();
+      app.dispose();
+    },
+  );
+
+  testWidgets(
+    'titlebar dropdowns are overlays: the row stays live, one click outside closes and acts, Esc returns focus; Settings from anywhere closes on a row action; a modal still blocks',
+    (tester) async {
+      const channel = MethodChannel('harness/swarm_tabs');
+      final updates = <Map>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+        call,
+      ) async {
+        if (call.method == 'update') updates.add(call.arguments as Map);
+        return null;
+      });
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          null,
+        ),
+      );
+      Future<void> native(String method, [Map<String, Object?>? args]) {
+        final result = Completer<void>();
+        tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          channel.name,
+          const StandardMethodCodec().encodeMethodCall(
+            MethodCall(method, args),
+          ),
+          (_) => result.complete(),
+        );
+        return result.future;
+      }
+
+      // As AppKit sends a row click while the menus are off.
+      Future<void> act(String method, [Map<String, Object?>? args]) async {
+        final reply = native('rowAction', {
+          'method': method,
+          'arguments': ?args,
+        });
+        var answered = false;
+        unawaited(reply.then((_) => answered = true));
+        for (var frame = 0; frame < 5 && !answered; frame++) {
+          await tester.pump();
+        }
+        expect(answered, isTrue, reason: '$method must answer');
+        await tester.pump(const Duration(milliseconds: 300));
+      }
+
+      // A plain titlebar call, as AppKit sends one while the menus are on.
+      Future<void> send(String method, [Map<String, Object?>? args]) async {
+        final reply = native(method, args);
+        var answered = false;
+        unawaited(reply.then((_) => answered = true));
+        for (var frame = 0; frame < 5 && !answered; frame++) {
+          await tester.pump();
+        }
+        await tester.pump(const Duration(milliseconds: 300));
+      }
+
+      Future<void> open(String method, Finder shown) async {
+        unawaited(native(method));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(shown, findsOneWidget);
+      }
+
+      // A row lit by focus or pointer draws its glyph in the selection ink.
+      Iterable<String> litRows() => [
+        for (final choice in AccountMenuChoice.values)
+          if (tester
+              .widgetList<Icon>(
+                find.descendant(
+                  of: find.byKey(ValueKey('account-menu-${choice.name}')),
+                  matching: find.byType(Icon),
+                ),
+              )
+              .any((icon) => icon.color == grid.AppDesktop.onSelection))
+            choice.name,
+      ];
+
+      final app = createApp();
+      final projects = SwarmProjectStore();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SwarmScreen(
+            notifier: app,
+            nativeTabs: true,
+            projectStore: projects,
+          ),
+        ),
+      );
+      await tester.pump();
+      final first = app.activeSwarmId;
+      app.newSwarm(newTabPage: true);
+      await tester.pump();
+      final second = app.activeSwarmId;
+
+      // The avatar's menu is a dropdown in the shared overlay, not a route:
+      // menus and the row both stay on, and there is no Dialog around it.
+      final barriers = find.byType(ModalBarrier).evaluate().length;
+      final from = updates.length;
+      await open('account', find.byType(AccountMenu));
+      expect(updates.last['enabled'], isTrue);
+      expect(updates.last['stripEnabled'], isTrue);
+      expect(
+        find.ancestor(
+          of: find.byType(AccountMenu),
+          matching: find.byType(Dialog),
+        ),
+        findsNothing,
+      );
+      expect(
+        find.byType(ModalBarrier),
+        findsNWidgets(barriers),
+        reason: 'no barrier of its own',
+      );
+      // One rim, the popover radius (desktop-design-system.md: 16).
+      final rims = tester
+          .widgetList<Material>(
+            find.ancestor(
+              of: find.byType(AccountMenu),
+              matching: find.byType(Material),
+            ),
+          )
+          .followedBy(
+            tester.widgetList<Material>(
+              find.descendant(
+                of: find.byType(AccountMenu),
+                matching: find.byType(Material),
+              ),
+            ),
+          )
+          .where(
+            (material) =>
+                material.shape is RoundedRectangleBorder &&
+                (material.shape! as RoundedRectangleBorder).side !=
+                    BorderSide.none,
+          )
+          .toList();
+      expect(rims, hasLength(1));
+      expect(
+        (rims.single.shape! as RoundedRectangleBorder).borderRadius,
+        BorderRadius.circular(grid.AppDesktop.menuRadius),
+      );
+      expect(grid.AppDesktop.menuRadius, 16);
+      expect(litRows(), isEmpty, reason: 'a pointer opened it: no row lit');
+
+      // A tab click in the native row closes it and chooses the tab, in one
+      // plain call.
+      await send('select', {'id': first});
+      expect(find.byType(AccountMenu), findsNothing);
+      expect(app.activeSwarmId, first);
+      // Opening and closing it never turned a titlebar control off, even for
+      // a frame: that is what flickered the row like a reload.
+      expect(
+        updates
+            .skip(from)
+            .where((u) => u['enabled'] != true || u['stripEnabled'] != true),
+        isEmpty,
+      );
+
+      // The avatar again closes its own menu, as a dropdown's button does.
+      await open('account', find.byType(AccountMenu));
+      await send('account');
+      expect(find.byType(AccountMenu), findsNothing);
+
+      // Escape closes it and gives the keyboard back to whoever had it.
+      final before = FocusManager.instance.primaryFocus;
+      await open('account', find.byType(AccountMenu));
+      expect(FocusManager.instance.primaryFocus, isNot(before));
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      expect(find.byType(AccountMenu), findsNothing);
+      expect(FocusManager.instance.primaryFocus, before);
+
+      // One click outside closes it AND lands: the start page's field takes it.
+      await open('account', find.byType(AccountMenu));
+      final field = find.byKey(const ValueKey('harness-start-search'));
+      await tester.tap(field);
+      await tester.pump();
+      expect(find.byType(AccountMenu), findsNothing);
+      expect(
+        tester
+            .widget<EditableText>(
+              find.descendant(of: field, matching: find.byType(EditableText)),
+            )
+            .focusNode
+            .hasFocus,
+        isTrue,
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+
+      // The bell's inbox is the same kind of dropdown.
+      await open('notificationInbox', find.byType(NotificationInbox));
+      expect(updates.last['enabled'], isTrue);
+      expect(
+        find.ancestor(
+          of: find.byType(NotificationInbox),
+          matching: find.byType(Dialog),
+        ),
+        findsNothing,
+      );
+      // The menu bar's "View all … notifications" opens it; only a titlebar
+      // button toggles. Open already, it stays.
+      await send('notificationInbox', {'open': true});
+      expect(find.byType(NotificationInbox), findsOneWidget);
+      await send('select', {'id': second});
+      expect(find.byType(NotificationInbox), findsNothing);
+      expect(app.activeSwarmId, second);
+
+      // Settings chosen from the avatar's menu, with the pointer.
+      await open('account', find.byType(AccountMenu));
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: tester.getCenter(find.text('Settings')));
+      await tester.pump();
+      await mouse.down(tester.getCenter(find.text('Settings')));
+      await mouse.up();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byType(SettingsScreen), findsOneWidget);
+      expect(updates.last['enabled'], isFalse);
+      expect(updates.last['stripEnabled'], isTrue);
+      await act('select', {'id': first});
+      expect(find.byType(SettingsScreen), findsNothing);
+      expect(app.activeSwarmId, first);
+      // The pointer went to the native row, out of Flutter's view.
+      await mouse.removePointer();
+      await tester.pump();
+      // Opened again, the menu is fresh: nothing kept from the last time.
+      await open('account', find.byType(AccountMenu));
+      expect(litRows(), isEmpty);
+      await send('account');
+      expect(find.byType(AccountMenu), findsNothing);
+
+      // Settings opened by someone else (the app menu, Agent Messages).
+      unawaited(
+        showSettingsScreen(
+          tester.element(find.byType(SwarmScreen)),
+          app,
+          source: 'test',
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(updates.last['stripEnabled'], isTrue);
+      await act('select', {'id': second});
+      expect(find.byType(SettingsScreen), findsNothing);
+      expect(app.activeSwarmId, second);
+
+      // A real dialog (Rename Tab) still holds the row.
+      await open('renameActive', find.text('Rename Tab'));
+      expect(updates.last['stripEnabled'], isFalse);
+      await act('select', {'id': first});
+      expect(find.text('Rename Tab'), findsOneWidget);
+      expect(app.activeSwarmId, second);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('Rename Tab'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      projects.dispose();
+      app.dispose();
+    },
+  );
 
   testWidgets(
     'late profile discovery cannot cross a machine switch with identical observed paths',
@@ -702,4 +1095,90 @@ void main() {
       app.dispose();
     },
   );
+
+  testWidgets(
+    'every titlebar click closes the open dropdown before it acts; a dropdown\'s own button closes it',
+    (tester) async {
+      const channel = MethodChannel('harness/swarm_tabs');
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        (call) async => null,
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          null,
+        ),
+      );
+      Future<void> send(String method) async {
+        final reply = Completer<void>();
+        tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          channel.name,
+          const StandardMethodCodec().encodeMethodCall(MethodCall(method)),
+          (_) => reply.complete(),
+        );
+        for (var frame = 0; frame < 5 && !reply.isCompleted; frame++) {
+          await tester.pump();
+        }
+        await tester.pump(const Duration(milliseconds: 300));
+      }
+
+      final app = createApp();
+      final projects = SwarmProjectStore();
+      await app.modelManager.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SwarmScreen(
+            notifier: app,
+            nativeTabs: true,
+            projectStore: projects,
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // The daemon's button returns early while it has nothing to show; the
+      // open menu still closes.
+      await send('account');
+      expect(find.byType(AccountMenu), findsOneWidget);
+      await send('daemon');
+      expect(find.byType(AccountMenu), findsNothing);
+
+      // Models: its button opens it and closes it again; the avatar's closes
+      // it on the way to its own menu, and the other way round.
+      await send('modelControls');
+      expect(find.byType(ModelsPanel), findsOneWidget);
+      await send('modelControls');
+      expect(find.byType(ModelsPanel), findsNothing);
+      await send('modelControls');
+      await send('account');
+      expect(find.byType(ModelsPanel), findsNothing);
+      expect(find.byType(AccountMenu), findsOneWidget);
+      await send('modelControls');
+      expect(find.byType(AccountMenu), findsNothing);
+      expect(find.byType(ModelsPanel), findsOneWidget);
+      await send('modelControls');
+      expect(find.byType(ModelsPanel), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      projects.dispose();
+      app.dispose();
+    },
+  );
+
+  testWidgets('the pane × is full ink at rest, as the tab ×', (tester) async {
+    final app = createApp();
+    addTearDown(app.dispose);
+    app.adoptSessionForTest(terminal('a0', []));
+    await mount(tester, app);
+    final icon = tester.widget<Icon>(
+      find.descendant(
+        of: find.byType(PaneCloseButton),
+        matching: find.byIcon(AppIcons.close),
+      ),
+    );
+    expect(icon.color!.a, AppIcons.closeInk);
+    expect(AppIcons.closeInk, 1);
+    await tester.pumpWidget(const SizedBox());
+  });
 }

@@ -227,6 +227,11 @@ final class HarnessStatusMenu: NSObject, NSMenuDelegate {
     case "clearStatusNotifications":
       guard enabled, let receipts = item.representedObject as? [[String: Any]] else { return }
       emit(action, ["receipts": receipts])
+    case "notificationInbox":
+      // Opens the inbox; only a titlebar button toggles it, so an open one stays.
+      guard enabled else { return }
+      showWindow()
+      emit(action, ["open": true])
     default:
       guard enabled else { return }
       showWindow()

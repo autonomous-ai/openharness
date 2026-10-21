@@ -1,3 +1,6 @@
+import '../core/runtime_platform.dart';
+import '../core/home_dir.dart';
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -55,6 +58,7 @@ class AgentPrefetch {
     String? Function()? markerDir,
     bool? warmOpenCode,
     String shell = '/bin/bash',
+    bool? isWindows,
   }) : _warm = warmOpenCode ?? !kUnderTest,
        _shell = shell,
        _markerDir =
@@ -63,7 +67,12 @@ class AgentPrefetch {
        _start =
            start ??
            ((executable, arguments) => Process.start(executable, arguments)),
-       _skip = skip ?? (() => alreadyHasAnAgent(_home)),
+       // These downloads use POSIX shell recipes; Windows installs agents from their panes.
+       _skip =
+           skip ??
+           (() =>
+               (isWindows ?? RuntimePlatform.isWindows) ||
+               alreadyHasAnAgent(_home)),
        _installed = installed ?? _agentInPlace,
        _managedNode = managedNode ?? _managedNodePath,
        _curl = curl ?? (kUnderTest ? (() => true) : _hasCurl),
@@ -415,7 +424,7 @@ class AgentPrefetch {
 
   static String _quote(String text) => "'${text.replaceAll("'", "'\\''")}'";
 
-  static String? get _home => Platform.environment['HOME'];
+  static String? get _home => maybeHomeDir();
 
   static bool _agentInPlace(String engine) {
     final home = _home;

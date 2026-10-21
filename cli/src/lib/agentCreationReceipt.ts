@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { opendir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
+import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
 
 export type AgentCreationOutcome =
   | { state: 'created'; agentId: string; level?: 'native' | 'handoff'; resumed?: boolean }
@@ -403,8 +403,7 @@ export class AgentCreationReceipts {
   }
 
   private syncDirectory(path = this.directory, ancestor = false): void {
-    const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | (ancestor ? 0 : constants.O_NOFOLLOW))
-    try { fsyncSync(fd) } finally { closeSync(fd) }
+    syncStateDirectory(path, constants.O_RDONLY | constants.O_DIRECTORY | (ancestor ? 0 : constants.O_NOFOLLOW))
   }
 
   private holdDirectory(): { verify(): void; close(): void } {
@@ -502,8 +501,7 @@ export class AgentCreationReceipts {
       try { writeFileSync(fd, JSON.stringify(receipt)); fsyncSync(fd) }
       finally { closeSync(fd) }
       if (!exclusive) renameSync(writing, file)
-      const directoryFd = openSync(dirname(file), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
-      try { fsyncSync(directoryFd) } finally { closeSync(directoryFd) }
+      syncStateDirectory(dirname(file), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
     } finally {
       // Failed reservations stay on disk so a partial write cannot permit a
       // duplicate. Only this write's private replacement file is disposable.

@@ -1407,7 +1407,7 @@ private extension SwarmTabStrip {
 
   func checkTopActions() throws {
     var state: [String: Any] = ["enabled": true,
-      "searchTooltip": "Open Harness · ⌘P", "addPhoneTooltip": "Add Phone", "storeTooltip": "Explore Harness Store · ⌘S",
+      "searchTooltip": "Open Harness · ⌘P", "addPhoneTooltip": "Add Phone", "storeTooltip": "Explore Harness Store · ⌃⌘S",
       "tabs": [["id": "work", "name": "Desktop"]], "activeId": "work",
       "focusedContext": ["text": "Office project", "segments": [["text": "Office project"]]]]
     var calls: [String] = []

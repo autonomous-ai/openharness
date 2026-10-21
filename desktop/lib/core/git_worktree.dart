@@ -1,3 +1,6 @@
+import 'runtime_platform.dart';
+import 'folder_commands.dart';
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -689,7 +692,7 @@ Future<String> prepareGitProject(
       );
       // Directory.create accepts an existing directory; mkdir reserves the
       // name exclusively, so concurrent starts never share a worktree.
-      final reservation = await Process.run('mkdir', [folder]);
+      final reservation = await reserveDirectory(folder);
       if (reservation.exitCode == 0) {
         destination = folder;
         break;
@@ -836,6 +839,10 @@ Future<void> _copyIncluded(
         continue;
       }
       await Directory(p.dirname(target)).create(recursive: true);
+      if (RuntimePlatform.isWindows) {
+        await copyTree(p.join(from, relative), target);
+        continue;
+      }
       await Process.run('cp', [
         '-R',
         '-p',

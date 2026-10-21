@@ -27,6 +27,8 @@ class _Folders extends WsConn {
       );
 
   final paths = <String?>[];
+  String? remoteHome;
+  final entriesByPath = <String, List<Map<String, dynamic>>>{};
   Completer<Map<String, dynamic>>? pendingHome;
   final pending = <String, Completer<Map<String, dynamic>>>{};
 
@@ -44,8 +46,9 @@ class _Folders extends WsConn {
     if (pending[path] case final reply?) return reply.future;
     if (path == null && pendingHome != null) return pendingHome!.future;
     return {
-      'path': path ?? '/home/$machineId',
+      'path': path ?? remoteHome ?? '/home/$machineId',
       'entries': [
+        ...?entriesByPath[path],
         if (path == '/home/$machineId/harnesses')
           {'name': 'payments-processing', 'isDir': true},
         if (path == '/home/$machineId/work')
@@ -760,6 +763,85 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
+
+  testWidgets(
+    'remote Windows home owns completion paths independently of this host',
+    (tester) async {
+      final folders = _Folders('studio')
+        ..remoteHome = r'C:\Users\Remote';
+      folders.entriesByPath[r'C:\Users\Remote\work'] = [
+        {'name': 'payments', 'isDir': true},
+      ];
+      final app = createApp(connectionForTest: (_) => folders);
+      seedMixedAgents(app);
+      final box = NewHarnessController(
+        app,
+        machineId: 'studio',
+        engine: 'claude',
+        folder: r'C:\Users\Remote\work\payments',
+        home: '/local-only-home',
+      );
+      addTearDown(box.dispose);
+      addTearDown(app.dispose);
+      await mount(tester, box);
+      expect(box.projectLocation, 'iMac · Office:~/work/payments');
+      box.focusField(NewHarnessField.project);
+      box.setQuery('~/work/pa');
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump();
+      expect(box.selected!.project!.folder, r'C:\Users\Remote\work\payments');
+      expect(box.complete(), '~/work/payments/');
+      expect(folders.paths, contains(r'C:\Users\Remote\work'));
+      expect(folders.paths.any((path) => path?.contains('/local-only-home') == true), isFalse);
+      box.setQuery(r'C:\Users\Remote\work\pa');
+      expect(box.isPathQuery, isTrue);
+      expect(box.selected!.project!.folder, r'C:\Users\Remote\work\payments');
+      expect(box.complete(), r'C:\Users\Remote\work\payments\');
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  for (final failedHome in [false, true]) {
+    for (final query in ['../sibling', r'..\sibling']) {
+      testWidgets(
+        'remote Windows relative $query uses its project while home is ${failedHome ? 'failed' : 'pending'}',
+        (tester) async {
+          final folders = _Folders('studio')
+            ..pendingHome = Completer<Map<String, dynamic>>();
+          folders.entriesByPath[r'C:\Users\Remote'] = [
+            {'name': 'sibling', 'isDir': true},
+          ];
+          final app = createApp(connectionForTest: (_) => folders);
+          seedMixedAgents(app);
+          final box = NewHarnessController(
+            app,
+            machineId: 'studio',
+            engine: 'claude',
+            folder: r'C:\Users\Remote\work',
+            home: '/local-only-home',
+          );
+          addTearDown(box.dispose);
+          addTearDown(app.dispose);
+          await mount(tester, box);
+          if (failedHome) {
+            folders.pendingHome!.completeError(StateError('home unavailable'));
+            await tester.pump();
+          }
+          box.focusField(NewHarnessField.project);
+          box.setQuery(query);
+          expect(box.isPathQuery, isTrue);
+          await tester.pump(const Duration(milliseconds: 100));
+          await tester.pump();
+          expect(folders.paths, contains(r'C:\Users\Remote'));
+          expect(box.selected!.project!.folder, r'C:\Users\Remote\sibling');
+          expect(folders.paths, isNot(contains('sibling')));
+          await tester.pump(const Duration(milliseconds: 200));
+          await tester.pumpWidget(const SizedBox());
+        },
+      );
+    }
+  }
 
   testWidgets(
     'a late home answer does not move a project to the previous machine',

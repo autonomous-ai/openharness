@@ -100,7 +100,7 @@ beforeAll(async () => {
   Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })
   vi.useFakeTimers({ toFake: ['Date'], now: NOW })
   const env: Record<string, string | undefined> = {
-    HOME: home(), ADAPTER_DATA_DIR: join(root, 'data'), ADAPTER_RUNTIME_DIR: join(root, 'runtime'), TZ: 'UTC',
+    HOME: home(), USERPROFILE: home(), ADAPTER_DATA_DIR: join(root, 'data'), ADAPTER_RUNTIME_DIR: join(root, 'runtime'), TZ: 'UTC',
     CLAUDE_PROJECTS_DIR: home('.claude', 'projects'), CODEX_HOME: home('.codex'), CLAUDE_CONFIG_DIR: undefined,
     CURSOR_HOME: home('.cursor'), CURSOR_CONFIG_DIR: undefined, CURSOR_DATA_DIR: home('.cursor-data'), XDG_CONFIG_HOME: undefined, XDG_DATA_HOME: undefined,
     GROK_HOME: home('.grok'), COPILOT_HOME: home('.copilot'), OPENCODE_DATA_DIR: home('.local', 'share', 'opencode'), OPENCODE_DB: undefined,

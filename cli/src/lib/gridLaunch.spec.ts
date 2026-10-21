@@ -940,6 +940,7 @@ describe('web search status — what the app is told about the launch it got', (
   it.each(['/fixture/qa-home', '/fixture/harness-home'])('says on exactly when the launch it describes names the server — for every engine, both machines, home %s', (fixtureHome) => {
     // Found by QA on a quiet machine: a home containing "harness" made Pi's skills path look like MCP wiring.
     vi.stubEnv('HOME', fixtureHome)
+    vi.stubEnv('USERPROFILE', fixtureHome)
     try {
       // "The engine wired it" is not taken on trust from the contract that reports it: the launch
       // either carries the MCP endpoint (in argv or in a file it writes) or it does not, and the

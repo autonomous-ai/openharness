@@ -14,6 +14,21 @@ Map<String, dynamic> conversationFixture(String id, String title) => {
   'lastMessageSequence': 0,
 };
 
+Map<String, dynamic> projectFixture(
+  String id,
+  String name,
+  String leadConversationId, {
+  String visibility = 'public',
+}) => {
+  'id': id,
+  'name': name,
+  'ownerId': 'owner',
+  'leadConversationId': leadConversationId,
+  'visibility': visibility,
+  'members': <dynamic>[],
+  'updateMinutes': 5,
+};
+
 class ConversationServer {
   int revision = 0;
   bool loseReply = false, reject = false, failSave = false, failReads = false;
@@ -99,10 +114,70 @@ class ConversationServer {
       } else if (command['type'] == 'conversation.create') {
         revision++;
         final id = 'group-$revision';
-        (state['conversations'] as List).add(
-          conversationFixture(id, command['title'] as String),
-        );
+        (state['conversations'] as List).add({
+          ...conversationFixture(id, command['title'] as String),
+          'projectId': command['projectId'] ?? 'lead',
+        });
         output['conversationId'] = id;
+      } else if (command['type'] == 'project.create') {
+        revision++;
+        final projects = state['projects'] ??= <dynamic>[
+          projectFixture('lead', state['name'] as String, 'lead'),
+        ];
+        final id = 'project-$revision', leadId = 'lead-$revision';
+        (projects as List).add(
+          projectFixture(
+            id,
+            command['name'] as String,
+            leadId,
+            visibility: command['visibility'] as String,
+          ),
+        );
+        (state['conversations'] as List).add({
+          ...conversationFixture(leadId, 'Lead'),
+          'projectId': id,
+          'brief': command['brief'] ?? '',
+        });
+        output.addAll({'projectId': id, 'conversationId': leadId});
+      } else if (command['type'] == 'project.delete') {
+        final projectId = command['projectId'];
+        final projects =
+            state['projects'] ??
+            [projectFixture('lead', state['name'] as String, 'lead')];
+        state['projects'] = (projects as List)
+            .where((p) => p['id'] != projectId)
+            .toList();
+        final groups = state['conversations'] as List;
+        final removed = groups
+            .where((g) => (g['projectId'] ?? 'lead') == projectId)
+            .map((g) => g['id'])
+            .toSet();
+        groups.removeWhere((g) => removed.contains(g['id']));
+        messages.removeWhere((m) => removed.contains(m['conversationId']));
+        revision++;
+      } else if ([
+        'project.rename',
+        'project.cadence',
+        'project.sharing',
+      ].contains(command['type'])) {
+        final project = (state['projects'] as List?)
+            ?.cast<Map<String, dynamic>>()
+            .where((p) => p['id'] == command['projectId'])
+            .firstOrNull;
+        if (project != null) {
+          if (command['type'] == 'project.rename') {
+            project['name'] = command['name'];
+          } else if (command['type'] == 'project.cadence') {
+            project['updateMinutes'] = command['minutes'];
+          } else {
+            project['visibility'] = command['visibility'];
+            project['members'] = [
+              for (final id in command['memberIds'] as List)
+                {'id': id, 'generation': 'fixture'},
+            ];
+          }
+          revision++;
+        }
       }
       final result = {'revision': revision, 'result': output};
       receipts[operationId] = result;

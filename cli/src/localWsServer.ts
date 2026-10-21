@@ -6,7 +6,8 @@ import type { Socket } from 'node:net'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import { watchSocketLiveness } from './lib/wsLiveness.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
-import { isTrustedLocal } from './lib/localSocket.js'
+import { isTrustedLocal, pipeProofOf } from './lib/localSocket.js'
+import { PIPE_PROOF_HEADER } from './lib/windows/pipeAuth.js'
 import { localCredentialMatches } from './lib/localCredential.js'
 import type { Frame, LocalClientSink } from './backendSocket.js'
 import {
@@ -301,6 +302,12 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     // WS clients that insist on proposing one; it carries no authority and is never inspected.
     handleProtocols: (protocols) => [...protocols][0] ?? false,
   })
+  // Over the Windows pipe every answer proves the daemon's token (lib/windows/pipeAuth.ts), and so does the 101: a
+  // client drops a connection whose upgrade carries no proof. Nothing is added on TCP or the Unix socket.
+  wss.on('headers', (headers, req) => {
+    const proof = pipeProofOf(req)
+    if (proof) headers.push(`${PIPE_PROOF_HEADER}: ${proof}`)
+  })
   // One desktop can have a connection per machine. Once a live window reports its selected pane,
   // background terminal attachments on ANY of those connections must not overwrite that selection.
   const explicitFocusClients = new Set<string>()
@@ -314,8 +321,8 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
   const onUpgrade = (req: http.IncomingMessage, socket: Socket, head: Buffer): void => {
     const path = (req.url ?? '').split('?')[0]
     if (path !== LOCAL_WS_PATH) return
-    // Over the daemon's own socket (lib/localSocket.ts) the filesystem already vouched for the peer;
-    // it has no address or port to check. It still must not be a browser.
+    // Over the daemon's own socket (lib/localSocket.ts) the filesystem already vouched for the peer, or, on Windows,
+    // the request proved the daemon's token over its pipe; it has no address or port to check. It still must not be a browser.
     if (isTrustedLocal(req)) {
       if (req.headers.origin) { rejectUpgrade(socket, 403, 'Forbidden'); return }
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))

@@ -169,6 +169,34 @@ void main() {
     expect(draft.existingFolder, isNull);
   });
 
+  test('a Windows machine offers an existing folder by its name', () async {
+    const folder = r'C:\Users\lee\harnesses\payments';
+    machines['office']!.refusal = {
+      'code': 'PROJECT_EXISTS',
+      'existingFolder': folder,
+    };
+    final draft = box('office');
+    expect(await draft.create(), NewHarnessOutcome.failed);
+    expect(draft.error, contains('“payments” already exists on office.'));
+    expect(draft.existingFolder, folder);
+    expect(await draft.useExistingFolder(), NewHarnessOutcome.created);
+    expect(machines['office']!.creates.last['cwd'], folder);
+  });
+
+  test('a Windows machine offers an existing folder under a network home', () async {
+    const folder = r'\\server\share\harnesses\payments';
+    machines['office']!.refusal = {
+      'code': 'PROJECT_EXISTS',
+      'existingFolder': folder,
+    };
+    final draft = box('office');
+    expect(await draft.create(), NewHarnessOutcome.failed);
+    expect(draft.error, contains('“payments” already exists on office.'));
+    expect(draft.existingFolder, folder);
+    expect(await draft.useExistingFolder(), NewHarnessOutcome.created);
+    expect(machines['office']!.creates.last['cwd'], folder);
+  });
+
   test('nothing is offered for a refusal with no folder to start in, or any other refusal', () async {
     // What is there is a file, or the machine predates naming the folder.
     machines['office']!.refusal = {

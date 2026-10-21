@@ -1,0 +1,140 @@
+# s1 check-install over SSH as hxe2e (07:50:13): expected to be refused WMI (B5.12)
+ok   version 0.4.18-dev.win1
+
+Folder: \
+HostName:                             WIN-TESTVM
+TaskName:                             \Harness harnessd (hxe2e)
+Next Run Time:                        10/17/2026 5:55:00 PM
+Status:                               Ready
+Logon Mode:                           Interactive only
+Last Run Time:                        11/30/1999 12:00:00 AM
+Last Result:                          267011
+Author:                               N/A
+Task To Run:                          C:\Users\hxe2e\.harness\bin\harness-launch.exe --root "C:\Users\hxe2e\.harness" -- start --if-down
+Start In:                             C:\Users\hxe2e
+Comment:                              harnessd, the Harness daemon. Its log: C:\Users\hxe2e\.harness\cli\data\harness.log
+Scheduled Task State:                 Enabled
+Idle Time:                            Disabled
+Power Management:                     
+Run As User:                          hxe2e
+Delete Task If Not Rescheduled:       Disabled
+Stop Task If Runs X Hours and X Mins: Disabled
+Schedule:                             Scheduling data is not available in this format.
+Schedule Type:                        At logon time
+Start Time:                           N/A
+Start Date:                           N/A
+End Date:                             N/A
+Days:                                 N/A
+Months:                               N/A
+Repeat: Every:                        N/A
+Repeat: Until: Time:                  N/A
+Repeat: Until: Duration:              N/A
+Repeat: Stop If Still Running:        N/A
+
+HostName:                             WIN-TESTVM
+TaskName:                             \Harness harnessd (hxe2e)
+Next Run Time:                        10/17/2026 5:55:00 PM
+Status:                               Ready
+Logon Mode:                           Interactive only
+Last Run Time:                        11/30/1999 12:00:00 AM
+Last Result:                          267011
+Author:                               N/A
+Task To Run:                          C:\Users\hxe2e\.harness\bin\harness-launch.exe --root "C:\Users\hxe2e\.harness" -- start --if-down
+Start In:                             C:\Users\hxe2e
+Comment:                              harnessd, the Harness daemon. Its log: C:\Users\hxe2e\.harness\cli\data\harness.log
+Scheduled Task State:                 Enabled
+Idle Time:                            Disabled
+Power Management:                     
+Run As User:                          hxe2e
+Delete Task If Not Rescheduled:       Disabled
+Stop Task If Runs X Hours and X Mins: Disabled
+Schedule:                             Scheduling data is not available in this format.
+Schedule Type:                        One Time Only, Minute 
+Start Time:                           12:00:00 AM
+Start Date:                           1/1/2026
+End Date:                             N/A
+Days:                                 N/A
+Months:                               N/A
+Repeat: Every:                        0 Hour(s), 5 Minute(s)
+Repeat: Until: Time:                  None
+Repeat: Until: Duration:              Disabled
+Repeat: Stop If Still Running:        Disabled
+ok   task Harness harnessd (hxe2e)
+ok   PATH has c:\users\hxe2e\.harness\bin
+
+  machine · remote machine
+  ─────────────────────────────────────
+   status     ● running · this computer only (not signed in)
+   version    v0.4.18-dev.win1
+   backend    not signed in · harness login
+   account    prod
+   state      ~\.harness\cli\data
+   auth       ~\.harness\auth
+   agents     0 available
+   pid        7500
+   logs       ~\.harness\cli\data\harness.log
+   dial log   ~\.harness\logs\dial-YYYYMMDD.log
+   local api  http://127.0.0.1:18474
+  ─────────────────────────────────────
+  running in background · stop with: harness stop
+
+FAIL could not list processes through WMI (Access denied ); run this at the desktop or as a batch logon
+exit=1
+
+# s1 check-install as hxe2e in a batch logon (one-shot task with its password) (07:51:41)
+ok   version 0.4.18-dev.win1
+ok   task Harness harnessd (hxe2e)
+ok   PATH has c:\users\hxe2e\.harness\bin
+
+  machine ┬╖ remote machine
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ΓöÇΓöÇΓöÇΓöÇΓöÇ
+   status     ΓùÅ running ┬╖ this computer only (not signed in)
+   version    v0.4.18-dev.win1
+   backend    not signed in ┬╖ harness login
+   account    prod
+   state      ~\.harness\cli\data
+   auth       ~\.harness\auth
+   agents     1 available
+   pid        7500
+   logs       ~\.harness\cli\data\harness.log
+   dial log   ~\.harness\logs\dial-YYYYMMDD.log
+   local api  http://127.0.0.1:18474
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ΓöÇΓöÇΓöÇΓöÇΓöÇ
+  running in background ┬╖ stop with: harness stop
+
+FAIL no harness-pty.exe runs after creating a terminal
+exit=1
+(run 1 and 2 above in a batch logon: FAIL no harness-pty.exe runs, with harness-pty 6932 running: a check-install bug, fixed in e3c28f981)
+
+# s1 check-install as hxe2e in a batch logon, after the fix e3c28f981 (07:55:31)
+ok   version 0.4.18-dev.win1
+ok   task Harness harnessd (hxe2e)
+ok   PATH has c:\users\hxe2e\.harness\bin
+ok   terminal 297854ec… on harness-pty pid 6932 (4 shell(s) under it)
+exit=0
+
+# procs.ps1 -User hxe2e (as admin) 07:55:36
+
+ProcessId ParentProcessId Name            Start    Cmd                                                                                                           
+--------- --------------- ----            -----    ---                                                                                                           
+     7500            9744 node.exe        17:49:53 "C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe" C:\Users\hxe2e\.harness\cli\0.4.18-dev.wi
+     9652            7500 node.exe        17:49:53 C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe --max-semi-space-size=4 --max-old-space-siz
+     1004            7500 node.exe        17:49:53 C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe --max-semi-space-size=4 --max-old-space-siz
+     6932            9652 harness-pty.exe 17:49:54 C:\Users\hxe2e\.harness\runtime\pty\0.4.18\harness-pty.exe serve --home C:\Users\hxe2e\.harness\pty           
+     5012            6932 OpenConsole.exe 17:50:17 "C:\Users\hxe2e\.harness\runtime\pty\0.4.18\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x1ac
+     7992            6932 powershell.exe  17:50:17 powershell.exe -NoLogo                                                                                        
+     3328            6932 OpenConsole.exe 17:51:46 "C:\Users\hxe2e\.harness\runtime\pty\0.4.18\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x204
+    11184            6932 powershell.exe  17:51:46 powershell.exe -NoLogo                                                                                        
+     5760            6932 OpenConsole.exe 17:53:14 "C:\Users\hxe2e\.harness\runtime\pty\0.4.18\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x230
+     4376            6932 powershell.exe  17:53:14 powershell.exe -NoLogo                                                                                        
+    10800            6932 OpenConsole.exe 17:55:35 "C:\Users\hxe2e\.harness\runtime\pty\0.4.18\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x244
+     4528            6932 powershell.exe  17:55:35 powershell.exe -NoLogo                                                                                        
+
+
+
+# parents of the master
+pid 7500 (node.exe) parent 9744
+parent 9744 is gone (the launcher exited)
+sshd: 3900 8312 12092

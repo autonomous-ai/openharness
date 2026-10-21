@@ -8,7 +8,8 @@ import { dshPinnedPermissionMode } from '../../dsh/manifest.js'
 import { incompatibleHarnessEngine } from '../../dsh/compatibility.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
-import { buildEngineLaunchArgv, namedAgentArgs, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from '../../lib/engineLaunch.js'
+import { windowsAfterExit } from '../../lib/windows/engineStart.js'
+import { buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from '../../lib/engineLaunch.js'
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import type { GridLaunchAnswer, GridLaunchRequest } from '../../lib/gridLaunchWire.js'
@@ -17,8 +18,6 @@ import { ENUMERATION_ATTEMPTS } from '../../engines/kit/nativeFiles.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { stopSessionOwner, type SessionOwner } from '../../lib/sessionSearch/external.js'
-import { clearPaneRemainOnExit } from '../../lib/tmux.js'
-import { tmuxSupportsSessionEnv } from '../../lib/tmuxVersion.js'
 import { createAgentCreator, type CreateAgentDeps } from './create.js'
 import { prepareInstructionWrites } from '../../scm/scmProjects.js'
 import { opencodeMajorVersion } from '../../engines/launchControl.js'
@@ -27,6 +26,7 @@ import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
 import { agentLaunchArgs } from '../../lib/agentAttribution.js'
+import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 
 vi.mock('../../lib/projectFolder.js', async real => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()
@@ -84,6 +84,7 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   ...await real<object>(),
   buildEngineCommandArgv: vi.fn(() => ['claude']),
   buildEngineLaunchArgv: vi.fn(() => ['zsh', '-lc', 'claude']),
+  engineLaunchEnv: vi.fn(() => undefined),
   namedAgentArgs: vi.fn((_engine: string, agent: string) => ['--agent', agent]),
   permissionModeApproves: vi.fn(() => true),
   permissionModeFlags: vi.fn(() => ['--permission-mode']),
@@ -106,8 +107,8 @@ vi.mock('../../engines/hooks.js', async (real) => {
   return { ...actual, engineHooks: { ...actual.engineHooks, codex: { ...actual.engineHooks.codex, installIn: vi.fn(async () => true) } } }
 })
 vi.mock('../../lib/sessionSearch/external.js', async (real) => ({ ...await real<object>(), stopSessionOwner: vi.fn(async () => true) }))
-vi.mock('../../lib/tmux.js', async (real) => ({ ...await real<object>(), clearPaneRemainOnExit: vi.fn(async () => {}) }))
-vi.mock('../../lib/tmuxVersion.js', async (real) => ({ ...await real<object>(), tmuxSupportsSessionEnv: vi.fn(async () => true) }))
+// What the backend new panes are made on can do; every test's backend can give a session its own environment.
+const capabilities = vi.fn(async () => ({ sessionEnv: true }))
 
 const launchDsh = vi.fn<CreateAgentDeps['dshLaunch']['launch']>(async () => ({ ok: true, launch: { env: { HARNESS_DSH: 'blender' }, args: ['--dsh'] } }))
 
@@ -131,7 +132,7 @@ const owner = { pid: 7, engine: 'claude' } as SessionOwner
 
 function setup(over: Partial<CreateAgentDeps> = {}) {
   const deps: CreateAgentDeps = {
-    tmuxBackend: {} as CreateAgentDeps['tmuxBackend'],
+    createBackend: { releaseHold: vi.fn(async () => {}), capabilities } as unknown as CreateAgentDeps['createBackend'],
     registry: { setLaunch: vi.fn(() => ({ ...pending, launch: { state: 'ready' } })) } as unknown as CreateAgentDeps['registry'],
     externalResume: vi.fn<CreateAgentDeps['externalResume']>(async () => ({ ok: true, session: pending })),
     watchNewPane: vi.fn(async () => {}),
@@ -221,7 +222,7 @@ describe('creating an agent', () => {
     vi.mocked(installedDsh).mockReturnValue(installed() as never)
     const run = setup()
     if (stage === 'folder inspection') vi.mocked(readdir).mockImplementationOnce(async () => { current = false; return [] })
-    if (stage === 'tmux capabilities') vi.mocked(tmuxSupportsSessionEnv).mockImplementationOnce(async () => { current = false; return true })
+    if (stage === 'tmux capabilities') capabilities.mockImplementationOnce(async () => { current = false; return { sessionEnv: true } })
     if (stage === 'config publication') vi.mocked(writeGridConfigDir).mockImplementationOnce(async () => { current = false; return '/fixture/config' })
     buildGridLaunch.mockResolvedValueOnce({ ok: true, override: { networkId: 'fixture', networkName: 'Fixture', baseUrl: 'http://fixture.invalid', apiKey: 'fixture' }, launch: {
       env: {}, args: [], webSearch: 'unsupported', configDir: { envVar: 'PI_CONFIG', files: [] },
@@ -373,8 +374,20 @@ describe('creating an agent', () => {
   })
 
   describe('refusals before any pane opens', () => {
+    it('a batch-file engine on Windows whose first message cmd.exe would read, by name; other errors are not refusals', async () => {
+      vi.mocked(buildEngineLaunchArgv).mockImplementationOnce(() => { throw new WindowsBatchLaunchRefused('claude', 'C:\\tools\\claude.cmd') })
+      expect(await setup().create(request({ prompt: 'fix&calc' }))).toEqual({
+        ok: false, error: 'ENGINE_LAUNCH_REFUSED', detail: expect.stringMatching(/^Harness cannot start claude on Windows .*claude\.cmd is a batch file/),
+      })
+      expect(createAndRegisterPane).not.toHaveBeenCalled()
+      vi.mocked(buildEngineLaunchArgv).mockImplementationOnce(() => { throw new Error('fixture') })
+      await expect(setup().create(request())).rejects.toThrow('fixture')
+    })
+
     it('without tmux, in a folder being purged, or in a folder that is not one', async () => {
-      expect(await setup({ tmuxBackend: null }).create(request())).toEqual({ ok: false, error: 'TMUX_UNAVAILABLE' })
+      expect(await setup({ createBackend: null }).create(request())).toEqual({ ok: false, error: 'TMUX_UNAVAILABLE' })
+      // Where the pty host is the configured backend (Windows), its own code: there is no tmux to install.
+      expect(await setup({ createBackend: null, noBackendCode: 'PTY_HOST_UNAVAILABLE' }).create(request())).toEqual({ ok: false, error: 'PTY_HOST_UNAVAILABLE' })
       expect(await setup({ blocksFolder: () => true }).create(request())).toEqual({ ok: false, error: 'WORKTREE_BUSY' })
       const { create } = setup()
       const file = join(folder(['x']), 'x')
@@ -396,7 +409,7 @@ describe('creating an agent', () => {
       vi.mocked(installedDsh).mockReturnValue(installed() as never)
       vi.mocked(incompatibleHarnessEngine).mockReturnValueOnce('Blender runs on codex')
       expect(await create(request({ dsh: 'blender' }))).toMatchObject({ error: 'INVALID_DSH', detail: 'Blender runs on codex' })
-      vi.mocked(tmuxSupportsSessionEnv).mockResolvedValueOnce(false)
+      capabilities.mockResolvedValueOnce({ sessionEnv: false })
       expect(await create(request({ dsh: 'blender' }))).toMatchObject({ error: 'TMUX_TOO_OLD_FOR_DSH' })
       vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
     })
@@ -432,7 +445,7 @@ describe('creating an agent', () => {
       const { create } = setup()
       buildGridLaunch.mockResolvedValueOnce({ ok: false, error: 'GRID_ENGINE_UNSUPPORTED', detail: 'no grid for amp' })
       expect(await create(request({ grid }))).toEqual({ ok: false, error: 'GRID_ENGINE_UNSUPPORTED', detail: 'no grid for amp' })
-      vi.mocked(tmuxSupportsSessionEnv).mockResolvedValueOnce(false)
+      capabilities.mockResolvedValueOnce({ sessionEnv: false })
       expect(await create(request({ grid }))).toMatchObject({ error: 'TMUX_TOO_OLD_FOR_GRID' })
       const configured = { ok: true, launch: { env: {}, args: [], webSearch: 'off', configDir: { envVar: 'PI_CONFIG', files: {}, links: [] } } }
       buildGridLaunch.mockResolvedValueOnce(configured as never).mockResolvedValueOnce(configured as never)
@@ -462,6 +475,28 @@ describe('creating an agent', () => {
       expect(pane).toMatchObject({ engine: 'claude', sessionLabel: expect.any(String), grid: null, gridLaunchRecord: null, dsh: null, dshRuntime: null, defaultName: null })
     })
 
+    it('sends the launch\'s Windows variables (no /usr/bin/env there) with the pane env, after its own', async () => {
+      vi.mocked(engineLaunchEnv).mockReturnValueOnce({ HARNESS_NATIVE_FIXTURE: 'token' })
+      expect(await setup().create(request())).toMatchObject({ ok: true })
+      expect(vi.mocked(createAndRegisterPane).mock.calls[0][0].env).toMatchObject({ HARNESS_NATIVE_FIXTURE: 'token' })
+      expect(engineLaunchEnv).toHaveBeenCalledWith('claude', undefined)
+    })
+
+    it('starts a Windows engine in its workspace, its pane becoming the person\'s shell after it', async () => {
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+      const input = request()
+      try {
+        Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+        expect(await setup().create(input)).toMatchObject({ ok: true })
+      } finally { Object.defineProperty(process, 'platform', platform) }
+      // The launch's cleared names too, which the host must keep from its own environment (a grid launch's keys).
+      const cleared = (vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1] as { clearEnv?: string[] }).clearEnv ?? []
+      expect(vi.mocked(createAndRegisterPane).mock.calls[0][0].paneLaunch).toEqual({ cwd: input.cwd, afterExit: windowsAfterExit('claude'),
+        ...(cleared.length ? { clearInherited: cleared } : {}) })
+      expect(await setup().create(request())).toMatchObject({ ok: true })
+      expect(vi.mocked(createAndRegisterPane).mock.calls[1][0].paneLaunch).toEqual({})
+    })
+
     it('starts an approving session in the default harness permission when no mode was named', async () => {
       expect(await setup().create(request({ bypassPermission: true }))).toMatchObject({ ok: true })
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ bypassPermission: true, permissionMode: null })
@@ -471,7 +506,7 @@ describe('creating an agent', () => {
       vi.mocked(createAndRegisterPane).mockResolvedValueOnce({ ok: true, spawned: { runtime: { paneId: '%2' } }, pending: { ...pending, engine: 'terminal' } } as never)
       const { deps, create } = setup()
       expect(await create(request({ engine: 'terminal' }))).toMatchObject({ ok: true, session: { launch: { state: 'ready' } } })
-      expect(clearPaneRemainOnExit).toHaveBeenCalledWith('%2')
+      expect(deps.createBackend!.releaseHold).toHaveBeenCalledWith({ paneId: '%2' })
       expect(deps.watchNewPane).not.toHaveBeenCalled()
       vi.mocked(createAndRegisterPane).mockResolvedValueOnce({ ok: true, spawned: { runtime: { paneId: '%3' } }, pending: { ...pending, engine: 'terminal' } } as never)
       vi.mocked(deps.registry.setLaunch).mockReturnValueOnce(null)
@@ -571,6 +606,18 @@ describe('creating an agent', () => {
       expect(vi.mocked(createAndRegisterPane).mock.calls[1][0]).toMatchObject({ grid: { model: null }, env: { OPENCODE_CONFIG: '/config/harness-claude/opencode.json' } })
       expect(vi.mocked(createAndRegisterPane).mock.calls[2][0]).toMatchObject({ env: { OPENCODE_CONFIG: '/config/harness-claude' } })
       expect(vi.mocked(buildEngineLaunchArgv).mock.calls[0][1]).toMatchObject({ clearEnv: ['ANTHROPIC_API_KEY', 'HARNESS_OLD'], extraArgs: ['--grid'] })
+    })
+
+    // Windows has no launch script to unset them: the pty host keeps them from what its panes inherit (security: a
+    // grid launch saw the person's ANTHROPIC_API_KEY and sent it to the grid's base URL).
+    it('on a grid on Windows, names the vendor keys to the pane so the host keeps them from its own environment', async () => {
+      const grid = { networkId: 'g1', networkName: 'Home', baseUrl: 'http://g', model: 'm1' }
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+      try {
+        Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+        await setup().create(request({ grid }))
+      } finally { Object.defineProperty(process, 'platform', platform) }
+      expect(vi.mocked(createAndRegisterPane).mock.calls[0][0].paneLaunch).toMatchObject({ clearInherited: ['ANTHROPIC_API_KEY', 'HARNESS_OLD'] })
     })
 
     it('installs the hooks a Codex profile and a new OpenCode need, unless hooks are off', async () => {

@@ -7,7 +7,7 @@ import 'swarm_state_test.dart' show createApp;
 
 void main() {
   test(
-    'a successful recent open consumes only the empty Super Tab draft',
+    'a successful recent open consumes only the empty Swarm draft',
     () async {
       final app = createApp();
       addTearDown(app.dispose);
@@ -32,7 +32,7 @@ void main() {
     },
   );
 
-  test('a disappeared recent result preserves the Super Tab draft', () async {
+  test('a disappeared recent result preserves the Swarm draft', () async {
     final app = createApp();
     addTearDown(app.dispose);
     final draft = app.activeSwarm;
@@ -54,7 +54,7 @@ void main() {
     expect(app.swarms, hasLength(1));
   });
 
-  test('ordinary new-tab allocation never consumes a Super Tab draft', () {
+  test('ordinary new-tab allocation never consumes a Swarm draft', () {
     final app = createApp();
     addTearDown(app.dispose);
     final draft = app.activeSwarm;
@@ -71,7 +71,7 @@ void main() {
     HarnessPlacement.newTab,
   ]) {
     test(
-      'ordinary search from a completed Super Tab uses its own canvas ($placement)',
+      'ordinary search from a completed Swarm uses its own canvas ($placement)',
       () async {
         final app = createApp();
         addTearDown(app.dispose);

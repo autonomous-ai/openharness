@@ -17,8 +17,8 @@ import { fingerprint as e2eeCoreFingerprint, b64d as e2eeCoreDecode } from './li
  * and the backend socket (events up / chat + RPCs down).
  */
 
-import { readFileSync, readdirSync, writeFileSync, mkdirSync, openSync, existsSync, rmSync, statSync } from 'fs'
-import { join, resolve } from 'path'
+import { readFileSync, readdirSync, writeFileSync, writeSync, mkdirSync, openSync, existsSync, rmSync, statSync } from 'fs'
+import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { spawn } from 'child_process'
 import { createServer } from 'http'
@@ -38,11 +38,14 @@ import { buildLogBundle, bundleFileName, redactSecretsInText } from './lib/logBu
 import { machineListCachePath } from './device/machineList.js'
 import { registry } from './lib/registry.js'
 import { readSafeModeMarker } from './lib/daemonSafeMode.js'
-import { SpawnLockBusyError, describeSpawnLockBusyPlainly, describeSpawnLockFailure, describeSpawnLockOwner, describeSpawnLockWaitPlainly, withSpawnLock } from './lib/daemonSpawnLock.js'
-import { stopDaemonProcess } from './lib/daemonStop.js'
-import { installedPlatform, osDaemonUnit, serviceDefinition, startUnderPlatform } from './lib/platformDaemon.js'
+import { SpawnLockBusyError, describeSpawnLockBusyPlainly, describeSpawnLockFailure, describeSpawnLockOwner, describeSpawnLockWaitPlainly, readSpawnLockOwner, withSpawnLock } from './lib/daemonSpawnLock.js'
+import { didNotStopSentence, leftRunning, stopDaemonOrExit, stopDaemonProcess } from './lib/daemonStop.js'
+import { AT_LOGON_FLAG, clearTaskStopped, installedPlatform, launchMaster, osDaemonUnit, platformDaemonDeps, serviceDefinition, startThroughTask, startUnderPlatform, taskStoppedThisBoot, waitForMaster } from './lib/platformDaemon.js'
+import { processIfDownDeps, releaseAbandonedLock, runningDaemon, startIfDown } from './lib/startIfDown.js'
+import { isInstalledCopy } from './lib/installedCopy.js'
 import { askRuntimePort, readCgroup, takeRuntimeBack } from './lib/osUnitTakeover.js'
 import { serviceCommand, serviceCommandDeps } from './lib/serviceCommand.js'
+import { infoBlockFooter } from './lib/infoBlockFooter.js'
 import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { AUTH_DIR, AuthSessionError, AuthSessionManager, clearAuthSession, knownSsoClientId, newSignInEpoch, readAuthSession, ssoClientIdFor, writeAuthSession, type AuthSession } from './lib/authSession.js'
@@ -71,8 +74,9 @@ import { describeMasterStatus, readStatusFile } from './harnessd/master.js'
 import { namedNode } from './harnessd/processName.js'
 import { probeThisMaster, startMaster, startMasterInForeground } from './masterProcess.js'
 import { startServiceProcess } from './serviceProcess.js'
-import { askDataFolderServer, isLocalSocketName, localSocketPath, refuseServedDataFolder } from './lib/localSocket.js'
-import { legacyDaemonStatus, localDaemonStatus } from './lib/daemonEndpoint.js'
+import { askDataFolderServer, isLocalSocketName, localSocketPath, refuseServedDataFolder, servedFolderDeps } from './lib/localSocket.js'
+import { legacyDaemonStatus, localDaemonCall, localDaemonStatus } from './lib/daemonEndpoint.js'
+import { PipeUnproven } from './lib/windows/pipeClient.js'
 import { runAutonomousDeviceCommand } from './lib/autonomous-device/command.js'
 import { E2eeStore, identitySpent, peekIdentityPub } from './lib/e2ee/store.js'
 import { confirmsRemoval, deviceRegistration, deviceStatusValue, formatDeviceDetail, formatDeviceHistory, formatDeviceList, logOrder, removeConfirmation } from './lib/e2ee/deviceDisplay.js'
@@ -133,14 +137,21 @@ Machine:
   harness start --repair       also re-verify the managed Node runtime and repoint the launcher at it
                                (normally done once by the installer; use this if a start fails because
                                the launcher points at a Node that no longer runs)
+  harness start --if-down      start the daemon only if it is not running and \`harness stop\` has not stopped it
+                               since the computer started (what Windows's scheduled task runs; quiet otherwise).
+                               --at-logon (the sign-in task's start) first forgets a \`harness stop\`
   harness logout               stop the adapter and clear this computer's SSO session
   harness stop                 stop the background adapter (keeps the SSO session)
   harness reset                stop the adapter and clear local CLI state
+  harness uninstall            remove Harness from this computer: harnesses, daemon, hooks, PATH and ~/.harness
+                               (asks first; --yes skips it, --keep-data keeps your sign-in and history)
   harness status               show whether it's running (+ version)
-  harness service install      run the daemon under launchd (macOS) or systemd (Linux): it starts at login
-                               and comes back if it dies; start and stop then go through it (opt-in)
+  harness service install      run the daemon under launchd (macOS) or systemd (Linux): it starts at login and comes
+                               back if it dies. On Windows, Task Scheduler starts it when you sign in, and again
+                               within 5 minutes if it stops. \`harness start\` and \`harness stop\` then go through
+                               it (opt-in)
   harness service uninstall    undo that: the daemon goes back to \`harness start\`
-  harness service status       what launchd or systemd has registered, and whether it runs (--json)
+  harness service status       what launchd, systemd or Task Scheduler has registered, and whether it runs (--json)
   harness logs export          zip the last 7 days of logs (app, CLI, dial, daemon) to the Desktop
   harness tui                  all of Harness in this terminal: swarms, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [--machine <name>] [folder|name] [-- task]
@@ -239,6 +250,8 @@ Env: BACKEND_WS_URL (${env.BACKEND_WS_URL}), WEB_URL (${env.WEB_URL}), ADAPTER_D
 
 /** The `supervisor` row: who keeps the daemon running when it is not `harness start`. */
 function supervisorRow(platform: string): string {
+  // Task Scheduler starts the master at logon and checks every five minutes; it does not run it (lib/startIfDown.ts).
+  if (platform === 'taskscheduler') return 'Task Scheduler · starts it when you sign in to Windows, and again within 5 minutes if it stops (harness service status)'
   return `${platform} · starts at login, comes back if it dies (harness service status)`
 }
 
@@ -552,7 +565,17 @@ async function loginCommand(
       // here would take every local terminal on this computer down for as long as the person is in
       // the browser. There is nothing to race either: the lock is held, and the identity swap happens
       // afterwards, once there is an identity to swap to (`restartDaemonForIdentity`).
-      const stopped = readAuthSession() ? (await stopDaemonProcess()).pid !== null : false
+      const stop = readAuthSession() ? await stopDaemonProcess() : null
+      // Windows: a stop that left the old account's Harness running (lib/daemonStop.ts). Signing in under it would
+      // put the new session on disk beside a daemon still serving the old one.
+      if (stop && leftRunning(stop)) {
+        const message = didNotStopSentence(stop.pid)
+        if (json) emit({ type: 'result', status: 'error', code: 'DAEMON_DID_NOT_STOP', message })
+        else console.error(`\n  ✗ ${message}\n`)
+        process.exitCode = 1
+        return { signedIn: false }
+      }
+      const stopped = stop !== null && stop.pid !== null
       const outcome = await signIn()
       // The daemon stopped for the switch comes back once it is made (`restartDaemonForIdentity`).
       return outcome.signedIn && stopped ? { ...outcome, stoppedDaemon: true } : outcome
@@ -1009,6 +1032,23 @@ function openInBrowser(url: string): void {
   } catch { /* ignore */ }
 }
 
+/** This process is the scheduled task's `harness start --if-down` (Windows), which never forgets a `harness stop`. */
+let startedByTheTask = false
+
+/**
+ * The pid of the daemon that runs, for `harness start`. On Windows the process table judges the pid file, with the
+ * judge `--if-down` uses (lib/startIfDown.ts `runningDaemon`): Windows gives a freed pid to the next process quickly,
+ * and a pid file whose pid is proven another process now does not count, so the start goes ahead instead of saying
+ * "already running" about it; one that cannot be told counts as running. `underLock`: the caller holds the spawn lock,
+ * and such a pid file is forgotten too. Outside the lock it is only judged: a start that holds the lock may write a
+ * fresh pid file between the read and the remove. macOS and Linux: its liveness, as before.
+ */
+async function runningDaemonPid(underLock: boolean = false): Promise<number | null> {
+  if (process.platform === 'win32') return runningDaemon(processIfDownDeps(process.platform, {}, { forget: underLock }))
+  const pid = readPid()
+  return pid && isAlive(pid) ? pid : null
+}
+
 /**
  * Start the adapter, with the saved SSO session when there is one. Missing credentials never open a
  * browser implicitly — and are no longer a refusal.
@@ -1023,7 +1063,18 @@ function openInBrowser(url: string): void {
  * the very value the backend binds a machine to at login) — so a later sign-in ADOPTS this machine
  * rather than replacing it.
  */
-async function startCommand(foreground: boolean, repair: boolean = false): Promise<void> {
+async function startCommand(foreground: boolean, repair: boolean = false, ifDown: boolean = false, atLogon: boolean = false): Promise<void> {
+  // The scheduled task's start (Windows, lib/startIfDown.ts): nothing to do is the usual answer, and it is quiet. The
+  // logon task's (`--at-logon`) forgets a `harness stop` first; the five-minute task's honours it.
+  if (ifDown) {
+    const decision = await startIfDown(processIfDownDeps(), { atLogon })
+    if (!decision.start) { console.log(`harness start --if-down: ${decision.why} — nothing to do`); process.exit(0) }
+    startedByTheTask = true
+  } else if (process.platform === 'win32') {
+    // Any `harness start` but the task's own is a person asking for the daemon: a `harness stop` written down earlier
+    // (harnessd/platform.ts TASK_STOPPED_FILE) is forgotten, even when the daemon turns out to run already.
+    clearTaskStopped()
+  }
   const session = readAuthSession()
   // The session file is the ONLY thing `start` needs. It used to pull the newest bundle and resolve
   // this computer's machine against the backend before launching — so a computer that could not reach
@@ -1036,8 +1087,11 @@ async function startCommand(foreground: boolean, repair: boolean = false): Promi
     // A daemon that is already up is left ALONE. The desktop app re-runs `harness start` whenever its
     // 400ms probe misreads a busy daemon as down; `spawnDaemon` repeats this check under the lock, for
     // the daemon that comes up while we are waiting our turn.
-    const running = readPid()
-    if (running && isAlive(running)) {
+    const running = await runningDaemonPid()
+    if (running) {
+      // The task's start never stops a daemon: a stop here would write `harness stop`'s marker, and the task would
+      // then leave the daemon down until the computer restarts (harnessd/platform.ts TASK_STOPPED_FILE).
+      if (ifDown) { console.log(`harness start --if-down: it runs (pid ${running}) — nothing to do`); process.exit(0) }
       // Left alone only when it serves THIS sign-in. A daemon on another account — what a forced
       // login left behind whenever a start landed while its browser was open — is stopped here and
       // started over on the session that is on disk: "already running" is exactly what kept it
@@ -1056,8 +1110,31 @@ async function startCommand(foreground: boolean, repair: boolean = false): Promi
         process.exit(0)
       }
       console.log(`machine running (pid ${running}) as another account — restarting it on this sign-in`)
-      await stopDaemonProcess()
+      await stopDaemonOrExit()
     }
+    // Windows, the task registered: it starts the master, as the task would at logon; not under the spawn lock,
+    // which its own `harness start --if-down` takes (lib/platformDaemon.ts startThroughTask).
+    if (!ifDown && installedPlatform() === 'taskscheduler') {
+      // A pid file proven another process's is forgotten first, under the lock and only for that moment: the wait
+      // below would take that process for the master the task started.
+      const up = await withSpawnLock('start', () => runningDaemonPid(true)).catch(() => null)
+      if (up) {
+        console.log(`machine already running (pid ${up}) — it auto-reconnects.`)
+        console.log('  check: harness status   ·   stop: harness stop')
+        process.exit(0)
+      }
+      const started = await startThroughTask(serviceDefinition({ logFile: LOG_FILE }), { ...platformDaemonDeps(), lockHeld: () => readSpawnLockOwner() !== null })
+      if (started.ok) return reportStarted(session, started.pid, 'taskscheduler')
+      if (!started.direct) {
+        console.error(`\n✗ ${started.detail}`)
+        console.error(`  logs   ${tildify(LOG_FILE)}   ·   harness service status`)
+        process.exit(1)
+      }
+      console.log(`  ${started.detail} — starting it directly`)
+    }
+    // Windows: a lock whose holder's pid was given to another process since would hold this start for the whole
+    // wait and then fail it; it is released first, judged again as it goes (`--if-down` did this already).
+    if (!ifDown && process.platform === 'win32') await releaseAbandonedLock(processIfDownDeps())
     await withSpawnLock('start', async () => {
       if (session) await resolveMachineIfUnknown(session)
       await launch(foreground, repair)
@@ -1187,7 +1264,7 @@ async function updateCommand(force: boolean): Promise<void> {
       await new Promise((r) => setTimeout(r, 1000)) // grace for the backend to release the one-machine claim
       await launch(false) // spawns a fresh daemon on the new bytes, prints status, and exits
     }
-    if (wasRunning) { console.log('  stopping the running adapter…'); await stopDaemonProcess() }
+    if (wasRunning) { console.log('  stopping the running adapter…'); await stopDaemonOrExit() }
 
     console.log(`▸ Updating v${VERSION} → v${staged.version}…`)
     let ok = false
@@ -1230,7 +1307,7 @@ async function updateCommand(force: boolean): Promise<void> {
 async function logout(): Promise<void> {
   // Through the lock-taking stop, not an inline kill: a logout that lands mid-handoff would otherwise
   // SIGTERM the OLD daemon, leave the new one coming up, and then delete the session under it.
-  const { pid: stoppedPid } = await stopDaemonProcess()
+  const { pid: stoppedPid } = await stopDaemonOrExit()
   // Before clearAuthSession: see the note above on serve children. Its exit code is deliberately
   // dropped — this command cannot fail — and its own words have already reached the terminal.
   const gridOut = await passThroughToGridLogout([])
@@ -1285,7 +1362,7 @@ async function restartDaemonForIdentity(stoppedDaemon = false): Promise<void> {
   if (!daemon) return
   if (daemon.machineId === wantedDaemonIdentity()) return
   console.log('  restarting the daemon on this account…')
-  await stopDaemonProcess()
+  await stopDaemonOrExit()
   await launch(false)   // prints the status block and exits
 }
 
@@ -1377,7 +1454,8 @@ function printInfoBlock(opts: {
   // until that page went: nothing opened it.
   console.log(row('local api', `http://127.0.0.1:${daemonPort()}`))
   console.log(rule)
-  console.log('  running in background · stop with: harness stop')
+  const footer = infoBlockFooter(opts.status)
+  if (footer) console.log(footer)
   console.log('')
 }
 
@@ -1440,7 +1518,7 @@ async function launch(foreground: boolean, repair: boolean = false): Promise<voi
   if (foreground && process.env.HARNESS_NO_MASTER !== '1') {
     // Beside a daemon that serves this data folder, leave at once and say so, as its core would have:
     // the master would start its services and a core only to see the core refused, and end with 0.
-    await refuseServedDataFolder(localSocketPath(env.ADAPTER_DATA_DIR, env.PORT))
+    await refuseServedDataFolder(localSocketPath(env.ADAPTER_DATA_DIR, env.PORT), 1_000, servedFolderDeps(env.ADAPTER_DATA_DIR, env.PORT))
     startMasterInForeground(SCRIPT_PATH)
     return
   }
@@ -1472,8 +1550,9 @@ async function launch(foreground: boolean, repair: boolean = false): Promise<voi
 
 /** The part of `launch` that runs under the spawn lock: check, spawn, wait for bind, wait for connect. */
 async function spawnDaemon(session: AuthSession | null, runtimeNode: string | null): Promise<void> {
-  const running = readPid()
-  if (running && isAlive(running)) {
+  // Under the spawn lock (launch): a pid file proven another process's is forgotten here.
+  const running = await runningDaemonPid(true)
+  if (running) {
     console.log(`machine already running (pid ${running}) — it auto-reconnects.`)
     console.log('  check: harness status   ·   stop: harness stop')
     process.exit(0)
@@ -1483,9 +1562,9 @@ async function spawnDaemon(session: AuthSession | null, runtimeNode: string | nu
   prepareLogFile(LOG_FILE, LEGACY_LOG_FILE) // adopt an older name + enforce the cap before we tail from here
   const logOffset = existsSync(LOG_FILE) ? readFileSync(LOG_FILE).length : 0
   // Opted in to launchd or systemd (`harness service install`): the platform runs the master, and one
-  // spawned here would be a second supervisor beside it (lib/platformDaemon.ts).
+  // spawned here would be a second supervisor beside it (lib/platformDaemon.ts). Task Scheduler only starts it.
   const platform = installedPlatform()
-  if (platform) {
+  if (platform && platform !== 'taskscheduler') {
     const started = await startUnderPlatform(serviceDefinition({ logFile: LOG_FILE }))
     if (!started.ok) {
       const fail = connectFailure(launchDeps.readLogSlice(logOffset), daemonPort())
@@ -1495,12 +1574,42 @@ async function spawnDaemon(session: AuthSession | null, runtimeNode: string | nu
     }
     return reportStarted(session, started.pid, platform)
   }
-  const logFd = openSync(LOG_FILE, 'a')
-  // The daemon starts on the managed runtime straight away rather than inheriting this process's
-  // interpreter and waiting for some later restart to adopt it.
   // harnessd: a master that keeps the daemon's core running (harnessd/supervisor.ts). HARNESS_NO_MASTER=1
   // starts the core on its own, as before, for a machine where the master itself is in question.
   const entry = process.env.HARNESS_NO_MASTER === '1' ? '__run' : '__harnessd'
+  if (process.platform === 'win32') {
+    if (startedByTheTask) {
+      // Asked again under the lock: a `harness stop` that held it while this start waited its turn wrote its stop down,
+      // and the task must not undo it.
+      if (taskStoppedThisBoot()) { console.log('harness start --if-down: `harness stop` stopped it meanwhile — nothing to do'); process.exit(0) }
+    } else {
+      // Any start but the task's own (a login, an update bringing it back) is the daemon wanted: a stop is forgotten.
+      clearTaskStopped()
+    }
+    // The master starts through harness-launch.exe (lib/windows/launcher.ts), outside this terminal's job, so closing
+    // it or an SSH session does not end it; the master writes its own log (masterProcess.ts). A build run from a
+    // checkout is not what the launcher would start, and keeps the spawn below.
+    if (entry === '__harnessd' && isInstalledCopy(SCRIPT_PATH, env.ADAPTER_CLI_DIR)) {
+      // With none of HARNESSD_* (harnessd/AGENTS.md rule 11): an ordinary start passes none.
+      const launched = await launchMaster()
+      if (!launched.ok) {
+        console.error(`\n✗ Harness could not start its daemon: ${launched.detail}`)
+        console.error(`  logs   ${tildify(LOG_FILE)}`)
+        process.exit(1)
+      }
+      const pid = await waitForMaster(platformDaemonDeps(), BIND_WAIT_MS)
+      if (pid === null) {
+        const fail = connectFailure(launchDeps.readLogSlice(logOffset), daemonPort())
+        console.error(`\n✗ ${fail?.detail ?? `the daemon did not bind within ${BIND_WAIT_MS / 1000}s`}`)
+        console.error(`  logs   ${tildify(LOG_FILE)}`)
+        process.exit(1)
+      }
+      return reportStarted(session, pid)
+    }
+  }
+  const logFd = openSync(LOG_FILE, 'a')
+  // The daemon starts on the managed runtime straight away rather than inheriting this process's
+  // interpreter and waiting for some later restart to adopt it.
   // Under its own name in Activity Monitor (harnessd/processName.ts) rather than `node`.
   const child = spawn(namedNode(runtimeNode ?? process.execPath, entry === '__run' ? 'harnessd-core' : 'harnessd', env.ADAPTER_RUNTIME_DIR), [SCRIPT_PATH, entry], {
     detached: true,
@@ -1528,8 +1637,8 @@ async function spawnDaemon(session: AuthSession | null, runtimeNode: string | nu
   return reportStarted(session, child.pid ?? 0)
 }
 
-/** What `harness start` says once the daemon it started is up, and its exit. `supervisor`: launchd or
- *  systemd started it (`harness service install`). */
+/** What `harness start` says once the daemon it started is up, and its exit. `supervisor`: launchd, systemd or
+ *  Task Scheduler started it (`harness service install`). */
 async function reportStarted(session: AuthSession | null, pid: number, supervisor?: string): Promise<never> {
   // Bound is started. What the daemon does next — dial the backend, retry on its own backoff, sign
   // itself out on a 401, step aside on a 409 — is its own business and is logged by it; this command
@@ -1562,9 +1671,10 @@ async function reportStarted(session: AuthSession | null, pid: number, superviso
   process.exit(0)
 }
 
-/** `harness stop` — SIGTERM the background adapter, SIGKILL if it lingers. */
+/** `harness stop` — SIGTERM the background adapter, SIGKILL if it lingers (Windows: lib/daemonStop.ts `stopOnWindows`). */
 async function stop(): Promise<void> {
-  const r = await stopDaemonProcess()
+  // Windows only: a process it could not confirm, or end, is left running; that is said, and it exits 1.
+  const r = await stopDaemonOrExit()
   if (!r.pid) {
     console.log('machine is not running.')
     process.exit(0)
@@ -1616,7 +1726,8 @@ function clearAdapterState(): void {
 
 /** Stop the daemon and clear local state so the next login starts fresh. */
 async function resetCommand(): Promise<void> {
-  const r = await stopDaemonProcess()
+  // Before anything is cleared: a pid file removed under a Harness still running leaves nothing able to stop it.
+  const r = await stopDaemonOrExit()
   clearAdapterState()
   console.log(`\n  ✓ Cleared local machine CLI state at ${tildify(env.ADAPTER_DATA_DIR)}.`)
   if (r.pid) console.log(`    Stopped adapter process ${r.pid}.`)
@@ -1628,22 +1739,18 @@ async function resetCommand(): Promise<void> {
   process.exit(0)
 }
 
-/** What every call to this daemon's loopback API carries: the CSRF mark its writes want, and the local
- *  credential every TCP call wants (lib/localCredential.ts). */
-function daemonHeaders(extra: Record<string, string> = {}): Record<string, string> {
-  return { 'x-adapter-local': '1', ...localCredentialHeaders(env.ADAPTER_DATA_DIR), ...extra }
+/** One call to the running daemon's control API: over its Windows pipe when it has one, else localhost. Throws as `fetch` does when it is not up. */
+function daemonRequest(method: 'GET' | 'POST', path: string, body?: unknown): Promise<Response> {
+  return localDaemonCall(env.ADAPTER_DATA_DIR, env.PORT, method, path, body, { tcpPort: daemonPort() })
 }
 
-/** Call the running daemon's localhost control API. Exits with a friendly message if it's not up. */
+/** Call the running daemon's control API (`daemonRequest`). Exits with a friendly message if it's not up. */
 async function daemonCall(method: 'GET' | 'POST', path: string, body?: unknown): Promise<{ res: Response; json: Record<string, unknown> }> {
-  const url = `http://127.0.0.1:${daemonPort()}${path}`
   let res: Response
   try {
-    const headers: Record<string, string> = daemonHeaders() // the local API's CSRF gate and credential
-    if (body) headers['content-type'] = 'application/json'
-    res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined })
+    res = await daemonRequest(method, path, body)
   } catch (error) {
-    console.error(`\n  ✗ ${daemonUnreachableText((error as { cause?: unknown }).cause ?? error)}\n`)
+    console.error(`\n  ✗ ${error instanceof PipeUnproven ? error.message : daemonUnreachableText((error as { cause?: unknown }).cause ?? error)}\n`)
     process.exit(1)
   }
   const json = (await res.json().catch(() => ({}))) as Record<string, unknown>
@@ -1818,11 +1925,7 @@ async function remotePasswordSetCommand(json: boolean, stdin: boolean): Promise<
   }
   let result: { fingerprint: string } | null = null
   try {
-    const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/remote-password/set`, {
-      method: 'POST',
-      headers: daemonHeaders({ 'content-type': 'application/json' }),
-      body: JSON.stringify({ password }),
-    })
+    const res = await daemonRequest('POST', '/api/remote-password/set', { password })
     if (res.ok) {
       const body = (await res.json().catch(() => null)) as { fingerprint?: unknown } | null
       if (typeof body?.fingerprint === 'string') result = { fingerprint: body.fingerprint }
@@ -1847,10 +1950,7 @@ async function remotePasswordSetCommand(json: boolean, stdin: boolean): Promise<
 async function remotePasswordClearCommand(json: boolean): Promise<void> {
   let cleared = false
   try {
-    const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/remote-password/clear`, {
-      method: 'POST',
-      headers: daemonHeaders(),
-    })
+    const res = await daemonRequest('POST', '/api/remote-password/clear')
     if (res.ok) cleared = true
   } catch { /* fall back to the disk-backed store below */ }
   if (!cleared) {
@@ -1868,7 +1968,7 @@ async function remotePasswordClearCommand(json: boolean): Promise<void> {
 async function remotePasswordStatusCommand(json: boolean): Promise<void> {
   let status: { hasPassword: boolean; fingerprint: string | null; setAt: number | null } | null = null
   try {
-    const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/remote-password/status`, { headers: daemonHeaders() })
+    const res = await daemonRequest('GET', '/api/remote-password/status')
     if (res.ok) {
       const body = (await res.json().catch(() => null)) as { hasPassword?: unknown; fingerprint?: unknown; setAt?: unknown } | null
       if (typeof body?.hasPassword === 'boolean') {
@@ -2030,11 +2130,7 @@ async function linkMachineWithPassword(
  *  (and rewrites it whole), so the write has to go through it; with no daemon, the file is written directly. */
 async function trustLinkedMachine(peer: LinkedPeer): Promise<void> {
   try {
-    const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/link/trust-peer`, {
-      method: 'POST',
-      headers: daemonHeaders({ 'content-type': 'application/json' }),
-      body: JSON.stringify(peer),
-    })
+    const res = await daemonRequest('POST', '/api/link/trust-peer', peer)
     if (res.ok) return
   } catch { /* fall back to the disk-backed store below */ }
   const store = new E2eeStore()
@@ -2079,11 +2175,7 @@ async function linkUnlinkCommand(machineId: string | undefined): Promise<void> {
 /** Ask the running daemon to remove a trust-group member; false when there is no daemon or no match. */
 async function daemonGroupRemove(selector: string): Promise<boolean> {
   try {
-    const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/group/remove`, {
-      method: 'POST',
-      headers: daemonHeaders({ 'content-type': 'application/json' }),
-      body: JSON.stringify({ selector }),
-    })
+    const res = await daemonRequest('POST', '/api/group/remove', { selector })
     return res.ok
   } catch {
     return false
@@ -2109,10 +2201,10 @@ async function groupCommand(sub: string | undefined, arg: string | undefined, js
   }
   if (sub === 'sync') {
     try {
-      const res = await fetch(`http://127.0.0.1:${daemonPort()}/api/group/sync`, { method: 'POST', headers: daemonHeaders() })
+      const res = await daemonRequest('POST', '/api/group/sync')
       if (!res.ok) throw new Error(String(res.status))
     } catch (error) {
-      console.error(`\n  ✗ ${daemonUnreachableText((error as { cause?: unknown }).cause ?? error)}\n`)
+      console.error(`\n  ✗ ${error instanceof PipeUnproven ? error.message : daemonUnreachableText((error as { cause?: unknown }).cause ?? error)}\n`)
       process.exit(1)
     }
     console.log('\n  ✓ Comparing with every reachable member now.\n')
@@ -2636,7 +2728,7 @@ switch (cmd) {
     // the environment) records every frame to/from a paired Autonomous device — see lib/autonomous-device/dump.ts.
     const dump = flags.find((f) => f === '--device-dump' || f.startsWith('--device-dump='))
     if (dump) process.env.HARNESS_DEVICE_DUMP = dump === '--device-dump' ? '1' : resolve(dump.slice('--device-dump='.length))
-    startCommand(foreground, repair).catch(onError)
+    startCommand(foreground, repair, flags.includes('--if-down'), flags.includes(AT_LOGON_FLAG)).catch(onError)
     break
   }
   case 'join':
@@ -2826,6 +2918,20 @@ switch (cmd) {
     break
   case 'reset':
     resetCommand().catch(onError)
+    break
+  case 'uninstall':
+    // Loaded only here: the engines' hook declarations and the Windows helpers are not every command's. Exits as soon
+    // as it is done, because on Windows the last step waits for this process to end before it deletes its node.exe.
+    Promise.all([import('./lib/uninstall/command.js'), import('./lib/uninstall/deps.js')])
+      .then(async ([{ uninstallCommand }, { uninstallDeps }]) => uninstallCommand(rest, await uninstallDeps({ tildify, ask: askLine })))
+      .then((code) => process.exit(code))
+      // Not onError, whose "Failed to start adapter" is another command's. uninstallCommand reports every error once its
+      // steps have begun, so what reaches here came before the first one: loading the command or reading this computer.
+      // Written at once, as the command's own lines are (uninstall/deps.ts): process.exit drops what a pipe has not taken.
+      .catch((error: unknown) => {
+        try { writeSync(2, `✗ harness uninstall could not start (${error instanceof Error ? error.message : String(error)}). Nothing was removed.\n`) } catch { /* no stderr */ }
+        process.exit(1)
+      })
     break
   case 'status':
     status().catch(onError)

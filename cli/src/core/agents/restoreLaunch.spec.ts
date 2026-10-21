@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { LaunchOverridesResult } from '../../lib/launchOverrides.js'
 import { createRestoreLaunch } from './restoreLaunch.js'
+import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { createLaunchHelpers } from './launch.js'
 import { createLaunchAuthority } from './launchAuthority.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
@@ -18,6 +19,16 @@ const setup = () => {
   }
   return { deps, build: createRestoreLaunch(deps) }
 }
+
+describe('a restore launch Windows refuses', () => {
+  it('fails that row alone, with its reason; any other error is thrown on', async () => {
+    const { deps, build } = setup()
+    deps.launch.mockImplementationOnce(() => { throw new WindowsBatchLaunchRefused('claude', 'C:\\tools\\claude.cmd') })
+    expect(await build(entry, { current: () => true })).toEqual({ error: 'ENGINE_LAUNCH_REFUSED', detail: expect.stringContaining('claude.cmd is a batch file') })
+    deps.launch.mockImplementationOnce(() => { throw new Error('fixture') })
+    await expect(build(entry, { current: () => true })).rejects.toThrow('fixture')
+  })
+})
 
 describe('restore preparation keeps session authority in core', () => {
   it.each(['unknown flags', 'changed executable', 'ready'] as const)('preserves native preparation evidence through restore: %s', async stage => {
@@ -48,7 +59,7 @@ describe('restore preparation keeps session authority in core', () => {
       authority: createLaunchAuthority({ byAgent: () => live, revision: () => 1, cancelled: () => false }),
       prepareApiTools: apiNotes, setGridLaunch: vi.fn(), setTail: vi.fn(),
       launchOverridesDeps: { machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(),
-        tmuxSupportsSessionEnv: async () => true, writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(async () => true), readCodexConfig: () => null },
+        capabilities: async () => ({ sessionEnv: true }), writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(async () => true), readCodexConfig: () => null },
     })
     const { deps } = setup()
     const build = createRestoreLaunch({ ...deps, relaunchOverrides: helpers.relaunchOverrides })
@@ -66,7 +77,7 @@ describe('restore preparation keeps session authority in core', () => {
       authority: createLaunchAuthority({ byAgent: () => live, revision: () => 1, cancelled: () => false }),
       prepareApiTools: apiNotes, setGridLaunch: vi.fn(), setTail: vi.fn(),
       launchOverridesDeps: { machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(),
-        tmuxSupportsSessionEnv: async () => true, writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(async () => true), readCodexConfig: () => null,
+        capabilities: async () => ({ sessionEnv: true }), writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(async () => true), readCodexConfig: () => null,
         dshLaunch: async () => { live.permissionMode = 'ask'; return { ok: true, launch: { env: {}, args: [] } } } },
     })
     const { deps } = setup()

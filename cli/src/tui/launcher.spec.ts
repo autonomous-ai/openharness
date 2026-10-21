@@ -39,6 +39,7 @@ beforeEach(async () => {
   writeFileSync(cli, '// installed bundle')
   writeFileSync(join(bin, 'harness'), `#!/bin/sh\nexec node ${quote(cli)} "$@"\n`, { mode: 0o755 })
   vi.stubEnv('HOME', home)
+  vi.stubEnv('USERPROFILE', home)
   vi.stubEnv('HARNESS_BIN_DIR', bin)
   vi.stubEnv('ADAPTER_CLI_DIR', dirname(cli))
   vi.stubEnv('HARNESS_TUI_BIN', undefined)

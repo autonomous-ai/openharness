@@ -46,6 +46,17 @@ describe('harnessd\'s variables', () => {
     expect(env.HARNESSD_SERVICE_TOKEN).toBeUndefined()
   })
 
+  it('are none of an ordinary start\'s: `harness start` launches a master with none of them (Windows, harness-launch.exe)', () => {
+    // Only a master handing over passes one (harnessd/reexec.ts, RESUME_ENV): a fresh master given an old one would
+    // take itself for a handover's replacement, and a core or service token from this shell would reach the master.
+    const given = started()
+    const ordinary = harnessd.withoutHarnessdEnv(given)
+    expect(ordinary).toEqual({ HOME: '/home/someone', PATH: '/usr/bin:/bin', HARNESS_PORT: '18473', MY_HARNESSD_NOTE: 'kept' })
+    expect(Object.keys(ordinary).filter(harnessd.isHarnessdVariable)).toEqual([])
+    // A copy: the environment it was read from keeps its own.
+    expect(given).toEqual(started())
+  })
+
   it('read as the environment itself before anything is held, as in a process that holds none', () => {
     expect(harnessd.harnessdEnv(started())).toEqual(started())
   })

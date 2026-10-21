@@ -1,0 +1,237 @@
+[
+  {
+    "name": "x64 takes the x64 entry, never arm64",
+    "platform": "win32-x64",
+    "document": {
+      "desktop-windows-x64": {
+        "version": "1.2.0",
+        "url": "https://cdn.example/x64.zip",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1
+      },
+      "desktop-windows-arm64": {
+        "version": "1.3.0",
+        "url": "https://cdn.example/arm64.zip",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1
+      }
+    },
+    "expect": "1.2.0 https://cdn.example/x64.zip"
+  },
+  {
+    "name": "x64 with only an arm64 entry has none",
+    "platform": "win32-x64",
+    "document": {
+      "desktop-windows-arm64": {
+        "version": "1.3.0",
+        "url": "https://cdn.example/arm64.zip",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1
+      }
+    },
+    "expect": "The desktop manifest has no Harness desktop app for this computer (win32-x64) yet."
+  },
+  {
+    "name": "arm64 takes a newer arm64",
+    "platform": "win32-arm64",
+    "document": {
+      "desktop-windows-x64": {
+        "version": "1.2.0",
+        "url": "https://cdn.example/x64.zip",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1
+      },
+      "desktop-windows-arm64": {
+        "version": "1.3.0",
+        "url": "https://cdn.example/arm64.zip",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1
+      }
+    },
+    "expect": "1.3.0 https://cdn.example/arm64.zip"
+  },
+  {
+    "name": "arm64 orders by number, not text",
+    "platform": "win32-arm64",
+    "document": {
+      "desktop-windows-x64": {
+        "version": "1.10.0",
+        "url": "https://cdn.example/x64.zip",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1
+      },
+      "desktop-windows-arm64": {
+        "version": "1.9.0",
+        "url": "https://cdn.example/arm64.zip",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1
+      }
+    },
+    "expect": "1.10.0 https://cdn.example/x64.zip"
+  },
+  {
+    "name": "arm64 wins a tie",
+    "platform": "win32-arm64",
+    "document": {
+      "desktop-windows-x64": {
+        "version": "1.3.0",
+        "url": "https://cdn.example/x64.zip",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1
+      },
+      "desktop-windows-arm64": {
+        "version": "1.3.0",
+        "url": "https://cdn.example/arm64.zip",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1
+      }
+    },
+    "expect": "1.3.0 https://cdn.example/arm64.zip"
+  },
+  {
+    "name": "a prerelease ties on its numbers, and arm64 wins it",
+    "platform": "win32-arm64",
+    "document": {
+      "desktop-windows-x64": {
+        "version": "1.3.0",
+        "url": "https://cdn.example/x64.zip",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1
+      },
+      "desktop-windows-arm64": {
+        "version": "1.3.0-rc.1",
+        "url": "https://cdn.example/arm64.zip",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1
+      }
+    },
+    "expect": "1.3.0-rc.1 https://cdn.example/arm64.zip"
+  },
+  {
+    "name": "arm64 alone",
+    "platform": "win32-arm64",
+    "document": {
+      "desktop-windows-arm64": {
+        "version": "1.3.0",
+        "url": "https://cdn.example/arm64.zip",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1
+      }
+    },
+    "expect": "1.3.0 https://cdn.example/arm64.zip"
+  },
+  {
+    "name": "x64 alone, emulated on arm64",
+    "platform": "win32-arm64",
+    "document": {
+      "desktop-windows-x64": {
+        "version": "1.2.0",
+        "url": "https://cdn.example/x64.zip",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1
+      }
+    },
+    "expect": "1.2.0 https://cdn.example/x64.zip"
+  },
+  {
+    "name": "a newer arm64 entry with no url is skipped",
+    "platform": "win32-arm64",
+    "document": {
+      "desktop-windows-x64": {
+        "version": "1.2.0",
+        "url": "https://cdn.example/x64.zip",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1
+      },
+      "desktop-windows-arm64": {
+        "version": "1.9.0",
+        "url": null,
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1
+      }
+    },
+    "expect": "1.2.0 https://cdn.example/x64.zip"
+  },
+  {
+    "name": "a newer arm64 entry with no sha256 is skipped",
+    "platform": "win32-arm64",
+    "document": {
+      "desktop-windows-x64": {
+        "version": "1.2.0",
+        "url": "https://cdn.example/x64.zip",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1
+      },
+      "desktop-windows-arm64": {
+        "version": "1.9.0",
+        "url": "https://cdn.example/arm64.zip",
+        "sha256": null,
+        "size": 1
+      }
+    },
+    "expect": "1.2.0 https://cdn.example/x64.zip"
+  },
+  {
+    "name": "a newer arm64 entry with a text size is skipped",
+    "platform": "win32-arm64",
+    "document": {
+      "desktop-windows-x64": {
+        "version": "1.2.0",
+        "url": "https://cdn.example/x64.zip",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1
+      },
+      "desktop-windows-arm64": {
+        "version": "1.9.0",
+        "url": "https://cdn.example/arm64.zip",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": "one"
+      }
+    },
+    "expect": "1.2.0 https://cdn.example/x64.zip"
+  },
+  {
+    "name": "a newer arm64 entry with a junk version is skipped",
+    "platform": "win32-arm64",
+    "document": {
+      "desktop-windows-x64": {
+        "version": "1.2.0",
+        "url": "https://cdn.example/x64.zip",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1
+      },
+      "desktop-windows-arm64": {
+        "version": "1.9.0junk",
+        "url": "https://cdn.example/arm64.zip",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1
+      }
+    },
+    "expect": "1.2.0 https://cdn.example/x64.zip"
+  },
+  {
+    "name": "a newer arm64 entry with a version past Int32 is skipped",
+    "platform": "win32-arm64",
+    "document": {
+      "desktop-windows-x64": {
+        "version": "1.2.0",
+        "url": "https://cdn.example/x64.zip",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1
+      },
+      "desktop-windows-arm64": {
+        "version": "9999999999.0.0",
+        "url": "https://cdn.example/arm64.zip",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 1
+      }
+    },
+    "expect": "1.2.0 https://cdn.example/x64.zip"
+  },
+  {
+    "name": "an empty manifest has none",
+    "platform": "win32-arm64",
+    "document": {},
+    "expect": "The desktop manifest has no Harness desktop app for this computer (win32-arm64) yet."
+  }
+]

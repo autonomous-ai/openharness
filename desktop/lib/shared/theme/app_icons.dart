@@ -11,8 +11,15 @@ abstract final class AppIcons {
   static const double controlSize = 20;
   static const double featureSize = 24;
 
-  /// A quiet close mark in tabs and pane headers, inside the full click target.
-  static const double closeSize = 12;
+  /// The close mark in tabs and pane headers, inside the full click target.
+  /// 14: its stroke matches the 13pt regular text beside it (1.1pt, measured),
+  /// as the native tab's × takes the title's size and weight.
+  static const double closeSize = 14;
+
+  /// The close mark's ink at rest, as a share of the foreground: full, as the
+  /// text beside it (owner, 2026-10-20). The native tab's × reads the same
+  /// value (`HarnessControlSymbols.closeInk`).
+  static const double closeInk = 1;
 
   static const aArrowDown = LucideIcons.aArrowDown400;
   static const aArrowUp = LucideIcons.aArrowUp400;
@@ -72,6 +79,7 @@ abstract final class AppIcons {
   static const dot = LucideIcons.dot400;
   static const download = LucideIcons.download400;
   static const ellipsis = LucideIcons.ellipsis400;
+  static const ellipsisVertical = LucideIcons.ellipsisVertical400;
   static const externalLink = LucideIcons.externalLink400;
   static const eye = LucideIcons.eye400;
   static const eyeOff = LucideIcons.eyeOff400;
@@ -121,6 +129,7 @@ abstract final class AppIcons {
   static const messageCircleQuestionMark =
       LucideIcons.messageCircleQuestionMark400;
   static const messagesSquare = LucideIcons.messagesSquare400;
+  static const messageSquare = LucideIcons.messageSquare400;
   static const messageSquareText = LucideIcons.messageSquareText400;
   static const minimize = LucideIcons.minimize400;
   static const minus = LucideIcons.minus400;

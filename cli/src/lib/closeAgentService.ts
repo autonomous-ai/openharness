@@ -182,10 +182,13 @@ export class CloseAgentService {
    * The answer to a close of an agent that is not the one asked about. One already closed, the same conversation, is
    * closed: a window closing a tab after a pane in it, its starter, was closed takes the harnesses that starter started
    * with it (services/agentCleanup.ts), and the window's own close of them, asked a moment later, was answered
-   * AGENT_CHANGED and shown as "Could not confirm that it stopped". Anything else is AGENT_CHANGED.
+   * AGENT_CHANGED and shown as "Could not confirm that it stopped". An inspect of one is closed too: the terminal client
+   * inspects before every close, and its close again of one it had closed was answered "Stop not confirmed:
+   * AGENT_CHANGED". Anything else is AGENT_CHANGED.
    */
   private changed(request: AgentCloseRequest): AgentCloseResult {
-    return (request.mode === 'idle' || request.mode === 'now') && this.deps.closedAlready?.(request) ? { closed: true } : { error: 'AGENT_CHANGED' }
+    return (request.mode === 'idle' || request.mode === 'now' || request.mode === 'inspect') && this.deps.closedAlready?.(request)
+      ? { closed: true } : { error: 'AGENT_CHANGED' }
   }
 
   private async execute(request: AgentCloseRequest, target: string, revision: number): Promise<AgentCloseResult> {

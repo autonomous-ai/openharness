@@ -539,6 +539,8 @@ void main() {
           tester.widget<TextField>(resourceField).decoration!.hintText,
           'Search models',
         );
+        // The title bar's Models opens with nothing typed to delete.
+        expect(resourceSearch(tester).query, ':');
         expect(app.sent, isEmpty);
         await tester.pumpWidget(const SizedBox());
         app.dispose();

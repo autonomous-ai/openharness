@@ -17,9 +17,7 @@ vi.mock('./processLiveness.js', async original => ({ ...await original<object>()
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
 }))
 vi.mock('./deleteAgentFallback.js', () => ({ checkPidRuntime: async () => ({ state: 'gone', reason: 'fixture' }) }))
-vi.mock('./tmuxAgentDiscovery.js', () => ({ listTmuxPanes: async () => ({ ok: true, panes: [] }) }))
-vi.mock('./tmux.js', () => ({ checkSessionRuntime: async () => ({ state: 'alive' }),
-  clearPaneRemainOnExit: async () => {}, tmuxPaneState: async () => ({ dead: false }),
+vi.mock('./paneEngineProcess.js', () => ({ checkSessionRuntime: async () => ({ state: 'alive' }),
   resolvePaneEngineProcess: async () => ({ pid: 7001, executable: '<engine>', startMarker: 'fixture-start' }),
 }))
 vi.mock('./engineLaunch.js', async original => ({ ...await original<object>(),
@@ -48,6 +46,7 @@ it.each(['linux', 'darwin'])('keeps healthy native resume composition on %s', as
       'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME']) {
       const path = join(root, key); mkdirSync(path, { recursive: true, mode: 0o700 }); vi.stubEnv(key, path)
     }
+    vi.stubEnv('USERPROFILE', join(root, 'HOME'))
     vi.stubEnv('CLAUDE_PROJECTS_DIR', join(root, 'CLAUDE_CONFIG_DIR', 'projects'))
     vi.stubEnv('TZ', 'UTC')
     writeFileSync(join(root, 'ADAPTER_DATA_DIR', 'engine-homes.json'), '{}')
@@ -56,6 +55,7 @@ it.each(['linux', 'darwin'])('keeps healthy native resume composition on %s', as
     const { StoppedAgentStore } = await import('./stoppedAgents.js')
     const { AgentRestartCoordinator } = await import('./restartAgent.js')
     const { createResumeAgentService } = await import('./resumeAgentService.js')
+    type ResumeAgentServiceDeps = import('./resumeAgentService.js').ResumeAgentServiceDeps
     let pane = 0
     for (const engine of ['claude', 'codex', 'terminal'] as const) {
       const directory = join(root, engine === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR', engine === 'codex' ? 'sessions' : 'projects')
@@ -70,12 +70,16 @@ it.each(['linux', 'darwin'])('keeps healthy native resume composition on %s', as
       registry.removeAgent(saved.agentId)
       const stopped = new StoppedAgentStore(join(root, 'saved', engine)); stopped.save(saved)
       const events: unknown[] = []
-      const resume = createResumeAgentService({ registry, stoppedAgents: stopped, restartJobs: new AgentRestartCoordinator(),
-        stopJobs: new Map(), pinnedControls: new Set(), tmuxBackend: {
+      const terminal: ResumeAgentServiceDeps['createBackend'] & ReturnType<ResumeAgentServiceDeps['backendFor']> = {
           create: async request => { events.push(['create', request.command]); return { state: 'succeeded', dispatch: 'executed',
             runtime: { backend: 'tmux', paneId: `%${++pane}` } } },
           kill: async () => { throw Error('A healthy resume must not kill a pane') },
-        }, retainExitedSession: () => { throw Error('No live session exists in this fixture') },
+          releaseHold: async () => {}, paneState: async () => ({ dead: false, exitStatus: null, command: '<engine>', engineExit: null }),
+          rootProcess: async () => { throw Error('The engine process is resolved through paneEngineProcess.js') },
+          inventory: async () => ({ state: 'available', roots: [] }),
+        }
+      const resume = createResumeAgentService({ registry, stoppedAgents: stopped, restartJobs: new AgentRestartCoordinator(),
+        stopJobs: new Map(), pinnedControls: new Set(), createBackend: terminal, backendFor: () => terminal, retainExitedSession: () => { throw Error('No live session exists in this fixture') },
         announceSession: session => { events.push(['announce', session.engine, session.sessionId, session.launch?.state]) },
         relaunchOverrides: async session => { events.push(['launch-prepare', session.engine, session.sessionId]);
           return { ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } } },

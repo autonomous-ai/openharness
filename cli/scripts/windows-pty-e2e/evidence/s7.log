@@ -1,0 +1,57 @@
+12:42:54.422 RESULT opencode: id c901a91a launch=ready engine=opencode status=stopped pane=null after 16947 ms
+12:42:54.423 --- opencode screen ---
+(no stream: terminal_open → {"protocolVersion":3,"code":"TERMINAL_AGENT_NOT_FOUND","requestId":"0483924d…"})
+12:44:12.676 RESULT pi: id 9d49dd80 launch=starting engine=pi status=active pane=%3002 after 78253 ms
+12:44:12.676 --- pi screen ---
+ Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.
+ fd not found. Downloading...
+ ripgrep not found. Downloading...
+ fd installed to C:\Users\admin\.pi\agent\bin\fd.exe
+ ripgrep installed to C:\Users\admin\.pi\agent\bin\rg.exe
+ Warning: No models available. Use /login to log into a provider via OAuth or API key. See:
+   C:\Users\admin\AppData\Roaming\npm\node_modules\@earendil-works\pi-coding-agent\docs\providers.md
+   C:\Users\admin\AppData\Roaming\npm\node_modules\@earendil-works\pi-coding-agent\docs\models.md
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+C:\work\e2e\proj
+0.0%/0 (auto)                                                                                                    unknown
+12:45:30.626 RESULT commandcode: id f3ce9e87 launch=starting engine=commandcode status=active pane=%3003 after 77950 ms
+12:45:30.626 --- commandcode screen ---
+Microsoft Windows [Version 10.0.26100.4349]
+(c) Microsoft Corporation. All rights reserved.
+C:\work\e2e\proj>
+12:45:49.348 RESULT kilo: id 73599078 launch=ready engine=kilo status=active pane=%3004 after 18722 ms
+12:45:49.349 --- kilo screen ---
+                       ┃
+                       ┃  Ask anything... "Fix a TODO in the codebase"
+                       ┃
+                       ┃  Code  · Auto Free Kilo Gateway
+                       ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                       tab agents  ctrl+p commands
+                       ● Move your opencode configuration
+                         Kilo no longer falls back to opencode configuration. Found opencode
+                         config at C:\Users\admin\.config\opencode. Move it into a .kilo directory
+                         (project) or C:\Users\admin\.config\kilo (global).
+                          ● Tip Use patterns like "git *": "allow" for granular bash permissions
+  C:\work\e2e\proj                                                                                              7.8.12
+12:46:08.013 RESULT copilot: id b85bd901 launch=ready engine=copilot status=active pane=%3005 after 18664 ms
+12:46:08.014 --- copilot screen ---
+│                                                                                                                      │
+│ Copilot can read files in this folder and, with your permission, edit them or run code and shell commands. It will   │
+│ remember your permissions for the rest of this session.                                                              │
+│                                                                                                                      │
+│ Do you trust the files in this folder?                                                                               │
+│                                                                                                                      │
+│ ❯ 1. Yes                                                                                                             │
+│   2. Yes, and remember this folder for future sessions                                                               │
+│   3. No (Esc)                                                                                                        │
+│                                                                                                                      │
+│ ↑/↓ to navigate · enter to select · esc to cancel                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+12:46:08.034 RESULT cursor: create refused NATIVE_LAUNCH_HELD — cursor is not installed. Installing engines is not supported on Windows yet: install it, then try again.
+12:46:08.051 RESULT hermes: create refused NATIVE_LAUNCH_HELD — hermes is not installed. Installing engines is not supported on Windows yet: install it, then try again.
+12:46:08.062 RESULT devin: create refused NATIVE_LAUNCH_HELD — devin is not installed. Installing engines is not supported on Windows yet: install it, then try again.
+12:46:08.076 RESULT muse: create refused NATIVE_LAUNCH_HELD — muse is not installed. Installing engines is not supported on Windows yet: install it, then try again.
+12:46:08.092 RESULT amp: create refused NATIVE_LAUNCH_HELD — amp is not installed. Installing engines is not supported on Windows yet: install it, then try again.
+12:46:08.105 RESULT grok: create refused NATIVE_LAUNCH_HELD — grok is not installed. Installing engines is not supported on Windows yet: install it, then try again.
+12:46:08.118 RESULT agy: create refused NATIVE_LAUNCH_HELD — agy is not installed. Installing engines is not supported on Windows yet: install it, then try again.

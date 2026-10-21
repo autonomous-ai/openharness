@@ -36,9 +36,29 @@ class HarnessCommand {
       final linux = linuxAltCommandKeys[id];
       if (linux != null) return linux;
     }
+    if (ctrlWorkspacePrefix) {
+      final windows = windowsCommandKeys[id];
+      if (windows != null) return windows;
+    }
     return action == null
         ? extraKeys.map(platformWorkspaceBinding).toList(growable: false)
         : _workspaceKeys[action] ?? const [];
+  }
+
+  /// Ctrl twins of Mac defaults. Existing Windows keys still take precedence.
+  List<String> get outsideTerminalKeys {
+    if (!ctrlWorkspacePrefix) return const [];
+    return action == null
+        ? [
+            for (final keys in extraKeys)
+              if (!keys.contains(' '))
+                ?windowsCtrlAliasForStroke(KeyStroke.parse(keys)),
+          ]
+        : [
+            for (final shortcut in [...kAppShortcuts, ...kSwarmShortcuts])
+              if (shortcut.action == action)
+                ?windowsCtrlAlias(shortcut.activator),
+          ];
   }
 
   final ShortcutAction? action;
@@ -618,7 +638,7 @@ final harnessCommands = <HarnessCommand>[
     'app.store',
     'Harness Store',
     ShortcutGroup.actions,
-    extraKeys: ['cmd+s'],
+    extraKeys: ['cmd+ctrl+s'],
     keywords: ['install', 'browse harnesses', 'packages', 'extensions'],
     nativeAction: 'store',
   ),
@@ -691,9 +711,9 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'super_tab.new',
-    'New Super Tab',
+    'New Swarm',
     ShortcutGroup.actions,
-    extraKeys: ['cmd+alt+shift+t'],
+    extraKeys: ['cmd+s'],
     hidden: true,
   ),
   if (kDebugSurfaceEnabled)
@@ -943,19 +963,52 @@ final harnessCommandById = {
   for (final command in harnessCommands) command.id: command,
 };
 final _defaultBindingsByPlatform = <TargetPlatform, List<KeyBinding>>{};
-List<KeyBinding> get harnessDefaultBindings =>
-    _defaultBindingsByPlatform.putIfAbsent(
-      defaultTargetPlatform,
-      () => [
-        for (final command in harnessCommands)
-          for (final keys in command.keys)
-            KeyBinding(
-              keys: keys.split(' ').map(KeyStroke.parse),
-              command: command.id,
-              context: command.context,
-            ),
-      ],
-    );
+List<KeyBinding> get harnessDefaultBindings => _defaultBindingsByPlatform
+    .putIfAbsent(defaultTargetPlatform, _readDefaultBindings);
+
+List<KeyBinding> _readDefaultBindings() {
+  final defaults = <KeymapContext, Set<String>>{};
+  for (final command in harnessCommands) {
+    (defaults[command.context] ??= {}).addAll(command.keys);
+  }
+  // The Mac action table owns alias collisions before string-only commands:
+  // Reload keeps Ctrl+R even though Split Right also has a Mac Cmd+R default.
+  final aliases = <HarnessCommand, List<String>>{};
+  for (final command in [
+    ...harnessCommands.where((command) => command.action != null),
+    ...harnessCommands.where((command) => command.action == null),
+  ]) {
+    for (final keys in command.outsideTerminalKeys) {
+      if (defaults[command.context]!.add(keys)) {
+        (aliases[command] ??= []).add(keys);
+      }
+    }
+  }
+  final bindings = <KeyBinding>[];
+  for (final command in harnessCommands) {
+    for (final keys in command.keys) {
+      bindings.add(
+        KeyBinding(
+          keys: keys.split(' ').map(KeyStroke.parse),
+          command: command.id,
+          context: command.context,
+        ),
+      );
+    }
+    for (final keys in aliases[command] ?? const <String>[]) {
+      bindings.add(
+        KeyBinding(
+          keys: keys.split(' ').map(KeyStroke.parse),
+          command: command.id,
+          context: command.context,
+          outsideTerminal: true,
+        ),
+      );
+    }
+  }
+  return bindings;
+}
+
 final _defaultKeymapsByPlatform = <TargetPlatform, ResolvedKeymap>{};
 ResolvedKeymap get harnessDefaultKeymap =>
     _defaultKeymapsByPlatform.putIfAbsent(

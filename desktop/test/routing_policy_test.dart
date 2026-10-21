@@ -168,7 +168,7 @@ void main() {
       'type': 'tab.routingPolicy',
       'policy': {'notes': 'Frontend prefers Claude.'},
     });
-    expect(find.text('Routing for this Super Tab'), findsNothing);
+    expect(find.text('Routing for this Swarm'), findsNothing);
     f.app.superTabs.dispose();
   });
 
@@ -263,7 +263,7 @@ void main() {
     await tester.pump();
     await tester.tap(find.widgetWithText(FilledButton, 'Save'));
     await tester.pumpAndSettle();
-    expect(find.text('Routing for this Super Tab'), findsOneWidget);
+    expect(find.text('Routing for this Swarm'), findsOneWidget);
     expect(find.textContaining('Only the owner'), findsOneWidget);
     f.app.superTabs.dispose();
   });

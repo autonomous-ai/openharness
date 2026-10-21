@@ -3,6 +3,7 @@ import { externalResumePending } from '../../lib/externalResume.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { LaunchOverrides, LaunchOverridesResult } from '../../lib/launchOverrides.js'
 import type { RestoreAgentsDeps, RestoreLaunch } from '../../lib/restoreAgents.js'
+import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
 
 interface RestoreLaunchDeps {
   workspaceMissing(cwd: string | null | undefined): { error: string; detail: string } | null
@@ -38,6 +39,11 @@ export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps[
       }
     }
     deps.refreshGridWebSearch(entry.agentId, built.overrides)
-    return deps.launch(entry, opts, built.overrides, permission)
+    // Windows refuses a batch-file engine whose arguments cmd.exe would read (lib/windows/launch.ts): this row fails
+    // alone. Thrown, it ended the whole pass ("restore skipped") on every start.
+    try { return await deps.launch(entry, opts, built.overrides, permission) } catch (error) {
+      const { error: code, detail } = windowsLaunchRefusal(error)
+      return { error: code, detail }
+    }
   }
 }

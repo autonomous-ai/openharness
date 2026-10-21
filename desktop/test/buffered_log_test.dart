@@ -147,11 +147,17 @@ void main() {
   test('an invalid NUL path never appends to its valid prefix', () {
     final output = File('${dir.path}/existing');
     output.writeAsStringSync('preserved');
-    expect(
-      () => appendDurableLog(File('${output.path}\u0000suffix'), 'bad'),
-      throwsArgumentError,
-    );
-    expect(output.readAsStringSync(), 'preserved');
+    for (final append in [appendDurableLog, appendLog]) {
+      Object? error;
+      try {
+        append(File('${output.path}\u0000suffix'), 'bad');
+      } catch (caught) {
+        error = caught;
+      }
+      // Check the side effect even when the invalid path did not throw.
+      expect(output.readAsStringSync(), 'preserved');
+      expect(error, isA<ArgumentError>());
+    }
   });
 
   test('opening a directory as a log fails without altering it', () {

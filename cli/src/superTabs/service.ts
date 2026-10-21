@@ -14,7 +14,7 @@ const HELP = {
   status: 'Read the shared tab roster and work.',
   messages: 'messages GROUP: read recent messages in a conversation.',
   message: 'message GROUP MESSAGE_ID: read one exact message, including an earlier question or result referenced by a reply.',
-  post: 'post GROUP TEXT OPERATION_ID: reply in that conversation. Use a unique ID per message and reuse it after an interrupted request.',
+  post: 'post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID]: reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID.',
   start: 'start OPERATION_ID JSON: create one agent in a conversation on a machine you can access. Repeat exactly after an interruption; it follows the same native creation receipt. It does not assign work.',
   resume: 'resume START_ID: finish a pending start without creating another agent.',
   route: 'route GROUP JSON: before starting or assigning work, choose who does it. JSON: {"difficulty":"low|medium|high","risk":"low|medium|high","why":"one sentence","needs":{"tools":[],"devices":[],"cwd":"/absolute/repo"}}. Start or assign the pick with its routeDecisionId; to choose otherwise, pass overrideReason.',
@@ -23,6 +23,7 @@ const HELP = {
     model: 'opus', effort: 'high', routeDecisionId: 'DECISION' },
   command: 'command OPERATION_ID JSON: send one of the commands below. Reuse exactly the same ID and JSON after an interrupted request.',
   commands: [
+    { type: 'project.report', projectId: 'PROJECT', throughRevision: 123, text: 'What changed, what is blocked, and what comes next. Use null when nothing merits repeating.' },
     { type: 'message.send', conversationId: 'GROUP', text: 'A message addressed to an agent', replyTo: null, recipientIds: ['AGENT'] },
     { type: 'conversation.create', title: 'Outcome', brief: 'An independently assignable result', checks: [{ description: 'Observable acceptance evidence', independent: false }] },
     { type: 'conversation.agent', conversationId: 'GROUP', agentId: 'AGENT', present: true, lead: false },
@@ -35,6 +36,18 @@ const HELP = {
 }
 
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
+
+/** Tell the agent which messages sent to it it has already answered, so it posts once (a Lead answered one question twice on
+ * 2026-10-20). A message is answered when a later message of the agent's own replies to it. */
+function markAnswered(page: unknown, later: unknown[], agentId: string): unknown {
+  const body = object(page)
+  if (!Array.isArray(body.messages)) return page
+  const mine = new Set([...body.messages, ...later].map(object).filter(m => object(m.author).id === agentId && typeof m.replyTo === 'string').map(m => m.replyTo))
+  return { ...body, messages: body.messages.map(object).map(m => {
+    const asked = Array.isArray(m.recipientIds) && m.recipientIds.includes(agentId) && object(m.author).id !== agentId
+    return asked ? { ...m, answered: mine.has(m.id) } : m
+  }) }
+}
 
 export interface SuperTabServiceOptions {
   prepareContribution?: typeof prepareContribution
@@ -177,10 +190,20 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           }
         }
         if (payload.action === 'messages' && identifier(payload.conversationId)) {
-          return { ok: true, value: await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}`) }
+          const page = await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}`)
+          return { ok: true, value: markAnswered(page, [], agentId) }
         }
         if (payload.action === 'message' && identifier(payload.conversationId) && identifier(payload.messageId)) {
-          return { ok: true, value: await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}&messageId=${payload.messageId}`) }
+          const page = await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}&messageId=${payload.messageId}`)
+          // One exact message cannot show its own answer, so what came after it is read, but only for a question put to
+          // this agent. If that read fails the message is still returned, just without a verdict.
+          const sent = object(list(object(page).messages)[0])
+          const asked = Array.isArray(sent.recipientIds) && sent.recipientIds.includes(agentId) && object(sent.author).id !== agentId
+          if (!asked || !Number.isInteger(Number(sent.sequence))) return { ok: true, value: page }
+          try {
+            const later = object(await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}&after=${sent.sequence}`)).messages
+            return { ok: true, value: markAnswered(page, list(later), agentId) }
+          } catch { return { ok: true, value: page } }
         }
         if (payload.action === 'command' && identifier(payload.operationId) && payload.command && typeof payload.command === 'object' && !Array.isArray(payload.command)) {
           return { ok: true, operationId: payload.operationId, value: await backend(core, 'POST', `${path}/commands`,

@@ -125,6 +125,21 @@ describe('the core\'s start-up order (core/main.ts)', () => {
     }
   })
 
+  it('names the enabled terminal backends before any backend says how it started', () => {
+    // A tmux machine's start log reads `[terminal] enabled backends: tmux`, then `[terminal] tmux: available`,
+    // which `TmuxBackend.prepare` prints once its first inventory lands (tmuxBackend.spec.ts): the list is
+    // printed after every prepare is started and before any is awaited.
+    const source = code(SOURCE)
+    // Each backend is handed only its own panes (`ownedPanesOf`, terminalRuntime.spec.ts).
+    const started = source.indexOf('prepareTerminalBackends(candidates, (backend) => ownedPanesOf(registry.list(), backend.name))')
+    const named = source.indexOf('console.log(`[terminal] enabled backends: ${terminalConfig.backends.join(\', \')}`)')
+    const awaited = source.indexOf('await preparing')
+    expect(started, 'core/main.ts still prepares each backend').toBeGreaterThan(-1)
+    expect(named, 'core/main.ts still names the enabled backends').toBeGreaterThan(started)
+    expect(awaited).toBeGreaterThan(named)
+    expect(source.slice(started, named)).not.toContain('await ')
+  })
+
   it('starts native hook maintenance after readiness without awaiting its completion', () => {
     const source = code(SOURCE)
     expect(source).not.toMatch(/await\s+installEngineHooks\(/)
@@ -160,6 +175,17 @@ describe('the core\'s start-up order (core/main.ts)', () => {
     expect(exiting).toBeLessThan(source.indexOf('\n  await ', loaded))
   })
 
+  it('on Windows, claims the data folder once no daemon serves it, before reading or listening, and gives it up with the socket', () => {
+    const source = code(SOURCE)
+    const claimed = source.indexOf("? await claimDataFolder(env.ADAPTER_DATA_DIR, ensureDaemonToken(env.ADAPTER_DATA_DIR), ")
+    expect(claimed).toBeGreaterThan(source.indexOf("const dataFolderClaim = process.platform === 'win32'"))
+    expect(claimed).toBeGreaterThan(source.indexOf('await refuseServedDataFolder('))
+    expect(claimed).toBeLessThan(source.indexOf('registry.load()'))
+    expect(claimed).toBeLessThan(source.indexOf('await startHookServer('))
+    // In the update's teardown and in the shutdown, beside the local socket: a successor may start once both are gone.
+    expect(source.match(/dataFolderClaim\?\.release\(\)/g)).toHaveLength(2)
+  })
+
   it('only swaps in the full restart handler once everything it tears down exists', () => {
     // `bootHandoff` hands the machine over without finishing start-up; the full handoff
     // (core/updateHandoff.ts) tears down two dozen subsystems, handed to it here as its teardown, and may
@@ -177,6 +203,24 @@ describe('the core\'s start-up order (core/main.ts)', () => {
     expect(late, 'these are torn down by the update handoff but declared after it is armed').toEqual([])
     // What it tears down is all there is to it: the handoff module reaches nothing of runForeground's.
     expect(referencedIn(teardown.text)).toEqual(expect.arrayContaining(['registry', 'hookServer', 'localWsServer', 'backend', 'watcher']))
+  })
+
+  it('harness stop reaches a stop that exists at every point of a core\'s life', () => {
+    // A core no master runs stops itself (core/daemonStopRoute.ts). The route is served once the hook server is
+    // bound, long before `shutdown` is declared, and in safe mode after a start-up that never got that far: a
+    // closure over `shutdown` then threw in its temporal dead zone, after the 202, and the core kept running.
+    const source = code(SOURCE)
+    const route = callArguments(source, '...daemonStopRoute(')
+    expect(route.text, 'the route goes through the holder, not a local of runForeground').toContain('daemonBoot.stopHere(')
+    expect(route.text).not.toMatch(/\bshutdown\(/)
+    expect(source, 'the holder starts as a stop that needs nothing of start-up').toMatch(/stopHere: leaveBeforeStartUp\(/)
+    const shutdownAt = localsOf(source).get('shutdown') ?? -1
+    expect(shutdownAt, 'runForeground still declares shutdown').toBeGreaterThan(-1)
+    const handed = source.indexOf('daemonBoot.stopHere = (why) => void shutdown(why)')
+    expect(handed, 'runForeground hands the holder its shutdown, once it exists').toBeGreaterThan(shutdownAt)
+    const safeMode = source.indexOf('const enterSafeMode = ')
+    const safeModeBody = source.slice(safeMode, source.indexOf('\n}\n', safeMode))
+    expect(safeModeBody, 'safe mode hands the holder its own leave').toMatch(/daemonBoot\.stopHere = \(why\) => leave\(/)
   })
 
   it('the daemon arm survives its own start-up failure', () => {

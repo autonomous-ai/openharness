@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../core/first_task.dart';
 import '../core/models.dart';
 import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
@@ -7,6 +8,7 @@ import '../state/harness_launch_integration.dart';
 import '../state/swarm.dart';
 import 'controller.dart';
 import 'model.dart';
+import 'launch_prompt.dart';
 
 /// Captures a conversation before opening New Harness. Its journal survives a
 /// closed form or process; a recovered launch only reads the native receipt.
@@ -25,14 +27,12 @@ class SuperTabLaunch {
   static Future<HarnessLaunchIntegration> open(
     AppNotifier app,
     Swarm tab,
-    String conversationId,
-  ) async {
+    String conversationId, {
+    bool newProject = false,
+  }) async {
     final account = app.currentUser?.id;
     if (account == null) {
-      throw const SuperTabFailure(
-        'SIGNED_OUT',
-        'Sign in to create a Super Tab.',
-      );
+      throw const SuperTabFailure('SIGNED_OUT', 'Sign in to create a Swarm.');
     }
     final key = 'super_tab.launch.$account.${tab.id}.$conversationId';
     final raw = await app.superTabs.storage.read(key);
@@ -45,7 +45,11 @@ class SuperTabLaunch {
             'joinId': superTabOperationId(),
             'tabId': tab.superTabId,
             'conversationId': conversationId,
-            'lead': tab.superTabId == null,
+            'lead': tab.superTabId == null || newProject,
+            'newSwarm': tab.superTabId == null,
+            'newProject': newProject,
+            'visibility': 'public',
+            if (!newProject) 'projectId': 'lead',
           }
         : superTabMap(jsonDecode(raw));
     final launch = SuperTabLaunch._(app, tab.id, account, key, saved);
@@ -54,8 +58,44 @@ class SuperTabLaunch {
     late final HarnessLaunchIntegration integration;
     integration = HarnessLaunchIntegration(
       creationId: saved['creationId'] as String? ?? superTabOperationId(),
-      actionLabel: saved['lead'] == true ? 'New Super Tab' : 'New Harness',
-      prepare: launch.prepare,
+      initialTask: saved['initialMessage'] as String?,
+      actionLabel: saved['newProject'] == true
+          ? 'New Project'
+          : saved['lead'] == true
+          ? 'New Swarm'
+          : 'New Harness',
+      projectVisibility: saved['lead'] == true
+          ? saved['visibility'] as String? ?? 'public'
+          : null,
+      projectVisibilityLocked:
+          saved['projectPrepared'] == true || saved['creationRequest'] != null,
+      prepare: (machine, task) async {
+        if (saved['projectPrepared'] != true &&
+            saved['creationRequest'] == null) {
+          saved['visibility'] = integration.projectVisibility ?? 'public';
+        }
+        try {
+          return await launch.prepare(machine, task);
+        } on SuperTabFailure catch (failure) {
+          // Validation rejects the request before applying it. A lost response
+          // stays locked so retrying cannot create a second project or change
+          // the visibility of a project that may already exist.
+          if (saved['projectPrepared'] != true &&
+              const {
+                'VALIDATION_ERROR',
+                'UPDATE_REQUIRED',
+              }.contains(failure.code)) {
+            saved.remove('creationRequest');
+            saved['operationId'] = superTabOperationId();
+            await launch.persist();
+          }
+          rethrow;
+        } finally {
+          integration.projectVisibilityLocked =
+              saved['projectPrepared'] == true ||
+              saved['creationRequest'] != null;
+        }
+      },
       beforeSubmit: (machine, receipt) async {
         saved['machineId'] = machine;
         saved['creationId'] = receipt;
@@ -105,36 +145,81 @@ class SuperTabLaunch {
 
   Future<String> prepare(String machine, String task) async {
     checkAccount();
+    if (app.stateOf(machine)?.belongsToOtherAccount == true) {
+      throw const SuperTabFailure(
+        'CONTRIBUTION_REQUIRED',
+        'Choose one of your machines. To use another person’s machine in this Swarm, ask its owner to add the machine or an agent.',
+      );
+    }
     saved['initialMessage'] = task;
     saved['machineId'] = machine;
     await persist();
     if (saved['tabId'] == null) {
+      saved['creationRequest'] ??= {
+        'operationId': saved['operationId'],
+        'name': 'Swarm',
+        'projectVisibility': saved['visibility'] ?? 'public',
+      };
+      await persist();
       final created = await app.superTabs.map(
         'POST',
         '/api/super-tabs',
-        body: {'operationId': saved['operationId'], 'name': 'Super Tab'},
+        body: superTabMap(saved['creationRequest']),
       );
       saved['tabId'] = created['id'];
+      saved['projectPrepared'] = true;
       app.superTabs.deferTabDiscovery(saved['tabId'] as String);
       await persist();
     }
+    if (saved['newProject'] == true && saved['projectPrepared'] != true) {
+      saved['creationRequest'] ??= {
+        'operationId': saved['operationId'],
+        'command': {
+          'type': 'project.create',
+          'name': 'New project',
+          'visibility': saved['visibility'] ?? 'public',
+          'brief': String.fromCharCodes(task.runes.take(4000)),
+        },
+      };
+      await persist();
+      final created = await app.superTabs.map(
+        'POST',
+        '/api/super-tabs/${saved['tabId']}/commands',
+        body: superTabMap(saved['creationRequest']),
+      );
+      final result = superTabMap(created['result']);
+      saved['projectId'] = result['projectId'];
+      saved['conversationId'] = result['conversationId'];
+      saved['projectPrepared'] = true;
+      await persist();
+    }
     app.superTabs.deferTabDiscovery(saved['tabId'] as String);
-    final command = 'harness super-tab --tab ${saved['tabId']}';
-    final prompt =
-        'You are an agent in a shared Harness Super Tab. '
-        '${saved['lead'] == true ? 'You are its coordinating lead. Start by discussing the person’s request; build after they authorize it.' : 'Join the conversation before beginning the person’s request.'}\n'
-        'First run `$command status`. Registration may still be finishing: if it reports AGENT_UNAVAILABLE, wait briefly and retry. '
-        'Do not start work or post until it confirms your participation.\n'
-        'Read the conversation: `$command messages ${saved['conversationId']}`. '
-        'Post explanations, questions and results with `$command post ${saved['conversationId']} "message" UNIQUE_OPERATION_ID`. '
-        'Reuse that operation ID and exact message after a lost reply. Your native terminal is not the shared conversation.\n'
-        'If sandbox restrictions block this local Harness command, request permission to run it outside the sandbox. '
-        'For work groups, assignments, acceptance evidence and messages to other agents, use `$command help`. '
-        '${saved['lead'] == true ? 'Before starting or assigning work, run `$command route GROUP JSON` with your difficulty and risk assessment, then start or assign its pick with the routeDecisionId it returns. To choose otherwise, pass overrideReason. If it answers NO_CANDIDATE, tell the person in the group why, using its reasons; do not guess another machine. ' : ''}'
-        'Use a group for an independently assignable outcome with acceptance checks. Reuse existing groups and agents. '
-        'Engine-native helper subagents do not need a group. Questions stay in the conversation where the work happens. '
-        'Report exact revisions, evidence and links appropriate to the project.\n\n'
-        'The person’s request:\n${task.isEmpty ? 'Ask what they would like to work on.' : task}';
+    // Revalidate a journal's destination before native submission. A project
+    // deleted on another computer must not leave an unattached native session.
+    final current = await app.superTabs.map(
+      'GET',
+      '/api/super-tabs/${saved['tabId']}',
+    );
+    checkAccount();
+    final groups =
+        superTabMap(current['state'])['conversations'] as List? ?? const [];
+    if (!groups.any((g) => (g as Map)['id'] == saved['conversationId'])) {
+      if (saved['phase'] != 'starting' && saved['phase'] != 'joining') {
+        // Nothing can still be starting: reopening New Project should get a
+        // fresh destination instead of loading this deleted project forever.
+        await app.superTabs.storage.delete(key);
+        checkAccount();
+      }
+      throw const SuperTabFailure(
+        'PROJECT_UNAVAILABLE',
+        'This project is no longer available. Close this form and create a new project.',
+      );
+    }
+    final prompt = superTabLaunchPrompt(
+      tabId: saved['tabId'] as String,
+      conversationId: saved['conversationId'] as String,
+      lead: saved['lead'] == true,
+    );
     saved['launchPrompt'] = prompt;
     await persist();
     return prompt;
@@ -213,7 +298,7 @@ class SuperTabLaunch {
       final name = Swarm.titleFor(native);
       final title =
           saved['title'] as String? ??
-          (name == Swarm.defaultName ? 'Super Tab' : name);
+          (name == Swarm.defaultName ? 'New project' : name);
       saved['title'] = title;
       await persist();
       await app.superTabs.map(
@@ -221,10 +306,27 @@ class SuperTabLaunch {
         '/api/super-tabs/$tabId/commands',
         body: {
           'operationId': '${saved['joinId']}-name',
-          'command': {'type': 'tab.rename', 'name': title},
+          'command': {
+            'type': 'project.rename',
+            'projectId': saved['projectId'] ?? 'lead',
+            'name': title,
+          },
         },
       );
       checkAccount();
+      if (saved['newProject'] != true) {
+        await app.superTabs.map(
+          'POST',
+          '/api/super-tabs/$tabId/commands',
+          body: {
+            'operationId': '${saved['joinId']}-swarm-name',
+            'command': {
+              'type': 'tab.rename',
+              'name': saved['visibility'] == 'private' ? 'Swarm' : title,
+            },
+          },
+        );
+      }
     }
     final controller = await app.superTabs.open(tabId);
     await controller.refresh();
@@ -257,9 +359,14 @@ class SuperTabLaunch {
       saved.remove('files');
       await persist();
     }
-    if (saved['lead'] == true) {
-      app.bindSuperTab(swarmId, tabId, saved['title'] as String);
+    if (saved['lead'] == true && saved['newProject'] != true) {
+      app.bindSuperTab(
+        swarmId,
+        tabId,
+        saved['visibility'] == 'private' ? 'Swarm' : saved['title'] as String,
+      );
     }
+    controller.select(saved['conversationId'] as String);
     await app.superTabs.storage.delete(key);
   }
 
@@ -269,6 +376,11 @@ class SuperTabLaunch {
     final native = await app.recoverSuperTabCreation(
       machine,
       saved['creationId'] as String,
+      cancelIfMissing:
+          saved['phase'] == 'starting' &&
+          (saved['launchPrompt'] as String? ?? '').trim().length >
+              kFirstTaskMaxLength &&
+          (saved['files'] as List? ?? const []).isEmpty,
     );
     await complete(machine, native.id, recovered: native);
   }

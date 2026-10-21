@@ -8,7 +8,7 @@ import '../../shared/theme/app_theme.dart' as grid;
 import '../../shared/widgets/app_icon_button.dart';
 import '../../shared/widgets/app_select_field.dart';
 import '../../shared/widgets/setting_row.dart';
-import '../../shortcuts/app_shortcuts.dart' show linuxKeyLabels;
+import '../../shortcuts/app_shortcuts.dart' show linuxKeyLabels, windowsKeyLabels;
 import '../../terminal/installed_fonts.dart';
 import '../../terminal/terminal_font_store.dart';
 import '../../terminal/terminal_theme.dart';
@@ -357,8 +357,8 @@ class _ResetRow extends StatelessWidget {
       spacing: 10,
       runSpacing: 8,
       children: [
-        // ⌘0 is the Mac's View menu row; Linux binds no font-size keys.
-        if (!linuxKeyLabels)
+        // ⌘0 is the Mac's View menu row; Linux and Windows bind no font-size keys.
+        if (!linuxKeyLabels && !windowsKeyLabels)
           Text(
             '⌘0',
             style: grid.AppType.monoMeta(color: grid.AppPalette.textFaint),

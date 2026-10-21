@@ -86,7 +86,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const tierOf = deps.decideTier ?? createTierDecider({
     tally,
     jev: process.env.HARNESS_NOTIFY_SMART === '0' ? null : createJevDecide({ backend: (method, path, body) => core.account.backend(method, path, body) }),
-    log: (line) => log(`[cable] ${line}`),
+    log,
   })
   const part = createPartGuard({ log, faults: deps.faults })
 

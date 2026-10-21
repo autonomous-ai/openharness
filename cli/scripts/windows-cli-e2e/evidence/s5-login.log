@@ -1,0 +1,21 @@
+{"type":"qr","url":"<redacted>","expiresIn":120}
+approved: {"ok":true}
+{"type":"confirm","email":"<the account>"}
+{"type":"result","status":"success","email":"<the account>","fingerprint":"91DE·…"}
+machine registered: 7e92c45a…; remove it after the run: harness machines delete 7e92c45a… --yes
+## restart on the session (08:50:06)
+machine stopped (pid 5740).
+  Task Scheduler did not start harnessd (it runs the task only in a signed-in Windows session) — starting it directly
+
+  machine · remote machine
+   status     ● started · connecting to the backend in the background
+   machine    WIN-TESTVM
+   version    v0.4.20-e2e.1
+   backend    wss://harness-api.autonomous.ai
+   account    prod
+   agents     2 available
+   pid        6100
+   local api  http://127.0.0.1:18474
+  running in background · stop with: harness stop
+
+{"loggedIn":true,"computerId":"e5f27bf2…","machineId":"7e92c45a…","autonomousEnv":"prod","expiresAt":1792291797056,"method":"qr","fingerprint":"91DE·…"}

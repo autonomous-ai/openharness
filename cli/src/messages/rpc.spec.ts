@@ -1,12 +1,14 @@
+import { randomBytes } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
-import { localSocketPath } from '../lib/localSocket.js'
+import { listenLocalSocket, localSocketPath, pipeProofOf } from '../lib/localSocket.js'
 import { NOT_RUNNING, SANDBOXED } from '../lib/unreachable.js'
-import { messagesRpc, RefusedError } from './rpc.js'
+import { newPipePath, PIPE_PROOF_HEADER } from '../lib/windows/pipeAuth.js'
+import { createMessagesRpc, messagesRpc, RefusedError } from './rpc.js'
 
 type Behave = (ws: WebSocket, frame: { type: string; payload: Record<string, unknown> }) => void
 
@@ -111,5 +113,87 @@ describe('one Agent Messages request through the daemon', () => {
       writeFileSync(join(dir, 'adapter.pid'), `${process.pid}\n`)
       await expect(messagesRpc(target(), {}, 2_000)).rejects.toMatchObject({ code: 'DAEMON_UNREACHABLE', message: SANDBOXED })
     } finally { for (const [name, value] of Object.entries(env)) if (value !== undefined) process.env[name] = value }
+  })
+})
+
+/** A real named pipe on Windows; a short Unix socket with the same auth name elsewhere. */
+function pipeFixture(): { path: string; close: () => void } {
+  if (process.platform === 'win32') return { path: newPipePath(), close: () => {} }
+  const pipeDir = mkdtempSync('/tmp/rpc-pipe-')
+  return {
+    path: join(pipeDir, `harness-${randomBytes(16).toString('hex')}`),
+    close: () => rmSync(pipeDir, { recursive: true, force: true }),
+  }
+}
+
+// On a shared Windows PC the configured port may be another user's daemon: `harness send` must neither reach it nor
+// hand it this user's local credential (agentClient/daemon.ts `connectSocket` keeps the agent verbs off it too).
+describe('one Agent Messages request on Windows', () => {
+  it.each([false, true])('never sends the local credential to TCP when the daemon pipe is unavailable (dataDir=%s)', async (withDataDir) => {
+    const tcp = new WebSocketServer({ host: '127.0.0.1', port: 0 })
+    let received = 0
+    let credentialSeen: string | string[] | undefined
+    tcp.on('connection', (ws, request) => { received++; credentialSeen = request.headers['x-harness-local']; ws.close() })
+    try {
+      await new Promise<void>((resolve) => tcp.once('listening', resolve))
+      const address = tcp.address()
+      if (typeof address !== 'object' || address === null) throw new Error('No test port')
+      writeFileSync(join(dir, 'hook-credential'), `${'A'.repeat(43)}\n`)
+      const rpc = createMessagesRpc({ platform: 'win32', pipe: async () => null })
+      const result = await rpc({ port: address.port, machineId: 'm2', ...(withDataDir ? { dataDir: dir } : {}) }, {}, 2_000)
+        .catch((error: unknown) => error)
+      expect(received).toBe(0)
+      expect(credentialSeen).toBeUndefined()
+      expect(result).toMatchObject({ code: 'DAEMON_UNREACHABLE', message: NOT_RUNNING })
+    } finally {
+      for (const client of tcp.clients) client.terminate()
+      await new Promise((done) => tcp.close(done))
+    }
+  })
+
+  it('sends the request over the proven daemon pipe', async () => {
+    const fixture = pipeFixture()
+    const token = randomBytes(32)
+    const pipe = await listenLocalSocket((_req, response) => response.end(), fixture.path, { token })
+    const pipeWss = new WebSocketServer({ noServer: true })
+    pipeWss.on('headers', (headers, req) => { const proof = pipeProofOf(req); if (proof) headers.push(`${PIPE_PROOF_HEADER}: ${proof}`) })
+    pipe.server.on('upgrade', (req, socket, head) => pipeWss.handleUpgrade(req, socket, head, (ws) => {
+      ws.on('message', (raw) => behave(ws, JSON.parse(raw.toString())))
+    }))
+    behave = (ws, frame) => {
+      if (frame.type === 'machine_select') ws.send(JSON.stringify({ type: 'connected', payload: {} }))
+      if (frame.type === 'agent_messages') ws.send(JSON.stringify({ type: 'agent_messages_result', payload: { requestId: frame.payload.requestId, via: 'pipe' } }))
+    }
+    try {
+      const rpc = createMessagesRpc({ platform: 'win32', pipe: async (dataDir, port) => {
+        expect([dataDir, port]).toEqual([dir, PORT])
+        return { pipe: fixture.path, token }
+      } })
+      expect(await rpc(target(), { action: 'status' }, 5_000)).toMatchObject({ via: 'pipe' })
+    } finally {
+      for (const client of pipeWss.clients) client.terminate()
+      await new Promise((done) => pipeWss.close(done))
+      await pipe.close()
+      fixture.close()
+    }
+  })
+
+  it('sends nothing to a pipe that answers without the daemon\'s proof', async () => {
+    const fixture = pipeFixture()
+    const squatter = createServer()
+    const squatterWss = new WebSocketServer({ server: squatter })
+    let frames = 0
+    squatterWss.on('connection', (ws) => ws.on('message', () => { frames++ }))
+    try {
+      await new Promise<void>((resolve) => squatter.listen(fixture.path, resolve))
+      const rpc = createMessagesRpc({ platform: 'win32', pipe: async () => ({ pipe: fixture.path, token: randomBytes(32) }) })
+      await expect(rpc(target(), {}, 5_000)).rejects.toMatchObject({ code: 'DAEMON_UNREACHABLE' })
+      expect(frames).toBe(0)
+    } finally {
+      for (const client of squatterWss.clients) client.terminate()
+      await new Promise((done) => squatterWss.close(done))
+      await new Promise((done) => squatter.close(done))
+      fixture.close()
+    }
   })
 })

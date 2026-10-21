@@ -33,6 +33,9 @@ import 'transient_menus.dart';
 /// [focusFirst] highlights the first row as the menu opens, for a menu a key opened: Return takes
 /// it. A menu a click opened passes false — the pointer picks the row, and arrows still start at
 /// the first one.
+///
+/// [ownsPointer] names the button that opened the menu: a press there is left to that button,
+/// which closes the menu itself, rather than closing it here and opening it again on release.
 Future<T?> showPaneMenu<T>({
   required BuildContext context,
   required RelativeRect position,
@@ -41,6 +44,7 @@ Future<T?> showPaneMenu<T>({
   void Function(OverlayEntry entry, void Function() close)? onOpen,
   VoidCallback? onClose,
   bool Function()? shouldRestoreFocus,
+  bool Function(Offset position)? ownsPointer,
   bool focusFirst = true,
   double minWidth = 340,
   double maxWidth = 540,
@@ -81,7 +85,9 @@ Future<T?> showPaneMenu<T>({
         Positioned.fill(
           child: Listener(
             behavior: HitTestBehavior.translucent,
-            onPointerDown: (_) => close(null),
+            onPointerDown: (event) {
+              if (ownsPointer?.call(event.position) != true) close(null);
+            },
             child: const SizedBox.expand(),
           ),
         ),

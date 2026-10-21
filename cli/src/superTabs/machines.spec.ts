@@ -17,11 +17,29 @@ function fixture() {
   const close = vi.fn(), open = vi.fn(async () => ({ machineId: 'host', request, close }))
   const capabilities = vi.fn(async () => ({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 }, tools: { git: true } }))
   const start = vi.fn(async () => ({ ok: true }))
-  const machine = new ContributedMachines(core, 'host', { backend, open, capabilities, start, now: () => now } as never)
-  return { machine, pool, core, backend, open, close, capabilities, start, advance: () => { now += 16000 } }
+  const prepare = vi.fn(async () => {})
+  const machine = new ContributedMachines(core, 'host', { backend, open, capabilities, start, prepare, now: () => now } as never)
+  return { machine, pool, core, backend, open, close, capabilities, start, prepare, advance: () => { now += 16000 } }
 }
 
 describe('contributed machine executor', () => {
+  it('prepares a swarm project before dispatch and durably rejects an unsafe checkout', async () => {
+    const f = fixture()
+    Object.assign(f.pool.machine, { scope: 'swarm' })
+    await f.machine.tick()
+    expect(f.prepare).toHaveBeenCalledWith(f.core, f.pool, f.pool.starts[0])
+    expect(f.prepare.mock.invocationCallOrder[0]).toBeLessThan(f.start.mock.invocationCallOrder[0]!)
+    f.prepare.mockRejectedValueOnce(new Error('Project checkout unavailable'))
+    f.advance()
+    await f.machine.tick()
+    expect(f.start).toHaveBeenCalledTimes(1)
+    expect(f.backend.mock.calls.some(c => JSON.stringify(c[3] ?? {}).includes('Project checkout unavailable'))).toBe(true)
+    f.pool.starts[0]!.dispatched = true
+    f.advance()
+    await f.machine.tick()
+    expect(f.prepare).toHaveBeenCalledTimes(2)
+    expect(f.start).toHaveBeenCalledTimes(2)
+  })
   it('publishes only scoped measurements and executes through the owner start endpoint', async () => {
     const f = fixture()
     await f.machine.tick()

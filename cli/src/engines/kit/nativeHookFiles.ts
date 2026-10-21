@@ -1,14 +1,15 @@
 /** Hook preparation owns only a verified file version. Unknown contents are
  * never an empty configuration, and a completed write includes its directory. */
 import { randomUUID } from 'node:crypto'
-import { accessSync, closeSync, constants, fchmodSync, fstatSync, fsync, linkSync, lstatSync, mkdirSync, openSync, readSync, renameSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
+import { accessSync, closeSync, constants, fchmodSync, fstatSync, fsync, linkSync, lstatSync, mkdirSync, openSync, readSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { NativeEvidenceBudget } from './nativeEvidence.js'
 import { NativePaths, verifyNativePathFacts } from './nativePaths.js'
-
-export class HookPreparationHeld extends Error {
-  constructor(detail: string) { super(`Hook preparation is waiting: ${detail}`); this.name = 'HookPreparationHeld' }
-}
+import { directorySyncSupported } from '../../lib/secureState.js'
+import { isRoot, renameReplacing, unchangedFlushFlags } from './windowsFiles.js'
+import { HookPreparationHeld } from './hookHeld.js'
+// Every importer of the class from here keeps working; windowsFiles.ts imports it from the leaf, with no cycle.
+export { HookPreparationHeld }
 const version = (info: BigIntStats) => `${info.dev}:${info.ino}:${info.uid}:${info.mode}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
 const fileIdentity = (info: BigIntStats) => `${info.dev}:${info.ino}:${info.uid}:${info.mode}`
 export interface HookFilePublication { verify(): void }
@@ -25,7 +26,8 @@ async function syncDirectory(path: string, attempt: HookPreparationAttempt): Pro
   const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
   try {
     if (fileIdentity(fstatSync(fd, { bigint: true })) !== expected) throw new HookPreparationHeld('the directory changed before sync')
-    await attempt.flush(fd)
+    // Windows cannot flush a directory handle (secureState.ts `syncStateDirectory`); NTFS journals the names.
+    if (directorySyncSupported()) await attempt.flush(fd)
     if (fileIdentity(lstatSync(path, { bigint: true })) !== expected) throw new HookPreparationHeld('the directory changed during sync')
   } finally { closeSync(fd) }
 }
@@ -35,7 +37,8 @@ async function syncDirectory(path: string, attempt: HookPreparationAttempt): Pro
 async function syncDirectoryChain(path: string, attempt: HookPreparationAttempt): Promise<void> {
   for (let depth = 0; depth < 256; depth++) {
     attempt.check(); await syncDirectory(path, attempt)
-    if (path === '/') return
+    // The root (`/`, or a drive's `C:\`) is its own parent. Compared with `/` alone, Windows never ended (F9).
+    if (isRoot(path)) return
     path = dirname(path)
   }
   throw new HookPreparationHeld('the directory sync exceeds its path limit')
@@ -64,6 +67,7 @@ function directoryPath(path: string): string {
       if (!route.info.isDirectory()) throw new HookPreparationHeld('the configuration parent is not a directory')
       return join(route.path, ...suffix)
     }
+    if (isRoot(path)) throw new HookPreparationHeld('the configuration root does not exist')
     suffix.unshift(basename(path)); path = dirname(path)
   }
   throw new HookPreparationHeld('the configuration directory exceeds its path limit')
@@ -124,6 +128,7 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
     for (let depth = 0; depth < 256; depth++) {
       const route = new NativePaths(new NativeEvidenceBudget()).resolveSync(parent, true)
       if (route) { accessSync(route.path, constants.W_OK | constants.X_OK); return }
+      if (isRoot(parent)) throw new HookPreparationHeld('the configuration root does not exist')
       parent = dirname(parent)
     }
     throw new HookPreparationHeld('the configuration parent exceeds its path limit')
@@ -138,12 +143,22 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
       if (content === next) {
         // A previous rename may have succeeded before directory sync failed.
         // Equality alone cannot turn that uncertainty into a durable success.
-        const fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
-        try {
-          if (version(fstatSync(fd, { bigint: true })) !== before) throw new HookPreparationHeld('the settings changed before sync')
-          await attempt.flush(fd)
-          if (version(fstatSync(fd, { bigint: true })) !== before) throw new HookPreparationHeld('the settings changed during sync')
-        } finally { closeSync(fd) }
+        const flags = unchangedFlushFlags(mode)
+        if (flags !== null) {
+          let fd: number
+          try { fd = openSync(target, flags) } catch (error) {
+            // A holder without write sharing refuses a writable handle on Windows.
+            if (process.platform === 'win32' && ['EBUSY', 'EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+              throw new HookPreparationHeld('another process holds the settings file')
+            }
+            throw error
+          }
+          try {
+            if (version(fstatSync(fd, { bigint: true })) !== before) throw new HookPreparationHeld('the settings changed before sync')
+            await attempt.flush(fd)
+            if (version(fstatSync(fd, { bigint: true })) !== before) throw new HookPreparationHeld('the settings changed during sync')
+          } finally { closeSync(fd) }
+        }
         await syncDirectoryChain(dirname(target), attempt)
         verify()
         return { verify }
@@ -167,16 +182,21 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
         writeFileSync(fd, next)
         const stagedVersion = version(fstatSync(fd, { bigint: true }))
         await attempt.flush(fd)
-        if (version(fstatSync(fd, { bigint: true })) !== stagedVersion || version(lstatSync(temporary, { bigint: true })) !== stagedVersion) {
-          throw new HookPreparationHeld('the staging file changed before publication')
+        const stagedFd = fd
+        // The whole pre-rename proof; a retried rename repeats it (attempt.verify() includes attempt.check()).
+        const beforeRename = () => {
+          if (version(fstatSync(stagedFd, { bigint: true })) !== stagedVersion || version(lstatSync(temporary, { bigint: true })) !== stagedVersion) {
+            throw new HookPreparationHeld('the staging file changed before publication')
+          }
+          fresh.verify()
+          // Retained existing ancestors/aliases must still name the original
+          // route; only directories created above can replace an absent fact.
+          verifyNativePathFacts(facts.filter(fact => fact.identity !== null))
+          attempt.verify()
         }
-        fresh.verify()
-        // Retained existing ancestors/aliases must still name the original
-        // route; only directories created above can replace an absent fact.
-        verifyNativePathFacts(facts.filter(fact => fact.identity !== null))
-        attempt.verify()
+        beforeRename()
         if (exclusive) { linkSync(temporary, actual); unlinkSync(temporary) }
-        else renameSync(temporary, actual)
+        else await renameReplacing(temporary, actual, { check: beforeRename })
         const committed = inspectHookFile(file)
         if (committed.content !== next || committed.stamp !== version(fstatSync(fd, { bigint: true }))) {
           throw new HookPreparationHeld('the published settings changed before sync')
@@ -211,6 +231,7 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
       for (let depth = 0; depth < 256; depth++) {
         const route = new NativePaths(new NativeEvidenceBudget()).resolveSync(parent, true)
         if (route) { await syncDirectoryChain(route.path, attempt); break }
+        if (isRoot(parent)) break
         parent = dirname(parent)
       }
       verifyNativePathFacts(facts.filter(fact => fact.identity !== null && fact.path !== target))

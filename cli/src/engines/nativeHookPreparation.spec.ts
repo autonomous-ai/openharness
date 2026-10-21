@@ -27,6 +27,7 @@ async function fixture() {
   for (const name of ['HOME', 'ADAPTER_DATA_DIR', 'OPENCODE_CONFIG_DIR', 'OPENCODE_PLUGIN_DIR', 'OPENCODE_DATA_DIR', 'CODEX_HOME', 'HERMES_HOME', 'CURSOR_CONFIG_DIR']) {
     const path = join(root, name === 'OPENCODE_PLUGIN_DIR' ? 'plugin' : name); mkdirSync(path); vi.stubEnv(name, path)
   }
+  vi.stubEnv('USERPROFILE', join(root, 'HOME'))
   vi.spyOn(console, 'log').mockImplementation(() => {})
   vi.spyOn(console, 'error').mockImplementation(() => {})
   vi.resetModules()

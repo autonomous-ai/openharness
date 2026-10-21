@@ -9,11 +9,12 @@ import { SuperTabStore } from '../superTabs/store.js'
 import { routingPolicySchema } from '../superTabs/routingPolicy.js'
 import { nativeEventSchema, openNativeSchema } from '../superTabs/native.js'
 import { machineObservationSchema } from '../superTabs/machines.js'
+import { joinSwarmSchema, previewJoinSchema, saveSharingSchema } from '../superTabs/sharing.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const tabParams = z.object({ tabId: id })
 const agentQuery = z.object({ asAgentId: id.optional() }).strict()
-const create = z.object({ operationId: id, name: z.string().trim().min(1).max(160) }).strict()
+const create = z.object({ operationId: id, name: z.string().trim().min(1).max(160), projectVisibility: z.enum(['public', 'private']).optional() }).strict()
 const operation = operationSchema.extend({ asAgentId: id.optional() })
 const listQuery = z.object({ after: id.optional() }).strict()
 const startParams = tabParams.extend({ startId: id })
@@ -75,8 +76,21 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Querystring: z.infer<typeof listQuery> }>('/api/super-tabs', { preHandler: validateQuery(listQuery) },
     (req, reply) => respond(reply, () => store.list(req.user!, req.query.after)))
   app.post<{ Body: z.infer<typeof create> }>('/api/super-tabs', { preHandler: validateBody(create) },
-    (req, reply) => respond(reply, () => store.create(req.user!, req.body.operationId, req.body.name)))
+    (req, reply) => respond(reply, () => store.create(req.user!, req.body.operationId, req.body.name, req.body.projectVisibility)))
   app.get('/api/super-tabs/invitations', (req, reply) => respond(reply, () => store.invitations(req.user!)))
+  app.get<{ Params: z.infer<typeof tabParams> }>('/api/super-tabs/:tabId/sharing',
+    { preHandler: validateParams(tabParams) },
+    (req, reply) => respond(reply, () => store.sharing(req.user!, req.params.tabId)))
+  app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof saveSharingSchema> }>('/api/super-tabs/:tabId/sharing',
+    { preHandler: [validateParams(tabParams), validateBody(saveSharingSchema)] },
+    (req, reply) => respond(reply, () => store.saveSharing(req.user!, req.params.tabId, req.body)))
+  // Preview uses a body so bearer link tokens never enter HTTP access/error logs.
+  app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof previewJoinSchema> }>('/api/super-tabs/:tabId/join/preview',
+    { preHandler: [validateParams(tabParams), validateBody(previewJoinSchema)] },
+    (req, reply) => respond(reply, () => store.previewJoin(req.user!, req.params.tabId, req.body.token)))
+  app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof joinSwarmSchema> }>('/api/super-tabs/:tabId/join',
+    { preHandler: [validateParams(tabParams), validateBody(joinSwarmSchema)] },
+    (req, reply) => respond(reply, () => store.join(req.user!, req.params.tabId, req.body)))
   app.get<{ Params: z.infer<typeof hostParams> }>('/api/super-tabs/hosts/:machineId', { preHandler: validateParams(hostParams) },
     (req, reply) => respond(reply, () => store.hostTabs(req.user!, req.params.machineId)))
   app.get<{ Params: z.infer<typeof hostParams> }>('/api/super-tabs/hosts/:machineId/assignments', { preHandler: validateParams(hostParams) },

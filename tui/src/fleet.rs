@@ -553,6 +553,10 @@ impl Fleet {
     }
 
     pub fn machine(&self, id: &str) -> Option<&Machine> { self.machines.iter().find(|m| m.id == id) }
+    /// Another account's machine, shared view-only ([Machine::shared]) or whole ([shares]): its daemon
+    /// answers as its owner, so a harness there is never this account's to move (desktop's
+    /// `belongsToOtherAccount`).
+    pub fn belongs_to_other_account(&self, id: &str) -> bool { self.shares.contains_key(id) || self.machine(id).is_some_and(|m| m.shared) }
     pub fn machine_mut(&mut self, id: &str) -> Option<&mut Machine> { self.machines.iter_mut().find(|m| m.id == id) }
     /// The account's record for this computer; the local PTY transport is not another machine.
     pub fn registered_local_machine(&self) -> Option<&Machine> {

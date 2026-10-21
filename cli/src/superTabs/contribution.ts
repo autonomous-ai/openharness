@@ -3,6 +3,8 @@ import { openDaemon } from '../agentClient/daemon.js'
 import { parseProjectFolder, prepareProjectFolder } from '../lib/projectFolder.js'
 import { readCapabilities } from './capacity.js'
 import { backend, identifier, object } from './host.js'
+import { mkdir } from 'node:fs/promises'
+import { join } from 'node:path'
 
 type Json = Record<string, unknown>
 const GiB = 1024 ** 3
@@ -17,7 +19,9 @@ export async function prepareContribution(core: CoreApi, input: Json, deps = {
   const state = object(answer.state), project = object(state.project)
   const machineId = core.daemon.machineId()
   const existing = (Array.isArray(state.machines) ? state.machines.map(object) : []).find(m => m.machineId === machineId)
-  let cwd = existing?.cwd
+  const swarm = input.scope === 'swarm' || Array.isArray(state.projects)
+  let cwd = swarm ? join(core.dataDir, 'swarm-projects', input.tabId) : existing?.cwd
+  if (swarm) await mkdir(cwd as string, { recursive: true })
   if (typeof cwd !== 'string') {
     if (project.machineId === machineId && typeof project.cwd === 'string') cwd = project.cwd
     else {
@@ -44,7 +48,7 @@ export async function prepareContribution(core: CoreApi, input: Json, deps = {
     // A conservative ceiling; each actual start still reserves measured memory
     // and disk and rechecks the engine's current subscription allowance.
     const maxAgents = Math.max(1, Math.min(8, Math.floor(available / (4 * GiB))))
-    return { ok: true, state: 'ready', cwd, engines: [...new Set(engines)], maxAgents }
+    return { ok: true, state: 'ready', cwd, engines: [...new Set(engines)], maxAgents, ...(swarm ? { scope: 'swarm' } : {}) }
   } finally { connection.close() }
 }
 

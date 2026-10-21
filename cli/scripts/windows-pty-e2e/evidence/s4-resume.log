@@ -1,0 +1,41 @@
+{"requestId":"35da2710…","agent":{"id":"a61b5044…","sessionId":"","userId":"","name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","title":null,"status":"active","activity":null,"closePlan":null,"closeSupported":true,"launch":{"state":"ready"},"createdAt":"2026-10-15T10:54:08.579Z","updatedAt":"2026-10-15T10:54:08.579Z","lastOpenedAt":null,"tokenUsage":null,"outputStats":null,"tmuxPane":"%1001","terminal":{"available":true,"primary":"ptyhost\u0000p2\u0000%1001","runtimes":[{"backend":"ptyhost","instance":"p2","paneId":"%1001"}]},"engine":"terminal","selectedModel":null,"grid":null,"codexHome":null,"project":{"kind":"none","name":"proj","cwd":"C:\\work\\e2e\\proj","root":null,"remote":null,"branch":null},"gitContext":{"state":"workspace","current":{"name":"proj","cwd":"C:\\work\\e2e\\proj","root":null,"remote":null,"branch":null},"observedAt":null,"locations":[],"pullRequests":[],"truncated":false,"checkouts":[],"history":{"branches":[],"pullRequests":[],"truncated":false},"version":{"epoch":"4c42abcd…","revision":1}},"dsh":null,"dshName":null,"viewerUrl":null,"viewerName":null,"verdict":null,"forkedFrom":null,"parentAgentId":null,"startedBy":null,"forkable":false,"resumeMode":"shell","permissionMode":null,"bypassPermission":null,"namedAgent":null},"resumed":true}
+{"requestId":"970e905e…","agent":{"id":"9f4d41e4…","sessionId":"","userId":"","name":"Multiplication of 6 and 7","title":null,"status":"active","activity":null,"closePlan":null,"closeSupported":true,"launch":{"state":"ready"},"createdAt":"2026-10-15T10:54:08.666Z","updatedAt":"2026-10-15T10:54:08.666Z","lastOpenedAt":null,"tokenUsage":null,"outputStats":null,"tmuxPane":"%1002","terminal":{"available":true,"primary":"ptyhost\u0000p2\u0000%1002","runtimes":[{"backend":"ptyhost","instance":"p2","paneId":"%1002"}]},"engine":"claude","selectedModel":null,"grid":null,"codexHome":null,"project":{"kind":"none","name":"proj","cwd":"C:\\work\\e2e\\proj","root":null,"remote":null,"branch":null},"gitContext":{"state":"workspace","current":{"name":"proj","cwd":"C:\\work\\e2e\\proj","root":null,"remote":null,"branch":null},"observedAt":null,"locations":[],"pullRequests":[],"truncated":false,"checkouts":[],"history":{"branches":[],"pullRequests":[],"truncated":false},"version":{"epoch":"4c42abcd…","revision":2}},"dsh":null,"dshName":null,"viewerUrl":null,"viewerName":null,"verdict":null,"forkedFrom":null,"parentAgentId":null,"startedBy":null,"forkable":true,"resumeMode":"conversation","permissionMode":null,"bypassPermission":null,"namedAgent":null},"resumed":false}
+{"requestId":"e6d15781…","agent":{"id":"a9332983…","sessionId":"","userId":"","name":"Codex harness 10-15 5:19","title":null,"status":"active","activity":null,"closePlan":null,"closeSupported":true,"launch":{"state":"ready"},"createdAt":"2026-10-15T12:19:48.770Z","updatedAt":"2026-10-15T12:19:48.770Z","lastOpenedAt":null,"tokenUsage":null,"outputStats":null,"tmuxPane":"%1003","terminal":{"available":true,"primary":"ptyhost\u0000p2\u0000%1003","runtimes":[{"backend":"ptyhost","instance":"p2","paneId":"%1003"}]},"engine":"codex","selectedModel":null,"grid":null,"codexHome":"C:\\Users\\admin\\.codex","project":{"kind":"none","name":"proj","cwd":"C:\\work\\e2e\\proj","root":null,"remote":null,"branch":null},"gitContext":{"state":"workspace","current":{"name":"proj","cwd":"C:\\work\\e2e\\proj","root":null,"remote":null,"branch":null},"observedAt":null,"locations":[],"pullRequests":[],"truncated":false,"checkouts":[],"history":{"branches":[],"pullRequests":[],"truncated":false},"version":{"epoch":"4c42abcd…","revision":3}},"dsh":null,"dshName":null,"viewerUrl":null,"viewerName":null,"verdict":null,"forkedFrom":null,"parentAgentId":null,"startedBy":null,"forkable":true,"resumeMode":"conversation","permissionMode":null,"bypassPermission":null,"namedAgent":null},"resumed":false}
+{"id":"a61b5044…","engine":"terminal","status":"active","launch":"ready","pane":"%1001","name":"Administrator: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe","cwd":"C:\\work\\e2e\\proj","resumeMode":"shell","sessionId":""}
+{"id":"9f4d41e4…","engine":"claude","status":"stopped","launch":"ready","pane":null,"name":"Multiplication of 6 and 7","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+{"id":"a9332983…","engine":"codex","status":"stopped","launch":"ready","pane":null,"name":"Codex harness 10-15 5:19","cwd":"C:\\work\\e2e\\proj","resumeMode":"conversation","sessionId":""}
+--- screen 9f4d41e4…
+FAIL Error: terminal_open → {"protocolVersion":3,"code":"TERMINAL_AGENT_NOT_FOUND","requestId":"74bdad48…"}
+    at Client.open (file:///C:/work/e2e/e2e.mjs:235:48)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async shot (file:///C:/work/e2e/e2e.mjs:555:13)
+    at async file:///C:/work/e2e/e2e.mjs:747:7
+--- screen a9332983…
+FAIL Error: terminal_open → {"protocolVersion":3,"code":"TERMINAL_AGENT_NOT_FOUND","requestId":"1c2df44f…"}
+    at Client.open (file:///C:/work/e2e/e2e.mjs:235:48)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async shot (file:///C:/work/e2e/e2e.mjs:555:13)
+    at async file:///C:/work/e2e/e2e.mjs:747:7
+
+ProcessId ParentProcessId Name            Start    Cmd                                                                                       
+--------- --------------- ----            -----    ---                                                                                       
+    12612            9408 node.exe        05:22:53 "C:\Program Files\nodejs\node.exe" --max-semi-space-size=4 --max-old-space-size=4096 C:\wo
+     9856            9628 powershell.exe  20:05:45 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     5104            9628 powershell.exe  20:35:11 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     3048            9628 powershell.exe  21:15:23 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     1464            9628 powershell.exe  07:49:36 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+    10524            9628 powershell.exe  19:44:49 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     8104            9628 powershell.exe  20:03:56 C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe                                 
+     1704           11580 powershell.exe  05:24:24 powershell  -NoProfile -ExecutionPolicy Bypass -File C:\work\e2e\procs.ps1                
+    10060           11616 OpenConsole.exe 05:24:04 "C:\work\e2e\dist\pty\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x268 -
+    12872           11616 node.exe        05:24:06 "C:\Program Files\nodejs\node.exe" C:\Users\admin\AppData\Roaming\npm\node_modules\@openai
+    10972           11616 OpenConsole.exe 05:24:06 "C:\work\e2e\dist\pty\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x29c -
+     6680           11616 claude.exe      05:24:04 C:\Users\admin\.local\bin\claude.exe                                                      
+     5856           11616 OpenConsole.exe 05:24:03 "C:\work\e2e\dist\pty\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x20c -
+    13060           11616 powershell.exe  05:24:03 powershell.exe -NoLogo                                                                    
+     9408           12336 node.exe        05:22:52 "C:\Program Files\nodejs\node.exe"  C:\work\e2e\dist\cli.js start -f                      
+    11248           12504 node.exe        05:24:10 "C:\Program Files\nodejs\node.exe" ./mcp/server.bundle.mjs                                
+    11616           12612 harness-pty.exe 05:23:27 C:\work\e2e\dist\pty\harness-pty.exe serve --home C:\work\e2e\ptyhome                     
+
+
+

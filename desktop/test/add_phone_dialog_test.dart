@@ -79,6 +79,7 @@ Future<void> _open(
   AppNotifier app,
   PhonePairCall pair, {
   PhoneSignInCodeCall? signInCode,
+  bool Function()? signInUnavailable,
   VoidCallback? onConnectMachine,
   VoidCallback? onManageDevices,
   bool reduceMotion = false,
@@ -103,6 +104,7 @@ Future<void> _open(
       app,
       pair: pair,
       signInCode: signInCode ?? _FakeSignIn().call,
+      signInUnavailable: signInUnavailable,
       onConnectMachine: onConnectMachine,
       onManageDevices: onManageDevices,
     ),
@@ -658,6 +660,47 @@ void main() {
       final fields = Uri.splitQueryString(Uri.parse(_qrData(tester)).fragment);
       expect(fields.keys, ['e', 'm', 'c']);
       expect(fields['c'], daemon.codes.single);
+      // An older CLI, or a moment without one: nothing more is said.
+      expect(find.byKey(const ValueKey('add-phone-email-code')), findsNothing);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 10));
+    });
+
+    testWidgets('with no sign-in code to be had on this PC, the QR says the phone will ask for an emailed one', (
+      tester,
+    ) async {
+      final app = _signedInApp();
+      addTearDown(app.dispose);
+      final daemon = _FakeDaemon(List.filled(10, _failed('NO_INTENT')));
+      var unavailable = true;
+      final signIn = _FakeSignIn(available: false);
+      await _open(
+        tester,
+        app,
+        daemon.call,
+        signInCode: () => unavailable ? signIn.call() : _FakeSignIn().call(),
+        signInUnavailable: () => unavailable,
+      );
+      await _codeUp(tester);
+      expect(
+        Uri.splitQueryString(Uri.parse(_qrData(tester)).fragment).keys,
+        ['e', 'm', 'c'],
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const ValueKey('add-phone-email-code'))).data,
+        'Your phone will ask for a code from your email.',
+      );
+      // Still the QR to scan, as with an older CLI.
+      expect(find.text('Scan with the Harness mobile app.'), findsOneWidget);
+
+      // The pipe is back by the next renewal: the code is in the QR, the sentence gone.
+      unavailable = false;
+      await tester.pump(const Duration(seconds: 61));
+      await tester.pump();
+      expect(Uri.splitQueryString(Uri.parse(_qrData(tester)).fragment)['h'], 'h1');
+      expect(find.byKey(const ValueKey('add-phone-email-code')), findsNothing);
 
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump();

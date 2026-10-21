@@ -19,7 +19,7 @@ import { basename, dirname, join } from 'node:path'
 
 import { agyTranscriptPath } from '../../../engines/agy/contract.js'
 import type { AgentCommandOwnershipSnapshot } from '../../engineBin.js'
-import { engineProcessMatch } from '../../tmux.js'
+import { engineProcessMatch } from '../../processTable.js'
 import { absoluteFolder, entries, fileStamp, parseLine, readJson, readText, record, text, UUID } from './support.js'
 import type { ExternalProvider, ExternalSession, OwnerClaim, ProcessView, ScanContext } from './types.js'
 

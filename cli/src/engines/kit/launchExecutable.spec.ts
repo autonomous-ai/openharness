@@ -7,13 +7,14 @@ afterEach(() => { vi.unstubAllEnvs(); vi.resetModules(); if (root) rmSync(root, 
 async function fixture() {
   root = mkdtempSync(join(tmpdir(), 'launch-executable-'))
   const bin = join(root, 'bin'); mkdirSync(bin)
-  vi.stubEnv('HOME', root); vi.stubEnv('PATH', bin); vi.stubEnv('OPENCODE_PATH', '')
+  vi.stubEnv('HOME', root); vi.stubEnv('USERPROFILE', root); vi.stubEnv('PATH', bin); vi.stubEnv('OPENCODE_PATH', '')
   vi.resetModules()
   return { bin, ...await import('./launchExecutable.js') }
 }
 it('captures an absolute executable once and detects its replacement', async () => {
   const { bin, captureLaunchExecutable } = await fixture()
-  const file = join(bin, 'opencode'); writeFileSync(file, 'fixture', { mode: 0o700 })
+  // A Windows launch runs a program file, never a bare name (`windowsPrograms`).
+  const file = join(bin, process.platform === 'win32' ? 'opencode.exe' : 'opencode'); writeFileSync(file, 'fixture', { mode: 0o700 })
   const result = await captureLaunchExecutable('opencode', '')
   expect(result.state).toBe('ready')
   if (result.state !== 'ready') throw new Error('fixture was held')
@@ -103,4 +104,39 @@ it('leaves the launch PATH alone for a Node the person has, and for an engine th
     expect(withNodeForScript(script, environment, node), head).toBe(environment)
   }
   expect(withNodeForScript(join(root, 'absent'), environment, node)).toBe(environment)
+})
+
+// Claude Code's native install on Windows is `claude.exe` alone; npm writes `codex.cmd` beside an extensionless sh
+// script nothing on Windows runs. Looked for by the bare name, Claude Code read as not installed (VM, 2026-10-15).
+it('finds a Windows engine by its program file, never the sh script npm writes beside it', async () => {
+  const { bin, captureLaunchExecutable } = await fixture()
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+  try {
+    writeFileSync(join(bin, 'opencode'), '#!/bin/sh\n', { mode: 0o700 })
+    expect(await captureLaunchExecutable('opencode', '')).toMatchObject({ state: 'install' })
+    writeFileSync(join(bin, 'opencode.cmd'), '@echo off\r\n', { mode: 0o700 })
+    expect(await captureLaunchExecutable('opencode', '')).toMatchObject({ state: 'ready', executable: { command: join(bin, 'opencode.cmd') } })
+    writeFileSync(join(bin, 'opencode.exe'), 'MZ', { mode: 0o700 })
+    expect(await captureLaunchExecutable('opencode', '')).toMatchObject({ state: 'ready', executable: { command: join(bin, 'opencode.exe') } })
+    // A configured path that names its program, absolute without a slash on Windows (`C:\…\opencode.exe`), is itself.
+    vi.stubEnv('OPENCODE_PATH', join(bin, 'opencode.exe'))
+    vi.resetModules()
+    const again = await import('./launchExecutable.js')
+    expect(await again.captureLaunchExecutable('opencode', '')).toMatchObject({ state: 'ready', executable: { command: join(bin, 'opencode.exe') } })
+  } finally { Object.defineProperty(process, 'platform', platform) }
+})
+it('takes the profile as the home on Windows, which sets no HOME of its own', async () => {
+  const { launchEnvironment } = await fixture()
+  vi.stubEnv('HOME', undefined)
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  try {
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    const { homedir } = await import('node:os')
+    expect((await launchEnvironment())?.HOME).toBe(homedir())
+    vi.stubEnv('HOME', root)
+    expect((await launchEnvironment())?.HOME).toBe(root)
+  } finally {
+    Object.defineProperty(process, 'platform', platform)
+  }
 })

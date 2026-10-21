@@ -1,6 +1,7 @@
 /** A launch resolves once, then keeps that executable through probes and dispatch. */
 import { execFile } from 'node:child_process'
-import { accessSync, closeSync, constants, openSync, readSync, statSync } from 'node:fs'
+import { accessSync, closeSync, constants, lstatSync, openSync, readSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
 import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallPaths, engineInstallRecipe, type EngineInstallRecipe } from '../../lib/engineInstall.js'
@@ -24,6 +25,14 @@ export { LAUNCH_LOCATION_VARIABLES } from './nativeLocations.js'
 const pickLocations = (environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv => Object.fromEntries(
   LAUNCH_LOCATION_VARIABLES.filter(key => environment[key] !== undefined).map(key => [key, environment[key]]),
 )
+/**
+ * Windows sets no HOME of its own. OpenSSH for Windows does, so the first VM runs (all over SSH) had one; a daemon
+ * started any other way (WMI, a scheduled task, the desktop app) held every native launch at "Waiting to read the
+ * engine's launch environment" (the Windows VM E2E, 2026-10-15). The profile is the home there, as os.homedir() says.
+ */
+function withWindowsHome(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return process.platform === 'win32' && !environment.HOME ? { ...environment, HOME: homedir() } : environment
+}
 let probing = 0
 const MAX_PROBES = 8
 /** How long a captured launch environment answers again. Each capture is a login shell (rc files, then Node),
@@ -44,7 +53,7 @@ export function clearLaunchEnvironmentCache(): void {
  * A capture still running is joined; one taken in the last ENVIRONMENT_TTL_MS is answered again. */
 export async function launchEnvironment(shell?: string): Promise<NodeJS.ProcessEnv | null> {
   const interactive = interactiveEngineShell(shell)
-  if (!interactive) return pickLocations(process.env)
+  if (!interactive) return withWindowsHome(pickLocations(process.env))
   // Keyed by the shell, not its argv: a shell that is not POSIX gets a one-time script file in its argv.
   const key = JSON.stringify([interactive.path, interactive.args, managedNodePath()])
   const hit = captured.get(key)
@@ -84,6 +93,14 @@ function captureEnvironment(argv: string[]): Promise<NodeJS.ProcessEnv | null> {
   })
 }
 
+/**
+ * The names a launch looks for on PATH, the command first. On Windows `cmd` is never one: it names the command processor
+ * (C:\Windows\System32\cmd.exe, ahead of npm's folder on PATH), which every Command Code launch ran instead (F7).
+ */
+export function launchSearchNames(command: string, recipeNames: readonly string[], platform: NodeJS.Platform = process.platform): string[] {
+  return [...new Set([command, ...recipeNames])].filter((name) => platform !== 'win32' || name.toLowerCase() !== 'cmd')
+}
+
 /** A complete absence can authorize installation. Unreadable routes and failed
  * shell capture cannot: installing then would risk replacing a working engine. */
 export async function captureLaunchExecutable(engine: AgentEngine, shell?: string): Promise<LaunchExecutableResult> {
@@ -97,20 +114,31 @@ export async function captureLaunchExecutable(engine: AgentEngine, shell?: strin
   const entries = listed.filter(path => isAbsolute(path) && path.length <= 4096)
   if (entries.length === 0 || listed.length > 256) return held('Waiting for a bounded, absolute engine search path.')
   const recipe = override ? undefined : engineInstallRecipe(engine)
-  const names = [...new Set([command, ...(recipe?.executable.names ?? [])])]
-  const candidates = command.includes('/') ? [resolve(command)] : names.flatMap(name => entries.map(path => join(path, name)))
+  const names = launchSearchNames(command, recipe?.executable.names ?? [])
+  const candidates = command.includes('/') || isAbsolute(command) ? [resolve(command)] : names.flatMap(name => entries.map(path => join(path, name)))
   if (recipe) candidates.push(...engineInstallPaths(recipe, environment.HOME))
   // The installer also finds an npm engine beside Harness's own Node (its PATH gains that folder, and
   // `npm prefix -g` names it). Looking only here, a Codex in that folder was "missing": every launch dispatched
   // an installer that found it and exited 0 without a word, and the next launch dispatched another (2026-10-19).
   if (recipe?.executable.npmGlobal) candidates.push(...npmRuntimeBins().flatMap(bin => recipe.executable.names.map(name => join(bin, name))))
-  for (const path of [...new Set(candidates)]) {
+  for (const path of [...new Set(candidates.flatMap(windowsPrograms))]) {
     try {
       const info = statSync(path)
       if (!info.isFile()) return held('Waiting for the selected engine path to name an executable file.')
       accessSync(path, constants.X_OK)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        // Windows: statSync follows links, so a PATH entry across a symlink or junction (nvm-windows, Scoop) proves
+        // absence like any other. NativePaths refuses links there, which is right for hook files, not for this search.
+        // A leaf that exists though statSync cannot follow it is a dangling link: a user's choice, held as on POSIX.
+        // Only the leaf is checked: a dangling folder on the way (nvm-windows' nodejs link after its version was
+        // removed) still reads as absent here, where POSIX holds on a dangling ancestor.
+        if (process.platform === 'win32') {
+          try { lstatSync(path) } catch (leaf) {
+            if ((leaf as NodeJS.ErrnoException).code === 'ENOENT') continue
+          }
+          return held('Waiting to confirm the engine search path and its aliases.')
+        }
         try {
           const paths = new NativePaths(new NativeEvidenceBudget())
           if (paths.resolveSync(path, true)) return held('Waiting for the engine search path to stop changing.')
@@ -129,6 +157,18 @@ export async function captureLaunchExecutable(engine: AgentEngine, shell?: strin
     return { state: 'ready', executable, environment: withNodeForScript(path, environment) }
   }
   return recipe ? { state: 'install', recipe, environment: environment as Record<string, string> } : held('Waiting for the configured engine executable to become available.')
+}
+
+/**
+ * The files a Windows launch can run for [path], in the order CreateProcess and npm's shims make them: its `.exe`, then
+ * its `.cmd`, `.bat` or `.com` (an npm shim, run as its script: lib/windows/launch.ts). Not the extensionless sh script
+ * npm also writes, which nothing on Windows runs, nor a `.ps1`. Claude Code's native install is `claude.exe` alone, and
+ * with only the bare name looked for, every launch of it read as not installed (Windows 11 VM, 2026-10-15). A path
+ * that names a program already, and every path elsewhere, is itself.
+ */
+function windowsPrograms(path: string): string[] {
+  if (process.platform !== 'win32' || /\.(?:exe|cmd|bat|com)$/i.test(path)) return [path]
+  return ['.exe', '.cmd', '.bat', '.com'].map(extension => path + extension)
 }
 
 /**

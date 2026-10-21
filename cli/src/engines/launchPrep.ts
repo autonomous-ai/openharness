@@ -7,6 +7,7 @@
  */
 import { join } from 'node:path'
 import { homeRoots, launchHomeOf } from '../lib/engineHomes.js'
+import { homeIsNetworkOrDevice } from './kit/homeAdoption.js'
 import { recordTrustIn, trustsIn } from './kit/folderTrust.js'
 import { repairHistory } from './kit/resumeRepair.js'
 import { launchContract } from './launches.js'
@@ -28,8 +29,14 @@ export interface FolderTrust {
 export function folderTrust(engine: AgentEngine, profile?: string | null, environment?: NodeJS.ProcessEnv): FolderTrust | null {
   const trust = launchContract(engine)?.trust
   if (!trust) return null
-  const file = (): string => join(launchHomeOf(trust.home, profile, environment), trust.file)
-  return { trusts: (path) => trustsIn(trust, file(), path), record: (path) => recordTrustIn(trust, file(), path) }
+  const home = (): string => launchHomeOf(trust.home, profile, environment)
+  const file = (): string => join(home(), trust.file)
+  // Windows: a network or device home counts as no trust file. Opening it could start an outbound connection.
+  const network = (): boolean => homeIsNetworkOrDevice(home())
+  return {
+    trusts: (path) => !network() && trustsIn(trust, file(), path),
+    record: (path) => network() ? 'skipped' : recordTrustIn(trust, file(), path),
+  }
 }
 
 /** The session a resume relaunches. `codexHome` is the agent's own engine home, the row's profile. */

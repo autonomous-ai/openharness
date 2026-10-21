@@ -5,7 +5,7 @@ import { openDaemon, whereFor, type Daemon, type Where } from '../agentClient/da
 import { callerOf, type Frame } from '../agentClient/model.js'
 import { identifier } from './host.js'
 
-const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status | messages GROUP | message GROUP MESSAGE_ID | post GROUP TEXT OPERATION_ID | command OPERATION_ID JSON | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | help'
+const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status | messages GROUP | message GROUP MESSAGE_ID | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] | command OPERATION_ID JSON | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | help'
 export function parseSuperTabArgs(argv: readonly string[], where: Where) {
   const positional: string[] = []
   let tabId = '', agentId = ''
@@ -26,9 +26,10 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
   else if (action === 'message' && identifier(first) && identifier(second) && positional.length === 3) {
     Object.assign(payload, { conversationId: first, messageId: second })
   }
-  else if (action === 'post' && identifier(first) && second?.trim() && identifier(third) && positional.length === 4) {
+  else if (action === 'post' && identifier(first) && second?.trim() && identifier(third)
+    && (positional.length === 4 || (positional.length === 6 && positional[4] === '--reply-to' && identifier(positional[5])))) {
     Object.assign(payload, { action: 'command', operationId: third,
-      command: { type: 'message.send', conversationId: first, text: second, replyTo: null, recipientIds: [] } })
+      command: { type: 'message.send', conversationId: first, text: second, replyTo: positional[5] ?? null, recipientIds: [] } })
   } else if (action === 'command' && identifier(first) && second && positional.length === 3) {
     Object.assign(payload, { operationId: first, command: JSON.parse(second) })
   } else if (action === 'start' && identifier(first) && second && positional.length === 3) {

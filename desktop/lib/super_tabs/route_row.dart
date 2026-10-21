@@ -326,7 +326,7 @@ class _ChangeDialogState extends State<_ChangeDialog> {
   }
 }
 
-/// Opens this Super Tab's routing policy: the effective policy, with the
+/// Opens this Swarm's routing policy: the effective policy, with the
 /// fields it overrides marked. Only the owner can change it.
 Future<void> showSuperTabRouting(BuildContext context, SuperTabController c) =>
     showAppDialog<void>(
@@ -349,7 +349,7 @@ class _RoutingDialogState extends State<_RoutingDialog> {
   RoutingPolicy? _policy;
   // The owner's account policy: what a field shows after Use account default.
   RoutingPolicy? _account;
-  // The fields this Super Tab overrides; the rest follow the account default.
+  // The fields this Swarm overrides; the rest follow the account default.
   final _overridden = <String>{};
   List<String> _warnings = const [];
   String? _problem;
@@ -429,7 +429,7 @@ class _RoutingDialogState extends State<_RoutingDialog> {
     return ListenableBuilder(
       listenable: _c,
       builder: (context, _) => AlertDialog(
-        title: const Text('Routing for this Super Tab'),
+        title: const Text('Routing for this Swarm'),
         content: SizedBox(
           width: 560,
           child: SingleChildScrollView(

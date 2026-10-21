@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   isRelayedPair,
   readTurn,
+  relayCanReach,
   TERMINAL_P2P_DOWN_TYPES,
   TERMINAL_P2P_NEGOTIATION_TIMEOUT_MS,
   TERMINAL_P2P_UP_TYPES,
@@ -265,6 +266,42 @@ describe('terminal WebRTC data channel', () => {
 
   it('does not mistake a host address that merely contains the word', () => {
     expect(isRelayedPair('candidate:1 1 udp 1 10.0.0.1 1 typ host raddr relay.example')).toBe(false)
+  })
+
+  describe('relayCanReach', () => {
+    const pair = (local: string, remote: string) =>
+      relayCanReach({ localCandidate: { type: local }, remoteCandidate: { host: remote } })
+
+    // The 8x4090's host candidates (its LAN card, Docker and libvirt bridges): Cloudflare refuses them,
+    // and waiting each one out cost the whole TURN-first negotiation (2026-10-20).
+    it('drops our relay paired with an address no TURN server can reach', () => {
+      for (const host of [
+        '192.168.86.22', '172.17.0.1', '172.18.0.1', '192.168.122.1',
+        '10.1.2.3', '172.31.255.255', '100.64.0.1', '100.127.255.254',
+        '127.0.0.1', '169.254.10.10', '0.0.0.0',
+        '::1', '::', 'fd7a:115c:a1e0::1', 'fc00::1', 'fe80::1', 'fe80::1%en0', '::ffff:192.168.1.1',
+      ]) expect(pair('relay', host), host).toBe(false)
+    })
+
+    it('keeps our relay paired with a public address', () => {
+      // 172.168/16 and 100.128/9 sit next to private ranges but are public: an office network uses 172.168.20.x.
+      for (const host of [
+        '42.96.33.130', '104.30.147.145', '172.168.20.132', '172.15.0.1', '172.32.0.1',
+        '100.63.255.255', '100.128.0.1', '2606:4700::1', '::ffff:42.96.33.130',
+      ]) expect(pair('relay', host), host).toBe(true)
+    })
+
+    it('keeps every pair our relay is not part of, so a LAN or a tailnet still connects directly', () => {
+      for (const local of ['host', 'srflx', 'prflx']) {
+        expect(pair(local, '192.168.86.22')).toBe(true)
+        expect(pair(local, '100.101.102.103')).toBe(true)
+        expect(pair(local, '127.0.0.1')).toBe(true)
+      }
+    })
+
+    it('leaves a named candidate to ICE', () => {
+      expect(pair('relay', '4c3b2a19-0d1e-4f5a-8b6c-7d8e9f0a1b2c.local')).toBe(true)
+    })
   })
 
   // Regression: a burst of sends (a chunked upload's chunks, fired back-to-back) can cross

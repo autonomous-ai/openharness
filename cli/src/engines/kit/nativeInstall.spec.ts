@@ -66,6 +66,17 @@ it('does not reserve or dispatch after cancellation', async () => {
   expect(install.dispatch).not.toHaveBeenCalled()
 })
 
+it('on Windows reports no obligation and holds an install with its reason, writing nothing', async () => {
+  const dispatch = vi.fn()
+  const install = createNativeInstallations({ directory, node: () => process.execPath, dispatch, platform: 'win32' })
+  expect(await install.status('terminal', 'request', () => true)).toBeNull()
+  expect(await install.ensure('opencode', recipe, environment, 'request', () => true))
+    .toEqual({ complete: false, detail: expect.stringMatching(/^opencode is not installed\. Installing engines is not supported on Windows yet/) })
+  expect(dispatch).not.toHaveBeenCalled()
+  expect(existsSync(directory)).toBe(false)
+  expect(existsSync(`${directory}.authority`)).toBe(false)
+})
+
 it('reads installation obligations after reconstruction without creating a missing history', async () => {
   const install = controller()
   expect(await install.status('opencode', 'request', () => true)).toBeNull()
