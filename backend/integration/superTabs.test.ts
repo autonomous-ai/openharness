@@ -152,8 +152,6 @@ describe('deleting abandoned swarm projects', () => {
     const agentId = String((await run(tab, { type: 'agent.add', conversationId, machineId: 'test-host', harnessId,
       name: 'Private lead', configuration: config, lead: true })).result.agentId)
     const context = await store.native.open(owner, tab, { operationId: randomUUID(), conversationId, agentId })
-    await expect(run(tab, { type: 'project.delete', projectId })).rejects.toMatchObject({ code: 'PROJECT_HAS_AGENTS' })
-    await run(tab, { type: 'agent.remove', agentId })
     await run(tab, { type: 'project.delete', projectId })
     await expect(store.native.read(host, tab, context.contextId)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
     expect(await store.mayObserve(owner, tab, 'test-host', harnessId, host.sub)).toBe(false)
@@ -168,12 +166,12 @@ describe('deleting abandoned swarm projects', () => {
       run(tab, { type: 'project.delete', projectId }),
       run(tab, { type: 'agent.add', conversationId, machineId: 'test-host', harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true }),
     ])
-    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1)
-    expect(results.filter(r => r.status === 'rejected')).toHaveLength(1)
+    // Whichever runs first, the delete wins and takes a lead that arrived before it.
+    expect(results[0].status).toBe('fulfilled')
     const state = (await store.read(owner, tab)).state
-    const exists = state.projects!.some(p => p.id === projectId)
-    expect(state.agents.some(a => a.projectId === projectId)).toBe(exists)
-    expect(state.conversations.some(c => c.id === conversationId)).toBe(exists)
+    expect(state.projects!.some(p => p.id === projectId)).toBe(false)
+    expect(state.agents.some(a => a.projectId === projectId)).toBe(false)
+    expect(state.conversations.some(c => c.id === conversationId)).toBe(false)
   })
 })
 

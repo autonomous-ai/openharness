@@ -263,9 +263,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       project.name = command.name
       break
     }
-    case 'project.delete':
+    case 'project.delete': {
+      // Its owner confirmed a permanent delete; nothing in Desktop removes agents one by one, so the project takes its
+      // own agents with it. Their machines release the native sessions as they would for any removed agent.
+      const project = manageProject(state, actor, command.projectId)
+      for (const target of state.agents.filter(a => agentProjectId(state, a) === project.id)) removeAgent(target)
       deleteProject(state, actor, command.projectId)
       break
+    }
     case 'project.sharing': {
       const project = manageProject(state, actor, command.projectId)
       project.members = projectMembers(state, command.memberIds)

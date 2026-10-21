@@ -164,13 +164,12 @@ describe('projects inside an invite-only swarm', () => {
     expect(f.state.name).toBe('Lead renamed')
   })
 
-  it('refuses any project agent, even after it leaves every workgroup', () => {
-    const f = setup(), p = f.project(), agentId = f.add(p.conversationId, 'idle')
+  it('removes only its own agents, even one that left every workgroup', () => {
+    const f = setup(), p = f.project(), agentId = f.add(p.conversationId, 'idle'), otherId = f.add('lead', 'other')
     f.run({ type: 'conversation.agent', conversationId: p.conversationId, agentId, present: false, lead: false })
-    expect(() => f.run({ type: 'project.delete', projectId: p.projectId })).toThrow('Stop and remove')
-    f.run({ type: 'agent.remove', agentId })
     f.run({ type: 'project.delete', projectId: p.projectId })
     expect(projectsOf(f.state).map(p => p.id)).toEqual(['lead'])
+    expect(f.state.agents.map(a => a.id)).toEqual([otherId])
   })
 
   it.each(['queued', 'dispatched', 'settling'] as const)('refuses %s starts and removes only settled project history', phase => {

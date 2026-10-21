@@ -97,15 +97,12 @@ export function manageProject(state: SuperTabState, actor: Actor, projectId: str
   return projectOf(state, projectId)
 }
 
-/** Removes coordination only. Native sessions and pending starts must be
- * reconciled first; their terminal-history privacy bindings remain permanent. */
+/** Removes coordination only; the command removes the project's agents first.
+ * Pending starts must be reconciled first; terminal-history privacy bindings remain permanent. */
 export function deleteProject(state: SuperTabState, actor: Actor, projectId: string): void {
   const project = manageProject(state, actor, projectId)
   const groups = state.conversations.filter(c => groupProject(state, c).id === project.id)
   const groupIds = new Set(groups.map(c => c.id))
-  if (state.agents.some(a => agentProjectId(state, a) === project.id)) {
-    fail('PROJECT_HAS_AGENTS', 'Stop and remove this project’s agents before deleting it.')
-  }
   if (state.starts?.some(s => groupIds.has(s.request.conversationId) && !s.error &&
     (!s.harnessId || s.poolGeneration && !s.poolSettled))) {
     fail('STARTS_PENDING', 'Resolve this project’s pending agent starts before deleting it.')
