@@ -87,7 +87,7 @@ void main() {
         for (final live in [true, false])
           {
             'machineId': live ? 'online' : 'offline',
-            'name': live ? 'Studio Mac' : 'Offline Mac',
+            'name': live ? 'Studio Mac' : 'M2',
             'contributorId': 'owner',
             'observation': {
               'receivedAt': now - (live ? 0 : 60000),
@@ -149,7 +149,7 @@ void main() {
       // The complete identity and actions remain accessible from the compact row.
       await tester.tap(find.byKey(const ValueKey('super-machine-offline')));
       await tester.pumpAndSettle();
-      expect(find.widgetWithText(AlertDialog, 'Offline Mac'), findsOneWidget);
+      expect(find.widgetWithText(AlertDialog, 'M2'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       await c.flush();
