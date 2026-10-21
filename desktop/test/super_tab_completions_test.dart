@@ -118,17 +118,22 @@ void main() {
     'moving the caret into a reference preserves the following text',
     (tester) async {
       final (_, c) = await show(tester);
-      await tester.enterText(composer, 'Review #off then reply.');
-      await tester.pump();
-      expect(picker, findsNothing);
-      final controller = tester.widget<TextField>(composer).controller!;
-      controller.selection = const TextSelection.collapsed(offset: 11);
-      await tester.pump();
-      expect(picker, findsOneWidget);
-      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
-      await tester.pumpAndSettle();
-      expect(c.draft('lead'), 'Review #12 then reply.');
-      expect(controller.selection.baseOffset, 10);
+      for (final punctuation in ['', ',']) {
+        await tester.enterText(
+          composer,
+          'Review #offline$punctuation then reply.',
+        );
+        await tester.pump();
+        expect(picker, findsNothing);
+        final controller = tester.widget<TextField>(composer).controller!;
+        controller.selection = const TextSelection.collapsed(offset: 11);
+        await tester.pump();
+        expect(picker, findsOneWidget);
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pumpAndSettle();
+        expect(c.draft('lead'), 'Review #12$punctuation then reply.');
+        expect(controller.selection.baseOffset, 10);
+      }
       await tester.pump(const Duration(milliseconds: 250));
     },
   );

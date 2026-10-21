@@ -285,9 +285,13 @@ class _SuperTabViewState extends State<SuperTabView> {
       }
     }
     if (ticks != null) return null;
+    // When editing inside a reference, replace the unfinished token after the
+    // caret too, while leaving sentence punctuation and following text intact.
+    final continuation = RegExp(r'^[^\s#`()\[\]{},.!?;:]*')
+        .firstMatch(value.text.substring(end))![0]!;
     return (
       start: prefix.lastIndexOf('#'),
-      end: end,
+      end: end + continuation.length,
       query: match[1]!.toLowerCase(),
     );
   }
@@ -343,8 +347,8 @@ class _SuperTabViewState extends State<SuperTabView> {
     final at = _workgroupAtCursor;
     if (at == null || group.number == null) return;
     final suffix = _composer.text.substring(at.end);
-    final token =
-        '#${group.number}${suffix.startsWith(RegExp(r'\s')) ? '' : ' '}';
+    final boundary = suffix.startsWith(RegExp(r'[\s)\]}.,!?;:]'));
+    final token = '#${group.number}${boundary ? '' : ' '}';
     final text = _composer.text.replaceRange(at.start, at.end, token);
     c.setDraft(c.selectedId, text);
     _composer.value = TextEditingValue(
