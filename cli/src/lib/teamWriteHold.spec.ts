@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { expect, it } from 'vitest'
 import { teamWriteHold } from './teamWriteHold.js'
 import { CLAUDE_REWIND_CONFIRM, CLAUDE_REWIND_EMPTY, CLAUDE_REWIND_LIST, CODEX_BROWSING_SCROLLBACK } from './__fixtures__/rewindPickers.js'
@@ -32,4 +33,19 @@ it('holds a delivery while Claude Code\'s Rewind menu is open, as someone at the
   for (const screen of [CLAUDE_REWIND_LIST, CLAUDE_REWIND_CONFIRM, CLAUDE_REWIND_EMPTY]) expect(teamWriteHold('claude', screen)).toBe('team_waiting_user')
   // And Codex's scrollback browser, a pager over the whole pane, the same way as its fullscreen one.
   expect(teamWriteHold('codex', CODEX_BROWSING_SCROLLBACK)).toBe('team_waiting_user')
+})
+
+it('does not read the IDE context chip in an empty Claude composer as a human draft', () => {
+  // A real capture (tmux capture-pane -e, 2026-10-21) of an idle Lead pane with `.env` open in the IDE. It was held as
+  // `team_waiting_draft`, and the delivery was retried every second for minutes.
+  const idle = readFileSync(new URL('./__fixtures__/claude-ide-chip-idle.txt', import.meta.url), 'utf8')
+  expect(teamWriteHold('claude', idle)).toBeNull()
+  expect(teamWriteHold('claude', idle.replace('[⧉ In .env]', '[⧉ In .env] [⧉ Selected 3 lines from a.ts]'))).toBeNull()
+  // Anything typed beside a chip is still somebody's draft.
+  expect(teamWriteHold('claude', idle.replace('[⧉ In .env]', '[⧉ In .env] fix the'))).toBe('team_waiting_draft')
+  expect(teamWriteHold('claude', idle.replace('[⧉ In .env]', 'fix the [⧉ In .env]'))).toBe('team_waiting_draft')
+  // The same Lead pane at 11:05, once its footer carried an OSC 8 link to the open PR: the user's next message sat
+  // as Queued behind the same chip.
+  const linked = readFileSync(new URL('./__fixtures__/claude-ide-chip-idle-pr-link.txt', import.meta.url), 'utf8')
+  expect(teamWriteHold('claude', linked)).toBeNull()
 })

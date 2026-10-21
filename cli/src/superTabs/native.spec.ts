@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
+import { REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
 import { createNativeTurnObservations } from '../lib/nativeTurnObservations.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
 
@@ -46,6 +47,17 @@ function setup() {
 }
 
 describe('durable native conversation recording', () => {
+  it('says why an unidentified terminal cannot be recorded instead of asking for an update', async () => {
+    const t = setup()
+    const transcripts = t.core.transcripts as { nativeTurns?: unknown }
+    transcripts.nativeTurns = vi.fn(async () => null)
+    await expect(t.open().prepare('tab', alpha)).rejects.toThrow('Harness hasn’t identified this terminal’s conversation yet. Retry in a moment, or restart the agent.')
+    vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', identityHold: `Conversation identity is held: ${REPLACED_PROGRAM}.` } as never)
+    await expect(t.open().prepare('tab', alpha)).rejects.toThrow('This agent’s program was updated while it was running. Restart the agent, then retry.')
+    delete transcripts.nativeTurns
+    await expect(t.open().prepare('tab', alpha)).rejects.toThrow('Update this machine’s Harness to record native terminal conversations.')
+    expect(existsSync(t.file)).toBe(false)
+  })
   it('starts at the current boundary and records only the prepared conversation, without writing native input', async () => {
     const t = setup(), host = t.open()
     t.observer.read('harness'); t.prompt('Private history'); t.answer('Private answer')
@@ -204,7 +216,7 @@ describe('durable native conversation recording', () => {
     t.backend.mockResolvedValueOnce({ status: 200, body: { data: { contextId: alpha, machineId: 'elsewhere' } } } as never)
     await expect(host.prepare('tab', alpha)).rejects.toThrow('exact contributed terminal')
     vi.mocked(t.core.transcripts.nativeTurns!).mockResolvedValueOnce(null)
-    await expect(host.prepare('tab', alpha)).rejects.toThrow('Update')
+    await expect(host.prepare('tab', alpha)).rejects.toThrow('identified')
     await host.prepare('tab', alpha)
     t.time(80_000); await host.prepare('tab', alpha, true); t.time(100_000)
     t.prompt('Still open'); t.answer('Recorded'); await host.capture(); await host.flush()

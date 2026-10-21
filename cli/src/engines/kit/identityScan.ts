@@ -6,6 +6,9 @@ export class IdentityReadUnavailable extends Error {
   readonly code = 'IDENTITY_UNAVAILABLE'
   constructor(reason: string, message = `Conversation identity is held: ${reason}.`) { super(message) }
 }
+/** The engine's executable was replaced on disk (a package manager updated it) while the process kept
+ *  running, so the kernel no longer reports its image and no native read can succeed until it restarts. */
+export const REPLACED_PROGRAM = 'the agent\u2019s program was replaced on disk while it was running; restart the agent'
 /** A conversation was seen and then could not be read: never a reason to stop its process without it
  *  (lib/stopAgentService.ts `withoutConversation`). */
 export class ObservedConversationUnavailable extends IdentityReadUnavailable {
