@@ -126,6 +126,8 @@ fn discovery_names_the_host() {
     let v: serde_json::Value = serde_json::from_str(&line).unwrap();
     assert_eq!(v["hello"]["instance"], harness_pty::instance::current());
     assert_eq!(v["hello"]["pid"], disc["pid"]);
+    // A pre-G host sends no `features`; a client reads that as none.
+    assert_eq!(v["hello"]["features"], serde_json::json!(["seed"]));
 }
 
 /// `data` as the `write` op carries it.

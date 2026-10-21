@@ -672,3 +672,88 @@ fn conversation_snapshots_carry_the_joined_history() {
         "{v}"
     );
 }
+
+/// `create` with an optional seed, `rows` high.
+fn create_seeded(
+    w: &mut Conn,
+    r: &mut BufReader<Conn>,
+    seed: Option<&str>,
+    rows: u16,
+    unix: &str,
+    windows: &str,
+) -> String {
+    let mut req = serde_json::json!({"id": 1, "op": "create", "command": script(unix, windows), "cols": 80, "rows": rows, "owner": "t", "hold": false});
+    if let Some(seed) = seed {
+        req["seed"] = serde_json::json!(seed);
+    }
+    let created = call(w, r, &req.to_string());
+    created["pane"].as_str().unwrap().to_string()
+}
+
+fn history_snapshot(s: &mut Conn, id: u64) -> serde_json::Value {
+    let req = serde_json::json!({"id": id, "history": "plain", "historyLines": 50});
+    write_frame(s, Kind::Snapshot, req.to_string().as_bytes()).unwrap();
+    loop {
+        let (kind, v) = next_reply(s);
+        if kind == Kind::SnapshotReply {
+            return v;
+        }
+    }
+}
+
+#[test]
+fn a_seeded_pane_starts_with_its_seed_in_history() {
+    let (_h, disc) = start();
+    let (mut w, mut r) = connect(&disc);
+    let pane = create_seeded(
+        &mut w,
+        &mut r,
+        Some("one\r\ntwo\r\n\x1b[31mthree\x1b[0m"),
+        10,
+        "sleep 1.5; echo ready; sleep 5",
+        r#"Start-Sleep -Milliseconds 1500; "ready"; Start-Sleep 5"#,
+    );
+    let mut s = stream(&disc);
+    subscribe_with(&mut s, &pane, 80, 10, false);
+    // Before the child prints anything.
+    let v = history_snapshot(&mut s, 1);
+    let history = v["history"].as_str().unwrap();
+    let (one, two, three) = (
+        history.find("one").expect(history),
+        history.find("two").expect(history),
+        history.find("three").expect(history),
+    );
+    assert!(one < two && two < three, "{history:?}");
+    assert!(history.contains("\x1b[31m"), "colour kept: {history:?}");
+    assert!(v["capture"].as_str().unwrap().trim().is_empty(), "{v}");
+    assert_eq!(v["meta"]["cursor_x"], 0, "{v}");
+    assert_eq!(v["meta"]["cursor_y"], 0, "{v}");
+    // The child draws from the top of the screen.
+    wait_capture(&mut w, &mut r, &pane, "ready");
+    let cap = call(
+        &mut w,
+        &mut r,
+        &serde_json::json!({"id": 9, "op": "capture", "pane": pane, "ansi": false, "visible": true}).to_string(),
+    );
+    assert!(cap["text"].as_str().unwrap().starts_with("ready"), "{cap}");
+}
+
+#[test]
+fn a_create_without_seed_is_unchanged() {
+    let (_h, disc) = start();
+    let (mut w, mut r) = connect(&disc);
+    let pane = create_seeded(
+        &mut w,
+        &mut r,
+        None,
+        10,
+        "sleep 1.5; echo ready; sleep 5",
+        r#"Start-Sleep -Milliseconds 1500; "ready"; Start-Sleep 5"#,
+    );
+    let mut s = stream(&disc);
+    subscribe_with(&mut s, &pane, 80, 10, false);
+    let v = history_snapshot(&mut s, 1);
+    assert_eq!(v["history"], "", "{v}");
+    assert!(v["capture"].as_str().unwrap().trim().is_empty(), "{v}");
+    wait_capture(&mut w, &mut r, &pane, "ready");
+}

@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::protocol::PROTOCOL;
+use crate::protocol::{FEATURES, PROTOCOL};
 
 /// How many random pipe names a Windows host tries before it gives up.
 #[cfg(windows)]
@@ -29,11 +29,7 @@ pub const fn release_version(given: Option<&'static str>) -> &'static str {
 }
 
 pub fn version_line() -> String {
-    format!(
-        "{{\"version\":\"{}\",\"protocol\":{}}}",
-        VERSION,
-        PROTOCOL
-    )
+    serde_json::json!({"version": VERSION, "protocol": PROTOCOL, "features": FEATURES}).to_string()
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -329,6 +325,7 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&version_line()).unwrap();
         assert_eq!(v["version"], VERSION);
         assert_eq!(v["protocol"], PROTOCOL);
+        assert_eq!(v["features"], serde_json::json!(["seed"]));
     }
 
     #[test]

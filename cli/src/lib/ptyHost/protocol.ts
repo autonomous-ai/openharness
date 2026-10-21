@@ -133,7 +133,7 @@ export interface HelloLine {
   hello: { auth: string; nonce: string; protocol: number; role: HelloRole; clientId: string }
 }
 export type HelloReply =
-  | { hello: { ok: true; instance: string; version: string; pid: number; proof: string } }
+  | { hello: { ok: true; instance: string; version: string; pid: number; features?: string[]; proof: string } }
   | { hello: { ok: false; code: string; reason: string } }
 
 const tokenDigest = (token: string, separator: string, nonce: string) =>
@@ -190,7 +190,7 @@ export interface PtyAfterExit {
 }
 
 export type PtyOp =
-  | { op: 'create'; command: string[]; cwd?: string; env?: Record<string, string>; cols: number; rows: number; owner: string; label?: string; hold: boolean; afterExit?: PtyAfterExit; clearInherited?: string[] }
+  | { op: 'create'; command: string[]; cwd?: string; env?: Record<string, string>; cols: number; rows: number; owner: string; label?: string; hold: boolean; afterExit?: PtyAfterExit; clearInherited?: string[]; seed?: string }
   | { op: 'kill'; pane: string; graceMs?: number }
   | { op: 'inventory' }
   | { op: 'titles' }

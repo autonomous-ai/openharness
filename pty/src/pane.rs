@@ -61,6 +61,8 @@ pub struct PaneSpec {
     pub rows: u16,
     /// Names the child does not get from the host's own environment (`clearInherited`).
     pub clear_env: Vec<String>,
+    /// Text drawn into the grid before the child starts, so it sits in the scrollback (`Op::Create`'s `seed`).
+    pub seed: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -328,6 +330,18 @@ impl Pane {
         };
         let term = Term::new(config, &Size { cols, rows }, Listener(shared.clone()));
         let screen = Arc::new(Mutex::new(Screen { term, seq: 0 }));
+        if let Some(seed) = spec.seed.as_deref() {
+            // The seed, then one line feed per row and a cursor home: it scrolls wholly into the history and the
+            // child draws on a blank screen from the top, as a new pane's child does. This runs before `attach`,
+            // so no stream or child output can interleave.
+            let mut screen = lock(&screen);
+            let Screen { term, seq } = &mut *screen;
+            let mut parser = Processor::<NoSync>::new();
+            parser.advance(term, seed);
+            parser.advance(term, "\r\n".repeat(rows as usize).as_bytes());
+            parser.advance(term, b"\x1b[H");
+            *seq += 1;
+        }
         let attachment = attach(&id, 1, &spec, cols, rows, &screen, &shared, sink.clone())?;
         Ok(Pane {
             id,
@@ -1405,6 +1419,7 @@ mod tests {
             cols: 40,
             rows: 10,
             clear_env: Vec::new(),
+            seed: None,
         }
     }
 
@@ -1437,6 +1452,7 @@ mod tests {
                 cols: 40,
                 rows: 10,
                 clear_env: Vec::new(),
+                seed: None,
             },
             1000,
             tx,
@@ -1460,6 +1476,7 @@ mod tests {
                 cols: 40,
                 rows: 10,
                 clear_env: Vec::new(),
+                seed: None,
             },
             1000,
             tx,
@@ -1868,6 +1885,7 @@ mod windows_tests {
             cols: 80,
             rows: 24,
             clear_env: Vec::new(),
+            seed: None,
         }
     }
 

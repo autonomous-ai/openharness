@@ -11,6 +11,10 @@ use std::io::{self, Read, Write};
 /// - 2: the `shutdown` op.
 /// - 1: the first.
 pub const PROTOCOL: u32 = 2;
+
+/// Optional protocol-2 abilities this host has, told in the hello reply and the `version` line. A host built
+/// before the list sends none, which a client reads as none: protocol 2 itself never changes for these.
+pub const FEATURES: &[&str] = &["seed"];
 pub const MAX_FRAME: u32 = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,6 +180,12 @@ pub enum Op {
         /// What `env` sets is still set.
         #[serde(rename = "clearInherited", default)]
         clear_inherited: Vec<String>,
+        /// Another pane's scrollback (`capture`/`history` style: SGR-only ANSI, one line per row) that the new
+        /// pane starts with, wholly in its history above a blank screen. Only a host that lists `seed` in
+        /// `FEATURES` knows the field; an older one refuses the whole `create`, so a client sends it only to a
+        /// host that lists it.
+        #[serde(default)]
+        seed: Option<String>,
     },
     Kill {
         pane: String,
