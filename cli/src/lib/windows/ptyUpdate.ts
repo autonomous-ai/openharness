@@ -25,7 +25,8 @@ import {
   sweepAsideFiles, type PtyInstallFs, type PtyPending, type PtyRestore,
 } from './ptyInstall.js'
 import {
-  PtyPayloadRefused, PtyPayloadUnpackFailed, fetchPtyEntry, preparePtyPayload, ptyUpdateWanted, sweepStagingFolders, type PreparedPty,
+  PtyPayloadRefused, PtyPayloadUnpackFailed, fetchPtyEntry, preparePtyPayload, ptyUpdateWanted, sweepCanaryHomes, sweepStagingFolders,
+  type PreparedPty,
   type PtyEntry,
 } from './ptyPayload.js'
 
@@ -325,13 +326,16 @@ export function putBackAside(rootDir: string, names: readonly string[], fs: Pick
 }
 
 /**
- * What an updater sweeps as it starts, under the lock: staging folders an interrupted check left, and bin\'s aside and
- * temporary files (./ptyInstall.ts `sweepAsideFiles`). A bin file that is missing is put back from its aside file
- * first; while one cannot be, nothing in bin\ is swept, as its aside file holds the only copy of its bytes.
+ * What an updater sweeps as it starts, under the lock: staging folders an interrupted check left, stale serve canary homes
+ * in the temporary folder (./ptyPayload.ts `sweepCanaryHomes`), and bin\'s aside and temporary files (./ptyInstall.ts
+ * `sweepAsideFiles`). A bin file that is missing is put back from its aside file first; while one cannot be, nothing in
+ * bin\ is swept, as its aside file holds the only copy of its bytes.
  */
 export function sweepPtyLeftovers(rootDir: string, log: (line: string) => void, fs: Partial<PtyInstallFs> = {}): void {
   const all: PtyInstallFs = { ...defaultPtyInstallFs, ...fs }
   sweepStagingFolders(join(rootDir, 'runtime'))
+  // A serve canary's temporary home whose removal failed (./ptyPayload.ts `serveCanary`).
+  sweepCanaryHomes()
   const put = putBackAside(rootDir, BIN_FILES, all)
   for (const { name, from } of put.restored) log(`[update] put bin\\${name} back from ${from}`)
   for (const { name, from, error } of put.failed) {

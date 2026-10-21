@@ -5,7 +5,7 @@
  * and the canary pane's command differ by platform.
  */
 import { execFile, spawn, type ChildProcess } from 'child_process'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { PtyHostClient } from '../ptyHost/client.js'
@@ -26,14 +26,55 @@ export const PTY_PAYLOAD_FILES: readonly string[] = [
 /** Each canary run must answer within this; a hung binary must not hold the updater. */
 const CANARY_TIMEOUT_MS = 5_000
 /**
- * The whole serve canary (`serveCanary`): its start and discovery file, the hello, one pane's create and exit, and the
- * shutdown. Half the updater's 30 s heartbeat timeout (harnessd/services.ts), though the canary is asynchronous and the
- * heartbeat goes on beside it; with the two version canaries (5 s each) a payload is proven in at most 25 s.
+ * The serve canary's work (`serveCanary`): its start and discovery file, the hello, one pane's create and exit, and the
+ * shutdown. With its cleanup (`SERVE_CANARY_CLEANUP_MS`) at most 20 s, under the updater's 30 s heartbeat timeout
+ * (harnessd/services.ts), though the canary is asynchronous and the heartbeat goes on beside it.
  */
-export const SERVE_CANARY_TIMEOUT_MS = 15_000
-/** What a killed canary host gets to exit in before its temporary home is removed: a running program's folder cannot be
- *  removed on Windows. On top of `SERVE_CANARY_TIMEOUT_MS`. */
-const SERVE_CANARY_CLEANUP_MS = 3_000
+export const SERVE_CANARY_TIMEOUT_MS = 12_000
+/** How long a killed canary host gets to exit before its temporary home is removed: on Windows a file a process still
+ *  holds, or a folder that is a process's working directory, cannot be removed. */
+const SERVE_CANARY_EXIT_WAIT_MS = 5_000
+/** The cleanup's whole bound: the exit wait, then the removal's retries (`removeCanaryHome`). */
+const SERVE_CANARY_CLEANUP_MS = 8_000
+/** The serve canary from start to cleanup: what `preparePtyPayload` waits for it at most. */
+export const SERVE_CANARY_BOUND_MS = SERVE_CANARY_TIMEOUT_MS + SERVE_CANARY_CLEANUP_MS
+/** The canary's temporary homes: `<temporary folder>/harness-pty-canary-*`. */
+const CANARY_HOME_PREFIX = 'harness-pty-canary-'
+/** A canary home this old is left over from one whose removal failed (`sweepCanaryHomes`): no canary runs this long. */
+export const CANARY_HOME_STALE_MS = 10 * 60_000
+
+/** Where canary homes are made: the OS's temporary folder; off Windows (the tests) `/tmp`, as the host's endpoint is a
+ *  Unix socket in the home, whose path must fit in about 100 bytes, and a macOS temporary folder alone takes half. */
+export function canaryTempRoot(): string {
+  return process.platform === 'win32' ? tmpdir() : '/tmp'
+}
+
+/** Remove a canary home, retrying while Windows still reports it held (a process that has just exited). */
+function removeCanaryHome(dir: string): void {
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+}
+
+/**
+ * Remove the canary homes in [root] older than [maxAgeMs]: those whose removal failed (a file still held as the canary
+ * ended), left for this sweep, which the updater runs as it starts (./ptyUpdate.ts `sweepPtyLeftovers`). A fresh one may
+ * be a canary running now, and stays; so does one that still cannot be removed. Returns how many were removed.
+ */
+export function sweepCanaryHomes(root: string = canaryTempRoot(), maxAgeMs: number = CANARY_HOME_STALE_MS, now: number = Date.now()): number {
+  let names: string[]
+  try { names = readdirSync(root) } catch { return 0 }
+  let removed = 0
+  for (const name of names) {
+    if (!name.startsWith(CANARY_HOME_PREFIX)) continue
+    const dir = join(root, name)
+    try {
+      const info = statSync(dir)
+      if (!info.isDirectory() || now - info.mtimeMs < maxAgeMs) continue
+      removeCanaryHome(dir)
+      removed++
+    } catch { /* held still, or gone meanwhile: the next sweep's */ }
+  }
+  return removed
+}
 
 export interface PtyEntry { version: string; url: string; sha256: string; size: number }
 
@@ -156,18 +197,22 @@ const CANARY_COMMAND = process.platform === 'win32' ? ['cmd.exe', '/d', '/c', 'e
  * so the process started is the host), hidden; its discovery file; the hello; one pane running [command] (a shell that
  * exits 0) and its exit; `shutdown`, and the process gone. A host of a protocol above this CLI's (a paired one) cannot
  * be spoken to by any client here: for it the canary ends at the discovery file. Within [timeoutMs]; on every path the
- * host is killed if it still runs and the temporary home is removed. Throws why it did not pass.
+ * host is killed if it still runs, its exit waited for, and the temporary home removed; a home that cannot be removed
+ * even so is left for `sweepCanaryHomes`. Neither the host nor its pane runs in the home: on Windows a folder that is a
+ * process's working directory cannot be removed while it runs, and a pane's console may outlive the host a moment.
+ * Throws why it did not pass.
  */
 export async function serveCanary(binary: string, host: { protocol: number; version: string }, options: {
   timeoutMs?: number
-  /** Where the temporary home is made: the OS's temporary folder (`/tmp` off Windows) unless a test names one. */
+  /** Where the temporary home is made: `canaryTempRoot()` unless a test names one. */
   tmpRoot?: string
   command?: string[]
+  /** How the home is removed (`removeCanaryHome`); a test's may fail. */
+  remove?: (dir: string) => void
 } = {}): Promise<void> {
   const timeoutMs = options.timeoutMs ?? SERVE_CANARY_TIMEOUT_MS
-  // Off Windows (the tests) the host's endpoint is a Unix socket in the home, whose path must fit in about 100 bytes: a
-  // macOS temporary folder alone takes half of that.
-  const home = mkdtempSync(join(options.tmpRoot ?? (process.platform === 'win32' ? tmpdir() : '/tmp'), 'harness-pty-canary-'))
+  const root = options.tmpRoot ?? canaryTempRoot()
+  const home = mkdtempSync(join(root, CANARY_HOME_PREFIX))
   const instance = hostInstanceName(host.protocol, host.version)
   let child: ChildProcess | null = null
   let client: PtyHostClient | null = null
@@ -175,7 +220,7 @@ export async function serveCanary(binary: string, host: { protocol: number; vers
   let done = false
   const work = async (): Promise<void> => {
     const started = spawn(binary, ['serve', '--home', home, '--no-reexec'], {
-      cwd: home, windowsHide: true, stdio: 'ignore', env: scrubTerminalContext({ ...process.env }),
+      cwd: root, windowsHide: true, stdio: 'ignore', env: scrubTerminalContext({ ...process.env }),
     })
     child = started
     started.once('error', (error) => { ended ??= `could not start (${error.message})` })
@@ -198,7 +243,7 @@ export async function serveCanary(binary: string, host: { protocol: number; vers
       exits.set(event.pane, event.status)
       wake?.()
     })
-    const created = await connected.call({ op: 'create', command: options.command ?? CANARY_COMMAND, cwd: home, cols: 80, rows: 24, owner: 'harness-pty-canary', hold: false })
+    const created = await connected.call({ op: 'create', command: options.command ?? CANARY_COMMAND, cwd: root, cols: 80, rows: 24, owner: 'harness-pty-canary', hold: false })
     if (created.state !== 'ok') throw new Error(`its create failed (${created.state === 'failed' ? `${created.code}: ${created.reason}` : created.reason})`)
     const pane = created.value.pane
     while (!exits.has(pane)) {
@@ -230,9 +275,9 @@ export async function serveCanary(binary: string, host: { protocol: number; vers
     if (running && running.exitCode === null && running.signalCode === null) {
       const gone = new Promise<void>((resolve) => { running.once('exit', () => resolve()); running.once('error', () => resolve()) })
       try { running.kill('SIGKILL') } catch { /* gone meanwhile */ }
-      await Promise.race([gone, sleep(SERVE_CANARY_CLEANUP_MS)])
+      await Promise.race([gone, sleep(SERVE_CANARY_EXIT_WAIT_MS)])
     }
-    try { rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }) } catch { /* the OS's temporary folder keeps it */ }
+    try { (options.remove ?? removeCanaryHome)(home) } catch { /* still held: the updater's next start sweeps it (`sweepCanaryHomes`) */ }
   }
 }
 
@@ -259,7 +304,7 @@ async function canary(probe: PreparePtyDeps['probe'], binary: string): Promise<u
  *  its failure a refusal. */
 async function serves(serve: PreparePtyDeps['serve'], binary: string, host: { protocol: number; version: string }): Promise<void> {
   let timer: NodeJS.Timeout | undefined
-  const bound = SERVE_CANARY_TIMEOUT_MS + SERVE_CANARY_CLEANUP_MS
+  const bound = SERVE_CANARY_BOUND_MS
   try {
     await Promise.race([
       serve(binary, host),

@@ -1,13 +1,13 @@
 import { execFileSync } from 'child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, realpathSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PTY_PROTOCOL } from '../ptyHost/protocol.js'
 import { DigestMismatchError } from '../selfUpdate.js'
 import {
-  PTY_PAYLOAD_FILES, PtyPayloadRefused, PtyPayloadUnpackFailed, SERVE_CANARY_TIMEOUT_MS, fetchPtyEntry, preparePtyPayload, ptyManifestUrl, ptyPlatformKey,
-  probeVersionLine, ptyUpdateWanted, serveCanary, sweepStagingFolders, type PtyEntry,
+  PTY_PAYLOAD_FILES, PtyPayloadRefused, PtyPayloadUnpackFailed, CANARY_HOME_STALE_MS, SERVE_CANARY_BOUND_MS, fetchPtyEntry, preparePtyPayload, ptyManifestUrl, ptyPlatformKey,
+  probeVersionLine, ptyUpdateWanted, serveCanary, sweepCanaryHomes, sweepStagingFolders, type PtyEntry,
 } from './ptyPayload.js'
 
 let tmp: string
@@ -171,11 +171,11 @@ describe('the serve canary', () => {
     const p = run({ serve: () => { started = true; return new Promise(() => {}) } })
     const assertion = expect(p).rejects.toThrow(/harness-pty serve failed: no answer within/)
     while (!started) await new Promise((r) => setImmediate(r))
-    await vi.advanceTimersByTimeAsync(SERVE_CANARY_TIMEOUT_MS + 5_000)
+    await vi.advanceTimersByTimeAsync(SERVE_CANARY_BOUND_MS)
     await assertion
     expect(leftovers()).toEqual([])
-    // Well under the updater's 30 s heartbeat timeout (harnessd/services.ts).
-    expect(SERVE_CANARY_TIMEOUT_MS).toBeLessThanOrEqual(15_000)
+    // Cleanup included, under the updater's 30 s heartbeat timeout (harnessd/services.ts).
+    expect(SERVE_CANARY_BOUND_MS).toBeLessThanOrEqual(20_000)
   })
 })
 
@@ -203,6 +203,30 @@ describe.skipIf(process.platform === 'win32')('serveCanary, against stand-in bin
     const pid = Number(readFileSync(pidFile, 'utf8'))
     expect(() => process.kill(pid, 0)).toThrow()
     expect(canaryHomes(homes)).toEqual([])
+  })
+
+  it('runs the host outside its home, so a host or pane that lingers does not hold the folder', async () => {
+    const homes = join(tmp, 'homes'); mkdirSync(homes)
+    const cwdFile = join(tmp, 'cwd')
+    await expect(serveCanary(script('cwd', `pwd -P > '${cwdFile}'\nexit 3`), { protocol: 2, version: '0.11.0' }, { tmpRoot: homes })).rejects.toThrow(/code 3/)
+    expect(readFileSync(cwdFile, 'utf8').trim()).toBe(realpathSync(homes))
+  })
+
+  it('a home it cannot remove is left, and swept once stale, never while fresh', async () => {
+    const homes = join(tmp, 'homes'); mkdirSync(homes)
+    await expect(serveCanary(script('exits', 'exit 3'), { protocol: 2, version: '0.11.0' }, {
+      tmpRoot: homes, remove: () => { throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' }) },
+    })).rejects.toThrow(/exited with code 3/)
+    const left = canaryHomes(homes)
+    expect(left).toHaveLength(1)
+    // A canary may be running in a fresh one.
+    expect(sweepCanaryHomes(homes)).toBe(0)
+    expect(canaryHomes(homes)).toEqual(left)
+    // Other folders are never touched.
+    mkdirSync(join(homes, 'something-else'))
+    expect(sweepCanaryHomes(homes, CANARY_HOME_STALE_MS, Date.now() + CANARY_HOME_STALE_MS + 1_000)).toBe(1)
+    expect(readdirSync(homes)).toEqual(['something-else'])
+    expect(sweepCanaryHomes(join(tmp, 'no-such-folder'))).toBe(0)
   })
 })
 
