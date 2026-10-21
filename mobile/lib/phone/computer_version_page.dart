@@ -36,9 +36,25 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
   bool _asking = true;
   bool _starting = false;
 
-  /// Started from here: what it said it would do.
+  /// Started from here and not finished: what it is doing, said under a spinner.
   String _started = '';
+
+  /// A restart is part of it: the computer goes offline, and comes back (or waits to be unlocked).
   bool _restarting = false;
+
+  /// It went offline for its restart.
+  bool _wentDown = false;
+
+  /// A new OS on a computer that does not restart itself: done when the update is in, waiting for it.
+  bool _manualRestart = false;
+
+  /// How it ended: done (green) or not confirmed (red).
+  String _finished = '';
+  bool _finishedWell = false;
+  Timer? _watch;
+
+  /// How long an update gets before the page stops waiting and says so.
+  static const _updateFor = Duration(minutes: 6);
 
   AppNotifier get _app => widget.notifier;
   String get _id => widget.machineId;
@@ -53,8 +69,92 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
 
   @override
   void dispose() {
+    _watch?.cancel();
     _app.removeListener(_changed);
     super.dispose();
+  }
+
+  String _versionsNow() {
+    final parts = _app.osParts(_id);
+    String? of(String key) => parts[key]?['running'] as String?;
+    final named = [
+      if (of('os') != null && _restarting) 'Harness OS ${of('os')}',
+      if (of('hn') != null) 'hn ${of('hn')}',
+      if (of('cli') != null) 'CLI ${of('cli')}',
+    ];
+    return named.isEmpty ? '' : ': ${named.join(', ')}';
+  }
+
+  /// Asked every few seconds until the update is in: the computer answers again with nothing
+  /// waiting. With a restart, it first goes offline; an encrypted one then waits to be unlocked.
+  void _follow({required bool encrypted}) {
+    final deadline = DateTime.now().add(_updateFor);
+    var asking = false;
+    _watch?.cancel();
+    _watch = Timer.periodic(const Duration(seconds: 5), (_) async {
+      if (asking || !mounted || _started.isEmpty) return;
+      asking = true;
+      try {
+        final machine = _app.machines
+            .where((m) => m.machineId == _id)
+            .firstOrNull;
+        if (_restarting && machine?.status != 'running') {
+          _wentDown = true;
+          if (encrypted) {
+            // Waiting at its password now: the rest is the Unlock page's.
+            _watch?.cancel();
+            setState(() {
+              _started = '';
+              _finishedWell = true;
+              _finished =
+                  '$_name updated and restarted. It waits for its password: unlock it here.';
+            });
+            return;
+          }
+        }
+        final before = _app.osStatus[_id];
+        await _app.refreshOsStatus(_id, force: true);
+        if (!mounted || _started.isEmpty) return;
+        final answered = !identical(before, _app.osStatus[_id]);
+        final restartRequired =
+            (_app.osStatus[_id]?['update'] as Map?)?['restartRequired'] == true;
+        if (answered && _manualRestart && restartRequired) {
+          // An older computer does not restart itself: the update is in, the restart is someone's.
+          _watch?.cancel();
+          setState(() {
+            _started = '';
+            _finishedWell = true;
+            _finished = 'The update is in. Restart $_name to finish it.';
+          });
+          return;
+        }
+        final settled =
+            answered &&
+            !_app.updateAvailable(_id) &&
+            !_app.updateRestarts(_id) &&
+            (!_restarting || _wentDown);
+        if (settled) {
+          _watch?.cancel();
+          setState(() {
+            _started = '';
+            _finishedWell = true;
+            _finished = 'Updated${_versionsNow()}.';
+          });
+          return;
+        }
+        if (DateTime.now().isAfter(deadline)) {
+          _watch?.cancel();
+          setState(() {
+            _started = '';
+            _finishedWell = false;
+            _finished =
+                '$_name has not said the update is in. Pull down to ask it again.';
+          });
+        }
+      } finally {
+        asking = false;
+      }
+    });
   }
 
   void _changed() {
@@ -62,6 +162,7 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
   }
 
   Future<void> _refresh() async {
+    if (_started.isEmpty) _finished = '';
     setState(() => _asking = true);
     await _app.refreshOsStatus(_id, force: true);
     if (mounted) setState(() => _asking = false);
@@ -100,22 +201,18 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
     if (!mounted) return;
     setState(() => _starting = false);
     if (reply['started'] == true) {
-      _app.osStatus.remove(_id);
       setState(() {
         _restarting = restarts && restartsItself;
+        _manualRestart = restarts && !restartsItself;
+        _wentDown = false;
+        _finished = '';
         _started = !restarts
-            ? '$_name is updating hn and the CLI. Its harnesses keep running.'
+            ? 'Updating hn and the CLI… Its harnesses keep running.'
             : restartsItself
-            ? encrypted
-                  ? '$_name is updating, then restarts. When it has restarted, unlock it here.'
-                  : '$_name is updating, then restarts and comes back by itself.'
-            : '$_name is updating. Restart it when it says so, to finish.';
+            ? 'Updating Harness OS… $_name restarts once it is in.'
+            : 'Updating… Restart $_name when it says so, to finish.';
       });
-      // Asked again once it is back on the new version.
-      Timer(
-        const Duration(minutes: 2),
-        () => unawaited(_app.refreshOsStatus(_id, force: true)),
-      );
+      _follow(encrypted: encrypted);
     } else {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
         SnackBar(
@@ -198,8 +295,8 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
                     else if (parts.isEmpty)
                       say(
                         available
-                            ? 'A new version is ready. Update $_name to see each part here next time.'
-                            : 'Up to date.',
+                            ? 'A new version is ready.'
+                            : 'Up to date. This version of $_name does not name each part.',
                       )
                     else
                       SettingsGroup(
@@ -210,15 +307,37 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
                         ],
                       ),
                     const SizedBox(height: 12),
-                    if (restartRequired && _started.isEmpty)
+                    if (restartRequired &&
+                        _started.isEmpty &&
+                        _finished.isEmpty)
                       say(
                         'An update is in. $_name finishes it when it restarts.',
                       ),
                     if (_started.isNotEmpty)
+                      Row(
+                        children: [
+                          const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              _started,
+                              key: const Key('version-started'),
+                              style: tty.style(color: tty.text),
+                            ),
+                          ),
+                        ],
+                      ),
+                    if (_finished.isNotEmpty)
                       Text(
-                        _started,
-                        key: const Key('version-started'),
-                        style: tty.style(color: tty.text),
+                        _finished,
+                        key: const Key('version-finished'),
+                        style: tty.style(
+                          color: _finishedWell ? tty.green : tty.red,
+                        ),
                       ),
                     const SizedBox(height: 20),
                     if (_started.isEmpty)
