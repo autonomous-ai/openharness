@@ -14,7 +14,7 @@
  * and a recent turn, as queries; the rest as notices.
  */
 import type { AutonomousDeviceReceipt } from '../lib/autonomous-device/service.js'
-import { WIFI_FALLBACKS, readFallback, type CoreApi, type WifiPort, type WifiReceipt } from './api.js'
+import { WIFI_FALLBACKS, readFallback, type CoreApi, type WifiAddon, type WifiPort, type WifiReceipt } from './api.js'
 import type { ServiceFrame } from './serviceLinks.js'
 
 export interface WifiLinkDeps {
@@ -60,6 +60,12 @@ export function createWifiLink(deps: WifiLinkDeps) {
       const answer = await deps.call('receipt', { deviceId, idempotencyKey }, WIFI_WAIT_MS)
       if (typeof answer.error === 'string') return readFallback(WIFI_FALLBACKS.receipt).value as WifiReceipt
       return { receipt: (answer.receipt ?? null) as AutonomousDeviceReceipt | null }
+    },
+    // A person's or an agent's, as `receipt` is: asked with a deadline, and a service that is down says so.
+    addon: async (op, input) => {
+      const answer = await deps.call('addon', { op, input }, WIFI_WAIT_MS)
+      if (typeof answer.error === 'string') return readFallback(WIFI_FALLBACKS.addon).value as WifiAddon
+      return answer as WifiAddon
     },
     // Its own process: the master stops it.
     stop: async () => {},

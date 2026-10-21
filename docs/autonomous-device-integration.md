@@ -4,6 +4,10 @@
 
 Paired robots can negotiate Store discovery and durable agent preparation separately from task delivery. See the [shared OS contract](autonomous-device-store.md), including JSON schemas, recovery rules and the Blender walkthrough. Older clients keep the operations below unchanged.
 
+## Add-ons (v1)
+
+A paired device can publish summaries of its own state for agents on this computer, and receive their proposals to judge. See [device add-ons](autonomous-device-addons.md). Older clients keep the operations below unchanged.
+
 
 The Mac discovers Autonomous OS on the local network and connects **directly to the device**.
 No manual IP address, device backend credentials, cloud device registration, or backend relay is

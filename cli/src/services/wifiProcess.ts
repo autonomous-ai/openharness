@@ -164,6 +164,13 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
         if (!built) return { error: 'SERVICE_UNAVAILABLE' }
         return { ...await built.port.receipt(text(deviceId), text(idempotencyKey)) }
       },
+      // `harness autonomous-device addon`, asked by the core the same way.
+      addon: async ({ op, input }) => {
+        await heardSoFar
+        if (!built) return { error: 'SERVICE_UNAVAILABLE' }
+        if (op !== 'state' && op !== 'propose' && op !== 'proposal') return { error: { code: 'INVALID_REQUEST', message: 'Unknown add-on operation' } }
+        return { ...await built.port.addon(op, input && typeof input === 'object' && !Array.isArray(input) ? input as Record<string, unknown> : {}) }
+      },
     },
     onEvent: (payload) => {
       const kind = text(payload.kind)

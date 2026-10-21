@@ -1275,6 +1275,11 @@ export interface WifiResume {
 /** A receipt the device asked for by `harness device receipt`, or the service is not there to say. */
 export type WifiReceipt = { receipt: AutonomousDeviceReceipt | null } | { unavailable: true }
 
+/** `harness autonomous-device addon`: what devices published, a proposal sent, or one read back
+ *  (lib/autonomous-device/addons.ts); refused with the add-on layer's own code, or the service is not there. */
+export type WifiAddonOp = 'state' | 'propose' | 'proposal'
+export type WifiAddon = { result: Record<string, unknown> } | { error: { code: string; message: string } } | { unavailable: true }
+
 /** What the core lists for the Wi-Fi device, read in line while it answers a request: the agents as it
  *  shows them, the Store's evidence on each, and whether a window is attached to show one. */
 export interface WifiView {
@@ -1319,6 +1324,8 @@ export interface WifiPort {
   revealed(operationId: string, agentId: string): void
   /** `harness device receipt`: what became of one of a device's requests. */
   receipt(deviceId: string, idempotencyKey: string): Promise<WifiReceipt>
+  /** `harness autonomous-device addon`: an agent reads what devices published, or proposes to one. */
+  addon(op: WifiAddonOp, input: Record<string, unknown>): Promise<WifiAddon>
   stop(): Promise<void>
 }
 
@@ -1342,7 +1349,7 @@ export const WIFI_FALLBACKS: PortFallbacks<WifiPort> = {
   session: undefined, request: later(undefined), dropped: undefined, revoked: undefined, resume: later(undefined), card: undefined,
   turnStarted: undefined, turnEnded: undefined, stream: undefined, transcript: undefined, delivery: undefined,
   dispatched: undefined, inputStatus: undefined, agentGone: undefined, appFocus: later(undefined), revealed: undefined,
-  receipt: later({ unavailable: true }), stop: later(undefined),
+  receipt: later({ unavailable: true }), addon: later({ unavailable: true }), stop: later(undefined),
 }
 
 /*
