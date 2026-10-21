@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { Transform, Writable, type Readable } from 'node:stream'
+import { Readable, Transform, Writable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { z } from 'zod'
 
@@ -39,6 +39,42 @@ export function served(name: string, mime: string): { contentType: string; conte
   const inline = INLINE.has(mime)
   return { contentType: inline ? mime : 'application/octet-stream',
     contentDisposition: `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}` }
+}
+
+/** The raster type the first bytes really are, or null. */
+export function imageTypeOf(head: Buffer): string | null {
+  const ascii = (at: number, text: string) => head.subarray(at, at + text.length).toString('latin1') === text
+  if (head.length >= 8 && head.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png'
+  if (head.length >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return 'image/jpeg'
+  if (ascii(0, 'GIF87a') || ascii(0, 'GIF89a')) return 'image/gif'
+  if (head.length >= 12 && ascii(0, 'RIFF') && ascii(8, 'WEBP')) return 'image/webp'
+  return null
+}
+
+/** A file that claims to be an image is served as one only when its first bytes agree, and then as what they say: a
+ * renamed page or script never opens inline, and a .png that is really a JPEG still shows. `body` is handed back with
+ * those bytes in front, so the store still reads the whole file as a stream. */
+export async function checkedType(mime: string, body: Readable): Promise<{ mime: string; body: Readable }> {
+  if (!INLINE.has(mime)) return { mime, body }
+  // One iterator for the whole read: leaving a `for await` early would destroy the request stream.
+  const source = body[Symbol.asyncIterator]()
+  const parts: Buffer[] = []
+  let length = 0, done = false
+  while (length < 16) {
+    const next = await source.next()
+    if (next.done) { done = true; break }
+    parts.push(Buffer.from(next.value)); length += next.value.length
+  }
+  const head = Buffer.concat(parts)
+  const rest = async function* () {
+    if (head.length) yield head
+    while (!done) {
+      const next = await source.next()
+      if (next.done) return
+      yield Buffer.from(next.value)
+    }
+  }
+  return { mime: imageTypeOf(head) ?? 'application/octet-stream', body: Readable.from(rest()) }
 }
 
 /** Counts what passes and fails the stream past `cap`, so a writer never commits more. */

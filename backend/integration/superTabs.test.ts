@@ -1105,6 +1105,7 @@ describe('Super Tab chat attachments', () => {
   it('streams one file into the bucket under a random key and answers its metadata', async () => {
     const { tab } = await fixture()
     const bytes = new Uint8Array(2 * 1024 * 1024).map((_, i) => i % 251)
+    bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
     const { status, attachment } = await file(tab, 'Screen Shot 1.png', bytes)
     expect(status).toBe(200)
     expect(attachment).toMatchObject({ name: 'Screen Shot 1.png', mime: 'image/png', size: bytes.byteLength })
@@ -1114,6 +1115,12 @@ describe('Super Tab chat attachments', () => {
     const html = await file(tab, 'page.html', new Uint8Array([60]), 'text/html')
     expect(html.attachment.mime).toBe('text/html')
     expect(files.objects.get(objectKey(html.attachment.url))).toMatchObject({ contentType: 'application/octet-stream', contentDisposition: "attachment; filename*=UTF-8''page.html" })
+    // A page renamed to .png is not an image: it is kept whole, as bytes to download.
+    const page = Buffer.from('<html><script>alert(1)</script></html>')
+    const disguised = await file(tab, 'cat.png', page, 'image/png')
+    expect(disguised.attachment.mime).toBe('application/octet-stream')
+    expect(files.objects.get(objectKey(disguised.attachment.url))).toMatchObject({ contentType: 'application/octet-stream', contentDisposition: "attachment; filename*=UTF-8''cat.png" })
+    expect(files.objects.get(objectKey(disguised.attachment.url))!.bytes.equals(page)).toBe(true)
   })
 
   it('refuses an oversized, second, misordered or hidden-named file, and a server with no bucket', async () => {

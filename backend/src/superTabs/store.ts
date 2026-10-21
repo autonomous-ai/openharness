@@ -6,7 +6,7 @@ import { machineAlive } from '../lib/prisma.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { applyCommand, authorizeCommandAccess, operationSchema, postable, type Command, type CommandContext } from './commands.js'
-import { attachmentMime, attachmentName, AttachmentTooLarge, MAX_ATTACHMENT_BYTES, objectKeyFor, publicUrl, type Attachment, type Attachments } from './attachments.js'
+import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, MAX_ATTACHMENT_BYTES, objectKeyFor, publicUrl, type Attachment, type Attachments } from './attachments.js'
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
@@ -493,8 +493,12 @@ export class SuperTabStore {
       return key
     })
     const objectKey = objectKeyFor(attachments.prefix, tabId, name.data)
-    let size: number
-    try { size = await attachments.store.put(objectKey, { name: name.data, mime: mime.data }, file.body, MAX_ATTACHMENT_BYTES) } catch (error) {
+    let size: number, stored = mime.data
+    try {
+      const checked = await checkedType(mime.data, file.body)
+      stored = checked.mime
+      size = await attachments.store.put(objectKey, { name: name.data, mime: stored }, checked.body, MAX_ATTACHMENT_BYTES)
+    } catch (error) {
       if (error instanceof AttachmentTooLarge) fail('ATTACHMENT_TOO_LARGE', error.message, 413)
       // The client's own stream breaking is the request's; anything else is the bucket's, and the person can try again.
       if (file.body.errored || (error && typeof error === 'object' && 'code' in error && String(error.code).startsWith('FST_'))) throw error
@@ -502,7 +506,7 @@ export class SuperTabStore {
       fail('ATTACHMENTS_UNAVAILABLE', 'Could not store the file just now. Try again.', 503)
     }
     const row = await this.db.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId,
-      actorKey: key, name: name.data, mime: mime.data, size, objectKey } })
+      actorKey: key, name: name.data, mime: stored, size, objectKey } })
     return { attachment: { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, objectKey) } satisfies Attachment }
   }
 

@@ -1,7 +1,7 @@
 import { generateKeyPairSync } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { Readable } from 'node:stream'
-import { AttachmentTooLarge, attachmentName, attachmentsFromEnv, GcsAttachmentStore, MemoryAttachmentStore, objectKeyFor, served, serviceAccountFrom } from './attachments.js'
+import { AttachmentTooLarge, attachmentName, attachmentsFromEnv, checkedType, imageTypeOf, GcsAttachmentStore, MemoryAttachmentStore, objectKeyFor, served, serviceAccountFrom } from './attachments.js'
 
 const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
 const key = { type: 'service_account', project_id: 'harness-test', client_email: 'uploads@harness-test.iam.gserviceaccount.com',
@@ -60,6 +60,41 @@ describe('attachment bucket credentials', () => {
 })
 
 describe('attachment files', () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52])
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1])
+  const read = async (body: Readable) => { const parts: Buffer[] = []; for await (const chunk of body) parts.push(Buffer.from(chunk)); return Buffer.concat(parts) }
+
+  it('tells raster images by their first bytes', () => {
+    expect(imageTypeOf(png)).toBe('image/png')
+    expect(imageTypeOf(jpeg)).toBe('image/jpeg')
+    expect(imageTypeOf(Buffer.from('GIF89a......'))).toBe('image/gif')
+    expect(imageTypeOf(Buffer.from('RIFF\0\0\0\0WEBPVP8 '))).toBe('image/webp')
+    expect(imageTypeOf(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg">'))).toBeNull()
+    expect(imageTypeOf(Buffer.alloc(0))).toBeNull()
+  })
+
+  it('serves a claimed image as what its bytes are, and hands the whole file on', async () => {
+    const rest = Buffer.alloc(100_000, 7)
+    // Small chunks, so the check has to gather the head across several and keep every byte.
+    const chunks = [jpeg.subarray(0, 5), jpeg.subarray(5), rest]
+    const renamed = await checkedType('image/png', Readable.from(chunks))
+    expect(renamed.mime).toBe('image/jpeg')
+    expect((await read(renamed.body)).equals(Buffer.concat([jpeg, rest]))).toBe(true)
+    const page = Buffer.from('<html><script>alert(1)</script></html>')
+    const disguised = await checkedType('image/png', Readable.from([page]))
+    expect(disguised.mime).toBe('application/octet-stream')
+    expect((await read(disguised.body)).equals(page)).toBe(true)
+    const tiny = await checkedType('image/gif', Readable.from([Buffer.from('GI')]))
+    expect(tiny.mime).toBe('application/octet-stream')
+    expect((await read(tiny.body)).toString()).toBe('GI')
+  })
+
+  it('leaves files that do not claim to be images as they are', async () => {
+    const body = Readable.from([Buffer.from('a,b\n')])
+    const checked = await checkedType('text/csv', body)
+    expect(checked).toEqual({ mime: 'text/csv', body })
+  })
+
   it('serves only raster images as themselves; everything else downloads as bytes', () => {
     expect(served('a.png', 'image/png')).toEqual({ contentType: 'image/png', contentDisposition: "inline; filename*=UTF-8''a.png" })
     expect(served('page.html', 'text/html')).toEqual({ contentType: 'application/octet-stream', contentDisposition: "attachment; filename*=UTF-8''page.html" })
