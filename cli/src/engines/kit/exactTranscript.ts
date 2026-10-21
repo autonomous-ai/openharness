@@ -1,15 +1,26 @@
 /** A complete, bounded native pool for an exact resume id. No optional reader or cross-poll cache. */
-import { lstatSync, realpathSync, statSync, type Stats } from 'node:fs'
-import { lstat, readlink, realpath } from 'node:fs/promises'
+import { constants, lstatSync, realpathSync, statSync, type Stats } from 'node:fs'
+import { lstat, open, readlink, realpath } from 'node:fs/promises'
 import { dirname, isAbsolute, join, parse, resolve, sep } from 'node:path'
 import { performance } from 'node:perf_hooks'
-import { identityBytes, identityEntries, identityScanBudget, IdentityReadUnavailable, type IdentityVersion } from './identityScan.js'
+import { identityEntries, identityScanBudget, IdentityReadUnavailable, type IdentityVersion } from './identityScan.js'
 
 type Layout = { kind: 'projects'; filename: string }
   | { kind: 'walk' | 'directory'; matches: (name: string) => boolean }
 type Proof = { path: string; info: Stats | null; content: boolean }
 const identity = (info: Stats | null) => info && `${info.dev}:${info.ino}:${info.mode}`
 const signature = (info: Stats | null) => info && `${identity(info)}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`
+
+/** The inspected file opens and reads. Its engine may append meanwhile: a working session writes its transcript all the
+ * time, and demanding an unchanged size held every busy one (2026-10-21). Another file at the path is still refused. */
+async function readable(path: string, info: Stats): Promise<void> {
+  const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK)
+  try {
+    const opened = await handle.stat()
+    if (identity(opened) !== identity(info)) throw new Error('another file')
+    if (opened.size > 0) await handle.read(Buffer.alloc(1), 0, 1, 0)
+  } finally { await handle.close() }
+}
 
 /** Filename authority remains engine-declared. An optional native header can reject another id/cwd;
  * every such exclusion is retained until the complete pool has been checked. */
@@ -84,7 +95,7 @@ export async function exactTranscript(roots: readonly string[], layout: Layout,
     if (!info.isFile()) throw new IdentityReadUnavailable('an exact transcript is not a regular file')
     // Even filename-based authority needs a readable regular file. Opening one byte is bounded and
     // nonblocking; stat alone would let an unreadable file authorize a binding.
-    if (options.accepts ? await options.accepts(path, info) : await identityBytes(path, 1, info).then(() => true).catch(() => {
+    if (options.accepts ? await options.accepts(path, info) : await readable(path, info).then(() => true).catch(() => {
       throw new IdentityReadUnavailable('an exact transcript could not be read')
     })) {
       selected.set(identity(info)!, selected.get(identity(info)!) ?? proof)

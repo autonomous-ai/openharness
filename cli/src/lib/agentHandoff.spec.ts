@@ -416,6 +416,16 @@ describe('prepareAgentHandoff: a repository', () => {
     expect(files.filter((name) => name.endsWith('.tmp'))).toEqual([])
   })
 
+  // The hold names a program updated while it ran: no retry reads it, only a restart. The reply says so in a code.
+  it('names a held binding whose program was replaced, and only that one', async () => {
+    const replaced = 'Conversation identity is held: the agent\u2019s program was replaced on disk while it was running; restart the agent.'
+    await expect(prepareAgentHandoff(depsFor([session({ identityHold: replaced })]), request()))
+      .rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE', hold: 'PROGRAM_REPLACED' })
+    const other = await prepareAgentHandoff(depsFor([session({ identityHold: 'Conversation identity is held: an exact transcript could not be read.' })]), request()).catch(e => e)
+    expect(other).toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+    expect(other.hold).toBeUndefined()
+  })
+
   it('holds unreadable history before consulting the mirror', async () => {
     const mirror = vi.fn(() => 'token=supersecret1 done')
     await expect(prepareAgentHandoff(depsFor([session({ transcriptPath: join(root, 'missing.jsonl') })], { lastFullText: mirror }), request())).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })

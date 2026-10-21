@@ -231,7 +231,7 @@ void main() {
 
     expect(
       held.error,
-      'Waiting for the conversation handoff. Try switching again.',
+      'Preparing the handoff took too long. Try switching again.',
     );
     expect(steps(rig), ['agent_handoff_prepare']);
 

@@ -162,6 +162,28 @@ String? agentSwitchHandoff(String source, Map<String, dynamic> recent) {
   return [head, ...sections, tail].join('\n\n');
 }
 
+/// What the person reads when the machine holds a switch, by the reply's code alone: the reply is
+/// not trusted for words. A program updated while it ran stays held until the harness restarts, so
+/// that one says so; a busy or slow machine is worth another try; anything else keeps the old text.
+String agentHandoffHeldMessage(
+  Object? error,
+  Object? hold,
+  String sourceLabel,
+) {
+  if (error == 'IDENTITY_UNAVAILABLE' && hold == 'PROGRAM_REPLACED') {
+    return '$sourceLabel was updated while this harness was running. '
+        'Use Restart Harness, then switch again.';
+  }
+  if (error == 'IDENTITY_UNAVAILABLE') {
+    return "This harness's conversation is not confirmed yet. "
+        'Try switching again in a minute, or use Restart Harness.';
+  }
+  if (error == 'TIMEOUT' || error == 'BUSY') {
+    return 'Preparing the handoff took too long. Try switching again.';
+  }
+  return 'Waiting for the conversation handoff. Try switching again.';
+}
+
 /// The notice for a switch where the machine confirmed there was no conversation to hand off.
 String agentSwitchNoHistoryHint(String sourceLabel, String targetLabel) =>
     'Switched to $targetLabel without history: no earlier conversation from '

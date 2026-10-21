@@ -263,4 +263,51 @@ void main() {
       expect(supportsAgentHandoff(engine), isFalse, reason: engine);
     }
   });
+
+  group('agentHandoffHeldMessage', () {
+    test('a program replaced while it ran asks for Restart Harness', () {
+      expect(
+        agentHandoffHeldMessage(
+          'IDENTITY_UNAVAILABLE',
+          'PROGRAM_REPLACED',
+          'Claude Code',
+        ),
+        'Claude Code was updated while this harness was running. '
+        'Use Restart Harness, then switch again.',
+      );
+    });
+    test('an unconfirmed conversation, a slow machine and anything else', () {
+      expect(
+        agentHandoffHeldMessage('IDENTITY_UNAVAILABLE', null, 'Claude Code'),
+        contains('not confirmed yet'),
+      );
+      expect(
+        agentHandoffHeldMessage(
+          'IDENTITY_UNAVAILABLE',
+          'made up',
+          'Claude Code',
+        ),
+        contains('not confirmed yet'),
+        reason: 'only a known hold changes the words',
+      );
+      for (final code in ['TIMEOUT', 'BUSY']) {
+        expect(
+          agentHandoffHeldMessage(code, null, 'Claude Code'),
+          'Preparing the handoff took too long. Try switching again.',
+        );
+      }
+      expect(
+        agentHandoffHeldMessage(
+          'HANDOFF_UNAVAILABLE',
+          'PROGRAM_REPLACED',
+          'Claude Code',
+        ),
+        'Waiting for the conversation handoff. Try switching again.',
+      );
+      expect(
+        agentHandoffHeldMessage(null, null, 'Claude Code'),
+        'Waiting for the conversation handoff. Try switching again.',
+      );
+    });
+  });
 }

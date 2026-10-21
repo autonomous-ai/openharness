@@ -15682,7 +15682,11 @@ class AppNotifier extends ChangeNotifier {
         return 'The conversation changed. Choose the agent again to start a new switch.';
       }
       if (reply['error'] != 'UNSUPPORTED') {
-        return 'Waiting for the conversation handoff. Try switching again.';
+        return agentHandoffHeldMessage(
+          reply['error'],
+          reply['hold'],
+          engineIdentity(source.engine).label,
+        );
       }
     } catch (_) {
       return 'Waiting for the conversation handoff. Try switching again.';
