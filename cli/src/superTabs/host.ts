@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, join } from 'node:path'
 import type { CoreApi, TurnDelivery } from '../core/api.js'
 import { shellQuote } from '../orchestrator/prompts.js'
+import { noticeReason, WithheldDeliveries } from './withheld.js'
 
 type Json = Record<string, unknown>
 export class SuperTabHostError extends Error {
@@ -75,6 +76,7 @@ export class SuperTabHost {
   private readonly observers: typeof publishObservers
   private readonly active = new Set<string>()
   private readonly authorized = new Map<string, number>()
+  private readonly withheld = new WithheldDeliveries()
   private readonly stopHearing: () => void
   private stopped = false
   private running: Promise<void> | null = null
@@ -215,6 +217,7 @@ export class SuperTabHost {
         if (result.id !== entry.deliveryId || !terminal.includes(String(result.status))) continue
         if (this.journal.entries[entry.deliveryId] !== entry || this.active.has(typedId(entry))) continue
         delete this.journal.entries[entry.deliveryId]
+        this.withheld.clear(entry.deliveryId)
         this.persist()
       } catch { /* Missing authority or a network failure is not a receipt. */ }
     }
@@ -297,6 +300,7 @@ export class SuperTabHost {
     if (!entry) return
     const id = typedId(entry)
     delete this.journal.entries[deliveryId]
+    this.withheld.clear(deliveryId)
     this.authorized.delete(id)
     if (this.active.delete(id)) this.core.turns.cancelDelivery(id)
     this.persist()
@@ -385,6 +389,19 @@ export class SuperTabHost {
       + native + reply + `Message ${String(message.id)} from ${String(object(message.author).name ?? 'a collaborator')}:\n${message.text}`
   }
 
+  /** Says why the core keeps holding this delivery: once in the log per change of reason, and once to the conversation after 30 s. */
+  private reportWithheld(entry: Entry, reason: string): void {
+    const now = this.now()
+    const reading = this.withheld.record(entry.deliveryId, reason, now)
+    if (reading.changed) this.log(`delivery ${entry.deliveryId} to ${entry.harnessId} withheld: ${reason}, waiting ${Math.round(reading.waitedMs / 1000)}s`)
+    if (!reading.noticeDue) return
+    this.withheld.noticeStarted(entry.deliveryId, now)
+    const path = `/api/super-tabs/${entry.tabId}/agents/${entry.agentId}/deliveries/${entry.deliveryId}`
+    backend(this.core, 'POST', path, { type: 'hold', claimId: entry.claimId, reason: noticeReason(reason) })
+      .then(() => this.withheld.noticed(entry.deliveryId))
+      .catch(error => this.log(error instanceof Error ? error.message : String(error)))
+  }
+
   private heard(event: TurnDelivery): void {
     const entry = Object.values(this.journal.entries).find(e => typedId(e) === event.deliveryId)
     if (this.stopped || !entry || event.sessionId !== entry.harnessId || !this.active.has(event.deliveryId)) return
@@ -396,7 +413,9 @@ export class SuperTabHost {
       // expired authority). A later fresh check may retry the same claim safely.
       entry.stage = 'prepared'
       delete entry.receipt
+      this.reportWithheld(entry, event.reason)
     } else {
+      this.withheld.clear(entry.deliveryId)
       entry.stage = event.state === 'delivered' || event.state === 'started' ? 'delivered' : 'uncertain'
       entry.receipt = `${event.state}: ${event.reason ?? 'Native session input receipt'}`.slice(0, 2000)
     }

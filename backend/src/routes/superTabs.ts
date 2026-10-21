@@ -10,6 +10,7 @@ import { routingPolicySchema } from '../superTabs/routingPolicy.js'
 import { nativeEventSchema, openNativeSchema } from '../superTabs/native.js'
 import { machineObservationSchema } from '../superTabs/machines.js'
 import { joinSwarmSchema, previewJoinSchema, saveSharingSchema } from '../superTabs/sharing.js'
+import { holdReason } from '../superTabs/holdNotice.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const tabParams = z.object({ tabId: id })
@@ -32,6 +33,7 @@ const deliveryActionParams = deliveryParams.extend({ deliveryId: id })
 const deliveryAction = z.discriminatedUnion('type', [
   z.object({ type: z.literal('claim'), claimId: id }).strict(),
   z.object({ type: z.literal('ack'), claimId: id, receipt: z.string().min(1).max(2000), uncertain: z.boolean() }).strict(),
+  z.object({ type: z.literal('hold'), claimId: id, reason: holdReason }).strict(),
 ])
 const savePolicy = z.object({ revision: z.number().int().nonnegative().safe(), policy: routingPolicySchema }).strict()
 const stop = z.object({ assignmentId: id, receipt: z.string().min(1).max(2000) }).strict()
