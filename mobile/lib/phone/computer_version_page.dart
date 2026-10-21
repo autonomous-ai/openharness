@@ -96,7 +96,15 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
       _finished = '';
       _started = 'Finishing the update…';
     });
-    await _app.refreshOsStatus(_id, force: true);
+    // Its own answer, not the one from before the restart: the phone's line to the restarted daemon
+    // comes back a little after the account says it is online.
+    final stale = _app.osStatus[_id];
+    final deadline = DateTime.now().add(const Duration(minutes: 2));
+    while (mounted && DateTime.now().isBefore(deadline)) {
+      await _app.refreshOsStatus(_id, force: true);
+      if (!identical(stale, _app.osStatus[_id])) break;
+      await Future<void>.delayed(const Duration(seconds: 4));
+    }
     if (!mounted) return;
     if (_app.updateAvailable(_id) && !_app.updateRestarts(_id)) {
       await _app.osDevice(_id, {'action': 'update'});
