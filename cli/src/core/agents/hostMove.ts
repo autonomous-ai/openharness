@@ -170,7 +170,8 @@ export function hostMoveDeps(session: RegisteredSession, current: () => boolean,
       const committed = await commitRelaunchedEngine(
         { registry: w.registry, announceSession: w.announce, refreshGridAssignment: (refreshed) => w.refreshGridAssignment?.(refreshed) },
         row.agentId, outcome.processIdentity, place, current)
-      return typeof committed !== 'string'
+      // Cancelled once the row had the engine: it runs in the old pane all the same, which is what a fallback is.
+      return typeof committed !== 'string' || committed === 'changed after commit'
     },
     gate: w.gate,
     holdRoute: (routeKey) => w.holdRoute(routeKey, null),

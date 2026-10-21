@@ -486,6 +486,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const hostQuiet = new QuietClock({ now: Date.now })
   const moveGate = new MoveGate()
   const moveHeld = new Set<string>()
+  /** The conversations of the agents in [moveHeld]: an adoption of one would start a second engine on it too. */
+  const moveHeldConversations = new Map<string, string>()
   let hostMover: HostMover | null = null
   // Every removal of a row goes through here: its clocks go with it.
   const forgetRestartRevision = (agentId: string): void => { restartJobs.forget(agentId); hostQuiet.forget(agentId) }
@@ -2382,6 +2384,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     for (const pane of swept.keptPanes) agentReconciler.holdRoute(terminalRouteKey(pane), null)
     for (const agentId of swept.unconfirmed) {
       moveHeld.add(agentId)
+      const conversation = registry.byAgent(agentId)?.sessionId ?? stoppedAgents.get(agentId)?.sessionId
+      if (conversation) moveHeldConversations.set(conversation, agentId)
       for (const runtime of registry.byAgent(agentId)?.runtimes ?? []) agentReconciler.holdRoute(terminalRouteKey(runtime), null)
       console.warn(moveHeldLine(agentId))
     }
@@ -2591,6 +2595,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       native: prepareNativeLaunch, hookPort, hooksDisabled: env.DISABLE_HOOK_INSTALL, installOpencodePlugin: installOpencodePluginBeforeSpawn }),
     announce: announceSession, launch: () => { void heldLaunches.restoreHeld('search') },
     forget: id => forgetSession(id, { force: true }),
+    heldConversation: (sessionId) => moveHeldConversations.get(sessionId) ?? null,
   })
 
   // Creating an agent (core/agents/create.ts).
@@ -2708,6 +2713,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     relaunchMarks,
     // A harness closed or stopped: the harnesses it started close with it (services/agentCleanup.ts).
     stopped: (agentId) => ports.agentCleanup?.closed(agentId),
+    moveHeld: (agentId) => moveHeld.has(agentId),
   })
   const stopJobs = lifecycle.stopJobs
   launchCancelled = id => stopJobs.has(id)

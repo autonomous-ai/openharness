@@ -6,6 +6,7 @@ import { AgentStopError, createStopAgentService } from '../../lib/stopAgentServi
 import { createAgentLifecycle, createPurgeRequest, createStopRequest, type LifecycleDeps } from './lifecycle.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
+import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
 
 vi.mock('../../lib/stopAgentService.js', async (real) => ({ ...await real<object>(), createStopAgentService: vi.fn(() => vi.fn(async () => {})) }))
 vi.mock('../../lib/resumeAgentService.js', async (real) => ({
@@ -153,6 +154,15 @@ describe('stopping, purging and resuming an agent', () => {
       vi.spyOn(running.deps.registry, 'byAgent').mockReturnValue(row({ guest: 'kim@acme.io' }))
       expect(await running.lifecycle.resumeAgent('a1')).toEqual(GUEST_HARNESS_REFUSAL)
       expect(vi.mocked(createResumeAgentService).mock.results.every((r) => !vi.mocked(r.value).mock.calls.length)).toBe(true)
+    })
+
+    it('starts no engine for an agent a stopped move may still run beside, stopped or running, this start', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const held = setup({ moveHeld: (id) => id === 'a1', stoppedAgents: { list: () => [], get: vi.fn(() => row()) } as never })
+      expect(await held.lifecycle.resumeAgent('a1')).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
+      expect(vi.mocked(createResumeAgentService).mock.results.at(-1)!.value).not.toHaveBeenCalled()
+      expect(warn).toHaveBeenCalledWith(moveHeldLine('a1'))
+      warn.mockRestore()
     })
 
     it('waits while the agent is being purged, or while a purge holds its folder', async () => {

@@ -206,6 +206,17 @@ describe('the move, wired to the core', () => {
     expect(w.refreshGridAssignment).toHaveBeenCalledWith(row)
   })
 
+  it('a relaunch cancelled once the row has its engine still says the engine came back', async () => {
+    const { w, old, row } = wiring()
+    let live = true
+    vi.mocked(old.releaseHold).mockImplementation(async () => { live = false })
+    const deps = hostMoveDeps(row, () => live, w)
+    await deps.buildLaunch(row, { resumeSessionId: 's1', current: () => true, prepare: false })
+    expect(await deps.relaunchOld(row)).toBe(true)
+    expect(w.registry.updateProcessIdentity).toHaveBeenCalled()
+    expect(w.announce).not.toHaveBeenCalled()
+  })
+
   it('a relaunch whose engine does not come back says so', async () => {
     const { w, swapDeps, row } = wiring()
     swapDeps.waitForProcess.mockResolvedValue(null as never)

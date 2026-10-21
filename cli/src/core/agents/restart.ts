@@ -58,18 +58,19 @@ export interface RelaunchCommitDeps {
  * The row learns the engine a restart relaunched in [place] (restart, and a move's fallback to the old pane:
  * core/agents/hostMove.ts): its process and gateway, active again, the pane handed back to its backend's default
  * disposal, then announced. Gateway is a core process fact; optional grid metadata follows the committed binding in the
- * background, so an unavailable models service cannot hold this route. 'changed' when [current] went false on the way,
- * 'vanished' when the row is gone.
+ * background, so an unavailable models service cannot hold this route. 'changed' when [current] went false before the
+ * row learned the engine, 'changed after commit' once it had, 'vanished' when the row is gone.
  */
 export async function commitRelaunchedEngine(
   deps: RelaunchCommitDeps, agentId: string, identity: ProcessIdentity, place: RestartTarget, current: () => boolean,
-): Promise<RegisteredSession | 'changed' | 'vanished'> {
+): Promise<RegisteredSession | 'changed' | 'changed after commit' | 'vanished'> {
   const gateway = await probeGatewayRuntime(identity)
   if (!current()) return 'changed'
   deps.registry.updateProcessIdentity(agentId, identity, gateway.kind)
   deps.registry.setActive(agentId, true)
   await place.backend.releaseHold(place.runtime)
-  if (!current()) return 'changed'
+  // The row has its new engine: cancelled from here on, the engine is still relaunched.
+  if (!current()) return 'changed after commit'
   const refreshed = deps.registry.byAgent(agentId)
   if (!refreshed) return 'vanished'
   deps.announceSession(refreshed)
@@ -239,7 +240,7 @@ export function createAgentRestarter({
       // accepts either an agentId or a bare sessionId, but `setActive`/`byAgent` only ever key on the
       // real agentId.
       const refreshed = await commitRelaunchedEngine({ registry, announceSession, refreshGridAssignment }, session.agentId, outcome.processIdentity, place, current)
-      if (refreshed === 'changed') return changed
+      if (refreshed === 'changed' || refreshed === 'changed after commit') return changed
       if (refreshed === 'vanished') return { ok: false, error: 'RESTART_FAILED', detail: 'agent vanished from the registry mid-restart' }
       console.log(`[restart] ${sid(session.agentId)} ${engine} · ${outcome.resumed ? 'resumed' : 'fresh session'}`
         + (session.gridLaunch ? ` · grid ${session.gridLaunch.networkName}` : ''))
