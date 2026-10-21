@@ -381,6 +381,12 @@ describe('PtyHostBackend input', () => {
     expect(calls).toEqual([{ op: 'write', pane: '%1', data: Buffer.from([0x1b, 0x5b, 0x41, 0x0d]).toString('base64') }])
   })
 
+  it('pasteInput pastes as a stream\'s paste frame does', async () => {
+    const { backend, calls } = await ready()
+    expect(await backend.pasteInput(PANE, 'a\nb')).toEqual({ state: 'succeeded', dispatch: 'executed' })
+    expect(calls).toEqual([{ op: 'paste', pane: '%1', text: 'a\nb', bracketed: true }])
+  })
+
   it('sendKey sends the tmux name of the key', async () => {
     const { backend, calls } = await ready()
     await backend.sendKey(PANE, 'backtab')

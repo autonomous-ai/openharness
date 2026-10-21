@@ -19,12 +19,10 @@ describe('MoveGate', () => {
     expect(delivered).toEqual(['one', 'two', 'three'])
   })
 
-  it('keeps what arrives while the queue runs behind it, and opens only after the last', async () => {
+  it('keeps what arrives while the queue runs behind it, and lets go only after the last', async () => {
     const gate = new MoveGate()
     const delivered: string[] = []
-    let opened = false
     gate.hold('a1')
-    void gate.whenOpen('a1').then(() => { opened = true })
     gate.enqueue('a1', async () => {
       delivered.push('first')
       // Arrives mid-drain: still held, so it queues behind rather than overtaking.
@@ -32,23 +30,27 @@ describe('MoveGate', () => {
       gate.enqueue('a1', async () => { delivered.push('late') })
     })
     gate.enqueue('a1', async () => { throw new Error('a failed delivery does not stop the rest') })
-    gate.enqueue('a1', async () => { expect(opened).toBe(false); delivered.push('second') })
+    gate.enqueue('a1', async () => { expect(gate.holding('a1')).toBe(true); delivered.push('second') })
     await gate.release('a1')
     expect(delivered).toEqual(['first', 'second', 'late'])
-    expect(opened).toBe(true)
+    expect(gate.holding('a1')).toBe(false)
   })
 
-  it('whenOpen resolves at release, and at once for an agent not held', async () => {
+  it('counts a held agent as touched from its first write or touch, and forgets it at release', async () => {
     const gate = new MoveGate()
-    await gate.whenOpen('free')
+    gate.touch('a1')
+    expect(gate.touched('a1')).toBe(false)
     gate.hold('a1')
-    let opened = false
-    const waiting = gate.whenOpen('a1').then(() => { opened = true })
-    await Promise.resolve()
-    expect(opened).toBe(false)
+    expect(gate.touched('a1')).toBe(false)
+    gate.touch('a1')
+    expect(gate.touched('a1')).toBe(true)
     await gate.release('a1')
-    await waiting
-    expect(opened).toBe(true)
+    expect(gate.touched('a1')).toBe(false)
+    gate.hold('a1')
+    expect(gate.touched('a1')).toBe(false)
+    gate.enqueue('a1', async () => {})
+    expect(gate.touched('a1')).toBe(true)
+    await gate.release('a1')
   })
 
   it('nothing is held for other agents', async () => {
@@ -57,9 +59,9 @@ describe('MoveGate', () => {
     gate.hold('a1')
     expect(gate.holding('a2')).toBe(false)
     gate.enqueue('a2', async () => { delivered.push('a2') })
-    await gate.whenOpen('a2')
     await Promise.resolve()
     expect(delivered).toEqual(['a2'])
+    expect(gate.touched('a2')).toBe(false)
     gate.enqueue('a1', async () => { delivered.push('a1') })
     await Promise.resolve()
     expect(delivered).toEqual(['a2'])

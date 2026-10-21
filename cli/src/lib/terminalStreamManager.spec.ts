@@ -46,12 +46,15 @@ class FakeStream implements TerminalStreamHandle {
   /** When set, every writeRaw parks on it instead of answering at once — a tmux that is slow to `%end`. */
   pendingWrites: Array<(result: TerminalActionResult) => void> = []
   holdWrites = false
+  /** Every write and paste, in the order they reached the pane. */
+  order: string[] = []
   async writeRaw(bytes: Uint8Array): Promise<TerminalActionResult> {
     this.writes.push(bytes)
+    this.order.push(`raw:${Buffer.from(bytes).toString()}`)
     if (!this.holdWrites) return TERMINAL_ACTION_SUCCEEDED
     return new Promise((resolve) => { this.pendingWrites.push(resolve) })
   }
-  async pasteRaw(text: string) { this.pastes.push(text); return TERMINAL_ACTION_SUCCEEDED }
+  async pasteRaw(text: string) { this.pastes.push(text); this.order.push(`paste:${text}`); return TERMINAL_ACTION_SUCCEEDED }
   async resize(size: { cols: number; rows: number }) { this.sizes.push(size); return TERMINAL_ACTION_SUCCEEDED }
   async scroll(direction: 'up' | 'down', lines: number) { this.scrolls.push({ direction, lines }); return TERMINAL_ACTION_SUCCEEDED }
   async pauseOutput() { this.pauses++; return TERMINAL_ACTION_SUCCEEDED }
@@ -1577,6 +1580,15 @@ describe('TerminalStreamManager', () => {
     let gate: MoveGate
     let opens: Array<{ runtimes: unknown; size: unknown; readOnly: boolean; sink: TerminalStreamSink; stream: FakeStream }>
     let rawWrites: Array<{ runtime: unknown; bytes: string }>
+    let duringOpen: (() => void) | null
+    const paste = (connId: string, streamId: string, text: string) => manager.handleBinary(connId, {
+      kind: TerminalBinaryKind.paste, streamId, seq: 0, bytes: Buffer.from(text), compressed: false,
+    })
+    /** What the mover does at the swap: the row names the new pane, and the agent's streams follow it. */
+    const swap = async () => {
+      agents.set('agent-1', row('agent-1', newPane))
+      await manager.retarget('agent-1', newPane)
+    }
     const row = (agentId: string, runtime: typeof oldPane) => ({
       ...session('codex', agentId), runtimes: [runtime], primaryRuntimeKey: `ptyhost:${runtime.instance}:${runtime.paneId}`,
     } as unknown as RegisteredSession)
@@ -1594,15 +1606,21 @@ describe('TerminalStreamManager', () => {
       opens = []
       rawWrites = []
       agents = new Map([['agent-1', row('agent-1', oldPane)], ['agent-2', row('agent-2', { ...oldPane, paneId: '%2' })]])
+      duringOpen = null
       terminals = {
         openStream: async (opened: RegisteredSession, size: unknown, nextSink: TerminalStreamSink, readOnly = false) => {
           const next = new FakeStream()
           opens.push({ runtimes: opened.runtimes, size, readOnly, sink: nextSink, stream: next })
+          duringOpen?.()
           return { state: 'succeeded' as const, value: next }
         },
         backendFor: () => ({
           writeInput: async (runtime: unknown, bytes: Uint8Array) => {
             rawWrites.push({ runtime, bytes: Buffer.from(bytes).toString() })
+            return TERMINAL_ACTION_SUCCEEDED
+          },
+          pasteInput: async (runtime: unknown, text: string) => {
+            rawWrites.push({ runtime, bytes: `paste:${text}` })
             return TERMINAL_ACTION_SUCCEEDED
           },
         }),
@@ -1623,18 +1641,62 @@ describe('TerminalStreamManager', () => {
       // Taken as input at once (the prewarm, the quiet clock), but nothing reaches a pane yet.
       expect(onInput).toHaveBeenCalledTimes(3)
       expect(opens[0].stream.writes).toEqual([])
-      expect(rawWrites).toEqual([])
-      // The move switched the row to its new pane before it let go.
-      agents.set('agent-1', row('agent-1', newPane))
+      await swap()
+      expect(opens[1].stream.writes).toEqual([])
       await gate.release('agent-1')
-      expect(rawWrites).toEqual([
-        { runtime: newPane, bytes: 'a' }, { runtime: newPane, bytes: 'b' }, { runtime: newPane, bytes: 'c' },
-      ])
+      // Through the retargeted stream, onto the new pane; never the old one.
+      expect(opens[1].stream.order).toEqual(['raw:a', 'raw:b', 'raw:c'])
       expect(opens[0].stream.writes).toEqual([])
+      expect(rawWrites).toEqual([])
       expect(sent.filter((f) => f.type === 'terminal_error')).toEqual([])
     })
 
-    it('a held agent counts as looked at from the moment input or an open arrives', async () => {
+    it('held input whose stream closed during the move still reaches the row\'s pane', async () => {
+      await openFrame('web-1')
+      const streamId = readyFor('web-1')
+      gate.hold('agent-1')
+      await input('web-1', streamId, 0, 'a')
+      await paste('web-1', streamId, 'P')
+      await manager.closeConnection('web-1')
+      agents.set('agent-1', row('agent-1', newPane))
+      await gate.release('agent-1')
+      expect(rawWrites).toEqual([{ runtime: newPane, bytes: 'a' }, { runtime: newPane, bytes: 'paste:P' }])
+      expect(opens[0].stream.writes).toEqual([])
+    })
+
+    it('a paste during a hold is delivered after release, in order with keystrokes', async () => {
+      await openFrame('web-1')
+      const streamId = readyFor('web-1')
+      gate.hold('agent-1')
+      await input('web-1', streamId, 0, 'a')
+      await paste('web-1', streamId, 'P')
+      await input('web-1', streamId, 1, 'b')
+      expect(opens[0].stream.order).toEqual([])
+      await swap()
+      await gate.release('agent-1')
+      expect(opens[1].stream.order).toEqual(['raw:a', 'paste:P', 'raw:b'])
+      expect(opens[0].stream.order).toEqual([])
+    })
+
+    it('an image paste during a hold is delivered after release, in order with keystrokes', async () => {
+      await openFrame('web-1')
+      const streamId = readyFor('web-1')
+      gate.hold('agent-1')
+      const png = Uint8Array.of(0x89, 0x50, 0x4e, 0x47)
+      await input('web-1', streamId, 0, 'a')
+      await manager.handleFrame('web-1', 'terminal_chunked_upload_begin', { streamId, uploadKind: 'image', totalBytes: png.length })
+      await manager.handleBinary('web-1', { kind: TerminalBinaryKind.imagePaste, streamId, seq: 0, compressed: false, bytes: png })
+      await input('web-1', streamId, 1, 'b')
+      expect(writeImageToOsClipboard).not.toHaveBeenCalled()
+      expect(opens[0].stream.order).toEqual([])
+      await swap()
+      await gate.release('agent-1')
+      expect(writeImageToOsClipboard).toHaveBeenCalledTimes(1)
+      expect(opens[1].stream.order).toEqual(['raw:a', 'raw:\u0016', 'raw:b'])
+      expect(sent.findLast((f) => f.type === 'terminal_paste_image_result')?.payload).toMatchObject({ streamId, outcome: 'clipboard' })
+    })
+
+    it('a held agent counts as looked at from the moment input or an open arrives, until it is let go', async () => {
       await openFrame('local:desktop')
       manager.setVisibleAgents('local:desktop', ['agent-other'])
       gate.hold('agent-1')
@@ -1643,28 +1705,56 @@ describe('TerminalStreamManager', () => {
       expect(manager.isLookedAt('agent-1')).toBe(true)
       await gate.release('agent-1')
       expect(manager.isLookedAt('agent-1')).toBe(false)
+      // The next hold starts untouched.
+      gate.hold('agent-1')
+      expect(manager.isLookedAt('agent-1')).toBe(false)
+      await gate.release('agent-1')
 
+      manager.setVisibleAgents('local:other', ['agent-other'])
       gate.hold('agent-2')
-      const opening = openFrame('web-2', 'agent-2')
-      await vi.advanceTimersByTimeAsync(0)
+      await openFrame('local:other', 'agent-2')
       expect(manager.isLookedAt('agent-2')).toBe(true)
       await gate.release('agent-2')
-      await opening
+      expect(manager.isLookedAt('agent-2')).toBe(false)
     })
 
-    it('a stream opened during a hold opens on the new runtime', async () => {
+    it('an open during a hold returns at once on the current runtime, and is moved by the retarget at swap', async () => {
       gate.hold('agent-1')
-      let ready = false
-      const opening = openFrame('web-1').then(() => { ready = true })
-      await vi.advanceTimersByTimeAsync(0)
-      expect(opens).toEqual([])
-      expect(ready).toBe(false)
-      agents.set('agent-1', row('agent-1', newPane))
+      await openFrame('web-1')
+      const streamId = readyFor('web-1')
+      expect(opens.map((o) => o.runtimes)).toEqual([[oldPane]])
+      await swap()
+      expect(opens.map((o) => o.runtimes)).toEqual([[oldPane], [newPane]])
+      expect(opens[0].stream.closed).toBe(true)
       await gate.release('agent-1')
-      await opening
-      expect(opens).toHaveLength(1)
-      expect(opens[0].runtimes).toEqual([newPane])
-      expect(sent.findLast((f) => f.type === 'terminal_ready')!.payload.agentId).toBe('agent-1')
+      expect(sent.filter((f) => f.type === 'terminal_closed' || f.type === 'terminal_error')).toEqual([])
+      await input('web-1', streamId, 0, 'typed')
+      expect(opens[1].stream.order).toEqual(['raw:typed'])
+    })
+
+    it('an open the swap overtook follows the row on its own', async () => {
+      gate.hold('agent-1')
+      // The mover switches the row and retargets while this open is still reaching the old pane: the
+      // retarget finds no stream to move, so the open has to notice.
+      duringOpen = () => {
+        duringOpen = null
+        agents.set('agent-1', row('agent-1', newPane))
+        void manager.retarget('agent-1', newPane)
+      }
+      await openFrame('web-1')
+      expect(opens.map((o) => o.runtimes)).toEqual([[oldPane], [newPane]])
+      expect(opens[0].stream.closed).toBe(true)
+      expect(sent.filter((f) => f.type === 'terminal_closed' || f.type === 'terminal_error')).toEqual([])
+      await gate.release('agent-1')
+    })
+
+    it('a retarget opens the new pane at the size the client last asked for, even one the old pane refused', async () => {
+      await openFrame('web-1')
+      const streamId = readyFor('web-1')
+      opens[0].stream.resize = async () => ({ state: 'failed', dispatch: 'rejected', reason: 'no' })
+      await manager.handleFrame('web-1', 'terminal_resize', { streamId, resizeSeq: 1, cols: 90, rows: 20 })
+      await swap()
+      expect(opens[1].size).toEqual({ cols: 90, rows: 20 })
     })
 
     it('an open stream follows a retarget with no close, and gets the new pane\'s output', async () => {
