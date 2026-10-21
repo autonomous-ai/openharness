@@ -40,6 +40,9 @@ export interface TerminalRootObservation {
   cwd: string
   /** Route aliases reported by the backend; never treated as process identity. */
   aliases?: readonly string[]
+  /** The label the pane was created with, where the backend keeps one (the pty host): a move's new pane is told by
+   *  it (hostMove/moveAgent.ts `removeOrphanMovePanes`). */
+  label?: string
 }
 
 export type TerminalInventoryResult =

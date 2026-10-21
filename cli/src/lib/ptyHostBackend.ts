@@ -644,6 +644,7 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
           runtime: { backend: 'ptyhost' as const, instance, paneId: pane.pane },
           rootPid: pane.rootPid!,
           cwd: pane.cwd,
+          ...(pane.label ? { label: pane.label } : {}),
         })),
     }
   }

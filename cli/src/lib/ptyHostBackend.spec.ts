@@ -281,6 +281,20 @@ describe('PtyHostBackend inventory and titles', () => {
     })
   })
 
+  it('lists the label a pane was created with, which tells a move pane (hostMove/moveAgent.ts)', async () => {
+    const row = (pane: string, label: string | null) => ({ pane, rootPid: 11, cwd: '/w', title: '', dead: false, owner: 'me', label })
+    const { backend } = await ready({
+      inventory: { state: 'ok', value: { panes: [row('%1', 'HARNESS_MOVE_OF=a1'), row('%2', null)] } },
+    })
+    expect(await backend.inventory()).toEqual({
+      state: 'available',
+      roots: [
+        { runtime: { backend: 'ptyhost', instance: 'p1', paneId: '%1' }, rootPid: 11, cwd: '/w', label: 'HARNESS_MOVE_OF=a1' },
+        { runtime: { backend: 'ptyhost', instance: 'p1', paneId: '%2' }, rootPid: 11, cwd: '/w' },
+      ],
+    })
+  })
+
   it('keys titles by route', async () => {
     const { backend } = await ready({ titles: { state: 'ok', value: { titles: { '%1': 'one' } } } })
     const titles = await backend.titles()
