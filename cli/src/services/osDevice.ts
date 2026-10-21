@@ -187,7 +187,9 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
   const update = (payload: Payload): Payload => {
     if (updateStartedAt !== null && now() - updateStartedAt < UPDATE_BUSY_MS) return { error: 'BUSY' }
     // From a phone the person agreed to the restart there: a system update restarts the computer at once.
-    detached(HARNESS, payload.reboot === true ? ['update', '--reboot'] : ['update'])
+    const args = payload.reboot === true ? ['update', '--reboot'] : ['update']
+    console.log(`[os-device] harness ${args.join(' ')}`)
+    detached(HARNESS, args)
     updateStartedAt = now()
     return { started: true }
   }
