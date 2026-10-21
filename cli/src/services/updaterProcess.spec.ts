@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -166,6 +166,30 @@ describe('the updater in its own process', () => {
     await expect(handover).rejects.toThrow('ENOSPC')
     expect(m.calls).toContain(`exit ${SERVICE_EXIT_RESTART}`)
   }))
+
+  it('on Windows, sweeps what installs leave under the lock as it starts, with no terminal host poller too', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'updater-sweep-'))
+    try {
+      mkdirSync(join(root, 'bin'))
+      mkdirSync(join(root, 'runtime', 'pty', '.staging-1-1'), { recursive: true })
+      for (const name of ['harness.exe', 'harness-launch.exe', 'harness.exe.old-1-1']) writeFileSync(join(root, 'bin', name), name)
+      // No HARNESSD_JUDGES_PTY: no poller, the sweep all the same.
+      const m = make()
+      locked.length = 0
+      runUpdaterService(undefined, { ...m.deps, ...m.windows, ptyRootDir: root }).stop()
+      expect(m.pty()).toBeNull()
+      await vi.waitFor(() => expect(readdirSync(join(root, 'bin')).sort()).toEqual(['harness-launch.exe', 'harness.exe']))
+      expect(readdirSync(join(root, 'runtime', 'pty'))).toEqual([])
+      expect(locked).toContain('handoff')
+      // A bin file missing whose aside file cannot be told from a stale one is put back, never swept.
+      rmSync(join(root, 'bin', 'harness.exe'))
+      writeFileSync(join(root, 'bin', 'harness.exe.old-2-2'), 'last bytes')
+      const again = make()
+      runUpdaterService(undefined, { ...again.deps, ...again.windows, ptyRootDir: root }).stop()
+      await vi.waitFor(() => expect(readFileSync(join(root, 'bin', 'harness.exe'), 'utf8')).toBe('last bytes'))
+      expect(again.calls).toContain('[update] put bin\\harness.exe back from harness.exe.old-2-2')
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
 
   it('runs no terminal host poller off Windows, or under a master that would not judge it', async () => {
     const plain = make()

@@ -212,14 +212,19 @@ function readBinaryVersion(binary: string): ReadVersion | null {
 }
 
 /**
- * What `<binary> version` prints, or a throw when it fails to run, exits non-zero or takes longer than 5 s. An
- * argument array, so no shell reads the path; hidden, so no console flashes on Windows. The one way this CLI asks a
- * PTY build what it is: `binaryVersion` here, and the payload canary (lib/windows/ptyPayload.ts `probeVersionLine`).
+ * How this CLI asks a PTY build what it is: `<binary> version`, an argument array so no shell reads the path, hidden
+ * so no console flashes on Windows, within 5 s. One definition for `runVersionCommand` here (synchronous, the daemon's
+ * `binaryVersion`) and the payload canary's asynchronous run (lib/windows/ptyPayload.ts `probeVersionLine`), which must
+ * never block the updater's event loop.
  */
+export const VERSION_COMMAND = {
+  args: ['version'] as readonly string[],
+  options: { encoding: 'utf8', timeout: VERSION_TIMEOUT_MS, windowsHide: true } as const,
+}
+
+/** What `<binary> version` prints, or a throw when it fails to run, exits non-zero or takes longer than 5 s. */
 export function runVersionCommand(binary: string): string {
-  return execFileSync(binary, ['version'], {
-    encoding: 'utf8', timeout: VERSION_TIMEOUT_MS, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'],
-  })
+  return execFileSync(binary, [...VERSION_COMMAND.args], { ...VERSION_COMMAND.options, stdio: ['ignore', 'pipe', 'ignore'] })
 }
 
 /**

@@ -25,7 +25,7 @@ import { DOWNLOAD_LIMITS, downloadVerified, isLocalDevBuild, retireCliVersions, 
 import { currentCli } from '../lib/windows/installLayout.js'
 import { processRetireDeps } from '../lib/windows/cliVersions.js'
 import { preparePtyPayload, ptyManifestUrl, ptyPlatformKey } from '../lib/windows/ptyPayload.js'
-import { startPtyUpdater } from '../lib/windows/ptyUpdate.js'
+import { startPtyUpdater, sweepPtyLeftovers } from '../lib/windows/ptyUpdate.js'
 import { startTuiUpdater } from '../tui/update.js'
 import { VERSION } from '../version.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
@@ -97,6 +97,14 @@ export function runUpdaterService(_options?: unknown, deps: UpdaterServiceDeps =
     })
   })
   const pty = startPty(deps, harnessd, installed, limits, withLock, handOver)
+  // Windows: what installs leave in bin\ and runtime\pty\ is swept at every start, under the lock; the poller does
+  // that itself before its first check, and without one (a master from before, an unusable manifest URL) it is done
+  // here. A bin file missing whose aside file holds its bytes is put back first, and while one is not, nothing goes.
+  if (!pty && deps.ptyRootDir !== undefined) {
+    const root = deps.ptyRootDir
+    void withLock(async () => { sweepPtyLeftovers(root, deps.log) })
+      .catch((error: unknown) => deps.log(`[update] could not sweep the terminal host's leftovers (${error instanceof Error ? error.message : String(error)}) — the next start tries again`))
+  }
   // A host the CLI's handover took (`beforeStage`) and has not told yet: told on its own if that stage fails.
   let ptyTaken: string | null = null
   const cli = deps.startCli({

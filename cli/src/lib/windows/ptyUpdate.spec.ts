@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SpawnLockBusyError } from '../daemonSpawnLock.js'
 import { rejectedPtyVersions } from './ptyInstall.js'
 import { PTY_PAYLOAD_FILES, PtyPayloadRefused, type PreparedPty, type PtyEntry } from './ptyPayload.js'
-import { keepStaged, rollBackStaged, startPtyUpdater, sweepPtyLeftovers, type PtyPoller, type PtyUpdaterDeps } from './ptyUpdate.js'
+import { keepStaged, ptyOnProbation, rollBackStaged, startPtyUpdater, sweepPtyLeftovers, type PtyPoller, type PtyUpdaterDeps } from './ptyUpdate.js'
 
 let root: string
 let ptyRoot: string
@@ -174,6 +174,28 @@ describe('startPtyUpdater', () => {
     expect(await h.poller.readyToStage()).toBeNull()
   })
 
+  it('a payload the manifest withdraws, or moves back from, is never installed by the next CLI stage', async () => {
+    for (const after of [null, entryOf('0.10.0'), entryOf('0.11.0', 'b')]) {
+      let offered: PtyEntry | null = entryOf()
+      // Never in on its own: only the CLI's handover could install it.
+      const h = harness({ entry: () => offered, withLock: async () => { throw new SpawnLockBusyError(null) } })
+      await vi.waitFor(() => expect(h.events).toContain('prepare 0.11.0 unlocked'), { timeout: 2_000 })
+      offered = after
+      const fetched = h.events.filter((e) => e === 'fetch').length
+      await vi.waitFor(() => expect(h.events.filter((e) => e === 'fetch').length).toBeGreaterThan(fetched), { timeout: 2_000 })
+      if (after?.sha256.startsWith('b')) {
+        // Replaced by other bytes: the new ones are prepared, never the old.
+        await vi.waitFor(() => expect(h.events.filter((e) => e === 'prepare 0.11.0 unlocked')).toHaveLength(2), { timeout: 2_000 })
+        h.poller.stop()
+        continue
+      }
+      expect(await h.poller.readyToStage()).toBeNull()
+      expect(pointer()).toBe('0.10.0')
+      expect(readdirSync(ptyRoot).filter((n) => n.startsWith('.staging-'))).toEqual([])
+      h.poller.stop()
+    }
+  })
+
   it('readyToStage never holds the CLI up: an install that fails is said and is null', async () => {
     const h = harness({
       withLock: async () => { throw new SpawnLockBusyError(null) },
@@ -292,6 +314,25 @@ describe("the master's rollback and keep", () => {
       '[harnessd] terminal host 0.11.0 did not come back healthy — back to 0.10.0',
       '[harnessd] put bin\\harness.exe back from harness.exe.old-7-123',
     ])
+  })
+
+  it('says a host it could not keep, whose marker then holds host updates back until a start judges it again', () => {
+    onProbation()
+    const lines: string[] = []
+    keepStaged({ confirmCli: () => {}, ptyRoot: root, log: (l) => lines.push(l), confirmPty: () => { throw new Error('EPERM') } })
+    expect(lines).toEqual(['[harnessd] could not keep terminal host 0.11.0 (EPERM) — judged again at the next start'])
+    expect(ptyOnProbation(root)).toBe('terminal host 0.11.0')
+  })
+
+  it('a corrupt marker is judged at a start and cleared by the rollback, the host in use staying', () => {
+    writeFileSync(join(ptyRoot, 'pty-pending.json'), '{ not json')
+    expect(ptyOnProbation(root)).toBe('terminal host (unreadable marker)')
+    const lines: string[] = []
+    rollBackStaged({ cliPending: () => false, restoreCli: () => {}, ptyRoot: root, log: (l) => lines.push(l) })
+    expect(existsSync(join(ptyRoot, 'pty-pending.json'))).toBe(false)
+    expect(pointer()).toBe('0.10.0')
+    expect(lines).toEqual(['[harnessd] removed an unreadable terminal host probation marker — the host in use stays'])
+    expect(ptyOnProbation(root)).toBeNull()
   })
 
   it('keeps both', () => {

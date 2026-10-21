@@ -6,7 +6,7 @@
 import { execFile } from 'child_process'
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { runVersionCommand } from '../ptyHost/launch.js'
+import { VERSION_COMMAND } from '../ptyHost/launch.js'
 import { SUPPORTED_PTY_PROTOCOLS } from '../ptyHost/protocol.js'
 import {
   DigestMismatchError, MANIFEST_LIMITS, downloadVerified, fetchWithin, isLocalDevBuild, semverGt,
@@ -94,10 +94,16 @@ async function unzipWithTool(zip: Buffer, dest: string): Promise<void> {
   }
 }
 
-/** The last line a binary prints for `version`, parsed. Run by ptyHost/launch.ts `runVersionCommand`, the one
- *  `binaryVersion` uses: an argument array, never a shell, hidden, within the same 5 s. */
-export async function probeVersionLine(binary: string): Promise<unknown> {
-  return JSON.parse(runVersionCommand(binary).trim().split(/\r?\n/).filter(Boolean).pop() ?? '')
+/** The last line a binary prints for `version`, parsed: ptyHost/launch.ts `VERSION_COMMAND`, the run `binaryVersion`
+ *  makes, but asynchronous. A binary whose child holds its output open past the timeout keeps a synchronous run going
+ *  with it, the updater's event loop blocked and the process killed as hung; here `canary`'s own timer ends the wait. */
+export function probeVersionLine(binary: string): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    execFile(binary, [...VERSION_COMMAND.args], VERSION_COMMAND.options, (err, stdout) => {
+      if (err) return reject(err)
+      try { resolve(JSON.parse(String(stdout).trim().split(/\r?\n/).filter(Boolean).pop() ?? '')) } catch (e) { reject(e) }
+    })
+  })
 }
 
 const DEFAULT_DEPS: PreparePtyDeps = { download: (ref) => downloadVerified(ref), unzip: unzipWithTool, probe: probeVersionLine }

@@ -29,8 +29,7 @@ import { launchDetached } from './lib/windows/launcher.js'
 import { leanFingerprint, readLeanBundle, releaseLeanClaim, writeLeanBundle, type LeanBundle } from './harnessd/leanBundle.js'
 import { ts } from './lib/log.js'
 import { confirm as confirmUpdate, pendingVersion, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
-import { readPtyPending } from './lib/windows/ptyInstall.js'
-import { keepStaged, rollBackStaged } from './lib/windows/ptyUpdate.js'
+import { keepStaged, ptyOnProbation, rollBackStaged } from './lib/windows/ptyUpdate.js'
 import { VERSION } from './version.js'
 
 /** Where a master re-executing on a new bundle leaves word of it, until that master's core is up. */
@@ -260,15 +259,12 @@ export function startMaster(
       cliPending: () => pendingVersion(env.ADAPTER_CLI_DIR) !== null, restoreCli: () => restoreUpdate(env.ADAPTER_CLI_DIR),
       ptyRoot, log: (line) => console.log(`${ts()} ${line}`),
     }),
-    confirmUpdate: () => keepStaged({ confirmCli: () => confirmUpdate(env.ADAPTER_CLI_DIR), ptyRoot }),
+    confirmUpdate: () => keepStaged({ confirmCli: () => confirmUpdate(env.ADAPTER_CLI_DIR), ptyRoot, log: (line) => console.log(`${ts()} ${line}`) }),
     version: VERSION,
     reexecMarkerFile: HARNESSD_REEXEC_FILE,
     // A host still on probation when the master judging it died (a power cut) is judged by the first core too: left
     // unjudged, its marker would hold every later host update back.
-    unjudgedUpdate: (bundle) => {
-      const host = ptyRoot === null ? null : readPtyPending(ptyRoot)
-      return unjudgedUpdate(env.ADAPTER_CLI_DIR, bundle) ?? (host ? `terminal host ${host.version}` : null)
-    },
+    unjudgedUpdate: (bundle) => unjudgedUpdate(env.ADAPTER_CLI_DIR, bundle) ?? (ptyRoot === null ? null : ptyOnProbation(ptyRoot)),
     // The updater runs for the installed copy alone (lib/installedCopy.ts), beside the core, never in it.
     updater: !env.ADAPTER_UPDATE_DISABLE && isInstalledCopy(start.scriptPath, env.ADAPTER_CLI_DIR),
     // A master that ends cleanly gives up its claim on its lean bundle, so the next one to start can

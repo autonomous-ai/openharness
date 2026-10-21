@@ -165,9 +165,12 @@ export function startPtyUpdater(opts: {
       if (halted) return
       if (existsSync(marker)) return
       const entry = await d.fetchEntry(opts.url, opts.key)
-      if (halted || !entry || !wanted(entry)) return
-      const key = `${entry.version} ${entry.sha256}`
+      if (halted) return
+      // What was prepared is installed only while the manifest still offers it: one withdrawn, replaced or moved back
+      // goes, before the CLI's next stage could take it into its handover (`readyToStage`).
+      const key = entry ? `${entry.version} ${entry.sha256}` : null
       if (ready && ready.key !== key) drop()
+      if (!entry || key === null || !wanted(entry)) return
       if (!ready) {
         if (refused?.key === key && d.now() < refused.until) return
         once('available', entry.version, () => d.log(`[update] newer terminal host available: ${currentPtyVersion(runtimeDir)} → ${entry.version}`))
@@ -186,6 +189,8 @@ export function startPtyUpdater(opts: {
       const version = ready.entry.version
       await opts.withLock(async () => {
         const staged = installReady()
+        // From the marker's write to the master hearing `harnessd:staged` is one IPC send: an updater killed in that
+        // window leaves a host on probation this master never judges, until a master's start does (`unjudgedUpdate`).
         if (staged !== null) await opts.onStaged(staged)
       }).catch((error: unknown) => {
         // A busy lock is no failed check: the payload is good and waiting, and the next tick tries again.
@@ -297,6 +302,11 @@ export function rollBackStaged(o: {
         for (const { name, from, error } of put.failed) {
           o.log(`[harnessd] bin\\${name} is missing and ${from} could not be put back (${message(error)}) — the updater sweeps nothing until it is`)
         }
+        // A marker no one can read names nothing to go back to; left, it would hold every host update back for good.
+        if (!pending) {
+          rmSync(join(root, 'runtime', 'pty', PTY_PENDING), { force: true })
+          o.log('[harnessd] removed an unreadable terminal host probation marker — the host in use stays')
+        }
       } catch (error) {
         o.log(`[harnessd] could not roll terminal host ${pending?.version ?? '(unreadable marker)'} back (${message(error)}) — the next probation tries again`)
       }
@@ -305,11 +315,30 @@ export function rollBackStaged(o: {
   if (o.ptyRoot === null || o.cliPending()) o.restoreCli()
 }
 
+/** What a master's start finds on probation for the host (masterProcess.ts `unjudgedUpdate`): `terminal host <v>`, or
+ *  the same with an unreadable marker, which the rollback clears; null with no marker. */
+export function ptyOnProbation(rootDir: string): string | null {
+  const pending = readPtyPending(rootDir)
+  if (pending) return `terminal host ${pending.version}`
+  return existsSync(join(rootDir, 'runtime', 'pty', PTY_PENDING)) ? 'terminal host (unreadable marker)' : null
+}
+
 /** The master's keep (its probation's `confirmUpdate`): the CLI build and the host both stay. */
-export function keepStaged(o: { confirmCli: () => void; ptyRoot: string | null; confirmPty?: (rootDir: string) => void }): void {
+export function keepStaged(o: {
+  confirmCli: () => void
+  ptyRoot: string | null
+  confirmPty?: (rootDir: string) => void
+  /** Where a host that could not be kept is said. Left out, nowhere. */
+  log?: (line: string) => void
+  readPending?: (rootDir: string) => PtyPending | null
+}): void {
   o.confirmCli()
   if (o.ptyRoot === null) return
+  const pending = (o.readPending ?? readPtyPending)(o.ptyRoot)
   try {
     (o.confirmPty ?? confirmPty)(o.ptyRoot)
-  } catch { /* the marker stays: the host is judged again with the next probation */ }
+  } catch (error) {
+    // The marker stays, and the poller checks nothing while it does: said, as host updates wait on the next start.
+    o.log?.(`[harnessd] could not keep terminal host ${pending?.version ?? '(unreadable marker)'} (${message(error)}) — judged again at the next start`)
+  }
 }

@@ -442,6 +442,13 @@ describe('starting the master', () => {
       writeFileSync(join(ptyRoot, 'pty-pending.json'), JSON.stringify({ version: '0.12.0', previous: '0.10.0' }))
       config.confirmUpdate()
       expect(existsSync(join(ptyRoot, 'pty-pending.json'))).toBe(false)
+      // A corrupt marker, which the poller waits on as on any: judged at the start, and the rollback clears it.
+      writeFileSync(join(ptyRoot, 'pty-pending.json'), '{ not json')
+      expect(config.unjudgedUpdate(null)).toBe('terminal host (unreadable marker)')
+      const quiet = vi.spyOn(console, 'log').mockImplementation(() => {})
+      try { config.restoreUpdate() } finally { quiet.mockRestore() }
+      expect(existsSync(join(ptyRoot, 'pty-pending.json'))).toBe(false)
+      expect(readFileSync(join(ptyRoot, 'current-pty'), 'utf8').trim()).toBe('0.10.0')
     } finally { rmSync(join(root, 'runtime', 'pty'), { recursive: true, force: true }) }
   })
 

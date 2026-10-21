@@ -129,6 +129,27 @@ describe('probeVersionLine', () => {
     writeFileSync(bad, '#!/bin/sh\nexit 3\n', { mode: 0o755 })
     await expect(probeVersionLine(bad)).rejects.toThrow()
   })
+
+  // A binary whose child holds its output open: a synchronous run outlived its timeout with it, and the updater's event
+  // loop with it. The default canary refuses it within 5 s, and the loop runs meanwhile.
+  it.skipIf(process.platform === 'win32')('a default probe that never answers is refused within the timeout, the event loop running', async () => {
+    const unzip = async (_zip: Buffer, dest: string) => {
+      for (const name of PTY_PAYLOAD_FILES) if (name !== 'harness-pty.exe') writeFileSync(join(dest, name), name)
+      // Its child keeps stdout open after the shell is killed at the timeout.
+      writeFileSync(join(dest, 'harness-pty.exe'), '#!/bin/sh\n(sleep 8)\n', { mode: 0o755 })
+    }
+    let beats = 0
+    const beat = setInterval(() => { beats++ }, 100)
+    const started = Date.now()
+    try {
+      const err = await preparePtyPayload(entry, join(tmp, 'rt'), { download: async () => Buffer.from('zip'), unzip }).catch((e) => e)
+      expect(err).toBeInstanceOf(PtyPayloadRefused)
+      expect((err as PtyPayloadRefused).reason).toMatch(/no answer within 5000 ms/)
+      expect(Date.now() - started).toBeLessThan(7_000)
+      expect(beats).toBeGreaterThan(20)
+    } finally { clearInterval(beat) }
+    expect(leftovers()).toEqual([])
+  }, 15_000)
 })
 
 describe('sweepStagingFolders', () => {
