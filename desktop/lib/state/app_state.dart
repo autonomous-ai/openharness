@@ -962,8 +962,20 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed) return;
     final wasForeground = foreground.value;
     foreground.value = state == null || state == AppLifecycleState.resumed;
+    if (wasForeground && !foreground.value) {
+      _awaySince = phoneOfferClock();
+      _missedWhileAway = null;
+    }
     // Back in front: a viewer reads the device log again, and joins it if the boot never got in.
     if (foreground.value && !wasForeground) {
+      final away = _awaySince, missed = _missedWhileAway;
+      _awaySince = null;
+      _missedWhileAway = null;
+      if (away != null &&
+          missed != null &&
+          phoneOfferClock().difference(away) >= phoneOfferAwayAfter) {
+        unawaited(_offerPhoneAway(missed));
+      }
       if (_notificationOfferDue) {
         _notificationOfferDue = false;
         unawaited(notificationOfferStoreForTest.set(true));
@@ -1148,6 +1160,11 @@ class AppNotifier extends ChangeNotifier {
     // A card a sign-out or another sign-in takes away went neither way.
     _endPhoneOffer(ProductOutcome.unknown);
     _phoneOffer = false;
+    _phoneOfferAway = null;
+    _missedWhileAway = null;
+    _phoneOfferAfterWorkAsked = false;
+    _phoneOfferAfterWorkUnanswered = 0;
+    _accountHasPhone = false;
     _closeOwnerMemories();
     _stopMachineRecovery();
     api.resetAccountCache();
@@ -7346,8 +7363,21 @@ class AppNotifier extends ChangeNotifier {
   /// launch, which a new install makes as a guest ([_offerPhoneAtLaunch]), or else after the first
   /// sign-in by hand ([_offerPhoneAfterSignIn]) — never again once Add Phone has been opened here,
   /// the card put away, or the account found to have a phone ([_phoneOfferDone]).
+  ///
+  /// A computer that opened signed in was marked offered without ever showing the card, so it gets
+  /// that one showing after work instead ([_offerPhoneAfterWork], [_phoneOfferSeen]).
   bool get phoneOfferShowing => _phoneOffer;
   bool _phoneOffer = false;
+
+  /// Which offer [_phoneOffer] is: the first one's, the one after work ([_offerPhoneAfterWork]) or
+  /// the one after time away ([_offerPhoneAway]), each counted as its own flow.
+  ProductFlow _phoneOfferFlow = ProductFlow.phoneOffer;
+
+  /// What the card says when it is offered after time away ([_offerPhoneAway]): the harness, whether
+  /// it waited on the person or finished, and how many minutes ago. Null for the card's usual words.
+  ({String agent, bool waited, int minutes})? get phoneOfferAway =>
+      _phoneOffer ? _phoneOfferAway : null;
+  ({String agent, bool waited, int minutes})? _phoneOfferAway;
 
   /// The card's observation ([ProductFlow.phoneOffer]): begun once it is on screen
   /// ([phoneOfferShown]), ended once — ok by its Add Phone, cancelled by its ×, unknown when the
@@ -7359,7 +7389,9 @@ class AppNotifier extends ChangeNotifier {
   /// offer, however often the card is built again.
   void phoneOfferShown() {
     if (!_phoneOffer || _phoneOfferMeasure != null) return;
-    _phoneOfferMeasure = productMeasurement.begin(ProductFlow.phoneOffer);
+    _markPhoneOfferSeen();
+    _countPhoneOfferShown();
+    _phoneOfferMeasure = productMeasurement.begin(_phoneOfferFlow);
   }
 
   void _endPhoneOffer(ProductOutcome outcome) {
@@ -7373,12 +7405,14 @@ class AppNotifier extends ChangeNotifier {
   void addPhoneOpened(AddPhoneOpening from) {
     productMeasurement.addPhoneOpened(from);
     if (from == AddPhoneOpening.offer) _endPhoneOffer(ProductOutcome.ok);
+    _stopPhoneOffers();
     dropPhoneOffer();
   }
 
-  /// The card's ×: put away for good ([dropPhoneOffer]).
+  /// The card's ×: put away for good ([dropPhoneOffer]), and no card after time away either.
   void dismissPhoneOffer() {
     _endPhoneOffer(ProductOutcome.cancelled);
+    _stopPhoneOffers();
     dropPhoneOffer();
   }
 
@@ -7390,7 +7424,9 @@ class AppNotifier extends ChangeNotifier {
     _endPhoneOffer(ProductOutcome.unknown);
     final showing = _phoneOffer;
     _phoneOffer = false;
+    _phoneOfferAway = null;
     _markPhoneOfferDone();
+    _markPhoneOfferSeen();
     if (showing) notifyListeners();
   }
 
@@ -7425,6 +7461,228 @@ class AppNotifier extends ChangeNotifier {
     _paneLayout?.storage.write(_phoneOfferDoneKey, '1').catchError((_) {});
   }
 
+  /// This computer's record that the card has been on its screen, or Add Phone opened here: unlike
+  /// [_phoneOfferDoneKey], never written by a launch that only skipped the offer. What
+  /// [_offerPhoneAfterWork] reads, so a computer sees the card once, whichever way it came.
+  static const _phoneOfferSeenKey = 'phone_offer_seen';
+
+  /// [_phoneOfferSeenKey], once read or written.
+  bool? _phoneOfferSeenHere;
+
+  /// Whether the card has had its one showing on this computer. Nowhere to remember it is taken as
+  /// seen, as for [_phoneOfferDone].
+  Future<bool> _phoneOfferSeen() async {
+    if (_phoneOfferSeenHere case final seen?) return seen;
+    final storage = _paneLayout?.storage;
+    if (storage == null) return true;
+    try {
+      return _phoneOfferSeenHere =
+          (await storage.read(_phoneOfferSeenKey)) == '1';
+    } catch (_) {
+      return true;
+    }
+  }
+
+  void _markPhoneOfferSeen() {
+    if (_phoneOfferSeenHere == true) return;
+    _phoneOfferSeenHere = true;
+    // Never awaited: a write that fails costs one more card on a later run.
+    _paneLayout?.storage.write(_phoneOfferSeenKey, '1').catchError((_) {});
+  }
+
+  /// [_offerPhoneAfterWork] has been asked in this run, for this account: one devices read a run.
+  bool _phoneOfferAfterWorkAsked = false;
+
+  /// Device reads [_offerPhoneAfterWork] has had in this run that gave no list to judge by. An
+  /// older CLI with no device list answers none at every finished turn, so it stops asking after
+  /// [_phoneOfferUnansweredReads] rather than read at each one for the rest of the run.
+  int _phoneOfferAfterWorkUnanswered = 0;
+  static const _phoneOfferUnansweredReads = 3;
+
+  /// A devices read in this run found a phone or a browser on this account: no card, and no read to
+  /// find that out again at each return to the window ([_offerPhoneAway]) — each one reaches the
+  /// backend through the daemon, for the many accounts that already have a phone.
+  bool _accountHasPhone = false;
+
+  /// The card for a computer that has never shown it ([_phoneOfferSeen]), on an account with no phone
+  /// or browser yet: once, after one of the person's own harnesses here finished a turn — beside work
+  /// that just went well, not over a launch.
+  ///
+  /// ⚠️ **Every computer that opened signed in was marked offered at launch and never saw the card**
+  /// ([_offerPhoneAtLaunch]): in the week to 2026-10-19, 59 of the 103 people working on Desktop used
+  /// no phone, with only the title bar's icon to find Add Phone by. Still once per computer: a computer that
+  /// showed the first card, or opened Add Phone, has seen it.
+  Future<void> _offerPhoneAfterWork() async {
+    if (_phoneOfferAfterWorkAsked ||
+        _accountHasPhone ||
+        _phoneOffer ||
+        viewer != null ||
+        !signedIn ||
+        status != AppStatus.authenticated) {
+      return;
+    }
+    _phoneOfferAfterWorkAsked = true;
+    final revision = _authRevision;
+    if (await _phoneOfferSeen()) return;
+    // No list to judge by: asked again at a later finished turn, a few times a run at most.
+    void unanswered() => _phoneOfferAfterWorkAsked =
+        ++_phoneOfferAfterWorkUnanswered >= _phoneOfferUnansweredReads;
+    bool hasPhone;
+    try {
+      final devices = await loadDevices();
+      if (devices == null) {
+        unanswered();
+        return;
+      }
+      hasPhone = devices.devices.any(
+        (device) => !device.isMachine && !device.self,
+      );
+    } catch (_) {
+      unanswered();
+      return;
+    }
+    if (!_authWorkCurrent(revision) || !signedIn || _phoneOffer) return;
+    if (hasPhone) {
+      _accountHasPhone = true;
+      _markPhoneOfferSeen();
+      return;
+    }
+    _phoneOfferFlow = ProductFlow.phoneOfferAfterWork;
+    _phoneOfferAway = null;
+    _phoneOffer = true;
+    notifyListeners();
+  }
+
+  /// [_offerPhoneAfterWork], as a finished turn runs it.
+  @visibleForTesting
+  Future<void> offerPhoneAfterWorkForTest() => _offerPhoneAfterWork();
+
+  /// This computer's record that the person said no to the card (its ×) or opened Add Phone: no card
+  /// after time away from then on ([_offerPhoneAway]).
+  static const _phoneOfferStoppedKey = 'phone_offer_stopped';
+
+  /// How many times a card has been on this computer's screen, every kind together ([phoneOfferShown]).
+  static const _phoneOfferShowsKey = 'phone_offer_shows';
+
+  /// The most cards a computer is shown, every kind together: a card left unanswered may come back
+  /// after time away, but not forever.
+  static const phoneOfferMaxShows = 3;
+
+  /// How long the window must have been away for a harness's news to offer Add Phone: long enough to
+  /// have left the computer, not only to have looked at another window.
+  static const phoneOfferAwayAfter = Duration(minutes: 5);
+
+  /// The clock time away is measured by. Injected so a test can move it.
+  @visibleForTesting
+  DateTime Function() phoneOfferClock = DateTime.now;
+
+  /// When the window last left the front ([appLifecycleChanged]); null while it is in front.
+  DateTime? _awaySince;
+
+  /// The news a person away from the window missed that says best what a phone is for: a harness
+  /// waiting on them first, else the first to finish, with when it happened ([_noteMissedWhileAway]).
+  ({String agent, bool waited, DateTime at})? _missedWhileAway;
+
+  void _stopPhoneOffers() {
+    // Never awaited: a write that fails costs, at most, one more card after time away.
+    _paneLayout?.storage.write(_phoneOfferStoppedKey, '1').catchError((_) {});
+  }
+
+  /// Whether this computer is done with cards after time away: said no, opened Add Phone, or shown
+  /// [phoneOfferMaxShows]. Nowhere to remember it is taken as done, as for [_phoneOfferDone].
+  Future<bool> _phoneOfferAwayDone() async {
+    final storage = _paneLayout?.storage;
+    if (storage == null) return true;
+    try {
+      if ((await storage.read(_phoneOfferStoppedKey)) == '1') return true;
+      final shows = int.tryParse(await storage.read(_phoneOfferShowsKey) ?? '');
+      return (shows ?? 0) >= phoneOfferMaxShows;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  void _countPhoneOfferShown() {
+    final storage = _paneLayout?.storage;
+    if (storage == null) return;
+    // Never awaited, and best effort: a count that is not kept costs one more card at most.
+    unawaited(() async {
+      try {
+        final shows =
+            int.tryParse(await storage.read(_phoneOfferShowsKey) ?? '') ?? 0;
+        await storage.write(_phoneOfferShowsKey, '${shows + 1}');
+      } catch (_) {}
+    }());
+  }
+
+  /// [kind] of the harness [agent], called [title], told while the window was not in front: kept for
+  /// the card when the person is back ([_offerPhoneAway]). Only one of the person's own harnesses here
+  /// — not a shared computer's, not a plain terminal.
+  void _noteMissedWhileAway(
+    MachineState machine,
+    Agent? agent,
+    AlertKind kind,
+    String title,
+  ) {
+    if (kind != AlertKind.done && kind != AlertKind.needsYou) return;
+    if (agent == null ||
+        machine.machine.isShared ||
+        isTerminalEngine(agent.engine)) {
+      return;
+    }
+    final waited = kind == AlertKind.needsYou;
+    final missed = _missedWhileAway;
+    // The longest wait or the earliest finish is the truest "while you were away"; a wait outranks
+    // a finish, since that harness could not go on without the person.
+    if (missed != null && (missed.waited || !waited)) return;
+    _missedWhileAway = (agent: title, waited: waited, at: phoneOfferClock());
+  }
+
+  /// The card for a person back after [phoneOfferAwayAfter] or more away from the window, to a harness
+  /// that waited on them or finished meanwhile ([missed]): what a phone would have told them where
+  /// they were. On an account with no phone or browser yet, at most [phoneOfferMaxShows] cards a
+  /// computer, and none once its card was put away or Add Phone opened ([_phoneOfferAwayDone]).
+  Future<void> _offerPhoneAway(
+    ({String agent, bool waited, DateTime at}) missed,
+  ) async {
+    if (_phoneOffer ||
+        _accountHasPhone ||
+        viewer != null ||
+        !signedIn ||
+        status != AppStatus.authenticated) {
+      return;
+    }
+    final revision = _authRevision;
+    if (await _phoneOfferAwayDone()) return;
+    bool hasPhone;
+    try {
+      final devices = await loadDevices();
+      // No list to judge by: nothing this time; the next time away asks again.
+      if (devices == null) return;
+      hasPhone = devices.devices.any(
+        (device) => !device.isMachine && !device.self,
+      );
+    } catch (_) {
+      return;
+    }
+    if (!_authWorkCurrent(revision) || !signedIn || _phoneOffer) return;
+    if (hasPhone) {
+      _accountHasPhone = true;
+      return;
+    }
+    final minutes = phoneOfferClock().difference(missed.at).inMinutes;
+    _phoneOfferFlow = missed.waited
+        ? ProductFlow.phoneOfferAwayWaited
+        : ProductFlow.phoneOfferAwayFinished;
+    _phoneOfferAway = (
+      agent: missed.agent,
+      waited: missed.waited,
+      minutes: minutes < 1 ? 1 : minutes,
+    );
+    _phoneOffer = true;
+    notifyListeners();
+  }
+
   /// The launch's half of the offer.
   ///
   /// ⚠️ **A new install opens as a guest**, on its desk, with no sign-in asked for — so "after the
@@ -7440,6 +7698,8 @@ class AppNotifier extends ChangeNotifier {
     }
     if (!isGuest || await _phoneOfferDone()) return;
     if (!_authWorkCurrent(revision) || !isGuest) return;
+    _phoneOfferFlow = ProductFlow.phoneOffer;
+    _phoneOfferAway = null;
     _phoneOffer = true;
     notifyListeners();
   }
@@ -7468,6 +7728,8 @@ class AppNotifier extends ChangeNotifier {
       _markPhoneOfferDone();
       return;
     }
+    _phoneOfferFlow = ProductFlow.phoneOffer;
+    _phoneOfferAway = null;
     _phoneOffer = true;
     notifyListeners();
   }
@@ -12520,6 +12782,7 @@ class AppNotifier extends ChangeNotifier {
     if (lifecycle() != AppLifecycleState.resumed) {
       systemNotifications.post(alert);
       _noteNotificationOffer(kind);
+      _noteMissedWhileAway(machine, agent, kind, alert.title);
     }
   }
 
@@ -20328,6 +20591,7 @@ class AppNotifier extends ChangeNotifier {
                 model: agent.gridModel,
               ));
               machine.completedHarnessTurns++;
+              unawaited(_offerPhoneAfterWork());
             } else if (ownWork) {
               machine.failedHarnessTurns++;
             }

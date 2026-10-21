@@ -31,6 +31,13 @@ enum ProductFlow {
   // The Add Phone card (widgets/phone_offer_card.dart), offered once per computer: begun when it is on
   // screen, ok by its Add Phone, cancelled by its ×, unknown when it goes another way.
   phoneOffer('phone_offer'),
+  // The same card offered once to a computer that never had it, after one of its own harnesses
+  // finished a turn (`AppNotifier._offerPhoneAfterWork`): counted apart, so the two offers read apart.
+  phoneOfferAfterWork('phone_offer_after_work'),
+  // The same card offered when the person comes back after five minutes or more away to a harness
+  // that waited on them, or one that finished (`AppNotifier._offerPhoneAway`), each counted apart.
+  phoneOfferAwayWaited('phone_offer_away_waited'),
+  phoneOfferAwayFinished('phone_offer_away_finished'),
   // The phone's own flows, listed so this enum names every flow the phone's copy does; the desktop
   // never begins them.
   signInScan('sign_in_scan'),
@@ -49,12 +56,20 @@ enum ProductFlow {
   /// The revision of the local CLI's report proxy that knows this flow's
   /// names, as [ProductHealthMeasure.vocabulary] — but its counts wait in the
   /// queue for that answer instead of being skipped ([ProductMeasurement]).
-  int get vocabulary => this == phoneOffer ? 3 : 1;
+  int get vocabulary => switch (this) {
+    phoneOffer => 3,
+    phoneOfferAfterWork || phoneOfferAwayWaited || phoneOfferAwayFinished => 4,
+    _ => 1,
+  };
 
   /// Ended only by what the person does, never by the 15-minute observation
   /// bound: the card waits beside the work until it is used or put away, and
   /// an Add Phone pressed after 15 minutes would otherwise be lost to unknown.
-  bool get unbounded => this == phoneOffer;
+  bool get unbounded =>
+      this == phoneOffer ||
+      this == phoneOfferAfterWork ||
+      this == phoneOfferAwayWaited ||
+      this == phoneOfferAwayFinished;
 }
 
 enum ProductOutcome { ok, failed, cancelled, unknown }
@@ -499,15 +514,24 @@ class ProductMeasurement extends ChangeNotifier {
   }
 
   /// The proxy revision ([proxyVocabulary]) that forwards [metric]: the Add
-  /// Phone card's flow and the ways Add Phone opened are 3, everything else
-  /// this queue holds is 1 (a health measure newer than 1 is never queued
-  /// before the proxy has named it, [health]).
-  static int _vocabularyOf(String metric) =>
-      metric.startsWith('ui_desktop_${ProductFlow.phoneOffer.wire}_')
-      ? ProductFlow.phoneOffer.vocabulary
-      : metric.startsWith('ui_desktop_add_phone_')
-      ? AddPhoneOpening.vocabulary
-      : 1;
+  /// Phone card's flow and the ways Add Phone opened are 3, the card offered
+  /// after work or after time away 4, everything else this queue holds is 1 (a
+  /// health measure newer than 1 is never queued before the proxy has named
+  /// it, [health]).
+  static int _vocabularyOf(String metric) {
+    for (final flow in _newerFlows) {
+      if (metric.startsWith('ui_desktop_${flow.wire}_')) return flow.vocabulary;
+    }
+    return metric.startsWith('ui_desktop_add_phone_')
+        ? AddPhoneOpening.vocabulary
+        : 1;
+  }
+
+  /// The flows newer than revision 1, longest name first: `phone_offer_after_work_` starts with
+  /// `phone_offer_`, and must be read as itself.
+  static final _newerFlows =
+      ProductFlow.values.where((flow) => flow.vocabulary > 1).toList()
+        ..sort((a, b) => b.wire.length.compareTo(a.wire.length));
 
   /// A widget's delayed callback cannot count after sign-out or a choice revision.
   VoidCallback observer(ProductHealthMeasure measure) {

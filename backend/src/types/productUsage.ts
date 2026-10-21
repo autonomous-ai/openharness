@@ -74,8 +74,13 @@ export const PRODUCT_USAGE_PHONE_SCREEN_METRICS = PRODUCT_USAGE_PHONE_SCREENS.fl
 /** Desktop's Add Phone card (desktop/lib/widgets/phone_offer_card.dart), offered once per computer: started
  * when it is on screen, ok for its Add Phone, cancelled for its ×, unknown when it goes another way (Add Phone
  * opened from elsewhere, a sign-out). It waits beside the work, so it has no 15-minute observation bound.
- * Vocabulary 3 (`x-harness-usage-vocabulary`, cli/src/lib/appProductUsageReport.ts), like the openings below. */
-export const PRODUCT_USAGE_DESKTOP_FLOWS = ['phone_offer'] as const
+ * Vocabulary 3 (`x-harness-usage-vocabulary`, cli/src/lib/appProductUsageReport.ts), like the openings below.
+ * `phone_offer_after_work` is the same card offered once to a computer that never showed it (a computer that
+ * opened signed in was marked offered without it), after one of its own harnesses finished a turn; vocabulary 4.
+ * `phone_offer_away_waited` / `_finished`: the card for a person back after five minutes or more away, to a harness
+ * that waited on them or finished meanwhile; vocabulary 4. docs/design/2026-10-20-desktop-phone-conversion.md. */
+export const PRODUCT_USAGE_DESKTOP_FLOWS = ['phone_offer', 'phone_offer_after_work', 'phone_offer_away_waited',
+  'phone_offer_away_finished'] as const
 /** Each time Add Phone opens on a computer, by its way in: that card (`offer`), the title bar's phone, Harness ▸
  * Add Phone… (`menu`, or a key bound to it on macOS), the account menu, the Machines picker, or the command
  * (`> add phone`, a key bound to it elsewhere). Which way in, nothing else. */
