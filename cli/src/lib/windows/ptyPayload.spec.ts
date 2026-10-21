@@ -7,7 +7,7 @@ import { PTY_PROTOCOL } from '../ptyHost/protocol.js'
 import { DigestMismatchError } from '../selfUpdate.js'
 import {
   PTY_PAYLOAD_FILES, PtyPayloadRefused, PtyPayloadUnpackFailed, CANARY_HOME_STALE_MS, SERVE_CANARY_BOUND_MS, fetchPtyEntry, preparePtyPayload, ptyManifestUrl, ptyPlatformKey,
-  probeVersionLine, ptyUpdateWanted, serveCanary, sweepCanaryHomes, sweepStagingFolders, type PtyEntry,
+  probeVersionLine, processesInFolder, ptyUpdateWanted, serveCanary, sweepCanaryHomes, sweepStagingFolders, type PtyEntry,
 } from './ptyPayload.js'
 
 let tmp: string
@@ -238,10 +238,20 @@ describe.runIf(realHost)('serveCanary, against the real host', () => {
   beforeEach(() => { homes = mkdtempSync(process.platform === 'win32' ? join(tmpdir(), 'hpc-') : '/tmp/hpc-') })
   afterEach(() => { rmSync(homes, { recursive: true, force: true }) })
 
+  // Windows: the host's console process (OpenConsole.exe) must not outlive the canary, or the folder it started in
+  // cannot be removed (and, staged, cannot be renamed). A leftover is named in the message.
+  async function expectNoneLeft(): Promise<void> {
+    if (process.platform !== 'win32') return
+    const left = await processesInFolder(realHost!)
+    expect(left, `processes still running from ${realHost}: ${JSON.stringify(left)}`).toEqual([])
+    rmSync(homes, { recursive: true, maxRetries: 0 })
+  }
+
   it('passes, and leaves no host and no home behind', async () => {
     const said = await probeVersionLine(realHost!) as { version: string; protocol: number }
     await serveCanary(realHost!, { protocol: said.protocol, version: said.version }, { tmpRoot: homes })
     expect(readdirSync(homes)).toEqual([])
+    await expectNoneLeft()
   }, 30_000)
 
   it('a host that cannot start a pane fails it', async () => {
@@ -249,6 +259,7 @@ describe.runIf(realHost)('serveCanary, against the real host', () => {
     await expect(serveCanary(realHost!, { protocol: said.protocol, version: said.version }, { tmpRoot: homes, command: [join(tmp, 'no-such-shell')] }))
       .rejects.toThrow(/its create failed|its pane exited with/)
     expect(readdirSync(homes)).toEqual([])
+    await expectNoneLeft()
   }, 30_000)
 })
 

@@ -7,11 +7,12 @@
 import { execFile, spawn, type ChildProcess } from 'child_process'
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { PtyHostClient } from '../ptyHost/client.js'
 import { hostInstanceName } from '../ptyHost/instance.js'
 import { VERSION_COMMAND, readInstanceDiscovery } from '../ptyHost/launch.js'
 import { PTY_PROTOCOL, SHUTDOWN_PROTOCOL, SUPPORTED_PTY_PROTOCOLS } from '../ptyHost/protocol.js'
+import { windowsProcessRows } from './processTable.js'
 import { scrubTerminalContext } from '../terminalEnvironment.js'
 import {
   DigestMismatchError, MANIFEST_LIMITS, downloadVerified, fetchWithin, isLocalDevBuild, semverGt,
@@ -30,12 +31,18 @@ const CANARY_TIMEOUT_MS = 5_000
  * shutdown. With its cleanup (`SERVE_CANARY_CLEANUP_MS`) at most 20 s, under the updater's 30 s heartbeat timeout
  * (harnessd/services.ts), though the canary is asynchronous and the heartbeat goes on beside it.
  */
-export const SERVE_CANARY_TIMEOUT_MS = 12_000
-/** How long a killed canary host gets to exit before its temporary home is removed: on Windows a file a process still
- *  holds, or a folder that is a process's working directory, cannot be removed. */
-const SERVE_CANARY_EXIT_WAIT_MS = 5_000
-/** The cleanup's whole bound: the exit wait, then the removal's retries (`removeCanaryHome`). */
-const SERVE_CANARY_CLEANUP_MS = 8_000
+export const SERVE_CANARY_TIMEOUT_MS = 10_000
+/** Cleanup, step 1: how long the host gets to end itself on `shutdown`, so it closes its consoles as it exits. */
+const SERVE_CANARY_ASK_MS = 2_000
+/** Cleanup, step 2: how long a killed host gets to exit before its temporary home is removed: on Windows a file a process
+ *  still holds, or a folder that is a process's working directory, cannot be removed. */
+const SERVE_CANARY_EXIT_WAIT_MS = 2_000
+/** Cleanup, step 3 (Windows): how long a console process the host started (OpenConsole.exe) gets to follow the host
+ *  out before it is ended; then the same again, after the ending, to see it gone. */
+const SERVE_CANARY_IMAGES_WAIT_MS = 3_000
+const SERVE_CANARY_IMAGES_ENDED_MS = 1_000
+/** The cleanup's whole bound: ask 2 s + exit wait 2 s + images 3 s + 1 s, then the removal's retries (`removeCanaryHome`, 2 s). */
+const SERVE_CANARY_CLEANUP_MS = 10_000
 /** The serve canary from start to cleanup: what `preparePtyPayload` waits for it at most. */
 export const SERVE_CANARY_BOUND_MS = SERVE_CANARY_TIMEOUT_MS + SERVE_CANARY_CLEANUP_MS
 /** The canary's temporary homes: `<temporary folder>/harness-pty-canary-*`. */
@@ -191,6 +198,38 @@ const reasonOf = (error: unknown): string => (error instanceof Error ? error.mes
 /** The canary pane's command: one that exits at once, with 0. */
 const CANARY_COMMAND = process.platform === 'win32' ? ['cmd.exe', '/d', '/c', 'exit 0'] : ['/bin/sh', '-c', 'exit 0']
 
+/** Processes (pid, image) alive whose executable sits in [dir], or null when the table cannot be read. This scan's own
+ *  child (`harness-pty ps`, from the same folder) is left out. */
+export async function processesInFolder(binary: string): Promise<{ pid: number; image: string }[] | null> {
+  const rows = await windowsProcessRows(null, { binary: () => binary })
+  const dir = dirname(binary)
+  if (!rows) return null
+  const prefix = dir.replace(/[\\/]+$/, '').toLowerCase().replace(/\//g, '\\') + '\\'
+  return rows
+    .filter((row) => row.parentPid !== process.pid && row.imagePath && row.imagePath.toLowerCase().replace(/\//g, '\\').startsWith(prefix))
+    .map((row) => ({ pid: row.pid, image: row.imagePath! }))
+}
+
+/** After the host is gone, no process of ours may keep running from the binary's folder: an OpenConsole.exe there would
+ *  hold the canary's working folder and, in production, block the rename of the staging folder. Wait for them to end,
+ *  then end what is left (their image is in our staging folder, so they are ours). */
+async function endBinaryProcesses(binary: string): Promise<void> {
+  const waitUntilNone = async (ms: number): Promise<{ pid: number; image: string }[]> => {
+    const until = Date.now() + ms
+    for (;;) {
+      const left = await processesInFolder(binary)
+      if (!left?.length || Date.now() >= until) return left ?? []
+      await sleep(100)
+    }
+  }
+  const left = await waitUntilNone(SERVE_CANARY_IMAGES_WAIT_MS)
+  if (!left.length) return
+  await Promise.all(left.map((p) => new Promise<void>((resolve) => {
+    execFile('taskkill', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true, timeout: 2_000 }, () => resolve())
+  })))
+  await waitUntilNone(SERVE_CANARY_IMAGES_ENDED_MS)
+}
+
 /**
  * Prove a staged host serves, which `harness-pty version` does not: that never loads conpty.dll, never binds an
  * endpoint and never starts a pane. `<binary> serve --home <a fresh temporary home> --no-reexec` (no copy outside a job,
@@ -270,13 +309,23 @@ export async function serveCanary(binary: string, host: { protocol: number; vers
   } finally {
     done = true
     clearTimeout(timer)
-    ;(client as PtyHostClient | null)?.close()
+    const askedClient = client as PtyHostClient | null
     const running = child as ChildProcess | null
-    if (running && running.exitCode === null && running.signalCode === null) {
+    const open = () => !!running && running.exitCode === null && running.signalCode === null
+    if (running && open()) {
       const gone = new Promise<void>((resolve) => { running.once('exit', () => resolve()); running.once('error', () => resolve()) })
-      try { running.kill('SIGKILL') } catch { /* gone meanwhile */ }
-      await Promise.race([gone, sleep(SERVE_CANARY_EXIT_WAIT_MS)])
+      // Ask first: a host ended by TerminateProcess never closes its pseudoconsoles, and the console process behind each
+      // (OpenConsole.exe) may outlive it holding the folder it started in. `shutdown` succeeds when no pane is left.
+      if (askedClient && askedClient.protocol >= SHUTDOWN_PROTOCOL) {
+        await Promise.race([askedClient.call({ op: 'shutdown' }).then(() => gone, () => undefined), sleep(SERVE_CANARY_ASK_MS)])
+      }
+      if (open()) {
+        try { running.kill('SIGKILL') } catch { /* gone meanwhile */ }
+        await Promise.race([gone, sleep(SERVE_CANARY_EXIT_WAIT_MS)])
+      }
     }
+    askedClient?.close()
+    if (process.platform === 'win32') await endBinaryProcesses(binary)
     try { (options.remove ?? removeCanaryHome)(home) } catch { /* still held: the updater's next start sweeps it (`sweepCanaryHomes`) */ }
   }
 }
