@@ -300,6 +300,13 @@ export const CATALOG_ITEMS: CatalogItem[] = [
   "mcp_url": "https://mcp.jam.dev/mcp"
  },
  {
+  "code": "keenable",
+  "label": "Keenable",
+  "auth": "dcr",
+  "description": "Web search built for AI agents: search the live web and read any page as clean markdown.",
+  "mcp_url": "https://api.keenable.ai/mcp?keenable_title=openharness"
+ },
+ {
   "code": "klaviyo",
   "label": "Klaviyo",
   "auth": "dcr",
