@@ -64,6 +64,9 @@ class SuperTabLaunch {
           : saved['lead'] == true
           ? 'New Swarm'
           : 'New Harness',
+      // Routing reads quota for Claude Code and Codex only, so a Lead is one
+      // of them; the agents it starts may be anything.
+      engines: saved['lead'] == true ? const ['claude', 'codex'] : null,
       projectVisibility: saved['lead'] == true
           ? saved['visibility'] as String? ?? 'public'
           : null,

@@ -8,6 +8,7 @@ import '../core/models.dart' show Agent;
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
+import '../state/phone_desk.dart' show PhoneDesk;
 import 'engine_identity.dart';
 
 /// The one "Edit name" dialog, opened from every place a name is shown.
@@ -79,6 +80,40 @@ Future<void> showMachineRenameDialog(
     ),
   );
 }
+
+/// The same dialog for a desk tab — held from its chip in Find. The desktop's "Rename Tab", and
+/// the name every computer's tab row then shows ([AppNotifier.renameDeskTab]).
+///
+/// [currentName] is the name the chip shows, which for a tab nobody named is the one its
+/// harnesses give it (`deskTabNames`) — what the person is looking at when they hold it.
+Future<void> showDeskTabRenameDialog(
+  BuildContext context,
+  AppNotifier notifier,
+  String tabId,
+  String currentName,
+) => showAppDialog<void>(
+  context: context,
+  builder: (_) => _RenameDialog(
+    title: 'Rename Tab',
+    currentName: currentName,
+    detail: '',
+    maxLength: PhoneDesk.nameMaxLength,
+    onSave: (name) async {
+      final trimmed = name.trim();
+      if (trimmed.isEmpty) return 'Name cannot be empty';
+      if (trimmed.length > PhoneDesk.nameMaxLength) {
+        return 'Use ${PhoneDesk.nameMaxLength} characters or fewer.';
+      }
+      // Closed on another computer while the dialog was open: a rename now would change nothing.
+      if (!notifier.deskTabs.any((tab) => tab.id == tabId)) {
+        return 'This tab has been closed.';
+      }
+      if (!notifier.deskWritable) return 'Rename failed. Try again later.';
+      notifier.renameDeskTab(tabId, trimmed);
+      return null;
+    },
+  ),
+);
 
 /// The field's corner — the buttons' too. Its focus ring stands 4 outside it,
 /// on the same curve.

@@ -707,6 +707,15 @@ describe('cableEventFor', () => {
     expect(cableEventFor({ ...base, payload: { ...base.payload, restored: true } })?.subagent).toBe(true)
     expect(cableEventFor({ ...base, payload: { kind: 'tool', text: 'Bash' } })).toBeNull()
   })
+
+  it('carries a summary\'s tier, decided by the recaps, and no word that is not one', () => {
+    const base = { type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'body', recap: 'recap' } }
+    for (const tier of ['alert', 'list', 'silent'] as const) {
+      expect(cableEventFor({ ...base, payload: { ...base.payload, tier } })?.tier).toBe(tier)
+    }
+    expect(cableEventFor({ ...base, payload: { ...base.payload, tier: 'loud' } })).not.toHaveProperty('tier')
+    expect(cableEventFor({ ...base, payload: { kind: 'done', text: 'done', tier: 'alert' } })).not.toHaveProperty('tier')
+  })
 })
 
 

@@ -1,5 +1,8 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:dio/dio.dart' show CancelToken;
+import 'package:harness/super_tabs/attachment_upload.dart';
 import 'package:harness/super_tabs/controller.dart';
 
 Map<String, dynamic> conversationFixture(String id, String title) => {
@@ -58,18 +61,28 @@ class ConversationServer {
       conversationFixture('offline', 'Offline editing'),
     ],
   };
+  // The files fully uploaded, in order, bytes included.
+  final uploads = <Map<String, dynamic>>[];
+  // Makes the upload of the file with this name fail with failUploadCode.
+  String? failUpload;
+  String failUploadCode = 'ATTACHMENT_TOO_LARGE';
   Future<void> save(Map<String, dynamic> value) async {
     if (failSave) throw StateError('Disk full');
     saved = jsonDecode(jsonEncode(value)) as Map<String, dynamic>;
   }
 
-  void append(String text, {String conversationId = 'lead'}) {
+  void append(
+    String text, {
+    String conversationId = 'lead',
+    List<Map<String, dynamic>> attachments = const [],
+  }) {
     revision++;
     messages.add({
       'id': 'message-$revision',
       'conversationId': conversationId,
       'sequence': revision,
       'text': text,
+      'attachments': attachments,
       'createdAt': '2026-10-18T00:00:00Z',
       'author': {'kind': 'person', 'id': 'owner', 'name': 'owner@example.com'},
       'deliveries': <dynamic>[],
@@ -77,6 +90,47 @@ class ConversationServer {
     (state['conversations'] as List).cast<Map<String, dynamic>>().firstWhere(
       (g) => g['id'] == conversationId,
     )['lastMessageSequence'] = revision;
+  }
+
+  /// What the backend does with a file sent to its upload route.
+  Future<Map<String, dynamic>> upload({
+    required String tabId,
+    required String conversationId,
+    required String name,
+    required String mime,
+    required Uint8List bytes,
+    required CancelToken cancel,
+    required void Function(double sent) onProgress,
+  }) async {
+    if (name == failUpload) {
+      throw SuperTabFailure(
+        failUploadCode,
+        'The file is too large.',
+        statusCode: 413,
+      );
+    }
+    onProgress(.5);
+    final id = 'attachment-${uploads.length + 1}';
+    uploads.add({
+      'conversationId': conversationId,
+      'name': name,
+      'mime': mime,
+      'file': bytes,
+      'id': id,
+    });
+    onProgress(1);
+    return {'attachment': _attachment(id)};
+  }
+
+  Map<String, dynamic> _attachment(String id) {
+    final upload = uploads.firstWhere((u) => u['id'] == id);
+    return {
+      'id': id,
+      'name': upload['name'],
+      'mime': upload['mime'],
+      'size': (upload['file'] as List).length,
+      'url': 'https://cdn.harness.autonomous.ai/$id/${upload['name']}',
+    };
   }
 
   Future<Map<String, dynamic>> request(
@@ -108,6 +162,10 @@ class ConversationServer {
         append(
           command['text'] as String,
           conversationId: command['conversationId'] as String,
+          attachments: [
+            for (final id in command['attachmentIds'] as List? ?? const [])
+              _attachment(id as String),
+          ],
         );
         messages.last['replyTo'] = command['replyTo'];
         output['messageId'] = 'message-$revision';
@@ -232,11 +290,13 @@ class ConversationServer {
   SuperTabController controller({
     Map<String, dynamic>? initial,
     String account = 'owner',
+    SuperTabUpload? upload,
   }) => SuperTabController(
     tabId: 'tab',
     accountId: account,
     request: request,
     save: save,
+    upload: upload ?? this.upload,
     initial: initial ?? const {},
     pollInterval: Duration.zero,
   );

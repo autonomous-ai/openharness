@@ -221,6 +221,7 @@ static void send_hello(void)
     msg_string(&root, "activity", "steps-v1");
     msg_string(&root, "stats", "turn-v1");
     msg_string(&root, "player", "library-v1");
+    msg_string(&root, "superTab", "wait-v1");   // a question with superTab + attention is shown as a wait (handle_question)
     msg_string(&root, "ota", "v1");
     char mac[24] = "";
     device_mac_str(mac, sizeof(mac));
@@ -667,14 +668,21 @@ static void handle_notif_seen(const cJSON *p)
     pro_app_notif_seen(id, token ? token->valuestring : NULL);
 }
 
+// question {agentId, id, questions:[{q}], superTab?, attention?}. A Super Tab's question names the project (`superTab`, cut to
+// SUPER_TAB_MAX - 1 bytes) and what it needs (`attention`: "stuck", else a decision, whatever an unknown value says). Without
+// a non-empty superTab it is a plain question, attention or not.
 static void handle_question(const char *id, const cJSON *p)
 {
+    static char s_tab[SUPER_TAB_MAX];
     const char *request = str_of(p, "id");   // the request this question belongs to
     if (!request) return;
     const cJSON *questions = cJSON_GetObjectItemCaseSensitive(p, "questions");
     const char *prompt = str_of(cJSON_GetArrayItem(questions, 0), "q");
     copy_cut(s_text, PRO_QUESTION_BYTES, prompt ? prompt : "Needs your answer");
-    pro_app_question(id, request, s_text);
+    const char *tab = cut_of(p, "superTab", s_tab, sizeof s_tab), *attn = str_of(p, "attention");
+    if (tab && !tab[0]) tab = NULL;
+    const pod_attention_t a = !tab ? POD_ATTN_NONE : attn && !strcmp(attn, "stuck") ? POD_ATTN_STUCK : POD_ATTN_DECISION;
+    pro_app_question(id, request, s_text, tab, a);
 }
 
 static void handle_question_close(const char *id, const cJSON *p)

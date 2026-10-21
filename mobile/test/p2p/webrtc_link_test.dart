@@ -176,6 +176,31 @@ void main() {
       expect(link.isReady, isFalse);
     });
 
+    test('the offer leaves a short settle after the first reflexive candidate', () async {
+      // A terminal's keys ride the relay until the channel is up, and the channel only follows the
+      // offer: the settle was 500 ms of a ~1.5 s setup on an iPhone 14 (2026-10-19).
+      final link = newLink();
+      link.start();
+      await eventually(() => webrtc.named('setLocalDescription').isNotEmpty);
+      await settle();
+      final found = Stopwatch()..start();
+      await webrtc.candidate(
+        'candidate:2 1 udp 1686052607 203.0.113.9 50001 typ srflx raddr 0.0.0.0 rport 0',
+      );
+      expect(
+        await eventually(
+          () => log.of('p2p_offer').isNotEmpty,
+          within: const Duration(seconds: 2),
+        ),
+        isTrue,
+      );
+      expect(found.elapsed, greaterThanOrEqualTo(gatherSettleAfterReflexive));
+      // Wall-clock, so only far from the 3s cap; the settle itself is pinned below.
+      expect(found.elapsed, lessThan(const Duration(seconds: 1)));
+      expect(gatherSettleAfterReflexive, const Duration(milliseconds: 100));
+      expect(link.isReady, isFalse);
+    });
+
     test('with nothing reflexive, it goes at the cap anyway', () async {
       final link = newLink();
       link.start();

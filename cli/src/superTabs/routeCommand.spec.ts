@@ -15,13 +15,15 @@ const policy = { version: 1, floor: { low: 1, medium: 2, high: 3 }, quotaReserve
 const agents = [
   { id: 'a1', name: 'Multiply', machineId: 'm1', harnessId: 'h1', configuration: { engine: 'claude', model: 'sonnet', effort: 'medium' } },
   { id: 'lead', name: 'Lead', machineId: 'm1', harnessId: 'hl', configuration: { engine: 'claude', model: 'opus', effort: 'high' } },
+  // An engine the route does not offer: it only puts m2 in the Swarm's Machines list, as a person adding the machine does.
+  { id: 'a2', name: 'Elsewhere', machineId: 'm2', harnessId: 'h2', configuration: { engine: 'pi', model: 'default', effort: 'default' } },
 ]
 const conversations = (assignment: unknown = null) => [
   { id: 'lead', title: 'Lead', leadId: 'lead', agentIds: ['lead', 'a1'], archived: false, brief: '', checks: [], assignment: null },
   { id: 'g1', title: 'API', leadId: 'lead', agentIds: ['lead'], archived: false, brief: 'Add the endpoint.', checks: [{ description: 'Tests pass' }], assignment },
 ]
 const tab = (assignment: unknown = null) => ({ revision: 3, state: { id: 'tab', agents, conversations: conversations(assignment) } })
-const usage = { providers: [{ provider: 'claude', outcome: 'answered', httpStatus: 200, account: 'acct', body: { five_hour: { utilization: 40, resets_at: '2026-10-19T12:00:00Z' }, seven_day: { utilization: 10 } } }] }
+const usage = { providers: [{ provider: 'claude', outcome: 'answered', httpStatus: 200, account: 'acct', body: { five_hour: { utilization: 40, resets_at: new Date(Date.now() + 3 * 3_600_000).toISOString() }, seven_day: { utilization: 10 } } }] }
 function daemon(machineId: string, options: { agents?: string[]; frames?: Record<string, Record<string, unknown>>; capacity?: Record<string, unknown>; terminalAvailable?: boolean; tools?: Record<string, boolean>; devices?: Record<string, boolean>; usage?: unknown; listFails?: boolean; engines?: unknown } = {}) {
   return {
     machineId, close: vi.fn(),
@@ -90,6 +92,9 @@ describe('routeTask', () => {
     const fresh = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'high' } }, scoped({ jev: { ok: true, value: { unavailable: 'BUSY' } } }), where as never, opener(), () => 'op')
     expect(fresh).toMatchObject({ pick: { kind: 'new', engine: 'claude', model: 'opus', effort: 'high' } })
     expect(fresh.next).toContain('"engine":"claude","model":"opus","effort":"high","routeDecisionId":"d1"')
+    // Without a branch the agent starts from the default one, and the hint says how to choose another.
+    expect(fresh.next).toContain('"branchRef":"refs/remotes/origin/BRANCH"')
+    expect(fresh.next).toContain('default branch, fetched first')
     // A complete start: every field its schema requires, with the defaults the help gives.
     const hint = JSON.parse(/start OPERATION_ID (\{.*\}), then/.exec(fresh.next as string)![1]!)
     expect(hint).toEqual({ conversationId: 'g1', name: 'Builder', cwd: '/absolute/repo/on/that/machine', worktree: true,
@@ -131,6 +136,54 @@ describe('routeTask', () => {
     expect(result).toMatchObject({ ok: true, warnings: ['w', "The account's machine list could not be read; only known machines were considered."] })
     const fine = await routeTask(input, scoped(), where as never, opener(), () => 'op')
     expect(fine.warnings).toEqual(['w'])
+  })
+  it('considers only the account machines the Swarm lists, and always the Lead\'s own', async () => {
+    const context = { ok: true, value: { agentId: 'lead', tab: tab(), policy: { policy }, machines: [{ machineId: 'm1', name: 'remote-1' }, { machineId: 'm2', name: 'mac' }, { machineId: 'm9', name: 'vm' }] } }
+    const s = scoped({ context }), open = opener()
+    await routeTask(input, s, where as never, open, () => 'op')
+    // m9 is the account's but not in the Swarm's list: it is neither probed nor a candidate nor an exclusion.
+    expect(open.mock.calls.map(c => c[1]).sort()).toEqual(['m1', 'm2'])
+    const decision = recorded(s).command.decision
+    expect([...decision.candidates, ...decision.excluded].some((c: { title: string }) => c.title.includes('vm'))).toBe(false)
+    expect(decision.candidates.some((c: { machineId?: string; title: string }) => c.title.includes('mac'))).toBe(true)
+  })
+  it('offers new agents on the Lead\'s own machine when the account list could not be read', async () => {
+    const context = { ok: true, value: { agentId: 'lead', tab: tab(), policy: { policy }, machines: [], machinesUnreadable: true } }
+    const s = scoped({ context }), open = opener()
+    await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'high' } }, s, where as never, open, () => 'op')
+    expect(open.mock.calls.map(c => c[1])).toEqual(['m1'])
+    expect(recorded(s).command.decision.candidates.some((c: { title: string }) => c.title.startsWith('New agent') && c.title.includes('m1'))).toBe(true)
+  })
+  it('says a listed machine without the project folder needs it cloned, not that its disk could not be verified', async () => {
+    const needs = { cwd: '/repo/api' }
+    const noFolder = { ok: true, resources: { memoryTotalBytes: 8e9, memoryUsedBytes: 1e9, cpuPercent: 10 }, tools: {}, devices: {} }
+    const s = scoped()
+    await routeTask({ ...input, assessment: { ...input.assessment, needs } }, s, where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], capacity: id === 'm1' ? { ...noFolder, tools: { git: true } } : noFolder })), () => 'op')
+    const excluded = recorded(s).command.decision.excluded as Array<{ title: string; reason: string }>
+    const reasonOf = (machine: string) => excluded.filter(e => e.title.includes(machine)).map(e => e.reason)
+    expect(reasonOf('mac').some(r => r.includes('This machine does not have the project folder. Add it to the Swarm so it can clone the project.'))).toBe(true)
+    expect(reasonOf('mac').some(r => /Project disk space/.test(r))).toBe(false)
+    // Its other reasons stay.
+    expect(reasonOf('mac').some(r => /Required tool unavailable: git/.test(r))).toBe(true)
+    // The Lead's own machine keeps the plain reason: its folder was named by the Lead itself.
+    expect(reasonOf('remote-1').some(r => r.includes('Project disk space could not be verified.'))).toBe(true)
+  })
+  it('offers a listed machine whose capacity read measured the project folder', async () => {
+    const s = scoped()
+    await routeTask({ ...input, assessment: { ...input.assessment, needs: { cwd: '/repo/api' } } }, s, where as never,
+      opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], capacity: { ok: true, resources: { memoryTotalBytes: 8e9, memoryUsedBytes: 1e9, cpuPercent: 10, projectDiskFreeBytes: 1e11 }, tools: { git: true }, devices: {} } })), () => 'op')
+    expect(recorded(s).command.decision.candidates.some((c: { title: string }) => c.title.startsWith('New agent') && c.title.includes('mac'))).toBe(true)
+  })
+  it('keeps "could not be verified" on a listed machine whose capacity read failed, because a failed read says nothing about the folder', async () => {
+    const s = scoped()
+    await routeTask({ ...input, assessment: { ...input.assessment, needs: { cwd: '/repo/api' } } }, s, where as never,
+      opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], ...(id === 'm2' ? { capacity: { ok: false, error: 'UNSUPPORTED' } } : {}) })), () => 'op')
+    const reasons = (recorded(s).command.decision.excluded as Array<{ title: string; reason: string }>).filter(e => e.title.includes('mac')).map(e => e.reason)
+    expect(reasons.length).toBeGreaterThan(0)
+    for (const reason of reasons) {
+      expect(reason).toContain('Project disk space could not be verified.')
+      expect(reason).not.toContain('does not have the project folder')
+    }
   })
   it('names a member that has no name, model or effort of its own, and leaves the decision blank when it is unrecorded', async () => {
     const plain = tab(); plain.state.agents = [{ id: 'a1', machineId: 'm1', harnessId: 'h1', configuration: { engine: 'claude' } }, agents[1]] as never
@@ -192,7 +245,9 @@ describe('routeTask', () => {
     const titles = (recorded(s).command.decision.candidates as Array<{ title: string }>).map(c => c.title)
     expect(titles.some(t => t.startsWith('Multiply'))).toBe(true)
     expect(titles.some(t => t.startsWith('Collab'))).toBe(false)
-    expect(recorded(s).command.decision.excluded.some((e: { title: string }) => e.title.startsWith('Collab'))).toBe(false)
+    // Left out because others' quota fits, which the log says.
+    expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([{ title: 'Collab · Claude sonnet medium · theirs',
+      reason: 'Its quota could not be read in full, and another candidate\'s quota fits this task.' }]))
   })
   it('opens a machine only members know and probes its members, but starts nothing new there', async () => {
     const two = tab(); two.state.agents = [{ ...agents[0], machineId: 'theirs' }, agents[1]] as never
@@ -216,6 +271,29 @@ describe('routeTask', () => {
     const rated = Object.fromEntries((recorded(s).command.decision.candidates as Array<{ title: string; quality: number; cost: number }>)
       .filter(c => /hand/.test(c.title)).map(c => [c.title.split(' · ')[0], [c.quality, c.cost]]))
     expect(rated).toEqual({ 'Opus hand': [3, 3], 'Sonnet hand': [2, 2], 'Codex hand': [3, 2] })
+  })
+  it('counts the quota open picks hold on the same account, and tells the Lead when nobody is expected to cover the task', async () => {
+    const pick = { conversationId: 'g1', title: 'Pick', outcome: null, assignmentId: 'as1', createdAt: new Date().toISOString(), final: { kind: 'new', engine: 'claude', model: 'opus' } }
+    const decisions = [{ ...pick, id: 'd1', account: 'acct', spend: { '5-hour': 45, weekly: 6 }, size: 'medium' },
+      // A finished pick, one not yet started and one from before phase 1 hold nothing.
+      { ...pick, id: 'd2', account: 'acct', spend: { '5-hour': 45 }, size: 'medium', outcome: 'done' }, { ...pick, id: 'd3', account: 'acct', spend: { '5-hour': 45 }, size: 'medium', final: null }, { ...pick, id: 'd4' }]
+    const s = scoped({ history: { ok: true, value: { messages: [], decisions, attempts: [] } } })
+    const result = await routeTask(input, s, where as never, opener(), () => 'op')
+    // 60% left less the 10% reserve and the 45% the open pick holds leaves 5% for a task that needs 30%.
+    expect(recorded(s).command.decision.candidates.every((c: { fit: { status: string; account: string } }) => c.fit.status === 'short' && c.fit.account === 'acct')).toBe(true)
+    expect(result.warnings).toEqual(['w', expect.stringMatching(/^No candidate is expected to cover this task; its 5-hour quota is expected to run out partway and resets in 3h\.$/)])
+  })
+  it('records again in the shape an older backend knows when it refuses the new fields as invalid', async () => {
+    const s = scoped(), base = s.getMockImplementation()!
+    let refused = 0
+    s.mockImplementation(async payload => payload.action === 'command' && !refused++ ? { error: 'VALIDATION_ERROR', detail: 'decision.candidates.0: Unrecognized key: "fit"', status: 400 } : base(payload))
+    expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
+    const [phase1, v1] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
+    expect(phase1.command.decision.assessment.size).toBe('medium')
+    expect(phase1.command.decision.candidates[0]).toHaveProperty('fit')
+    expect(v1.operationId).toBe(phase1.operationId)
+    expect(v1.command.decision.assessment).not.toHaveProperty('size')
+    expect(v1.command.decision.candidates.some((c: object) => 'fit' in c)).toBe(false)
   })
   it('falls back to the policy order when Jev is unavailable, and still routes when recording fails', async () => {
     const result = await routeTask(input, scoped({ jev: { ok: true, value: { unavailable: 'BUSY' } }, record: { error: 'BACKEND_UNAVAILABLE' } }), where as never, opener())

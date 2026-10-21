@@ -192,6 +192,9 @@ export interface HookServerHandlers {
   /** The phone half of a sign-in (backend routes/qrSignIn.ts) for the desktop and web apps: approve a device
    *  that says its code aloud (a lamp, #1410) with this computer's own session, as the phone does. */
   onSignInAnswer?: (action: 'lookup' | 'approve' | 'deny', body: { code: string }) => Promise<PairOutcome>
+  /** A Super Tab chat file from the native desktop, streamed on to the backend with this computer's account
+   *  (lib/superTabAttachmentProxy.ts): the app's REST client holds no token of its own. Answers on `res` itself. */
+  onSuperTabAttachment?: (req: http.IncomingMessage, res: http.ServerResponse, path: string) => Promise<void>
   onProductUsageReport?: (body: unknown) => Promise<PairOutcome>
   onProductUsageRead?: () => Promise<PairOutcome>
   onProductUsageWrite?: (body: unknown) => Promise<PairOutcome>
@@ -1100,6 +1103,16 @@ export function startHookServer(
           json(result.status, result.body)
         } catch { json(502, { success: false, error: { code: 'USAGE_UNAVAILABLE', message: 'Product usage unavailable' } }) }
         return
+      }
+      const attachment = req.method === 'POST' ? /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/attachments$/.exec(url) : null
+      if (attachment) {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onSuperTabAttachment) { json(503, { error: 'UNAVAILABLE' }); return }
+        // The body is the file, read by the handler as a stream: never readBody, which holds 256 KiB of text. An agent's
+        // `post --attach` names itself; the backend checks that this account runs that agent.
+        const asAgentId = new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('asAgentId')
+        const agent = asAgentId && /^[A-Za-z0-9_-]{1,160}$/.test(asAgentId) ? `?asAgentId=${asAgentId}` : ''
+        await handlers.onSuperTabAttachment(req, res, `${url}${agent}`); return
       }
       const signInAnswer = req.method === 'POST' ? /^\/api\/auth\/qr\/(lookup|approve|deny)$/.exec(url) : null
       if (signInAnswer) {

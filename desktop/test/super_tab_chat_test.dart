@@ -13,6 +13,16 @@ import 'package:harness/super_tabs/view.dart';
 import 'support/super_tab_fixture.dart';
 
 void main() {
+  test('work that waits on a person reads as people say it', () {
+    expect(superTabWorkWaits('needs_human'), isTrue);
+    expect(superTabWorkWaits('blocked'), isTrue);
+    expect(superTabWorkWaits('working'), isFalse);
+    expect(superTabWorkWaits(null), isFalse);
+    expect(superTabWorkStatusLabel('blocked'), 'stuck');
+    expect(superTabWorkStatusLabel('needs_human'), 'needs human');
+    expect(superTabWorkStatusLabel('reconciling'), 'reconciling');
+  });
+
   Future<SuperTabController> show(
     WidgetTester tester,
     ConversationServer server,
@@ -263,6 +273,14 @@ void main() {
       await c.refresh();
       await tester.pumpAndSettle();
       expect(find.text('Builder needs you'), findsNothing);
+      // Stuck waits on a person as a decision does.
+      group['assignment']
+        ..['status'] = 'blocked'
+        ..['result'] = 'The staging key is missing.';
+      server.revision++;
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(find.text('Builder needs you'), findsOneWidget);
     },
   );
 

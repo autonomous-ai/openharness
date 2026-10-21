@@ -447,7 +447,9 @@ static void turn_locked(const char *id, const char *kind, const char *text, int 
         // R1: only a NEW turn starts the clock; a heartbeat refreshes the word it carries.
         const bool new_turn = set_find(s_busy, id) < 0;
         if (!set_add(s_busy, id)) return;
-        set_remove(s_quest, id);   // only turn.started or question.close ends a question
+        // Only turn.started or question.close ends a question; a Super Tab's survives the turn (pod_model set_state).
+        const pod_agent_t *asked = pod_model_find(&s_pod.model, id);
+        if (!(asked && asked->state == POD_ASKING && asked->super_tab[0])) set_remove(s_quest, id);
         if (new_turn) settle(pod_ui_turn(&s_pod, id, "started", "", 0, now));
         feed_verb(id, text, now);
     } else if (!strcmp(kind, "verb")) {
@@ -534,13 +536,13 @@ void pro_app_notif_seen(const char *id, const char *token)
     leave();
 }
 
-void pro_app_question(const char *id, const char *request, const char *text)
+void pro_app_question(const char *id, const char *request, const char *text, const char *super_tab, pod_attention_t attention)
 {
     if (!id_ok(id)) return;
     pro_app_lock();
     if (s_linked && held(id) && set_add(s_quest, id)) {
         const char *q = text && text[0] ? text : "Needs your answer";
-        settle(pod_ui_question(&s_pod, id, q));
+        settle(pod_ui_question(&s_pod, id, q, super_tab, attention));
         uint32_t h = 2166136261u;   // FNV-1a of the request id and the prompt: a lost close must not mute the next one
         for (const char *c = request ? request : ""; *c; c++) h = (h ^ (uint8_t)*c) * 16777619u;
         h = (h ^ 0u) * 16777619u;
@@ -622,7 +624,8 @@ const char *pro_app_voice_block_reason(const char *agent_id)
         if (!strcmp(pa->engine, "terminal")) why = "Choose an agent pane.";
         else if (mach && !strcmp(mach->state, "offline")) why = "This computer is offline.";
         else if (mach && !strcmp(mach->state, "needs-link")) why = "Link this computer in Harness.";
-        else if (set_find(s_quest, agent_id) >= 0) why = "Answer its question first.";
+        // A Super Tab wait is not answered here: talking to the agent is how a person unblocks it.
+        else if (set_find(s_quest, agent_id) >= 0 && !pa->super_tab[0]) why = "Answer its question first.";
     }
     pro_app_unlock();
     return why;   // a literal, valid after the unlock

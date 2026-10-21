@@ -9,6 +9,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../logging/app_log.dart';
 import '../logging/redact.dart';
 import '../logging/startup_trace.dart';
+import '../logging/typing_trace.dart';
 import '../core/models.dart';
 import '../core/test_run.dart';
 import 'relay_codec.dart';
@@ -512,6 +513,20 @@ class WsConn {
     return decoded is Map<String, dynamic> ? decoded : null;
   }
 
+  /// A relay frame's turn in the inbound line, against when the socket handed it over: said when it
+  /// waited (or [always]), and only while somebody types — the channel's frames share this line
+  /// (`TerminalTransportHost.enqueueInbound`), so a wait here is a wait for the terminal too.
+  static void _traceInbound(String what, int arrivedMs, {bool always = false}) {
+    final waited = typingNowMs() - arrivedMs;
+    final line =
+        'ws in $what arrived t=$arrivedMs, waited ${waited}ms in the inbound line';
+    if (always) {
+      typingEvent(line);
+    } else if (waited >= 10) {
+      typingNote(line);
+    }
+  }
+
   static String _typeOf(Map<String, dynamic> message) =>
       message['type'] is String ? message['type'] as String : '?';
 
@@ -520,12 +535,16 @@ class WsConn {
 
   void _onRaw(dynamic raw) {
     final codec = _codec;
+    // When the socket handed the frame over, against when its turn in the inbound line came — see
+    // [_traceInbound].
+    final arrivedMs = kTypingTrace ? typingNowMs() : 0;
     if (raw is List<int>) {
       // The socket already hands over a Uint8List; copying it cost one allocation per chunk of
       // terminal output, for nothing.
       final bytes = raw is Uint8List ? raw : Uint8List.fromList(raw);
       _inboundTail = _inboundTail
           .then((_) async {
+            if (kTypingTrace) _traceInbound('binary', arrivedMs);
             final local = codec == null ? bytes : codec.decodeBinary(bytes);
             if (local == null) return;
             // Every relay binary frame is sealed by the machine — see [lastHeardFromMachineAt].
@@ -547,8 +566,16 @@ class WsConn {
         raw is String &&
         raw.length >= _decodeOffThreadFrom &&
         !kUnderTest) {
+      if (kTypingTrace) {
+        typingEvent(
+          'ws in large frame ${(raw.length / 1024).round()}KB arrived t=$arrivedMs',
+        );
+      }
       _inboundTail = _inboundTail
           .then((_) async {
+            if (kTypingTrace) {
+              _traceInbound('large frame', arrivedMs, always: true);
+            }
             final clock = Stopwatch()..start();
             final message = await _decodeOffThread(raw);
             if (message == null) return;
@@ -574,7 +601,10 @@ class WsConn {
     }
     if (codec != null) {
       _inboundTail = _inboundTail
-          .then((_) => _onRelayFrame(codec, message))
+          .then((_) {
+            if (kTypingTrace) _traceInbound(_typeOf(message), arrivedMs);
+            return _onRelayFrame(codec, message);
+          })
           .catchError((_) {
             // Keep the FIFO alive: a frame that will not open is dropped, never dispatched.
           });

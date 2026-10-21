@@ -121,7 +121,9 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
         command: { type: 'agent.startDispatch', startId } }))
       const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent',
         prompt: `You are joining a shared Super Tab. Run harness super-tab --tab ${input.tabId} status until this harness appears in the roster. Do not begin project work yet. Your lead will assign work in conversation ${request.conversationId}. Reply in that conversation using harness super-tab --tab ${input.tabId} post ${request.conversationId} 'your message' UNIQUE_OPERATION_ID. Run harness super-tab help for commands. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`,
-        ...(request.worktree ? { projectSource: 'worktree', gitSource: request.cwd, branchName: `super-tab/${startId}`, ...(request.branchRef ? { branchRef: request.branchRef } : {}) } : { cwd: request.cwd }),
+        ...(request.worktree ? { projectSource: 'worktree', gitSource: request.cwd, branchName: `super-tab/${startId}`,
+          // No branch named: the repository's default branch, fetched, not the host checkout's old HEAD.
+          ...(request.branchRef ? { branchRef: request.branchRef } : { branchBase: 'default' }) } : { cwd: request.cwd }),
       }
       for (const key of ['permissionMode', 'codexHome', 'gridModel', 'gridName']) if (request[key] !== undefined) payload[key] = request[key]
       // The routed model goes on the command line of this session alone. Typing /model into the pane afterwards saves

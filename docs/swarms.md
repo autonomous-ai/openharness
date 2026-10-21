@@ -51,6 +51,35 @@ tries the other transport (HTTPS or SSH) once. For a private repository, every
 contributing owner needs access to it on that machine, either through
 `gh auth login` and `gh auth setup-git` or through an SSH key.
 
+The lead starts new agents only on the Swarm's listed machines: every
+contributed machine, plus every machine an agent of the Swarm already runs on
+(the lead's own machine is always one of them). To make another machine
+available, a person adds it to the Swarm under Machines; the host then clones
+the project there.
+
+A Builder starts in a new worktree of the project's checkout on that machine.
+The host clones a project once and reuses the checkout, so it is not kept up to
+date. A start that names no `branchRef` therefore bases its worktree on the
+repository's default branch (`origin/HEAD`, else `origin/main` or
+`origin/master`), fetched first, rather than on whatever commit the checkout was
+left on. If the fetch fails (offline, access refused), the worktree starts from
+the copy of that branch the checkout already has; a repository with no `origin`
+default branch starts from the checkout's current commit, as before. The lead
+passes `branchRef` (`refs/remotes/origin/BRANCH`, fetched first, or
+`refs/heads/BRANCH`) to start from another branch, such as the integration
+branch the work builds on. This is the Swarm start only: New Harness in Desktop
+and the CLI still starts from the folder's current commit unless a branch is
+chosen. On the lead's own machine the same rule applies, so work that is only in
+the lead's checkout (unpushed commits) reaches a Builder through `branchRef`.
+
+A machine contribution accepts a start in the folder this project uses on that
+machine, with one of the engines its owner contributed and the owner's default
+account settings. Any other start is refused as `OUTSIDE_CONTRIBUTION`. The
+refusal names each refused field (`cwd`, `engine`, or any of `codexHome`,
+`gridModel`, `gridName`, `permissionMode`) with what the machine accepts: the
+folder this project uses there and the engines it contributes. It does not
+repeat the values the start sent.
+
 Ordinary guest machine sharing does not authorize Swarm controls under the
 owner's account. The owner contributes the machine or an agent. The lead's
 routing policy still determines eligible engines, capacity and model choices.
@@ -103,7 +132,8 @@ Use the matching backend, CLI and Desktop versions together for this feature:
 1. Generate the backend Prisma client and apply its additive schema, including
    `SuperTabSessionScope`, before serving the new project commands.
 2. Update participating hosts to the CLI with Swarm-scoped contributions and
-   project checkout preparation.
+   project checkout preparation. A host on an older CLI ignores the request for
+   the default branch and starts Builders from its checkout's current commit.
 3. Install the Desktop build with the project sidebar and Cmd-S entry point.
 
 A signed internal Desktop artifact alone does not update the backend or host

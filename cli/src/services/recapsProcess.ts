@@ -14,6 +14,7 @@
  * them each time it connects: a core that restarted holds nothing until then (core/recapsLink.ts).
  */
 import type { CoreApi, TurnCardFrame, TurnLifecycle, TurnSummaryFrame, RecapWatchers } from '../core/api.js'
+import { HOSTED_JEV_PATH } from '../lib/jev/jevClient.js'
 import type { LastTurnText } from '../lib/normalize.js'
 import { processCoreApi } from './processCoreApi.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
@@ -35,18 +36,31 @@ export interface RecapsCoreWays {
   turnCard(frame: TurnCardFrame): void
   turnSummary(frame: TurnSummaryFrame): void
   lastTurn(sessionId: string): Promise<LastTurnText | null>
+  /** Harness's Jev, for how loudly a turn ends: asked of the core, which signs it (core/recapsLink.ts). */
+  jev(body: unknown): Promise<{ status: number; body: Record<string, unknown> }>
 }
 
 /** The core API the recaps run on in their own process: the light services' (processCoreApi.ts), with
- *  the three ways the recaps reach the core. */
+ *  the ways the recaps reach the core. Of the account's backend, only Jev's route: the rest answers as
+ *  every light service's does. */
 export function recapsCoreApi(dataDir: string, ways: RecapsCoreWays): CoreApi {
   const api = processCoreApi(dataDir, 'recaps')
   return {
     ...api,
+    account: {
+      ...api.account,
+      backend: (method, path, body) => (method === 'POST' && path === HOSTED_JEV_PATH ? ways.jev(body) : api.account.backend(method, path, body)),
+    },
     transcripts: { ...api.transcripts, lastTurn: ways.lastTurn },
     clients: { ...api.clients, turnCard: ways.turnCard, turnSummary: ways.turnSummary },
   }
 }
+
+/** The core's answer to `jev`, as the backend's: a status and an object, or unavailable. */
+const backendAnswer = (answer: Record<string, unknown> | null): { status: number; body: Record<string, unknown> } =>
+  answer && typeof answer.status === 'number' && answer.body && typeof answer.body === 'object'
+    ? { status: answer.status, body: answer.body as Record<string, unknown> }
+    : { status: 503, body: { error: 'SERVICE_UNAVAILABLE' } }
 
 /** Whether what the core sent reads as a lifecycle event: its kind, and the watchers beside it. */
 const isLifecycle = (payload: Record<string, unknown>): payload is { event: TurnLifecycle; watchers: RecapWatchers } =>
@@ -77,6 +91,8 @@ export function runRecapsService(options: RecapsServiceOptions): ServiceProcess 
       const answer = await core.query('lastTurn', { sessionId })
       return answer.turn && typeof answer.turn === 'object' ? answer.turn as LastTurnText : null
     },
+    // Unavailable with no core: the tier then falls back to its rule (lib/notifyTier.ts).
+    jev: async (body) => backendAnswer(core ? await core.query('jev', { body }).catch(() => null) : null),
   }), { changed: tell })
 
   const run = options.run ?? runServiceProcess

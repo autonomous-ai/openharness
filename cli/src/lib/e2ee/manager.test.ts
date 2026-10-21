@@ -840,6 +840,22 @@ describe('E2eeManager guests', () => {
     // Nothing to seal: as wrapUp passes it.
     expect(h.mgr.wrapFor('g', { type: 'node_status', payload: { online: true } })).toEqual({ type: 'node_status', payload: { online: true } })
 
+    // An agent's question goes to the apps over the relay (core/questions.ts): sealed for the group, which the
+    // guest cannot open, and for the guest's own session, though core.ts's ENCRYPTED_UP_TYPES does not name it.
+    const ask = { requestId: 'q1', questions: [{ q: 'Ship it?', options: ['Yes', 'No'] }] }
+    const asked = h.mgr.wrapUp({ type: 'commander_question', agentId: 'a1', dbSessionId: 's', payload: ask })
+    expect(asked.agentId).toBe('a1')
+    expect(JSON.stringify(asked.payload)).not.toContain('Ship it?')
+    expect(C.unwrapPayload(owner.session!.groupKey, (asked.payload as Wrapped).__e2e, 'commander_question', 's')).toEqual(ask)
+    expect(C.unwrapPayload(guest.session!.groupKey, (asked.payload as Wrapped).__e2e, 'commander_question', 's')).toBeNull()
+    const askedMine = h.mgr.wrapFor('g', { type: 'commander_question', dbSessionId: 's', payload: ask })!
+    expect(C.unwrapPayload(guest.session!.s2c, (askedMine.payload as Wrapped).__e2e, 'commander_question', 's')).toEqual(ask)
+    // Its close carries only a request id, and goes in the clear, as the devices are sent it.
+    const close = { type: 'commander_question_close', agentId: 'a1', dbSessionId: 's', payload: { requestId: 'q1' } }
+    expect(h.mgr.wrapUp(close)).toEqual(close)
+    expect(h.mgr.wrapFor('g', close)).toEqual(close)
+    expect(h.mgr.wrapUp({ payload: {} })).toEqual({ payload: {} })
+
     // Sharing with lee ends: the key turns over, and the guest that stays is still handed a throwaway one.
     h.mgr.untrustPeer(C.b64e(other.identity.pub))
     owner.onRekey(h.lastFor('o', 'e2e_rekey')!)

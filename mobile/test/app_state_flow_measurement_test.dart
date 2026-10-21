@@ -99,6 +99,117 @@ void main() {
     });
   });
 
+  group('a dial still going when the app goes to the background', () {
+    // The OS suspends the app within seconds, so the socket's answer may never be heard; the dial
+    // is cancelled by the person leaving, before the counts are sent.
+
+    const outcomes = ['started', 'ok', 'failed', 'cancelled', 'unknown'];
+
+    /// How many `remote_connect` dials started and ended each way, apart from the duration buckets.
+    Future<Map<String, int>> dials(ViewerRig rig) async {
+      final all = await sent(rig, 'remote_connect');
+      return {
+        for (final outcome in outcomes)
+          if (all.containsKey('ui_phone_remote_connect_$outcome'))
+            outcome: all['ui_phone_remote_connect_$outcome']!,
+      };
+    }
+
+    test('is cancelled, once, and that goes out with the pause', () async {
+      final rig = await sharing({'m': []});
+      final before = rig.api.usageReports.length;
+      rig.app.sendMeasurementBeforeBackground = true;
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+
+      rig.app.handleAppPaused();
+      rig.app.handleAppPaused();
+      await pumpEventQueue();
+
+      // In the report the pause itself sent, not one of a later flush.
+      final reported = <String, int>{};
+      for (final report in rig.api.usageReports.skip(before)) {
+        (report['counters'] as Map).forEach((metric, value) {
+          reported['$metric'] = (reported['$metric'] ?? 0) + (value as int);
+        });
+      }
+      expect(reported, containsPair('ui_phone_remote_connect_started', 1));
+      expect(reported, containsPair('ui_phone_remote_connect_cancelled', 1));
+      expect(reported, isNot(contains('ui_phone_remote_connect_ok')));
+      expect(reported, isNot(contains('ui_phone_remote_connect_failed')));
+    });
+
+    test('is no second outcome when the socket answers after all', () async {
+      final rig = await sharing({'m': [], 'n': []});
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+      rig.app.connectionStatusForTest('n', ConnectionStatus.reconnecting);
+      rig.app.handleAppPaused();
+
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
+      rig.app.connectionStatusForTest('n', ConnectionStatus.disconnected);
+
+      expect(await dials(rig), {'started': 2, 'cancelled': 2});
+    });
+
+    test('every machine still dialling is cancelled, each once', () async {
+      final rig = await sharing({'m': [], 'n': [], 'o': []});
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+      rig.app.connectionStatusForTest('n', ConnectionStatus.reconnecting);
+      rig.app.connectionStatusForTest('o', ConnectionStatus.connecting);
+      rig.app.connectionStatusForTest('o', ConnectionStatus.connected);
+
+      rig.app.handleAppPaused();
+
+      expect(await dials(rig), {'started': 3, 'ok': 1, 'cancelled': 2});
+    });
+
+    test('that had connected before stays ok, and only ok', () async {
+      final rig = await sharing({'m': []});
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
+
+      rig.app.handleAppPaused();
+
+      expect(await dials(rig), {'started': 1, 'ok': 1});
+    });
+
+    test('that failed before stays failed, and only failed', () async {
+      final rig = await sharing({'m': []});
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+      rig.app.connectionStatusForTest('m', ConnectionStatus.disconnected);
+
+      rig.app.handleAppPaused();
+
+      expect(await dials(rig), {'started': 1, 'failed': 1});
+    });
+
+    test(
+      'is followed by a new count when the app dials after resuming',
+      () async {
+        final rig = await sharing({'m': []});
+        rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+        rig.app.handleAppPaused();
+        rig.app.handleAppResumed();
+        await settle();
+
+        rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+        rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
+
+        expect(await dials(rig), {'started': 2, 'cancelled': 1, 'ok': 1});
+      },
+    );
+
+    test('is not cancelled by losing the foreground for a moment', () async {
+      // A system sheet or the app switcher does not stop the dial; only the background does.
+      final rig = await sharing({'m': []});
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+
+      rig.app.handleAppInactive();
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
+
+      expect(await dials(rig), {'started': 1, 'ok': 1});
+    });
+  });
+
   group('dials', () {
     test('a socket coming back by itself is the app\'s own', () async {
       final rig = await sharing({'m': []});

@@ -28,7 +28,7 @@ import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
 
 import { PLAYER_STATES, type PlayerSession } from './playerLibrary.js'
-import type { ActivitySnapshot, AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
+import type { ActivitySnapshot, AppSwarms, SuperTabAsk, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
 import type { WindowRoute } from './windowRoute.js'
 import type { SelectionCommand, SelectionResult } from './windowSelection.js'
 import type { VisitCommand, VisitResult } from './windowVisit.js'
@@ -36,6 +36,7 @@ import type { FormCommand, FormResult } from './windowForm.js'
 import type { PetStore } from './pets/store.js'
 import type { MachineFleet } from './machineFleet.js'
 import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
+import { isTier, type Tier } from '../lib/notifyTier.js'
 
 /** One completed turn's recap, as the mirror keeps them. */
 
@@ -901,8 +902,8 @@ export function cableStepFor(
  * kind reaches the cable the day it reaches the socket.
  */
 export function cableEventFor(
-  frame: { type?: string; agentId?: string; payload?: { kind?: string; text?: string; recap?: string; subagent?: unknown; restored?: unknown; update?: unknown; fullText?: unknown; failed?: unknown } },
-): { kind: 'processing' | 'done' | 'summary' | 'error'; agentId: string; text: string; recap: string; subagent: boolean; update?: string; fullText?: string; failed?: boolean } | null {
+  frame: { type?: string; agentId?: string; payload?: { kind?: string; text?: string; recap?: string; subagent?: unknown; restored?: unknown; update?: unknown; fullText?: unknown; failed?: unknown; tier?: unknown } },
+): { kind: 'processing' | 'done' | 'summary' | 'error'; agentId: string; text: string; recap: string; subagent: boolean; update?: string; fullText?: string; failed?: boolean; tier?: Tier } | null {
   if (frame.type !== 'commander_event' || !frame.agentId) return null
   const kind = frame.payload?.kind
   if (kind !== 'processing' && kind !== 'done' && kind !== 'summary' && kind !== 'error') return null
@@ -911,10 +912,13 @@ export function cableEventFor(
   const silent = frame.payload?.subagent === true || frame.payload?.restored === true
   const update = frame.payload?.update
   const fullText = frame.payload?.fullText
+  // `tier`: how loudly the turn tells, decided once by the recaps (services/recaps.ts) for every screen.
+  const tier = frame.payload?.tier
   return { kind, agentId: frame.agentId, text: frame.payload?.text ?? '', recap: frame.payload?.recap ?? '', subagent: silent,
     ...(kind === 'processing' && typeof update === 'string' ? { update } : {}),
     ...(kind === 'summary' && frame.payload?.failed === true ? { failed: true } : {}),
-    ...(kind === 'summary' && typeof fullText === 'string' && fullText ? { fullText } : {}) }
+    ...(kind === 'summary' && typeof fullText === 'string' && fullText ? { fullText } : {}),
+    ...(kind === 'summary' && isTier(tier) ? { tier } : {}) }
 }
 
 /**
@@ -925,13 +929,16 @@ export function cableEventFor(
  * question screen was complete, wired and unreachable: nothing on this side ever produced the message.
  */
 export function cableQuestionFor(
-  frame: { type?: string; agentId?: string; payload?: { requestId?: string; questions?: unknown } },
-): { agentId: string; requestId: string; questions: unknown } | null {
+  frame: { type?: string; agentId?: string; payload?: { requestId?: string; questions?: unknown; superTab?: unknown; attention?: unknown } },
+): { agentId: string; requestId: string; questions: unknown; superTab?: SuperTabAsk } | null {
   if (frame.type !== 'commander_question' || !frame.agentId) return null
   const requestId = frame.payload?.requestId
   const questions = frame.payload?.questions
   if (typeof requestId !== 'string' || !requestId || !Array.isArray(questions)) return null
-  return { agentId: frame.agentId, requestId, questions }
+  // A Super Tab member waiting on a person (core/superTabAttention.ts): the tab's name and what it needs ride along.
+  const superTab = frame.payload?.superTab, attention = frame.payload?.attention
+  const tab = typeof superTab === 'string' && superTab && (attention === 'decision' || attention === 'stuck') ? { superTab, attention } as SuperTabAsk : null
+  return { agentId: frame.agentId, requestId, questions, ...(tab ? { superTab: tab } : {}) }
 }
 
 /**

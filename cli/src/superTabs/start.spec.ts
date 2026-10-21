@@ -72,6 +72,29 @@ it('uses one native creation receipt and joins its captured group after a lost j
   expect(commands.find(c => c.type === 'agent.started')).toMatchObject({ startId: 'start', harnessId: 'native', configuration: { engine: 'claude', model: 'fixture-model', effort: 'high' } })
   expect(commands.some(c => c.type === 'work.assign')).toBe(false)
 })
+describe('which branch a worktree starts from', () => {
+  const created = async (change: (request: Record<string, unknown>) => void) => {
+    const f = fixture(); change(f.start.request)
+    await startAgent({ action: 'start', tabId: 'tab', operationId: 'op', request: f.start.request }, f.scoped, where, f.open)
+    return f.request.mock.calls.filter(c => c[0] === 'agent_create').map(c => c[1])
+  }
+  it('is the repository\'s default branch when the start names none', async () => {
+    const [payload] = await created(() => {})
+    expect(payload).toMatchObject({ projectSource: 'worktree', gitSource: '/repo', branchName: 'super-tab/start', branchBase: 'default' })
+    expect(payload).not.toHaveProperty('branchRef')
+  })
+  it('is the branch the start names, unchanged', async () => {
+    const [payload] = await created(request => { request.branchRef = 'refs/remotes/origin/feat/mobile' })
+    expect(payload).toMatchObject({ projectSource: 'worktree', branchRef: 'refs/remotes/origin/feat/mobile' })
+    expect(payload).not.toHaveProperty('branchBase')
+  })
+  it('is not asked for when the agent works in the folder itself', async () => {
+    const [payload] = await created(request => { request.worktree = false })
+    expect(payload).toMatchObject({ cwd: '/repo' })
+    expect(payload).not.toHaveProperty('branchBase')
+    expect(payload).not.toHaveProperty('projectSource')
+  })
+})
 it('does not recreate when a previously dispatched start loses its native receipt', async () => {
   const f = fixture(); f.start.dispatched = true
   expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ error: 'START_UNCERTAIN', creationId: 'super-native-receipt' })

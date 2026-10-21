@@ -24,6 +24,18 @@ import { ReplayWindow } from './replayWindow.js'
 
 type Frame = Record<string, unknown>
 
+/**
+ * `up` frames the web audience is sent sealed although core.ts's `ENCRYPTED_UP_TYPES` does not name them.
+ * `commander_question` carries the question and its option labels — user content, as a recap is — and since
+ * 2026-10-21 it goes to the owner's apps over the relay too (core/questions.ts), so a phone hears an agent
+ * waiting on it. Kept here rather than in core.ts, as `wrapCommander` keeps it for the devices: core.ts is
+ * hashed and pinned, while every reader opens by the envelope (any `payload.__e2e`: the phone's and the
+ * desktop's relay_session_crypto.dart `unwrapIncoming`), so none of them changes. Its close carries only a
+ * request id, and goes as the devices are sent it: in the clear.
+ */
+const SEALED_FOR_WEB: ReadonlySet<string> = new Set(['commander_question'])
+const sealsForWeb = (type: string | undefined): type is string => !!type && (C.isEncryptedUpType(type) || SEALED_FOR_WEB.has(type))
+
 export type PairResult =
   | { ok: true; label: string; fingerprint: string }
   | { ok: false; error: 'NO_INTENT' | 'EXPIRED' | 'CODE_MISMATCH' | 'BACKEND_DOWN' | 'RATE_LIMITED' | 'BUSY' | 'TIMEOUT' | 'CANCELLED' }
@@ -373,7 +385,7 @@ export class E2eeManager {
     const s = this.sessions.get(connId)
     if (!s) return null
     const type = frame.type as string | undefined
-    if (!type || !C.isEncryptedUpType(type)) return frame
+    if (!sealsForWeb(type)) return frame
     return { ...frame, payload: C.wrapPayload(s.s2c, 'p', s.s2cCounter++, type, frame.dbSessionId as string | undefined, frame.payload) }
   }
 
@@ -382,7 +394,7 @@ export class E2eeManager {
   /** Encrypt a broadcast `up` event under the group key if it carries user content; else pass through. */
   wrapUp(frame: Frame): Frame {
     const type = frame.type as string | undefined
-    if (!type || !C.isEncryptedUpType(type)) return frame
+    if (!sealsForWeb(type)) return frame
     const wrapped = C.wrapPayload(this.groupKey, 'g', this.groupCounter++, type, frame.dbSessionId as string | undefined, frame.payload, this.epoch)
     return { ...frame, payload: wrapped }
   }

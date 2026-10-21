@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import '../core/local_key_value_store.dart';
+import 'attachment_upload.dart';
 import 'controller.dart';
 import 'model.dart';
 
@@ -21,12 +22,14 @@ class SuperTabClient {
     required this.storage,
     this.onSnapshot,
     this.onTabs,
+    this.upload = refuseUpload,
     this.discoveryInterval = const Duration(seconds: 15),
   });
   final SuperTabTransport transport;
   final LocalKeyValueStore storage;
   final void Function(SuperTabController)? onSnapshot;
   final void Function(List<SuperTabListing>, Set<String> hidden)? onTabs;
+  final SuperTabUpload upload;
   final Duration discoveryInterval;
   String? _account;
   int _generation = 0;
@@ -238,6 +241,7 @@ class SuperTabClient {
         return map(method, path, body: body);
       },
       save: (state) => storage.write(key, jsonEncode(state)),
+      upload: upload,
     );
     var seenRevision = -1;
     controller.addListener(() {

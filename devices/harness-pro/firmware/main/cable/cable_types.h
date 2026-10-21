@@ -50,6 +50,14 @@ typedef struct {
 typedef enum { POD_TIER_ALERT, POD_TIER_LIST, POD_TIER_SILENT } pod_tier_t;
 
 /*
+ * WHAT A SUPER TAB QUESTION ASKS FOR (the question frame's optional `attention`, sent with `superTab`, the shared
+ * multi-agent project's name): decision = a human has to choose, stuck = the agent cannot go on. Both are alerts whose
+ * toast stays until it is dismissed, answered or seen in Notices. NONE: a plain question (no `superTab`), as before.
+ */
+typedef enum { POD_ATTN_NONE, POD_ATTN_DECISION, POD_ATTN_STUCK } pod_attention_t;
+#define SUPER_TAB_MAX 49   // the Super Tab's name: at most 48 bytes, NUL included here
+
+/*
  * ONE TILE OF THE SELECTED TAB'S GRID, exactly where the window put it: a unit rectangle in THOUSANDTHS of the
  * grid. `agent_id` is empty for a tile this device cannot drive (a shell, a viewer); it still holds its place.
  * Relayed, never derived. An empty list means a daemon or window too old to send one.

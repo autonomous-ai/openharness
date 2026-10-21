@@ -637,7 +637,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     if (accounts.isEmpty && fresh) {
       accounts = [
         for (final raw in observation['quotas'] as List? ?? [])
-          _quotaRow(superTabMap(raw), id),
+          // Routing reads quota for these two only; other engines drew "—".
+          if (const {'claude', 'codex'}.contains(superTabMap(raw)['engine']))
+            _quotaRow(superTabMap(raw), id),
       ];
     }
     final usage = WorkspaceSubscriptionUsage.fromRows(online ? accounts : []);

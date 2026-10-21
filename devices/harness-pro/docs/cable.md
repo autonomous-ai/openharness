@@ -28,6 +28,7 @@ Full key list, in the order the Pro sends it:
 | `activity` | `"steps-v1"` | capability |
 | `stats` | `"turn-v1"` | capability |
 | `player` | `"library-v1"` | capability |
+| `superTab` | `"wait-v1"` | capability: Super Tab waits on `question` (below) |
 | `ota` | `"v1"` | capability: the Pro takes firmware offers |
 | `mac` | `aa:bb:...` | existing |
 | `settings` | object | existing: brightness, character, face, voiceLang, muted, quiet, straightTitle, focusFace, scrollReversed, round |
@@ -45,6 +46,7 @@ Capabilities are per session: they reset on a new port and on close, like the br
 | `recap: "long-v1"` | `full` on `summary` (live and `restore:true`) | `{t:"summary", agentId, recap, text, full?:string, restore?:true, ...}`. `full` is the whole answer's prose: markdown stripped, whitespace collapsed, at most **1200 chars**, at most **3600 UTF-8 bytes**, cut on a word boundary with `…`. Omitted (not empty) when the answer has no text. Firmware recap buffer is 2048 B. `recap` and `text` are unchanged. |
 | `activity: "steps-v1"` | `step`, `action`, `elapsedSeconds` on `turn.activity` | `{t:"turn.activity", agentId, text, action?:string, elapsedSeconds?:int, step?:string}`. `step`: one tool card as `"Tool · arg"` (a path argument keeps its last segment), at most **120 chars**, sent as `{text:"", step}` the moment the tool starts; the firmware cuts at 400. `action`: latest assistant-written progress paragraph, whitespace collapsed, at most **188 bytes** (firmware keeps 192 B). `elapsedSeconds`: integer **0..2592000**, parsed from the engine footer (`1h 2m 3s`); anything else is omitted. `action` also rides on the first `turn.activity` right after `turn.started`. |
 | `player: "library-v1"` | feature `player.library` in `welcome.features`; the `player.library.get` request and the `player.library` reply | Request (device to host): `{t:"player.library.get", offset:int 0..1000000, request:int 0..4294967295}`; anything else is ignored. Reply: `{t:"player.library", request, offset, total, machines, rows:[...]}`. `rows` has at most **6** (page size); `offset` is clamped to `max(0, total-6)`; the page is never re-sorted (desktop order). Row: `{id, machineId, name, engine, status, ageSeconds}`; `id`, `machineId` non-empty and < 48 B; `name` <= 95 B, `engine` <= 15 B (control chars to spaces, UTF-8 safe); `status` one of `idle working question finished failed paused offline`; `ageSeconds` is -1 (unknown) or 0..315360000. The firmware rejects the whole page if `count != min(6, total - offset)`. `request` echoes the latest request; a reply for an older request is dropped. Resent at most every 10 s unless the page changed. |
+| `superTab: "wait-v1"` | `question` frames for Super Tab waits | `{t:"question", agentId, id:"supertab:…", questions:[{q}], superTab:string ≤48 B, attention:"decision"\|"stuck"}`; see "Super Tab waits on `question`". Without it the daemon sends none. |
 
 Order of arrival the firmware tolerates: any. Every field above is optional on the device side; a missing one
 leaves the Pod showing an empty body, never an error.
@@ -163,3 +165,22 @@ frame for each question still open. It does not replay recent `summary` history 
 wake or toast) or `"silent"` (the card updates, nothing else). The host still sends the older flags beside it
 for firmware that predates `tier`: `alert` sets neither, `list` sets `quiet: true`, `silent` sets `silent: true`.
 `question` and `turn.error` carry no `tier`; treat both as `alert`.
+
+## Super Tab waits on `question`
+
+When a Super Tab member running on this machine needs a person (its assignment's `work.status` is `needs_human` or
+`blocked`), the daemon sends it as a `question` with two optional fields: `superTab` (the tab's name, at most 48 bytes)
+and `attention` (`"decision"` or `"stuck"`). Only a device whose hello says `superTab: "wait-v1"` (the Pro) is sent
+one; the round dial would open a question screen that cannot load. `questions[0].q` is the decision asked for, or
+`Stuck: <reason>`; the question has no `key` or `options` and is not answered on a device (`question.read` says so; an
+`answer` or `answer.reviewed` for its id is dropped), and it does not hold Talk back: talking to the agent is how a
+person unblocks it. Its `id` is `supertab:<assignment>:<status>`, under 64 bytes. It is closed with `question.close`
+when the status moves on, the attempt or agent changes, or the tab is paused.
+
+The Pro keeps such a question through the agent's turns (`turn.started`, `turn.done`, `turn.error`, a `summary`, a
+library sweep), so it alerts once: a finished turn meanwhile neither beeps nor replaces its Notices entry or toast, a
+failed one still alerts. Closed, the agent takes the state its turns left it in (idle or done, working only mid-turn).
+A link drop ends it as it ends any question (it becomes a plain one the next turn ends); the daemon asks it again when
+the Pro's session comes back (its `agents.list`) and on a resync. The library page reports a waiting agent as
+`question`. An engine's own question for the same agent replaces it (the daemon closes the wait first) and the daemon
+asks the wait again once that question closes.

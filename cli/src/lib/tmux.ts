@@ -505,8 +505,8 @@ export function sendLiteralToTmux(pane: string, text: string): Promise<boolean> 
  * mechanism `sendToTmux` already uses for composer messages — just without the trailing Enter, since a
  * paste into a live terminal must not auto-submit.
  */
-export function pasteRawIntoTmux(pane: string, text: string): Promise<boolean> {
-  return tmuxPasteText(pane, text, true)
+export function pasteRawIntoTmux(pane: string, text: string, allowed?: () => boolean): Promise<boolean> {
+  return tmuxPasteText(pane, text, true, allowed)
 }
 
 export function sendKeyToTmux(pane: string, key: string): Promise<boolean> {

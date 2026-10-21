@@ -6,6 +6,9 @@ import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { expect, it } from 'vitest'
 
+/** The child's verdict, its last line: the pool says above it how its answer went (`[terminal-p2p] … answered`). */
+const lastLine = (output: string): string => output.trim().split('\n').at(-1)!
+
 it('loads the real peer library once, only when a peer negotiation needs it', async () => {
   // Found by QA on a quiet machine: a gateway paid for werift before any P2P traffic.
   // Observe real module evaluation in a disposable split bundle, not Node's CommonJS cache.
@@ -90,7 +93,7 @@ it('loads the real peer library once, only when a peer negotiation needs it', as
       cwd: cli, encoding: 'utf8', timeout: 15_000, maxBuffer: 1024 * 1024,
       env: { ...process.env, NODE_OPTIONS: '' },
     })
-    expect(JSON.parse(output.trim())).toEqual({ evaluations: 1 })
+    expect(JSON.parse(lastLine(output))).toEqual({ evaluations: 1 })
     // A missing split chunk costs only P2P. In particular begin() must not reject unhandled.
     const peerChunk = readdirSync(root).find(name => name.startsWith('part-')
       && readFileSync(join(root, name), 'utf8').includes('globalThis.__qaPeerLibraryEvaluations ='))
@@ -100,7 +103,7 @@ it('loads the real peer library once, only when a peer negotiation needs it', as
       cwd: cli, encoding: 'utf8', timeout: 15_000, maxBuffer: 1024 * 1024,
       env: { ...process.env, NODE_OPTIONS: '', EXPECT_PEER_LOAD_FAILURE: '1' },
     })
-    expect(JSON.parse(unavailable.trim())).toEqual({ unavailable: true })
+    expect(JSON.parse(lastLine(unavailable))).toEqual({ unavailable: true })
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

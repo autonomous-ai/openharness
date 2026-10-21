@@ -758,9 +758,13 @@ class AppNotifier extends ChangeNotifier {
   void addAgentToDeskTab(String tabId, AgentRef agent) =>
       _desk.addToTab(tabId, agent);
 
-  /// A tab renamed by hand, from a double tap on its name in the tabs panel.
+  /// A tab renamed by hand, from holding its chip in Find.
   /// See [PhoneDesk.renameTab].
   void renameDeskTab(String tabId, String name) => _desk.renameTab(tabId, name);
+
+  /// A tab closed by hand, from holding its chip in Find. Its harnesses keep
+  /// running. See [PhoneDesk.closeTab].
+  void closeDeskTab(String tabId) => _desk.closeTab(tabId);
 
   /// An agent that already exists opens a tab of its own — the `+` on the tab
   /// row. See [PhoneDesk.createTabFor].
@@ -1402,6 +1406,19 @@ class AppNotifier extends ChangeNotifier {
                 ? ProductOutcome.ok
                 : ProductOutcome.failed,
           );
+    }
+  }
+
+  /// Ends every dial still going as `cancelled`: the person left the screen before it had an answer,
+  /// which is neither a success nor a failure of the socket. Each count is dropped from
+  /// [_measurementConnections] as it ends, so the socket's own answer later finds none to end again
+  /// (no second outcome), and a dial after the app is back starts a fresh count.
+  void _cancelMeasurementConnections() {
+    if (_measurementConnections.isEmpty) return;
+    final open = _measurementConnections.values.toList();
+    _measurementConnections.clear();
+    for (final finish in open) {
+      finish(ProductOutcome.cancelled);
     }
   }
 
@@ -10273,10 +10290,10 @@ class AppNotifier extends ChangeNotifier {
           unawaited(_loadMachineData(machine, force: true));
         }
         break;
-      // An agent stopped and is waiting on the person. Ignored by this window
-      // until now, even though the daemon had already shaped the question for
-      // the dial — `sendCommander` is device-only, so it never came down this
-      // wire at all.
+      // An agent stopped and is waiting on the person. Over the relay since
+      // 2026-10-21 (cli core/questions.ts `sendRemote`); a daemon from before
+      // shaped it for the dial and its own computer only, so it never came
+      // down this wire.
       case 'commander_question':
         final agentId = _eventAgentId(machine, event, payload);
         if (agentId != null) {
@@ -10326,6 +10343,18 @@ class AppNotifier extends ChangeNotifier {
           ), requestId: requestId is String ? requestId : null);
         }
         break;
+      // Which questions the machine has open at all, said as an app connects,
+      // after each one still open (cli core/questions.ts `reannounceRemote`).
+      // One held here and not among them was answered while the phone was away.
+      case 'commander_questions_open':
+        final requestIds = payload['requestIds'];
+        if (requestIds is! List) return;
+        final open = requestIds.whereType<String>().toSet();
+        machine.blockedAgents.removeWhere(
+          (_, asked) => !open.contains(asked.requestId),
+        );
+        agentNotices.questionsOpen(machine.machine.machineId, open);
+        break;
       case 'turn_started':
       case 'turn_heartbeat':
         var changed = false;
@@ -10371,6 +10400,11 @@ class AppNotifier extends ChangeNotifier {
           }
         }
         break;
+      // The recap that follows a turn's end. Nothing here draws it: it says
+      // how loudly that end tells.
+      case 'turn_summary':
+        _announceTurnTier(machine, event, payload);
+        return;
       // A program in a harness's pane opened a page (Claude Code's `/login`) while this phone was the one
       // typing there (cli core/terminals/browser.ts): it opens on this phone. Nothing here to redraw.
       case 'browser_open':
@@ -10490,7 +10524,8 @@ class AppNotifier extends ChangeNotifier {
       machine.agents.where((a) => a.id == agentId).firstOrNull;
 
   /// One agent's turn ended: tell the person as the dial would — see
-  /// `notify/done_notice.dart` for when that is a tap, a mark or a notice.
+  /// `notify/done_notice.dart` for when that is a tap, a mark or a notice —
+  /// once the daemon's `turn_summary` says how loudly ([_announceTurnTier]).
   void _announceTurnEnd(
     MachineState machine,
     String agentId,
@@ -10500,7 +10535,7 @@ class AppNotifier extends ChangeNotifier {
     final agent = _knownAgent(machine, agentId);
     if (agent == null) return;
     final who = _noticeAgent(machine, agent);
-    agentNotices.turnEnded(
+    agentNotices.turnEndedAwaitingTier(
       who,
       turnEndFrom(
         event,
@@ -10511,6 +10546,23 @@ class AppNotifier extends ChangeNotifier {
       ),
       watching: () => _watchedAgent == who.ref,
     );
+  }
+
+  /// The recap after a turn's end, with how loudly the daemon says it tells
+  /// (`tier`, cli `services/recaps.ts`): the turn waiting for it is announced
+  /// now. A daemon that decides none sends its recap without one, and the old
+  /// rule goes at once.
+  void _announceTurnTier(
+    MachineState machine,
+    Map<String, dynamic> event,
+    Map<String, dynamic> payload,
+  ) {
+    final agentId = _eventAgentId(machine, event, payload);
+    if (agentId == null) return;
+    agentNotices.tierDecided((
+      machineId: machine.machine.machineId,
+      agentId: agentId,
+    ), noticeTierFrom(payload['tier']));
   }
 
   /// An agent stopped to ask the person something — see
@@ -10586,6 +10638,10 @@ class AppNotifier extends ChangeNotifier {
   ///
   /// And write the machine cache now ([_keepMachineCache]): this is the last moment the app is sure
   /// to run, since closing it from the app switcher starts by sending it here.
+  ///
+  /// A dial still going ends `cancelled` ([_cancelMeasurementConnections]) before the counts are
+  /// sent: an app the OS suspends in its first seconds away never hears the socket's answer, and
+  /// the dial would stay without an outcome.
   void handleAppPaused() {
     // The first pause of this time away: a second without a resume between (the OS repeating
     // itself) does not move the moment the phone actually left.
@@ -10600,6 +10656,7 @@ class AppNotifier extends ChangeNotifier {
     }
     // The agents this run learned between lists, for the next launch — see [_keepMachineCache].
     _keepMachineCache();
+    _cancelMeasurementConnections();
     _sendMeasurementBeforeBackground();
   }
 

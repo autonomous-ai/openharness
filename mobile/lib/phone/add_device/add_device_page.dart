@@ -45,6 +45,102 @@ enum _Step { start, join, unlock, networks, password, waiting, done, back }
 enum _Progress { choosing, talking, reading }
 
 /// One line of [_Progress]: a check when done, a spinner while it is going on.
+/// The setup's steps, in order, with where the person is: done ✓, here ▸, to come ·. On the first
+/// page each says what it asks of them, before anything is looked for.
+class _Steps extends StatelessWidget {
+  const _Steps({required this.current, this.details = false});
+
+  /// The step the person is on; past the last, every step is done.
+  final int current;
+  final bool details;
+
+  static const steps = [
+    (
+      'Turn the computer on',
+      'Plug it in and switch it on. In about a minute it opens a Wi-Fi named "Harness-…".',
+    ),
+    (
+      'Find it',
+      'This phone looks for that Wi-Fi and joins it. Stay close to the computer.',
+    ),
+    (
+      'Its password',
+      'If it asks: the computer\'s password, the one set when it was installed.',
+    ),
+    (
+      'Its Wi-Fi',
+      'Choose the Wi-Fi the computer should use, and type its password.',
+    ),
+    (
+      'Online',
+      'It joins that Wi-Fi and signs in to your account. Then it shows in Computers.',
+    ),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Column(
+      key: const Key('add-device-steps'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var i = 0; i < steps.length; i++)
+          Padding(
+            padding: EdgeInsets.symmetric(vertical: details ? 6 : 2),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 22,
+                  child: Text(
+                    i < current
+                        ? '✓'
+                        : i == current
+                        ? '▸'
+                        : '·',
+                    style: tty.style(
+                      color: i < current
+                          ? tty.green
+                          : i == current
+                          ? tty.text
+                          : tty.faint,
+                      weight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${i + 1}. ${steps[i].$1}',
+                        style: tty.style(
+                          color: i == current
+                              ? tty.text
+                              : i < current
+                              ? tty.dim
+                              : tty.faint,
+                          weight: i == current
+                              ? FontWeight.w600
+                              : FontWeight.w400,
+                        ),
+                      ),
+                      if (details)
+                        Text(
+                          steps[i].$2,
+                          style: tty.style(color: tty.dim, size: TtySize.meta),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 class _Line extends StatelessWidget {
   const _Line({required this.done, required this.text});
 
@@ -171,15 +267,24 @@ class _AddDevicePageState extends State<AddDevicePage> {
     });
   }
 
-  @override
-  void initState() {
-    super.initState();
-    unawaited(_start());
-  }
+  /// Find the device was pressed: the steps are being followed. Before it, the first page only says
+  /// what is to come — nothing is looked for until the person is ready.
+  bool _begun = false;
+
+  /// Where [_step] is among [_Steps.steps].
+  int get _stage => switch (_step) {
+    _Step.start => _begun ? 1 : 0,
+    _Step.join => 1,
+    _Step.unlock => 2,
+    _Step.networks || _Step.password => 3,
+    _Step.waiting => 4,
+    _Step.done || _Step.back => 5,
+  };
 
   // -- 1. a ticket while the Internet is still here --
 
   Future<void> _start() async {
+    _begun = true;
     _show(_Step.start);
     setState(() => _busy = true);
     try {
@@ -719,7 +824,10 @@ class _AddDevicePageState extends State<AddDevicePage> {
                     size: TtySize.display,
                     weight: FontWeight.w600,
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 12),
+                  // Where the person is, on every page: the steps, with their words on the first.
+                  _Steps(current: _stage, details: !_begun),
+                  const SizedBox(height: 16),
                   // Above the step, not under it: under a list of twenty Wi-Fi it was off screen.
                   if (_error.isNotEmpty) ...[
                     Text(
@@ -747,10 +855,12 @@ class _AddDevicePageState extends State<AddDevicePage> {
     switch (_step) {
       case _Step.start:
         return [
-          say(
-            'For a Harness with no screen. Plug it in and wait a minute: it opens a Wi-Fi named '
-            '"Harness-…".',
-          ),
+          if (_begun)
+            say('Getting ready to sign the computer in…')
+          else
+            say(
+              'When the computer is on and its Wi-Fi "Harness-…" is up, tap Find the device.',
+            ),
         ];
       case _Step.join:
         return [
@@ -948,7 +1058,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
         return [
           TtyPrimaryButton(
             key: const Key('add-device-continue'),
-            label: 'Try again',
+            label: _begun ? 'Try again' : 'Find the device',
             busy: _busy,
             busyLabel: 'Preparing…',
             onPressed: () => unawaited(_start()),

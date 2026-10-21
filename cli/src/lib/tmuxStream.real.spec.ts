@@ -254,6 +254,40 @@ run('TmuxControlStream real tmux', () => {
 
   // The stream manager reads the output a keyframe held back as it reads live output, and begins the keyframe for
   // Codex's print from it: what follows the clear precedes that keyframe's cut, and must not reach the viewer after it.
+  it('gives a keyframe the cursor of the grid it captured, while the pane is still printing', async () => {
+    // Keys are echoed while their own pane's keyframe is taken (backendSocket.ts `enqueueTerminalBinary`): a
+    // cursor read before the grid, a round trip earlier, sat behind the echo it came with, and the receiver
+    // drew the next one over it.
+    const opened = await TmuxControlStream.open(paneId, { cols: 200, rows: 10 }, { onData: () => {}, onClose: () => {} })
+    expect(opened.state).toBe('succeeded')
+    if (opened.state !== 'succeeded') return
+    try {
+      await opened.value.writeRaw(Buffer.from(`clear; for i in $(seq 1 150); do printf x; sleep 0.005; done; printf '\\nDONE\\n'\r`))
+      await eventually(async () => (await tmux(['capture-pane', '-p', '-t', paneId])).startsWith('xx'))
+      const mismatches: string[] = []
+      let judged = 0
+      for (let attempt = 0; attempt < 20; attempt++) {
+        opened.value.beginSnapshot()
+        const shot = await opened.value.snapshot()
+        opened.value.endSnapshot()
+        expect(shot.state).toBe('succeeded')
+        if (shot.state !== 'succeeded') return
+        const text = Buffer.from(shot.value.bytes).toString('latin1')
+        const cursor = /\u001b\[(\d+);(\d+)H\u001b\[\?7h\u001b\[\?25[hl]$/.exec(text)
+        const firstRow = /\u001b\[1;1H(?:\u001b\[[0-9;]*m)*([^\u001b]*)/.exec(text)?.[1] ?? ''
+        const printed = /^x*/.exec(firstRow)![0].length
+        // Only while the loop is still printing on the first row: once done the prompt moves the cursor on.
+        if (cursor?.[1] !== '1' || printed >= 150) break
+        judged++
+        if (Number(cursor[2]) !== printed + 1) mismatches.push(`grid has ${printed} x, cursor at column ${cursor[2]}`)
+      }
+      expect(judged).toBeGreaterThan(3)
+      expect(mismatches).toEqual([])
+    } finally {
+      await opened.value.close()
+    }
+  })
+
   it('holds what is left of the output a snapshot releases behind the next one its sink begins', async () => {
     const delivered: string[] = []
     let regate: (() => void) | null = null
