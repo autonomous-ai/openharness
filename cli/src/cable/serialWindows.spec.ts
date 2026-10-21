@@ -86,7 +86,8 @@ describe('SerialLink over harness-serial (any OS, the stand-in)', () => {
     } finally {
       await fleet.stop()
       watch.stop()
-      rmSync(logs, { recursive: true, force: true })
+      // DialLog's last write can land after stop(): retry the ENOTEMPTY that race leaves, as CI hit once.
+      rmSync(logs, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 })
     }
   })
 })
