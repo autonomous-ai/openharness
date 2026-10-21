@@ -8,6 +8,7 @@ import 'package:harness_mobile/widgets/rename_agent_dialog.dart'
     show showMachineRenameDialog;
 
 import 'change_wifi_page.dart';
+import 'computer_version_page.dart';
 import 'link_page.dart';
 import 'phone_navigation.dart';
 import 'phone_sheet.dart';
@@ -15,40 +16,12 @@ import 'phone_status.dart';
 import 'remove_machine.dart';
 import 'tty.dart';
 import 'unlink_machine.dart';
+import 'unlock_computer_page.dart';
 
 /// The Wi-Fi a Harness OS computer is on, as it last said.
 String? _ssidOf(AppNotifier notifier, String machineId) {
   final wifi = notifier.osStatus[machineId]?['wifi'];
   return wifi is Map ? wifi['ssid'] as String? : null;
-}
-
-/// Update ▸ a Harness OS computer updates itself (`harness update`, the same as Super+u there). It
-/// restarts its daemon on the way, so it reads offline for a moment and comes back on the new version.
-Future<void> updateComputer(
-  BuildContext context,
-  AppNotifier notifier,
-  String machineId,
-) async {
-  final messenger = ScaffoldMessenger.maybeOf(context);
-  final name =
-      notifier.stateOf(machineId)?.machine.displayName ?? 'The computer';
-  final reply = await notifier.osDevice(machineId, {'action': 'update'});
-  final String said;
-  if (reply['started'] == true) {
-    said =
-        '$name is updating. It restarts by itself and comes back in a minute or two.';
-    notifier.osStatus.remove(machineId);
-    // Asked again once it is back on the new version.
-    Timer(
-      const Duration(minutes: 2),
-      () => unawaited(notifier.refreshOsStatus(machineId, force: true)),
-    );
-  } else if (reply['error'] == 'BUSY') {
-    said = '$name is already updating.';
-  } else {
-    said = 'Could not start the update. Try again.';
-  }
-  messenger?.showSnackBar(SnackBar(content: Text(said)));
 }
 
 /// The sheet of what can be done TO a computer — Settings ▸ Computers.
@@ -96,11 +69,34 @@ void openMachineActions(
     onTap: () => unawaited(confirmRemoveMachine(context, notifier, machineId)),
   );
 
+  // An encrypted Harness OS computer reads offline after a restart: it waits for its password, on
+  // its own Wi-Fi, for a phone near it.
+  final harnessOs = notifier.harnessOsComputers[machineId];
   final List<PhoneSheetAction> actions;
   final List<PhoneSheetAction> destructive;
   switch (status) {
     case PhoneMachineStatus.offline:
-      actions = [tryAgain, rename];
+      actions = [
+        if (harnessOs != null && harnessOs.encrypted)
+          PhoneSheetAction(
+            icon: LucideIcons.lockOpen300,
+            label: 'Unlock…',
+            value: harnessOs.hotspot,
+            chevron: true,
+            enabled: !removing,
+            onTap: () => Navigator.of(context).push(
+              phoneRoute(
+                (_) => UnlockComputerPage(
+                  notifier: notifier,
+                  machineId: machineId,
+                  hotspotName: harnessOs.hotspot,
+                ),
+              ),
+            ),
+          ),
+        tryAgain,
+        rename,
+      ];
       destructive = [remove];
     case PhoneMachineStatus.needsPassword:
       actions = [
@@ -134,17 +130,23 @@ void openMachineActions(
         if (notifier.runsHarnessOs(machineId)) ...[
           PhoneSheetAction(
             icon: LucideIcons.download300,
-            label: 'Update',
-            // The dot: a new version is waiting.
+            label: 'Version',
+            // The dot: a new version is waiting; its Update is on the page.
             value: notifier.updateAvailable(machineId)
                 ? '● new version'
                 : 'up to date',
             valueColor: notifier.updateAvailable(machineId)
                 ? Tty.of(context).green
                 : null,
-            enabled: notifier.updateAvailable(machineId),
-            onTap: () =>
-                unawaited(updateComputer(context, notifier, machineId)),
+            chevron: true,
+            onTap: () => Navigator.of(context).push(
+              phoneRoute(
+                (_) => ComputerVersionPage(
+                  notifier: notifier,
+                  machineId: machineId,
+                ),
+              ),
+            ),
           ),
           PhoneSheetAction(
             icon: LucideIcons.wifi300,
