@@ -11,14 +11,41 @@ import { processUpdaterDeps, runUpdaterService, type UpdaterServiceDeps } from '
 
 // A lock someone else holds a moment: what the updater says while it waits for it.
 const locked = vi.hoisted(() => [] as string[])
+/** What the next lock sections throw instead of running (each once). */
+const lockFails = vi.hoisted(() => [] as unknown[])
+/** Replacements for the terminal host payload's functions, left to the real ones when unset. */
+const payload = vi.hoisted(() => ({} as {
+  manifestUrl?: (url: string) => string
+  platformKey?: () => string | null
+  prepare?: (...args: unknown[]) => Promise<unknown>
+}))
+const downloaded = vi.hoisted(() => ({ ref: undefined as unknown, limits: undefined as unknown }))
 vi.mock('../lib/daemonSpawnLock.js', async (real) => ({
   ...await real<object>(),
   withSpawnLock: async (purpose: string, fn: () => Promise<unknown>, opts: { onWaiting?: (owner: object) => void } = {}) => {
     locked.push(purpose)
+    if (lockFails.length) throw lockFails.shift()
     opts.onWaiting?.({ pid: 4242, purpose: 'start', since: Date.now(), startMarker: 'x', token: 't' })
     return fn()
   },
 }))
+
+vi.mock('../lib/windows/ptyPayload.js', async (real) => {
+  const actual = await real<typeof import('../lib/windows/ptyPayload.js')>()
+  return {
+    ...actual,
+    ptyManifestUrl: (url: string) => (payload.manifestUrl ?? actual.ptyManifestUrl)(url),
+    ptyPlatformKey: () => (payload.platformKey ? payload.platformKey() : actual.ptyPlatformKey()),
+    preparePtyPayload: (...args: Parameters<typeof actual.preparePtyPayload>) => (payload.prepare ?? actual.preparePtyPayload)(...args),
+  }
+})
+vi.mock('../lib/selfUpdate.js', async (real) => {
+  const actual = await real<typeof import('../lib/selfUpdate.js')>()
+  return {
+    ...actual,
+    downloadVerified: async (ref: unknown, limits: unknown) => { downloaded.ref = ref; downloaded.limits = limits; return Buffer.from('zip') },
+  }
+})
 
 // No process runs from any build: the retirement's table, the same on every host.
 vi.mock('../lib/windows/processTable.js', () => ({ windowsProcessRows: async () => [] }))
@@ -38,7 +65,11 @@ async function judgingPty(fn: () => Promise<void> | void): Promise<void> {
 }
 
 describe('the updater in its own process', () => {
-  afterEach(() => { vi.restoreAllMocks() })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    lockFails.length = 0
+    for (const k of Object.keys(payload)) delete (payload as Record<string, unknown>)[k]
+  })
 
   const make = () => {
     const calls: string[] = []
@@ -200,6 +231,47 @@ describe('the updater in its own process', () => {
       expect(again.calls).toContain('[update] put bin\\harness.exe back from harness.exe.old-2-2')
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
+
+  it('says when the sweep of the terminal host\'s leftovers cannot run, whatever was thrown', async () => {
+    for (const thrown of [new Error('locked'), 'plain']) {
+      lockFails.push(thrown)
+      const m = make()
+      runUpdaterService(undefined, { ...m.deps, ...m.windows }).stop()
+      await vi.waitFor(() => expect(m.calls).toContain(`[update] could not sweep the terminal host's leftovers (${thrown instanceof Error ? thrown.message : thrown}) — the next start tries again`))
+    }
+  })
+
+  it('runs no terminal host poller when the manifest url or the platform has none, and says why for the url', () => judgingPty(() => {
+    for (const thrown of [new Error('not a CLI manifest url: x'), 'odd']) {
+      payload.manifestUrl = () => { throw thrown }
+      const m = make()
+      runUpdaterService(undefined, { ...m.deps, ...m.windows }).stop()
+      expect(m.pty()).toBeNull()
+      expect(m.calls).toContain(`[update] no terminal host updates: ${thrown instanceof Error ? thrown.message : thrown}`)
+    }
+    delete payload.manifestUrl
+    payload.platformKey = () => null
+    const other = make()
+    runUpdaterService(undefined, { ...other.deps, ...other.windows }).stop()
+    expect(other.pty()).toBeNull()
+  }))
+
+  it('names the installed build to the host poller, and downloads a host payload with this process\'s limits', () => judgingPty(async () => {
+    const plain = make()
+    runUpdaterService(undefined, { ...plain.deps, ...plain.windows }).stop()
+    expect(plain.pty()!.installedCli()).toBe(VERSION)
+    const named = make()
+    runUpdaterService(undefined, { ...named.deps, ...named.windows, installedVersion: () => '7.7.7' }).stop()
+    expect(named.pty()!.installedCli()).toBe('7.7.7')
+    const calls: unknown[][] = []
+    payload.prepare = async (...args) => { calls.push(args); await (args[2] as { download(ref: unknown): Promise<unknown> }).download({ url: 'u' }); return 'prepared' }
+    const entry = { url: 'https://x/pty.zip', sha256: 'a'.repeat(64), size: 1 } as never
+    await expect(named.pty()!.deps!.prepare!(entry, 'runtime-dir', Buffer.from('v'))).resolves.toBe('prepared')
+    expect(calls[0]!.slice(0, 2)).toEqual([entry, 'runtime-dir'])
+    expect(calls[0]![3]).toEqual(Buffer.from('v'))
+    expect(downloaded.ref).toEqual({ url: 'u' })
+    expect(downloaded.limits).toMatchObject({ floorBytesPerSecond: expect.any(Number) })
+  }))
 
   it('runs no terminal host poller off Windows, or under a master that would not judge it', async () => {
     const plain = make()

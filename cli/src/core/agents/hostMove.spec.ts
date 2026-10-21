@@ -10,7 +10,7 @@ import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { MoveGate } from '../../lib/hostMove/gate.js'
 import { MOVE_MARKER_ENV } from '../../lib/hostMove/moveAgent.js'
 import { SEED_HISTORY_LINES } from '../../lib/hostMove/seed.js'
-import { hostMoveDeps, moveWaitingArgv, type HostMoveWiring } from './hostMove.js'
+import { createHostMove, hostMoveDeps, moveWaitingArgv, type HostMoveWiring } from './hostMove.js'
 
 const OLD: TerminalRuntimeRef = { backend: 'ptyhost', instance: 'p2', paneId: '%1' }
 const NEW: TerminalRuntimeRef = { backend: 'ptyhost', instance: 'p2-1.2.3', paneId: '%7' }
@@ -242,5 +242,99 @@ describe('the move, wired to the core', () => {
       expect(argv.join(' '), platform).not.toMatch(/printf|stdout|echo/)
     }
     expect(moveWaitingArgv('win32')[1]).toBe('-e')
+  })
+})
+
+describe('the move, wired to the core: the paths that do not go through', () => {
+  it('reads no history from a pane that cannot be captured, and probes the new pane\'s engine', async () => {
+    const { w } = wiring()
+    vi.mocked(w.terminals.capture).mockResolvedValue({ state: 'failed', dispatch: 'rejected', reason: 'gone' } as never)
+    const deps = hostMoveDeps(session(), () => true, w)
+    expect(await deps.capture(session())).toBeNull()
+    expect(await deps.probeProcess(NEW, 'claude')).toEqual(NEW_ID)
+    expect(w.restore.probeProcess).toHaveBeenCalledWith(NEW, 'claude')
+    await deps.retarget('a1', NEW)
+    expect(w.retarget).toHaveBeenCalledWith('a1', NEW)
+    deps.log('a line')
+    expect(w.log).toHaveBeenCalledWith('a line')
+  })
+
+  it('opens no pane without a target host, and says why a host refused one', async () => {
+    const none = wiring({ createBackend: () => null })
+    expect(await hostMoveDeps(session(), () => true, none.w).createSeeded(session(), 'seed')).toEqual({ ok: false, reason: 'no target host' })
+    const { w, target } = wiring()
+    vi.mocked(target.create).mockResolvedValue({ state: 'failed', dispatch: 'rejected', reason: 'full' } as never)
+    expect(await hostMoveDeps(session(), () => true, w).createSeeded(session(), 'seed')).toEqual({ ok: false, reason: 'full' })
+  })
+
+  it('does not stop an engine whose pane has no backend, and names a hold failure that gave no reason', async () => {
+    const lost = wiring()
+    vi.mocked(lost.w.terminals.backendFor).mockReturnValue(undefined as never)
+    expect(await hostMoveDeps(session(), () => true, lost.w).stopEngine(session())).toBe('failed')
+    expect(lost.w.paneSwapDeps).not.toHaveBeenCalled()
+    const { w, swapDeps } = wiring()
+    swapDeps.holdOpen.mockResolvedValue({ ok: false } as never)
+    expect(await hostMoveDeps(session(), () => true, w).stopEngine(session())).toBe('failed')
+    expect(vi.mocked(w.log).mock.calls.flat().join('\n')).toContain('(unknown reason)')
+  })
+
+  it('a switch whose save fails is logged, and a row gone after it or no grid refresh is not an error', async () => {
+    for (const thrown of [new Error('disk full'), 'plain']) {
+      const { w } = wiring({ registry: { ...wiring().w.registry, transaction: vi.fn(async () => { throw thrown }) as never } })
+      expect(() => hostMoveDeps(session(), () => true, w).swap('a1', NEW, NEW_ID)).toThrow('the row is gone')
+      await new Promise((done) => setImmediate(done))
+      expect(vi.mocked(w.log).mock.calls.flat().join('\n')).toContain(`saving the switch failed: ${thrown instanceof Error ? thrown.message : thrown}`)
+    }
+    const gone = wiring()
+    vi.mocked(gone.w.registry.byAgent).mockReturnValue(undefined)
+    hostMoveDeps(session(), () => true, gone.w).swap('a1', NEW, NEW_ID)
+    expect(gone.w.announce).not.toHaveBeenCalled()
+    const plain = wiring({ refreshGridAssignment: undefined })
+    hostMoveDeps(session(), () => true, plain.w).swap('a1', NEW, NEW_ID)
+    expect(plain.w.announce).toHaveBeenCalled()
+  })
+
+  it('releases no hold on a pane with no backend', async () => {
+    const { w } = wiring()
+    vi.mocked(w.terminals.backendFor).mockReturnValue(undefined as never)
+    const deps = hostMoveDeps(session(), () => true, w)
+    await expect(deps.releaseHold(NEW)).rejects.toThrow('no backend for the new pane')
+    expect(await deps.killPane(NEW)).toBe(false)
+  })
+
+  it('relaunches a resume-only, bypassing agent that was never prepared, and says when the relaunch fails or the row is gone', async () => {
+    const prepare = vi.fn()
+    const launch = deferredLaunch(prepare)
+    launch.deferred!.permission = { bypassPermission: true } as never
+    const row = { ...session(), resumeOnly: true } as RegisteredSession
+    const { w, swapDeps } = wiring({ buildLaunch: vi.fn(async () => launch) })
+    const deps = hostMoveDeps(row, () => true, w)
+    await deps.buildLaunch(row, { resumeSessionId: 's1', current: () => true, prepare: false })
+    // The row is gone once the engine is back: not a failure of the relaunch.
+    vi.mocked(w.registry.byAgent).mockReturnValue(undefined)
+    expect(await deps.relaunchOld(row)).toBe(false)
+    expect(vi.mocked(w.paneSwapDeps).mock.calls[0]![3]).toBeNull()
+    expect(prepare).toHaveBeenCalledTimes(1)
+    // A relaunch cancelled before the row learned the engine.
+    expect(await hostMoveDeps(row, () => false, w).relaunchOld(row)).toBe(false)
+    expect(swapDeps.waitForProcess).toHaveBeenCalled()
+  })
+
+  it('has nothing to relaunch without a conversation, or for a pane with no backend', async () => {
+    const bare = { ...session(), sessionId: undefined } as unknown as RegisteredSession
+    const { w } = wiring()
+    const deps = hostMoveDeps(bare, () => true, w)
+    await deps.buildLaunch(bare, { resumeSessionId: 's1', current: () => true, prepare: false })
+    expect(await deps.relaunchOld(bare)).toBe(false)
+    const refused = wiring({ buildLaunch: vi.fn(async () => ({ error: 'no' }) as never) })
+    const d2 = hostMoveDeps(session(), () => true, refused.w)
+    expect(await d2.buildLaunch(session(), { resumeSessionId: 's1', current: () => true, prepare: false })).toEqual({ error: 'no' })
+    expect(await d2.relaunchOld(session())).toBe(false)
+  })
+
+  it('createHostMove runs a move of a snapshot of the row, and a row with no conversation is not moved', async () => {
+    const { w } = wiring()
+    const bare = { ...session(), sessionId: undefined } as unknown as RegisteredSession
+    expect(await createHostMove(w)(bare, () => true)).toEqual({ moved: false, reason: 'no conversation to resume', fellBack: false })
   })
 })

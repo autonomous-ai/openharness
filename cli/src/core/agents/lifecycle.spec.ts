@@ -165,6 +165,15 @@ describe('stopping, purging and resuming an agent', () => {
       warn.mockRestore()
     })
 
+    it('holds an id that no store knows by that id, as given', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const held = setup({ moveHeld: (id) => id === 'ghost', stoppedAgents: { list: () => [], get: vi.fn(() => undefined) } as never })
+      vi.spyOn(held.deps.registry, 'byAgent').mockReturnValue(undefined)
+      expect(await held.lifecycle.resumeAgent('ghost')).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
+      expect(warn).toHaveBeenCalledWith(moveHeldLine('ghost'))
+      warn.mockRestore()
+    })
+
     it('waits while the agent is being purged, or while a purge holds its folder', async () => {
       const busy = setup()
       vi.spyOn(busy.lifecycle.purgeAgentService, 'busy').mockReturnValue(true)
