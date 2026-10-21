@@ -37,7 +37,6 @@ vi.mock('../lib/createAgentPane.js', () => ({
     return { ok: false, error: 'RECORDED', detail: 'the pane is not opened by this spec' }
   }),
 }))
-vi.mock('../lib/tmuxVersion.js', async (real) => ({ ...await real<object>(), tmuxSupportsSessionEnv: vi.fn(async () => pane.tmux) }))
 vi.mock('../engines/launchControl.js', async (real) => ({ ...await real<object>(), opencodeMajorVersion: vi.fn(() => 2) }))
 vi.mock('../lib/engineBin.js', async (real) => ({ ...await real<object>(), enginePathOverride: vi.fn(() => null) }))
 // A create's and a fork's label is new each time, and their session's runtime is keyed on it: one per engine here.
@@ -59,7 +58,7 @@ const RECORD = process.env.RECORD_DSH_LAUNCH_SHAPES_GOLDEN === '1'
 let root = ''
 const saved: Record<string, string | undefined> = {}
 /** The variables a launch reads of the daemon's own environment, each pinned (or cleared) for the record. */
-const VARS = ['ADAPTER_DATA_DIR', 'DSH_DIR', 'HOME', 'ZDOTDIR', 'SHELL', 'CODEX_HOME', 'CODEX_PATH', 'HARNESS_OS', 'HARNESS_GRID_BIN', 'CLAUDE_PATH',
+const VARS = ['ADAPTER_DATA_DIR', 'DSH_DIR', 'HOME', 'USERPROFILE', 'ZDOTDIR', 'SHELL', 'CODEX_HOME', 'CODEX_PATH', 'HARNESS_OS', 'HARNESS_GRID_BIN', 'CLAUDE_PATH',
   'CURSOR_PATH', 'OPENCODE_PATH', 'PI_PATH', 'HERMES_PATH', 'COMMANDCODE_PATH', 'DEVIN_PATH', 'MUSE_PATH', 'AMP_PATH', 'KILO_PATH', 'GROK_PATH',
   'AGY_PATH', 'COPILOT_PATH', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME'] as const
 /** The launch scripts the cases name, by digest: most shapes share theirs with others. */
@@ -170,6 +169,7 @@ beforeAll(async () => {
   process.env.ADAPTER_DATA_DIR = join(root, 'data')
   process.env.DSH_DIR = join(root, 'dsh')
   process.env.HOME = join(root, 'home')
+  process.env.USERPROFILE = join(root, 'home')
   process.env.SHELL = '/bin/zsh'
   process.env.CODEX_HOME = join(root, 'home', '.codex')
   process.env.XDG_CONFIG_HOME = join(root, 'home', '.config')
@@ -181,7 +181,7 @@ beforeAll(async () => {
   const { launchShapes } = await import('../testing/launchShapes.js')
   invalidate = (await import('../dsh/installed.js')).invalidateInstalledDsh
   shapes = (gridName = null) => launchShapes({
-    dataDir: join(root, 'data'), machine: () => ({ ...M1 }), tmuxSupportsSessionEnv: async () => pane.tmux,
+    dataDir: join(root, 'data'), machine: () => ({ ...M1 }), capabilities: async () => ({ sessionEnv: pane.tmux }),
     readCodexConfig: () => null, setGridLaunch: () => {}, gridName: () => gridName,
   })
 })
@@ -221,7 +221,7 @@ const paneOf = (call: Record<string, unknown> | undefined): unknown => call ? {
 const pending = { agentId: 'created', sessionId: '', engine: 'claude' } as RegisteredSession
 const gridSetups: string[] = []
 const createRest = (privateGrid: string | null) => ({
-  tmuxBackend: {} as never, registry: { setLaunch: () => pending } as never,
+  createBackend: { capabilities: async () => ({ sessionEnv: pane.tmux }) } as never, registry: { setLaunch: () => pending } as never,
   adoptableSession: async () => ({ ok: false, error: 'UNUSED' }) as never, heldBy: async () => 'none' as const, takeOverWhenIdle: async () => {},
   watchNewPane: (async () => {}) as never, announceSession: () => {}, attachDsh: () => {}, hookPort: 4242, hooksDisabled: true,
   installOpencodePlugin: async () => true, terminalHintMachineName: () => 'this-mac', blocksFolder: () => false,
@@ -325,7 +325,7 @@ async function relaunchCases(): Promise<Record<string, unknown>> {
 
 const mirror = { isBusy: () => false, recentAsks: () => [], recent: () => [], lastFullText: () => undefined }
 const forkRest = (source: RegisteredSession) => ({
-  tmuxBackend: {} as never, registry: { byAgent: (id: string) => (id === source.agentId ? source : undefined) } as never, mirror: mirror as never,
+  createBackend: {} as never, registry: { byAgent: (id: string) => (id === source.agentId ? source : undefined) } as never, mirror: mirror as never,
   pendingForkInherit: new Map<string, string>(), watchNewPane: (async () => {}) as never, announceSession: () => {}, attachDsh: () => {},
 })
 

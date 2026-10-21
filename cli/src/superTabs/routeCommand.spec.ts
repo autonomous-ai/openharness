@@ -581,8 +581,10 @@ describe('routing contributed capacity', () => {
   const healthy = () => ({ machineId: 'm1', name: 'Contributed laptop', cwd: '/owner/project', engines: ['claude'], paused: false,
     observation: { receivedAt: Date.now(), resources: { memoryTotalBytes: 32e9, memoryUsedBytes: 2e9, projectDiskFreeBytes: 200e9 },
       tools: { git: true }, runningHarnessIds: [], quotas: [{ engine: 'claude', known: true, windows: [{ name: '5-hour', usedPercent: 20, resetsAt: Date.now() + 3600000 }] }] } })
-  async function runPool(pool: Record<string, any>, members = false, needs: Record<string, unknown> = {}) {
-    const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: members ? agents : [agents[1]], conversations: conversations(), machines: [pool] } }, policy: { policy, warnings: [] }, machines: [] } } })
+  async function runPool(pool: Record<string, any>, members = false, needs: Record<string, unknown> = {}, project?: Record<string, unknown>) {
+    const groups = conversations()
+    if (project) Object.assign(groups[1]!, { projectId: project.id })
+    const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: members ? agents : [agents[1]], conversations: groups, machines: [pool], ...(project ? { projects: [project] } : {}) } }, policy: { policy, warnings: [] }, machines: [] } } })
     const open = opener()
     const answer = await routeTask({ ...input, assessment: { ...input.assessment, needs } }, s, where, open)
     expect(open).not.toHaveBeenCalled()
@@ -594,6 +596,16 @@ describe('routing contributed capacity', () => {
     expect(answer.next).toContain('/owner/project')
     const member = await runPool(healthy(), true)
     expect(member.answer.ok).toBe(true)
+  })
+  it('routes each swarm project to its own checkout and never widens an old folder grant', async () => {
+    const project = { id: 'project-two', repository: { machineId: 'other', cwd: '/elsewhere', repositoryUrl: 'https://github.com/example/two' } }
+    expect((await runPool(healthy(), false, {}, project)).answer.ok).not.toBe(true)
+    const shared = { ...healthy(), scope: 'swarm', cwd: '/swarm-root' }
+    expect((await runPool(shared, false, {}, project)).answer.next).toContain('/swarm-root/project-two')
+    project.repository.machineId = 'm1'
+    expect((await runPool(shared, false, {}, project)).answer.next).toContain('/elsewhere')
+    expect((await runPool(shared, false, {}, { id: 'project-two' })).answer.ok).not.toBe(true)
+    expect((await runPool(shared)).answer.ok).not.toBe(true)
   })
   it.each([
     ['stale', (p: any) => { p.observation.receivedAt = 0 }],

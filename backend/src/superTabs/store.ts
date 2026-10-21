@@ -5,7 +5,10 @@ import type { AuthUser } from '../lib/ssoAuth.js'
 import { machineAlive } from '../lib/prisma.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
-import { applyCommand, operationSchema, type Command, type CommandContext } from './commands.js'
+import { applyCommand, authorizeCommandAccess, operationSchema, type Command, type CommandContext } from './commands.js'
+import { canReadAgent, canReadProject, groupProject, projectsOf, readConversation, type ProjectVisibility } from './projects.js'
+import { bindSession, makeProjectPrivate } from './sessionScope.js'
+import { noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import {
   activeWork, actorKey, agent, author, conversation, createSuperTab, fail, person, stableId, visibleState,
@@ -13,6 +16,8 @@ import {
 } from './model.js'
 import { closeAssignment, readDecision, recentRoutes, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
+import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
+  saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
 
 type Transaction = Prisma.TransactionClient
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
@@ -140,16 +145,16 @@ export class SuperTabStore {
     return { machineOwnerId: machine.userId, contributorId, hostGrant }
   }
 
-  async create(user: AuthUser, operationId: string, name: string) {
+  async create(user: AuthUser, operationId: string, name: string, projectVisibility?: ProjectVisibility) {
     const id = stableId('super-tab', user.autonomousEnv, user.sub, operationId)
-    const requestHash = hash({ name })
+    const requestHash = hash({ name, ...(projectVisibility ? { projectVisibility } : {}) })
     return transaction(this.db, async tx => {
       const prior = await tx.superTabOperation.findUnique({ where: { id } })
       if (prior) {
         if (prior.requestHash !== requestHash) fail('OPERATION_REUSED', 'Use a new operation ID for a different request.')
         return { id, revision: prior.revision }
       }
-      const state = createSuperTab(id, name, { id: user.sub, email: user.email }, user.autonomousEnv)
+      const state = createSuperTab(id, name, { id: user.sub, email: user.email }, user.autonomousEnv, projectVisibility)
       await tx.superTab.create({ data: { id, ownerId: user.sub, autonomousEnv: user.autonomousEnv, ...indexes(state), state: json(state) } })
       await tx.superTabOperation.create({ data: { id, tabId: id, actorKey: `person:${user.sub}`, requestHash, revision: 0, result: { id } } })
       return { id, revision: 0 }
@@ -175,12 +180,89 @@ export class SuperTabStore {
     })
   }
 
+  async sharing(user: AuthUser, tabId: string) {
+    return transaction(this.db, async tx => {
+      const state = stateOf(await this.row(tx, user, tabId))
+      requireSharingOwner(state, user.sub)
+      return sharingDetails(state)
+    })
+  }
+
+  async saveSharing(user: AuthUser, tabId: string, input: SaveSharing) {
+    const request = saveSharingSchema.parse(input)
+    return transaction(this.db, async tx => {
+      const row = await this.row(tx, user, tabId), state = stateOf(row)
+      requireSharingOwner(state, user.sub)
+      const receiptId = stableId('swarm-sharing', tabId, user.sub, request.operationId), requestHash = hash(request)
+      const prior = await tx.superTabOperation.findUnique({ where: { id: receiptId } })
+      if (prior) {
+        if (prior.requestHash !== requestHash) fail('OPERATION_REUSED', 'Use a new operation ID for a different request.')
+        const result = prior.result as Record<string, unknown>
+        if (state.sharing?.generation !== result.generation) fail('SHARING_CHANGED', 'Sharing changed after this request. Reload it and try again.')
+        return sharingDetails(state)
+      }
+      if ((state.sharing?.revision ?? 0) !== request.revision) fail('REVISION_CHANGED', 'Sharing changed elsewhere. Reload it and try again.')
+      state.sharing = configureSharing(state.sharing, request.access, request.rotateLink)
+      const revision = row.revision + 1
+      await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: { revision, state: json(state) } })
+      await tx.superTabOperation.create({ data: { id: receiptId, tabId, actorKey: `person:${user.sub}`, requestHash,
+        revision, result: { generation: state.sharing.generation } } })
+      return sharingDetails(state)
+    })
+  }
+
+  /** A signed-in preview contains no projects, people, machines, or conversation data. It never joins. */
+  async previewJoin(user: AuthUser, tabId: string, token?: string) {
+    return transaction(this.db, async tx => {
+      const state = stateOf(await this.row(tx, user, tabId))
+      const sharing = authorizeSwarmJoin(state, user.email, token)
+      const member = state.people.find(p => p.id === user.sub)
+      return { id: tabId, name: state.name, role: member?.role ?? sharing.access.role, alreadyMember: !!member }
+    })
+  }
+
+  async join(user: AuthUser, tabId: string, input: JoinSwarm) {
+    const request = joinSwarmSchema.parse(input)
+    return transaction(this.db, async tx => {
+      const row = await this.row(tx, user, tabId), state = stateOf(row)
+      // Recheck the current grant before an old receipt. Disabling, replacing, or
+      // changing access can never revive a removed membership through a retry.
+      const sharing = authorizeSwarmJoin(state, user.email, request.token)
+      const receiptId = stableId('swarm-join', tabId, user.sub, request.operationId), requestHash = hash(request)
+      const prior = await tx.superTabOperation.findUnique({ where: { id: receiptId } })
+      let member = state.people.find(p => p.id === user.sub)
+      if (prior) {
+        if (prior.requestHash !== requestHash) fail('OPERATION_REUSED', 'Use a new operation ID for a different request.')
+        const result = prior.result as Record<string, unknown>
+        if (result.sharingGeneration !== sharing.generation || !member || (member.generation ?? null) !== result.membershipGeneration) {
+          fail('JOIN_CHANGED', 'This join request is no longer current. Open the latest Swarm link again.')
+        }
+        return { id: tabId, revision: prior.revision, role: member.role, alreadyMember: result.alreadyMember === true }
+      }
+      const alreadyMember = !!member
+      if (!member) {
+        member = { id: user.sub, email: authenticatedEmail(user.email)!, role: sharing.access.role, generation: receiptId }
+        state.people.push(member)
+      }
+      // Existing people retain their role and private-project grants. A general
+      // access link does not promote a viewer or grant a private project.
+      const revision = row.revision + 1
+      await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: { revision, state: json(state), ...indexes(state) } })
+      await tx.superTabOperation.create({ data: { id: receiptId, tabId, actorKey: `person:${user.sub}`, requestHash, revision,
+        result: { sharingGeneration: sharing.generation, membershipGeneration: member.generation ?? null, alreadyMember } } })
+      return { id: tabId, revision, role: member.role, alreadyMember }
+    })
+  }
+
   async read(user: AuthUser, tabId: string, asAgentId?: string) {
     return transaction(this.db, async tx => {
       const row = await this.row(tx, user, tabId)
       const state = stateOf(row)
       const actor = await this.actor(tx, user, state, asAgentId)
-      return { revision: row.revision, state: { ...visibleState(state, actor), machines: state.machines?.map(pool => ({ ...pool, availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, pool)) })) } }
+      const visible = visibleState(state, actor)
+      return { revision: row.revision, state: { ...visible, machines: visible.machines?.map(pool => ({
+        ...pool, availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, state.machines!.find(m => m.machineId === pool.machineId)!)),
+      })) } }
     })
   }
 
@@ -193,7 +275,7 @@ export class SuperTabStore {
       if (start.actorKey !== actorKey(actor) || person(state, start.contributorId).generation !== start.membershipGeneration) {
         fail('FORBIDDEN', 'Only the original initiating lead can resume this start.', 403)
       }
-      const group = conversation(state, start.request.conversationId)
+      const group = readConversation(state, actor, start.request.conversationId)
       if (actor.kind === 'agent' && group.leadId !== actor.agentId) fail('LEAD_REQUIRED', 'The coordinating lead changed.', 403)
       if (group.archived) fail('ARCHIVED', 'This conversation is archived.')
       if (state.paused && !start.harnessId && !start.dispatched) fail('PAUSED', 'New work is paused in this Super Tab.')
@@ -221,7 +303,29 @@ export class SuperTabStore {
         if (prior.requestHash !== requestHash) fail('OPERATION_REUSED', 'Use a new operation ID for a different request.')
         // A leave may be retried by its original author. Nothing except that operation's receipt is returned.
         const selfLeave = actor.kind === 'person' && command.type === 'member.remove' && command.userId === actor.userId
-        if (!selfLeave) author(original, actor)
+        if (!selfLeave) {
+          if (command.type === 'agent.remove' && !original.agents.some(a => a.id === command.agentId) ||
+              command.type === 'project.delete' && !projectsOf(original).some(p => p.id === command.projectId)) {
+            // Retrying one's own completed removal returns only its empty
+            // receipt. The removed object no longer exists to authorize against.
+            author(original, actor, true)
+          } else {
+            authorizeCommandAccess(original, actor, command)
+          }
+          if (command.type === 'delivery.resolve') {
+            const delivery = await tx.superTabDelivery.findFirst({ where: { id: command.deliveryId, tabId } })
+            if (!delivery) fail('NOT_FOUND', 'This delivery is unavailable.', 404)
+            readConversation(original, actor, delivery.conversationId)
+          }
+          if ('decisionId' in command) {
+            const decision = await readDecision(tx, tabId, command.decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
+            readConversation(original, actor, decision.conversationId)
+          }
+        }
+        if (command.type === 'project.create' &&
+            !projectsOf(original).some(p => p.id === (prior.result as Record<string, unknown>).projectId)) {
+          fail('NOT_FOUND', 'This project was deleted. Create a new project.', 404)
+        }
         return { revision: prior.revision, result: prior.result }
       }
       if (command.type !== 'invite.accept') author(original, actor)
@@ -249,7 +353,9 @@ export class SuperTabStore {
           // The native receipt remains intact; the operation records the person's resolution.
         } })
       }
-      if (command.type === 'machine.contribute' || command.type === 'agent.add') context.contribution = await this.contribution(tx, original, actor, command)
+      if (command.type === 'machine.contribute' || command.type === 'agent.add' || command.type === 'tab.project') {
+        context.contribution = await this.contribution(tx, original, actor, command)
+      }
       if (command.type === 'agent.start') context.contribution = await this.contribution(tx, original, actor, command.request, true)
       if (command.type === 'agent.started' || command.type === 'agent.startDispatch') {
         const start = original.starts?.find(s => s.id === command.startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
@@ -270,7 +376,21 @@ export class SuperTabStore {
         : command.type === 'work.assign' || command.type === 'agent.start' ? command.routeDecisionId : undefined
       if (decisionId) context.routeDecision = await readDecision(tx, tabId, decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
       const effects = applyCommand(original, actor, command, context)
+      if (command.type === 'agent.add' || command.type === 'agent.started') {
+        const target = agent(effects.state, effects.result.agentId as string)
+        await bindSession(tx, effects.state, target)
+      }
+      if (command.type === 'project.sharing' && command.visibility === 'private') {
+        await makeProjectPrivate(tx, effects.state, command.projectId)
+      }
       await revokeNativeContexts(tx, original, effects.state)
+      const removedGroups = original.conversations.filter(c => !effects.state.conversations.some(n => n.id === c.id))
+      if (removedGroups.length) {
+        // Keep immutable history and operation receipts for audit/replay; all
+        // reads require a live conversation. No removed group can deliver work.
+        await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: { in: removedGroups.map(c => c.id) },
+          status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled' } })
+      }
       const revision = row.revision + 1
       if (command.type === 'agent.add' || command.type === 'agent.started' || command.type === 'agent.configuration') {
         for (const target of effects.state.agents) {
@@ -286,6 +406,7 @@ export class SuperTabStore {
         }
       }
       for (const message of effects.messages) conversation(effects.state, message.conversationId).lastMessageSequence = revision
+      noteProjectReports(effects.state, effects.messages, revision, context.now)
       if (command.type === 'work.assign') {
         const assigned = conversation(effects.state, command.conversationId).assignment!
         const running = await tx.superTabRun.findUnique({ where: { id: assigned.agentId } })
@@ -313,6 +434,13 @@ export class SuperTabStore {
       if (command.type === 'message.send' && command.replyTo && actor.kind === 'agent') {
         await tx.superTabDelivery.updateMany({ where: { tabId, messageId: command.replyTo, agentId: actor.agentId,
           status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'answered' } })
+      }
+      if (command.type === 'project.report' && actor.kind === 'agent') {
+        const progress = projectsOf(original).find(p => p.id === command.projectId)?.progress
+        if (progress?.requestMessageId && command.throughRevision >= progress.requestedRevision) {
+          await tx.superTabDelivery.updateMany({ where: { tabId, agentId: actor.agentId, messageId: progress.requestMessageId,
+            status: { in: ['queued', 'claimed', 'uncertain', 'delivered'] } }, data: { status: 'answered' } })
+        }
       }
       const revoked = [
         ...original.people.filter(p => !effects.state.people.some(n => n.id === p.id && n.generation === p.generation))
@@ -357,8 +485,7 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       const row = await this.row(tx, user, tabId)
       const state = stateOf(row)
-      author(state, await this.actor(tx, user, state, asAgentId))
-      conversation(state, conversationId)
+      readConversation(state, await this.actor(tx, user, state, asAgentId), conversationId)
       const forward = cursor.after !== undefined
       const rows = await tx.superTabMessage.findMany({ where: { tabId, conversationId,
         ...(cursor.messageId ? { id: cursor.messageId } : {}),
@@ -381,8 +508,7 @@ export class SuperTabStore {
   async attempts(user: AuthUser, tabId: string, conversationId: string, asAgentId?: string) {
     return transaction(this.db, async tx => {
       const state = stateOf(await this.row(tx, user, tabId))
-      author(state, await this.actor(tx, user, state, asAgentId))
-      conversation(state, conversationId)
+      readConversation(state, await this.actor(tx, user, state, asAgentId), conversationId)
       const rows = await tx.superTabAttempt.findMany({ where: { tabId, conversationId }, orderBy: { createdAt: 'desc' }, take: 50 })
       return rows.map(row => {
         const assignment = (row.snapshot as unknown as { assignment: Assignment }).assignment
@@ -394,8 +520,9 @@ export class SuperTabStore {
   async routeDecisions(user: AuthUser, tabId: string, asAgentId?: string) {
     return transaction(this.db, async tx => {
       const state = stateOf(await this.row(tx, user, tabId))
-      author(state, await this.actor(tx, user, state, asAgentId))
-      const rows = await tx.superTabRouteDecision.findMany({ where: { tabId }, orderBy: { createdAt: 'desc' }, take: 100 })
+      const actor = await this.actor(tx, user, state, asAgentId)
+      const groups = visibleState(state, actor).conversations.map(c => c.id)
+      const rows = await tx.superTabRouteDecision.findMany({ where: { tabId, conversationId: { in: groups } }, orderBy: { createdAt: 'desc' }, take: 100 })
       return rows.map(timedDecisionOf)
     })
   }
@@ -403,8 +530,10 @@ export class SuperTabStore {
   async routeDecision(user: AuthUser, tabId: string, decisionId: string, asAgentId?: string) {
     return transaction(this.db, async tx => {
       const state = stateOf(await this.row(tx, user, tabId))
-      author(state, await this.actor(tx, user, state, asAgentId))
+      const actor = await this.actor(tx, user, state, asAgentId)
+      author(state, actor)
       const row = await tx.superTabRouteDecision.findFirst({ where: { id: decisionId, tabId } })
+      if (row) readConversation(state, actor, row.conversationId)
       return row ? timedDecisionOf(row) : fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
     })
   }
@@ -444,7 +573,12 @@ export class SuperTabStore {
         try { pool = machineContribution(state, machineId) } catch (error) { if (error instanceof SuperTabError) return []; throw error }
         if (!pool || pool.contributorId !== user.sub) return []
         const starts = (state.starts ?? []).filter(s => s.request.machineId === machineId && s.poolGeneration === pool.generation && (!s.harnessId || !s.poolSettled) && !s.error)
-        return [{ tabId: row.id, paused: state.paused, machine: pool, starts, harnessIds: [...new Set([...state.agents.filter(a => a.machineId === machineId).map(a => a.harnessId), ...(state.starts ?? []).filter(s => s.request.machineId === machineId && s.harnessId).map(s => s.harnessId!)])] }]
+        return [{ tabId: row.id, paused: state.paused, machine: pool, starts,
+          ...(pool.scope === 'swarm' ? { projects: projectsOf(state).filter(p => starts.some(s =>
+            groupProject(state, conversation(state, s.request.conversationId)).id === p.id))
+            .map(p => ({ id: p.id, leadConversationId: p.leadConversationId, repository: p.repository,
+              conversationIds: state.conversations.filter(c => groupProject(state, c).id === p.id).map(c => c.id) })) } : {}),
+          harnessIds: [...new Set([...state.agents.filter(a => a.machineId === machineId).map(a => a.harnessId), ...(state.starts ?? []).filter(s => s.request.machineId === machineId && s.harnessId).map(s => s.harnessId!)])] }]
       })
     })
   }
@@ -478,7 +612,9 @@ export class SuperTabStore {
           // `active` lets the host release members that are only in archived groups to automatic cleanup.
           const active = state.conversations.some(c => !c.archived && c.agentIds.includes(target.id))
           result.push({ tabId: row.id, revision: row.revision, paused: state.paused, active, agent: target,
-            observers: people.filter(p => p.id !== user.sub).map(p => ({ email: p.email, userId: p.id })) })
+            observers: people.filter(p => p.id !== user.sub &&
+              canReadAgent(state, { kind: 'person', userId: p.id, email: p.email }, target))
+              .map(p => ({ email: p.email, userId: p.id })) })
         }
       }
       return result
@@ -493,6 +629,7 @@ export class SuperTabStore {
         const target = state.agents.find(a => a.machineId === machineId && a.harnessId === harnessId && a.machineOwnerId === machineOwnerId)
         if (!target) return false
         agent(state, target.id)
+        if (!canReadAgent(state, { kind: 'person', userId: user.sub, email: user.email }, target)) return false
         await this.agentGrant(tx, state, target)
         return true
       })
@@ -520,6 +657,12 @@ export class SuperTabStore {
     if (!target || target.membershipGeneration !== delivery.membershipGeneration || !group || group.archived || !group.agentIds.includes(target.id)) return false
     const sender = delivery.authorKind === 'person' ? state.people.find(p => p.id === delivery.authorId) : state.agents.find(a => a.id === delivery.authorId)
     if (!sender) return false
+    const actor: Actor = delivery.authorKind === 'person'
+      ? { kind: 'person', userId: delivery.authorId, email: '' }
+      : { kind: 'agent', agentId: delivery.authorId, machineOwnerId: (sender as Agent).machineOwnerId }
+    if (!canReadProject(state, actor, groupProject(state, group))) return false
+    if (!canReadAgent(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, target) ||
+      !canReadProject(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, groupProject(state, group))) return false
     const generation = 'generation' in sender ? sender.generation : sender.membershipGeneration
     return generation === delivery.authorGeneration && (!('role' in sender) || sender.role !== 'viewer')
   }
@@ -536,6 +679,24 @@ export class SuperTabStore {
       const row = await this.row(tx, user, tabId)
       const state = stateOf(row)
       author(state, await this.actor(tx, user, state, agentId), true)
+      const target = agent(state, agentId)
+      const update = projectUpdateRequest(state, target, this.now())
+      if (update) {
+        const project = groupProject(state, conversation(state, update.conversationId))
+        const progress = project.progress!
+        const pending = progress.requestMessageId
+          ? await tx.superTabDelivery.findFirst({ where: { tabId, agentId, messageId: progress.requestMessageId,
+            status: { in: ['queued', 'claimed', 'uncertain', 'delivered'] } } })
+          : null
+        if (!pending) {
+          progress.requestedRevision = progress.dirtyRevision
+          progress.requestedAt = this.now()
+          progress.requestMessageId = update.id
+          const revision = row.revision + 1
+          await this.writeMessages(tx, tabId, state, [update], revision)
+          await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: { revision, state: json(state) } })
+        }
+      }
       const rows = await tx.superTabDelivery.findMany({ where: { tabId, agentId, status: { in: ['queued', 'claimed', 'uncertain'] } },
         orderBy: { createdAt: 'asc' }, take: 100 })
       const allowed: SuperTabDelivery[] = []

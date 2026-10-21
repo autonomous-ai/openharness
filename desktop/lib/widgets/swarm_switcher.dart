@@ -39,6 +39,23 @@ import 'swarm_search_preview.dart';
 import 'swarm_resource_preview.dart';
 import 'key_hints.dart';
 
+/// Only the palette lists conditional aliases; single hints stay usable everywhere.
+String? _paletteShortcut(BuildContext context, SwarmDestination row) {
+  final command = row.commandId;
+  if (command == null) return row.shortcut;
+  final bindings = (KeymapTheme.of(context)?.current ?? harnessDefaultKeymap)
+      .bindingsFor(KeymapContext.workspace)
+      .where((binding) => binding.command == command)
+      .toList();
+  if (!bindings.any((binding) => binding.outsideTerminal)) return row.shortcut;
+  return [
+    for (final binding in bindings.where((binding) => !binding.outsideTerminal))
+      describeKeyBinding(binding),
+    for (final binding in bindings.where((binding) => binding.outsideTerminal))
+      '${describeKeyBinding(binding)} (outside a terminal)',
+  ].join(' / ');
+}
+
 Future<SwarmSearchSelection?> showSwarmHistory(
   BuildContext context,
   AppNotifier app,
@@ -88,6 +105,7 @@ class _SwarmHistoryState extends State<_SwarmHistory> {
         insetPadding: const EdgeInsets.all(20),
         backgroundColor: Colors.transparent,
         elevation: 0,
+        shape: DesktopChrome.bareDialogShape,
         child: SizedBox(
           width: 680,
           height: 480,
@@ -950,6 +968,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
         final sectioned = _sectioned;
         Widget buildRow(BuildContext context, int index) {
           final row = search.rows[index];
+          final shortcut = _paletteShortcut(context, row);
           final selected = index == search.cursor;
           final highlighted = selected && !search.managing;
           final canSubmit = search.canSubmit(row);
@@ -960,6 +979,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
           final activityAge = sessionActivityLabel(activity, widget.now());
           final presentation = (
             row,
+            shortcut,
             selected,
             highlighted,
             canSubmit,
@@ -1156,14 +1176,21 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                     activity: activity,
                   ),
                   trailing: desktop
-                      ? row.shortcut == null
+                      ? shortcut == null
                             ? null
-                            : Text(
-                                row.shortcut!,
-                                style: grid.AppType.monoMeta(
-                                  color: highlighted
-                                      ? DesktopChrome.selectionDetail
-                                      : DesktopChrome.muted,
+                            : ConstrainedBox(
+                                constraints: BoxConstraints(
+                                  maxWidth: shortcut == row.shortcut
+                                      ? double.infinity
+                                      : resultWidth * .48,
+                                ),
+                                child: Text(
+                                  shortcut,
+                                  style: grid.AppType.monoMeta(
+                                    color: highlighted
+                                        ? DesktopChrome.selectionDetail
+                                        : DesktopChrome.muted,
+                                  ),
                                 ),
                               )
                       : widget.terminal
@@ -1173,10 +1200,10 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                                 key: const ValueKey('swarm-row-action'),
                                 style: boxMonoStyle(color: kBoxFaint),
                               )
-                            : row.shortcut == null || !keyHints
+                            : shortcut == null || !keyHints
                             ? null
                             : Text(
-                                row.shortcut!,
+                                shortcut,
                                 style: boxMonoStyle(color: kBoxFaint),
                               ))
                       : alreadyHere && search.placement == null
@@ -1204,10 +1231,10 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                             ),
                           ),
                         )
-                      : row.shortcut == null
+                      : shortcut == null
                       ? null
                       : Text(
-                          row.shortcut!,
+                          shortcut,
                           style: boxMonoStyle(color: boxText(.60)),
                         ),
                   onTap: canSubmit ? () => _submit(row) : null,
@@ -1797,6 +1824,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final row = widget.row;
+    final shortcut = _paletteShortcut(context, row);
     final terms = swarmQueryTerms(_query.$1);
     final matches = searchResultMatches(row, terms);
     // Found in what was said rather than in the row's own name and context:
@@ -2051,7 +2079,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                   '${snippet == null ? '' : ', Found in conversation: ${snippet.plainSnippet}'}'
                   '${modelAction == null ? '' : ', $modelAction'}'
                   '${widget.unavailableReason == null ? '' : ', ${widget.unavailableReason}'}'
-                  '${row.shortcut == null ? '' : ', Shortcut ${row.shortcut}'}'
+                  '${shortcut == null ? '' : ', Shortcut $shortcut'}'
                   '${widget.activityAge == null ? '' : ', ${sessionActivityTooltip(widget.activity)}'}',
         excludeSemantics: true,
         child: Column(
@@ -2169,7 +2197,7 @@ class _SearchRowContentState extends State<_SearchRowContent> {
                           style: terminalContentStyle(color: muted),
                         ),
                       ),
-                    ] else if (row.shortcut case final shortcut?) ...[
+                    ] else if (shortcut case final shortcut?) ...[
                       SizedBox(width: cell.width * 2),
                       ConstrainedBox(
                         constraints: BoxConstraints(

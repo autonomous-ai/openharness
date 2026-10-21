@@ -1,0 +1,40 @@
+0.4.18-dev.dbeca9ff8.dirty
+{"ok":true,"machineId":"3c78e842…","agent":{"id":"cc1634be…","sess
+✓ stopped 1 harness
+✗ The Harness daemon (pid 2857) did not stop. None of Harness's files were deleted. Run `harness stop`, then `harness uninstall` again.
+exit=1 in 4 s
+/home/hx:
+total 68
+drwxr-x--- 14 hx   hx   4096 Oct 18 02:23 .
+drwxr-xr-x  1 root root 4096 Oct 18 02:22 ..
+-rw-r--r--  1 hx   hx    220 Mar 31  2024 .bash_logout
+-rw-r--r--  1 hx   hx   3838 Oct 18 02:23 .bashrc
+drwx------  3 hx   hx   4096 Oct 18 02:23 .cache
+drwxr-xr-x  2 hx   hx   4096 Oct 18 02:23 .claude
+drwxr-xr-x  3 hx   hx   4096 Oct 18 02:23 .codex
+drwxr-xr-x  2 hx   hx   4096 Oct 18 02:23 .commandcode
+drwxr-xr-x  6 hx   hx   4096 Oct 18 02:23 .config
+drwxr-xr-x  3 hx   hx   4096 Oct 18 02:23 .copilot
+drwxr-xr-x  2 hx   hx   4096 Oct 18 02:23 .cursor
+drwxr-xr-x  3 hx   hx   4096 Oct 18 02:23 .gemini
+drwxr-xr-x  3 hx   hx   4096 Oct 18 02:23 .grok
+drwxr-xr-x  9 hx   hx   4096 Oct 18 02:23 .harness
+drwxr-xr-x  3 hx   hx   4096 Oct 18 02:23 .local
+drwxr-xr-x  3 hx   hx   4096 Oct 18 02:23 .pi
+-rw-r--r--  1 hx   hx    874 Oct 18 02:23 .profile
+
+/home/hx/.local/bin:
+total 16
+drwxr-xr-x 2 hx hx 4096 Oct 18 02:23 .
+drwxr-xr-x 3 hx hx 4096 Oct 18 02:23 ..
+-rwxr-xr-x 1 hx hx  114 Oct 18 02:23 harness
+-rwxr-xr-x 1 hx hx   54 Oct 18 02:23 hn
+/home/hx/.bashrc:119:# added by harness installer
+/home/hx/.profile:29:# added by harness installer
+no process
+  PID  PPID STAT USER     COMMAND
+    1     0 Ss   root     sleep
+ 2857     1 Zs   hx       harnessd
+ 2949     1 Zs   hx       tmux: server
+ 2982     0 Ss   root     sh
+ 2988  2982 R    root     ps

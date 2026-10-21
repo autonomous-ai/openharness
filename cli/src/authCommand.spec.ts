@@ -318,6 +318,9 @@ describe('harness status — device row', () => {
     const result = runSync(root, ['status'])
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('○ stopped')
+    // A stopped daemon's block says how to start it, never that it runs in the background (infoBlockFooter.ts).
+    expect(result.stdout).toContain('  start with: harness start')
+    expect(result.stdout).not.toContain('running in background')
     expect(deviceLine(result.stdout)).toBe(`   device     ${fp}  (in your account)`)
     // After `machine` (when named) and before `version`.
     const lines = result.stdout.split('\n')

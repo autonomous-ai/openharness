@@ -198,11 +198,14 @@ icon implementation, not in individual pane widgets.
 Use 16-point icons beside text, 20 for standalone controls, and 24 for a feature
 illustration. Center the drawing optically inside its role's target; icon-only
 controls retain a 32-point target and a descriptive tooltip/accessibility label.
-Workspace close marks are a quiet exception: 12-point Lucide × at 45% foreground,
-with an optically matched 8-point regular SF Symbol in AppKit, inside the existing
-click target. Hover or keyboard focus restores full ink;
-Increase Contrast strengthens the resting mark. Tabs reveal the mark on hover,
-while pane headers keep it visible. Neither changes geometry on interaction.
+Workspace close marks (tabs and pane headers) are full foreground ink at rest
+(`AppIcons.closeInk`, mirrored by `HarnessControlSymbols.closeInk`), weighted like
+the text beside them: in AppKit the tab's × is the SF Symbol `xmark` at the
+title's size and weight (13-point regular, small scale); in Flutter it is the
+14-point Lucide × (`AppIcons.closeSize`), whose 1.1-point stroke matches that
+text's stems. Both sit in a 28-point square target. Tabs reveal the mark on
+hover, while pane headers keep it visible. Neither changes geometry on
+interaction.
 Use the surrounding text's semantic color. Hover changes emphasis or the shared
 control fill, never the symbol, weight or position. Disabled icons stay legible
 without suggesting an action. Agent, provider, service and product logos retain
@@ -226,7 +229,8 @@ dots remain solid at their intended size; color is accompanied by status text.
 | Field / inset row / pane radius | 10 |
 | Tab upper corner / outward lower shoulder | 10 / 8 |
 | Tab top inset | 6 |
-| Tab close target inset from outer bounds | 8 |
+| Tab close target (square) | 28 |
+| Tab close target inset from outer bounds | 11 (the 8-point shoulder + one 3-point gap, equal above, below and beside it) |
 | Pane close target trailing inset | 4 |
 | Dialog content inset | 24 |
 | Group / control gap | 16 / 8 |
@@ -253,6 +257,18 @@ line. Machine menus align to the project popover's top edge with an 8-point gap,
 then flip or constrain when the window has insufficient room.
 
 ## Surface families
+
+**Titlebar dropdowns** — the avatar's menu, the bell's inbox and the other
+menus a titlebar button opens are built on the shared overlay menu
+(`showPaneMenu`): no modal route and no veil, the popover radius and one rim.
+A click outside closes the dropdown and lands where it was aimed; Escape
+closes it and returns the keyboard; choosing a row closes it; opening another
+dropdown, or any titlebar action, closes it first (`dismissTransientMenus`),
+and its own button closes it again. A dropdown never disables the titlebar or
+dims its controls. It opens fresh: no row is lit when a pointer opened it, the
+first is focused only when a key did. The Settings page is a page: the tab
+row stays live over it and a click there leaves Settings, then acts. Only a
+real modal dialog holds the titlebar.
 
 **Task dialogs** — one heading, optional short explanation, fields, and fixed
 trailing actions. Rename, confirmation, linking and sharing use the same type,
@@ -333,9 +349,10 @@ in Flutter and AppKit. Tabs use the 13-point system control face, independent of
 the status bar and terminal font. Center the name and its adjacent
 status as one compact group, without permanent number prefixes. Navigation ink
 follows the tab-bar surface, including beside light app content. The default label
-is New Tab. A small right-hand close icon appears on hover, with its 32-point
-target inset 8 points from the outer tab bounds. This puts the cross's center
-16 points inside the curved body edge. × is the tab's only control: Agent
+is New Tab. A small right-hand close icon appears on hover, in the pane close
+button's 28-point square target, centred on the tab's body with one equal gap
+above, below and to the body's straight right side (3 points in the 40-point
+row; 11 from the outer tab bounds). × is the tab's only control: Agent
 Messages' 💬 that sat left of it was removed, since it was easy to hit by mistake
 and turned the tab off (owner, 2026-10-12); the account's Settings ▸ Experimental
 holds that switch now, off by default. At rest the name and status have the whole tab; on hover a name that would run
@@ -382,9 +399,10 @@ hover, without wrapping or reducing the font size. Remove a coding-agent logo
 that repeats the agent selector; keep a distinct domain-harness mark on the left.
 The session name and its activity/status remain on the left.
 
-Use the shared 12-point close glyph in a 28-point target, sitting 4 points
-inside the header's trailing edge. Resting ink is 45%; hover and keyboard focus
-brighten the glyph without a fill, border, or movement. Keep the controls on one
+Use the shared close mark (14-point Lucide ×, `AppIcons.closeSize`) in a
+28-point target, sitting 4 points inside the header's trailing edge. It is full
+foreground ink at rest (`AppIcons.closeInk`), as the tab's ×, with no fill,
+border, or movement on hover or keyboard focus. Keep the controls on one
 line; the session title yields first, then the model truncates while the agent
 retains readable identity. Never shrink the close target.
 

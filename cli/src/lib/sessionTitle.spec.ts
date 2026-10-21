@@ -121,8 +121,10 @@ describe('codexThreadName: Codex’s own name for a thread', () => {
 
   it('falls back to ~/.codex when neither the agent nor the environment names a Codex home', async () => {
     const savedUserHome = process.env.HOME
+    const savedProfile = process.env.USERPROFILE
     delete process.env.CODEX_HOME
     process.env.HOME = home
+    process.env.USERPROFILE = home
     try {
       mkdirSync(join(home, '.codex'))
       writeFileSync(join(home, '.codex', 'session_index.jsonl'), JSON.stringify({ id: 't1', thread_name: 'Default home' }) + '\n')
@@ -132,6 +134,7 @@ describe('codexThreadName: Codex’s own name for a thread', () => {
       expect(fresh.codexThreadName('t1')).toBe('Default home')
     } finally {
       process.env.HOME = savedUserHome
+      if (savedProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = savedProfile
     }
   })
 })

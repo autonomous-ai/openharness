@@ -30,6 +30,7 @@ class DesktopPromptSurface extends StatelessWidget {
         insetPadding: const EdgeInsets.all(20),
         backgroundColor: Colors.transparent,
         elevation: 0,
+        shape: DesktopChrome.bareDialogShape,
         child: SizedBox(
           width: width,
           child: DesktopDialogSurface(

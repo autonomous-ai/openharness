@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -17,6 +18,7 @@ import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../state/new_harness.dart';
 import '../state/device_form.dart';
+import '../super_tabs/project_visibility.dart';
 import 'box_chrome.dart' show kTerminalCornerRadius, terminalPaneBorder;
 import 'dsh_install_panel.dart' show describeInstallFailure;
 import 'desktop_chrome.dart';
@@ -1950,37 +1952,49 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     if (attachments == null) {
       return Align(
         alignment: Alignment.centerRight,
-        child: _desktopLaunchActions(),
+        child: _desktopLaunchActions(includeProjectVisibility: true),
       );
     }
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        Expanded(
-          // Right after the task it sits under, so Start stays last.
-          child: FocusTraversalOrder(
-            order: const NumericFocusOrder(4.5),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                NewHarnessAttachButton(
-                  attachments: attachments,
-                  enabled: !box.locked,
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: NewHarnessAttachmentChips(
+    return LayoutBuilder(
+      builder: (context, constraints) => Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Expanded(
+            // Right after the task it sits under, so Start stays last.
+            child: FocusTraversalOrder(
+              order: const NumericFocusOrder(4.5),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  NewHarnessAttachButton(
                     attachments: attachments,
                     enabled: !box.locked,
                   ),
-                ),
-              ],
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: NewHarnessAttachmentChips(
+                      attachments: attachments,
+                      enabled: !box.locked,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
-        const SizedBox(width: 12),
-        _desktopLaunchActions(),
-      ],
+          const SizedBox(width: 12),
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              // Keep the attachment target reachable when enlarged text
+              // makes the action group wrap inside a narrow composer.
+              maxWidth: math.max(
+                0,
+                constraints.maxWidth - grid.AppControl.height - 6 - 12,
+              ),
+            ),
+            child: _desktopLaunchActions(includeProjectVisibility: true),
+          ),
+        ],
+      ),
     );
   }
 
@@ -2236,12 +2250,33 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     child: const Text('Use the existing folder'),
   );
 
-  Widget _desktopLaunchActions() => Wrap(
+  Widget _desktopLaunchActions({bool includeProjectVisibility = false}) => Wrap(
     spacing: 8,
+    runSpacing: 8,
+    alignment: WrapAlignment.end,
     crossAxisAlignment: WrapCrossAlignment.center,
     children: [
       if (box.canCancelPending) _cancelPendingButton(),
       if (box.existingFolder != null) _useExistingFolderButton(),
+      if (includeProjectVisibility &&
+          box.integration?.projectVisibility != null)
+        FocusTraversalOrder(
+          order: const NumericFocusOrder(9.95),
+          child: ProjectVisibility(
+            key: const ValueKey('new-harness-project-visibility'),
+            value: box.integration!.projectVisibility!,
+            disabledReason: box.integration!.projectVisibilityLocked
+                ? 'Project creation has started. Visibility is fixed for this request.'
+                : box.locked
+                ? 'Finish the current request before changing visibility.'
+                : null,
+            onChanged: box.locked || box.integration!.projectVisibilityLocked
+                ? null
+                : (value) => setState(
+                    () => box.integration!.projectVisibility = value,
+                  ),
+          ),
+        ),
       _desktopStartButton(),
     ],
   );
@@ -2308,7 +2343,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                 ),
                 const SizedBox(width: 8),
               ],
-              Text(label),
+              Flexible(child: Text(label)),
             ],
           ),
         ),

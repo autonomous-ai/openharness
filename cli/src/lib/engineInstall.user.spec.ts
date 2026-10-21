@@ -26,6 +26,7 @@ function fixture() {
   const home = join(root, "home with 'quotes")
   mkdirSync(home)
   vi.stubEnv('HOME', home)
+  vi.stubEnv('USERPROFILE', home)
   const shared = join(root, 'shared-prefix')
   mkdirSync(shared, { mode: 0o555 })
   locked.push(shared)

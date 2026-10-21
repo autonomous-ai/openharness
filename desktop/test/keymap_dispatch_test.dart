@@ -31,6 +31,7 @@ void main() {
     bool composing = false,
     bool enabled = true,
     bool modifier = false,
+    bool aliasesBlocked = false,
   }) => runtime.dispatch(
     stroke: key == null ? null : KeyStroke.parse(key),
     physicalKey: key ?? 'unmapped',
@@ -41,6 +42,49 @@ void main() {
     canRepeat: (command) => command == 'pane.left',
     composing: composing,
     modifier: modifier,
+    aliasesBlocked: aliasesBlocked,
+  );
+
+  test('a Ctrl alias is left to the terminal when aliases are blocked', () {
+    runtime.update(
+      ResolvedKeymap([
+        KeyBinding(
+          keys: [KeyStroke.parse('ctrl+t')],
+          command: 'swarm.new',
+          outsideTerminal: true,
+        ),
+        binding('ctrl+shift+t', 'swarm.new'),
+      ], const KeymapConfig.empty()),
+    );
+    final blocked = press('ctrl+t', aliasesBlocked: true);
+    expect(blocked.handled, isFalse);
+    expect(blocked.command, isNull);
+    expect(press('ctrl+t', phase: KeymapKeyPhase.up).handled, isFalse);
+    expect(press('ctrl+t').command, 'swarm.new');
+    expect(press('ctrl+shift+t', aliasesBlocked: true).command, 'swarm.new');
+    expect(press('ctrl+t', composing: true).handled, isFalse);
+    expect(press('ctrl+t', phase: KeymapKeyPhase.repeat).command, isNull);
+  });
+
+  test(
+    'a blocked alias cancels a pending sequence like an unmatched suffix',
+    () {
+      runtime.update(
+        ResolvedKeymap([
+          KeyBinding(
+            keys: [KeyStroke.parse('f6'), KeyStroke.parse('ctrl+t')],
+            command: 'swarm.new',
+            outsideTerminal: true,
+          ),
+        ], const KeymapConfig.empty()),
+      );
+      expect(press('f6').handled, isTrue);
+      final blocked = press('ctrl+t', aliasesBlocked: true);
+      expect(blocked.command, isNull);
+      expect(blocked.handled, isTrue);
+      expect(runtime.hasPending, isFalse);
+      expect(press('ctrl+t').handled, isFalse);
+    },
   );
 
   test('a picker key nothing can run is left to the text field', () {

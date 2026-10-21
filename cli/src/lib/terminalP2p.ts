@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { BlockList, isIP } from 'node:net'
 import type { RTCPeerConnection, RTCDataChannel, RTCIceCandidateInit } from 'werift'
 import { env } from '../config/env.js'
 import { pickTurnUrl, selectStunUrls, type StunSelector } from './stunSelect.js'
@@ -158,10 +159,53 @@ function peerConfig(stunUrls: string[], turn?: TurnChoice, relayOnly = false): C
     // pair is only ever nominated once every direct pair has failed. Setting 'relay' for every session
     // would force it through Cloudflare — and bill for it; `relayOnly` is only ever a machine that
     // reached nothing else last time.
+    iceFilterCandidatePair: relayCanReach,
     // Terminal keyframes can approach 480 KiB. SCTP fragments them, but advertise enough room so
     // the peer never rejects the message at the WebRTC API boundary before fragmentation happens.
     maxMessageSize: 512 * 1024,
   }
+}
+
+/** Addresses no public TURN server can send to: private, carrier-grade NAT (Tailscale), loopback, link-local. */
+const UNREACHABLE_FROM_TURN = new BlockList()
+UNREACHABLE_FROM_TURN.addSubnet('0.0.0.0', 8, 'ipv4')
+UNREACHABLE_FROM_TURN.addSubnet('10.0.0.0', 8, 'ipv4')
+UNREACHABLE_FROM_TURN.addSubnet('100.64.0.0', 10, 'ipv4')
+UNREACHABLE_FROM_TURN.addSubnet('127.0.0.0', 8, 'ipv4')
+UNREACHABLE_FROM_TURN.addSubnet('169.254.0.0', 16, 'ipv4')
+UNREACHABLE_FROM_TURN.addSubnet('172.16.0.0', 12, 'ipv4')
+UNREACHABLE_FROM_TURN.addSubnet('192.168.0.0', 16, 'ipv4')
+UNREACHABLE_FROM_TURN.addAddress('::', 'ipv6')
+UNREACHABLE_FROM_TURN.addAddress('::1', 'ipv6')
+UNREACHABLE_FROM_TURN.addSubnet('fc00::', 7, 'ipv6')
+UNREACHABLE_FROM_TURN.addSubnet('fe80::', 10, 'ipv6')
+
+/**
+ * Keeps every pair but one kind: our TURN allocation paired with a peer address that no TURN server on
+ * the internet can reach. Those pairs can never connect, and with werift they used to cost the whole
+ * negotiation.
+ *
+ * Measured 2026-10-20 against the 8x4090 (Docker and libvirt bridges, so four private host candidates):
+ * Cloudflare answers a ChannelBind to a private peer with a 401 that carries no MESSAGE-INTEGRITY.
+ * werift drops that answer as unverified and retransmits until it times out, about 6.7s per peer, and
+ * it runs ChannelBinds one at a time. Four private peers ahead of the public one outlasted the 25s
+ * negotiation timeout, so every TURN-first negotiation died in `connecting` (0 of 14 in harness.log).
+ * With these pairs dropped, the same relay-only negotiation connected in about 1s, three times of three.
+ *
+ * Host-to-host pairs are kept, so two machines on one LAN or one tailnet still connect directly. If the
+ * backend ever hands out a TURN server inside the peer's own network, this filter has to go.
+ */
+export function relayCanReach(pair: { localCandidate: { type: string }; remoteCandidate: { host: string } }): boolean {
+  if (pair.localCandidate.type !== 'relay') return true
+  // A scope id (`fe80::1%en0`) is not part of the address.
+  let host = pair.remoteCandidate.host.split('%')[0]!
+  // An IPv4 address written as IPv6 (`::ffff:10.0.0.1`) is the IPv4 address.
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(host)
+  if (mapped) host = mapped[1]!
+  const family = isIP(host)
+  // A name (an mDNS `.local` candidate) is left to ICE: nothing here knows where it points.
+  if (family === 0) return true
+  return !UNREACHABLE_FROM_TURN.check(host, family === 4 ? 'ipv4' : 'ipv6')
 }
 
 /** Shared by both sides: same validation, same reason. Anything malformed degrades to STUN-only. */

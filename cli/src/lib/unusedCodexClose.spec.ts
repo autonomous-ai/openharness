@@ -10,13 +10,13 @@ import { CloseAgentService, inspectCloseActivity as inspectCloseReading } from '
 import { createStopAgentService } from './stopAgentService.js'
 import { inlineNativeControls } from '../testing/inlineNativeControls.js'
 import { SessionCheckpointStore } from './sessionCheckpoint.js'
-import { processRows } from './tmux.js'
+import { processRows } from './processTable.js'
 import { checkPidRuntime, terminateDeletedAgent } from './deleteAgentFallback.js'
 import { TmuxBackend } from './tmuxBackend.js'
 import { isolatedTmux } from '../testing/isolatedTmux.js'
 
-vi.mock('./tmux.js', async importOriginal => ({
-  ...await importOriginal<typeof import('./tmux.js')>(),
+vi.mock('./processTable.js', async importOriginal => ({
+  ...await importOriginal<typeof import('./processTable.js')>(),
   processRows: vi.fn(),
 }))
 vi.mock('./captureResumeIdentity.js', () => ({ captureResumeIdentity: vi.fn(async session => session) }))
@@ -50,7 +50,7 @@ beforeEach(() => {
   vi.mocked(terminateDeletedAgent).mockResolvedValue('terminated')
   const stop = createStopAgentService({
     registry, stoppedAgents, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
-    tmuxBackend: { kill: killPane },
+    backendFor: () => ({ kill: killPane }),
     agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
     forgetSession: id => registry.removeAgent(id), markDeleted: vi.fn(), clearDeleted: vi.fn(),
     // The real chain: the core's broker, Codex's own control in process, the process table mocked above.
@@ -117,7 +117,7 @@ it('closes the saved shell when an unbound Codex client exits before discovery c
 
 it.runIf(process.env.RUN_REAL_TMUX_DISCOVERY === '1')('closes only the exited client pane in a real private tmux server', async () => {
   const server = await isolatedTmux()
-  const actualTmux = await vi.importActual<typeof import('./tmux.js')>('./tmux.js')
+  const actualTmux = await vi.importActual<typeof import('./processTable.js')>('./processTable.js')
   const actualStop = await vi.importActual<typeof import('./deleteAgentFallback.js')>('./deleteAgentFallback.js')
   vi.stubEnv('TMUX', undefined)
   vi.stubEnv('TMUX_PANE', undefined)

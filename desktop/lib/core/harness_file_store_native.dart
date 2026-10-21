@@ -1,3 +1,5 @@
+import 'home_dir.dart';
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -48,18 +50,8 @@ class HarnessFileStore implements BatchLocalKeyValueStore {
     Map<String, String>? environment,
     String? name,
   }) {
-    final env = environment ?? Platform.environment;
-    var home = env['HOME'];
-    if ((home == null || home.isEmpty) && Platform.isWindows) {
-      home = env['USERPROFILE'];
-      if (home == null || home.isEmpty) {
-        final drive = env['HOMEDRIVE'];
-        final path = env['HOMEPATH'];
-        if (drive != null && path != null) home = '$drive$path';
-      }
-    }
-    if (home == null || home.isEmpty) home = containerHome;
-    if (home == null || home.isEmpty) {
+    final home = maybeHomeDir(environment: environment);
+    if (home == null) {
       throw StateError('Could not resolve the current user home directory');
     }
     return _join(_join(home, '.harness'), name ?? directoryName);

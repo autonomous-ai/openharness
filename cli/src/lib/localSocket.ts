@@ -7,16 +7,22 @@
  * user's processes can connect. A request that arrives over it is from this user, and needs none of
  * the address checks a TCP request does — its peer has no address at all.
  *
- * TCP stays: the CLI, engine hooks and scripts still use
- * it, as do app builds that predate this. Windows has no socket here; there everything is TCP.
+ * TCP stays: the CLI, engine hooks and scripts still use it, as do app builds that predate this. On Windows the
+ * daemon serves a named pipe instead (`listenAuthenticated` below). Reaching that pipe is no credential, so every
+ * request over it proves the daemon's token (lib/windows/pipeAuth.ts).
  */
 import { randomBytes } from 'node:crypto'
 import http from 'node:http'
 import { connect } from 'node:net'
 import type { IncomingMessage } from 'node:http'
 import type { Socket } from 'node:net'
+import type { Duplex } from 'node:stream'
 import { chmodSync, linkSync, lstatSync, renameSync, unlinkSync, type Stats } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { readDaemonRecord } from './daemonRecord.js'
+import { daemonPipe, type LocalDaemonOptions } from './windows/daemonPipe.js'
+import { checkPipeAuth, newPipePath, NonceWindow, PIPE_AUTH_HEADER, PIPE_PROOF_HEADER, pipeIdOf, pipeProofValue } from './windows/pipeAuth.js'
+import { pipeAbsent, pipeRequest, PipeUnproven } from './windows/pipeClient.js'
 
 /**
  * One socket per configured port in this OS user's data directory: `daemon-<port>.sock`. Its name
@@ -36,20 +42,54 @@ export function isLocalSocketName(name: string): boolean {
  *  created under a name 4 bytes longer (see [listenLocalSocket]) and must fit too. */
 const MAX_SOCKET_PATH_BYTES = 96
 
-const trustedSockets = new WeakSet<Socket>()
+/** The shortest daemon token a pipe accepts (the token is 32 random bytes). */
+const MIN_TOKEN_BYTES = 32
 
-/** Where the socket for the daemon on `port` lives in this data directory, or null where there is none. */
-export function localSocketPath(dataDir: string, port: number, platform: NodeJS.Platform = process.platform): string | null {
+const trustedSockets = new WeakSet<Socket>()
+/** Requests over the daemon's pipe whose auth checked out, and the proof each answer to them carries. */
+const pipeProofs = new WeakMap<IncomingMessage, string>()
+
+/** The daemon's Unix socket for `port` in this data directory, or null where there is none: Windows, or a path too long. */
+export function unixSocketPath(dataDir: string, port: number, platform: NodeJS.Platform = process.platform): string | null {
   if (platform === 'win32') return null
   const path = join(dataDir, localSocketName(port))
   return Buffer.byteLength(path) <= MAX_SOCKET_PATH_BYTES ? path : null
 }
 
-/** Whether this request (or raw socket) came in over the daemon's own Unix socket. */
+/**
+ * Where a client reaches the daemon on `port` of this data directory, or null where there is nothing to reach. That
+ * is its Unix socket; on Windows, the pipe the running daemon recorded in `daemon-<port>.json`, a new name on each
+ * start. Reaching that pipe is no trust: every request there proves the daemon's token (lib/windows/pipeAuth.ts).
+ * A caller that needs a filesystem socket (`ws+unix://`, the services) uses unixSocketPath.
+ */
+export function localSocketPath(dataDir: string, port: number, platform: NodeJS.Platform = process.platform): string | null {
+  return platform === 'win32' ? readDaemonRecord(dataDir, port, platform)?.pipe ?? null : unixSocketPath(dataDir, port, platform)
+}
+
+/** Where a daemon starting on `port` listens: its Unix socket, or on Windows a pipe of a new random name. */
+export function localSocketListenPath(dataDir: string, port: number, platform: NodeJS.Platform = process.platform): string | null {
+  return platform === 'win32' ? newPipePath() : unixSocketPath(dataDir, port, platform)
+}
+
+/** Whether this request (or raw socket) came in over the daemon's own Unix socket, or over its pipe with valid auth. */
 export function isTrustedLocal(target: IncomingMessage | Socket | null | undefined): boolean {
   if (!target) return false
+  if (pipeProofs.has(target as IncomingMessage)) return true
   const socket = 'socket' in target && target.socket ? target.socket : target as Socket
   return trustedSockets.has(socket)
+}
+
+/** The proof every answer to [req] must carry, for a request over the daemon's pipe whose auth checked out. */
+export function pipeProofOf(req: IncomingMessage): string | undefined {
+  return pipeProofs.get(req)
+}
+
+export interface ListenLocalSocketOptions {
+  /**
+   * The daemon's token (lib/windows/pipeAuth.ts). When given, `path` is a pipe (in the tests, a socket with a pipe's
+   * name) whose every request must prove the token: Windows. Absent: the Unix socket, trusted by its file mode.
+   */
+  token?: Buffer
 }
 
 export interface LocalSocketServer {
@@ -66,7 +106,10 @@ export interface LocalSocketServer {
  * only a stale socket. CLI startup is serialized by the per-user spawn lock; two daemons that start at
  * once anyway (two masters) get one socket between them, never one each.
  */
-export async function listenLocalSocket(handler: http.RequestListener, path: string): Promise<LocalSocketServer> {
+export async function listenLocalSocket(handler: http.RequestListener, path: string, options: ListenLocalSocketOptions = {}): Promise<LocalSocketServer> {
+  if (options.token) return listenAuthenticated(handler, path, options.token)
+  // A Harness pipe, or any endpoint on Windows, is never trusted by reachability: it needs the daemon's token.
+  if (pipeIdOf(path) || process.platform === 'win32') throw new Error(`${path} needs the daemon's token: reaching a pipe is no credential`)
   // A TCP collision can now move this user to another port. Holding a TCP port no longer proves
   // an existing Unix socket is stale: never unlink a live daemon belonging to this user.
   await refuseLiveSocket(path)
@@ -116,7 +159,54 @@ export async function listenLocalSocket(handler: http.RequestListener, path: str
   })
 }
 
-const alreadyServing = (path: string): Error =>
+/**
+ * The daemon's Windows pipe: the same handler, for requests that prove the token. Node cannot set a pipe's DACL,
+ * and the default one lets every account open it for reading, so reaching the pipe is no credential. A request
+ * without valid auth gets a 401 and never reaches the handler. An upgrade without valid auth is dropped here,
+ * before the local WS server's listener (localWsServer.ts), which then finds its socket destroyed. Every answer
+ * carries the proof; the local WS server adds it to a 101. There is no file to claim or remove: the name is new on
+ * each start (localSocketListenPath), and a pipe goes with its last handle.
+ */
+function listenAuthenticated(handler: http.RequestListener, path: string, token: Buffer): Promise<LocalSocketServer> {
+  if (token.length < MIN_TOKEN_BYTES) return Promise.reject(new Error(`The daemon's token must be at least ${MIN_TOKEN_BYTES} bytes`))
+  const pipeId = pipeIdOf(path)
+  if (!pipeId) return Promise.reject(new Error(`${path} is not a Harness pipe name`))
+  const seen = new NonceWindow()
+  const admit = (req: IncomingMessage): boolean => {
+    const header = req.headers[PIPE_AUTH_HEADER]
+    const auth = checkPipeAuth(token, typeof header === 'string' ? header : undefined, seen, pipeId)
+    if (auth) pipeProofs.set(req, pipeProofValue(token, auth.nonce))
+    return auth !== null
+  }
+  const server = http.createServer((req, res) => {
+    if (!admit(req)) {
+      res.writeHead(401, { 'Content-Type': 'application/json', Connection: 'close' })
+      res.end(JSON.stringify({ error: 'PIPE_AUTH_REQUIRED' }))
+      return
+    }
+    res.setHeader(PIPE_PROOF_HEADER, pipeProofs.get(req)!)
+    handler(req, res)
+  })
+  // Must stay the first 'upgrade' listener: it drops an unauthenticated upgrade before any other listener sees it.
+  server.prependListener('upgrade', (req: IncomingMessage, socket: Duplex) => {
+    // Alone, this listener would leave an upgrade nobody takes hanging: nothing serves upgrades here yet.
+    if (!admit(req) || server.listenerCount('upgrade') === 1) socket.destroy()
+  })
+  const closeNow = (): void => {
+    server.closeAllConnections()
+    server.close()
+  }
+  return new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(path, () => {
+      server.off('error', reject)
+      resolve({ server, path, close: async () => closeNow(), closeSync: closeNow })
+    })
+  })
+}
+
+/** What a start finds when another daemon serves its data folder: `EADDRINUSE`, as the bind it spares would have. */
+export const alreadyServing = (path: string): Error =>
   Object.assign(new Error(`A Harness daemon is already serving ${path}`), { code: 'EADDRINUSE' })
 
 /**
@@ -126,7 +216,7 @@ const alreadyServing = (path: string): Error =>
  * and launchd and systemd do not start a clean exit again (lib/daemonSafeMode.ts).
  */
 export const ORPHAN_STILL_SERVING = 'ORPHAN_STILL_SERVING'
-const orphanStillServing = (path: string, corePid: number): Error =>
+export const orphanStillServing = (path: string, corePid: number): Error =>
   Object.assign(new Error(`The core (pid ${corePid}) of a master that is gone still serves ${path}`), { code: ORPHAN_STILL_SERVING })
 
 /**
@@ -175,10 +265,24 @@ export interface ServedFolderDeps {
 export const ORPHAN_WAIT_MS = 20_000
 const ORPHAN_POLL_MS = 250
 
+/** What a status answer says: a daemon and its master, or `unknown` when it does not say both pids. */
+function folderServerOf(body: string): DataFolderServer {
+  try {
+    const status = JSON.parse(body) as { pid?: unknown; corePid?: unknown }
+    const pid = Number(status.pid)
+    // A daemon from before harnessd says no core of its own: it is its own master.
+    const corePid = status.corePid === undefined ? pid : Number(status.corePid)
+    return Number.isSafeInteger(pid) && pid > 0 && Number.isSafeInteger(corePid) && corePid > 0 ? { pid, corePid } : 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
+
 /** Ask the daemon on a data folder's socket who it is. A socket that takes no connection serves nothing
  *  (no socket, a stale one, one that cannot be reached: start-up goes on, and the bind decides); one that
- *  takes it and does not say is `unknown`. */
-export function askDataFolderServer(path: string, timeoutMs: number): Promise<DataFolderServer> {
+ *  takes it and does not say is `unknown`. With [token] the socket is the Windows pipe: see [askPipeServer]. */
+export function askDataFolderServer(path: string, timeoutMs: number, token: Buffer | null = null): Promise<DataFolderServer> {
+  if (token) return askPipeServer(path, timeoutMs, token)
   return new Promise((resolve) => {
     let connected = false
     // A connection of its own, never one kept alive from an earlier ask: that one may be to a daemon gone.
@@ -186,15 +290,7 @@ export function askDataFolderServer(path: string, timeoutMs: number): Promise<Da
       let body = ''
       response.setEncoding('utf8')
       response.on('data', (chunk: string) => { if (body.length < 65_536) body += chunk })
-      response.on('end', () => {
-        try {
-          const status = JSON.parse(body) as { pid?: unknown; corePid?: unknown }
-          const pid = Number(status.pid)
-          // A daemon from before harnessd says no core of its own: it is its own master.
-          const corePid = status.corePid === undefined ? pid : Number(status.corePid)
-          resolve(Number.isSafeInteger(pid) && pid > 0 && Number.isSafeInteger(corePid) && corePid > 0 ? { pid, corePid } : 'unknown')
-        } catch { resolve('unknown') }
-      })
+      response.on('end', () => resolve(folderServerOf(body)))
       response.on('error', () => resolve('unknown'))
     })
     request.on('socket', (socket: Socket) => socket.once('connect', () => { connected = true }))
@@ -204,12 +300,49 @@ export function askDataFolderServer(path: string, timeoutMs: number): Promise<Da
   })
 }
 
+/**
+ * The Windows pipe: the ask proves the token and takes only an answer with the daemon's proof (pipeClient.ts).
+ * An answer without it serves nothing: whatever took a dead daemon's name must not keep this one down. So does a
+ * name that is no Harness pipe, or nothing listening there (a stale record). Silence is not that: a listener that
+ * does not answer in time (a real daemon that is only slow) is `unknown`, and start-up refuses, since each Windows
+ * start listens on a fresh pipe and this ask is the only guard against a second daemon on the folder. An answer that
+ * proves the daemon but is unusable (too large) is `unknown` too, as on a Unix socket.
+ */
+async function askPipeServer(pipe: string, timeoutMs: number, token: Buffer): Promise<DataFolderServer> {
+  if (!pipeIdOf(pipe)) return 'none'
+  try {
+    const reply = await pipeRequest({ pipe, token }, { method: 'GET', path: '/api/status', timeoutMs, maxBytes: 65_536 })
+    return folderServerOf(reply.body)
+  } catch (error) {
+    return error instanceof PipeUnproven || pipeAbsent(error) ? 'none' : 'unknown'
+  }
+}
+
 const SERVED_FOLDER_DEFAULTS: ServedFolderDeps = {
   who: askDataFolderServer,
   alive: (pid) => { try { process.kill(pid, 0); return true } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM' } },
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now: () => performance.now(),
   log: (line) => console.log(line),
+}
+
+/**
+ * What `refuseServedDataFolder` asks with for the daemon of [dataDir] on [configuredPort]. On Windows it asks the
+ * recorded pipe with that folder's token (windows/daemonPipe.ts `daemonPipe`). Nothing serves it when there is no token
+ * (the core makes the token before it listens), no record of a pipe and pid, or a recorded process proven gone: that
+ * pipe is never dialled, so whatever took a dead daemon's name and hangs cannot keep every start down. Elsewhere it
+ * asks as it always has.
+ */
+export function servedFolderDeps(dataDir: string, configuredPort: number, options: LocalDaemonOptions = {}): ServedFolderDeps {
+  if ((options.platform ?? process.platform) !== 'win32') return SERVED_FOLDER_DEFAULTS
+  const find = options.pipe ?? daemonPipe
+  return {
+    ...SERVED_FOLDER_DEFAULTS,
+    who: async (_path, timeoutMs) => {
+      const target = await find(dataDir, configuredPort)
+      return target ? askDataFolderServer(target.pipe, timeoutMs, target.token) : 'none'
+    },
+  }
 }
 
 /**

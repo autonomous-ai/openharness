@@ -164,7 +164,7 @@ void main() {
       section('loft', state: 'awake', wakeOutcome: 'nobody_serving'),
     ]);
 
-    const subtitle = 'Asleep 2h ago';
+    const subtitle = '2h ago';
     expect(find.text(subtitle), findsOneWidget);
     expect(
       find.byTooltip(

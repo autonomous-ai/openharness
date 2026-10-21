@@ -4,7 +4,8 @@ project(harness LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
-set(BINARY_NAME "harness")
+# harness-desktop.exe: the CLI owns harness.exe, and Windows matches names case-insensitively.
+set(BINARY_NAME "harness-desktop")
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
@@ -49,8 +50,17 @@ endfunction()
 set(FLUTTER_MANAGED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/flutter")
 add_subdirectory(${FLUTTER_MANAGED_DIR})
 
+# Atomic Win32 operation/error capture for the Dart pipe adapter.
+add_library(harness_pipe_io SHARED "pipe_io_bridge.cpp")
+apply_standard_settings(harness_pipe_io)
+target_compile_definitions(harness_pipe_io PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(harness_pipe_io PRIVATE kernel32)
+set_target_properties(harness_pipe_io PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/runner/$<CONFIG>")
+
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
+add_dependencies(${BINARY_NAME} harness_pipe_io)
 
 
 # Generated plugin build rules, which manage building the plugins and adding
@@ -73,6 +83,9 @@ set(INSTALL_BUNDLE_DATA_DIR "${CMAKE_INSTALL_PREFIX}/data")
 set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}")
 
 install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  COMPONENT Runtime)
+
+install(TARGETS harness_pipe_io RUNTIME DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
 
 install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"

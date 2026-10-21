@@ -1,9 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import '../core/harness_cli_runner.dart';
+import '../core/runtime_platform.dart';
 import '../core/serial_port_lease.dart';
+
+/// How the flash dialog names the computer the dial is plugged into.
+String flashHostName({bool? windows}) =>
+    (windows ?? RuntimePlatform.isWindows) ? 'this computer' : 'this Mac';
 
 /// What a line of flasher output is.
 ///
@@ -59,12 +65,55 @@ class FlashProbe {
 /// class owns one thing: turning that command's output into something a window
 /// can draw.
 class Flasher {
-  Flasher({this.startProcess = harnessCliStart});
+  Flasher({
+    this.startProcess = harnessCliStart,
+    bool? windows,
+    this.cancelDirectory,
+    this.killAfter = const Duration(seconds: 15),
+    Future<void> Function(int pid)? killTree,
+    Future<ProcessResult> Function(String, List<String>) runProcess =
+        Process.run,
+  }) : _windows = windows ?? RuntimePlatform.isWindows,
+       _killTree = killTree ?? ((pid) => _taskkillTree(pid, runProcess));
 
   /// Overridden in tests.
-  final Future<Process> Function(List<String> arguments) startProcess;
+  final Future<Process> Function(
+    List<String> arguments, {
+    Map<String, String>? environment,
+  })
+  startProcess;
+
+  /// How long a cancelled Windows flash has to stop before its process tree is ended.
+  final Duration killAfter;
+
+  /// Where the Windows cancel file goes; defaults to the flasher's folder.
+  final String? cancelDirectory;
+  final bool _windows;
+  final Future<void> Function(int pid) _killTree;
+  Timer? _killTimer;
+  Future<void>? _forcedStop;
+
+  String get scriptName => _windows ? 'flash-circle.ps1' : 'flash-circle.sh';
+
+  static Future<void> _taskkillTree(
+    int pid,
+    Future<ProcessResult> Function(String, List<String>) runProcess,
+  ) async {
+    // `harness flash` runs PowerShell, which runs esptool; killing only the parent leaves writers alive.
+    final arguments = ['/PID', '$pid', '/T', '/F'];
+    final result = await runProcess('taskkill', arguments);
+    if (result.exitCode != 0) {
+      throw ProcessException(
+        'taskkill',
+        arguments,
+        result.stderr.toString().trim(),
+        result.exitCode,
+      );
+    }
+  }
 
   Process? _running;
+  void Function(FlashLine)? _onLine;
   bool _cancelled = false;
 
   bool get isRunning => _running != null;
@@ -124,12 +173,57 @@ class Flasher {
   /// thing that brings the Harness daemon back after the script stopped it to
   /// free the serial port. Killing it outright leaves the computer with no
   /// daemon and the dial dark — worse than never having flashed at all.
+  ///
+  /// Windows Process.kill skips flash-circle.ps1's `finally`, its one way of starting Harness
+  /// again. Ask by file so the script can unwind, then end its tree only after [killAfter].
+  /// Releasing the lease lets this app's supervision start the daemon on its next tick.
   void cancel() {
     final process = _running;
     if (process == null) return;
     _cancelled = true;
-    process.kill(ProcessSignal.sigterm);
+    if (!_windows) {
+      process.kill(ProcessSignal.sigterm);
+      return;
+    }
+    try {
+      final dir = Directory(
+        cancelDirectory ?? SerialPortLease.flasherDirectory(),
+      )..createSync(recursive: true);
+      File('${dir.path}${Platform.pathSeparator}cancel')
+          .writeAsStringSync('${DateTime.now().millisecondsSinceEpoch}');
+    } catch (_) {
+      // A filesystem failure must not skip the script's chance to finish and restart Harness.
+    }
+    _killTimer?.cancel();
+    _killTimer = Timer(killAfter, () {
+      if (identical(_running, process) && _forcedStop == null) {
+        _forcedStop = _endTree(process);
+      }
+    });
   }
+
+  Future<void> _endTree(Process process) async {
+    try {
+      await _killTree(process.pid);
+      await process.exitCode;
+      // The script's finally could not run. Only this invocation's unguessable lease name is ours;
+      // a terminal/older script's shared marker and every other app run must be left alone.
+      final lease = _ownedLease;
+      if (lease != null && lease.existsSync()) lease.deleteSync();
+    } catch (error) {
+      // A failed kill leaves the writer alive: report it without releasing its serial lease.
+      if (identical(_running, process)) {
+        _onLine?.call(
+          FlashLine(
+            'error: could not stop the flash: $error',
+            FlashLineKind.error,
+          ),
+        );
+      }
+    }
+  }
+
+  File? _ownedLease;
 
   Future<int> _run(
     List<String> command,
@@ -137,20 +231,44 @@ class Flasher {
   ) async {
     if (_running != null) throw StateError('a flash is already running');
     _cancelled = false;
-    final process = await startProcess(command);
+    _forcedStop = null;
+    final random = _windows ? Random.secure() : null;
+    final runId = _windows
+        ? List.generate(
+            16,
+            (_) => random!.nextInt(256).toRadixString(16).padLeft(2, '0'),
+          ).join()
+        : null;
+    final cache = cancelDirectory ?? SerialPortLease.flasherDirectory();
+    _ownedLease = runId == null ? null : File('$cache/flashing.$runId');
+    final process = await startProcess(
+      command,
+      environment: runId == null
+          ? null
+          : {'HARNESS_FLASH_RUN_ID': runId, 'HARNESS_FLASHER_CACHE': cache},
+    );
     _running = process;
+    _onLine = onLine;
     try {
       final pumps = <Future<void>>[
         _pump(process.stdout, onLine, stderr: false),
         _pump(process.stderr, onLine, stderr: true),
       ];
       final code = await process.exitCode;
+      _killTimer?.cancel();
+      // Parent EOF can arrive while taskkill is still ending descendants. Retire the persisted
+      // lease and finish that termination attempt before SerialPortLease.hold releases supervision.
+      await _forcedStop;
       // Drain first: the last lines can still be in flight when the process
       // has already gone, and losing them loses the reason it failed.
       await Future.wait(pumps);
       return code;
     } finally {
+      _killTimer?.cancel();
+      _killTimer = null;
+      _onLine = null;
       _running = null;
+      _ownedLease = null;
     }
   }
 
@@ -191,5 +309,9 @@ FlashLine classifyFlashLine(String raw, {required bool stderr}) {
 /// Starts `harness flash` with the managed runtime. [HarnessCliRunner] also
 /// puts the legacy launcher directory on PATH for the child script, so the
 /// flasher can stop and restart its daemon reliably without zsh.
-Future<Process> harnessCliStart(List<String> arguments) =>
-    HarnessCliRunner().start(arguments);
+Future<Process> harnessCliStart(
+  List<String> arguments, {
+  Map<String, String>? environment,
+}) =>
+    HarnessCliRunner(environment: {...Platform.environment, ...?environment})
+        .start(arguments);

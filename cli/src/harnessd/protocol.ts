@@ -19,12 +19,18 @@ import type { SupervisorStatus } from './supervisor.js'
  *  only once grid is in use here or a request needs it, and for the gateway's, which runs once this machine is
  *  signed in, has anything paired or needs it; and `want` before `bound` (./services.ts `askedSince`).
  *  5: `want` for the viewers' process (the harness viewers and the Store), which runs once a harness is here, a
- *  request needs it or the release's own harnesses are to be put in place (core/viewersWake.ts). */
-export const HARNESSD_PROTOCOL = 5
+ *  request needs it or the release's own harnesses are to be put in place (core/viewersWake.ts).
+ *  6: `stop`, the core asking its master to stop everything (`harness stop` on Windows, where the CLI has no signal
+ *  to send the master), and `shutdown`, the master asking the core or a service to leave, where a signal cannot:
+ *  on Windows Node's `kill` is TerminateProcess, whatever the signal, and nothing would be torn down. */
+export const HARNESSD_PROTOCOL = 6
 
 /** The command a bundle's master answers its probe on, and what it answers. */
 export const PROBE_COMMAND = '__harnessd-probe'
 export const PROBE_ANSWER = 'harnessd-probe ok'
+/** Added to the answer by a master that takes a handover (Windows, ./reexec.ts `HandOverDeps`): one from before would
+ *  be handed the state, never take the handover, and run beside the master that handed over. */
+export const PROBE_HANDOVER = 'takes a handover'
 /** How long a probe may take: the updater gives its canary as long. */
 export const PROBE_TIMEOUT_MS = 15_000
 
@@ -71,11 +77,17 @@ export type CoreMessage =
    *  `bound` too), or the viewers (protocol 5). A master from before ignores it, or finds that process already
    *  running, having started it at once. */
   | { type: 'harnessd:want'; service: string }
+  /** Stop the services, this core and the master, and stay stopped (protocol 6): `harness stop` asked this core
+   *  over its pipe (core/daemonStopRoute.ts). A master from before ignores it; the CLI then ends it. */
+  | { type: 'harnessd:stop' }
 
 export type MasterMessage =
   | { type: 'harnessd:status'; status: SupervisorStatus }
   /** The updater staged `version`: hand over for it, as a core whose own updater staged it did (exit 75). */
   | { type: 'harnessd:update'; version: string }
+  /** Leave, as on SIGTERM (protocol 6): what the master says where it has no signal to send (Windows). A process
+   *  from before ignores it, and is ended once its grace is over, as one that ignored SIGTERM was. */
+  | { type: 'harnessd:shutdown' }
 
 /** What the updater says to the master: it staged `version` on disk. */
 export type UpdaterMessage = { type: 'harnessd:staged'; version: string }
@@ -103,6 +115,8 @@ export function isCoreMessage(value: unknown): value is CoreMessage {
         && (message.loopDelayMs === undefined || typeof message.loopDelayMs === 'number')
     case 'harnessd:want':
       return typeof message.service === 'string' && message.service.length > 0
+    case 'harnessd:stop':
+      return true
     default:
       return false
   }
@@ -112,5 +126,6 @@ export function isMasterMessage(value: unknown): value is MasterMessage {
   if (!value || typeof value !== 'object') return false
   const message = value as Record<string, unknown>
   if (message.type === 'harnessd:update') return typeof message.version === 'string' && message.version.length > 0
+  if (message.type === 'harnessd:shutdown') return true
   return message.type === 'harnessd:status' && !!message.status && typeof message.status === 'object'
 }

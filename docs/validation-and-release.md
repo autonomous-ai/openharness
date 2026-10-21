@@ -33,7 +33,8 @@ PR CI is deliberately fast. Each changed component runs only its own Linux suite
 | --- | --- | --- |
 | `cli/`, `tests/` | `cli-typecheck` and `cli-tests` (default Vitest suite, four shards) | 3–5 min |
 | `desktop/` | `desktop-tests` (VM suite, four Linux shards) | 5–7 min |
-| `tui/` | `tui-test` (`cargo test`) | a few minutes |
+| `tui/`, `term/` (the TUI builds on it) | `tui-test` (`cargo test`) | a few minutes |
+| `pty/`, `term/`, `tui/vendor/`, the CLI's ptyhost backend (`cli/src/lib/ptyHost/`, `ptyHostBackend*`, `terminalBackend.contract.ts`) | `pty-checks` (`cargo test` for `term` and `pty`, then the ptyhost terminal contract against the built host) | a few minutes |
 | `backend/`, `companions/`, `website/`, `os/`, `provider/`, `mobile/`, `daemons/` | that component's one check | 1–4 min |
 | `devices/` | `firmware-checks` | 1–2 min |
 | `devices/harness-pro/` | also `pro-firmware-build` (ESP-IDF v5.5.4 build of `harness_pro.bin`, which must fit `ota_0`) and `pro-golden` (`test/golden.sh --check` with Liberation Sans, on macOS arm64 where the baseline is recorded: float maths in the code-drawn shapes differs on Linux x86-64) | build ~4 min, golden ~1 min |
@@ -167,9 +168,9 @@ When the final implementation is pushed, start `make release-desktop ARGS="--pre
 on that PR branch alongside its required tests and review. This chooses the next
 version using the same tags/live-manifest rules as a release, then dispatches a
 candidate build. Use an explicit version with `--prepare` when preparing a minor
-bump. The candidate uses the release's normal macOS and Linux build, signing and
+bump. The candidate uses the release's normal macOS, Linux and Windows build, signing and
 notarization steps and production updater settings. It writes only to a random
-candidate prefix, verifies all six downloads, and retains a small receipt in
+candidate prefix, verifies all nine downloads, and retains a small receipt in
 GitHub Actions. It neither tags nor updates the product manifest or Release page.
 
 After validation and review pass, merge and release that version normally. The
@@ -191,7 +192,7 @@ or malformed responses cannot authorize reuse. The workflow checks the
 producer run's successful completion, repository, workflow, source, attempt and
 immutable receipt digest. Promotion copies only the exact object generations
 whose sizes and SHA-256 hashes were verified, with atomic no-overwrite conditions.
-The normal version check, serialized manifest publication and six public-download
+The normal version check, serialized manifest publication and nine public-download
 checks still apply. Candidate packaging never substitutes for application tests
 or authorizes a merge or release.
 
@@ -212,7 +213,7 @@ Unused candidates expire after seven days; a daily job deletes only recognized
 old candidate objects at their listed generations. Failed candidates and consumed
 candidates are removed by their owning workflow. For process maintenance, dispatch
 `test_candidate_reuse=true` for the same branch/version after its candidate passes:
-it requires reuse, promotes to disposable paths, verifies all six downloads, then
+it requires reuse, promotes to disposable paths, verifies all nine downloads, then
 removes those objects and the consumed candidate. It cannot publish a product.
 
 PR CI runs the TUI unit tests only. The TUI release builds the shipped musl targets

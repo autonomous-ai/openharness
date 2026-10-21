@@ -20,7 +20,7 @@ import { devinMessagesToEvents } from '../../../engines/devin/normalizer.js'
 import { isDevinSessionId, readDevinMessages } from '../../../engines/devin/reader.js'
 import { hasSqliteReader } from '../../sqliteAvailability.js'
 import type { SqliteRow } from '../../sqliteRead.js'
-import { resumeSessionId } from '../../tmux.js'
+import { resumeSessionId } from '../../processTable.js'
 import {
   LIST_LIMIT, argvSubcommand, engineProcess, ownerRecord, parseOwnerRecord, readSql, checkedSql, rowsOf, splitCounts, storeStamp,
   tableColumns, tally, type Counting, type SqlRead, type Tally,

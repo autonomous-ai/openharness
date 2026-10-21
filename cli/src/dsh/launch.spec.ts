@@ -51,7 +51,7 @@ describe('buildLaunchOverrides with a DSH', () => {
     // The branch replaced `configDirFor` with the machine facts the grid launch builder reads itself.
     machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(),
     writeGridConfigDir: async () => '/cfg',
-    tmuxSupportsSessionEnv: async () => true,
+    capabilities: async () => ({ sessionEnv: true }),
     installCodexHooks: () => true,
     dshLaunch: async (id, workspace, engine) => id === installed.id ? { ok: true, launch: dshLaunch(installed, workspace, {}, engine) } : { ok: false, error: 'DSH_NOT_INSTALLED', detail: `${id} is not installed on this machine` },
   }

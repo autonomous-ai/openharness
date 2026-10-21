@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../core/machine_resources.dart';
 import '../core/models.dart';
@@ -8,17 +9,17 @@ import '../core/test_run.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
-import '../shared/widgets/app_icon_button.dart';
+import '../shared/widgets/app_menu.dart';
 import '../state/app_state.dart';
 import '../usage/models_menu_controller.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
-import '../shared/widgets/app_select_field.dart';
 import '../widgets/workspace_subscription_usage.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'model.dart';
+import 'section_heading.dart';
 
 class SuperTabMachines extends StatefulWidget {
   const SuperTabMachines({
@@ -26,12 +27,184 @@ class SuperTabMachines extends StatefulWidget {
     required this.controller,
     required this.onAddAgent,
     this.app,
+    this.embedded = false,
   });
   final SuperTabController controller;
   final AppNotifier? app;
+  final bool embedded;
   final ValueChanged<SuperTabConversation> onAddAgent;
   @override
   State<SuperTabMachines> createState() => _SuperTabMachinesState();
+}
+
+class _MachineChoice {
+  const _MachineChoice({
+    required this.id,
+    required this.label,
+    this.unavailable,
+  });
+
+  final String id, label;
+  final ({IconData icon, String message})? unavailable;
+}
+
+/// Unlike an ordinary choice field, this inventory also explains computers
+/// that cannot be selected. Standard menu buttons own their disabled semantics
+/// and keyboard traversal; the shared menu theme supplies their appearance.
+class _MachinePicker extends StatefulWidget {
+  const _MachinePicker({
+    required this.value,
+    required this.choices,
+    required this.busy,
+    required this.onChanged,
+  });
+
+  final String? value;
+  final List<_MachineChoice> choices;
+  final bool busy;
+  final ValueChanged<String> onChanged;
+
+  @override
+  State<_MachinePicker> createState() => _MachinePickerState();
+}
+
+class _MachinePickerState extends State<_MachinePicker> {
+  final _menu = MenuController();
+  final _focus = FocusNode(debugLabel: 'Machine');
+
+  @override
+  void dispose() {
+    _focus.dispose();
+    super.dispose();
+  }
+
+  void _open() {
+    if (!widget.busy) _menu.open();
+  }
+
+  Widget _status(({IconData icon, String message}) status) => Tooltip(
+    message: status.message,
+    excludeFromSemantics: true,
+    child: Icon(status.icon, size: grid.AppControl.iconSize),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final current = widget.choices
+        .where((choice) => choice.id == widget.value)
+        .firstOrNull;
+    final firstAvailable = widget.choices
+        .where((choice) => choice.unavailable == null)
+        .firstOrNull;
+    final focusId = current?.unavailable == null && current != null
+        ? current.id
+        : firstAvailable?.id;
+    final label = current?.label ?? 'Choose a machine';
+    return LayoutBuilder(
+      builder: (context, constraints) => MenuAnchor(
+        controller: _menu,
+        childFocusNode: _focus,
+        consumeOutsideTap: true,
+        alignmentOffset: const Offset(0, grid.AppControl.menuGap),
+        style: grid.AppMenu.style(
+          minWidth: constraints.maxWidth,
+          maxWidth: constraints.maxWidth,
+        ),
+        onOpen: () => setState(() {}),
+        onClose: () => setState(() {}),
+        menuChildren: [
+          for (final choice in widget.choices)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              child: SizedBox(
+                width: constraints.maxWidth - 12,
+                child: MenuItemButton(
+                  key: ValueKey('swarm-machine-option-${choice.id}'),
+                  autofocus: choice.id == focusId,
+                  overflowAxis: Axis.vertical,
+                  semanticsLabel: [
+                    choice.label,
+                    ?choice.unavailable?.message,
+                  ].join(', '),
+                  style: ButtonStyle(
+                    side: const WidgetStatePropertyAll(BorderSide.none),
+                    padding: WidgetStatePropertyAll(
+                      AppMenuRowMetrics.roomy.padding,
+                    ),
+                  ),
+                  onPressed: widget.busy || choice.unavailable != null
+                      ? null
+                      : () => widget.onChanged(choice.id),
+                  trailingIcon: choice.unavailable != null
+                      ? _status(choice.unavailable!)
+                      : choice.id == widget.value
+                      ? const Icon(
+                          AppIcons.check,
+                          size: grid.AppControl.iconSize,
+                        )
+                      : null,
+                  child: Tooltip(
+                    message: choice.label,
+                    excludeFromSemantics: true,
+                    child: Text(
+                      choice.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+        builder: (context, menu, _) => CallbackShortcuts(
+          bindings: {
+            const SingleActivator(LogicalKeyboardKey.arrowDown): _open,
+            const SingleActivator(LogicalKeyboardKey.arrowUp): _open,
+          },
+          child: Semantics(
+            label: 'Machine',
+            value: [label, ?current?.unavailable?.message].join(', '),
+            expanded: menu.isOpen,
+            child: TextButton(
+              key: const ValueKey('swarm-machine-picker'),
+              focusNode: _focus,
+              style: TextButton.styleFrom(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(grid.AppControl.radius),
+                ),
+              ),
+              onPressed: widget.busy
+                  ? null
+                  : () => menu.isOpen ? menu.close() : _open(),
+              child: ExcludeSemantics(
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (current?.unavailable != null) ...[
+                      const SizedBox(width: 8),
+                      _status(current!.unavailable!),
+                    ],
+                    const SizedBox(width: 8),
+                    const Icon(
+                      AppIcons.chevronDown,
+                      size: grid.AppControl.iconSize,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _SuperTabMachinesState extends State<SuperTabMachines> {
@@ -125,19 +298,52 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   Future<void> _contribute({Map<String, dynamic>? existing}) async {
     final app = widget.app;
     if (app == null) return;
-    final choices = app.machineStates.values
-        .where(
-          (m) =>
-              !m.machine.isShared &&
-              !m.machine.isSharedMachine &&
-              !m.needsLink &&
-              m.nodeOnline != false,
-        )
+    final isConfigure = existing != null;
+    final existingId = existing?['machineId'] as String?;
+    bool isExisting(MachineState m) =>
+        existingId != null && m.machine.machineId == existingId;
+    // "Already in this tab" means already CONTRIBUTED — an agent already
+    // running there (unconfirmed) does not count, or a freshly created tab
+    // whose lead runs on this Mac could never contribute it. `_ids` (agents
+    // too) is for the machine-card panel below, not this dialog.
+    final contributed = {
+      for (final m in c.snapshot?.machines ?? const <Map<String, dynamic>>[])
+        m['machineId'] as String,
+    };
+    // Unavailable computers stay inspectable in the picker, but another
+    // account's computers must never be offered for contribution.
+    List<MachineState> ownedMachines() => app.machineStates.values
+        .where((m) => !m.belongsToOtherAccount)
         .toList();
+    ({IconData icon, String message})? unavailable(MachineState m) {
+      if (!isExisting(m) && contributed.contains(m.machine.machineId)) {
+        return (icon: AppIcons.circleCheck, message: 'Already in this Swarm');
+      }
+      if (m.needsLink) {
+        return (
+          icon: AppIcons.unlink,
+          message: 'Not linked. Link this computer from Machines.',
+        );
+      }
+      if (m.isOffline) {
+        return (
+          icon: AppIcons.cloudOff,
+          message: 'Offline. Open Harness on this computer to add it.',
+        );
+      }
+      return null;
+    }
+
+    bool canSelect(MachineState? m) =>
+        m != null && !m.belongsToOtherAccount && unavailable(m) == null;
+    final addable = ownedMachines().where(canSelect).toList();
+    String labelFor(MachineState m) => m.isLocalMachine
+        ? 'This Mac (${m.machine.displayName})'
+        : m.machine.displayName;
     String? machineId =
-        existing?['machineId'] as String? ??
-        choices.where((m) => m.isLocalMachine).firstOrNull?.machine.machineId ??
-        choices.firstOrNull?.machine.machineId;
+        existingId ??
+        addable.where((m) => m.isLocalMachine).firstOrNull?.machine.machineId ??
+        addable.firstOrNull?.machine.machineId;
     String? error;
     var busy = false;
     String? setupId;
@@ -145,166 +351,178 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       context: context,
       builder: (context) => SuperTabDialogScope(
         controller: c,
-        child: StatefulBuilder(
-          builder: (context, update) {
-            Future<void> save() async {
-              if (busy || machineId == null) return;
-              final selected = machineId!;
-              update(() {
-                busy = true;
-                error = null;
-              });
-              try {
-                // Older tabs can record the project already chosen for their lead.
-                // No folder is inferred across machines from a matching path.
-                if (c.snapshot?.project == null) {
-                  final lead = c.snapshot?.agents
-                      .where((a) => c.snapshot!.isLead(a.id))
-                      .firstOrNull;
-                  final host = lead == null
-                      ? null
-                      : app.stateOf(lead.machineId);
-                  final native = host?.agents
-                      .where((a) => a.id == lead?.harnessId)
-                      .firstOrNull;
-                  final project = native == null
-                      ? null
-                      : host?.projectOf(native);
-                  if (project != null && c.isOwner) {
-                    final recorded = await c.command({
-                      'type': 'tab.project',
-                      'machineId': lead!.machineId,
-                      'project': {
-                        'cwd': project.root ?? project.cwd,
-                        'repositoryUrl': superTabRepositoryUrl(project.remote),
-                      },
+        child: ListenableBuilder(
+          listenable: app,
+          builder: (context, _) => StatefulBuilder(
+            builder: (context, update) {
+              Future<void> save() async {
+                if (busy ||
+                    !c.canWrite ||
+                    machineId == null ||
+                    !canSelect(app.stateOf(machineId!))) {
+                  return;
+                }
+                final selected = machineId!;
+                update(() {
+                  busy = true;
+                  error = null;
+                });
+                try {
+                  setupId ??= superTabOperationId();
+                  final deadline = DateTime.now().add(
+                    const Duration(minutes: 5),
+                  );
+                  Map<String, dynamic> prepared;
+                  while (true) {
+                    if (!context.mounted || !c.canWrite) return;
+                    prepared = await app.superTabMachineRequest(selected, {
+                      'action': 'prepareContribution',
+                      'tabId': c.tabId,
+                      'scope': 'swarm',
+                      'operationId': setupId,
                     });
-                    if (recorded == null) {
-                      throw SuperTabFailure(
-                        'PROJECT_UNAVAILABLE',
-                        c.operationError ??
-                            'Could not read the lead’s project.',
+                    if (prepared['state'] == 'ready' &&
+                        prepared['scope'] == 'swarm') {
+                      break;
+                    }
+                    if (prepared['state'] != 'preparing') {
+                      throw const SuperTabFailure(
+                        'UPDATE_REQUIRED',
+                        'Update Harness on this machine, then try again.',
                       );
                     }
-                  }
-                }
-                setupId ??= superTabOperationId();
-                final deadline = DateTime.now().add(const Duration(minutes: 5));
-                Map<String, dynamic> prepared;
-                while (true) {
-                  if (!context.mounted || !c.canWrite) return;
-                  prepared = await app.superTabMachineRequest(selected, {
-                    'action': 'prepareContribution',
-                    'tabId': c.tabId,
-                    'operationId': setupId,
-                  });
-                  if (prepared['state'] == 'ready') break;
-                  if (prepared['state'] != 'preparing') {
-                    throw const SuperTabFailure(
-                      'UPDATE_REQUIRED',
-                      'Update Harness on this machine, then try again.',
-                    );
-                  }
-                  if (DateTime.now().isAfter(deadline)) {
-                    throw const SuperTabFailure(
-                      'SETUP_PENDING',
-                      'Project setup is still running. Try again to check its progress.',
-                    );
-                  }
-                  await Future<void>.delayed(const Duration(seconds: 1));
-                }
-                if (!context.mounted || !c.canWrite) return;
-                final machine = app.stateOf(selected);
-                final result = c.pendingCommand?['type'] == 'machine.contribute'
-                    ? await c.retry()
-                    : await c.command({
-                        'type': 'machine.contribute',
-                        'machineId': selected,
-                        'name': machine!.machine.displayName,
-                        'cwd': prepared['cwd'],
-                        'engines': prepared['engines'],
-                        'maxAgents': prepared['maxAgents'],
-                      });
-                if (result == null) {
-                  throw SuperTabFailure(
-                    'CONTRIBUTION_FAILED',
-                    c.operationError ?? 'Could not add this machine.',
-                  );
-                }
-                await app.wakeSuperTabHost(selected);
-                if (context.mounted) Navigator.pop(context);
-              } catch (failure) {
-                if (context.mounted) {
-                  update(() {
-                    busy = false;
-                    error = failure.toString();
-                    if (failure is! SuperTabFailure ||
-                        failure.code != 'SETUP_PENDING') {
-                      setupId = null;
+                    if (DateTime.now().isAfter(deadline)) {
+                      throw const SuperTabFailure(
+                        'SETUP_PENDING',
+                        'Project setup is still running. Try again to check its progress.',
+                      );
                     }
-                  });
+                    await Future<void>.delayed(const Duration(seconds: 1));
+                  }
+                  if (!context.mounted || !c.canWrite) return;
+                  final machine = app.stateOf(selected);
+                  final result =
+                      c.pendingCommand?['type'] == 'machine.contribute'
+                      ? await c.retry()
+                      : await c.command({
+                          'type': 'machine.contribute',
+                          'machineId': selected,
+                          'name': machine!.machine.displayName,
+                          'cwd': prepared['cwd'],
+                          if (prepared['scope'] != null)
+                            'scope': prepared['scope'],
+                          'engines': prepared['engines'],
+                          'maxAgents': prepared['maxAgents'],
+                        });
+                  if (result == null) {
+                    throw SuperTabFailure(
+                      'CONTRIBUTION_FAILED',
+                      c.operationError ?? 'Could not add this machine.',
+                    );
+                  }
+                  await app.wakeSuperTabHost(selected);
+                  if (context.mounted) Navigator.pop(context);
+                } catch (failure) {
+                  if (context.mounted) {
+                    update(() {
+                      busy = false;
+                      error = failure.toString();
+                      if (failure is! SuperTabFailure ||
+                          failure.code != 'SETUP_PENDING') {
+                        setupId = null;
+                      }
+                    });
+                  }
                 }
               }
-            }
 
-            return AlertDialog(
-              title: const Text('Add machine'),
-              content: SizedBox(
-                width: 360,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (choices.isEmpty)
-                      Text(
-                        'Connect a computer to Harness first.',
-                        style: DesktopChrome.text(),
-                      )
-                    else
-                      AbsorbPointer(
-                        absorbing: busy,
-                        child: AppSelectField<String>(
-                          value: machineId!,
-                          semanticLabel: 'Machine',
-                          options: [
-                            for (final m in choices)
-                              SelectOption(
-                                value: m.machine.machineId,
-                                label: m.isLocalMachine
-                                    ? 'This Mac'
-                                    : m.machine.displayName,
+              final own = ownedMachines();
+              final canSave =
+                  machineId != null && canSelect(app.stateOf(machineId!));
+              return AlertDialog(
+                title: Text(isConfigure ? 'Configure machine' : 'Add machine'),
+                content: SizedBox(
+                  width: 360,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (own.isNotEmpty)
+                        _MachinePicker(
+                          value: machineId,
+                          busy: busy,
+                          choices: [
+                            for (final m in own)
+                              _MachineChoice(
+                                id: m.machine.machineId,
+                                label: labelFor(m),
+                                unavailable: unavailable(m),
                               ),
                           ],
                           onChanged: (id) {
-                            if (busy) return;
+                            if (busy || !canSelect(app.stateOf(id))) return;
                             update(() {
                               machineId = id;
                               setupId = null;
                               error = null;
                             });
                           },
+                        )
+                      else
+                        Text(
+                          'No computer is connected to this account yet.',
+                          style: DesktopChrome.text(),
                         ),
-                      ),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Let the lead run agents here using this machine’s signed-in accounts.',
-                      style: DesktopChrome.text(),
-                    ),
-                    if (error != null) ...[
-                      const SizedBox(height: 12),
-                      Text(error!, style: DesktopChrome.metadata()),
+                      const SizedBox(height: 16),
+                      if (own.isNotEmpty)
+                        Text(
+                          'Let the lead run agents here using this machine’s signed-in accounts.',
+                          style: DesktopChrome.text(),
+                        )
+                      else ...[
+                        Text(
+                          'To add another computer, install Harness on it and sign in with '
+                          'this account, or approve a device with no screen from Machines.',
+                          style: DesktopChrome.text(),
+                        ),
+                        const SizedBox(height: 4),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton(
+                            onPressed: () {
+                              Navigator.pop(context);
+                              app.requestMachines();
+                            },
+                            child: const Text('Open Machines'),
+                          ),
+                        ),
+                      ],
+                      if (error != null) ...[
+                        const SizedBox(height: 12),
+                        Text(error!, style: DesktopChrome.metadata()),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
-              ),
-              actions: [
-                FilledButton(
-                  onPressed: busy || machineId == null ? null : save,
-                  child: Text(busy ? 'Preparing…' : 'Add machine'),
-                ),
-              ],
-            );
-          },
+                actions: [
+                  if (own.isNotEmpty)
+                    FilledButton(
+                      onPressed: busy || !canSave ? null : save,
+                      child: Text(
+                        busy
+                            ? (isConfigure ? 'Saving…' : 'Preparing…')
+                            : (isConfigure ? 'Save' : 'Add machine'),
+                      ),
+                    )
+                  else
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Close'),
+                    ),
+                ],
+              );
+            },
+          ),
         ),
       ),
     );
@@ -454,7 +672,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             .replaceAll(' TB', 'T')
             .replaceAll(' MB', 'M');
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -530,28 +748,62 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 ],
               ),
             ),
-            child: Text(
-              [
-                name,
-                if (person != null) superTabPersonName(person.email),
-                paused
-                    ? 'Paused'
-                    : !online
-                    ? 'Offline'
-                    : '$running ${running == 1 ? 'agent' : 'agents'}',
-              ].join('  '),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: DesktopChrome.control(medium: true),
+            child: Tooltip(
+              message: [name, if (person != null) person.email].join('\n'),
+              child: Row(
+                children: [
+                  Flexible(
+                    flex: 3,
+                    child: Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: DesktopChrome.control(medium: true),
+                    ),
+                  ),
+                  if (person != null) ...[
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 64),
+                        child: Text(
+                          superTabPersonName(person.email),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: DesktopChrome.metadata(),
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(width: 8),
+                  Text(
+                    paused
+                        ? 'Paused'
+                        : !online
+                        ? 'Offline'
+                        : '$running ${running == 1 ? 'agent' : 'agents'}',
+                    style: DesktopChrome.metadata(),
+                  ),
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 4),
           Tooltip(
             message:
                 'Available capacity\nCPU and GPU: idle percentage at the latest reading\nRAM: ${resourceBytes(memoryFree?.toDouble())} free of ${resourceBytes(value?.memoryTotalBytes)}\nSSD: ${resourceBytes(diskFree)} free of ${resourceBytes(diskTotal)}',
-            child: Text(
-              'CPU ${available(value?.cpuPercent)}  GPU ${available(value?.busiestGpu?.utilizationPercent)}  RAM ${compactBytes(memoryFree)}  SSD ${compactBytes(diskFree)}',
-              style: DesktopChrome.metadata(),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                for (final metric in [
+                  'CPU ${available(value?.cpuPercent)}',
+                  'GPU ${available(value?.busiestGpu?.utilizationPercent)}',
+                  'RAM ${compactBytes(memoryFree)}',
+                  'SSD ${compactBytes(diskFree)}',
+                ])
+                  Text(metric, style: DesktopChrome.metadata()),
+              ],
             ),
           ),
           const SizedBox(height: 4),
@@ -590,52 +842,32 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   }
 
   @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 12, 0),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                'Machines',
-                style: DesktopChrome.metadata().copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            if (c.canWrite && widget.app != null)
-              AppIconButton(
-                icon: AppIcons.plus,
-                tooltip: 'Add machine',
-                onPressed: () => unawaited(_contribute()),
-              ),
-          ],
-        ),
+  Widget build(BuildContext context) {
+    final children = [
+      SuperTabSectionHeading(
+        'Machines',
+        onAdd: c.canWrite && widget.app != null
+            ? () => unawaited(_contribute())
+            : null,
+        addTooltip: 'Add machine',
       ),
-      Expanded(
-        child: _ids.isEmpty
-            ? Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Text(
-                    'Add a machine for the lead to use.',
-                    textAlign: TextAlign.center,
-                    style: DesktopChrome.metadata(),
-                  ),
-                ),
-              )
-            : ListView.separated(
-                itemCount: _ids.length,
-                separatorBuilder: (_, _) => Divider(
-                  height: 1,
-                  indent: 16,
-                  endIndent: 16,
-                  color: DesktopChrome.rim,
-                ),
-                itemBuilder: (_, i) => _machine(_ids.elementAt(i)),
-              ),
-      ),
-    ],
-  );
+      if (_ids.isEmpty)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          child: Text(
+            'Add a machine for the lead to use.',
+            style: DesktopChrome.metadata(),
+          ),
+        )
+      else
+        for (final id in _ids) _machine(id),
+    ];
+    return widget.embedded
+        ? Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: children,
+          )
+        : ListView(children: children);
+  }
 }

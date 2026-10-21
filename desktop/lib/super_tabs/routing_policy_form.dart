@@ -5,7 +5,7 @@ import '../shared/widgets/setting_row.dart';
 import 'routing_policy.dart';
 
 /// The routing policy editor, used by Settings ▸ Routing (the account default)
-/// and by a Super Tab's Routing dialog (override mode, with Use account
+/// and by a Swarm's Routing dialog (override mode, with Use account
 /// default).
 ///
 /// A number outside what the backend accepts is flagged under its field and is

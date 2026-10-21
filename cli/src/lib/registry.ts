@@ -53,8 +53,8 @@ import { agyTranscriptPath } from '../engines/agy/contract.js'
 import { copilotTranscriptPath } from '../engines/copilot/contract.js'
 import { bootChanged, currentBootId } from './bootId.js'
 import { lockOwnerAlive, lockStartMarker, processLockIdentity } from './processLiveness.js'
-import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory } from './secureState.js'
-import { mergeTerminalRuntimes, processIdentityKey, sameProcessIdentity, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
+import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
+import { mergeTerminalRuntimes, primaryRuntime, processIdentityKey, sameProcessIdentity, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import type { HookTerminalHint, ProcessIdentity, TerminalRuntimeRef } from './terminalTypes.js'
 import { externalReservations, externalResumePending, externalResumeIds, parseExternalResume, type ExternalResumeIntent } from './externalResume.js'
 import type { StartedBy } from './agentAttribution.js'
@@ -356,6 +356,8 @@ const PRE_V2_BACKUP_FILE = join(env.ADAPTER_DATA_DIR, 'registry.pre-v2.json')
 const NAME_OVERRIDES = new Map<string, string>()
 
 const PANE_RE = /^%\d+$/
+/** A pty host instance: `p` and its protocol version (`PtyRuntimeRef.instance`). */
+const PTY_INSTANCE_RE = /^p\d{1,4}$/
 const GROK_SESSION_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const AGENT_ENGINES: ReadonlySet<string> = new Set(ENGINES)
 
@@ -518,8 +520,7 @@ export function atomicWriteJson(file: string, value: unknown, exclusive = false)
     } finally { closeSync(fd) }
     renameSync(temporary, file)
     renamed = true
-    const directoryFd = openSync(dirname(file), 'r')
-    try { fsyncSync(directoryFd) } finally { closeSync(directoryFd) }
+    syncStateDirectory(dirname(file))
   } catch (error) {
     if (renamed) throw new AtomicWriteUnconfirmed(error)
     throw error
@@ -534,8 +535,10 @@ function boundedIdentityPart(value: unknown, max = 200): value is string {
 
 export function validTerminalRuntime(value: unknown): value is TerminalRuntimeRef {
   if (!value || typeof value !== 'object') return false
-  const runtime = value as Partial<TerminalRuntimeRef>
-  return runtime.backend === 'tmux' && typeof runtime.paneId === 'string' && PANE_RE.test(runtime.paneId)
+  const runtime = value as { backend?: unknown; paneId?: unknown; instance?: unknown }
+  if (typeof runtime.paneId !== 'string' || !PANE_RE.test(runtime.paneId)) return false
+  if (runtime.backend === 'tmux') return true
+  return runtime.backend === 'ptyhost' && typeof runtime.instance === 'string' && PTY_INSTANCE_RE.test(runtime.instance)
 }
 
 function retiredRuntime(value: unknown): boolean {
@@ -577,16 +580,19 @@ function withoutRetiredRows(stored: readonly unknown[]): { rows: unknown[]; drop
   return { rows, dropped: stored.length - rows.length, changed: cleaned.some((row, i) => row !== stored[i]) }
 }
 
+/** A legacy `tmuxPane` adds a tmux runtime unless it is a listed runtime's own projection (`paneProjection`). */
 function normalizedRuntimes(raw: unknown, legacyTmuxPane?: unknown): TerminalRuntimeRef[] {
   const fromArray = Array.isArray(raw) ? raw.filter(validTerminalRuntime) : []
   const legacy = typeof legacyTmuxPane === 'string' && PANE_RE.test(legacyTmuxPane)
+    && !fromArray.some((runtime) => runtime.paneId === legacyTmuxPane)
     ? [{ backend: 'tmux' as const, paneId: legacyTmuxPane }]
     : []
   return mergeTerminalRuntimes([], [...fromArray, ...legacy])
 }
 
-function tmuxProjection(runtimes: readonly TerminalRuntimeRef[]): string {
-  return runtimes.find((runtime) => runtime.backend === 'tmux')?.paneId ?? ''
+/** The legacy `tmuxPane` field: the primary runtime's pane, whatever its backend. */
+function paneProjection(runtimes: readonly TerminalRuntimeRef[]): string {
+  return runtimes.length ? primaryRuntime({ runtimes }).paneId : ''
 }
 
 function persistedRow(entry: RegisteredSession): RegisteredSession | Omit<RegisteredSession, 'tmuxPane'> {
@@ -604,7 +610,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   const primary = typeof row.primaryRuntimeKey === 'string' ? row.primaryRuntimeKey : ''
   const normalizedPrimary = selectedRuntimeKey(runtimes, primary)
   const active = row.active === true
-  const projectedTmuxPane = tmuxProjection(runtimes)
+  const projectedTmuxPane = paneProjection(runtimes)
   const launch = normalizedLaunch(row.launch)
   const externalResume = row.externalResume === undefined ? undefined : parseExternalResume(row.externalResume)
   if (row.schemaVersion !== 2
@@ -1242,7 +1248,7 @@ class Registry {
       for (const raw of Array.isArray(arr) ? arr : []) {
         const engine = normalizedAgentEngine(raw?.engine)
         const runtimes = normalizedRuntimes(raw?.runtimes, raw?.tmuxPane)
-        const pane = tmuxProjection(runtimes)
+        const pane = paneProjection(runtimes)
         if (!runtimes.length) { changed = true; continue }
         let transcriptPath =
           typeof raw?.transcriptPath === 'string' && raw.transcriptPath
@@ -1514,7 +1520,7 @@ class Registry {
       const before = rowFingerprint(persistedRow(existing))
       this.drop(existing)
       existing.runtimes = mergeTerminalRuntimes(existing.runtimes, runtimes)
-      existing.tmuxPane = tmuxProjection(existing.runtimes)
+      existing.tmuxPane = paneProjection(existing.runtimes)
       existing.primaryRuntimeKey = selectedRuntimeKey(existing.runtimes, input.primaryRuntimeKey || existing.primaryRuntimeKey)
       // The pane's current path follows a terminal tile around until an engine session is bound to
       // it; from then on the bind owns the folder (see `register`), and a pane re-observed in the
@@ -1555,7 +1561,7 @@ class Registry {
       if (!other) continue
       this.drop(other)
       other.runtimes = other.runtimes.filter((candidate) => terminalRouteKey(candidate) !== terminalRouteKey(runtime))
-      other.tmuxPane = tmuxProjection(other.runtimes)
+      other.tmuxPane = paneProjection(other.runtimes)
       other.primaryRuntimeKey = selectedRuntimeKey(other.runtimes, other.primaryRuntimeKey)
       other.active = other.runtimes.length > 0
       if (other.runtimes.length) this.index(other)
@@ -1591,7 +1597,7 @@ class Registry {
       cwd: input.cwd ?? null,
       runtimes,
       primaryRuntimeKey: selectedRuntimeKey(runtimes, input.primaryRuntimeKey),
-      tmuxPane: tmuxProjection(runtimes),
+      tmuxPane: paneProjection(runtimes),
       source: null,
       title: null,
       model: null,
@@ -1684,7 +1690,7 @@ class Registry {
       cwd: input.cwd ?? null,
       runtimes,
       primaryRuntimeKey: selectedRuntimeKey(runtimes, input.primaryRuntimeKey),
-      tmuxPane: tmuxProjection(runtimes),
+      tmuxPane: paneProjection(runtimes),
       source: null,
       title: null,
       model: null,
@@ -1722,7 +1728,7 @@ class Registry {
       processIdentity: null,
       runtimes: routes,
       primaryRuntimeKey: selectedRuntimeKey(routes, ''),
-      tmuxPane: tmuxProjection(routes),
+      tmuxPane: paneProjection(routes),
       touchedAt: Date.now(),
     }
     this.index(entry)
@@ -2045,7 +2051,7 @@ class Registry {
       ...(existing?.lastOpenedAt ? { lastOpenedAt: existing.lastOpenedAt } : {}),
       ...(existing?.closePlan ? { closePlan: existing.closePlan } : {}),
     }
-    entry.tmuxPane = tmuxProjection(entry.runtimes)
+    entry.tmuxPane = paneProjection(entry.runtimes)
     entry.primaryRuntimeKey = selectedRuntimeKey(entry.runtimes, input.primaryRuntimeKey || existing?.primaryRuntimeKey)
     const previousLaunch = existing?.launch, promoted = !!existing && isTerminalEngine(existing.engine)
     this.save(true, false, undefined, { agentId, candidate: entry, displaced, replaceLive: true, verify: () => proof?.verify() })
@@ -2209,7 +2215,7 @@ class Registry {
     const before = rowFingerprint(persistedRow(entry))
     this.drop(entry)
     entry.runtimes = normalized
-    entry.tmuxPane = tmuxProjection(normalized)
+    entry.tmuxPane = paneProjection(normalized)
     entry.primaryRuntimeKey = selectedRuntimeKey(normalized, primaryRuntimeKey)
     entry.active = true
     if (rowFingerprint(persistedRow(entry)) !== before) entry.touchedAt = Date.now()

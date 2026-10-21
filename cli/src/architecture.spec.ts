@@ -487,6 +487,12 @@ describe('the daemon\'s shape', () => {
     expect(importsIn('gateway').some(({ from, typeOnly }) => from === '../core/api.js' && typeOnly)).toBe(true)
   })
 
+  it('the local socket finds the daemon\'s Windows pipe without the daemon\'s client: no import cycle between them', () => {
+    // daemonEndpoint.ts imports localSocket.ts for the socket's path; the pipe's lookup both use is lib/windows/daemonPipe.ts.
+    expect(closureOf('lib/localSocket.ts').has('lib/daemonEndpoint.ts')).toBe(false)
+    expect(closureOf('lib/localSocket.ts').has('lib/windows/daemonPipe.ts')).toBe(true)
+  })
+
   it('the master holds no feature code: Node itself, its own folder, and the log trimmer', () => {
     const wrong = importsIn('harnessd').filter(({ from }) => !from.startsWith('node:') && !from.startsWith('./') && from !== '../lib/log.js')
       .map(({ file, from }) => `${file} imports ${from}`)

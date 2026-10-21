@@ -1,0 +1,6 @@
+# The static C runtime, so harness-install.exe runs on a PC with no Visual C++ runtime installed (spec §1.4).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -1,0 +1,58 @@
+▸ Installing tmux via Homebrew
+==> Downloading Homebrew API data
+✔︎ JSON API packages.arm64_tahoe.jws.json
+Warning: tmux 3.8 is already installed and up-to-date.
+To reinstall 3.8, run:
+  brew reinstall tmux
+✓ tmux ready (tmux 3.8)
+▸ Installing the Harness Node runtime into $T/home/.harness/runtime
+  The CLI runs on its own Node so it behaves the same from a terminal and from the app.
+  Your system Node, nvm and Homebrew are not read or changed.
+  ▸ downloading Node v22.23.2 (darwin-arm64)…
+  ✓ installed Node v22.23.2 → $T/home/.harness/runtime/node-v22.23.2-darwin-arm64
+▸ Installing harness from https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/cli/metadata.json
+  ✓ installed harness 0.4.18 → $T/home/.harness/cli
+▸ Installing the managed grid into $T/home/.harness/runtime
+  ▸ downloading grid 0.3.59 (darwin-arm64)…
+  ✓ installed grid 0.3.59 → $T/home/.harness/runtime/grid-0.3.59-darwin-arm64
+▸ Installing hn
+  ▸ downloading hn 0.1.36 (darwin-arm64)…
+  ✓ installed hn 0.1.36 → $T/home/.harness/bin/harness-tui
+  ✓ added ~/.local/bin to PATH in $T/home/.zshrc
+
+    _
+   | |__   __ _ _ __ _ __   ___  ___ ___
+   | '_ \ / _` | '__| '_ \ / _ \/ __/ __|
+   | | | | (_| | |  | | | |  __/\__ \__ \
+   |_| |_|\__,_|_|  |_| |_|\___||___/___/
+
+  ✓ harness 0.4.18 installed.
+  ✓ hn 0.1.36 installed.
+
+  Start here — every harness on every machine, in this terminal:
+
+      hn                             # start locally; no login required
+
+  Or set this computer up step by step — three commands, in this order:
+
+      harness login                  # 1. sign in with your Autonomous account (opens a browser)
+      harness start                  # 2. connect this computer as a machine (runs in the background)
+      harness remote-password set    # 3. let your OTHER machines reach this one (asked once, kept)
+
+  Then, from a Harness terminal tile on any of your machines:
+
+      harness remote                 # pick a machine — the tile becomes a terminal on it
+
+  Useful:
+      harness machines               # this account's machines and their ids
+      harness status                 # is the daemon running, and which machine this is
+      harness --help                 # everything else
+
+  For an agent (Claude Code, Codex) that installed this:
+
+      Next: harness start      (starts Harness here; no account is needed)
+      Then: harness whoami     (whether you may start harnesses, and if not, what to ask the person)
+
+  Only the person can let an agent start harnesses: they sign in (harness login, in a browser)
+  and turn on agents starting agents (harness settings agents-start-agents on, in their own
+  terminal; an agent is refused). Ask them. How: https://harness.autonomous.ai/agents

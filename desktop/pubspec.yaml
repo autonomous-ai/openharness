@@ -36,6 +36,8 @@ dependencies:
     sdk: flutter
   # Natural ordering for numbered agents, projects, and completion candidates.
   collection: ^1.19.1
+  # A wall clock tests can move: the Finder tells a double click by time.
+  clock: ^1.1.2
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
@@ -95,6 +97,10 @@ dependencies:
   # Named directly for the WebKit creation params (muted autoplay in viewer panes).
   webview_flutter_platform_interface: ^2.15.1
   webview_flutter_wkwebview: ^3.26.1
+  # The Finder tile's code editor and its highlighter (lib/finder/): pure
+  # Dart, no native plugin, so the macOS SPM package list is unchanged.
+  re_editor: ^0.10.0
+  re_highlight: ^0.0.3
 
 dev_dependencies:
   flutter_test:

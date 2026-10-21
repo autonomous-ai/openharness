@@ -25,6 +25,9 @@ void appendLog(File file, String contents) =>
     _appendLog(file, contents, sync: false);
 
 void _appendLog(File file, String contents, {required bool sync}) {
+  if (file.path.contains('\u0000')) {
+    throw ArgumentError.value(file.path, 'path', 'Contains a NUL byte');
+  }
   if (!Platform.isMacOS && !Platform.isLinux) {
     sync
         ? fallback.appendDurableLog(file, contents)
@@ -59,9 +62,6 @@ class _PosixAppend {
 
   /// Empty [contents] with [sync] commits what earlier unsynced appends left.
   void append(String path, String contents, {required bool sync}) {
-    if (path.contains('\u0000')) {
-      throw ArgumentError.value(path, 'path', 'Contains a NUL byte');
-    }
     final bytes = utf8.encode(contents);
     using((arena) {
       final name = path.toNativeUtf8(allocator: arena);

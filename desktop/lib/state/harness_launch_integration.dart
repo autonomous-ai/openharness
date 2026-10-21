@@ -14,8 +14,15 @@ class HarnessLaunchIntegration {
     this.resolveAttachments,
     this.resume,
     this.actionLabel = 'New Harness',
+    this.projectVisibility,
+    this.projectVisibilityLocked = false,
+    this.initialTask,
   });
   final String creationId, actionLabel;
+  // Restores the person's original request from a destination launch journal.
+  final String? initialTask;
+  String? projectVisibility;
+  bool projectVisibilityLocked;
   final Future<String> Function(String machineId, String task) prepare;
   final Future<void> Function(String machineId, String harnessId) complete;
   final Future<void> Function(String machineId, String creationId) beforeSubmit;

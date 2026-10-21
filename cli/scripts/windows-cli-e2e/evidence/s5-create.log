@@ -1,0 +1,6 @@
+# s5 harnesses made on the VM through the local WebSocket (the driver), signed in as machine 7e92c45a… (08:51:01)
+01:51:02.106 create codex → dac87568… launch=starting (441 ms)
+{"id":"dac87568…","engine":"codex","status":"active","launch":"starting","pane":"%3003","name":"Codex harness 10-17 18:51","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
+01:51:04.455 create opencode → ENGINE_LAUNCH_REFUSED OpenCode does not run on Windows on Arm yet: its Arm build stops before its screen opens. Use another engine on this computer. {"requestId":"8e3fd9ea…","error":"ENGINE_LAUNCH_REFUSED","detail":"OpenCode does not run on Windows on Arm yet: its Arm build stops before its screen opens. Use another engine on this computer."}
+01:51:05.382 create kilo → 29c3a0f0… launch=starting (77 ms)
+{"id":"29c3a0f0…","engine":"kilo","status":"active","launch":"starting","pane":"%3004","name":"Kilo harness 10-17 18:51","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}

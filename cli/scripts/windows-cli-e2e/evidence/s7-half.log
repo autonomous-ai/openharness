@@ -1,0 +1,45 @@
+(after --keep-data there is no harness.exe to run 'harness uninstall --yes' with: the full uninstall of this data is round 3's, which installs over it)
+# s7 round 3: a half install repaired, then uninstalled (2026-10-18 09:08:31)
+  OK Node v22.23.2 -> C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64
+  OK Harness 0.4.18-dev.win1 -> C:\Users\hxe2e\.harness\cli\0.4.18-dev.win1
+  OK terminal host 0.4.18 -> C:\Users\hxe2e\.harness\runtime\pty\0.4.18
+  OK added C:\Users\hxe2e\.harness\bin to your PATH
+  OK harness 0.4.18-dev.win1 installed.
+## pointer deleted
+Harness is not installed completely; to install it again, open PowerShell and run: irm https://cdn.autonomous.ai/harness/cli/install.ps1 | iex
+exit=3
+## install again over the half install
+  OK Node v22.23.2 -> C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64
+  OK Harness 0.4.18-dev.win1 -> C:\Users\hxe2e\.harness\cli\0.4.18-dev.win1
+  OK terminal host 0.4.18 -> C:\Users\hxe2e\.harness\runtime\pty\0.4.18
+  OK harness 0.4.18-dev.win1 installed.
+0.4.18-dev.win1
+0.4.18-dev.win1
+   status     ● started · this computer only (not signed in)
+   pid        1156
+## harness uninstall --yes from a batch logon (09:11:53)
+Γ£ô removed the Harness daemon from Task Scheduler: it no longer starts at login
+Γ£ô stopped the Harness daemon (pid 1156)
+Γ£ô removed Harness's hooks from ~\.claude\settings.json
+Γ£ô removed Harness's hooks from ~\.codex\hooks.json
+Γ£ô removed Codex's record of Harness's hooks from ~\.codex\config.toml
+Γ£ô removed Harness's hooks from ~\.copilot\hooks\harness.json
+Γ£ô removed Harness's hooks from ~\.commandcode\settings.json
+Γ£ô removed ~\.config\kilo\plugin\launcher-register.js
+Γ£ô removed ~\.pi\agent\extensions\launcher-register.ts
+Γ£ô removed ~\.config\amp\plugins\launcher-register.ts
+┬╖ if you had added a permission rule in ~\.claude\settings.json that is the same as one of Harness's, it went too: add it again if you need it
+┬╖ Codex may ask you to review your own hooks again: it remembers the hooks you reviewed by their place in ~\.codex\hooks.json, and taking Harness's out moved them
+Γ£ô removed ~\.harness\bin from your PATH
+Γ£ô ~\.harness goes once this command has exited (anything left is listed in C:\Users\hxe2e\AppData\Local\Temp\harness-uninstall-3060-1792289531061.log)
+Harness is uninstalled.
+uninstall exit=0 in 12 s
+exit=0
+## check-uninstall
+LEFT hooks: C: is still there
+
+(the LEFT line above is this run's mistake: zsh's echo turned the \U of the -HookFiles list into a NUL, so the list named 'C:'; the same check with the list written by printf:)
+clean: nothing of Harness is left. Checked: C:\Users\hxe2e\.harness, the task 'Harness harnessd (hxe2e)', the user PATH, the processes running from C:\Users\hxe2e\.harness\, the uninstall's temp files, notify.mjs in 4 settings files, the [hooks.state] records in C:\Users\hxe2e\.codex\config.toml, and 6 hook file(s) named by -HookFiles
+## procs.ps1 -User hxe2e
+
+(empty = no process)

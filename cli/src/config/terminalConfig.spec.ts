@@ -1,11 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ALL_TERMINAL_BACKENDS, parseTerminalBackends } from './terminalConfig.js'
+import { defaultTerminalBackends, parseTerminalBackends } from './terminalConfig.js'
 
 afterEach(() => vi.restoreAllMocks())
 
 describe('terminal backend configuration', () => {
-  it('watches tmux, and only tmux, when nothing is configured', () => {
-    expect(ALL_TERMINAL_BACKENDS).toEqual(['tmux'])
+  it('watches tmux, and only tmux, when nothing is configured off Windows', () => {
+    expect(defaultTerminalBackends('darwin')).toEqual(['tmux'])
+    expect(defaultTerminalBackends('linux')).toEqual(['tmux'])
+    expect(defaultTerminalBackends('win32')).toEqual(['ptyhost'])
+  })
+
+  it('defaults to ptyhost on Windows only', () => {
+    expect(parseTerminalBackends(undefined, 'win32')).toEqual(['ptyhost'])
+    expect(parseTerminalBackends(undefined, 'darwin')).toEqual(['tmux'])
+    expect(parseTerminalBackends('ptyhost', 'linux')).toEqual(['ptyhost'])
   })
 
   it('treats an explicit value as a pin', () => {
@@ -33,5 +41,9 @@ describe('terminal backend configuration', () => {
 
   it.each(['', ' ', 'tmux,', 'tmux,,tmux', 'tmux,tmux', 'screen'])('rejects invalid TERMINAL_BACKENDS=%j', (value) => {
     expect(() => parseTerminalBackends(value)).toThrow(/TERMINAL_BACKENDS/)
+  })
+
+  it('names both supported backends when it rejects one', () => {
+    expect(() => parseTerminalBackends('screen')).toThrow('expected tmux or ptyhost')
   })
 })

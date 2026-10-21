@@ -12,7 +12,7 @@ Future<void> openWorkspaceTool(WidgetTester tester, String tool) async {
     'store' => LogicalKeyboardKey.keyS,
     _ => LogicalKeyboardKey.keyP,
   };
-  await key(tester, shortcut, cmd: true);
+  await key(tester, shortcut, cmd: true, ctrl: tool == 'store');
   await tester.pump(const Duration(milliseconds: 350));
 }
 

@@ -29,6 +29,7 @@ class _CloseConnection extends WsConn {
   final failures = <String, Map<String, dynamic>>{};
   final targetedFailures = <(String, String), Map<String, dynamic>>{};
   final requests = <String>[];
+  final closedOnInspect = <String>{};
   Completer<Map<String, dynamic>>? inspecting;
 
   /// Runs as the daemon takes a close, before it answers: what the window
@@ -62,6 +63,8 @@ class _CloseConnection extends WsConn {
       );
     }
     if (mode == 'inspect') {
+      // The daemon answers an agent it already closed with `closed`.
+      if (closedOnInspect.contains(agentId)) return {'closed': true};
       return inspecting?.future ??
           Future.value({'activity': activities[payload['agentId']] ?? 'idle'});
     }
@@ -156,6 +159,23 @@ void main() {
       expect(app.closedHistory, hasLength(1));
       expect(app.canReopenLastClosed, isTrue);
       expect(find.text('Close session'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'a harness the daemon already closed closes its view without asking',
+    (tester) async {
+      connection.closedOnInspect.add('a0');
+      final pane = app.adoptSessionForTest(terminal('a0', []));
+      await mount(tester, app);
+      unawaited(app.requestClosePane(pane.id));
+      await tester.pumpAndSettle();
+      expect(find.text('Activity unknown'), findsNothing);
+      expect(find.widgetWithText(FilledButton, 'Stop'), findsNothing);
+      expect(app.allPanes, isEmpty);
+      expect(modes(), ['inspect'], reason: 'nothing left to stop');
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
     },

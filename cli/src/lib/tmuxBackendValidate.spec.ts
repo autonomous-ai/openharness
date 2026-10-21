@@ -10,8 +10,8 @@
 import { describe, expect, it, vi } from 'vitest'
 
 const lookupPaneEngineProcess = vi.hoisted(() => vi.fn())
-vi.mock('./tmux.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./tmux.js')>()),
+vi.mock('./paneEngineProcess.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./paneEngineProcess.js')>()),
   lookupPaneEngineProcess,
 }))
 
@@ -55,7 +55,7 @@ describe('TmuxBackend.validate and the pre-psEnv start marker', () => {
   })
 
   it('reports an empty pane as gone, saved marker or not', async () => {
-    lookupPaneEngineProcess.mockResolvedValue({ ok: false, unknown: false, reason: 'no claude process under pane %42' })
+    lookupPaneEngineProcess.mockResolvedValue({ ok: false, unknown: false, reason: 'no claude process under tmux:%42' })
     const saved = { ...LIVE, startMarker: 'K szept. 15 23:10:38 2026' }
 
     expect((await new TmuxBackend().validate(PANE, { engine: 'claude', processIdentity: saved })).state)

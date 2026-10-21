@@ -17,7 +17,7 @@
  * lands in a person's files, and say so in that change.
  */
 import { createHash } from 'node:crypto'
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -43,6 +43,8 @@ let root = ''
 let savedUmask: number | null = null
 const savedEnv: Record<string, string | undefined> = {}
 const saved: { dataDir?: string; codexHome?: string } = {}
+/** The throwaway profile: HOME and USERPROFILE both point here, so the default-home cases never touch the real one. */
+let testHome = ''
 
 beforeAll(() => {
   // Files the code writes without a mode take the process's umask: the usual one, on every machine.
@@ -53,6 +55,10 @@ beforeAll(() => {
   env.ADAPTER_DATA_DIR = join(root, 'data')
   mkdirSync(env.ADAPTER_DATA_DIR)
   for (const name of ['CLAUDE_CONFIG_DIR', 'CODEX_HOME']) { savedEnv[name] = process.env[name]; delete process.env[name] }
+  testHome = join(root, 'home')
+  mkdirSync(testHome)
+  for (const name of ['HOME', 'USERPROFILE']) { savedEnv[name] = process.env[name]; process.env[name] = testHome }
+  resetEngineHomes()
 })
 
 afterAll(() => {
@@ -79,6 +85,7 @@ function chmodTree(path: string): void {
 }
 
 const normalize = (text: string): string => text
+  .split(testHome).join('<home>')
   .split(root).join('<root>')
   .split(homedir()).join('<home>')
   .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '<uuid>')
@@ -219,7 +226,13 @@ type Where = 'moved' | 'default' | 'profile'
 const homeFolderFiles = (): Snapshot => Object.fromEntries(Object.entries(snapshot(homedir()))
   .filter(([name]) => name.startsWith('.claude.json')).map(([name, value]) => [`<home>/${name}`, value]))
 const clearHomeFolder = (): void => {
-  for (const name of readdirSync(homedir())) if (name.startsWith('.claude.json')) rmSync(join(homedir(), name), { recursive: true, force: true })
+  for (const name of readdirSync(homedir())) {
+    if (!name.startsWith('.claude.json')) continue
+    const path = join(homedir(), name)
+    // rmSync leaves a dangling link in place; a link is removed by itself.
+    if (lstatSync(path).isSymbolicLink()) unlinkSync(path)
+    else rmSync(path, { recursive: true, force: true })
+  }
 }
 
 function trustCase(engine: AgentEngine, scenario: TrustCase, where: Where): unknown {

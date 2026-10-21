@@ -19,7 +19,7 @@ import { READER_SERVICES, type ReaderEngine } from '../../engines/worker/protoco
 import { sid } from '../../lib/log.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
-import type { ProcessRow } from '../../lib/tmux.js'
+import type { ProcessRow } from '../../lib/processTable.js'
 import type { ActivityState } from '../../lib/turnActivity.js'
 import { boundedControl } from './controlTransport.js'
 import { createSnapshotTransport, type SnapshotTransportDeps } from './snapshotTransport.js'

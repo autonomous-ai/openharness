@@ -1,4 +1,6 @@
+import '../finder/widgets/finder_pane_panel.dart';
 import '../super_tabs/pane.dart';
+import '../super_tabs/saved_session.dart';
 import '../sharing/shared_harness_panel.dart';
 
 import 'dart:async';
@@ -25,6 +27,7 @@ import '../state/app_state.dart';
 import '../state/harness_sessions.dart' show heldLaunchDetail;
 import '../state/pane_preset.dart';
 import '../state/pane_arrangement.dart';
+import 'pane_fixed_width.dart';
 import '../state/terminal_pane.dart';
 import '../terminal/terminal_binary.dart';
 import '../terminal/terminal_text.dart';
@@ -573,9 +576,18 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
           );
         }
         if (layout.columns != null) app.gridColumns = layout.columns;
+        // A tile that asks for its own width (a Finder showing only its
+        // files) takes it; its divider is not dragged while it does.
+        final pinned = pinFixedColumn(
+          layout.rectangles,
+          [for (final pane in visible) pane.fixedWidth],
+          Size(layout.width, layout.height),
+          gap: kPaneGap,
+          minOther: _MinTile.of().width,
+        );
+        final tiles = pinned ?? layout.rectangles;
         final rectangles = {
-          for (var i = 0; i < visible.length; i++)
-            visible[i].id: layout.rectangles[i],
+          for (var i = 0; i < visible.length; i++) visible[i].id: tiles[i],
         };
         final retainedIds = app.allPanes.map((pane) => pane.id).toSet();
         _inputLayers.removeWhere((id, _) => !retainedIds.contains(id));
@@ -652,6 +664,7 @@ class _SwarmCanvasState extends State<_SwarmCanvas> {
                                 ),
                               ),
                           if (_shownZoom == null &&
+                              pinned == null &&
                               layout.arrangement?.dividers.isNotEmpty == true)
                             Positioned.fill(child: _resizeLayer(layout)),
                         ],
@@ -1592,6 +1605,17 @@ class _PaneContent extends StatelessWidget {
       );
     }
 
+    // A folder browsed in place: no agent and no terminal behind it.
+    if (pane.finderRoot case final root? when pane.isFinder) {
+      return FinderPanePanel(
+        key: ValueKey('finder-pane-${pane.id}'),
+        root: root,
+        onGuardClose: (guard) => pane.beforeClose = guard,
+        onFixedWidth: (width) => notifier.setPaneFixedWidth(pane.id, width),
+        compactHeader: swarmMode,
+      );
+    }
+
     // A harness's viewer: the one tile that is not a terminal and not about a
     // machine. Decided first, before anything below reads `agentId` — which a
     // viewer keeps null on purpose (see TerminalPane.ownerAgentId).
@@ -1761,12 +1785,28 @@ class _PaneContent extends StatelessWidget {
           pane.machineId,
           wantedAgentId!,
         );
+        final resume = superPane?.onResume;
+        final canResume = resume != null && !machine.belongsToOtherAccount;
         notice = terminalNotice(
           label: opening?.busy == true ? 'Opening' : 'Stopped',
           icon: AppIcons.terminal,
-          detail: opening?.result?.error ?? 'Open to continue your saved conversation. Retained output is read only.',
-          actionLabel: opening?.busy == true ? null : 'Open',
-          onAction: () => notifier.openSavedPane(pane.id).ignore(),
+          detail:
+              opening?.result?.error ??
+              (superPane != null
+                  ? 'This agent is stopped. Retained output is read only.'
+                  : 'Open to continue your saved conversation. Retained output is read only.'),
+          actionLabel: opening?.busy == true
+              ? null
+              : superPane == null
+              ? 'Open'
+              : canResume
+              ? 'Resume'
+              : null,
+          onAction: superPane == null
+              ? () => notifier.openSavedPane(pane.id).ignore()
+              : canResume
+              ? () => resume(pane.machineId, wantedAgentId)
+              : null,
           banner: true,
         );
       } else if (agent != null && agent.launchState == 'held') {
@@ -2015,6 +2055,31 @@ class _PaneContent extends StatelessWidget {
       );
     }
     if (agent?.isStopped == true) {
+      if (superPane != null) {
+        final resume = superPane.onResume;
+        return Column(
+          children: [
+            _PaneHeader(
+              title:
+                  superPane.titleFor(pane.machineId, wantedAgentId) ??
+                  agentName,
+              activity: activityMark,
+            ),
+            Divider(height: 1, color: AppColors.border),
+            Expanded(
+              child: SuperTabSavedSession(
+                key: ValueKey((pane.machineId, wantedAgentId)),
+                app: notifier,
+                machineId: pane.machineId,
+                harnessId: wantedAgentId,
+                onResume: resume != null && !machine.belongsToOtherAccount
+                    ? () => resume(pane.machineId, wantedAgentId)
+                    : null,
+              ),
+            ),
+          ],
+        );
+      }
       final opening = notifier.pendingAgentRestart(
         pane.machineId,
         wantedAgentId,

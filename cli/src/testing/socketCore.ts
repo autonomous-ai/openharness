@@ -74,7 +74,7 @@ export function bindAgentList(socket: BackendSocket, over: Partial<AgentListDeps
 /** `terminal_info` and `theme_set` (core/terminals/requests.ts). A bare socket paints no panes: a spec
  *  that checks a theme says where it goes. */
 export function bindTerminalRequests(socket: BackendSocket, over: Partial<TerminalRequestDeps> = {}): void {
-  const requests = createTerminalRequests({ resolve: (id) => registry.resolve(id), paneInfo: (pane) => tmuxPaneInfo(pane), applyTheme: () => {}, ...over })
+  const requests = createTerminalRequests({ resolve: (id) => registry.resolve(id), paneInfo: (runtime) => tmuxPaneInfo(runtime.paneId), applyTheme: () => {}, ...over })
   socket.terminalInfoProvider = requests.terminalInfo
   socket.themeProvider = requests.themeSet
 }

@@ -7,8 +7,8 @@ import '../../state/app_state.dart';
 import '../../super_tabs/routing_policy.dart';
 import '../../super_tabs/routing_policy_form.dart';
 
-/// Settings ▸ Routing: the account's routing default for every Super Tab it
-/// owns. A Super Tab can override single fields from its own Routing dialog.
+/// Settings ▸ Routing: the account's routing default for every Swarm it
+/// owns. A Swarm can override single fields from its own Routing dialog.
 class RoutingSection extends StatefulWidget {
   const RoutingSection({super.key, required this.notifier});
   final AppNotifier notifier;
@@ -83,7 +83,7 @@ class _RoutingSectionState extends State<RoutingSection> {
     final theme = Theme.of(context);
     return SectionScaffold(
       title: 'Routing',
-      subtitle: 'How a Super Tab Lead chooses who does each task. Each Super Tab you own can override these.',
+      subtitle: 'How a Swarm Lead chooses who does each task. Each Swarm you own can override these.',
       child: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,

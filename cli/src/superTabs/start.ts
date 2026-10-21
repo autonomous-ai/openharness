@@ -102,6 +102,10 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
       if (start.dispatched) return { error: 'START_UNCERTAIN', startId, creationId,
         detail: 'This start was submitted but its machine has no receipt. Inspect the machine before creating another agent.' }
       const resources = await inspectCapacity(target, request)
+      if (resources.capacity.error === 'GUEST_NOT_ALLOWED') return {
+        error: 'CONTRIBUTION_REQUIRED', startId,
+        detail: 'Ask the machine owner to use Add machine in this Swarm, or to add a running agent. Guest machine sharing does not grant access to the owner’s Swarm controls.',
+      }
       if (!resources.allowed) return { error: 'CAPACITY_UNAVAILABLE', startId, ...resources }
       const reservation = await target.request('super_tabs', { action: 'reserveCapacity', creationId,
         cwd: request.cwd, worktree: request.worktree === true, requirements: request.requirements }, 20_000).catch(() => null)

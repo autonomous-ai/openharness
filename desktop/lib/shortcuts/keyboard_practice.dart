@@ -925,6 +925,7 @@ class _KeyboardPracticeState extends State<KeyboardPractice> {
           key: const ValueKey('keyboard-practice'),
           backgroundColor: Colors.transparent,
           elevation: 0,
+          shape: DesktopChrome.bareDialogShape,
           insetPadding: const EdgeInsets.all(16),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 780, maxHeight: 620),

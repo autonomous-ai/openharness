@@ -29,7 +29,7 @@ import { repairedCwd } from '../lib/cwdRepair.js'
 import type { AgentCommandOwnershipSnapshot } from '../lib/engineBin.js'
 import { classifyGridAssignment } from '../lib/gridAssignment.js'
 import type { RegisteredSession } from '../lib/registry.js'
-import { ambiguousAgentProcess, bypassPermissionActive, engineProcessMatch, permissionModeFromArgv, resumeSessionId, type ProcessRow } from '../lib/tmux.js'
+import { ambiguousAgentProcess, bypassPermissionActive, engineProcessMatch, permissionModeFromArgv, resumeSessionId, type ProcessRow } from '../lib/processTable.js'
 import { profileHomeFromEnv, transcriptProject } from './discoveries.js'
 import { ENGINES, PROCESS_ENGINES } from './types.js'
 

@@ -128,6 +128,10 @@ class PaneHeaderButton extends StatelessWidget {
                         : .22
                   : emphasized
                   ? 1
+                  // The close mark is full ink at rest (AppIcons.closeInk),
+                  // as the tabs' ×; the quieter pane controls are not.
+                  : icon == AppPaneSymbol.close
+                  ? AppIcons.closeInk
                   : MediaQuery.highContrastOf(context)
                   ? .7
                   : .45,

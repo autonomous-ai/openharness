@@ -1,0 +1,155 @@
+# RF4 (08:57:32); the Mac's update server stopped
+01:57:32.777 create terminal → b5c7e44b… launch=ready (86 ms)
+{"id":"b5c7e44b…","engine":"terminal","status":"active","launch":"ready","pane":"%3005","name":"Terminal harness 10-17 18:57","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
+COUNT_1
+COUNT_2
+COUNT_3
+## before (08:57:46)
+0.4.20-e2e.1
+
+  machine · remote machine
+   status     ● running · backend connected
+   machine    WIN-TESTVM
+   device     91DE·CD1F·1675·8D1C  (in your account)
+   version    v0.4.20-e2e.1
+   agents     5 available
+   pid        6100
+   local api  http://127.0.0.1:18474
+  running in background · stop with: harness stop
+
+
+ProcessId ParentProcessId Name            Start    Cmd                                                                                                           
+--------- --------------- ----            -----    ---                                                                                                           
+     5028            4240 harness-pty.exe 18:40:04 C:\Users\hxe2e\.harness\runtime\pty\0.4.18\harness-pty.exe serve --home C:\Users\hxe2e\.harness\pty           
+     4900            5028 OpenConsole.exe 18:43:05 "C:\Users\hxe2e\.harness\runtime\pty\0.4.18\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x1a0
+      744            5028 powershell.exe  18:43:05 powershell.exe -NoLogo                                                                                        
+     3824            5028 OpenConsole.exe 18:43:06 "C:\Users\hxe2e\.harness\runtime\pty\0.4.18\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x1fc
+     5768            5028 claude.exe      18:43:06 C:\Users\hxe2e\.local\bin\claude.exe                                                                          
+     6100            4032 node.exe        18:50:18 "C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe" C:\Users\hxe2e\.harness\cli\0.4.20-e2e.1\
+     7128            6100 node.exe        18:50:19 C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe --max-semi-space-size=4 --max-old-space-siz
+     5356            6100 node.exe        18:50:19 C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe --max-semi-space-size=4 --max-old-space-siz
+     2852            5028 OpenConsole.exe 18:51:02 "C:\Users\hxe2e\.harness\runtime\pty\0.4.18\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x28c
+     6336            5028 node.exe        18:51:02 "C:\Program Files\nodejs\node.exe" C:\Users\hxe2e\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js 
+     1436            6336 codex.exe       18:51:02 C:\Users\hxe2e\AppData\Roaming\npm\node_modules\@openai\codex\node_modules\@openai\codex-win32-arm64\vendor\aa
+      728            5028 OpenConsole.exe 18:51:05 "C:\Users\hxe2e\.harness\runtime\pty\0.4.18\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x2bc
+     2028            5028 node.exe        18:51:05 "C:\Program Files\nodejs\node.exe" C:\Users\hxe2e\AppData\Roaming\npm\node_modules\@kilocode\cli\bin\kilo     
+     7108            2028 kilo.exe        18:51:05 C:\Users\hxe2e\AppData\Roaming\npm\node_modules\@kilocode\cli\node_modules\@kilocode\cli-windows-arm64\bin\kil
+     6064            5028 OpenConsole.exe 18:57:32 "C:\Users\hxe2e\.harness\runtime\pty\0.4.18\OpenConsole.exe" --headless --width 200 --height 50 --signal 0x224
+     2532            5028 powershell.exe  18:57:32 powershell.exe -NoLogo                                                                                        
+
+
+
+## run 1: the installer over the live install, onto staging's N while the daemon runs N+1 (08:57:49)
+Installing Harness for win32-arm64 into C:\Users\hxe2e\.harness
+  OK Node v22.23.2 -> C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64
+  Downloading Harness 0.4.18-dev.win1...
+  OK Harness 0.4.18-dev.win1 -> C:\Users\hxe2e\.harness\cli\0.4.18-dev.win1
+  OK terminal host 0.4.18 -> C:\Users\hxe2e\.harness\runtime\pty\0.4.18
+  Moving the running Harness from 0.4.20-e2e.1 to 0.4.18-dev.win1 (your agents keep running)...
+  machine stopped (pid 6100).
+  Task Scheduler did not start harnessd (it runs the task only in a signed-in Windows session) — starting it directly
+
+  machine · remote machine
+  ─────────────────────────────────────
+   status     ● started · connecting to the backend in the background
+   machine    WIN-TESTVM
+   version    v0.4.18-dev.win1
+   backend    wss://harness-api.autonomous.ai
+   account    prod
+   state      ~\.harness\cli\data
+   auth       ~\.harness\auth
+   agents     5 available
+   pid        7156
+   logs       ~\.harness\cli\data\harness.log
+   dial log   ~\.harness\logs\dial-YYYYMMDD.log
+   local api  http://127.0.0.1:18474
+  ─────────────────────────────────────
+  running in background · stop with: harness stop
+
+  harnessd is registered with Task Scheduler already (Harness harnessd (hxe2e)); nothing to change.
+  
+    machine · remote machine
+    ─────────────────────────────────────
+     status     ● running · backend connected
+     machine    WIN-TESTVM
+     device     91DE·CD1F·1675·8D1C  (in your account)
+     version    v0.4.18-dev.win1
+     backend    wss://harness-api.autonomous.ai
+     account    prod
+     state      ~\.harness\cli\data
+     auth       ~\.harness\auth
+     agents     5 available
+     pid        7156
+     logs       ~\.harness\cli\data\harness.log
+     dial log   ~\.harness\logs\dial-YYYYMMDD.log
+     local api  http://127.0.0.1:18474
+    ─────────────────────────────────────
+    running in background · stop with: harness stop
+  
+
+  OK harness 0.4.18-dev.win1 installed.
+
+  Set this computer up with three commands, in this order:
+
+      harness login                  # 1. sign in with your Autonomous account (opens a browser)
+      harness start                  # 2. connect this computer as a machine (runs in the background)
+      harness remote-password set    # 3. let your OTHER machines reach this one (asked once, kept)
+
+  Useful:
+      harness status                 # is the daemon running, and which machine this is
+      harness --help                 # everything else
+
+  harness works in this window now. Terminals that were already open see it once they are reopened.
+real 24.35
+(no 'being used by another process' on stderr)
+## after run 1 (08:58:22)
+0.4.18-dev.win1
+0.4.18-dev.win1
+0.4.20-e2e.1
+current
+data
+notify.mjs
+update-rejected.json
+{"id":"c66db6da…","engine":"terminal","status":"offline","launch":"ready","pane":"%3001","name":"Terminal harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
+{"id":"47324568…","engine":"claude","status":"active","launch":"ready","pane":"%3002","name":"Claude harness 10-17 18:43","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
+{"id":"dac87568…","engine":"codex","status":"active","launch":"ready","pane":"%3003","name":"Codex harness 10-17 18:51","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":""}
+{"id":"29c3a0f0…","engine":"kilo","status":"active","launch":"ready","pane":"%3004","name":"Kilo CLI","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"conversation","sessionId":"ses_eb34ac58dffeD615Cp1P5v3kH8"}
+{"id":"b5c7e44b…","engine":"terminal","status":"offline","launch":"ready","pane":"%3005","name":"Terminal harness 10-17 18:57","cwd":"C:\\Users\\hxe2e\\proj","resumeMode":"shell","sessionId":""}
+## COUNTER screen 1
+COUNT_43
+COUNT_44
+## COUNTER screen 2 (5 s later)
+COUNT_51
+COUNT_52
+ProcessId ParentProcessId Name            Start    Cmd                                                                                                           
+     5028            4240 harness-pty.exe 18:40:04 C:\Users\hxe2e\.harness\runtime\pty\0.4.18\harness-pty.exe serve --home C:\Users\hxe2e\.harness\pty           
+     7156            4856 node.exe        18:58:09 "C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe" C:\Users\hxe2e\.harness\cli\0.4.18-dev.wi
+     2840            7156 node.exe        18:58:10 C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe --max-semi-space-size=4 --max-old-space-siz
+     2848            7156 node.exe        18:58:10 C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe --max-semi-space-size=4 --max-old-space-siz
+## check-install (batch logon)
+ok   version 0.4.18-dev.win1
+ok   task Harness harnessd (hxe2e)
+ok   PATH has c:\users\hxe2e\.harness\bin
+ok   terminal 99c99d15… on harness-pty pid 5028 (3 shell(s) under it)
+exit=0
+## run 2: the same version again (08:58:50)
+   pid        7156
+Installing Harness for win32-arm64 into C:\Users\hxe2e\.harness
+  OK Node v22.23.2 -> C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64
+  OK Harness 0.4.18-dev.win1 -> C:\Users\hxe2e\.harness\cli\0.4.18-dev.win1
+  OK terminal host 0.4.18 -> C:\Users\hxe2e\.harness\runtime\pty\0.4.18
+  harnessd is registered with Task Scheduler already (Harness harnessd (hxe2e)); nothing to change.
+    machine · remote machine
+    ─────────────────────────────────────
+     status     ● running · backend connected
+     machine    WIN-TESTVM
+     device     91DE·CD1F·1675·8D1C  (in your account)
+     version    v0.4.18-dev.win1
+     backend    wss://harness-api.autonomous.ai
+(no 'being used by another process')
+   status     ● running · backend connected
+   version    v0.4.18-dev.win1
+   pid        7156
+ProcessId ParentProcessId Name            Start    Cmd                                                                                                           
+     5028            4240 harness-pty.exe 18:40:04 C:\Users\hxe2e\.harness\runtime\pty\0.4.18\harness-pty.exe serve --home C:\Users\hxe2e\.harness\pty           
+     7156            4856 node.exe        18:58:09 "C:\Users\hxe2e\.harness\runtime\node-v22.23.2-win32-arm64\node.exe" C:\Users\hxe2e\.harness\cli\0.4.18-dev.wi

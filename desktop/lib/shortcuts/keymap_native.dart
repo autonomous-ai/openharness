@@ -10,7 +10,9 @@ Map<String, Object> nativeKeymapSnapshot(AppKeymap keymap) => {
     for (final context in KeymapContext.values)
       context.name: [
         for (final binding in keymap.current.bindingsFor(context))
-          if (binding.command != null && harnessCommandActive(binding.command!))
+          if (!binding.outsideTerminal &&
+              binding.command != null &&
+              harnessCommandActive(binding.command!))
             {
               'keys': binding.keys.map((key) => key.toString()).toList(),
               'command': binding.command!,

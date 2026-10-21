@@ -1,0 +1,15 @@
+# s2 reboot WITHOUT autologon: nobody signed in
+(reboot = shutdown + utmctl start at 08:33:51)
+VM up at Mac 08:34:52; last boot (VM clock) 2026-10-17 18:33:57
+VM 18:36:55, 2+ min after ssh came up:
+'query' is not recognized as an internal or external command,
+operable program or batch file.
+
+Logon Mode:                           Interactive only
+Last Run Time:                        10/17/2026 6:32:51 PM
+Last Result:                          0
+Logon Mode:                           Interactive only
+Last Run Time:                        10/17/2026 6:32:51 PM
+Last Result:                          0
+   status     ○ stopped
+   pid        9012

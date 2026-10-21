@@ -28,9 +28,38 @@ class SelectionTests(unittest.TestCase):
             "devices/harness-pro/firmware/main/app/pro_app.c": {"firmware", "pro"},
             "devices/harness-pro/README.md": {"firmware", "pro"}, "devices/harness-pro-other/x.c": {"firmware"},
             "mobile/pubspec.lock": {"mobile"}, "daemons/tools/card.mjs": {"daemons"},
+            "pty/src/stream.rs": {"pty"},
         }.items():
             with self.subTest(path=path):
                 self.assertEqual(planner.select([path])[0], expected)
+
+    def test_the_cli_ptyhost_backend_and_the_vendored_terminal_also_select_the_pty_suite(self):
+        for path, expected in {
+            "cli/src/lib/ptyHost/stream.ts": {"cli", "pty"}, "cli/src/lib/ptyHostBackend.ts": {"cli", "pty"},
+            "cli/src/lib/ptyHostBackend.contract.spec.ts": {"cli", "pty"},
+            "cli/src/lib/terminalBackend.contract.ts": {"cli", "pty"},
+            "tui/vendor/alacritty_terminal/src/term/mod.rs": {"tui", "pty"},
+            "cli/src/lib/ptyHostile.ts": {"cli"}, "cli/src/lib/tmuxBackend.ts": {"cli"},
+        }.items():
+            with self.subTest(path=path):
+                self.assertEqual(planner.select([path])[0], expected)
+
+    def test_the_windows_installer_selects_the_pty_suite(self):
+        # installer/'s model and steps are plain Rust that tests on Linux; pty-checks runs them (installer spec §4.1).
+        for path in ("installer/src/model.rs", "installer/tests/entry-vectors.json", "installer/Cargo.lock"):
+            with self.subTest(path=path):
+                self.assertEqual(planner.select([path])[0], {"pty"})
+
+    def test_the_pipe_auth_vectors_also_select_the_desktop_suite(self):
+        # desktop/test/windows_pipe_auth_test.dart reads them from cli/: a new vector runs both halves.
+        self.assertEqual(planner.select(["cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json"])[0], {"cli", "desktop"})
+        self.assertEqual(planner.select(["cli/src/lib/windows/pipeAuth.ts"])[0], {"cli"})
+
+    def test_the_shared_terminal_crate_selects_both_the_pty_host_and_the_tui(self):
+        # term/ is a dependency of the PTY host and of the shipped TUI (`hn`): both suites run.
+        for path in ("term/src/capture.rs", "term/Cargo.toml"):
+            with self.subTest(path=path):
+                self.assertEqual(planner.select([path])[0], {"pty", "tui"})
 
     def test_invalid_paths_fail(self):
         for path in ["../cli/code.ts", "/absolute", ""]:

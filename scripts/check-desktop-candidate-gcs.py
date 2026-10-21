@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise candidate sealing/promotion using six tiny run-owned GCS objects."""
+"""Exercise candidate sealing/promotion using one tiny run-owned GCS object per release artifact."""
 from datetime import datetime, timedelta, timezone
 import hashlib
 import importlib.util
@@ -42,14 +42,14 @@ def main():
             receipt = candidate.seal(version, bucket, prefix, root, identity)
             candidate.check_sources(receipt)
             candidate.promote(receipt, destination, scratch)
-            print('PASS: seal six source generations and promote their exact bytes', flush=True)
+            print(f'PASS: seal {len(candidate.FILES)} source generations and promote their exact bytes', flush=True)
             promoted = root / 'promoted'
             promoted.mkdir()
             gcloud('storage', 'cp', f'gs://{bucket}/{scratch}/*.json', str(promoted) + '/')
             candidate.publisher.publish(uri, version, promoted, allow_initialize=True)
             checked = candidate.verification.verify(version, uri.replace('gs://', 'https://storage.googleapis.com/'))
             assert checked['status'] == 'passed', checked
-            print('PASS: publish and verify all six promoted fixture downloads', flush=True)
+            print(f'PASS: publish and verify all {len(candidate.FILES)} promoted fixture downloads', flush=True)
             destination_uris = [f'gs://{bucket}/{destination}/{filename}' for filename in candidate.FILES.values()]
             before = [candidate.describe(path)['generation'] for path in destination_uris]
             try:
@@ -67,9 +67,9 @@ def main():
             now = datetime.now(timezone.utc)
             assert candidate.expired_objects(listed, now) == [], listed
             expired = candidate.expired_objects(listed, now + timedelta(days=8))
-            assert len(expired) == 6 and all(item.startswith(prefix + '/') for item in expired), listed
+            assert len(expired) == len(candidate.FILES) and all(item.startswith(prefix + '/') for item in expired), listed
             gcloud('storage', 'rm', f'gs://{bucket}/{expired[0]}')
-            print('PASS: recent objects retained; expiry recognizes all six and deletes the selected generation', flush=True)
+            print(f'PASS: recent objects retained; expiry recognizes all {len(candidate.FILES)} and deletes the selected generation', flush=True)
     finally:
         # No configurable product paths: all three prefixes are constructed from
         # this workflow's own run/attempt and random token above.

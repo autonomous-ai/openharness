@@ -14,9 +14,12 @@ import 'package:harness/super_tabs/workspace.dart';
 import 'package:harness/widgets/pane_grid.dart';
 import 'package:harness/widgets/agent_drag.dart';
 import 'package:harness/widgets/terminal_panel.dart';
+import 'package:harness/ws/local_cli_discovery.dart';
 
 import '../test/super_tab_launch_test.dart'
     show SuperTabFixtureConnection, SuperTabLaunchFixture, tabId;
+import '../test/support/super_tab_fixture.dart'
+    show projectFixture, conversationFixture;
 
 /// A real Flutter/macOS surface with in-memory accounts and native protocol
 /// fixtures. It never opens a production daemon, account, harness or database.
@@ -25,9 +28,9 @@ void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized()
     ..framePolicy = LiveTestWidgetsFlutterBindingFramePolicy.onlyPumps;
   testWidgets(
-    'native Super Tab keeps group context, people and terminal in one workspace',
+    'native Swarm keeps group context, people and terminal in one workspace',
     (tester) async {
-      debugPrint('Super Tab fixture: initialize window');
+      debugPrint('Swarm fixture: initialize window');
       await windowManager.ensureInitialized().timeout(
         const Duration(seconds: 10),
       );
@@ -36,11 +39,21 @@ void main() {
           .timeout(const Duration(seconds: 10));
       await windowManager.show().timeout(const Duration(seconds: 10));
       await windowManager.focus().timeout(const Duration(seconds: 10));
-      debugPrint('Super Tab fixture: create lead');
+      debugPrint('Swarm fixture: create lead');
       final f = SuperTabLaunchFixture();
       f.connection.nativeName = 'hi';
       f.connection.nativeSurface = true;
-      f.app.machineStates['m']!.terminalCapabilityAvailable = true;
+      f.app.machineStates['m']!
+        ..terminalCapabilityAvailable = true
+        // The fixture serves a local daemon's protocol. A local machine with
+        // no endpoint means offline to PaneGrid, even when its registry is set.
+        ..localEndpoint = LocalCliEndpoint(
+          computerId: 'fixture',
+          machineId: 'm',
+          wsUri: Uri.parse('ws://fixture.invalid'),
+          protocolVersion: 1,
+          terminalProtocolVersion: 3,
+        );
       await tester.runAsync(() async {
         final box = await f.box(engine: 'claude');
         expect(
@@ -49,10 +62,24 @@ void main() {
           reason: box.error,
         );
       });
-      debugPrint('Super Tab fixture: show conversation');
+      debugPrint('Swarm fixture: show conversation');
       f.app.machineStates['m']!.agents = [Agent.fromJson(f.connection.native!)];
       final server = f.connection.server;
-      server.state['name'] = 'Pilot';
+      server.state['name'] = 'Company';
+      server.state['projects'] = [
+        projectFixture('lead', 'Lamp OS', 'lead'),
+        projectFixture(
+          'design',
+          'Design',
+          'design-lead',
+          visibility: 'private',
+        ),
+      ];
+      (server.state['conversations'] as List)[1]['number'] = 12;
+      (server.state['conversations'] as List).add({
+        ...conversationFixture('design-lead', 'Lead'),
+        'projectId': 'design',
+      });
       server.state['machines'] = [
         {
           'machineId': 'm',
@@ -101,7 +128,7 @@ void main() {
       (server.state['conversations'] as List)[0]['leadId'] = 'lead-agent';
       (server.state['people'] as List).addAll(
         List.generate(
-          19,
+          2,
           (i) => {
             'id': 'person-$i',
             'email': 'person$i@example.com',
@@ -120,18 +147,19 @@ void main() {
       server.append(
         'Keep changes on the device and sync when the connection returns.',
       );
-      debugPrint('Super Tab fixture: load conversation controller');
+      debugPrint('Swarm fixture: load conversation controller');
       final c = await tester.runAsync(() async {
         final controller = await f.app.superTabs
             .open(tabId)
             .timeout(const Duration(seconds: 10));
-        debugPrint('Super Tab fixture: refresh conversation');
+        debugPrint('Swarm fixture: refresh conversation');
         await controller.refresh().timeout(const Duration(seconds: 10));
+        controller.toggleProject('lead');
         return controller;
       });
       expect(c, isNotNull);
       debugPrint(
-        'Super Tab fixture: render first frame '
+        'Swarm fixture: render first frame '
         '(lifecycle=${binding.lifecycleState}, '
         'framesEnabled=${binding.framesEnabled}, '
         'visible=${await windowManager.isVisible()}, '
@@ -152,19 +180,20 @@ void main() {
                   app: f.app,
                   canvas: PaneGrid(notifier: f.app, swarmMode: true),
                   onAddAgent: (_) {},
+                  onNewProject: () {},
                 ),
               ),
             ),
           ),
         ),
       );
-      debugPrint('Super Tab fixture: first frame painted');
+      debugPrint('Swarm fixture: first frame painted');
       await tester.pumpAndSettle(
         const Duration(milliseconds: 100),
         EnginePhase.sendSemanticsUpdate,
         const Duration(seconds: 10),
       );
-      debugPrint('Super Tab fixture: conversation settled');
+      debugPrint('Swarm fixture: conversation settled');
       expect(find.byTooltip('Invite people'), findsOneWidget);
       expect(find.text('CHATS'), findsNothing);
       expect(find.text('New group'), findsNothing);
@@ -183,17 +212,25 @@ void main() {
       }
 
       await shot('conversation');
+      await tester.tap(find.byTooltip('Project options'));
+      await tester.pumpAndSettle();
+      await shot('project-menu');
+      await tester.tap(find.text('Update cadence'));
+      await tester.pumpAndSettle();
+      await shot('project-cadence');
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
       await tester.tap(
         find.byKey(ValueKey('super-member-${c!.snapshot!.agents.single.id}')),
       );
-      debugPrint('Super Tab fixture: terminal requested');
+      debugPrint('Swarm fixture: terminal requested');
       for (var i = 0; i < 30 && f.app.activeSwarm.panes.isEmpty; i++) {
         await tester.pump(const Duration(milliseconds: 50));
       }
       expect(f.app.activeSwarm.panes, hasLength(1));
       final machine = f.app.machineStates['m']!;
       debugPrint(
-        'Super Tab fixture: native prerequisites '
+        'Swarm fixture: native prerequisites '
         'online=${machine.nodeOnline} capability=${machine.terminalCapabilityAvailable} '
         'agents=${machine.agents.map((a) => '${a.id}:${a.terminalAvailable}').join(',')} '
         'session=${f.app.activeSwarm.panes.single.session?.status}',
@@ -214,7 +251,7 @@ void main() {
       );
       expect(f.app.activeSwarm.panes.single.inputContext, isNotNull);
       await tester.pump(const Duration(milliseconds: 100));
-      debugPrint('Super Tab fixture: terminal ready');
+      debugPrint('Swarm fixture: terminal ready');
       await shot('terminal');
       expect(find.byType(PaneGrid), findsOneWidget);
       expect(
@@ -247,8 +284,8 @@ void main() {
       await shot('add-machine');
       Navigator.of(tester.element(find.byType(AlertDialog))).pop();
       await tester.pumpAndSettle();
-      // An earlier app/daemon may already have cleaned up this member. Reopening
-      // must resume its exact saved conversation before preparing recording.
+      // Navigation preserves a stopped member. Only an explicit Resume may
+      // reopen its exact saved conversation before preparing recording.
       f.connection.native = {
         ...f.connection.native!,
         'status': 'stopped',
@@ -259,10 +296,20 @@ void main() {
       await tester.tap(
         find.byKey(ValueKey('super-member-${c.snapshot!.agents.single.id}')),
       );
+      for (var i = 0; i < 40 && find.text('Resume').evaluate().isEmpty; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(
+        f.connection.calls.where((call) => call.$1 == 'agent_resume'),
+        isEmpty,
+      );
+      expect(find.text('Resume'), findsOneWidget);
+      await tester.tap(find.text('Resume'));
       for (
         var i = 0;
         i < 120 &&
             (f.app.activeSwarm.panes.isEmpty ||
+                f.app.stateOf('m')!.agents.single.isStopped ||
                 f.app.activeSwarm.panes.single.session?.streamId == null);
         i++
       ) {

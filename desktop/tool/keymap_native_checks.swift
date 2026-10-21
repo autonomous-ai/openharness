@@ -25,7 +25,7 @@ try checkKeymap(changed.match([stroke("down")], context: "project").binding == n
 for (key, command) in [
   ("cmd+left", "pane.focus_left"), ("cmd+down", "pane.focus_below"),
   ("cmd+up", "pane.focus_above"), ("cmd+right", "pane.focus_right"),
-  ("cmd+s", "app.store"), ("cmd+shift+l", "pane.layout"),
+  ("cmd+ctrl+s", "app.store"), ("cmd+s", "super_tab.new"), ("cmd+shift+l", "pane.layout"),
   ("cmd+b", "task.route"), ("cmd+t", "swarm.new"),
   ("cmd+p", "harnesses.list"), ("cmd+o", "agent.open"), ("cmd+shift+p", "navigation.commands"),
   ("cmd+r", "pane.split_right"), ("cmd+d", "pane.split_down"),
@@ -57,9 +57,11 @@ for context in HarnessNativeKeymap.contexts {
     "Command-U has no default workspace action")
   try checkKeymap(defaults.match([stroke("cmd+y")], context: context).binding == nil,
     "Command-Y has no default workspace action")
-  let store = defaults.match([stroke("cmd+s")], context: context).binding
-  try checkKeymap(store?.command == "app.store" && store?.menuAction == "store" && store?.hint == "⌘S",
-    "Command-S opens Store with the matching native action and hint")
+  let store = defaults.match([stroke("cmd+ctrl+s")], context: context).binding
+  try checkKeymap(store?.command == "app.store" && store?.menuAction == "store" && store?.hint == "⌃⌘S",
+    "Control-Command-S opens Store with the matching native action and hint")
+  try checkKeymap(defaults.match([stroke("cmd+s")], context: context).binding?.command == "super_tab.new",
+    "Command-S opens New Swarm from \(context)")
   try checkKeymap(defaults.match([stroke("cmd+o")], context: context).binding?.command == "agent.open",
     "Command-O opens the project picker")
   try checkKeymap(defaults.match([stroke("cmd+shift+n")], context: context).binding?.command == "agent.clone",

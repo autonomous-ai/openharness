@@ -7,6 +7,11 @@ import 'keymap_commands.dart';
 import 'keymap_dispatch.dart';
 import 'keymap_keyboard.dart';
 
+const composerOwnedStrokes = [
+  KeyStroke('w', control: true),
+  KeyStroke('u', control: true),
+];
+
 /// Runs before a focused terminal/editor. Unmatched events are returned intact
 /// to that original owner; there is no disk access or deferred key replay.
 class KeymapHost extends StatefulWidget {
@@ -116,6 +121,12 @@ class _KeymapHostState extends State<KeymapHost> with WidgetsBindingObserver {
       return KeyEventResult.ignored;
     }
     final region = KeymapRegion.of(context);
+    if (region?.keeps case final keeps?
+        when keeps.contains(keyStrokeForEvent(event))) {
+      _dispatch.cancel();
+      _notifyPending();
+      return KeyEventResult.ignored;
+    }
     final localActions = region?.actions;
     if (localActions == null && !widget.enabled()) {
       _dispatch.cancel();
@@ -132,8 +143,14 @@ class _KeymapHostState extends State<KeymapHost> with WidgetsBindingObserver {
         (value != null &&
             value.composing.isValid &&
             !value.composing.isCollapsed);
+    final stroke = keyStrokeForEvent(event);
+    final aliasesBlocked =
+        region?.contextKind == KeymapContext.terminal &&
+        (identical(region?.terminalFocusNode, focus) ||
+            (KeymapComposer.contains(context) &&
+                composerOwnedStrokes.contains(stroke)));
     final result = _dispatch.dispatch(
-      stroke: keyStrokeForEvent(event),
+      stroke: stroke,
       physicalKey: event.physicalKey,
       phase: event is KeyUpEvent
           ? KeymapKeyPhase.up
@@ -143,6 +160,7 @@ class _KeymapHostState extends State<KeymapHost> with WidgetsBindingObserver {
       context: region?.contextKind ?? KeymapContext.workspace,
       owner: focus!,
       composing: composing,
+      aliasesBlocked: aliasesBlocked,
       modifier: _modifiers.contains(event.logicalKey),
       canExecute: (id) =>
           (localActions?.containsKey(id) == true ||

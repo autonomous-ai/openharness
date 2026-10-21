@@ -25,7 +25,7 @@ import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallRecipe } from '../../lib/engineInstall.js'
 import {
-  buildEngineCommandArgv, buildEngineLaunchArgv, namedAgentArgs, permissionModeApproves, permissionModeFlags,
+  buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeApproves, permissionModeFlags,
   refusePermissionFlagIfUnsupported, supportsFirstPrompt, supportsNamedAgent, NamedAgentUnsupportedError,
 } from '../../lib/engineLaunch.js'
 import { setUpWithin } from '../../lib/setUpWithin.js'
@@ -43,9 +43,10 @@ import { folderTrust } from '../../engines/launchPrep.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
-import { clearPaneRemainOnExit } from '../../lib/tmux.js'
-import type { TmuxBackend } from '../../lib/tmuxBackend.js'
-import { TMUX_SESSION_ENV_MIN, tmuxSupportsSessionEnv } from '../../lib/tmuxVersion.js'
+import type { TerminalBackend } from '../../lib/terminalBackend.js'
+import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
+import { isWindowsHeldPane, windowsPaneLaunch } from '../../lib/windows/engineStart.js'
+import { tmuxTooOldForSessionEnv } from '../../lib/tmuxVersion.js'
 import { prepareInstructionWrites, scmLaunchEnv } from '../../scm/scmProjects.js'
 import { mergedLaunchEnv } from './launchEnv.js'
 import type { createPaneWatcher } from './newPane.js'
@@ -59,9 +60,12 @@ type CreateAgent = NonNullable<BackendSocket['onCreateAgent']>
 
 export interface CreateAgentDeps {
   publishConfig?: typeof publishGridConfigDir
-  /** The tmux backend; null where the configuration lists no tmux. */
   native?: (engine: AgentEngine, source: NativeLaunchSource, authority: LaunchAuthority) => Promise<NativeLaunchResult>
-  tmuxBackend: TmuxBackend | null
+  /** The backend new panes are made on; null where none is configured or could be readied. */
+  createBackend: TerminalBackend | null
+  /** What a launch answers when [createBackend] is null: the configured backend's own code (terminalBackend.ts
+   *  `noBackendCode`); `TMUX_UNAVAILABLE`, as before, by default. */
+  noBackendCode?: string
   registry: typeof registry
   externalResume: CreateAgent
   watchNewPane: ReturnType<typeof createPaneWatcher>
@@ -91,7 +95,7 @@ export interface CreateAgentDeps {
 }
 
 export function createAgentCreator({
-  native: inspectNative, publishConfig, tmuxBackend, registry, externalResume, watchNewPane, announceSession, attachDsh,
+  native: inspectNative, publishConfig, createBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, externalResume, watchNewPane, announceSession, attachDsh,
   prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
   gridSetup, privateGridName, dshLaunch,
 }: CreateAgentDeps) {
@@ -100,7 +104,7 @@ export function createAgentCreator({
     const stale = () => ({ ok: false as const, error: 'LAUNCH_AUTHORITY_CHANGED', unavailable: 'launch', detail: 'Waiting for the original launch request’s authority.' })
     if (!authority.current()) return stale()
     let { engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, scmLaunchRecord, startedBy, parentAgentId, launchModel } = input
-    if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
+    if (!createBackend) return { ok: false, error: noBackendCode }
     if (blocksFolder(cwd)) return { ok: false, error: 'WORKTREE_BUSY' }
     const workspaceIdentity = () => { const info = statSync(cwd); return `${info.dev}:${info.ino}:${realpathSync(cwd)}` }
     let originalWorkspace: string
@@ -175,9 +179,8 @@ export function createAgentCreator({
       if (refusal) {
         return { ok: false, error: 'INVALID_DSH', detail: refusal }
       }
-      if (!(await tmuxSupportsSessionEnv())) {
-        const detail = `this machine's tmux is older than ${TMUX_SESSION_ENV_MIN.major}.${TMUX_SESSION_ENV_MIN.minor}, `
-          + `which is the first version that can give a new session its own environment — so ${installed.manifest.name} `
+      if (!(await createBackend.capabilities()).sessionEnv) {
+        const detail = `${tmuxTooOldForSessionEnv('a new session')} — so ${installed.manifest.name} `
           + `could not tell ${engine} which harness it is. Upgrade tmux.`
         console.warn(`[agent] create ${dsh} refused · ${detail}`)
         return { ok: false, error: 'TMUX_TOO_OLD_FOR_DSH', detail }
@@ -243,10 +246,8 @@ export function createAgentCreator({
     }
     let gridLaunch: { env: Record<string, string>; args: string[]; webSearch: GridWebSearchStatus } | undefined
     if (grid && built?.ok) {
-      if (!(await tmuxSupportsSessionEnv())) {
-        const detail = `this machine's tmux is older than `
-          + `${TMUX_SESSION_ENV_MIN.major}.${TMUX_SESSION_ENV_MIN.minor}, which is the first version that can `
-          + `give a new session its own environment — so ${engine} could not have been pointed at grid `
+      if (!(await createBackend.capabilities()).sessionEnv) {
+        const detail = `${tmuxTooOldForSessionEnv('a new session')} — so ${engine} could not have been pointed at grid `
           + `${grid.networkName}. Upgrade tmux, or create this agent without a grid selected.`
         console.warn(`[agent] create ${engine} refused · ${detail}`)
         return { ok: false, error: 'TMUX_TOO_OLD_FOR_GRID', detail }
@@ -334,8 +335,12 @@ export function createAgentCreator({
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
     const firstPrompt = prompt
     const launchOptions = { ...(native ? { native } : {}), bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, installIfMissing, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(firstPrompt ? { firstPrompt } : {}), ...(launchModel ? { launchModel } : {}), terminalHint: { machineName: terminalHintMachineName() } }
-    const command = buildEngineCommandArgv(engine, launchOptions)
-    const argv = buildEngineLaunchArgv(engine, launchOptions)
+    // Windows refuses a batch-file engine whose arguments cmd.exe would read (lib/windows/launch.ts), before any pane.
+    let command: string[], argv: string[]
+    try {
+      command = buildEngineCommandArgv(engine, launchOptions)
+      argv = buildEngineLaunchArgv(engine, launchOptions)
+    } catch (error) { return windowsLaunchRefusal(error) }
     // A tmux route is enough to stream its screen. Register it before looking for a process so both
     // loopback and relayed Desktop clients can attach while the login shell/installer is still busy.
     // `tmuxBackend` exists whenever the CONFIG lists tmux — it is never a probe of the binary, so a
@@ -355,15 +360,18 @@ export function createAgentCreator({
     if (!current()) return stale()
     const result = await createAndRegisterPane({
       current, ...(native ? { nativeToken: native.token } : {}),
-      tmuxBackend,
+      tmuxBackend: createBackend,
       registry,
       engine,
       cwd,
       sessionLabel: label,
       argv,
-      env: freshHarnessEnvironment(engine, mergedLaunchEnv(mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? profileEnvironment(engine, codexHome) : undefined), dshEnv),
+      // Windows: the workspace to start in and the shell the pane becomes after the engine (lib/windows/engineStart.ts).
+      paneLaunch: windowsPaneLaunch(engine, { ...launchOptions, held: isWindowsHeldPane(argv) }),
+      // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
+      env: mergedLaunchEnv(freshHarnessEnvironment(engine, mergedLaunchEnv(mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? profileEnvironment(engine, codexHome) : undefined), dshEnv),
         mergedLaunchEnv(scmLaunchEnv(scmLaunchRecord), native?.environment)), !!grid,
-        permissionMode ?? (bypassPermission ? DEFAULT_HARNESS_PERMISSION : 'ask')),
+        permissionMode ?? (bypassPermission ? DEFAULT_HARNESS_PERMISSION : 'ask')), engineLaunchEnv(engine, native)),
       grid: grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null,
       gridLaunchRecord: grid && gridLaunch ? { override: grid, webSearch: gridLaunch.webSearch } : null,
       scmLaunchRecord: scmLaunchRecord ?? null,
@@ -384,7 +392,7 @@ export function createAgentCreator({
     // shell exiting is the person closing it — so `remain-on-exit` comes off now, and the pane going
     // away is what removes the row (reconciler `onRemoved`), exactly as for an engine that quit.
     if (isTerminalEngine(engine)) {
-      await clearPaneRemainOnExit(spawned.runtime.paneId)
+      await createBackend.releaseHold(spawned.runtime)
       const ready = registry.setLaunch(pending.agentId, { state: 'ready' }) ?? pending
       announceSession(ready)
       console.log(`[agent] create terminal open · agent ${pending.agentId}`)

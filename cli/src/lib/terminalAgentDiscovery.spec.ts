@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { ProcessRow } from './tmux.js'
+import type { ProcessRow } from './processTable.js'
 import { discoverTerminalAgentsFromSnapshot } from './terminalAgentDiscovery.js'
 import { terminalRouteKey } from './terminalRuntime.js'
 import type { TerminalRootObservation } from './terminalTypes.js'
@@ -82,6 +82,20 @@ describe('process discovery', () => {
       { pid: 22, cwd: '/work/21', runtimes: [root(21).runtime, root(20).runtime] },
     ])
     expect(result.ambiguousPlacements).toEqual(new Set([terminalRouteKey(root(40).runtime)]))
+  })
+
+  it('finds the engines in panes of a terminal host the daemon started (Windows keeps the daemon as its parent)', () => {
+    const pane = (pid: number): TerminalRootObservation => ({
+      runtime: { backend: 'ptyhost', instance: 'p2', paneId: `%${pid}` }, rootPid: pid, cwd: `C:\\work\\${pid}`,
+    })
+    const host: ProcessRow = { pid: 500, parentPid: 999, executable: 'harness-pty.exe', startMarker: start, args: 'harness-pty.exe serve' }
+    const result = discoverTerminalAgentsFromSnapshot(
+      [pane(600), pane(700)],
+      [host, claude(600, 500), shell(700, 500), claude(701, 700), claude(1000, 999)],
+      999,
+      ['ptyhost'],
+    )
+    expect(result.agents.map((agent) => agent.processIdentity.pid)).toEqual([600, 701])
   })
 
   it('sees exits and reused PIDs on the next snapshot', () => {

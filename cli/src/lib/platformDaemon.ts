@@ -1,5 +1,5 @@
 /**
- * Where the rest of the CLI meets launchd or systemd, once someone has opted in with
+ * Where the rest of the CLI meets launchd, systemd or Task Scheduler, once someone has opted in with
  * `harness service install` (./serviceCommand.ts; the definitions are ../harnessd/platform.ts).
  *
  * One supervisor per machine. When the platform runs the master, `harness start` asks the platform to
@@ -16,16 +16,20 @@
  * Harness OS is the one computer where nobody opts in: its package ships the unit (OS_UNIT_FILE), so
  * there every start and stop of its daemon goes through that unit (osDaemonUnit).
  */
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
 import { readStatusFile } from '../harnessd/master.js'
 import {
-  OS_UNIT_FILE, PlatformService, defaultPlatformDeps, platformFor, type PlatformName, type PlatformState, type ServiceDefinition,
+  OS_UNIT_FILE, PlatformService, TASK_STOPPED_FILE, bootTimeMs, defaultPlatformDeps, platformFor, stoppedThisBoot, type PlatformName,
+  type PlatformState, type ServiceDefinition,
 } from '../harnessd/platform.js'
 import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, isAlive, readPid } from './daemonState.js'
+import { withoutHarnessdEnv } from './harnessdEnv.js'
 import { managedNodePath } from './nodeRuntime.js'
+import { currentCli, harnessLaunchPath } from './windows/installLayout.js'
+import { launchDetached, type LaunchOutcome } from './windows/launcher.js'
 
 /**
  * The CLI's own settings that decide which daemon this is, carried into the definition when they are
@@ -87,7 +91,8 @@ export function platformDaemonDeps(overrides: Partial<PlatformDaemonDeps> = {}):
   const platform = supervisingPlatform(process.platform, process.env)
   const os = platform === 'systemd' && osDaemonUnit(process.platform, process.env)
   return {
-    service: platform ? new PlatformService(platform, defaultPlatformDeps(), os) : null,
+    // The data folder: on Windows the task's definition and a stop are written there (harnessd/platform.ts).
+    service: platform ? new PlatformService(platform, defaultPlatformDeps({ dataDir: env.ADAPTER_DATA_DIR }), os) : null,
     logFile: DAEMON_LOG_FILE,
     readPid,
     isAlive,
@@ -99,20 +104,29 @@ export function platformDaemonDeps(overrides: Partial<PlatformDaemonDeps> = {}):
 }
 
 /** What the platform runs for this install: the managed Node (as the desktop app runs the CLI) and the
- *  installed bundle, the daemon's log, and the settings to carry from `source`. */
-export function serviceDefinition(options: { logFile: string; source?: NodeJS.ProcessEnv; nodePath?: string; scriptPath?: string; home?: string }): ServiceDefinition {
+ *  installed bundle, the daemon's log, and the settings to carry from `source`. On Windows, the launcher
+ *  the scheduled task runs too. */
+export function serviceDefinition(options: {
+  logFile: string; source?: NodeJS.ProcessEnv; nodePath?: string; scriptPath?: string; home?: string
+  platform?: NodeJS.Platform; launcherPath?: string
+}): ServiceDefinition {
   const source = options.source ?? process.env
   const carried: Record<string, string> = {}
   for (const name of CARRIED_ENV) {
     const value = source[name]
     if (value) carried[name] = value
   }
+  // Windows: the build `cli\current` names (there is no cli\cli.js), started by the launcher in bin\. Without the
+  // launcher the task could not be written at all (B3.12's review: `harness service install` threw).
+  const windows = (options.platform ?? process.platform) === 'win32'
+  const root = dirname(env.ADAPTER_CLI_DIR)
   return {
     nodePath: options.nodePath ?? managedNodePath(),
-    scriptPath: options.scriptPath ?? join(env.ADAPTER_CLI_DIR, 'cli.js'),
+    scriptPath: options.scriptPath ?? (windows ? currentCli(root)?.cliJs : undefined) ?? join(env.ADAPTER_CLI_DIR, 'cli.js'),
     logFile: options.logFile,
     home: options.home ?? homedir(),
     env: carried,
+    ...(windows ? { launcherPath: options.launcherPath ?? harnessLaunchPath(root) } : {}),
   }
 }
 
@@ -151,13 +165,73 @@ export type StartOutcome = { ok: true; pid: number; refreshed: boolean } | { ok:
  */
 export async function startUnderPlatform(definition: ServiceDefinition, deps: PlatformDaemonDeps = platformDaemonDeps(), waitMs = PLATFORM_START_WAIT_MS): Promise<StartOutcome> {
   const service = deps.service
-  if (!service) return { ok: false, detail: 'neither launchd nor systemd runs harnessd on this computer' }
+  if (!service) return { ok: false, detail: 'this computer has no launchd, systemd or Task Scheduler to run harnessd' }
   const refreshed = service.write(definition)
   const started = service.start(refreshed)
   if (!started.ok) return started
   const pid = await waitForMaster(deps, waitMs)
   if (pid !== null) return { ok: true, pid, refreshed }
   return { ok: false, detail: `${service.platform} did not bring harnessd up within ${Math.round(waitMs / 1000)}s (${describeState(service.inspect())})` }
+}
+
+/** How long `harness start` gives the scheduled task to start the master, or begin to, before it starts it itself. */
+export const TASK_RUN_WAIT_MS = 10_000
+
+export type TaskStart = { ok: true; pid: number } | { ok: false; direct: boolean; detail: string }
+
+/**
+ * Windows, the task registered: `harness start` runs it (`schtasks /Run`), so the master starts as the task starts it,
+ * and waits. Not under the spawn lock: the task's `harness start --if-down` takes it, and would find it held and do
+ * nothing. `direct`: the task did not start anything (Task Scheduler runs an InteractiveToken task only in a signed-in
+ * Windows session, not in an SSH one), or it could not even be written, and the caller starts the master itself, as
+ * without the task.
+ */
+export async function startThroughTask(
+  definition: ServiceDefinition, deps: PlatformDaemonDeps & { lockHeld(): boolean }, waitMs = PLATFORM_START_WAIT_MS,
+): Promise<TaskStart> {
+  const service = deps.service!
+  let refreshed: boolean
+  try {
+    refreshed = service.write(definition)
+  } catch (error) {
+    // The task's XML could not be made (whoami could not say who this is, a path it cannot hold): nothing was run.
+    return { ok: false, direct: true, detail: (error as Error).message }
+  }
+  const ran = service.start(refreshed)
+  if (!ran.ok) return { ok: false, direct: true, detail: ran.detail }
+  const quick = await waitForMaster(deps, TASK_RUN_WAIT_MS)
+  if (quick !== null) return { ok: true, pid: quick }
+  if (!deps.lockHeld()) return { ok: false, direct: true, detail: 'Task Scheduler did not start harnessd (it runs the task only in a session at the Windows desktop, not over SSH)' }
+  const pid = await waitForMaster(deps, waitMs)
+  return pid !== null ? { ok: true, pid } : { ok: false, direct: false, detail: `harnessd did not come up within ${Math.round((TASK_RUN_WAIT_MS + waitMs) / 1000)}s` }
+}
+
+/**
+ * Windows, the installed copy: `harness start` starts the master through harness-launch.exe (./windows/launcher.ts),
+ * outside this terminal's job, so closing it or an SSH session does not end it. With none of `HARNESSD_*`
+ * (../harnessd/AGENTS.md rule 11): a shell in an agent's pane may have them, and only a master handing over gives its
+ * replacement one (../harnessd/reexec.ts). The rest of this shell's environment is the master's.
+ */
+export function launchMaster(
+  cliDir: string = env.ADAPTER_CLI_DIR, given: NodeJS.ProcessEnv = process.env, launch: typeof launchDetached = launchDetached,
+): Promise<LaunchOutcome> {
+  const root = dirname(cliDir)
+  return launch(harnessLaunchPath(root), root, ['__harnessd'], withoutHarnessdEnv(given))
+}
+
+export { AT_LOGON_FLAG } from '../harnessd/platform.js'
+
+/** Whether `harness stop` stopped the daemon since this computer started, which the task's starts honour. */
+export function taskStoppedThisBoot(dataDir: string = env.ADAPTER_DATA_DIR): boolean {
+  let text: string | null = null
+  try { text = readFileSync(join(dataDir, TASK_STOPPED_FILE), 'utf8') } catch { /* none */ }
+  return stoppedThisBoot(text, bootTimeMs())
+}
+
+/** Any start but the task's own forgets a stop. */
+export function clearTaskStopped(dataDir: string = env.ADAPTER_DATA_DIR): void {
+  // A start never fails over this: a file held open for a moment (an antivirus scan) is forgotten at the next start.
+  try { rmSync(join(dataDir, TASK_STOPPED_FILE), { force: true }) } catch { /* nothing to forget */ }
 }
 
 /** The master's pid once it has claimed the pid file, which it does when its core has bound; null if
@@ -186,7 +260,7 @@ export async function waitGone(deps: Pick<PlatformDaemonDeps, 'isAlive' | 'now' 
 export function describeState(state: PlatformState): string {
   if (state.unreachable) return `could not ask ${state.platform}: ${state.unreachable}`
   const parts: string[] = []
-  if (!state.registered) parts.push(state.platform === 'launchd' ? 'not loaded' : 'not enabled')
+  if (!state.registered) parts.push(state.platform === 'launchd' ? 'not loaded' : state.platform === 'taskscheduler' ? 'not registered' : 'not enabled')
   if (state.state) parts.push(state.state)
   if (state.pid !== null) parts.push(`pid ${state.pid}`)
   else if (state.lastExit) parts.push(`last exit ${state.lastExit}`)

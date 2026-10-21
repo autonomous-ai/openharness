@@ -17,6 +17,29 @@ Local changes are marked `hn` in the relevant source:
   and restore its spacer when the pane grows.
 - `alacritty_terminal/src/term/mod.rs`: handle both blink variants (tmux treats
   them alike), blink reset and overline attributes in the cursor template.
+- Windows only, for harness-pty's per-pane Job Object (`pty/src/job.rs`):
+  - `alacritty_terminal/src/tty/mod.rs`: `Options::job`, a raw Job Object
+    `HANDLE` (`#[cfg(windows)]`);
+  - `alacritty_terminal/src/tty/windows/conpty.rs`: with a job, the child is
+    created suspended, assigned to the job, then resumed, so nothing it starts
+    escapes the job; a child that cannot join is terminated and the spawn fails;
+  - `alacritty_terminal/src/tty/windows/mod.rs`: `Pty` drops its output pipe
+    before the pseudoconsole (upstream drops it after), so `ClosePseudoConsole`
+    never waits for a drain of output that nobody reads any more;
+  - `alacritty_terminal/src/tty/windows/mod.rs`: with `escape_args`, the program is
+    quoted when it has a space or tab (`push_program`), as the C runtime reads
+    argv[0]; upstream pushed it bare, so `C:\Users\John Doe\…\claude.exe` ran
+    `C:\Users\John.exe`;
+  - `alacritty_terminal/src/tty/mod.rs` and `tty/windows/conpty.rs`: `Options::env_remove`,
+    names left out of the environment the child inherits (compared without case, as Windows
+    does), so a pane's cleared variables (a grid launch's provider keys) are not handed down from
+    the host's own environment; upstream could only add variables;
+  - `alacritty_terminal/src/tty/windows/conpty.rs`: the bundled `conpty.dll` is loaded with
+    `LoadLibraryExW(LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32)`, from
+    the executable's own directory only (where `OpenConsole.exe` sits beside it); upstream's
+    `LoadLibraryW` searched the current directory and PATH, so a planted `conpty.dll` there
+    would run inside the host;
+  - `alacritty_terminal/Cargo.toml`: the `Win32_System_JobObjects` feature.
 
 Keeping these attributes in the native grid makes erase, scrolling, cursor save,
 alternate screens, history and reconnect use the existing terminal operations.

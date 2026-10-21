@@ -1,16 +1,16 @@
 /// Backend records are independent of the desktop's visible panes and tab layout.
 Map<String, dynamic> superTabMap(Object? value) => value is Map
     ? Map<String, dynamic>.from(value)
-    : throw const FormatException('Invalid Super Tab response.');
+    : throw const FormatException('Invalid Swarm response.');
 
 String _text(Map<String, dynamic> value, String key) => value[key] is String
     ? value[key] as String
-    : throw FormatException('Missing Super Tab $key.');
+    : throw FormatException('Missing Swarm $key.');
 
 List<T> _list<T>(Object? value, T Function(Map<String, dynamic>) read) =>
     value is List
     ? List.unmodifiable(value.map((row) => read(superTabMap(row))))
-    : throw const FormatException('Invalid Super Tab list.');
+    : throw const FormatException('Invalid Swarm list.');
 
 class SuperTabPerson {
   SuperTabPerson.fromJson(Map<String, dynamic> row)
@@ -24,12 +24,13 @@ class SuperTabPerson {
 class SuperTabAgent {
   SuperTabAgent.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
+      projectId = row['projectId'] as String? ?? 'lead',
       name = _text(row, 'name'),
       machineId = _text(row, 'machineId'),
       harnessId = _text(row, 'harnessId'),
       contributorId = _text(row, 'contributorId'),
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
-  final String id, name, machineId, harnessId, contributorId;
+  final String id, projectId, name, machineId, harnessId, contributorId;
   final Map<String, dynamic> configuration;
   String get engine => configuration['engine'] as String? ?? '';
 }
@@ -37,6 +38,7 @@ class SuperTabAgent {
 class SuperTabConversation {
   SuperTabConversation.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
+      projectId = row['projectId'] as String? ?? 'lead',
       number = (row['number'] as num?)?.toInt(),
       title = _text(row, 'title'),
       leadId = row['leadId'] as String?,
@@ -51,7 +53,7 @@ class SuperTabConversation {
       assignment = row['assignment'] == null
           ? null
           : Map.unmodifiable(superTabMap(row['assignment']));
-  final String id, title, brief;
+  final String id, projectId, title, brief;
   final int? number;
   String get label => number == null ? title : '#$number $title';
   final String? leadId;
@@ -60,6 +62,28 @@ class SuperTabConversation {
   final List<Map<String, dynamic>> checks;
   final int lastMessageSequence;
   final Map<String, dynamic>? assignment;
+}
+
+class SuperTabProject {
+  SuperTabProject.fromJson(Map<String, dynamic> row)
+    : id = _text(row, 'id'),
+      name = _text(row, 'name'),
+      ownerId = _text(row, 'ownerId'),
+      leadConversationId = _text(row, 'leadConversationId'),
+      isPrivate = row['visibility'] == 'private',
+      memberIds = [
+        for (final member in row['members'] as List? ?? const [])
+          superTabMap(member)['id'] as String,
+      ],
+      updateMinutes = (row['updateMinutes'] as num?)?.toInt() ?? 5,
+      repository = row['repository'] is Map
+          ? Map.unmodifiable(superTabMap(row['repository']))
+          : null;
+  final String id, name, ownerId, leadConversationId;
+  final bool isPrivate;
+  final List<String> memberIds;
+  final int updateMinutes;
+  final Map<String, dynamic>? repository;
 }
 
 class SuperTabSnapshot {
@@ -86,8 +110,24 @@ class SuperTabSnapshot {
         (row) => Map<String, dynamic>.unmodifiable(row),
       ) {
     if (row['version'] != 1) {
-      throw const FormatException('Update Harness to open this Super Tab.');
+      throw const FormatException('Update Harness to open this Swarm.');
     }
+    projects = _list(
+      row['projects'] ??
+          [
+            {
+              'id': 'lead',
+              'name': name,
+              'ownerId': ownerId,
+              'leadConversationId': 'lead',
+              'visibility': 'public',
+              'members': <Object>[],
+              'updateMinutes': 5,
+              if (project != null) 'repository': project,
+            },
+          ],
+      SuperTabProject.fromJson,
+    );
   }
   final String id, name, ownerId;
   final Map<String, dynamic>? project;
@@ -96,13 +136,24 @@ class SuperTabSnapshot {
   final List<SuperTabAgent> agents;
   final List<Map<String, dynamic>> machines;
   final List<SuperTabConversation> conversations;
+  late final List<SuperTabProject> projects;
   final List<Map<String, dynamic>> invitations;
   SuperTabConversation? conversation(String id) =>
       conversations.where((c) => c.id == id).firstOrNull;
   SuperTabAgent? agent(String id) =>
       agents.where((a) => a.id == id).firstOrNull;
 
-  bool isLead(String agentId) => conversation('lead')?.leadId == agentId;
+  SuperTabProject? projectFor(String conversationId) {
+    final group = conversation(conversationId);
+    return projects.where((p) => p.id == group?.projectId).firstOrNull;
+  }
+
+  bool isProjectLead(String conversationId) =>
+      projects.any((p) => p.leadConversationId == conversationId);
+
+  bool isLead(String agentId) => projects.any(
+    (p) => conversation(p.leadConversationId)?.leadId == agentId,
+  );
 
   String agentName(String id, {String fallback = 'Agent'}) =>
       isLead(id) ? 'Lead' : agent(id)?.name ?? fallback;

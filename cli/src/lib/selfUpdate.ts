@@ -16,10 +16,12 @@
 import { createHash } from 'crypto'
 import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { execFile } from 'child_process'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { SpawnLockBusyError, describeSpawnLockFailure } from './daemonSpawnLock.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { patientDeadline } from './patientExec.js'
+import { currentCli } from './windows/installLayout.js'
+import { isVersionFolder, retireUnused, switchTo, versionsOnDisk, writeVersionFolder, type RetireDeps } from './windows/cliVersions.js'
 
 export interface FileRef {
   url: string
@@ -65,13 +67,28 @@ function writeWhole(file: string, bytes: string | Buffer): void {
 
 const sha256 = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
 
-/** The update a stage left to be kept or rolled back: its version, and the sha256 of the cli.js it put in place. */
-interface Pending { version: string; sha256: string | null }
+/** The update a stage left to be kept or rolled back: its version, the sha256 of the cli.js it put in place, and
+ *  (Windows) the version to roll back to. */
+interface Pending { version: string; sha256: string | null; previous: string | null }
 
 function readPending(dir: string): Pending | null {
-  const pending = readJson(join(dir, PENDING)) as { version?: unknown; sha256?: unknown } | null
+  const pending = readJson(join(dir, PENDING)) as { version?: unknown; sha256?: unknown; previous?: unknown } | null
   if (typeof pending?.version !== 'string') return null
-  return { version: pending.version, sha256: typeof pending.sha256 === 'string' ? pending.sha256 : null }
+  return {
+    version: pending.version,
+    sha256: typeof pending.sha256 === 'string' ? pending.sha256 : null,
+    previous: typeof pending.previous === 'string' ? pending.previous : null,
+  }
+}
+
+/** The cli.js the daemon starts from now: here on macOS and Linux; on Windows the build `cli\current` names. */
+function liveCli(dir: string, platform: NodeJS.Platform): string | null {
+  return platform === 'win32' ? currentCli(dirname(dir))?.cliJs ?? null : join(dir, CLI)
+}
+
+const liveSha256 = (dir: string, platform: NodeJS.Platform): string | null => {
+  const file = liveCli(dir, platform)
+  return file === null ? null : fileSha256(file)
 }
 
 function pendingVersion(dir: string): string | null {
@@ -347,7 +364,8 @@ export async function canary(cliBuf: Buffer, dir: string, version?: string): Pro
  * newer build staged during its probation), the backups already hold the last build that was kept,
  * and stay: a rollback goes back to a build that proved itself, not to one that never did.
  */
-export function stage(dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: string): void {
+export function stage(dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: string, platform: NodeJS.Platform = process.platform): void {
+  if (platform === 'win32') { stageVersion(dir, cliBuf, notifyBuf, version); return }
   mkdirSync(dir, { recursive: true })
   const path = (name: string): string => join(dir, name)
   const temporary = (name: string): string => `${path(name)}.tmp`
@@ -397,6 +415,34 @@ export function stage(dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: 
   for (const [from, to] of renames) renameSync(from, to) // atomic within the same filesystem
 }
 
+/**
+ * Windows: the build goes into its own folder and `cli\current` moves to it (./windows/cliVersions.ts); nothing that
+ * runs is touched. The pending note names the build to roll back to, as `.prev` holds it on a Mac: the build in use,
+ * or, while that build is itself an update still being judged, the last one kept — a rollback goes back to a build
+ * that proved itself, not to one that never did. The note is written before the pointer moves, as on a Mac before the
+ * swap; if the pointer cannot be moved, the note goes back to what it was.
+ */
+function stageVersion(dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: string): void {
+  if (!version) throw new Error('a Windows install stages a build into its own version folder, which needs its version')
+  const live = currentCli(dirname(dir))
+  const pending = readPending(dir)
+  const judged = live !== null && !!pending?.sha256 && pending.sha256 === fileSha256(live.cliJs)
+  const previous = judged ? pending!.previous : live?.version ?? null
+  writeVersionFolder(dir, version, cliBuf, notifyBuf)
+  const note = join(dir, PENDING)
+  const before = readText(note)
+  writeJson(note, { version, sha256: sha256(cliBuf), at: Date.now(), ...(previous && previous !== version ? { previous } : {}) })
+  try {
+    switchTo(dir, version)
+  } catch (error) {
+    try {
+      if (before === null) rmSync(note, { force: true })
+      else writeWhole(note, before)
+    } catch { /* the pointer did not move: the build in use is unchanged either way */ }
+    throw error
+  }
+}
+
 function readText(file: string): string | null {
   try { return readFileSync(file, 'utf8') } catch { return null }
 }
@@ -411,16 +457,35 @@ function fileSha256(file: string): string | null {
  * build in the manifest a minute later and staged it again: a release that passed its canary but
  * crashed the daemon restarted every machine once a minute until a fix was published.
  */
-export function restore(dir: string): void {
-  for (const name of [CLI, NOTIFY]) {
-    const prev = join(dir, `${name}.prev`)
-    if (existsSync(prev)) { try { renameSync(prev, join(dir, name)) } catch { /* ignore */ } }
+export function restore(dir: string, platform: NodeJS.Platform = process.platform): void {
+  let movedBack = true
+  if (platform === 'win32') movedBack = restoreVersion(dir)
+  else {
+    for (const name of [CLI, NOTIFY]) {
+      const prev = join(dir, `${name}.prev`)
+      if (existsSync(prev)) { try { renameSync(prev, join(dir, name)) } catch { /* ignore */ } }
+    }
   }
   const failed = pendingVersion(dir)
   try {
     if (failed) writeJson(join(dir, REJECTED), [...rejectedVersions(dir).filter((version) => version !== failed), failed].slice(-REJECTED_KEPT))
-    rmSync(join(dir, PENDING), { force: true })
+    // A pointer that did not move back leaves the failed build in use: its note stays, so the next master to start
+    // judges it again (`unjudgedUpdate`) and rolls it back once more.
+    if (movedBack) rmSync(join(dir, PENDING), { force: true })
   } catch { /* the rollback itself is what matters */ }
+}
+
+/** Windows: `cli\current` back to the build the pending note names. False when the pointer could not be moved there;
+ *  true once it is, and when there is no such build to go back to. */
+function restoreVersion(dir: string): boolean {
+  const previous = readPending(dir)?.previous
+  if (!previous || !isVersionFolder(dir, previous)) return true
+  try {
+    switchTo(dir, previous)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -430,9 +495,9 @@ export function restore(dir: string): void {
  * was staged again once there was room, and crashed the daemon once more (e2e/updateHostile.e2e.ts).
  * Null when there is no such note.
  */
-export function settleRolledBack(dir: string): string | null {
+export function settleRolledBack(dir: string, platform: NodeJS.Platform = process.platform): string | null {
   const pending = readPending(dir)
-  if (!pending?.sha256 || pending.sha256 === fileSha256(join(dir, CLI))) return null
+  if (!pending?.sha256 || pending.sha256 === liveSha256(dir, platform)) return null
   try {
     const listed = rejectedVersions(dir)
     if (!listed.includes(pending.version)) writeJson(join(dir, REJECTED), [...listed, pending.version].slice(-REJECTED_KEPT))
@@ -451,6 +516,27 @@ export function confirm(dir: string): void {
     if (kept && rejectedVersions(dir).includes(kept)) writeJson(join(dir, REJECTED), rejectedVersions(dir).filter((version) => version !== kept))
     rmSync(join(dir, PENDING), { force: true })
   } catch { /* the new build runs either way */ }
+}
+
+/**
+ * Windows: remove the builds no longer needed (./windows/cliVersions.ts `retireUnused`). Kept: the build in use, and
+ * the one a rollback would go back to — the pending note's while an update is on probation, otherwise the newest
+ * other build that was not rolled back. Without a pointer, nothing: nothing proves which build is in use. Both are
+ * read again after the process table is, as a stage may have moved them meanwhile.
+ */
+export function retireCliVersions(dir: string, deps: RetireDeps): Promise<string[]> {
+  return retireUnused(dir, () => buildsToKeep(dir), deps)
+}
+
+function buildsToKeep(dir: string): Set<string> | null {
+  const current = currentCli(dirname(dir))
+  if (!current) return null
+  const rejected = new Set(rejectedVersions(dir))
+  const others = versionsOnDisk(dir).filter((version) => version !== current.version && !rejected.has(version))
+    .sort((a, b) => (semverGt(a, b) ? -1 : semverGt(b, a) ? 1 : 0))
+  const pending = readPending(dir)
+  const previous = pending?.previous && pending.previous !== current.version ? pending.previous : others[0]
+  return new Set([current.version, ...(previous ? [previous] : [])])
 }
 
 export interface Poller { stop(): void }
@@ -520,6 +606,8 @@ export function startSelfUpdater(opts: {
    * itself (HARNESSD_JUDGES_SUPERSEDED).
    */
   stageWhileJudged?: boolean
+  /** Whose layout `dir` has; this process's when left out. */
+  platform?: NodeJS.Platform
 }): Poller {
   let checking = false
   let done = false
@@ -537,6 +625,9 @@ export function startSelfUpdater(opts: {
   let toldWaiting: string | null = null
 
   const now = opts.now ?? Date.now
+  const platform = opts.platform ?? process.platform
+  /** Windows: the version `cli\current` names now. Null on macOS and Linux, and when the pointer cannot be read. */
+  const pointed = (): string | null => platform === 'win32' ? currentCli(dirname(opts.dir))?.version ?? null : null
   const download = opts.limits ?? DOWNLOAD_LIMITS
   const manifest: TransferLimits = {
     idleMs: Math.min(download.idleMs, MANIFEST_LIMITS.idleMs), deadlineMs: Math.min(download.deadlineMs, MANIFEST_LIMITS.deadlineMs),
@@ -563,8 +654,15 @@ export function startSelfUpdater(opts: {
     checking = true
     try {
       const entry = await fetchManifest(opts.url, opts.key, manifest)
-      if (halted || !entry || !shouldAutoUpdate(entry.version, opts.currentVersion)) return
-      const unremembered = settleRolledBack(opts.dir)
+      if (halted || !entry) return
+      // On Windows a master superseded by a newer build (one another process staged, or the installer put in)
+      // still runs from its own version folder, and its own version is older than what is installed: judged
+      // against it, it would stage an older build over the newer one and move the pointer back (found in
+      // review). What is installed is the build `cli\current` names; this process's own version only when the
+      // pointer cannot be read. The dev-build rule then applies to that build, the one a developer installed.
+      const installed = pointed() ?? opts.currentVersion
+      if (!shouldAutoUpdate(entry.version, installed)) return
+      const unremembered = settleRolledBack(opts.dir, platform)
       if (unremembered === entry.version || rejectedVersions(opts.dir).includes(entry.version)) {
         if (toldRejected !== entry.version) console.log(`[update] ${entry.version} was rolled back on this machine — waiting for a newer build (\`harness update\` installs it anyway)`)
         toldRejected = entry.version
@@ -580,7 +678,7 @@ export function startSelfUpdater(opts: {
         console.error(`[update] ${entry.version} ${why} — not trying it again for ${wait >= 1000 ? `${Math.round(wait / 1000)} s` : `${wait} ms`}`)
       }
       if (verified?.entry !== key) {
-        console.log(`[update] newer build available: ${opts.currentVersion} → ${entry.version}`)
+        console.log(`[update] newer build available: ${installed} → ${entry.version}`)
         verified = null
         let cliBuf: Buffer
         let notifyBuf: Buffer
@@ -606,7 +704,7 @@ export function startSelfUpdater(opts: {
         verified.canaried = true
       }
       const ready = verified
-      if (opts.stageWhileJudged === false && unjudgedUpdate(opts.dir, fileSha256(join(opts.dir, CLI)))) {
+      if (opts.stageWhileJudged === false && unjudgedUpdate(opts.dir, liveSha256(opts.dir, platform))) {
         if (toldWaiting !== ready.version) console.log(`[update] ${ready.version} is ready — waiting for this build to be kept before staging it`)
         toldWaiting = ready.version
         return
@@ -615,7 +713,15 @@ export function startSelfUpdater(opts: {
       // nothing shared); swapped and handed off INSIDE it.
       await withLock(async () => {
         if (halted) return
-        stage(opts.dir, ready.cliBuf, ready.notifyBuf, ready.version)
+        // Asked again under the lock: the download and the canary took seconds or minutes since the check
+        // above, and the installer or another process may have put a newer build in meanwhile. The next
+        // check's gate then refuses it, so this is said once.
+        const pointedNow = pointed()
+        if (pointedNow !== null && !shouldAutoUpdate(ready.version, pointedNow)) {
+          console.log(`[update] ${ready.version} is no longer an update: the installed build is now ${pointedNow}. Nothing was staged.`)
+          return
+        }
+        stage(opts.dir, ready.cliBuf, ready.notifyBuf, ready.version, platform)
         done = true
         stop()
         console.log(`[update] staged ${ready.version} — restarting now`)

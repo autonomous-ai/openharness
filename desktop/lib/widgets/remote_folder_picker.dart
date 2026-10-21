@@ -533,6 +533,7 @@ class _RemoteFolderPickerDialogState extends State<_RemoteFolderPickerDialog> {
         key: const ValueKey('desktop-remote-folder-dialog'),
         backgroundColor: Colors.transparent,
         elevation: 0,
+        shape: DesktopChrome.bareDialogShape,
         insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 620, maxHeight: 620),

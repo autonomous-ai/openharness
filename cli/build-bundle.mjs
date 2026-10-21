@@ -18,6 +18,7 @@ import { readBuiltinBundle, readHarnessMonitorBundle, readMemoriesBundle, readMo
 import { readProcessImageBundle } from './scripts/lib/processImageBundle.mjs'
 import { leanBlock } from './scripts/lib/leanBlock.mjs'
 import { asciiOnly } from './scripts/lib/asciiOnly.mjs'
+import { copyPtyPayload } from './scripts/lib/ptyPayload.mjs'
 import { fileURLToPath } from 'node:url'
 import { basename } from 'node:path'
 const modelManagerBundle = JSON.stringify(readModelManagerBundle(fileURLToPath(new URL('../store/agents/autonomous-grid', import.meta.url))))
@@ -147,5 +148,9 @@ writeFileSync(`${outDir}/cli.js`, asciiOnly(readFileSync(`${outDir}/cli.js`, 'ut
 appendFileSync(`${outDir}/cli.js`, leanBlock(leanFiles))
 
 copyFileSync('hook/notify.mjs', `${outDir}/notify.mjs`)
+
+// Windows: the pty host and its ConPTY payload in dist/pty/, when they were built (scripts/lib/ptyPayload.mjs).
+const ptyFiles = copyPtyPayload({ ptyDir: fileURLToPath(new URL('../pty', import.meta.url)), outDir })
+if (ptyFiles.length) console.log(`✓ Copied ${ptyFiles.join(', ')} into ${outDir}/pty`)
 
 console.log(`✓ Bundled ${outDir}/cli.js (v${version}) + ${outDir}/notify.mjs`)

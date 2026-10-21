@@ -11,7 +11,7 @@
  * in an engine's settings, and say so in that change.
  */
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -288,15 +288,19 @@ const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
 beforeAll(async () => {
   Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })
   root = mkdtempSync(join(tmpdir(), 'hook-golden-'))
-  for (const name of ['HOME', 'CODEX_HOME', 'ADAPTER_DATA_DIR', 'ADAPTER_RUNTIME_DIR', 'CLAUDE_PROJECTS_DIR']) saved[name] = process.env[name]
+  for (const name of ['HOME', 'USERPROFILE', 'CODEX_HOME', 'ADAPTER_DATA_DIR', 'ADAPTER_RUNTIME_DIR', 'CLAUDE_PROJECTS_DIR']) saved[name] = process.env[name]
   // Every folder the hook command names is inside the throwaway root, so the command reads the same on every machine.
   process.env.HOME = join(root, 'home')
+  // Windows reads the profile from USERPROFILE: move it too, or the installers write into the real one.
+  process.env.USERPROFILE = join(root, 'home')
   process.env.CODEX_HOME = join(root, 'home', '.codex')
   process.env.ADAPTER_DATA_DIR = join(root, 'data')
   process.env.ADAPTER_RUNTIME_DIR = join(root, 'runtime')
   delete process.env.CLAUDE_PROJECTS_DIR
   mkdirSync(join(root, 'data'), { recursive: true })
   mkdirSync(join(root, 'runtime'), { recursive: true })
+  // A regression (a home that is not the throwaway one) must fail here, before any installer writes.
+  expect(homedir()).toBe(join(root, 'home'))
   vi.resetModules()
   ;({ engineHooks: hooks } = await import('./hooks.js'))
   const notify = await import('./kit/notifyHooks.js')

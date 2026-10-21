@@ -999,6 +999,16 @@ model SuperTab {
   @@index([autonomousEnv, machineIds])
 }
 
+// A terminal retains its history when removed from a roster. These bindings
+// prevent contributing a private session to another project's audience later.
+model SuperTabSessionScope {
+  id           String   @id @map("_id")
+  scopeIds     String[]
+  privateScope String?
+
+  @@index([scopeIds])
+}
+
 model SuperTabMessage {
   id              String   @id @map("_id")
   tabId           String

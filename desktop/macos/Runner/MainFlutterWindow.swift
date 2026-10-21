@@ -194,7 +194,7 @@ class MainFlutterWindow: NSWindow {
     // key equivalent it is handled by the responder chain first, so it works
     // wherever the focus happens to be.
     //
-    // Cmd-Shift-L matches the workspace keymap; Cmd-S opens the Store.
+    // Cmd-Shift-L matches the workspace keymap.
     viewMenu.insertItem(
       menuItem(
         title: "Layout…",

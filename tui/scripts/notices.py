@@ -78,7 +78,7 @@ def main():
     meta = json.loads(subprocess.check_output(['cargo', 'metadata', '--format-version', '1', '--locked'], cwd=TUI))
     lock = open(os.path.join(TUI, 'Cargo.lock')).read()
     locked = set(re.findall(r'\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"]+)"', lock))
-    crates = sorted((p for p in meta['packages'] if (p['name'], p['version']) in locked and p['name'] != 'harness-tui'),
+    crates = sorted((p for p in meta['packages'] if (p['name'], p['version']) in locked and p['name'] not in ('harness-tui', 'harness-term')),
                     key=lambda p: (p['name'], p['version']))
     groups = OrderedDict()  # licence text -> [crate ids]
     rows = []
@@ -130,6 +130,11 @@ def main():
     for name, version, spdx in rows:
         out.append(f'| {name} | {version} | {spdx} |')
     out.append('')
+    out.append('`alacritty_terminal` and `vte` are built from modified copies in `tui/vendor`, their changes marked')
+    out.append('`hn` in the source and listed in `tui/vendor/README.md`: terminal compatibility fixes and, on')
+    out.append('Windows only, a Job Object for the ConPTY child (`tty::Options::job`: the child is spawned')
+    out.append('suspended, put in the job, then resumed) and a `Pty` that closes its output pipe before the')
+    out.append('pseudoconsole, so the close never waits for a drain.\n')
     out.append('### Licence texts\n')
     out.append('Each text below is followed by the crates it comes from. Where a crate offers a choice, its MIT')
     out.append('text is given.\n')

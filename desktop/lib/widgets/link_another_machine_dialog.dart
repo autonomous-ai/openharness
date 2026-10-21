@@ -12,6 +12,7 @@ import '../shortcuts/keymap_commands.dart' show describeKeyBinding;
 import '../state/app_state.dart';
 import '../terminal/terminal_text.dart';
 import 'box_chrome.dart';
+import 'desktop_chrome.dart' show DesktopChrome;
 import 'link_machine_dialog.dart';
 import 'link_machine_screen.dart';
 
@@ -661,6 +662,7 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
             insetPadding: const EdgeInsets.fromLTRB(16, 56, 16, 18),
             elevation: 0,
             backgroundColor: Colors.transparent,
+            shape: DesktopChrome.bareDialogShape,
             child: _keys(
               Focus(
                 onKeyEvent: _key,

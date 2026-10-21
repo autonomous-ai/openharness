@@ -10,6 +10,7 @@ import { assumeTmuxVersion, resetTmuxVersionCache } from './tmuxVersion.js'
 import { isHarnessdVariable } from './harnessdEnv.js'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
 import { isolatedTmux } from '../testing/isolatedTmux.js'
+import { DEFAULT_HOST_THEME } from './hostTheme.js'
 
 /**
  * The fake tmux in these specs is a real `/bin/sh` script, and on a loaded machine one takes seconds to
@@ -689,6 +690,17 @@ describe('handing a pane back to tmux\'s disposal', () => {
   })
 })
 
+describe('asking TmuxBackend for a pane\'s root process', () => {
+  it('rootProcess maps "can\'t find pane" to missing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-root-'))
+    dirs.push(dir)
+    writeFileSync(join(dir, 'tmux'), `#!/bin/sh\nprintf "can't find pane: %%9\\n" >&2\nexit 1\n`, { mode: 0o700 })
+    process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`
+    const backend = new TmuxBackend()
+    expect(await backend.rootProcess({ backend: 'tmux', paneId: '%9' })).toBe('missing')
+  })
+})
+
 describe('TmuxBackend with variables on a tmux that cannot take them', () => {
   const env = { CODEX_HOME: '/work/profile' }
 
@@ -823,5 +835,70 @@ describe('harnessd\'s variables in the tmux server\'s environment', () => {
       vi.unstubAllEnvs()
       await tmux.close()
     }
+  })
+})
+
+// What main.ts did for tmux at daemon start, now the backend's own: find tmux, rename the sessions an older
+// build named, forget harnessd's variables, and say what the first inventory found — in that order.
+describe('readying tmux at daemon start', () => {
+  it('prepare reports tmux absent as unavailable, not a throw', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const backend = new TmuxBackend(() => DEFAULT_HOST_THEME, undefined, undefined, undefined, { ensureOnPath: async () => ({ state: 'absent', reason: 'no tmux' }) })
+      expect(await backend.prepare({ ownedPanes: new Map() })).toEqual({ state: 'unavailable', code: 'TMUX_UNAVAILABLE', reason: 'no tmux' })
+      expect(error.mock.calls).toEqual([['[tmux] unavailable: no tmux · install tmux and verify `tmux -V`, then restart — agents cannot be created or restored until then']])
+    } finally { error.mockRestore() }
+  })
+
+  it('prepare adopts tmux, renames legacy sessions, forgets harnessd variables, then logs the first inventory', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-prepare-'))
+    dirs.push(dir)
+    const calls = join(dir, 'calls')
+    writeFileSync(join(dir, 'tmux'), `#!/bin/sh
+printf '%s\\n' "$1" >> "$TMUX_BACKEND_CALLS"
+case "$1" in
+  list-panes) printf '%%7|4242|claude-1790000000000|/work|\\n' ;;
+  show-environment) printf 'HOME=/home/someone\\nHARNESSD_SERVICE_TOKEN=fixture-token\\nCLAUDECODE=1\\n' ;;
+esac
+exit 0
+`, { mode: 0o700 })
+    process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`
+    process.env.TMUX_BACKEND_CALLS = calls
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const backend = new TmuxBackend(undefined, () => 'daemon-a', () => {}, undefined,
+        { ensureOnPath: async () => ({ state: 'adopted', path: '/opt/tmux/bin/tmux', from: '/opt/tmux/bin' }) })
+      expect(await backend.prepare({ ownedPanes: new Map([['%7', 'claude']]) })).toEqual({ state: 'ready' })
+      expect(log.mock.calls.map(([line]) => line)).toEqual([
+        '[tmux] not on the daemon PATH · adopted /opt/tmux/bin/tmux · /opt/tmux/bin',
+        expect.stringMatching(/^\[terminal\] renamed tmux session claude-1790000000000 → harness-claude-\d+-[0-9a-f-]+ \(pane %7\) · named by a build before the harness- prefix$/),
+        '[terminal] tmux: removed HARNESSD_SERVICE_TOKEN, CLAUDECODE from the environment new panes start with',
+        // The renamed session is still `claude-…` in this fake, so the inventory whitelists none of it.
+        '[terminal] tmux: available',
+      ])
+      const commands = readFileSync(calls, 'utf8').trim().split('\n')
+      expect(commands.indexOf('rename-session')).toBeLessThan(commands.indexOf('show-environment'))
+      expect(commands.lastIndexOf('list-panes')).toBeGreaterThan(commands.indexOf('set-environment'))
+    } finally { log.mockRestore() }
+  })
+
+  it('stays ready when the first inventory cannot be read, and says why', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-prepare-'))
+    dirs.push(dir)
+    writeFileSync(join(dir, 'tmux'), '#!/bin/sh\nexit 0\n', { mode: 0o700 })
+    process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const backend = new TmuxBackend(undefined, () => 'daemon-a', () => {}, undefined, { ensureOnPath: async () => ({ state: 'present' }) })
+      expect(await backend.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
+      expect(log.mock.calls).toEqual([['[terminal] tmux: unavailable (tmux listed no panes)']])
+    } finally { log.mockRestore() }
+  })
+
+  it('capabilities says whether this tmux can give a new session its own environment', async () => {
+    assumeTmuxVersion({ major: 3, minor: 1 })
+    expect(await new TmuxBackend().capabilities()).toEqual({ sessionEnv: false })
+    assumeTmuxVersion({ major: 3, minor: 2 })
+    expect(await new TmuxBackend().capabilities()).toEqual({ sessionEnv: true })
   })
 })

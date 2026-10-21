@@ -2,6 +2,7 @@ import type { NativeHookOptions } from '../kit/nativeLocations.js'
 import type { Env } from '../../config/env.js'
 import type { LiveEvent } from '../kit/events.js'
 import type { LiveTurn } from './live.js'
+import type { HookRunner } from '../kit/notifyHooks.js'
 
 /** Only the session facts a hook needs; transport authentication and process binding stay in core. */
 export interface HookSession {
@@ -52,6 +53,11 @@ export interface HookSettings {
   allow?: HarnessAllowance
   /** The command names this home as the engine's (`--codex-home`): a profile's sessions are in its own store. */
   commandNamesHome: boolean
+  /**
+   * What runs this engine's hooks on Windows (kit/notifyHooks.ts `HookRunner`), as its own source or docs say. Absent:
+   * Harness installs no hooks for it there. Off Windows every engine's hooks run in a POSIX shell.
+   */
+  win32Runner?: HookRunner
   /**
    * When the block of ours already there needs no write. It is the only block of ours, and its command is
    * the current one: the command of its first notify.mjs hook (`first-ours`) or of its first hook (`first`).

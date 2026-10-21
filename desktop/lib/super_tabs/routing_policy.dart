@@ -48,7 +48,7 @@ class RoutingModel {
       '${effort == 'default' ? '' : ' $effort'}';
 }
 
-/// The Super Tab routing policy: which models may be chosen, the quality each
+/// The Swarm routing policy: which models may be chosen, the quality each
 /// difficulty needs, and how much quota to keep back.
 class RoutingPolicy {
   const RoutingPolicy({
@@ -108,7 +108,7 @@ class RoutingPolicy {
     _ => copyWith(notes: other.notes),
   };
 
-  /// Only the named fields, for a Super Tab override.
+  /// Only the named fields, for a Swarm override.
   Map<String, dynamic> fields(Set<String> names) => {
     for (final e in toJson().entries)
       if (names.contains(e.key)) e.key: e.value,

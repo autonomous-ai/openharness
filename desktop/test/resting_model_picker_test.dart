@@ -126,7 +126,7 @@ void main() {
         ),
       ]);
       await open(tester);
-      const subtitle = 'Asleep 9h ago';
+      const subtitle = '9h ago';
       expect(find.text(subtitle), findsOneWidget);
       expect(
         find.byTooltip(

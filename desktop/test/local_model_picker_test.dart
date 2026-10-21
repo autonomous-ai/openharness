@@ -391,6 +391,36 @@ void main() {
   );
 
   testWidgets(
+    'the footer Models opens on your models with nothing typed to delete',
+    (tester) async {
+      final app = await _localFixture();
+      try {
+        await tester.binding.setSurfaceSize(const Size(1600, 1000));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        await configured.mount(tester, app, MemoryKeymap());
+        // The footer's Models, the title bar's and the session picker's all
+        // ask the app for the local Models overview.
+        unawaited(app.runLocalModel(tester.element(find.byType(Scaffold))));
+        await tester.pumpAndSettle();
+        final picker = search(tester);
+        expect(picker.query, ':');
+        expect(picker.rows.first.id, isNot(picker.selected!.id));
+        expect(
+          picker.selected!.id,
+          picker.rows
+              .firstWhere(
+                (row) => picker.modelSection(row) == ModelSearchSection.local,
+              )
+              .id,
+        );
+      } finally {
+        await tester.pumpWidget(const SizedBox());
+        app.dispose();
+      }
+    },
+  );
+
+  testWidgets(
     'the model the harness is on says In use, here and in its preview',
     (tester) async {
       final app = await _localFixture(onModel: 'Qwen3.6-35B-A3B');

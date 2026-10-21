@@ -1,6 +1,6 @@
 import 'package:flutter/widgets.dart';
 
-/// A Super Tab's view of an existing terminal. The renderer and session stay
+/// A Swarm's view of an existing terminal. The renderer and session stay
 /// shared with ordinary panes; presentation belongs to this placement only.
 /// Group membership owns the visible panes; individual panes cannot be closed.
 class SuperPane extends InheritedWidget {
@@ -12,6 +12,7 @@ class SuperPane extends InheritedWidget {
     this.titles = const {},
     this.failures = const {},
     this.onRetry,
+    this.onResume,
     required super.child,
   });
 
@@ -19,6 +20,7 @@ class SuperPane extends InheritedWidget {
   final String? title;
   final Map<(String, String?), String> titles, failures;
   final VoidCallback? onRetry;
+  final void Function(String machineId, String harnessId)? onResume;
 
   static SuperPane? maybeOf(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<SuperPane>();
@@ -33,5 +35,6 @@ class SuperPane extends InheritedWidget {
       harnessId != oldWidget.harnessId ||
       title != oldWidget.title ||
       titles != oldWidget.titles ||
-      failures != oldWidget.failures;
+      failures != oldWidget.failures ||
+      onResume != oldWidget.onResume;
 }

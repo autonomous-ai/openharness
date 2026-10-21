@@ -5,23 +5,25 @@ import { describe, expect, it, vi } from 'vitest'
 import { PROCESS_ENGINES } from '../engines/types.js'
 import type { AgentCommandOwnershipSnapshot } from './engineBin.js'
 import {
+  isNoTmuxServerError,
+  LOAD_BUFFER_TIMEOUT_MS,
+  pasteRawIntoTmux,
+  sendLiteralToTmux,
+  sendToTmux,
+  tmuxCaptureArgs,
+} from './tmux.js'
+import {
   ambiguousAgentProcess,
   bypassPermissionActive,
   permissionModeFromArgv,
   engineProcessMatch,
   engineProcessMatchScore,
-  isNoTmuxServerError,
-  LOAD_BUFFER_TIMEOUT_MS,
   LSTART_MARKER_RE,
   liveProcessRows,
   parseProcessRow,
-  pasteRawIntoTmux,
   resumeSessionId,
-  sendLiteralToTmux,
-  sendToTmux,
-  tmuxCaptureArgs,
   withStartTicks,
-} from './tmux.js'
+} from './processTable.js'
 import { tmuxControlGate } from './tmuxControlGate.js'
 import { assumeTmuxVersion, resetTmuxVersionCache } from './tmuxVersion.js'
 

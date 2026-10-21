@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { findTuiBinary, opensClient, platformKey, tuiCommand } from './index.js'
+import { findTuiBinary, opensClient, platformKey, TUI_UNAVAILABLE_ON_WINDOWS, tuiCommand } from './index.js'
 import { localDaemonStatus } from '../lib/daemonEndpoint.js'
 vi.mock('../lib/daemonEndpoint.js', () => ({ localDaemonStatus: vi.fn() }))
 
@@ -19,6 +19,7 @@ describe('harness tui launcher', () => {
     binary = join(home, 'hn')
     writeFileSync(binary, '#!/bin/sh\n', { mode: 0o755 })
     vi.stubEnv('HOME', home)
+    vi.stubEnv('USERPROFILE', home)
     vi.stubEnv('ADAPTER_DATA_DIR', join(home, '.harness', 'cli', 'data'))
     vi.stubEnv('HARNESS_TUI_BIN', binary)
     vi.stubEnv('PORT', '19418')
@@ -132,5 +133,23 @@ describe('harness tui launcher', () => {
     expect(localDaemonStatus).not.toHaveBeenCalled()
     expect(fetch).not.toHaveBeenCalled()
     expect(vi.mocked(spawnSync).mock.calls.every(([command]) => command === binary)).toBe(true)
+  })
+
+  it('says the terminal app is not available on Windows, and starts or downloads nothing', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await tuiCommand([], { port: 19418, platform: 'win32' })).toBe(1)
+    expect(await tuiCommand(['--install'], { port: 19418, platform: 'win32' })).toBe(1)
+    expect(errors.mock.calls.flat().join('\n')).toContain(TUI_UNAVAILABLE_ON_WINDOWS)
+    expect(spawnSync).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(localDaemonStatus).not.toHaveBeenCalled()
+  })
+
+  it('answers --where on Windows without looking for a binary', async () => {
+    const logs = vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(await tuiCommand(['--where'], { port: 19418, platform: 'win32' })).toBe(0)
+    expect(logs).toHaveBeenCalledWith('(not available on Windows)')
   })
 })
