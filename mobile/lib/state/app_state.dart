@@ -9,6 +9,7 @@ import '../measurement/product_resumes.dart';
 import '../measurement/setup_transport.dart';
 
 import 'dart:async';
+import 'dart:convert' show jsonDecode, jsonEncode;
 import 'dart:math' show Random;
 
 import 'package:dio/dio.dart';
@@ -1783,6 +1784,7 @@ class AppNotifier extends ChangeNotifier {
     // Which computer's tabs to show (Settings ▸ Profile). Queued behind the record above on
     // purpose, and not awaited: nothing picks a tab before the desk's network read lands.
     unawaited(_loadMachineProfile());
+    unawaited(_loadHarnessOsComputers());
     // No screen from the last run: the agent that record names is drawn as the skeleton until its
     // keyframe lands — see [KeptScreenStore]. What an earlier build kept of it on disk goes. Only in
     // the app, on the store's terms: a test never reaches the real cache directory.
@@ -6146,6 +6148,79 @@ class AppNotifier extends ChangeNotifier {
     return update is Map && update['available'] == true;
   }
 
+  /// Each part of a Harness OS computer, as its last status said (CLI osDevice.ts `update.parts`):
+  /// `os`, `hn`, `cli`, each `{running, available, next}`. Empty from a computer that does not say.
+  Map<String, Map<String, dynamic>> osParts(String machineId) {
+    final update = osStatus[machineId]?['update'];
+    final parts = update is Map ? update['parts'] : null;
+    if (parts is! Map) return const {};
+    return {
+      for (final entry in parts.entries)
+        if (entry.key is String && entry.value is Map)
+          entry.key as String: Map<String, dynamic>.from(entry.value as Map),
+    };
+  }
+
+  /// The update waiting needs the computer restarted: a new OS package, or one applied already that
+  /// is waiting for its restart. hn and the CLI alone do not.
+  bool updateRestarts(String machineId) {
+    final update = osStatus[machineId]?['update'];
+    if (update is! Map) return false;
+    if (update['restartRequired'] == true) return true;
+    return osParts(machineId)['os']?['available'] == true;
+  }
+
+  static const _harnessOsKey = 'harness_os_computers';
+
+  /// The Harness OS computers this phone has seen, kept between launches: the hotspot each opens and
+  /// whether its disk is encrypted. A computer switched off and on again is offline to the account,
+  /// waiting at its password; this is how the phone still knows to offer Unlock there.
+  final Map<String, ({String hotspot, bool encrypted})> harnessOsComputers = {};
+
+  Future<void> _loadHarnessOsComputers() async {
+    try {
+      final stored = await _paneLayout?.storage.read(_harnessOsKey);
+      if (stored == null || _disposed) return;
+      final decoded = jsonDecode(stored);
+      if (decoded is! Map) return;
+      for (final entry in decoded.entries) {
+        final value = entry.value;
+        if (entry.key is! String ||
+            value is! Map ||
+            value['hotspot'] is! String) {
+          continue;
+        }
+        harnessOsComputers[entry.key as String] = (
+          hotspot: value['hotspot'] as String,
+          encrypted: value['encrypted'] == true,
+        );
+      }
+      notifyListeners();
+    } catch (_) {
+      // Unreadable: learned again from each computer's next status.
+    }
+  }
+
+  void _rememberHarnessOs(String machineId, Map<String, dynamic> status) {
+    final hotspot = status['hotspot'];
+    if (status['harnessOs'] != true || hotspot is! String || hotspot.isEmpty) {
+      return;
+    }
+    final next = (hotspot: hotspot, encrypted: status['encrypted'] == true);
+    if (harnessOsComputers[machineId] == next) return;
+    harnessOsComputers[machineId] = next;
+    final json = jsonEncode({
+      for (final entry in harnessOsComputers.entries)
+        entry.key: {
+          'hotspot': entry.value.hotspot,
+          'encrypted': entry.value.encrypted,
+        },
+    });
+    unawaited(
+      _paneLayout?.storage.write(_harnessOsKey, json).catchError((_) {}),
+    );
+  }
+
   /// Asks [machineId] what it is and whether it has an update, unless asked lately ([force] asks now).
   Future<void> refreshOsStatus(String machineId, {bool force = false}) async {
     final asked = _osAsked[machineId];
@@ -6162,6 +6237,7 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     osStatus[machineId] = status;
+    _rememberHarnessOs(machineId, status);
     notifyListeners();
   }
 
