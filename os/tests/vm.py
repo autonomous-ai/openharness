@@ -335,11 +335,11 @@ class VM:
         self.shell_ready = True
         self.command('stty -echo')
         if not config['encrypt']:
-            for word in [config['username'], config['password']]:
-                for char in word:
-                    self.keys('minus' if char == '-' else char)
-                self.keys('ret')
-                time.sleep(2)
+            # tty1 knows its one account and asks only its password (installer.py, password.conf).
+            for char in config['password']:
+                self.keys('minus' if char == '-' else char)
+            self.keys('ret')
+            time.sleep(2)
         if wait_workspace:
             self.command('for n in $(seq 1 90); do systemctl --user is-active --quiet hn-screen && pgrep -x "hn|harness-tui" >/dev/null && exit 0; sleep 1; done; exit 1', timeout=110)
         self.command('/usr/lib/harness-os/wait-runtime', timeout=160)
