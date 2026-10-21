@@ -1,5 +1,5 @@
 import { once } from 'node:events'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -991,9 +991,10 @@ describe('PtyHostBackend hosts by instance', () => {
 
   /**
    * A stand-in host of [instance] in [home], in this process: its discovery file, a hello that proves its token, and
-   * `ok` to every op (a `create` makes `%9`). `stop` ends it and every connection to it; `start` serves again.
+   * `ok` to every op (a `create` makes `%9`). `stop` ends it and every connection to it; `start` serves again. [pid]
+   * is the one its file and hello name (this process's by default).
    */
-  async function hostIn(home: string, instance: string, version: string) {
+  async function hostIn(home: string, instance: string, version: string, pid = process.pid) {
     const endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\pty-backend-${path.basename(home)}-${instance}` : path.join(home, `${instance}.sock`)
     const token = `tok-${instance}`
     const hellos: string[] = []
@@ -1019,7 +1020,7 @@ describe('PtyHostBackend hosts by instance', () => {
           }
           said = true
           hellos.push(instance)
-          socket.write(`${JSON.stringify({ hello: { ok: true, instance, version, pid: process.pid, proof: helloProof(token, value.hello.nonce) } })}\n`)
+          socket.write(`${JSON.stringify({ hello: { ok: true, instance, version, pid, proof: helloProof(token, value.hello.nonce) } })}\n`)
         }
       })
     }
@@ -1042,7 +1043,7 @@ describe('PtyHostBackend hosts by instance', () => {
     await host.start()
     servers.push(host)
     mkdirSync(path.join(home, 'run'), { recursive: true })
-    writeFileSync(path.join(home, 'run', discoveryFileName(instance)!), JSON.stringify({ protocol: P, instance, endpoint, pid: process.pid, version, token }))
+    writeFileSync(path.join(home, 'run', discoveryFileName(instance)!), JSON.stringify({ protocol: P, instance, endpoint, pid, version, token }))
     return host
   }
 
@@ -1115,4 +1116,97 @@ describe('PtyHostBackend hosts by instance', () => {
     expect(replaced).not.toHaveBeenCalled()
     backend.dispose()
   }, 15_000)
+
+  /** A pid no host has: the stand-in host given it is dead once the test says so (`hostProcess`). */
+  const GONE_PID = 2_000_000_001
+
+  it('with no target, a host proven dead gives way to the newest one that answers', async () => {
+    quiet()
+    vi.stubEnv('HARNESS_PTY_BIN', path.join(tmpdir(), 'no-such-harness-pty'))
+    const home = tmpHome()
+    const older = await hostIn(home, `p${P}-0.1.0`, '0.1.0')
+    const newer = await hostIn(home, `p${P}-0.2.0`, '0.2.0', GONE_PID)
+    let dead = false
+    const hostProcess = { alive: (pid: number) => pid !== GONE_PID || !dead, rows: async () => null }
+    const backend = new PtyHostBackend({ home, target: null, owner: () => 'me', platform: 'linux', hostProcess })
+    const replaced = vi.fn()
+    backend.onHostReplaced = replaced
+    expect(await backend.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
+    expect(backend.instanceId).toBe(`ptyhost:p${P}-0.2.0`)
+    // The newest host exits for good: its panes are gone, and new ones go to the host that answers.
+    dead = true
+    await newer.stop()
+    await vi.waitFor(() => expect(replaced).toHaveBeenCalledTimes(1), { timeout: 5_000, interval: 50 })
+    expect(backend.instanceId).toBe(`ptyhost:p${P}-0.1.0`)
+    expect(await backend.create({ command: ['sh'] })).toMatchObject({ state: 'succeeded', runtime: { instance: `p${P}-0.1.0` } })
+    expect(older.ops).toContain('create')
+    backend.dispose()
+  }, 15_000)
+
+  // A stand-in binary is a script run by its shebang: not on Windows.
+  it.runIf(process.platform !== 'win32')('with a target, a dead host is started again from the binary, and only the target\'s instance is waited on', async () => {
+    quiet()
+    const home = tmpHome()
+    const instance = `p${P}-0.2.0`
+    const binary = path.join(home, 'harness-pty-stub')
+    // `serve --home <home>`: says how it was started, then serves as [instance] (hello, `ok` to every op) and
+    // publishes its discovery file. It ends itself after 30 s if nothing kills it.
+    writeFileSync(binary, `#!${process.execPath}
+const { createHash } = require('node:crypto')
+const fs = require('node:fs')
+const net = require('node:net')
+const path = require('node:path')
+const home = process.argv[process.argv.indexOf('--home') + 1]
+fs.appendFileSync(path.join(home, 'started'), process.argv.slice(2).join(' ') + '\\n')
+const endpoint = path.join(home, 'stub.sock')
+const token = 'stub-token'
+const proof = (nonce) => createHash('sha256').update(token).update('\\0').update(nonce).digest('hex')
+const server = net.createServer((socket) => {
+  socket.on('error', () => {})
+  let pending = ''
+  let said = false
+  socket.on('data', (chunk) => {
+    pending += chunk
+    let at
+    while ((at = pending.indexOf('\\n')) >= 0) {
+      const value = JSON.parse(pending.slice(0, at))
+      pending = pending.slice(at + 1)
+      if (said) {
+        socket.write(JSON.stringify(value.op === 'inventory' ? { id: value.id, ok: true, panes: [] } : value.op === 'create' ? { id: value.id, ok: true, pane: '%5' } : { id: value.id, ok: true }) + '\\n')
+        continue
+      }
+      said = true
+      socket.write(JSON.stringify({ hello: { ok: true, instance: ${JSON.stringify(instance)}, version: '0.2.0', pid: process.pid, proof: proof(value.hello.nonce) } }) + '\\n')
+    }
+  })
+})
+server.listen(endpoint, () => {
+  fs.writeFileSync(path.join(home, 'run', ${JSON.stringify(discoveryFileName(instance))}), JSON.stringify({ protocol: ${P}, instance: ${JSON.stringify(instance)}, endpoint, pid: process.pid, version: '0.2.0', token }))
+})
+setTimeout(() => process.exit(0), 30000)
+`, { mode: 0o755 })
+    vi.stubEnv('HARNESS_PTY_BIN', binary)
+    const own = await hostIn(home, instance, '0.2.0', GONE_PID)
+    const other = await hostIn(home, `p${P}-0.3.0`, '0.3.0')
+    let dead = false
+    const hostProcess = { alive: (pid: number) => pid !== GONE_PID || !dead, rows: async () => null }
+    const backend = new PtyHostBackend({ home, target: target('0.2.0'), owner: () => 'me', platform: 'linux', hostProcess })
+    const replaced = vi.fn()
+    backend.onHostReplaced = replaced
+    expect(await backend.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
+    dead = true
+    await own.stop()
+    try {
+      await vi.waitFor(() => expect(replaced).toHaveBeenCalledTimes(1), { timeout: 8_000, interval: 50 })
+      expect(readFileSync(path.join(home, 'started'), 'utf8')).toBe(`serve --home ${home}\n`)
+      expect(backend.instanceId).toBe(`ptyhost:${instance}`)
+      expect(await backend.create({ command: ['sh'] })).toMatchObject({ state: 'succeeded', runtime: { instance, paneId: '%5' } })
+      // Another build's host, though it answers, is never taken.
+      expect(other.hellos).toEqual([])
+    } finally {
+      backend.dispose()
+      const stub = JSON.parse(readFileSync(path.join(home, 'run', discoveryFileName(instance)!), 'utf8')) as { pid: number }
+      if (stub.pid !== GONE_PID) try { process.kill(stub.pid, 'SIGKILL') } catch { /* already gone */ }
+    }
+  }, 20_000)
 })

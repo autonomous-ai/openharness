@@ -14,11 +14,13 @@
  * One backend per host instance (ptyHost/instance.ts, ptyHost/drain.ts). The create backend makes new panes on the
  * target's host (launch.ts `targetHost`: the build this daemon would start), and starts it when there is none; it is
  * never connected to another build's host. With no target it takes the newest running host of `PTY_PROTOCOL` and stays
- * on that instance. Every other host is a drain backend's: it reaches a host still running from before an update and
+ * on that instance until that host is proven dead. Every other host is a drain backend's: it reaches a host still running from before an update and
  * never starts one, lists, streams and controls its panes, refuses `create`, and shuts the host down once it has none
  * (`shutdownHost`) when it may (`mayShutDown`). A drain host that exits is gone for good (`hostGone`): its inventory is
  * then authoritative and empty, so its panes' runtimes go gone through the reconciler's normal misses.
  */
+import { existsSync } from 'node:fs'
+import path from 'node:path'
 import { env } from '../config/env.js'
 import type { AgentEngine } from '../engines/types.js'
 import { harnessPaneOwner } from './harnessSessionLabel.js'
@@ -27,9 +29,9 @@ import { lookupPaneEngineProcess } from './paneEngineProcess.js'
 import { comparableStartMarker, processRows, setProcessTableSource, type ProcessRow } from './processTable.js'
 import { setAgentSignaller, type AgentSignal } from './processSignals.js'
 import type { PtyHostCallResult, PtyHostClient } from './ptyHost/client.js'
-import { instanceProtocol } from './ptyHost/instance.js'
+import { discoveryFileName, instanceProtocol } from './ptyHost/instance.js'
 import {
-  compareVersions, ensurePtyHost, forgetExitedHost, pidAlive, reachPtyHost, readInstanceDiscovery,
+  compareVersions, discoveredHostDead, ensurePtyHost, forgetExitedHost, pidAlive, reachPtyHost, readInstanceDiscovery,
   type EnsurePtyHostResult, type HostLiveness, type PtyHostTarget, type PtyHostUnavailable, type PtyHostUnreached, type ReachPtyHostResult,
 } from './ptyHost/launch.js'
 import { PTY_PROTOCOL, SHUTDOWN_PROTOCOL, type PtyEvent } from './ptyHost/protocol.js'
@@ -204,19 +206,28 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
       : { alive: (pid) => this.hostProcess.alive(pid) }
     this.launch = options.launch ?? (drainInstance !== undefined
       ? ((home) => reachPtyHost(home, drainInstance, liveness))
-      : ((home) => ensurePtyHost(home, { target: this.pinnedTarget(), liveness })))
+      : (async (home) => ensurePtyHost(home, { target: await this.pinnedTarget(liveness), liveness })))
     this.endTree = options.endTree ?? ((pid) => this.endTreeOf(pid))
   }
 
   /**
-   * The host the create backend reaches: the target's; with none, once it has been attached, the instance it took. A
-   * reconnect while that host does not answer must not take another build's host instead: that host's pid would read
-   * as a replaced host, and every pane of the one it was on as gone. The pin names only the instance, which is all
-   * `ensurePtyHost` matches on.
+   * The host the create backend reaches: the target's; with none, once it has been attached, the instance it took,
+   * while that host is not proven dead. A reconnect while it only does not answer must not take another build's host
+   * instead: that host's pid would read as a replaced host, and every pane of the one it was on as gone. Once it is
+   * proven dead (its discovery file gone, or `discoveredHostDead`), its panes are gone anyway, and the reconnect takes
+   * the newest host that answers or the one the binary starts, as with no pin; `onHostReplaced` then says so. The pin
+   * names only the instance, which is all `ensurePtyHost` matches on.
    */
-  private pinnedTarget(): PtyHostTarget | null {
+  private async pinnedTarget(liveness: HostLiveness): Promise<PtyHostTarget | null> {
     if (this.target || this.instance === null) return this.target
-    return { protocol: instanceProtocol(this.instance) ?? PTY_PROTOCOL, version: '', instance: this.instance, features: [], source: 'binary' }
+    const pin: PtyHostTarget = { protocol: instanceProtocol(this.instance) ?? PTY_PROTOCOL, version: '', instance: this.instance, features: [], source: 'binary' }
+    const discovery = readInstanceDiscovery(this.home, this.instance)
+    if (!discovery) {
+      // A file caught mid-write is still there: no proof. A host takes its file down only as it exits.
+      const file = discoveryFileName(this.instance)
+      return file && existsSync(path.join(this.home, 'run', file)) ? pin : null
+    }
+    return await discoveredHostDead(this.home, discovery, liveness) ? null : pin
   }
 
   /**
