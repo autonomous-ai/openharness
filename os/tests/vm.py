@@ -90,6 +90,9 @@ print('HN_LIVE_MEDIA=' + json.dumps(dict(mode=mode, payload=str(payload), payloa
 # the repository's secrets (HARNESS_TEST_EMAIL, HARNESS_TEST_OTP), never from this public file.
 ACCOUNT_API = 'https://apiv2.autonomous.ai'
 HARNESS_API = 'https://harness-api.autonomous.ai'
+# Real model replies (--model-calls): a free model's speed and wording are another service's, so an
+# ordinary run checks only what the image does, and asks a model nothing.
+MODEL_CALLS = False
 
 
 def account_ticket():
@@ -838,6 +841,33 @@ def check_first_use(vm, user, folder, installed=False):
         vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 30); do hn capture-pane -p | grep -q "Repeat password" && exit 0; sleep 1; done; exit 1')), timeout=40)
         vm.command('test "$(lsblk -n -o TYPE /dev/vda | wc -l)" -eq 1')
         vm.keys('esc')
+    project_name = 'first-project' if installed else 'usb-trial'
+    trial_project = agent_path + '/' + project_name + '/index.html'
+    if not MODEL_CALLS:
+        # The visible agent takes keyboard input; the project a person would have it make is written
+        # here instead, so the installation that follows still has trial work to preserve.
+        draft = 'hello harness keyboard check'
+        vm.type_probe(draft)
+        _, typed_status = vm.command(user('sh -c ' + shlex.quote(
+            'for n in $(seq 1 30); do hn capture-pane -p | grep -Fq ' + shlex.quote(draft) + ' && exit 0; '
+            'sleep 1; done; exit 1')), timeout=40, check=False)
+        vm.screenshot('01e-first-agent-input')
+        assert typed_status == 0, 'The visible bundled agent must accept keyboard input'
+        for _ in draft:
+            vm.keys('backspace')
+        vm.command(user('sh -c ' + shlex.quote(
+            'mkdir -p ' + shlex.quote(str(Path(trial_project).parent)) +
+            ' && printf "<h1>hello harness</h1>\\n" > ' + shlex.quote(trial_project))))
+        (folder / 'trial-project.html').write_bytes(vm.read_file(trial_project))
+        if installed:
+            return trial_project
+        vm.keys('ctrl', 'c')
+        time.sleep(.3)
+        vm.keys('ctrl', 'c')
+        vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 60); do '
+            'hn list-panes -a -F "#{pane_id}" | grep -Fx ' + shlex.quote(agent_pane.group(1)) +
+            ' >/dev/null || exit 0; sleep .25; done; exit 1')), timeout=20)
+        return trial_project
     # Exercise what a first-time user actually does after choosing Try: type
     # into the visible agent and receive its answer, without a CLI/API shortcut.
     vm.type_probe('what is six times seven reply with digits only')
@@ -866,8 +896,6 @@ def check_first_use(vm, user, folder, installed=False):
     assert guide_status == 0, 'Bundled OpenCode must explain the actual OS shortcuts from its local guide'
     # Build inside the actual per-agent project, as a person does. A sibling
     # directory would instead exercise OpenCode's external-directory permission.
-    project_name = 'first-project' if installed else 'usb-trial'
-    trial_project = agent_path + '/' + project_name + '/index.html'
     vm.type_probe('create the folder ' + project_name + ' in this project and an index html page inside it saying hello harness')
     vm.keys('ret')
     vm.command('for n in $(seq 1 120); do test -s ' + shlex.quote(trial_project) + ' && '
@@ -1083,7 +1111,10 @@ def main():
     parser.add_argument('--workload-seed', type=Path, help='Previous workload artifact: preserve its generated projects and rerun acceptance')
     parser.add_argument('--workload-repair-game', action='store_true', help='With a seed, explicitly ask the agent to repair game layout before rechecking')
     parser.add_argument('--live-only', action='store_true', help='Development probe: stop after the live-session checks, without installing')
+    parser.add_argument('--model-calls', action='store_true', help='Also ask the bundled agent real questions (a free model) on first use')
     args = parser.parse_args()
+    global MODEL_CALLS
+    MODEL_CALLS = args.model_calls or args.workloads or args.dsh
     if args.expect_live_mode and args.live_transport != 'usb':
         parser.error('--expect-live-mode requires --live-transport usb')
     if args.workloads and not args.agents:
