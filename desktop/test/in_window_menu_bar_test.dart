@@ -462,10 +462,6 @@ void main() {
     await tap(tester, 'menu-bar-harness');
     await tap(tester, 'menu-bar-check-for-updates');
     expect(appActions.last, 'checkForUpdates');
-
-    await tap(tester, 'menu-bar-harness');
-    await tap(tester, 'menu-bar-flash-firmware');
-    expect(appActions.last, 'flashFirmware');
   });
 
   testWidgets('the File menu fires the native action strings', (tester) async {
@@ -894,7 +890,6 @@ void main() {
       'menu-bar-settings Settings…',
       'menu-bar-shortcuts Keyboard Shortcuts…',
       'menu-bar-check-for-updates Check for Updates…',
-      'menu-bar-flash-firmware Flash Firmware…',
       'menu-bar-quit Quit Harness',
     ]);
     expect(await rows('menu-bar-file'), [

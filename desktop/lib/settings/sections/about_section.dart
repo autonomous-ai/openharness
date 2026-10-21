@@ -9,7 +9,6 @@ import '../../shared/widgets/section_scaffold.dart';
 import '../../shared/widgets/skeleton.dart';
 import '../../state/app_state.dart';
 import '../../update/desktop_updater.dart';
-import '../../widgets/flash_firmware_dialog.dart';
 import '../../widgets/update_notice.dart';
 
 /// Settings ▸ About: which build this is, and the way to ask for a newer one.
@@ -27,13 +26,6 @@ import '../../widgets/update_notice.dart';
 /// from both places shares a check and a single result dialog. The card's
 /// pill is the quiet half of that: the dialog is the answer to a question you
 /// asked, the pill is the state you can see without asking.
-///
-/// "Flash dial firmware…" opens the same [showFlashFirmwareDialog] the native
-/// macOS "Flash Firmware…" menu item does. It is in the card on every platform
-/// rather than only where it is strictly needed, because on Linux and Windows
-/// there is no native app menu and this is the ONLY way to reach it — and a
-/// control that appears on some machines and not others is the harder thing to
-/// support.
 class AboutSection extends StatefulWidget {
   const AboutSection({super.key, required this.notifier});
 
@@ -131,8 +123,6 @@ class _AboutCard extends StatelessWidget {
             Container(height: 1, color: grid.AppPalette.divider),
             const SizedBox(height: 14),
             _CheckRow(checking: checking, onCheck: onCheck),
-            const SizedBox(height: 12),
-            const _FlashRow(),
           ],
         ],
       ),
@@ -371,25 +361,6 @@ class _CheckRow extends StatelessWidget {
         key: const Key('settings-check-updates-button'),
         onPressed: checking ? null : () => onCheck(),
         child: Text(checking ? 'Checking…' : 'Check for updates'),
-      ),
-    );
-  }
-}
-
-/// The dial, in the same sentence-then-button shape the update row uses, so the
-/// card reads as one object with two things you can ask of it.
-class _FlashRow extends StatelessWidget {
-  const _FlashRow();
-
-  @override
-  Widget build(BuildContext context) {
-    grid.AppTheme.watch(context);
-    return _AboutAction(
-      description: 'Update your hardware dial over USB.',
-      action: OutlinedButton(
-        key: const Key('settings-flash-firmware-button'),
-        onPressed: () => showFlashFirmwareDialog(context),
-        child: const Text('Flash dial firmware…'),
       ),
     );
   }

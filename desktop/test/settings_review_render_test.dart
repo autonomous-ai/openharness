@@ -212,7 +212,7 @@ void main() {
             }
             if (section == SettingsSection.about) {
               await tester.ensureVisible(
-                find.byKey(const Key('settings-flash-firmware-button')),
+                find.byKey(const Key('settings-check-updates-button')),
               );
               await tester.pumpAndSettle();
               debugDisableShadows = false;

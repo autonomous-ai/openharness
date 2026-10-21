@@ -896,9 +896,7 @@ class AppNotifier extends ChangeNotifier {
           ownPid: pid,
           // An uninstall at work as well: this restart is a `harness stop` and a start beside it.
           paused: () =>
-              SerialPortLease.held ||
-              SerialPortLease.heldByAnotherProcess() ||
-              UninstallMarker.held(),
+              SerialPortLease.heldByAnotherProcess() || UninstallMarker.held(),
           restart: () async {
             final probe = await _discovery.restart();
             return probe.ready ? probe.pid : null;
