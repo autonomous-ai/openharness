@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { PtyHostBackend } from './ptyHostBackend.js'
-import { readDiscovery } from './ptyHost/launch.js'
+import { listDiscoveries } from './ptyHost/launch.js'
 import { PTY_PROTOCOL } from './ptyHost/protocol.js'
 import { removeTree, runTerminalBackendContract, SHELL } from './terminalBackend.contract.js'
 import type { TerminalInventoryResult } from './terminalTypes.js'
@@ -19,7 +19,7 @@ const freshHome = (prefix: string) => mkdtempSync(join(tmpdir(), prefix))
 
 /** Stop the host serving [home] (its panes go with it) and remove the home. */
 async function stopHost(home: string): Promise<void> {
-  const pid = readDiscovery(home, PTY_PROTOCOL)?.pid
+  const pid = listDiscoveries(home).findLast((found) => found.protocol === PTY_PROTOCOL)?.pid
   if (pid) {
     try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
   }
@@ -66,7 +66,7 @@ async function readyBackend(home: string): Promise<PtyHostBackend> {
       backend.onHostReplaced = () => replaced.push(Date.now())
       const created = await backend.create({ command: SHELL })
       if (created.state !== 'succeeded') throw new Error(`create failed: ${JSON.stringify(created)}`)
-      const before = readDiscovery(home, PTY_PROTOCOL)!
+      const before = listDiscoveries(home).findLast((found) => found.protocol === PTY_PROTOCOL)!
       process.kill(before.pid, 'SIGKILL')
       await new Promise((resolve) => setTimeout(resolve, 300))
       // Disconnected: unavailable, never an empty listing (which would read as every pane gone).
@@ -74,7 +74,7 @@ async function readyBackend(home: string): Promise<PtyHostBackend> {
       // The reconnect, 1 s after the loss, starts a new host: it has no panes.
       const inventory = await until<TerminalInventoryResult>(() => backend.inventory(), (inv) => inv.state === 'available')
       expect(inventory).toEqual({ state: 'available', roots: [] })
-      const after = readDiscovery(home, PTY_PROTOCOL)!
+      const after = listDiscoveries(home).findLast((found) => found.protocol === PTY_PROTOCOL)!
       expect(after.pid).not.toBe(before.pid)
       // A Windows host draws a new pipe name each start; the reconnect followed the discovery file to it.
       if (process.platform === 'win32') {

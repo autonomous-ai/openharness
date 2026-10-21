@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -24,7 +24,7 @@ vi.mock('../processTable.js', async (importOriginal) => {
 
 const { PtyHostBackend } = await import('../ptyHostBackend.js')
 const { EMPTY_PASSES, isDrainBackend, ptyHostBackends, PtyHostDrain, rowsOnInstance } = await import('./drain.js')
-const { readDiscovery } = await import('./launch.js')
+const { listDiscoveries, readInstanceDiscovery } = await import('./launch.js')
 const { setProcessTableSource } = await import('../processTable.js')
 
 const OLD = PTY_PROTOCOL - 1
@@ -535,9 +535,9 @@ describe.runIf(!!realBinary)('shutdown on the real host', () => {
   it('is refused while the host has a pane; granted, the host exits and takes its discovery file down', async () => {
     const home = tmpHome()
     const { create } = ptyHostBackends(home, { owner: () => 'me' })
-    cleanup.push(() => { create.dispose(); killPid(readDiscovery(home, PTY_PROTOCOL)?.pid) })
+    cleanup.push(() => { create.dispose(); killPid(listDiscoveries(home).findLast((found) => found.protocol === PTY_PROTOCOL)?.pid) })
     expect(await create.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
-    const discovery = readDiscovery(home, PTY_PROTOCOL)!
+    const discovery = listDiscoveries(home).findLast((found) => found.protocol === PTY_PROTOCOL)!
     const client = await PtyHostClient.connect(discovery)
     if (!(client instanceof PtyHostClient)) throw new Error(JSON.stringify(client))
     cleanup.push(() => client.close())
@@ -548,7 +548,7 @@ describe.runIf(!!realBinary)('shutdown on the real host', () => {
     expect((await create.kill(pane.runtime)).state).toBe('succeeded')
     expect(await client.call({ op: 'shutdown' })).toEqual({ state: 'ok', value: {} })
     expect(await until(() => alive(discovery.pid), (up) => !up)).toBe(false)
-    expect(existsSync(path.join(home, 'run', `pty-host-${PTY_PROTOCOL}.json`))).toBe(false)
+    expect(listDiscoveries(home).some((found) => found.pid === discovery.pid)).toBe(false)
   }, CASE_TIMEOUT_MS)
 })
 
@@ -558,10 +558,10 @@ describe.runIf(!!realBinary && !!previousBinary && PTY_PROTOCOL >= 2)('a protoco
   it('streams the old host\'s pane, makes new panes on the new host, and lets the old one go once its pane closes', async () => {
     quiet()
     const home = tmpHome()
-    cleanup.push(() => { killPid(readDiscovery(home, OLD)?.pid); killPid(readDiscovery(home, PTY_PROTOCOL)?.pid) })
+    cleanup.push(() => { killPid(readInstanceDiscovery(home, `p${OLD}`)?.pid); killPid(listDiscoveries(home).findLast((found) => found.protocol === PTY_PROTOCOL)?.pid) })
     // The host an older daemon started, with a shell pane in it.
     spawn(previousBinary!, ['serve', '--home', home], { cwd: home, detached: true, stdio: 'ignore', windowsHide: true }).unref()
-    const old = await until(() => readDiscovery(home, OLD), (found) => found !== null)
+    const old = await until(() => readInstanceDiscovery(home, `p${OLD}`), (found) => found !== null)
     if (!old) throw new Error('the previous host published no discovery file')
     const oldPid = old.pid
     const before = await PtyHostClient.connect(old)
@@ -615,7 +615,7 @@ describe.runIf(!!realBinary && !!previousBinary && PTY_PROTOCOL >= 2)('a protoco
     expect(terminals.instances()).toEqual([create])
     await new Promise((resolve) => setTimeout(resolve, 300))
     expect(alive(oldPid)).toBe(true)
-    expect(readDiscovery(home, OLD)?.pid).toBe(oldPid)
+    expect(readInstanceDiscovery(home, `p${OLD}`)?.pid).toBe(oldPid)
     // The new host and its pane are untouched.
     const remaining: TerminalInventoryResult = await create.inventory()
     expect(remaining.state === 'available' && remaining.roots.map((root) => root.runtime)).toEqual([fresh.runtime])

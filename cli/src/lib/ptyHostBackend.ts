@@ -11,7 +11,7 @@
  * apart; the delays start again from 1 s only for a connection that had stayed up 30 s. A host with another pid is another host: its predecessor's panes are gone, and `onHostReplaced` says so,
  * so the reconciler sees them absent and the resume path takes over. `dispose` drops the connection alone.
  *
- * One backend per host instance (`p<protocol>`, ptyHost/drain.ts). The one for this daemon's protocol makes new panes,
+ * One backend per host instance (ptyHost/instance.ts, ptyHost/drain.ts). The one for this daemon's protocol makes new panes,
  * and starts its host when there is none. One for the protocol before is a drain backend: it reaches the host still
  * running from before an update and never starts one, lists, streams and controls its panes, refuses `create`, and
  * shuts the host down once it has none (`shutdownHost`). A drain host that exits is gone for good (`hostGone`): its
@@ -194,12 +194,12 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
       ? { alive: (pid) => this.hostProcess.alive(pid), rows: () => this.hostProcess.rows() }
       : { alive: (pid) => this.hostProcess.alive(pid) }
     this.launch = options.launch ?? (this.draining
-      ? ((home) => reachPtyHost(home, protocol, liveness))
-      : ((home) => ensurePtyHost(home, { liveness })))
+      ? ((home) => reachPtyHost(home, `p${protocol}`, liveness))
+      : ((home) => ensurePtyHost(home, { target: null, liveness })))
     this.endTree = options.endTree ?? ((pid) => this.endTreeOf(pid))
   }
 
-  /** `ptyhost:<instance>`, the instance being the host's (`p<protocol>`), known once `prepare` reached it. */
+  /** `ptyhost:<instance>`, the instance being the host's (ptyHost/instance.ts), known once `prepare` reached it. */
   get instanceId(): string {
     return `ptyhost:${this.instance ?? 'unprepared'}`
   }
@@ -329,7 +329,7 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
       console.error(`[terminal] ptyhost: the drained ${this.instance} host (pid ${pid}) has not exited`)
       return 'failed'
     }
-    forgetExitedHost(this.home, this.protocol, pid)
+    forgetExitedHost(this.home, `p${this.protocol}`, pid)
     this.markGone(`shut down with no panes left (pid ${pid})`)
     return 'exited'
   }

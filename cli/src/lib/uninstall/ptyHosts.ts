@@ -14,7 +14,7 @@ import { statSync } from 'node:fs'
 import path from 'node:path'
 import { env } from '../../config/env.js'
 import type { PtyHostClient, PtyHostDiscovery } from '../ptyHost/client.js'
-import { discoverHosts, discoveredHostDead, pidAlive, reachPtyHost, type HostLiveness } from '../ptyHost/launch.js'
+import { discoveredHostDead, listDiscoveries, pidAlive, reachPtyHost, type HostLiveness } from '../ptyHost/launch.js'
 import { SHUTDOWN_PROTOCOL, SUPPORTED_PTY_PROTOCOLS } from '../ptyHost/protocol.js'
 import { startedNoLaterThan, startMarkerMs } from '../processProof.js'
 import { argvTokens, processRows, type ProcessRow } from '../processTable.js'
@@ -195,10 +195,13 @@ export function ptyHostsDeps(home: string = env.HARNESS_PTY_DIR): PtyHostsDeps {
       // Each record's time before the records: one rewritten in between is judged against the older time, which a
       // later host fails, so the error is on the side of leaving it.
       const written = new Map(SUPPORTED_PTY_PROTOCOLS.map((protocol) => [protocol, writtenAt(path.join(home, 'run', `pty-host-${protocol}.json`))]))
-      return discoverHosts(home).map((discovery) => ({ discovery, written: written.get(discovery.protocol) ?? null }))
+      // Only the legacy `p<protocol>` hosts of the supported protocols, the ones whose record time is read above: a
+      // versioned instance's host is not ended here yet.
+      const legacy = listDiscoveries(home).filter((discovery) => SUPPORTED_PTY_PROTOCOLS.includes(discovery.protocol) && discovery.instance === `p${discovery.protocol}`)
+      return legacy.map((discovery) => ({ discovery, written: written.get(discovery.protocol) ?? null }))
     },
     reach: async (protocol) => {
-      const result = await reachPtyHost(home, protocol, liveness)
+      const result = await reachPtyHost(home, `p${protocol}`, liveness)
       return 'client' in result ? { client: result.client } : { unreachable: 'incompatible' in result ? result.incompatible : result.unavailable }
     },
     alive: pidAlive,

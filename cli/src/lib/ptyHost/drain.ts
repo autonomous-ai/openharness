@@ -1,8 +1,9 @@
 /**
  * Hosts across a protocol bump: the newest protocol's host makes new panes, and the one before drains.
  *
- * A host's protocol is fixed at its build (pty/src/protocol.rs `PROTOCOL`), and each protocol is its own instance,
- * `p<protocol>`: its own discovery file, endpoint, lock and pane ids. An update that bumps the protocol leaves the old
+ * A host's protocol is fixed at its build (pty/src/protocol.rs `PROTOCOL`), and each build is its own instance
+ * (`p<protocol>-<version>`, or `p<protocol>` for a host from before that, instance.ts): its own discovery file,
+ * endpoint, lock and pane ids. The drain here is by protocol: the older protocol's legacy `p<protocol>` host. An update that bumps the protocol leaves the old
  * host running with the person's panes in it, as a tmux server of an older tmux keeps running. This daemon reaches
  * it too, as a drain backend (ptyHostBackend.ts): its panes are listed, streamed and controlled, their registry rows
  * keep their `ptyhost:p<old>` runtimes, and the route keys name the instance, so both hosts' panes are reached at
@@ -17,7 +18,7 @@ import type { TerminalBackend } from '../terminalBackend.js'
 import { terminalInstanceId } from '../terminalRuntime.js'
 import type { TerminalRuntimeRef } from '../terminalTypes.js'
 import { PtyHostBackend, type PtyHostBackendOptions } from '../ptyHostBackend.js'
-import { readDiscovery } from './launch.js'
+import { readInstanceDiscovery } from './launch.js'
 import { PTY_PROTOCOL, SUPPORTED_PTY_PROTOCOLS } from './protocol.js'
 
 /** How many reconcile passes in a row must find a drain host with no pane before it is shut down. */
@@ -44,7 +45,7 @@ export function ptyHostBackends(home: string, options: PtyHostBackendsOptions = 
   const { rowsOn, ...backendOptions } = options
   const drain = SUPPORTED_PTY_PROTOCOLS
     .filter((protocol) => protocol < PTY_PROTOCOL)
-    .filter((protocol) => readDiscovery(home, protocol) !== null || rowsOn?.(`ptyhost:p${protocol}`) === true)
+    .filter((protocol) => readInstanceDiscovery(home, `p${protocol}`) !== null || rowsOn?.(`ptyhost:p${protocol}`) === true)
     .map((protocol) => new PtyHostBackend({ ...backendOptions, home, protocol }))
   return { create: new PtyHostBackend({ ...backendOptions, home }), drain }
 }

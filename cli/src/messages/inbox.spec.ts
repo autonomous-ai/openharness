@@ -51,6 +51,18 @@ describe('a pane inbox', () => {
     expect(inbox.waiting(tmux, 'k')).toBe(false)
   })
 
+  it('keys a versioned pty host\'s pane by its instance: p2-0.4.21-dev.win1:%7 and p2-h0123456789ab:%7', () => {
+    const dev = 'ptyhost\u0000p2-0.4.21-dev.win1\u0000%7', hashed = 'ptyhost\u0000p2-h0123456789ab\u0000%7', legacy = 'ptyhost\u0000p2\u0000%7'
+    expect(inbox.paneDir(dev)).toBe(paneDir('ptyhost.p2-0.4.21-dev.win1.7'))
+    expect(inbox.paneDir(hashed)).toBe(paneDir('ptyhost.p2-h0123456789ab.7'))
+    for (const bad of ['ptyhost\u0000p2-\u0000%7', 'ptyhost\u0000p2-a/b\u0000%7', 'ptyhost\u0000p2-0.4.21\u00007']) expect(inbox.paneDir(bad), bad).toBeNull()
+    // A delivery key has a `-` in it, as a versioned instance does: the folder still reads back as its pane.
+    for (const pane of [dev, hashed, legacy]) inbox.put(pane, 'm0000001-aaaa', { session: '', text: pane })
+    expect(inbox.entries().map((e) => [e.pane, e.key]).sort()).toEqual([dev, hashed, legacy].map((pane) => [pane, 'm0000001-aaaa']).sort())
+    for (const pane of [dev, hashed, legacy]) expect(inbox.reclaim(pane, 'm0000001-aaaa')).toBe(true)
+    expect(inbox.reclaimed().sort()).toEqual([dev, hashed, legacy].map((pane) => [pane, 'm0000001-aaaa']).sort())
+  })
+
   it('refuses what is not a pane or a key', () => {
     expect(() => inbox.put('x', 'k', { session: '', text: 't' })).toThrow(/not a terminal pane/)
     expect(() => inbox.put('%1', '../escape', { session: '', text: 't' })).toThrow(/invalid inbox key/)
