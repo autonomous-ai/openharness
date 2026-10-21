@@ -78,6 +78,14 @@ class Doctor(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertEqual(r.stdout.splitlines()[-1], "miss python3 for the verdict")
 
+    def test_broken_python_alias_is_a_miss(self):
+        box = Sandbox(self)
+        box.stub("typst", 'echo "typst 0.15.1"', where=box.install / "bin")
+        box.stub("python3", "exit 9009")
+        r = box.run("doctor.sh")
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.stdout.splitlines()[-1], "miss python3 for the verdict")
+
 
 class Setup(unittest.TestCase):
     def sandbox(self, system="Darwin", machine="arm64") -> Sandbox:
@@ -86,6 +94,7 @@ class Setup(unittest.TestCase):
         # curl writes the archive it was asked for; tar unpacks a typst that knows its version.
         box.stub("curl", 'while [ $# -gt 1 ]; do [ "$1" = -o ] && out="$2"; shift; done; echo archive > "$out"')
         box.stub("tar", f'dir="$4/$(basename "$2" .tar.xz)"; mkdir -p "$dir"; printf \'#!/bin/bash\\necho "typst {VERSION[1:]} (fetched)"\\n\' > "$dir/typst"')
+        box.stub("unzip", f'dir="$4/$(basename "$2" .zip)"; mkdir -p "$dir"; printf \'#!/bin/bash\\necho "typst {VERSION[1:]} (fetched)"\\n\' > "$dir/typst.exe"')
         (box.bin / "basename").symlink_to("/usr/bin/basename")
         self.sha("shasum")
         return box
@@ -118,6 +127,42 @@ class Setup(unittest.TestCase):
         r = box.run("setup.sh")
         self.assertEqual((r.returncode, r.stdout.splitlines()[-1]), (0, f"ok   typst {VERSION[1:]} (fetched)"), r.stderr)
         self.assertIn("sha256sum tmp/typst-x86_64-unknown-linux-musl.tar.xz", box.logged())
+
+    def test_windows_zip_on_mingw_and_msys(self):
+        for system in ("MINGW64_NT-10.0-26200", "MSYS_NT-10.0-26200"):
+            with self.subTest(system=system):
+                box = self.sandbox(system, "x86_64")
+                (box.bin / "shasum").unlink()
+                self.sha("sha256sum")
+                r = box.run("setup.sh")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertTrue(os.access(box.install / "bin/typst.exe", os.X_OK))
+                self.assertIn("unzip -q tmp/typst-x86_64-pc-windows-msvc.zip -d tmp", box.logged())
+                self.assertFalse(any(c.startswith("tar ") for c in box.logged()))
+                self.assertFalse((box.install / "tmp").exists())
+                r = box.run("setup.sh")
+                self.assertEqual(r.stdout.strip(), f"ok   typst {VERSION} already here")
+                self.assertEqual(sum(c.startswith("curl ") for c in box.logged()), 1)
+
+    def test_windows_bad_checksum_is_not_unzipped(self):
+        box = self.sandbox("MINGW64_NT-10.0", "x86_64")
+        r = box.run("setup.sh", BAD_SUM="0" * 64)
+        self.assertEqual(r.returncode, 1)
+        self.assertFalse(any(c.startswith("unzip ") for c in box.logged()))
+        self.assertFalse((box.install / "bin/typst.exe").exists())
+
+    def test_windows_needs_unzip_before_download(self):
+        box = self.sandbox("MSYS_NT-10.0", "x86_64")
+        (box.bin / "unzip").unlink()
+        r = box.run("setup.sh")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("miss unzip", r.stdout)
+        self.assertFalse(any(c.startswith("curl ") for c in box.logged()))
+
+    def test_windows_arm_is_not_mistaken_for_x64(self):
+        r = self.sandbox("MINGW64_NT-10.0", "aarch64").run("setup.sh")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("miss no Typst release", r.stdout)
 
     def test_an_archive_that_does_not_match_its_checksum_is_never_unpacked(self):
         box = self.sandbox()
