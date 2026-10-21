@@ -11,10 +11,10 @@ import { buildEngineLaunchArgv, commandAvailableInInteractiveShell } from '../..
 import { windowsPaneLaunch } from '../../lib/windows/engineStart.js'
 import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
 import { sid } from '../../lib/log.js'
-import type { registry, RegisteredSession } from '../../lib/registry.js'
+import type { ProcessIdentity, registry, RegisteredSession } from '../../lib/registry.js'
 import { bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
 import type { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
-import { restartTargetOf } from '../../lib/terminalBackend.js'
+import { restartTargetOf, type RestartTarget } from '../../lib/terminalBackend.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import type { HeldRestart } from './heldLaunches.js'
@@ -22,6 +22,7 @@ import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import type { createLaunchHelpers } from './launch.js'
 import type { RestartAgent } from './launches.js'
 import type { PaneSwap } from './swap.js'
+import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
 import type { LaunchOverridesDeps } from '../../lib/launchOverrides.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
@@ -46,6 +47,35 @@ async function engineInstalled(engine: AgentEngine): Promise<boolean | null> {
 }
 
 type RestartAgentHandler = RestartAgent
+
+export interface RelaunchCommitDeps {
+  registry: Pick<typeof registry, 'updateProcessIdentity' | 'setActive' | 'byAgent'>
+  announceSession: (session: RegisteredSession) => void
+  refreshGridAssignment: (session: RegisteredSession) => void
+}
+
+/**
+ * The row learns the engine a restart relaunched in [place] (restart, and a move's fallback to the old pane:
+ * core/agents/hostMove.ts): its process and gateway, active again, the pane handed back to its backend's default
+ * disposal, then announced. Gateway is a core process fact; optional grid metadata follows the committed binding in the
+ * background, so an unavailable models service cannot hold this route. 'changed' when [current] went false on the way,
+ * 'vanished' when the row is gone.
+ */
+export async function commitRelaunchedEngine(
+  deps: RelaunchCommitDeps, agentId: string, identity: ProcessIdentity, place: RestartTarget, current: () => boolean,
+): Promise<RegisteredSession | 'changed' | 'vanished'> {
+  const gateway = await probeGatewayRuntime(identity)
+  if (!current()) return 'changed'
+  deps.registry.updateProcessIdentity(agentId, identity, gateway.kind)
+  deps.registry.setActive(agentId, true)
+  await place.backend.releaseHold(place.runtime)
+  if (!current()) return 'changed'
+  const refreshed = deps.registry.byAgent(agentId)
+  if (!refreshed) return 'vanished'
+  deps.announceSession(refreshed)
+  deps.refreshGridAssignment(refreshed)
+  return refreshed
+}
 
 export interface RestartDeps {
   native?: LaunchOverridesDeps['native']
@@ -72,13 +102,15 @@ export interface RestartDeps {
   /** A held agent runs no engine to swap: its restart is its launch, now (core/agents/heldLaunches.ts). Null for
    *  any other agent. */
   restartHeld: (agentId: string) => Promise<HeldRestart> | null
+  /** An agent a move a dead daemon left may still run beside (main.ts `moveHeld`): no engine of it starts this start. */
+  moveHeld?: (agentId: string) => boolean
 }
 
 export function createAgentRestarter({
   native: inspectNative,
   restartJobs, registry, purgeBusy, stopJobs, pinnedControls, terminals, sameRestartTarget, agentReconciler,
   terminalHintMachineName, announceSession, refreshGridAssignment, relaunchOverrides, downgradedPermission, refreshGridWebSearch,
-  liveBypassPermission, paneSwapDeps, restartHeld,
+  liveBypassPermission, paneSwapDeps, restartHeld, moveHeld,
 }: RestartDeps) {
   /**
    * Web or device restarted an agent (`agent_restart`): exit the live engine process and relaunch it in
@@ -101,6 +133,13 @@ export function createAgentRestarter({
    */
   const restartAgentHandler: RestartAgentHandler = (agentId) => restartJobs.run(registry.resolve(agentId)?.agentId ?? agentId, async (operationCurrent) => {
     if (purgeBusy(agentId) || stopJobs.has(agentId) || pinnedControls.has(agentId)) return { ok: false, error: 'AGENT_BUSY' }
+    // A pane a stopped move left may still run this conversation's engine: neither a swap nor a held launch starts
+    // another beside it (core/main.ts, `removeOrphanMovePanes`).
+    const heldId = registry.resolve(agentId)?.agentId ?? agentId
+    if (moveHeld?.(heldId)) {
+      console.warn(moveHeldLine(heldId))
+      return { ok: false, error: 'AGENT_BUSY', detail: 'This harness is held until the daemon restarts.' }
+    }
     const session = registry.resolve(agentId)
     if (!session) return { ok: false, error: 'AGENT_NOT_FOUND' }
     if (session.guest) return GUEST_HARNESS_REFUSAL
@@ -198,18 +237,10 @@ export function createAgentRestarter({
 
       // Address the CANONICAL agentId from the resolved session, not the raw RPC input — `resolve()`
       // accepts either an agentId or a bare sessionId, but `setActive`/`byAgent` only ever key on the
-      // real agentId. Gateway is a core process fact; optional grid metadata follows the committed
-      // binding in the background, so an unavailable models service cannot hold this route.
-      const gateway = await probeGatewayRuntime(outcome.processIdentity)
-      if (!current()) return changed
-      registry.updateProcessIdentity(session.agentId, outcome.processIdentity, gateway.kind)
-      registry.setActive(session.agentId, true)
-      await backend.releaseHold(runtime)
-      if (!current()) return changed
-      const refreshed = registry.byAgent(session.agentId)
-      if (!refreshed) return { ok: false, error: 'RESTART_FAILED', detail: 'agent vanished from the registry mid-restart' }
-      announceSession(refreshed)
-      refreshGridAssignment(refreshed)
+      // real agentId.
+      const refreshed = await commitRelaunchedEngine({ registry, announceSession, refreshGridAssignment }, session.agentId, outcome.processIdentity, place, current)
+      if (refreshed === 'changed') return changed
+      if (refreshed === 'vanished') return { ok: false, error: 'RESTART_FAILED', detail: 'agent vanished from the registry mid-restart' }
       console.log(`[restart] ${sid(session.agentId)} ${engine} · ${outcome.resumed ? 'resumed' : 'fresh session'}`
         + (session.gridLaunch ? ` · grid ${session.gridLaunch.networkName}` : ''))
       return { ok: true, session: refreshed, resumed: outcome.resumed }

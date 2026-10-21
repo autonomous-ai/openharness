@@ -80,8 +80,8 @@ import { restoreAgents, type RestoreAgentsDeps, type RestoreSummary } from '../l
 import { restoreTerminals } from '../lib/restoreTerminals.js'
 import { acquireAfterHold, MoveGate } from '../lib/hostMove/gate.js'
 import { HostMover } from '../lib/hostMove/mover.js'
-import { removeOrphanMovePanes, type MoveOutcome } from '../lib/hostMove/moveAgent.js'
-import { QuietClock } from '../lib/hostMove/quiet.js'
+import { moveHeldLine, removeOrphanMovePanes, type MoveOutcome } from '../lib/hostMove/moveAgent.js'
+import { QUIET_MS, QuietClock } from '../lib/hostMove/quiet.js'
 import { resumesConversation } from '../lib/resumeCapability.js'
 import { createRetainExitedSession } from '../lib/retainExitedSession.js'
 import { createKeepAbandonedConversation } from '../lib/keepAbandonedConversation.js'
@@ -773,7 +773,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Delivered turns (core/deliveries.ts): text a feature writes into an agent under a delivery id of its
   // own, and what becomes of each, told back to whoever made it, in this process or in its own.
   // A read-only view of agents' terminals for an experiment's viewers, told to its process (core/terminalWatch.ts).
-  const terminalWatch = createTerminalWatch({ terminals, resolve: (id) => registry.resolve(id), watchers: new Set(Object.keys(EXPERIMENTS)),
+  const terminalWatch = createTerminalWatch({ terminals, resolve: (id) => registry.resolve(id), watchers: new Set(Object.keys(EXPERIMENTS)), moveGate,
     tell: (service, viewer, output) => serviceLinksRef?.notify(service, { type: 'service_event', payload: { kind: 'watch', viewer, output } }) ?? false })
   const deliveries = createDeliveries({
     submit: (agentId, text, deliveryId) => backendRef?.onMessage?.(agentId, text, deliveryId),
@@ -1718,6 +1718,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     startHeartbeat,
     questionWatcher,
     mirror,
+    // A live turn, however short and with no input of its own (a /loop wake-up, a background notification), restarts
+    // the agent's quiet period: the mover's ticks alone, seconds apart, would miss it.
+    working: (agentId) => hostQuiet.noteActivity(agentId, 'working'),
   })
   // Cursor's Task hooks and the sub-agents they start (core/engines/cursorTasks.ts).
   const cursorTasks = createCursorTaskHooks({ emitSessionEvents, watcher, registry, cursorNormalizers })
@@ -2380,7 +2383,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     for (const agentId of swept.unconfirmed) {
       moveHeld.add(agentId)
       for (const runtime of registry.byAgent(agentId)?.runtimes ?? []) agentReconciler.holdRoute(terminalRouteKey(runtime), null)
-      console.warn(`[terminal] move ${agentId}: held until the next start: a pane its stopped move left was not confirmed closed`)
+      console.warn(moveHeldLine(agentId))
     }
   }
   // Later passes over held agents (core/agents/heldLaunches.ts) wait for this one.
@@ -2656,7 +2659,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.onRetargetAgent = createAgentRetargeter({
     noBackendCode: createUnavailable,
     sessionTurnOpen,
-    purgeBusy: (agentId) => restorePanes.busy(agentId) || backend.purgeAgentService?.busy(agentId),
+    // A retarget swaps the engine too: not of an agent a stopped move may still run beside (`moveHeld`).
+    purgeBusy: (agentId) => restorePanes.busy(agentId) || backend.purgeAgentService?.busy(agentId) || moveHeld.has(registry.resolve(agentId)?.agentId ?? agentId),
     terminals,
     registry,
     runtimeProfiles,
@@ -2756,17 +2760,26 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     liveBypassPermission,
     paneSwapDeps,
     restartHeld: (agentId) => heldLaunches.restartHeld(agentId),
+    moveHeld: (agentId) => moveHeld.has(agentId),
   })
   // Agents on a drained pty host move, one at a time and only while nobody uses them, to the target host once it can seed
   // a pane (lib/hostMove/mover.ts). Each move is the agent's lifecycle operation: a restart, stop or delete waits for it
   // or cancels it, as it would another restart.
   if (ptyHosts?.drain.length && ptyHostBackend) {
     const target = ptyHostBackend
+    const moveActivity = (row: RegisteredSession) => activityFrameContextRef?.(row)?.state ?? 'unknown'
+    const moveLookedAt = (agentId: string) => terminalStreams.isLookedAt(agentId) || terminalWatch.isWatched(agentId)
     const moveOne = createHostMove({
       registry, terminals, createBackend: () => createBackend,
       restore: restoreOn, buildLaunch: restoreLaunch, paneSwapDeps,
-      retarget: (agentId, runtime) => terminalStreams.retarget(agentId, runtime),
+      // Every stream open to the agent follows it: the windows' and phones', and Share viewers'.
+      retarget: async (agentId, runtime) => { await Promise.all([terminalStreams.retarget(agentId, runtime), terminalWatch.retarget(agentId, runtime)]) },
       gate: moveGate,
+      // What the mover picked the agent for, asked again up to the old engine's stop: still idle, quiet, unwatched.
+      eligible: (agentId) => {
+        const row = registry.byAgent(agentId)
+        return !!row && moveActivity(row) === 'idle' && hostQuiet.quietFor(agentId) >= QUIET_MS && !moveLookedAt(agentId)
+      },
       holdRoute: (key, ms) => agentReconciler.holdRoute(key, ms),
       announce: announceSession,
       invalidateControl: invalidateTerminalControl,
@@ -2784,9 +2797,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       targetCanSeed: () => createBackend === target && target.canSeed,
       target: ptyTarget?.instance ?? target.instanceId.replace(/^ptyhost:/, ''),
       resumesConversation,
-      activity: (row) => activityFrameContextRef?.(row)?.state ?? 'unknown',
+      activity: moveActivity,
       quiet: hostQuiet,
-      lookedAt: (agentId) => terminalStreams.isLookedAt(agentId) || terminalWatch.isWatched(agentId),
+      lookedAt: moveLookedAt,
       busy: (agentId) => restartJobs.busy(agentId) || stopJobs.has(agentId) || restorePanes.busy(agentId) || pinnedControls.has(agentId)
         || moveHeld.has(agentId),
       move: async (row) => {
@@ -2797,8 +2810,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
             ? { ok: true, session: registry.byAgent(row.agentId) ?? row, resumed: outcome.resumed }
             : { ok: false, error: 'MOVE_FAILED', detail: outcome.reason }
         }, 'move')
-        // Another lifecycle operation took the agent first: nothing ran, so nothing failed.
-        return outcome ?? { moved: false, reason: reply.ok ? 'another operation ran' : reply.detail ?? reply.error, fellBack: false, cancelled: true }
+        if (outcome) return outcome
+        // Another lifecycle operation held the agent: nothing ran, so nothing failed. Anything else counts as a failure.
+        const reason = reply.ok ? 'the move did not run' : reply.detail ?? reply.error
+        return !reply.ok && reply.error === 'AGENT_BUSY'
+          ? { moved: false, reason, fellBack: false, cancelled: true }
+          : { moved: false, reason, fellBack: false }
       },
       log: (line) => console.log(line),
     })

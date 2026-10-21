@@ -232,6 +232,33 @@ describe('HostMover', () => {
     expect(h.lines()).toEqual([`[terminal] ptyhost: target ${TARGET} cannot seed; agents stay on their hosts`])
   })
 
+  it('a turn that starts and ends between two ticks restarts the quiet period', async () => {
+    const h = harness([row('a1')])
+    await h.settle()
+    // The funnel's live events (core/turns/funnel.ts `working`): a /loop wake-up, over before the next tick reads idle.
+    h.quiet.noteActivity('a1', 'working')
+    await h.mover.step()
+    expect(h.moves).toEqual([])
+    expect(h.lines()).toContain('[terminal] move a1: skipped (not quiet yet)')
+    h.advance(QUIET_MS)
+    await h.mover.step()
+    expect(h.moves).toEqual(['a1'])
+  })
+
+  it('says when a target that could not seed can, once', async () => {
+    const h = harness([row('a1')])
+    h.setCanSeed(false)
+    await h.mover.step()
+    h.setCanSeed(true)
+    await h.settle()
+    await h.mover.step()
+    expect(h.lines().filter((line) => line.startsWith('[terminal] ptyhost:'))).toEqual([
+      `[terminal] ptyhost: target ${TARGET} cannot seed; agents stay on their hosts`,
+      `[terminal] ptyhost: target ${TARGET} can seed now; idle agents move to it`,
+    ])
+    expect(h.moves).toEqual(['a1'])
+  })
+
   it('an agent on a newer host moves after a rollback', async () => {
     // The target went back to 1.2.3; a host of 9.9.9 is drained like any other.
     const h = harness([row('a1', { instance: 'p2-9.9.9' })])

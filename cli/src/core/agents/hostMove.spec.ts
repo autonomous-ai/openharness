@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('../../lib/gatewayRuntime.js', async (real) => ({ ...await real<object>(), probeGatewayRuntime: vi.fn(async () => ({ kind: 'ori' })) }))
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { RestartAgentDeps } from '../../lib/restartAgent.js'
 import type { RestoreLaunch } from '../../lib/restoreAgents.js'
@@ -77,8 +79,10 @@ function wiring(overrides: Partial<HostMoveWiring> = {}) {
     paneSwapDeps: vi.fn(() => swapDeps) as unknown as HostMoveWiring['paneSwapDeps'],
     retarget: vi.fn(async () => {}),
     gate: new MoveGate(),
+    eligible: vi.fn(() => true),
     holdRoute: vi.fn(() => { const release = vi.fn(); releases.push(release); return release }),
     announce: vi.fn(),
+    refreshGridAssignment: vi.fn(),
     invalidateControl: vi.fn(),
     waitingArgv: () => ['wait'],
     log: vi.fn(),
@@ -91,6 +95,10 @@ describe('the move, wired to the core', () => {
   it('holds routes with the reconciler, with no auto-release, and hands back that hold\'s own release', () => {
     const { w, releases } = wiring()
     const deps = hostMoveDeps(session(), () => true, w)
+    // The eligibility asked before the stop is the core's, of this agent.
+    vi.mocked(w.eligible).mockReturnValueOnce(false)
+    expect(deps.eligible()).toBe(false)
+    expect(w.eligible).toHaveBeenCalledWith('a1')
     const release = deps.holdRoute(terminalRouteKey(OLD))
     expect(w.holdRoute).toHaveBeenCalledWith(terminalRouteKey(OLD), null)
     expect(release).toBe(releases[0])
@@ -189,9 +197,13 @@ describe('the move, wired to the core', () => {
     // Prepared already, before the stop: not prepared twice.
     expect(prepare).toHaveBeenCalledTimes(1)
     expect(swapDeps.prepareResume).not.toHaveBeenCalled()
-    expect(w.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', { ...OLD_ID, pid: 44 })
+    // Committed as a restart commits (`commitRelaunchedEngine`): gateway, active, the pane released, announced, and
+    // its grid assignment refreshed.
+    expect(w.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', { ...OLD_ID, pid: 44 }, 'ori')
+    expect(w.registry.setActive).toHaveBeenCalledWith('a1', true)
     expect(old.releaseHold).toHaveBeenCalledWith(OLD)
     expect(w.announce).toHaveBeenCalled()
+    expect(w.refreshGridAssignment).toHaveBeenCalledWith(row)
   })
 
   it('a relaunch whose engine does not come back says so', async () => {

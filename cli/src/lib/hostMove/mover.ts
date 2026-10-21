@@ -44,6 +44,7 @@ export class HostMover {
   /** The reason each agent was last said to be skipped, so a skip is logged once per change, not every tick. */
   private readonly skipped = new Map<string, string>()
   private toldCannotSeed = false
+  private toldCanSeed = false
 
   constructor(private readonly deps: HostMoverDeps) {}
 
@@ -54,6 +55,11 @@ export class HostMover {
         this.deps.log(`[terminal] ptyhost: target ${this.deps.target} cannot seed; agents stay on their hosts`)
       }
       return
+    }
+    // A target attached after the first tick (or reconnected to a newer build) may seed after all: say so once.
+    if (this.toldCannotSeed && !this.toldCanSeed) {
+      this.toldCanSeed = true
+      this.deps.log(`[terminal] ptyhost: target ${this.deps.target} can seed now; idle agents move to it`)
     }
     const rows = this.deps.list().filter((row) => this.deps.isDrainRow(row))
     // Each tick reads every drain agent's state, a move in flight or not: the quiet clock starts at the first idle.

@@ -19,6 +19,7 @@ import type { RestoreTerminals } from '../../lib/restoreTerminals.js'
 import { restartTargetOf, type TerminalBackend } from '../../lib/terminalBackend.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
+import { commitRelaunchedEngine } from './restart.js'
 import type { PaneSwap } from './swap.js'
 
 export interface HostMoveWiring {
@@ -26,7 +27,7 @@ export interface HostMoveWiring {
     byAgent(agentId: string): RegisteredSession | undefined
     transaction<T>(apply: () => T | Promise<T>): Promise<T>
     updateRuntimes(agentId: string, runtimes: readonly TerminalRuntimeRef[], primaryRuntimeKey?: string): boolean
-    updateProcessIdentity(agentId: string, identity: ProcessIdentity): boolean
+    updateProcessIdentity(agentId: string, identity: ProcessIdentity, gateway?: 'ori' | null): boolean
     setActive(agentId: string, active: boolean): boolean
   }
   terminals: Pick<TerminalBackendCoordinator, 'backendFor' | 'capture'>
@@ -40,6 +41,8 @@ export interface HostMoveWiring {
   paneSwapDeps: PaneSwap['paneSwapDeps']
   retarget(agentId: string, runtime: TerminalRuntimeRef): Promise<void>
   gate: MoveGate
+  /** Whether [agentId] is still idle, quiet and not looked at, as the mover picked it: asked before the stop. */
+  eligible(agentId: string): boolean
   /** `agentReconciler.holdRoute`, asked with no auto-release. */
   holdRoute(routeKey: string, autoReleaseMs: null): () => void
   announce(session: RegisteredSession): void
@@ -163,17 +166,16 @@ export function hostMoveDeps(session: RegisteredSession, current: () => boolean,
         w.log(`[terminal] move ${agentId}: the relaunch in the old pane failed: ${outcome.detail}`)
         return false
       }
-      if (!current()) return false
-      w.registry.updateProcessIdentity(row.agentId, outcome.processIdentity)
-      w.registry.setActive(row.agentId, true)
-      await place.backend.releaseHold(place.runtime)
-      const refreshed = w.registry.byAgent(row.agentId)
-      if (refreshed) w.announce(refreshed)
-      return true
+      // The row learns it as a restart's does (`commitRelaunchedEngine`, core/agents/restart.ts): shared, not copied.
+      const committed = await commitRelaunchedEngine(
+        { registry: w.registry, announceSession: w.announce, refreshGridAssignment: (refreshed) => w.refreshGridAssignment?.(refreshed) },
+        row.agentId, outcome.processIdentity, place, current)
+      return typeof committed !== 'string'
     },
     gate: w.gate,
     holdRoute: (routeKey) => w.holdRoute(routeKey, null),
     current,
+    eligible: () => w.eligible(agentId),
     log: (line) => w.log(line),
   }
 }

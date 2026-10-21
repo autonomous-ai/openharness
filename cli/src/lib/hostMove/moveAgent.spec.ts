@@ -54,6 +54,7 @@ function harness(overrides: Partial<MoveAgentDeps> = {}) {
     gate,
     holdRoute,
     current: () => true,
+    eligible: () => true,
     log: vi.fn(),
     ...overrides,
   }
@@ -369,6 +370,38 @@ describe('moveAgent', () => {
       expect(h.gate.holding('a1'), point).toBe(false)
       expect(h.routes.size, point).toBe(0)
     }
+  })
+
+  it('input, a turn or a viewer during capture, launch or create cancels the move before the stop', async () => {
+    // The agent stops being idle, quiet and unwatched while each step before the stop runs, and right before the stop.
+    for (const point of ['capture', 'buildLaunch', 'create', 'hold'] as const) {
+      let eligible = true
+      const h = harness({ eligible: () => eligible })
+      const inner = { ...h.deps }
+      const at = <A extends unknown[], R>(name: string, step: (...args: A) => R) => (...args: A): R => {
+        const result = step(...args)
+        if (name === point) eligible = false
+        return result
+      }
+      h.deps.capture = at('capture', inner.capture)
+      h.deps.buildLaunch = at('buildLaunch', inner.buildLaunch)
+      h.deps.createSeeded = at('create', inner.createSeeded)
+      h.gate.hold = at('hold', h.gate.hold)
+      const outcome = await run(h.deps)
+      expect(outcome, point).toMatchObject({ moved: false, fellBack: false, cancelled: true })
+      expect(h.deps.stopEngine, point).not.toHaveBeenCalled()
+      expect(h.deps.prepareResume, point).not.toHaveBeenCalled()
+      expect(h.deps.relaunchOld, point).not.toHaveBeenCalled()
+      expect(vi.mocked(h.deps.killPane).mock.calls.map(([runtime]) => runtime), point).toEqual(point === 'capture' || point === 'buildLaunch' ? [] : [NEW])
+      expect(h.gate.holding('a1'), point).toBe(false)
+      expect(h.routes.size, point).toBe(0)
+    }
+  })
+
+  it('once the old engine stopped, the agent becoming busy does not stop the move', async () => {
+    let eligible = true
+    const h = harness({ eligible: () => eligible, stopEngine: vi.fn(async () => { eligible = false; return 'terminated' as const }) })
+    expect(await run(h.deps)).toEqual({ moved: true, resumed: true })
   })
 
   it('input that arrives once held, before the old engine stops, cancels the move and reaches the old pane', async () => {

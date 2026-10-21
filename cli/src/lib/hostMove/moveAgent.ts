@@ -99,6 +99,11 @@ export interface MoveAgentDeps {
   holdRoute(routeKey: string): () => void
   /** False once the move is cancelled (Stop, delete, a replacement): `restartJobs.run`'s `current`. */
   current(): boolean
+  /** Whether the agent still meets what the mover picked it for: idle, quiet, and nobody looking at it. Asked at every
+   *  point before the old engine stops, the last right before it: a person who types, a turn that starts or a viewer
+   *  who opens it in that window cancels the move with nothing changed. Never asked after the stop, where only
+   *  [current] counts: the engine is stopped by then, and the move ends one way or the other. */
+  eligible(): boolean
   log(message: string): void
 }
 
@@ -160,6 +165,11 @@ export async function removeOrphanMovePanes(
   return { removed, unconfirmed: [...unconfirmed], keptPanes }
 }
 
+/** The line said of an agent `removeOrphanMovePanes` could not free, each time something would start its engine. */
+export function moveHeldLine(agentId: string): string {
+  return `[terminal] move ${agentId}: held until the next start: a pane its stopped move left was not confirmed closed`
+}
+
 type Bounded<T> = { done: true; value: T } | { done: false; reason: string }
 
 /** [work], or why it did not finish within [ms]: thrown, or still running. A step that overruns is abandoned, not
@@ -203,6 +213,7 @@ async function proveEngine(deps: MoveAgentDeps, runtime: TerminalRuntimeRef, eng
 
 const CANCELLED = 'the move was cancelled'
 const IN_USE = 'the agent was used as the move began'
+const NOT_ELIGIBLE = 'the agent was used, started a turn or was looked at'
 
 export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps): Promise<MoveOutcome> {
   const { agentId, engine } = session
@@ -231,7 +242,7 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
 
   /** Undo everything a failed or cancelled move did before its swap. The gate is released by the caller after it. */
   const recover = async (reason: string): Promise<MoveOutcome> => {
-    const cancelled = reason === CANCELLED || reason === IN_USE
+    const cancelled = reason === CANCELLED || reason === IN_USE || reason === NOT_ELIGIBLE
     const notMoved = (fellBack: boolean): MoveOutcome => ({ moved: false, reason, fellBack, ...(cancelled ? { cancelled: true as const } : {}) })
     if (swapped) {
       log(`[terminal] move ${agentId}: after the switch, ${reason}`)
@@ -264,8 +275,11 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
     return notMoved(relaunched.done && relaunched.value)
   }
 
+  /** Before the stop: why the move must not go on, or null. */
+  const stale = (): string | null => !deps.current() ? CANCELLED : !deps.eligible() ? NOT_ELIGIBLE : null
   try {
-    if (!deps.current()) return await recover(CANCELLED)
+    let reason = stale()
+    if (reason) return await recover(reason)
 
     // Steps 1 to 3 write nothing: not the row, not the conversation, not the old pane. A failure or a cancel here
     // leaves the agent as it was, apart from the pane step 3 made.
@@ -273,7 +287,7 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
     // 1. The old pane's scrollback.
     const capture = await bounded(() => deps.capture(session), MOVE_CAPTURE_TIMEOUT_MS, 'capturing the old pane')
     if (!capture.done || capture.value === null) return await recover(`could not capture the old pane${capture.done ? '' : `: ${capture.reason}`}`)
-    if (!deps.current()) return await recover(CANCELLED)
+    if ((reason = stale())) return await recover(reason)
     const seed = seedFromCapture(capture.value)
 
     // 2. The launch, as restore builds it, resuming the row's conversation, without preparing it: the old engine still
@@ -286,6 +300,7 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
     if (!deps.current() || 'cancelled' in launch) return await recover(CANCELLED)
     if ('error' in launch) return await recover(`no launch: ${launch.detail}`)
     if ('held' in launch) return await recover(`the launch waits for ${launch.held}`)
+    if ((reason = stale())) return await recover(reason)
 
     // 3. The new pane, waiting with no engine.
     const creating = Promise.resolve().then(() => deps.createSeeded(session, seed))
@@ -300,7 +315,7 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
     if (!made.value.ok) return await recover(`could not open a pane on the new host: ${made.value.reason}`)
     created = made.value.runtime
     holdRoute(created)
-    if (!deps.current()) return await recover(CANCELLED)
+    if ((reason = stale())) return await recover(reason)
 
     // 4. From here until release, what is typed or sent to the agent waits (gate.ts), and the old pane's route is
     // held: its engine is about to stop, which must not read as the agent ending.
@@ -310,6 +325,8 @@ export async function moveAgent(session: RegisteredSession, deps: MoveAgentDeps)
     if (!deps.current()) return await recover(CANCELLED)
     // Someone reached for the agent: nothing has changed yet, so give it back untouched.
     if (deps.gate.touched(agentId)) return await recover(IN_USE)
+    // The last look before anything changes: a turn that began, or a viewer who opened it, since the pick.
+    if ((reason = stale())) return await recover(reason)
 
     // 5. The old engine stops; its pane stays, for the fallback. Only then is the conversation prepared for its resume,
     // as a restart prepares after its kill.
