@@ -180,10 +180,11 @@ pub enum Op {
         /// What `env` sets is still set.
         #[serde(rename = "clearInherited", default)]
         clear_inherited: Vec<String>,
-        /// Another pane's scrollback (`capture`/`history` style: SGR-only ANSI, one line per row) that the new
-        /// pane starts with, wholly in its history above a blank screen. Only a host that lists `seed` in
-        /// `FEATURES` knows the field; an older one refuses the whole `create`, so a client sends it only to a
-        /// host that lists it.
+        /// Another pane's scrollback (`capture`/`history` style: SGR-only ANSI, lines separated by `\n` or
+        /// `\r\n`; one break at the very end is not a row) that the new pane starts with, wholly in its history
+        /// above a blank screen. Only a host that lists `seed` in `FEATURES` knows the field; an older one
+        /// ignores it and the pane starts with no history, so a client sends `seed` only to a host that lists
+        /// the `seed` feature.
         #[serde(default)]
         seed: Option<String>,
     },

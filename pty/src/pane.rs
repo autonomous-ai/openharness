@@ -309,6 +309,26 @@ fn user_home() -> Option<PathBuf> {
         .filter(|dir| dir.is_dir())
 }
 
+/// A seed as the terminal should read it: capture/history lines end in a bare `\n`, which does not return
+/// to column 0 (a staircase), so each one becomes `\r\n`. One line break at the very end is dropped: it ends
+/// the last line, it does not start another (a blank history row).
+fn seed_bytes(seed: &[u8]) -> Vec<u8> {
+    let seed = seed
+        .strip_suffix(b"\r\n")
+        .or_else(|| seed.strip_suffix(b"\n"))
+        .unwrap_or(seed);
+    let mut out = Vec::with_capacity(seed.len() + 16);
+    let mut previous = 0u8;
+    for &byte in seed {
+        if byte == b'\n' && previous != b'\r' {
+            out.push(b'\r');
+        }
+        out.push(byte);
+        previous = byte;
+    }
+    out
+}
+
 impl Pane {
     /// A new pane running `spec`. Without a `cwd` it starts in the user's home directory
     /// (`%USERPROFILE%`, `$HOME`), as a new tmux pane does, not in the host's (whose directory
@@ -337,7 +357,10 @@ impl Pane {
             let mut screen = lock(&screen);
             let Screen { term, seq } = &mut *screen;
             let mut parser = Processor::<NoSync>::new();
-            parser.advance(term, seed);
+            parser.advance(term, &seed_bytes(seed));
+            // A seed that ends with a colour on must not paint the blank screen below it: the line feeds
+            // scroll rows in with the cursor's colour.
+            parser.advance(term, b"\x1b[0m");
             parser.advance(term, "\r\n".repeat(rows as usize).as_bytes());
             parser.advance(term, b"\x1b[H");
             *seq += 1;
@@ -2218,5 +2241,18 @@ mod windows_tests {
                 _ => assert!(Instant::now() < end, "reader thread deadlocked"),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod seed_tests {
+    use super::seed_bytes;
+
+    #[test]
+    fn a_seed_reads_with_crlf_and_no_row_for_its_last_break() {
+        assert_eq!(seed_bytes(b"a\nb\n"), b"a\r\nb");
+        assert_eq!(seed_bytes(b"a\r\nb\r\n"), b"a\r\nb");
+        assert_eq!(seed_bytes(b"a\r\nb\nc"), b"a\r\nb\r\nc");
+        assert_eq!(seed_bytes(b"a\n\n"), b"a\r\n");
     }
 }

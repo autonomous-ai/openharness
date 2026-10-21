@@ -757,3 +757,38 @@ fn a_create_without_seed_is_unchanged() {
     assert!(v["capture"].as_str().unwrap().trim().is_empty(), "{v}");
     wait_capture(&mut w, &mut r, &pane, "ready");
 }
+
+#[test]
+fn a_history_style_seed_has_no_staircase_and_no_extra_blank_row() {
+    let (_h, disc) = start();
+    let (mut w, mut r) = connect(&disc);
+    let pane = create_seeded(
+        &mut w,
+        &mut r,
+        Some("one\ntwo\n\x1b[31mthree\x1b[0m\n"),
+        10,
+        "sleep 5",
+        "Start-Sleep 5",
+    );
+    let mut s = stream(&disc);
+    subscribe_with(&mut s, &pane, 80, 10, false);
+    let v = history_snapshot(&mut s, 1);
+    let lines: Vec<&str> = v["history"].as_str().unwrap().lines().collect();
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert!(lines[0].starts_with("one"), "{lines:?}");
+    assert!(lines[1].starts_with("two"), "{lines:?}");
+    assert!(lines[2].starts_with("\x1b[31mthree"), "{lines:?}");
+}
+
+#[test]
+fn a_seed_that_ends_with_a_colour_on_leaves_the_screen_default() {
+    let (_h, disc) = start();
+    let (mut w, mut r) = connect(&disc);
+    let pane = create_seeded(&mut w, &mut r, Some("red\n\x1b[41m"), 10, "sleep 5", "Start-Sleep 5");
+    let mut s = stream(&disc);
+    subscribe_with(&mut s, &pane, 80, 10, false);
+    let v = history_snapshot(&mut s, 1);
+    let capture = v["capture"].as_str().unwrap();
+    assert!(!capture.contains('\x1b') && capture.trim().is_empty(), "{capture:?}");
+    assert!(v["history"].as_str().unwrap().starts_with("red"), "{v}");
+}

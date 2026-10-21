@@ -190,7 +190,7 @@ export interface PtyAfterExit {
 }
 
 export type PtyOp =
-  | { op: 'create'; command: string[]; cwd?: string; env?: Record<string, string>; cols: number; rows: number; owner: string; label?: string; hold: boolean; afterExit?: PtyAfterExit; clearInherited?: string[]; seed?: string }
+  | { op: 'create'; command: string[]; cwd?: string; env?: Record<string, string>; cols: number; rows: number; owner: string; label?: string; hold: boolean; afterExit?: PtyAfterExit; clearInherited?: string[]; /** Scrollback the pane starts with: lines separated by \n or \r\n. Send only to a host listing the `seed` feature. */ seed?: string }
   | { op: 'kill'; pane: string; graceMs?: number }
   | { op: 'inventory' }
   | { op: 'titles' }
