@@ -296,7 +296,7 @@ describe('the Wi-Fi device, with the dials', () => {
     await ask({ type: 'addon.publish', values: [{ topic: 'mood/state', value: { energy: 0.5 } }] })
     expect(await port.addon('state', { deviceId: 'device-1' })).toMatchObject({ result: { devices: [{ deviceId: 'device-1' }] } })
     expect(await port.addon('state', { deviceId: 'nobody' })).toEqual({ result: { devices: [] } })
-    expect(await port.addon('proposal', { proposalId: 42 })).toEqual({ result: { proposal: null } })
+    expect(await port.addon('proposal', { proposalId: 42 })).toMatchObject({ error: { code: 'PROPOSAL_UNKNOWN' } })
     await port.stop()
     const ports = emptyPorts()
     startWifi(fakeCore({ dataDir }), ports, {

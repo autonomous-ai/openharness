@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { randomUUID } from 'node:crypto'
-import { DeviceAddons, DeviceAddonError, HOLDS_MAX_MS, OPEN_PROPOSALS_MAX, PROPOSALS_PER_MINUTE, TOPICS_MAX, VALUE_MAX_BYTES } from './addons.js'
+import { DEVICE_PROPOSALS_PER_MINUTE, DeviceAddons, DeviceAddonError, HOLDS_MAX_MS, OPEN_PROPOSALS_MAX, PROPOSALS_PER_MINUTE, TOPICS_MAX, VALUE_MAX_BYTES } from './addons.js'
 import type { AutonomousDeviceFrame } from './service.js'
 
 function fixture() {
@@ -35,6 +35,23 @@ describe('device add-ons: what a device publishes', () => {
     expect(f.code(() => f.publish('lamp', [{ topic: 'room/state', value: {} }]))).toBe('BACKPRESSURE')
     // Replacing one and adding one in the same batch stays within the bound.
     expect(f.publish('lamp', [{ topic: 't/n0', value: null }, { topic: 'room/state', value: {} }])).toEqual({ topics: TOPICS_MAX })
+  })
+
+  it('clears what a device published at its hello, so a topic it withdrew is gone and counts for nothing', () => {
+    const f = fixture()
+    f.publish('lamp', [{ topic: 'voice/state', value: { state: 'resting' } }, { topic: 'mood/state', value: {} }])
+    for (let i = 0; i < TOPICS_MAX - 2; i += 15) f.publish('lamp', Array.from({ length: Math.min(15, TOPICS_MAX - 2 - i) }, (_, n) => ({ topic: `t/n${i + n}`, value: {} })))
+    f.addons.hello('lamp')
+    expect(f.addons.state('lamp')).toEqual([])
+    // Its new set, without voice/state: nothing of the old one is left, and the bound is the new set's.
+    f.publish('lamp', [{ topic: 'mood/state', value: { energy: 0.5 } }, { topic: 'room/presence', value: { someone: true } }])
+    expect(Object.keys(f.addons.state('lamp')[0].topics)).toEqual(['mood/state', 'room/presence'])
+  })
+
+  it('asks a device to publish again, to that device alone', () => {
+    const f = fixture()
+    f.addons.republish('lamp')
+    expect(f.sent).toEqual([{ deviceId: 'lamp', frame: { type: 'event', serverInstanceId: 'instance', machineId: 'machine', kind: 'addon.republish', payload: {} } }])
   })
 
   it('marks a device offline when its link closes, and forgets it when it is unpaired', () => {
@@ -98,6 +115,41 @@ describe('device add-ons: what an agent proposes', () => {
     expect(f.code(() => f.propose({ params: { x: 'a'.repeat(2048) } }))).toBe('PAYLOAD_TOO_LARGE')
     expect(f.code(() => f.propose({ extra: true }))).toBe('INVALID_REQUEST')
     expect(f.sent).toHaveLength(0)
+  })
+
+  it('bounds a device per minute whatever the add-ons call themselves', () => {
+    const f = fixture()
+    f.publish('lamp', [{ topic: 'mood/state', value: {} }])
+    for (let i = 0; i < DEVICE_PROPOSALS_PER_MINUTE; i++) {
+      const p = f.propose({ addon: `name-${i}` })
+      f.decide('lamp', p.proposalId, 'dropped')
+    }
+    expect(f.code(() => f.propose({ addon: 'yet-another-name' }))).toBe('RATE_LIMITED')
+    f.tick(60_000)
+    expect(f.propose({ addon: 'yet-another-name' }).state).toBe('sent')
+  })
+
+  it('never drops a proposal the limits still count to make room, and refuses instead', () => {
+    const f = fixture()
+    // 22 devices, each at its minute's bound: more proposals than are kept, all inside the window.
+    let made = 0
+    let refused = ''
+    for (let d = 0; d < 22 && !refused; d++) {
+      f.publish(`d${d}`, [{ topic: 'mood/state', value: {} }])
+      for (let i = 0; i < DEVICE_PROPOSALS_PER_MINUTE && !refused; i++) {
+        refused = f.code(() => {
+          const p = f.propose({ deviceId: `d${d}`, addon: `a${i}` })
+          f.decide(`d${d}`, p.proposalId, 'dropped')
+          made++
+        })
+        if (refused === 'no error') refused = ''
+      }
+    }
+    expect(refused).toBe('BACKPRESSURE')
+    expect(made).toBe(256)
+    // A minute on, the oldest settled ones make room.
+    f.tick(60_000)
+    expect(f.propose({ deviceId: 'd21', addon: 'later' }).state).toBe('sent')
   })
 
   it('limits each add-on per minute and each device to a few undecided proposals', () => {

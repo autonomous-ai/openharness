@@ -1277,7 +1277,8 @@ export type WifiReceipt = { receipt: AutonomousDeviceReceipt | null } | { unavai
 
 /** `harness autonomous-device addon`: what devices published, a proposal sent, or one read back
  *  (lib/autonomous-device/addons.ts); refused with the add-on layer's own code, or the service is not there. */
-export type WifiAddonOp = 'state' | 'propose' | 'proposal'
+export const WIFI_ADDON_OPS = ['state', 'propose', 'proposal'] as const
+export type WifiAddonOp = typeof WIFI_ADDON_OPS[number]
 export type WifiAddon = { result: Record<string, unknown> } | { error: { code: string; message: string } } | { unavailable: true }
 
 /** What the core lists for the Wi-Fi device, read in line while it answers a request: the agents as it

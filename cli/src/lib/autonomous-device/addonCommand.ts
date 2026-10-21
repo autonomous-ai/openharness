@@ -1,23 +1,30 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { readHookCredential } from '../hookAuth.js'
 import { outsideCaller } from '../../agentClient/model.js'
 
 const USAGE = 'Usage: harness autonomous-device addon state [--device <id>]'
   + ' | addon propose --act <act> --holds-ms <ms> [--why <why>] [--sure <0..1>] [--params <json>] [--note <text>] [--addon <name>] [--key <key>] [--device <id>]'
-  + ' | addon proposal <proposalId> [--json]'
+  + ' | addon proposal <proposalId> [--json]. To retry a propose that got no answer, pass the same --key, which it prints.'
 
 const VALUE_FLAGS = new Set(['--device', '--act', '--holds-ms', '--why', '--sure', '--params', '--note', '--addon', '--key'])
 
 /**
- * The add-on's name a device is told: `--addon`, or the agent whose shell runs this, as Harness names an
- * outside caller (agentClient/model.ts). Said by this computer, not proven to the device: the device rate-limits
- * and judges every proposal whatever it is called (docs/autonomous-device-addons.md).
+ * The add-on's name a device is told: `--addon`, or the agent whose shell runs this, as its engine and a short
+ * hash of how Harness names the outside caller (agentClient/model.ts): one name per session, without the
+ * session's own id, which the device has no need of. Said by this computer, not proven to the device: the
+ * device rate-limits and judges every proposal whatever it is called (docs/autonomous-device-addons.md).
  */
 function addonName(given: string | undefined, env: NodeJS.ProcessEnv): string | undefined {
   if (given) return given
   const caller = outsideCaller(env, '')
-  return caller ? caller.agentId.replace(/[^A-Za-z0-9._:-]/g, '-').slice(0, 64) : undefined
+  if (!caller) return undefined
+  const engine = caller.engine.replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 40) || 'agent'
+  return `${engine}-${createHash('sha256').update(caller.agentId).digest('hex').slice(0, 12)}`
 }
+
+/** A confidence, 0 to 1, written plainly: no empty value, hex or exponent read as a number. */
+const SURE = /^(0(\.\d{1,6})?|1(\.0{1,6})?|\.\d{1,6})$/
+const WHOLE = /^\d{1,6}$/
 
 /** `harness autonomous-device addon …`: read what paired devices publish, or propose to one. */
 export async function runAddonCommand(argv: string[], dataDir: string, port: number, env: NodeJS.ProcessEnv = process.env): Promise<number> {
@@ -47,6 +54,8 @@ export async function runAddonCommand(argv: string[], dataDir: string, port: num
   } else {
     const act = flags.get('--act'), holds = flags.get('--holds-ms')
     if (!act || !holds) return usage('propose needs --act and --holds-ms')
+    if (!WHOLE.test(holds)) return usage('--holds-ms is a whole number of milliseconds')
+    if (flags.has('--sure') && !SURE.test(flags.get('--sure')!)) return usage('--sure is a number from 0 to 1')
     const addon = addonName(flags.get('--addon'), env)
     if (!addon) return usage('Name the add-on with --addon: no agent is running this shell')
     let params: unknown
@@ -70,7 +79,9 @@ export async function runAddonCommand(argv: string[], dataDir: string, port: num
       headers: { Authorization: `Bearer ${credential}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
     })
-    print(await result.json())
+    const answer = await result.json() as Record<string, unknown>
+    // A propose that failed says the key it used, so a retry can send the same proposal at most once.
+    print(!result.ok && body ? { ...answer, idempotencyKey: body.idempotencyKey } : answer)
     return result.ok ? 0 : 1
   } catch {
     print({ error: { code: 'DAEMON_UNAVAILABLE', message: 'Could not reach the Harness Autonomous device API. Start or update Harness CLI.' } })

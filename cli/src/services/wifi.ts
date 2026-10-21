@@ -184,7 +184,10 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       try {
         if (op === 'state') return { result: { devices: service.addons.state(typeof input.deviceId === 'string' ? input.deviceId : undefined) } }
         if (op === 'propose') return { result: { proposal: service.addons.propose(input) } }
-        return { result: { proposal: service.addons.proposal(typeof input.proposalId === 'string' ? input.proposalId : '') } }
+        const proposal = service.addons.proposal(typeof input.proposalId === 'string' ? input.proposalId : '')
+        // Never sent, or aged out: said as such, so a script can tell it from a proposal.
+        if (!proposal) return { error: { code: 'PROPOSAL_UNKNOWN', message: 'No such proposal: never sent, or aged out after ten minutes' } }
+        return { result: { proposal } }
       } catch (error) {
         if (error instanceof DeviceAddonError) return { error: { code: error.code, message: error.message } }
         throw error

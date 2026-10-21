@@ -9,7 +9,7 @@
  * whichever devices the new core's gateway brings.
  */
 import type { RecentTurn } from '../cable/cableHost.js'
-import { emptyPorts, type CoreApi, type CorePorts, type ForkResult, type RemoteClient, type WifiPort, type WifiResume, type WifiView } from '../core/api.js'
+import { WIFI_ADDON_OPS, emptyPorts, type CoreApi, type CorePorts, type ForkResult, type RemoteClient, type WifiAddonOp, type WifiPort, type WifiResume, type WifiView } from '../core/api.js'
 import type { AutonomousDeviceDelivery } from '../lib/autonomous-device/service.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
@@ -168,8 +168,8 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
       addon: async ({ op, input }) => {
         await heardSoFar
         if (!built) return { error: 'SERVICE_UNAVAILABLE' }
-        if (op !== 'state' && op !== 'propose' && op !== 'proposal') return { error: { code: 'INVALID_REQUEST', message: 'Unknown add-on operation' } }
-        return { ...await built.port.addon(op, input && typeof input === 'object' && !Array.isArray(input) ? input as Record<string, unknown> : {}) }
+        if (!(WIFI_ADDON_OPS as readonly unknown[]).includes(op)) return { error: { code: 'INVALID_REQUEST', message: 'Unknown add-on operation' } }
+        return { ...await built.port.addon(op as WifiAddonOp, input && typeof input === 'object' && !Array.isArray(input) ? input as Record<string, unknown> : {}) }
       },
     },
     onEvent: (payload) => {

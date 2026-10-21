@@ -34,8 +34,11 @@ An authenticated role-device application `hello` advertises two more strings:
 ```
 
 An older CLI does not list them and answers `UNSUPPORTED_CAPABILITY`. A device offers add-ons by
-publishing after its hello; it publishes its whole set again after every hello, because nothing is
-kept across a daemon restart.
+publishing after its hello. **A hello clears what the device published before**, and the device
+publishes its whole set again after every hello, so a topic it no longer offers (a person withdrew
+consent) is gone, not left readable. When the Wi-Fi device service restarts under a session the
+gateway kept, no hello comes: the computer sends the `addon.republish` event below, and the device
+publishes its whole set again.
 
 ## Device → computer requests
 
@@ -85,7 +88,9 @@ characters. Success: `{"type":"addon.decision_result","requestId":…,"proposalI
 - The same decision again answers the same result; a different one answers `IDEMPOTENCY_CONFLICT`.
 - A decision for a proposal that already lapsed here is still recorded: the device's judge decided.
 
-## Computer → device event
+## Computer → device events
+
+`addon.republish`, with an empty payload, asks the device to publish its whole set again (above).
 
 A proposal reaches its device as an encrypted `autonomous_device_event`:
 
@@ -121,7 +126,7 @@ harness autonomous-device addon proposal <proposalId> [--json]
 |---|---|
 | GET `/api/autonomous-device/addon/state[?deviceId=…]` | `{devices:[{deviceId,online,topics:{<topic>:{value,at,receivedAt}}}]}` |
 | POST `/api/autonomous-device/addon/propose` | `{addon,idempotencyKey,act,holdsMs,why?,sure?,params?,note?,deviceId?}` → `{proposal}` |
-| GET `/api/autonomous-device/addon/proposal?proposalId=…` | `{proposal}`, or `{proposal:null}` once it aged out |
+| GET `/api/autonomous-device/addon/proposal?proposalId=…` | `{proposal}`; `PROPOSAL_UNKNOWN` (404) for one never sent or aged out |
 
 A proposal record is `{proposalId,deviceId,addon,idempotencyKey,act,why?,sure?,holdsMs,params?,note?,
 state,reason,sentAt,expiresAt,decidedAt}`, with `state` one of `sent`, `kept`, `dropped`, `expired`.
@@ -130,8 +135,8 @@ state,reason,sentAt,expiresAt,decidedAt}`, with `state` one of `sent`, `kept`, `
 
 | Field | Rule |
 |---|---|
-| `addon` | `[A-Za-z0-9._:-]{1,64}`. The CLI uses `--addon`, or else the agent running the shell as Harness names an outside caller (`claude-code:<session>`, `codex:<thread>`, `agent:<name>`) |
-| `idempotencyKey` | `[A-Za-z0-9_-]{1,64}`; the same add-on and key is one proposal. The CLI makes a fresh key per call unless `--key` is given |
+| `addon` | `[A-Za-z0-9._:-]{1,64}`. The CLI uses `--addon`, or else the engine of the agent running the shell and a 12-hex hash of how Harness names that outside caller (`claude-1a2b3c4d5e6f`): one name per session, never the session's own id |
+| `idempotencyKey` | `[A-Za-z0-9_-]{1,64}`; the same add-on and key is one proposal. The CLI makes a fresh key per call unless `--key` is given, and prints the key it used when a propose fails |
 | `act`, `why` | `[a-z][a-z0-9_]{0,31}` |
 | `sure` | 0 to 1 |
 | `holdsMs` | 1000 to 30000 |
@@ -139,18 +144,26 @@ state,reason,sentAt,expiresAt,decidedAt}`, with `state` one of `sent`, `kept`, `
 | `note` | at most 300 bytes, no control characters but newline |
 | `deviceId` | optional when exactly one device that published is connected |
 
-**Limits:** six proposals a minute per add-on and device (`RATE_LIMITED`), four undecided proposals
-per device (`BACKPRESSURE`). A proposal not decided within `holdsMs` becomes `expired`. Settled
-proposals stay readable ten minutes; at most 256 are kept.
+**Limits:** six proposals a minute per add-on and device, and twelve a minute per device whatever the
+add-ons call themselves, since the name is the caller's (`RATE_LIMITED`); four undecided proposals per
+device (`BACKPRESSURE`). A proposal not decided within `holdsMs` becomes `expired`. Settled proposals
+stay readable ten minutes; at most 256 are kept, and a proposal still inside the rate window is never
+dropped to make room: a new one is refused `BACKPRESSURE` instead.
+
+**No answer in time.** The CLI waits 5 seconds for the Wi-Fi device service. A `propose` with no answer
+in time is `OUTCOME_UNKNOWN` (504): it may have been sent. Retry with the same `--key` and it is sent at
+most once. A read with no answer is `UNAVAILABLE` (503).
 
 **Errors** (HTTP status): `INVALID_REQUEST` 400, `PAYLOAD_TOO_LARGE` 413, `DEVICE_NOT_FOUND` 404,
-`MISSING_TARGET` 409, `DEVICE_OFFLINE` 409, `IDEMPOTENCY_CONFLICT` 409, `RATE_LIMITED` 429,
-`BACKPRESSURE` 429, `UNAVAILABLE` 503 when the Wi-Fi device service is not running.
+`PROPOSAL_UNKNOWN` 404, `MISSING_TARGET` 409, `DEVICE_OFFLINE` 409, `IDEMPOTENCY_CONFLICT` 409,
+`RATE_LIMITED` 429, `BACKPRESSURE` 429, `UNAVAILABLE` 503 when the Wi-Fi device service is not running,
+`OUTCOME_UNKNOWN` 504 for a propose with no answer in time.
 
 ## Lifetime
 
 - A device's link closing marks it `online: false`: its values stay readable, and nothing is
   proposed to it until it publishes again.
+- A hello clears what it published; a restored session is asked to publish again.
 - Unpairing (either side) forgets everything it published and every proposal made to it.
 - A daemon restart forgets everything: values, proposals and decisions.
 

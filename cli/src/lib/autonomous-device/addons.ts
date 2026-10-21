@@ -12,8 +12,11 @@ import type { AutonomousDeviceFrame } from './service.js'
  * proposal may change are the device's own policy; this layer bounds sizes, rates and lifetimes so that one
  * agent cannot flood a device and one device cannot grow this daemon's memory.
  *
- * Nothing here is durable. Published values and proposals live in RAM, a device publishes its whole set
- * again after each hello, and a proposal lives at most `HOLDS_MAX_MS` before it lapses.
+ * Nothing here is durable. Published values and proposals live in RAM. A hello clears what a device
+ * published, and the device publishes its whole set again after it, so a topic it no longer offers (a
+ * person withdrew consent) is gone, not left readable. When the service restarts under a session the
+ * gateway kept, there is no hello: the device is asked to publish again (`addon.republish`). A proposal
+ * lives at most `HOLDS_MAX_MS` before it lapses.
  */
 export const DEVICE_ADDON_CAPABILITIES = ['addon.publish', 'addon.decision'] as const
 
@@ -26,9 +29,12 @@ export const PARAMS_MAX_BYTES = 2048
 export const NOTE_MAX_BYTES = 300
 /** Per device and add-on, in any rolling minute. */
 export const PROPOSALS_PER_MINUTE = 6
+/** Per device, whatever the add-ons call themselves: the name is the caller's, so it cannot be the bound. */
+export const DEVICE_PROPOSALS_PER_MINUTE = 12
 /** Per device: proposals sent and not yet decided or lapsed. */
 export const OPEN_PROPOSALS_MAX = 4
 const PROPOSALS_RETAINED = 256
+const RATE_WINDOW_MS = 60_000
 /** How long a settled proposal stays readable by `addon proposal`. */
 const SETTLED_TTL_MS = 10 * 60_000
 
@@ -157,15 +163,18 @@ export class DeviceAddons {
     }
     const deviceId = this.target(req.deviceId)
     const now = this.now()
-    const mine = [...this.proposals.values()].filter(p => p.deviceId === deviceId)
-    if (mine.filter(p => p.addon === req.addon && now - p.sentAt < 60_000).length >= PROPOSALS_PER_MINUTE) fail('RATE_LIMITED', `At most ${PROPOSALS_PER_MINUTE} proposals a minute per add-on`)
-    if (mine.filter(p => p.state === 'sent').length >= OPEN_PROPOSALS_MAX) fail('BACKPRESSURE', 'The device has not answered earlier proposals yet')
+    const recent = [...this.proposals.values()].filter(p => p.deviceId === deviceId && now - p.sentAt < RATE_WINDOW_MS)
+    if (recent.length >= DEVICE_PROPOSALS_PER_MINUTE) fail('RATE_LIMITED', `At most ${DEVICE_PROPOSALS_PER_MINUTE} proposals a minute to one device`)
+    if (recent.filter(p => p.addon === req.addon).length >= PROPOSALS_PER_MINUTE) fail('RATE_LIMITED', `At most ${PROPOSALS_PER_MINUTE} proposals a minute per add-on`)
+    const open = [...this.proposals.values()].filter(p => p.deviceId === deviceId && p.state === 'sent')
+    if (open.length >= OPEN_PROPOSALS_MAX) fail('BACKPRESSURE', 'The device has not answered earlier proposals yet')
+    // Room is made before anything is sent: a proposal the limits still count is never dropped for it.
+    if (this.proposals.size >= PROPOSALS_RETAINED && !this.evict(now)) fail('BACKPRESSURE', 'Too many recent proposals are kept; try again in a minute')
     const proposal = { proposalId: randomUUID(), deviceId, addon: req.addon, idempotencyKey: req.idempotencyKey, act: req.act,
       ...(req.why ? { why: req.why } : {}), ...(req.sure !== undefined ? { sure: req.sure } : {}), holdsMs: req.holdsMs,
       ...(req.params ? { params: structuredClone(req.params) } : {}), ...(req.note ? { note: req.note } : {}),
       state: 'sent' as ProposalState, reason: null, sentAt: now, expiresAt: now + req.holdsMs, decidedAt: null, digest }
     this.proposals.set(proposal.proposalId, proposal)
-    if (this.proposals.size > PROPOSALS_RETAINED) this.evict()
     const { deviceId: _d, idempotencyKey: _i, state: _s, reason: _r, sentAt: _t, decidedAt: _a, digest: _g, ...payload } = proposal
     this.options.send(deviceId, { type: 'event', serverInstanceId: this.options.serverInstanceId, machineId: this.options.machineId,
       kind: 'addon.proposal', payload })
@@ -184,6 +193,17 @@ export class DeviceAddons {
     return [...this.devices].filter(([id]) => !deviceId || id === deviceId).map(([id, record]) => ({
       deviceId: id, online: record.online,
       topics: Object.fromEntries([...record.topics].sort(([a], [b]) => a < b ? -1 : 1).map(([t, v]) => [t, structuredClone(v)])) }))
+  }
+
+  /** A hello: what it published before is cleared, and it publishes its whole set again (module doc). */
+  hello(deviceId: string): void {
+    this.devices.delete(deviceId)
+  }
+
+  /** Served again after the service restarted, without a hello: the device is asked to publish again. */
+  republish(deviceId: string): void {
+    this.options.send(deviceId, { type: 'event', serverInstanceId: this.options.serverInstanceId, machineId: this.options.machineId,
+      kind: 'addon.republish', payload: {} })
   }
 
   /** Its last link closed: its values stay readable, marked offline, and nothing is proposed to it. */
@@ -223,8 +243,11 @@ export class DeviceAddons {
     }
   }
 
-  /** Over capacity: the oldest settled proposal goes; open ones are bounded by `OPEN_PROPOSALS_MAX` per device. */
-  private evict(): void {
-    for (const [id, p] of this.proposals) if (p.state !== 'sent') { this.proposals.delete(id); return }
+  /** Over capacity: the oldest settled proposal outside the rate window goes, or none (false). */
+  private evict(now: number): boolean {
+    for (const [id, p] of this.proposals) {
+      if (p.state !== 'sent' && now - p.sentAt >= RATE_WINDOW_MS) { this.proposals.delete(id); return true }
+    }
+    return false
   }
 }

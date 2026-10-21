@@ -185,6 +185,15 @@ describe('device add-ons over the E2EE relay', () => {
     expect(opened(1)).toMatchObject({ type: 'addon.decision_result', state: 'kept' })
     expect(service.addons.proposal(proposal.proposalId)).toMatchObject({ state: 'kept', reason: 'evening, someone here' })
 
+    // A new hello clears what it published: it publishes its whole set again.
+    await request('conn', { type: 'hello', proto: 1, requestId: randomUUID() })
+    expect(service.addons.state('lamp')).toEqual([])
+    await request('conn', { type: 'addon.publish', requestId: randomUUID(), values: [{ topic: 'room/presence', value: { someone: false } }] })
+    send.mockClear()
+    // A restored session (the service restarted, no hello) is asked to publish again.
+    relay.drop('conn')
+    relay.restore('conn', 'lamp')
+    expect(send.mock.calls.map((_, i) => opened(i).kind)).toContain('addon.republish')
     // The device's last link closing marks it offline; unpairing forgets it.
     relay.drop('conn')
     expect(service.addons.state('lamp')[0].online).toBe(false)

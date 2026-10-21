@@ -61,11 +61,16 @@ export function createWifiLink(deps: WifiLinkDeps) {
       if (typeof answer.error === 'string') return readFallback(WIFI_FALLBACKS.receipt).value as WifiReceipt
       return { receipt: (answer.receipt ?? null) as AutonomousDeviceReceipt | null }
     },
-    // A person's or an agent's, as `receipt` is: asked with a deadline, and a service that is down says so.
+    // A person's or an agent's, as `receipt` is: asked with a deadline. The link answers a service that is
+    // down and one that missed the deadline alike, so a proposal with no answer may still have been sent:
+    // said as unknown, to be retried with the same key, never as a stopped service.
     addon: async (op, input) => {
       const answer = await deps.call('addon', { op, input }, WIFI_WAIT_MS)
-      if (typeof answer.error === 'string') return readFallback(WIFI_FALLBACKS.addon).value as WifiAddon
-      return answer as WifiAddon
+      if (typeof answer.error !== 'string') return answer as WifiAddon
+      if (op === 'propose') {
+        return { error: { code: 'OUTCOME_UNKNOWN', message: 'No answer in time: the proposal may have been sent. Retry with the same key (--key) to send it at most once.' } }
+      }
+      return readFallback(WIFI_FALLBACKS.addon).value as WifiAddon
     },
     // Its own process: the master stops it.
     stop: async () => {},

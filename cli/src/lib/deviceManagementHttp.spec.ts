@@ -150,6 +150,8 @@ describe('device add-on local routes', () => {
       { error: { code: 'MISSING_TARGET', message: 'name one' } },
       { error: { code: 'PAYLOAD_TOO_LARGE', message: 'too big' } },
       { unavailable: true as const },
+      { error: { code: 'OUTCOME_UNKNOWN', message: 'maybe sent' } },
+      { error: { code: 'PROPOSAL_UNKNOWN', message: 'aged out' } },
       { result: { proposal: null } },
     ]
     const routes = deviceAddonRoutes(async () => answers.shift()!)
@@ -159,6 +161,8 @@ describe('device add-on local routes', () => {
     expect((await post()).status).toBe(409)
     expect((await post()).status).toBe(413)
     expect((await post()).body).toMatchObject({ error: { code: 'UNAVAILABLE' } })
+    expect((await post()).status).toBe(504)
+    expect((await post()).status).toBe(404)
     expect(await post()).toEqual({ status: 200, body: { proposal: null } })
   })
 })

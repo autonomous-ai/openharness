@@ -1,3 +1,5 @@
+import type { WifiAddon, WifiAddonOp } from '../core/api.js'
+
 /** Local HTTP validation only. Pairing and device state stay behind the gateway and Wi-Fi ports. */
 export interface AutonomousDeviceManagement {
   discover(): unknown | Promise<unknown>
@@ -15,12 +17,10 @@ export interface AutonomousDeviceManagement {
 
 export interface AutonomousDeviceLocalResponse { status: number; body: unknown }
 
-type AddonAnswer = { result: Record<string, unknown> } | { error: { code: string; message: string } } | { unavailable: true }
-
 /** The add-on routes over the Wi-Fi device service's one `addon` door (core/api.ts `WifiPort.addon`). */
-export function deviceAddonRoutes(ask: (op: 'state' | 'propose' | 'proposal', input: Record<string, unknown>) => Promise<AddonAnswer>):
+export function deviceAddonRoutes(ask: (op: WifiAddonOp, input: Record<string, unknown>) => Promise<WifiAddon>):
   Pick<AutonomousDeviceManagement, 'addonState' | 'addonPropose' | 'addonProposal'> {
-  const call = async (op: 'state' | 'propose' | 'proposal', input: Record<string, unknown>): Promise<Record<string, unknown>> => {
+  const call = async (op: WifiAddonOp, input: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const answer = await ask(op, input)
     if ('unavailable' in answer) throw Object.assign(new Error('The Wi-Fi device service is not running on this computer. See the daemon\'s log.'), { code: 'UNAVAILABLE' })
     if ('error' in answer) throw Object.assign(new Error(answer.error.message), { code: answer.error.code })
@@ -57,6 +57,7 @@ const errorStatus: Record<string, number> = {
   DEVICE_NOT_FOUND: 404, BAD_CODE: 400, NO_INTENT: 409, STALE_PAIR: 409, CODE_MISMATCH: 403, BACKEND_DOWN: 503, TIMEOUT: 504, RATE_LIMITED: 429, EXPIRED: 410, CANCELLED: 409,
   LOCAL_NETWORK_BLOCKED: 503, UNAVAILABLE: 503,
   INVALID_REQUEST: 400, PAYLOAD_TOO_LARGE: 413, MISSING_TARGET: 409, DEVICE_OFFLINE: 409, IDEMPOTENCY_CONFLICT: 409, BACKPRESSURE: 429,
+  PROPOSAL_UNKNOWN: 404, OUTCOME_UNKNOWN: 504,
 }
 
 function failure(status: number, code: string, message: string): AutonomousDeviceLocalResponse {

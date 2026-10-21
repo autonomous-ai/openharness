@@ -61,6 +61,8 @@ describe('the Wi-Fi device in the devices\' process, as the core sees it', () =>
     const refused = { error: { code: 'RATE_LIMITED', message: 'slow down' } }
     expect(await link(refused).wifi.port.addon('propose', {})).toEqual(refused)
     expect(await link({ error: 'SERVICE_UNAVAILABLE' }).wifi.port.addon('proposal', { proposalId: 'p' })).toEqual({ unavailable: true })
+    // A proposal with no answer in time may have been sent: unknown, retried with its key, never "not running".
+    expect(await link({ error: 'SERVICE_UNAVAILABLE' }).wifi.port.addon('propose', {})).toMatchObject({ error: { code: 'OUTCOME_UNKNOWN' } })
   })
 
   it('answers what it asks through the core\'s Wi-Fi doors', async () => {
