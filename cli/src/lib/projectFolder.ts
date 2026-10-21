@@ -272,9 +272,26 @@ function cloneRepository(url: string, destination: string): Promise<void> {
       clearTimeout(forceKill)
       if (timedOut) reject(new ProjectFolderError('CLONE_TIMEOUT', 'Cloning took too long. Check the connection and retry.'))
       else if (code === 0) resolve()
-      else reject(new ProjectFolderError('CLONE_FAILED', /authentication|permission denied|could not read username|repository not found/i.test(diagnostic)
-        ? 'Could not access this repository. Check the URL and GitHub access on the selected machine.'
-        : 'Could not clone the repository. Check the URL and connection, then retry.'))
+      else reject(cloneFailure(diagnostic))
     })
   })
+}
+
+/** CLONE_FAILED because the host refused this machine's credentials, not because of the network or the URL. The code
+ *  stays CLONE_FAILED for the apps; a caller that knows another way in can tell the two apart. */
+export class RepositoryAccessError extends ProjectFolderError {}
+
+/** What git's diagnostic of a failed clone becomes. A private GitHub repository answers "not found" without access. */
+export function cloneFailure(diagnostic: string): ProjectFolderError {
+  return /authentication|permission denied|could not read username|repository not found/i.test(diagnostic)
+    ? new RepositoryAccessError('CLONE_FAILED', 'Could not access this repository. Check the URL and GitHub access on the selected machine.')
+    : new ProjectFolderError('CLONE_FAILED', 'Could not clone the repository. Check the URL and connection, then retry.')
+}
+
+/** The same GitHub repository over the other transport, for parseProjectFolder's two forms; null for anything else. */
+export function otherGitHubTransport(url: string): string | null {
+  const ssh = /^git@github\.com:([^/\s]+\/[^/\s]+)$/.exec(url)
+  if (ssh) return `https://github.com/${ssh[1]}`
+  const https = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)$/.exec(url)
+  return https ? `git@github.com:${https[1]}` : null
 }

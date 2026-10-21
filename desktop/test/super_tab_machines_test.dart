@@ -69,6 +69,23 @@ void main() {
       'https://github.com/example/project',
     );
   });
+  test('a daemon\'s canonical remote is shared as an HTTPS repository', () {
+    // The CLI daemon reports `origin` as host/owner/repo, without a scheme.
+    expect(
+      superTabRepositoryUrl('github.com/autonomous-ai/openharness'),
+      'https://github.com/autonomous-ai/openharness',
+    );
+    expect(
+      superTabRepositoryUrl('gitlab.example.co.uk/team/group/project'),
+      'https://gitlab.example.co.uk/team/group/project',
+    );
+    // A canonical port may be SSH's; it is not guessed as HTTPS.
+    expect(superTabRepositoryUrl('git.example.com:2222/team/project'), isNull);
+    // Local and relative remotes are not shareable repositories.
+    expect(superTabRepositoryUrl('../project'), isNull);
+    expect(superTabRepositoryUrl('/Users/me/project.git'), isNull);
+    expect(superTabRepositoryUrl('github.com'), isNull);
+  });
   testWidgets(
     'Add machine has one field and contributes the prepared project and installed engines',
     (tester) async {

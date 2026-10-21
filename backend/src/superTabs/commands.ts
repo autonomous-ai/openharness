@@ -18,7 +18,7 @@ const configuration = z.object({
   engineVersion: z.string().max(160).nullable(),
 }).strict()
 const path = z.string().min(1).max(4096).regex(/^\//).refine(value => !/[\x00-\x1f\x7f]/.test(value))
-const project = z.object({ cwd: path, repositoryUrl: z.string().max(4096).refine(value => {
+const repositoryUrl = z.string().max(4096).refine(value => {
   if (/[\x00-\x20\x7f]/.test(value)) return false
   if (/^git@[^/@:]+:[^@]+$/.test(value)) return true
   try {
@@ -26,7 +26,8 @@ const project = z.object({ cwd: path, repositoryUrl: z.string().max(4096).refine
     return ['https:', 'http:', 'ssh:', 'git:'].includes(uri.protocol) && !!uri.hostname && !uri.password &&
       (!uri.username || (uri.protocol === 'ssh:' && uri.username === 'git'))
   } catch { return false }
-}, 'Share a repository URL without credentials.').nullable() }).strict()
+}, 'Share a repository URL without credentials.')
+const project = z.object({ cwd: path, repositoryUrl: repositoryUrl.nullable() }).strict()
 export const startRequestSchema = z.object({
   conversationId: id, machineId: id, engine: z.string().min(1).max(80), name: title, cwd: path,
   worktree: z.boolean(), branchRef: z.string().max(1024).regex(/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/).optional(),
@@ -52,6 +53,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.sharing'), projectId: id, visibility: z.enum(['public', 'private']), memberIds: z.array(id).max(200) }).strict(),
   z.object({ type: z.literal('project.cadence'), projectId: id, minutes: z.union([z.literal(1), z.literal(5), z.literal(15), z.literal(30)]) }).strict(),
   z.object({ type: z.literal('project.report'), projectId: id, throughRevision: z.number().int().nonnegative().safe(), text: text.nullable() }).strict(),
+  z.object({ type: z.literal('project.repository'), projectId: id, repositoryUrl }).strict(),
   z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000), checks: z.array(check).max(40) }).strict(),
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
@@ -210,6 +212,23 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (project.progress) project.progress.summarizedRevision = Math.max(project.progress.summarizedRevision,
         Math.min(command.throughRevision, project.progress.dirtyRevision))
       if (command.text) message(group.id, command.text, [], null, { kind: 'project-report' })
+      break
+    }
+    case 'project.repository': {
+      // Desktop once dropped the daemon's scheme-less remote, so some leads recorded a folder without an address and
+      // other machines could not clone it. Its owner or lead fills it in; an address already shared is never replaced.
+      const project = readProject(state, actor, command.projectId)
+      author(state, actor, true)
+      const group = conversation(state, project.leadConversationId)
+      if (!(actor.kind === 'person' && actor.userId === project.ownerId) && !(actor.kind === 'agent' && group.leadId === actor.agentId)) {
+        fail('PROJECT_OWNER_REQUIRED', 'Only the project owner or its lead can share its repository.', 403)
+      }
+      // On a tab from before projects this is `state.project` itself (projectsOf).
+      const repository = project.repository ?? fail('PROJECT_FOLDER_REQUIRED', 'Start this project’s lead in its repository first.')
+      if (repository.repositoryUrl && repository.repositoryUrl !== command.repositoryUrl) {
+        fail('PROJECT_REPOSITORY_SET', 'This project already shares another repository.')
+      }
+      repository.repositoryUrl = command.repositoryUrl
       break
     }
     case 'project.create': {

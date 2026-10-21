@@ -190,6 +190,33 @@ describe('projects inside an invite-only swarm', () => {
     expect(() => f.run({ type: 'agent.started', startId, harnessId: 'late', configuration })).toThrow('unavailable')
   })
 
+  it('lets the owner or lead share a missing repository address once, without replacing it', () => {
+    const f = setup(), p = f.project('public'), url = 'https://github.com/example/project'
+    const share = (repositoryUrl: string): Command => ({ type: 'project.repository', projectId: p.projectId, repositoryUrl })
+    expect(() => f.run(share(url))).toThrow('lead in its repository')
+    // What Desktop recorded while it dropped the daemon's scheme-less remote.
+    f.run({ type: 'agent.add', conversationId: p.conversationId, harnessId: 'lead', machineId: 'machine', name: 'Lead', configuration,
+      lead: true, project: { cwd: '/work/project', repositoryUrl: null } })
+    const lead: Actor = { kind: 'agent', agentId: f.state.agents[0]!.id, machineOwnerId: 'host' }
+    const worker: Actor = { kind: 'agent', agentId: f.add(p.conversationId, 'worker', false), machineOwnerId: 'host' }
+    expect(() => f.run(share(url), peer)).toThrow('Only the project owner or its lead')
+    expect(() => f.run(share(url), worker)).toThrow('Only the project owner or its lead')
+    f.run(share(url), lead)
+    const repository = () => projectsOf(f.state).find(item => item.id === p.projectId)!.repository
+    expect(repository()).toEqual({ machineId: 'machine', cwd: '/work/project', repositoryUrl: url })
+    f.run(share(url))
+    expect(() => f.run(share('https://github.com/example/another'))).toThrow('already shares another repository')
+    expect(repository()!.repositoryUrl).toBe(url)
+  })
+
+  it('shares a missing repository address on a tab from before projects', () => {
+    const f = setup(), url = 'git@github.com:example/project.git'
+    f.state.project = { machineId: 'machine', cwd: '/old', repositoryUrl: null }
+    f.run({ type: 'project.repository', projectId: 'lead', repositoryUrl: url })
+    expect(f.state.project).toEqual({ machineId: 'machine', cwd: '/old', repositoryUrl: url })
+    expect(projectsOf(f.state)[0]!.repository).toEqual(f.state.project)
+  })
+
   it('keeps active work visible after its contributed agent is removed', () => {
     const f = setup(), p = f.project(), agentId = f.add(p.conversationId, 'worker')
     f.run({ type: 'work.define', conversationId: p.conversationId, brief: 'Finish the task',

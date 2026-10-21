@@ -24,6 +24,7 @@ const HELP = {
   command: 'command OPERATION_ID JSON: send one of the commands below. Reuse exactly the same ID and JSON after an interrupted request.',
   commands: [
     { type: 'project.report', projectId: 'PROJECT', throughRevision: 123, text: 'What changed, what is blocked, and what comes next. Use null when nothing merits repeating.' },
+    { type: 'project.repository', projectId: 'PROJECT', repositoryUrl: 'https://github.com/OWNER/REPOSITORY' },
     { type: 'message.send', conversationId: 'GROUP', text: 'A message addressed to an agent', replyTo: null, recipientIds: ['AGENT'] },
     { type: 'conversation.create', title: 'Outcome', brief: 'An independently assignable result', checks: [{ description: 'Observable acceptance evidence', independent: false }] },
     { type: 'conversation.agent', conversationId: 'GROUP', agentId: 'AGENT', present: true, lead: false },

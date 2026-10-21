@@ -265,11 +265,24 @@ class SuperTabMessage {
   bool get uncertain => deliveries.any((d) => d['status'] == 'uncertain');
 }
 
+/// The `remote` a daemon reports for a project: `host/owner/repo`, already
+/// without credentials or transport (the CLI's `canonicalRepository`). A port
+/// there may be SSH's, so only a plain host is read as an HTTPS address.
+final _canonicalRemote = RegExp(
+  r'^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}/\S+$',
+  caseSensitive: false,
+);
+
 /// A remote may contain a developer's embedded credential. Never share it.
+/// Contributed machines clone this address, so a daemon's canonical remote
+/// becomes the HTTPS URL that Harness's GitHub project source also clones.
 String? superTabRepositoryUrl(String? remote) {
   if (remote == null || remote.isEmpty) return null;
   if (remote.startsWith('git@') && !remote.contains('://')) return remote;
-  final uri = Uri.tryParse(remote);
+  final address = _canonicalRemote.hasMatch(remote)
+      ? 'https://$remote'
+      : remote;
+  final uri = Uri.tryParse(address);
   if (uri == null ||
       uri.host.isEmpty ||
       !['https', 'http', 'ssh', 'git'].contains(uri.scheme)) {
@@ -279,5 +292,5 @@ String? superTabRepositoryUrl(String? remote) {
       !(uri.scheme == 'ssh' && uri.userInfo == 'git')) {
     return null;
   }
-  return remote;
+  return address;
 }

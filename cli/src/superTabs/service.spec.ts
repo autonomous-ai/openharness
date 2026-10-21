@@ -51,6 +51,11 @@ it('limits the owner proxy to Super Tab endpoints and preserves backend failures
   vi.mocked(t.core.account.backend).mockResolvedValueOnce({ status: 403, body: { success: false, error: { code: 'FORBIDDEN', message: 'Access withdrawn' } } })
   expect(await t.ask({ action: 'backend', method: 'GET', path: '/api/super-tabs/tab' }, owner)).toEqual({ error: 'FORBIDDEN', detail: 'Access withdrawn', status: 403 })
 })
+it('documents how a lead shares its project repository for other machines', async () => {
+  const t = setup()
+  const answer = await t.ask({ action: 'help' }, owner) as { help: { commands: Array<Record<string, unknown>> } }
+  expect(answer.help.commands).toContainEqual({ type: 'project.repository', projectId: 'PROJECT', repositoryUrl: 'https://github.com/OWNER/REPOSITORY' })
+})
 it('resolves a native caller to its exact contribution and rechecks it before every agent command', async () => {
   const t = setup()
   expect(await t.ask({ action: 'status', tabId: 'tab', harnessId: 'native' }, owner)).toMatchObject({ ok: true })
