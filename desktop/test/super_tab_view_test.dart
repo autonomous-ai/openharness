@@ -372,6 +372,9 @@ void main() {
             )
             .first,
       );
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(member);
+      await tester.pumpAndSettle();
       await tester.tap(member);
       await tester.pumpAndSettle();
       expect(target?.id, 'agent-0');

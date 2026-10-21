@@ -5,10 +5,8 @@ import 'package:flutter/material.dart';
 import '../core/machine_resources.dart';
 import '../core/models.dart';
 import '../core/test_run.dart';
-import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
-import '../shared/widgets/app_icon_button.dart';
 import '../state/app_state.dart';
 import '../usage/models_menu_controller.dart';
 import '../widgets/desktop_chrome.dart';
@@ -19,6 +17,7 @@ import 'controller.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'model.dart';
+import 'section_heading.dart';
 
 class SuperTabMachines extends StatefulWidget {
   const SuperTabMachines({
@@ -26,9 +25,11 @@ class SuperTabMachines extends StatefulWidget {
     required this.controller,
     required this.onAddAgent,
     this.app,
+    this.embedded = false,
   });
   final SuperTabController controller;
   final AppNotifier? app;
+  final bool embedded;
   final ValueChanged<SuperTabConversation> onAddAgent;
   @override
   State<SuperTabMachines> createState() => _SuperTabMachinesState();
@@ -536,7 +537,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             .replaceAll(' TB', 'T')
             .replaceAll(' MB', 'M');
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -612,28 +613,62 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 ],
               ),
             ),
-            child: Text(
-              [
-                name,
-                if (person != null) superTabPersonName(person.email),
-                paused
-                    ? 'Paused'
-                    : !online
-                    ? 'Offline'
-                    : '$running ${running == 1 ? 'agent' : 'agents'}',
-              ].join('  '),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: DesktopChrome.control(medium: true),
+            child: Tooltip(
+              message: [name, if (person != null) person.email].join('\n'),
+              child: Row(
+                children: [
+                  Flexible(
+                    flex: 3,
+                    child: Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: DesktopChrome.control(medium: true),
+                    ),
+                  ),
+                  if (person != null) ...[
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 64),
+                        child: Text(
+                          superTabPersonName(person.email),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: DesktopChrome.metadata(),
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(width: 8),
+                  Text(
+                    paused
+                        ? 'Paused'
+                        : !online
+                        ? 'Offline'
+                        : '$running ${running == 1 ? 'agent' : 'agents'}',
+                    style: DesktopChrome.metadata(),
+                  ),
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 4),
           Tooltip(
             message:
                 'Available capacity\nCPU and GPU: idle percentage at the latest reading\nRAM: ${resourceBytes(memoryFree?.toDouble())} free of ${resourceBytes(value?.memoryTotalBytes)}\nSSD: ${resourceBytes(diskFree)} free of ${resourceBytes(diskTotal)}',
-            child: Text(
-              'CPU ${available(value?.cpuPercent)}  GPU ${available(value?.busiestGpu?.utilizationPercent)}  RAM ${compactBytes(memoryFree)}  SSD ${compactBytes(diskFree)}',
-              style: DesktopChrome.metadata(),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                for (final metric in [
+                  'CPU ${available(value?.cpuPercent)}',
+                  'GPU ${available(value?.busiestGpu?.utilizationPercent)}',
+                  'RAM ${compactBytes(memoryFree)}',
+                  'SSD ${compactBytes(diskFree)}',
+                ])
+                  Text(metric, style: DesktopChrome.metadata()),
+              ],
             ),
           ),
           const SizedBox(height: 4),
@@ -672,52 +707,32 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   }
 
   @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 12, 0),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                'Machines',
-                style: DesktopChrome.metadata().copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            if (c.canWrite && widget.app != null)
-              AppIconButton(
-                icon: AppIcons.plus,
-                tooltip: 'Add machine',
-                onPressed: () => unawaited(_contribute()),
-              ),
-          ],
-        ),
+  Widget build(BuildContext context) {
+    final children = [
+      SuperTabSectionHeading(
+        'Machines',
+        onAdd: c.canWrite && widget.app != null
+            ? () => unawaited(_contribute())
+            : null,
+        addTooltip: 'Add machine',
       ),
-      Expanded(
-        child: _ids.isEmpty
-            ? Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Text(
-                    'Add a machine for the lead to use.',
-                    textAlign: TextAlign.center,
-                    style: DesktopChrome.metadata(),
-                  ),
-                ),
-              )
-            : ListView.separated(
-                itemCount: _ids.length,
-                separatorBuilder: (_, _) => Divider(
-                  height: 1,
-                  indent: 16,
-                  endIndent: 16,
-                  color: DesktopChrome.rim,
-                ),
-                itemBuilder: (_, i) => _machine(_ids.elementAt(i)),
-              ),
-      ),
-    ],
-  );
+      if (_ids.isEmpty)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          child: Text(
+            'Add a machine for the lead to use.',
+            style: DesktopChrome.metadata(),
+          ),
+        )
+      else
+        for (final id in _ids) _machine(id),
+    ];
+    return widget.embedded
+        ? Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: children,
+          )
+        : ListView(children: children);
+  }
 }

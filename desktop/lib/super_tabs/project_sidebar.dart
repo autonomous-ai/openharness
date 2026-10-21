@@ -29,69 +29,105 @@ class ProjectSidebar extends StatelessWidget {
           );
     final waiting = groups.any((g) => needsHuman(g) > 0);
     final unread = groups.any(controller.unread);
-    return Semantics(
-      selected: selected,
-      child: ListTile(
-        key: ValueKey('super-group-${group.id}'),
-        dense: true,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 10),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-        ),
-        selected: selected,
-        selectedTileColor: DesktopChrome.activeSelection,
-        title: Row(
+    final expanded = controller.expandedProjects.contains(project?.id);
+    final hasChildren =
+        project != null &&
+        groups.any((g) => g.id != project.leadConversationId);
+    return Padding(
+      padding: EdgeInsets.only(left: project == null ? 40 : 0, bottom: 2),
+      child: Material(
+        color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
+        borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+        clipBehavior: Clip.antiAlias,
+        child: Row(
           children: [
-            if (project?.isPrivate == true) ...[
-              Icon(
-                AppIcons.lock,
-                size: 14,
-                color: selected
-                    ? DesktopChrome.onSelection
-                    : DesktopChrome.muted,
-              ),
-              const SizedBox(width: 6),
-            ],
+            if (project != null && hasChildren)
+              AppIconButton(
+                key: ValueKey('super-project-expand-${project.id}'),
+                icon: expanded ? AppIcons.chevronDown : AppIcons.chevronRight,
+                tooltip: '${expanded ? 'Collapse' : 'Expand'} ${project.name}',
+                onPressed: () => controller.toggleProject(project.id),
+              )
+            else if (project != null)
+              const SizedBox(width: 32),
             Expanded(
-              child: Text(
-                project?.name ?? group.label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: DesktopChrome.control(
-                  medium: project != null || unread,
-                  color: selected ? DesktopChrome.onSelection : null,
+              child: Semantics(
+                label: project?.isPrivate == true ? 'Private project' : null,
+                selected: selected,
+                child: Tooltip(
+                  message: project?.name ?? group.label,
+                  child: InkWell(
+                    key: ValueKey('super-group-${group.id}'),
+                    onTap: () => onSelect(group.id),
+                    hoverColor: grid.AppSurface.hoverFill,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(minHeight: 36),
+                      child: Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          project == null ? 12 : 4,
+                          8,
+                          12,
+                          8,
+                        ),
+                        child: Row(
+                          children: [
+                            if (project?.isPrivate == true) ...[
+                              Icon(
+                                AppIcons.lock,
+                                size: 14,
+                                color: DesktopChrome.muted,
+                              ),
+                              const SizedBox(width: 6),
+                            ],
+                            Expanded(
+                              child: Text(
+                                project?.name ?? group.label,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: DesktopChrome.control(
+                                  medium: project != null || unread || selected,
+                                  color: selected || unread || project != null
+                                      ? DesktopChrome.foreground
+                                      : DesktopChrome.muted,
+                                ),
+                              ),
+                            ),
+                            if (waiting) ...[
+                              const SizedBox(width: 8),
+                              Tooltip(
+                                message: 'Needs a human',
+                                child: Text(
+                                  '?',
+                                  style: DesktopChrome.control(
+                                    color: grid.AppPalette.warn,
+                                    medium: true,
+                                  ),
+                                ),
+                              ),
+                            ] else if (unread) ...[
+                              const SizedBox(width: 8),
+                              Semantics(
+                                label: 'Unread messages',
+                                child: Container(
+                                  width: 6,
+                                  height: 6,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: DesktopChrome.accent,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),
           ],
         ),
-        trailing: waiting
-            ? Tooltip(
-                message: 'Needs a human',
-                child: Text(
-                  '?',
-                  style: DesktopChrome.control(
-                    color: grid.AppPalette.warn,
-                    medium: true,
-                  ),
-                ),
-              )
-            : unread
-            ? Semantics(
-                label: 'Unread messages',
-                child: Container(
-                  width: 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: selected
-                        ? DesktopChrome.onSelection
-                        : DesktopChrome.accent,
-                  ),
-                ),
-              )
-            : null,
-        onTap: () => onSelect(group.id),
       ),
     );
   }
@@ -103,9 +139,21 @@ class ProjectSidebar extends StatelessWidget {
       color: DesktopChrome.surface,
       child: Column(
         children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 18, 16, 12),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Projects',
+                style: DesktopChrome.metadata().copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
           Expanded(
             child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               children: [
                 for (final project
                     in snapshot?.projects ?? const <SuperTabProject>[])
@@ -114,52 +162,44 @@ class ProjectSidebar extends StatelessWidget {
                     Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Row(
-                          children: [
-                            AppIconButton(
-                              key: ValueKey(
-                                'super-project-expand-${project.id}',
-                              ),
-                              icon:
-                                  controller.expandedProjects.contains(
-                                    project.id,
-                                  )
-                                  ? AppIcons.chevronDown
-                                  : AppIcons.chevronRight,
-                              tooltip:
-                                  '${controller.expandedProjects.contains(project.id) ? 'Collapse' : 'Expand'} ${project.name}',
-                              onPressed: () =>
-                                  controller.toggleProject(project.id),
-                            ),
-                            Expanded(child: _row(lead, project: project)),
-                          ],
-                        ),
+                        _row(lead, project: project),
                         if (controller.expandedProjects.contains(project.id))
                           for (final group in snapshot!.conversations)
                             if (group.projectId == project.id &&
                                 group.id != project.leadConversationId &&
                                 !group.archived)
-                              Padding(
-                                padding: const EdgeInsets.only(
-                                  left: 32,
-                                  bottom: 2,
-                                ),
-                                child: _row(group),
-                              ),
+                              _row(group),
                       ],
                     ),
               ],
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                key: const ValueKey('super-new-project'),
-                onPressed: controller.canWrite ? onNewProject : null,
-                icon: const Icon(AppIcons.plus, size: 16),
-                label: const Text('Project'),
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 16),
+            child: TextButton(
+              key: const ValueKey('super-new-project'),
+              onPressed: controller.canWrite ? onNewProject : null,
+              style: TextButton.styleFrom(
+                foregroundColor: DesktopChrome.muted,
+                backgroundColor: Colors.transparent,
+                disabledBackgroundColor: Colors.transparent,
+                alignment: Alignment.centerLeft,
+                side: BorderSide.none,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+                ),
+                textStyle: DesktopChrome.control(),
+              ),
+              child: const Row(
+                children: [
+                  Icon(AppIcons.plus, size: 16),
+                  SizedBox(width: 8),
+                  Flexible(child: Text('New project')),
+                ],
               ),
             ),
           ),

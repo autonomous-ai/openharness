@@ -10,6 +10,7 @@ import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
 import '../state/app_state.dart';
 import 'roster.dart';
+import 'recording_notice.dart';
 import 'pull_requests.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
@@ -500,7 +501,7 @@ class _SuperTabViewState extends State<SuperTabView> {
   Widget _header(SuperTabConversation? group, bool narrow, bool showRoster) =>
       Container(
         constraints: const BoxConstraints(minHeight: 52),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
         decoration: BoxDecoration(
           border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
         ),
@@ -822,7 +823,7 @@ class _SuperTabViewState extends State<SuperTabView> {
   }
 
   Widget _date(DateTime time) => Padding(
-    padding: const EdgeInsets.fromLTRB(20, 20, 20, 4),
+    padding: const EdgeInsets.fromLTRB(24, 20, 24, 4),
     child: Row(
       children: [
         Expanded(child: Divider(color: DesktopChrome.rim)),
@@ -841,6 +842,7 @@ class _SuperTabViewState extends State<SuperTabView> {
   Widget _conversation(bool narrow) {
     final group = c.selected;
     final messages = c.messages(c.selectedId);
+    final entries = superTabTranscriptEntries(messages);
     final byId = {for (final message in messages) message.id: message};
     final grouped = SuperTabMessageRow.consecutiveUpdates(messages);
     final newAfter = _newAfter[c.selectedId];
@@ -912,7 +914,7 @@ class _SuperTabViewState extends State<SuperTabView> {
                             'super-messages-${c.tabId}-${c.selectedId}',
                           ),
                           padding: const EdgeInsets.symmetric(vertical: 8),
-                          itemCount: messages.length + 1,
+                          itemCount: entries.length + 1,
                           itemBuilder: (context, index) {
                             if (index == 0) {
                               return c.hasOlder(c.selectedId)
@@ -924,9 +926,13 @@ class _SuperTabViewState extends State<SuperTabView> {
                                     )
                                   : const SizedBox.shrink();
                             }
-                            final message = messages[index - 1];
+                            final entry = entries[index - 1];
+                            final message = entry.message;
+                            final agent = message.fromAgent
+                                ? c.snapshot?.agent(message.authorId)
+                                : null;
                             final previous = index > 1
-                                ? messages[index - 2]
+                                ? entries[index - 2].message
                                 : null;
                             final time = message.createdAt;
                             return Column(
@@ -938,11 +944,23 @@ class _SuperTabViewState extends State<SuperTabView> {
                                       previous?.createdAt?.toLocal(),
                                     ))
                                   _date(time),
-                                _message(
-                                  message,
-                                  grouped.contains(message.id),
-                                  byId,
-                                ),
+                                if (entry.interruptions > 0)
+                                  SuperTabRecordingNotice(
+                                    key: ValueKey(
+                                      'super-message-${message.id}',
+                                    ),
+                                    author: _shownAuthor(c, message),
+                                    count: entry.interruptions,
+                                    onOpenTerminal: agent == null
+                                        ? null
+                                        : () => _openAgent(agent),
+                                  )
+                                else
+                                  _message(
+                                    message,
+                                    grouped.contains(message.id),
+                                    byId,
+                                  ),
                               ],
                             );
                           },
@@ -1010,7 +1028,7 @@ class _SuperTabViewState extends State<SuperTabView> {
         if (group != null)
           for (final agent in _needsHuman(group))
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 6, 20, 0),
+              padding: const EdgeInsets.fromLTRB(24, 6, 24, 0),
               child: ListTile(
                 key: ValueKey('super-needs-human-${agent.id}'),
                 dense: true,
@@ -1033,7 +1051,7 @@ class _SuperTabViewState extends State<SuperTabView> {
             ),
         if (mentions.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
+            padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Material(
               color: DesktopChrome.surface,
               child: Column(
@@ -1055,7 +1073,7 @@ class _SuperTabViewState extends State<SuperTabView> {
             ),
           ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+          padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
           child: Focus(
             onKeyEvent: (node, event) {
               final keys = HardwareKeyboard.instance;
@@ -1118,7 +1136,7 @@ class _SuperTabViewState extends State<SuperTabView> {
                 border: Border.all(color: DesktopChrome.rim),
               ),
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+                padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
@@ -1137,6 +1155,10 @@ class _SuperTabViewState extends State<SuperTabView> {
                         keyboardType: TextInputType.multiline,
                         style: DesktopChrome.text(),
                         decoration: InputDecoration(
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                            vertical: 6,
+                          ),
                           hintText: group == null
                               ? 'Loading conversation…'
                               : c.canWrite
