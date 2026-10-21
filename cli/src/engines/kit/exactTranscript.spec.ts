@@ -90,7 +90,8 @@ describe('exact resume uses complete native evidence', () => {
     })
     await expect(repair.findResumedTranscript('claude', ID)).resolves.toBe(transcript)
     vi.mocked(fs.open).mockImplementation(async (name, flags, mode) => {
-      if (String(name) === transcript) { rmSync(transcript); writeFileSync(transcript, '{}\n') }
+      // Moved aside, not deleted: Linux hands a freed inode straight to the next file, which would look like the same one.
+      if (String(name) === transcript) { renameSync(transcript, `${transcript}.old`); writeFileSync(transcript, '{}\n') }
       return actual.open(name, flags, mode)
     })
     await expect(repair.findResumedTranscript('claude', ID)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
