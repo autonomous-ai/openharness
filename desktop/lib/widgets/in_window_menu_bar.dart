@@ -330,12 +330,6 @@ class _InWindowMenuBarState extends State<InWindowMenuBar> {
         label: 'Check for Updates…',
         action: 'checkForUpdates',
       ),
-      _appRow(
-        key: 'menu-bar-flash-firmware',
-        icon: AppIcons.zap,
-        label: 'Flash Firmware…',
-        action: 'flashFirmware',
-      ),
       const AppMenuDivider(),
       // The Quit row the Mac's application menu carries. The app's exit
       // lifecycle (the pane-arrangement flush in didRequestAppExit) runs on

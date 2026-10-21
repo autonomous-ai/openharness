@@ -84,13 +84,15 @@ it('drops names this contract does not know yet, says so once, and refuses every
   ]) expect(appProductUsageReport(refused), JSON.stringify(refused)).toBeUndefined()
 })
 
-it('announces vocabulary 3, the revision whose frame-phase and Add Phone names a Desktop waits for', () => {
-  expect(APP_USAGE_VOCABULARY).toBe(3)
+it('announces vocabulary 4, the revision whose frame-phase and Add Phone names a Desktop waits for', () => {
+  expect(APP_USAGE_VOCABULARY).toBe(4)
   for (const measure of ['frame_slow_wait', 'frame_slow_build', 'frame_slow_raster', 'frame_long_collector']) {
     expect(appProductUsageReport({ ...native, counters: { [`health_desktop_${measure}`]: 1 } })).toBeDefined()
   }
   // The Add Phone card's flow and each way into Add Phone, from a Desktop, forwarded as they are.
   const addPhone = { ...native, counters: { ui_desktop_phone_offer_started: 1, ui_desktop_phone_offer_ok: 1,
+    ui_desktop_phone_offer_after_work_started: 1, ui_desktop_phone_offer_after_work_cancelled: 1,
+    ui_desktop_phone_offer_away_waited_ok: 1, ui_desktop_phone_offer_away_finished_unknown: 1,
     ui_desktop_phone_offer_cancelled: 1, ui_desktop_phone_offer_over_1m: 1,
     ...Object.fromEntries(PRODUCT_USAGE_ADD_PHONE_METRICS.map(metric => [metric, 1])) } }
   expect(appProductUsageReport(addPhone)).toBe(addPhone)

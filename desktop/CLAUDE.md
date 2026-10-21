@@ -583,7 +583,7 @@ add a kind there, not at the call site.
   fills the window goes through `FullWindowScreen` (`lib/widgets/window_chrome.dart`) for its drag
   strip, and a full-width band at the top edge pads by `trafficLightClearance`.
 - `macos/Runner/MainFlutterWindow.swift` installs native menu items and calls into Dart over the
-  `harness/app_menu` MethodChannel (`checkForUpdates`, `flashFirmware`, `showShortcuts`, terminal font
+  `harness/app_menu` MethodChannel (`checkForUpdates`, `showShortcuts`, terminal font
   size). Keep the menu in Swift; only the handler lives in `RootShell`.
 - `macos/Runner/SurfaceCacheGuard.swift` patches Flutter's private macOS back-buffer cache, which can
   hand a frame a surface of another size after an A → B → A resize or a display replug; Impeller then
@@ -868,8 +868,8 @@ add a kind there, not at the call site.
   `^U` because a ⌘ chord never reaches xterm's input handler at all. The composer answers all four
   line-editing chords too: it writes ⌥⏎'s newline itself, binds `^W`/`^U`, and lets Flutter's own
   macOS text-editing shortcuts serve ⌥⌫ and ⌘⌫.
-- `lib/flash/` flashes the ESP32-S3 dial through the CLI runner; `SerialPortLease` pauses daemon
-  supervision while the port is held so `harness start` cannot steal it mid-write.
+- The app has no flash UI: the dial is flashed with `harness flash`. `SerialPortLease` sees that
+  flash's lease file and pauses daemon supervision so `harness start` cannot steal the port mid-write.
 - `lib/update/desktop_updater.dart` self-updates from the GCS manifest (sha256-verified, strictly
   newer only). Its keys must match what writes the manifest — `_otaKeyMacOS`/`_otaKeyMacOSArm64` the
   variant table in `scripts/publish-macos-variant.sh`, `desktop-linux-<arch>` the `OTA_KEY` in

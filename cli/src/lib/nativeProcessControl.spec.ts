@@ -110,6 +110,20 @@ describe('strict Darwin control protocol', () => {
       await expect(nativeProcessControl([42], 0, budget())).rejects.toThrow('probe did not complete')
     }
   })
+  it('names a live process whose program was replaced on disk, and only that, when the probe fails', async () => {
+    const live = process.pid, gone = 2_000_000_000
+    const paths = (pid: number) => `${JSON.stringify({ schema: 1, mode: 'paths' })}\n${JSON.stringify({ pid, unavailable: true })}\n`
+    for (const [pid, expected] of [[live, 'replaced on disk'], [gone, 'probe did not complete']] as const) {
+      host.exec.mockImplementation((_path, args, _options, callback) => args[0] === '--paths'
+        ? callback(null, paths(pid), '')
+        : callback(Object.assign(Error('exit 75'), { code: 75 }), Buffer.alloc(0), Buffer.alloc(0)))
+      await expect(nativeProcessControl([pid], 0, budget())).rejects.toThrow(expected)
+      expect(host.exec.mock.calls.at(-1)?.[1]).toEqual(['--paths', String(pid)])
+    }
+    host.exec.mockClear().mockImplementation((_path, _args, _options, callback) => callback(null, Buffer.from(output({ ...record(), imageHex: 'zz' })), Buffer.alloc(0)))
+    await expect(nativeProcessControl([42], 0, budget())).rejects.toThrow()
+    expect(host.exec.mock.calls.map(call => call[1][0])).toEqual(['--control']) // A parse failure is not a failed probe.
+  })
   it('uses the remaining deadline and stops a missing, late or failed helper without accepting an empty pool', async () => {
     await expect(nativeProcessControl([42], 0, budget())).resolves.toMatchObject({ parent: 0 })
     expect(host.exec.mock.calls[0][1]).toEqual(['--control', expect.any(String), '0', '42'])

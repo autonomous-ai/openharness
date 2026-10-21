@@ -652,11 +652,12 @@ describe('core finds sessions where it did before Claude Code and Codex declared
           }
           // Safety correction: an existing unusable process record is not proof of absence. Keep
           // the former artifact intact, assert its exact old answer, and name every changed case.
+          // A valid record naming a conversation with no transcript yet is a process before its
+          // first prompt: its former answer, no session, is right again (and no folder scan follows).
           const held = new Map<string, string>(['default homes', 'moved homes'].flatMap(home => [
             ...['no id', 'no start', 'unreadable'].map(name => [
               `process record · ${home} · ${name}`, 'the process record is incomplete or invalid',
             ] as const),
-            [`process record · ${home} · no transcript`, 'the process names a conversation whose transcript is unavailable'] as const,
             [`process record · ${home} · another folder`, 'the current process record names a different working directory'] as const,
           ]))
           const descriptorCorrections = new Map<string, { before: unknown; reason: string }>([

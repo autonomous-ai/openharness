@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -69,37 +68,6 @@ void main() {
     },
   );
 
-  test('the lease is released even when the work throws', () async {
-    expect(SerialPortLease.held, isFalse);
-    await expectLater(
-      SerialPortLease.hold<void>(() async => throw StateError('flash died')),
-      throwsStateError,
-    );
-    // Leaving it held would switch daemon supervision off for the rest of the
-    // session — a worse fault than the one it prevents, and a silent one.
-    expect(SerialPortLease.held, isFalse);
-  });
-
-  test('overlapping holders do not release each other', () async {
-    final outer = Completer<void>();
-    final inner = Completer<void>();
-    unawaited(SerialPortLease.hold(() => outer.future));
-    unawaited(SerialPortLease.hold(() => inner.future));
-    await Future<void>.delayed(Duration.zero);
-
-    inner.complete();
-    await Future<void>.delayed(Duration.zero);
-    expect(
-      SerialPortLease.held,
-      isTrue,
-      reason: 'the outer one still holds it',
-    );
-
-    outer.complete();
-    await Future<void>.delayed(Duration.zero);
-    expect(SerialPortLease.held, isFalse);
-  });
-
   test('a flash started in a terminal also stops the daemon being restarted', () async {
     // The case that matters most for a device already in someone's hands: they run `harness flash`
     // themselves while the app is open, and the app's five-second supervisor takes the port back
@@ -150,14 +118,22 @@ void main() {
       spawnCommand: () async => spawned = true,
     );
 
-    await SerialPortLease.hold(() async {
-      // Flashing stops the daemon first, so discovery finds nothing and the
-      // old code went straight on to start it again — taking back the port
-      // esptool was writing through.
-      final probe = await discovery.ensureRunning();
-      expect(probe.state, LocalCliProbeState.down);
-      expect(probe.endpoint, isNull);
+    // A run-id lease of its own in the real flasher folder, so a flash the
+    // machine may really be running keeps its shared flag untouched.
+    final dir = Directory(SerialPortLease.flasherDirectory())
+      ..createSync(recursive: true);
+    final lease = File('${dir.path}/flashing.${'e' * 32}')
+      ..writeAsStringSync('${DateTime.now().millisecondsSinceEpoch ~/ 1000}\n');
+    addTearDown(() {
+      if (lease.existsSync()) lease.deleteSync();
     });
+
+    // Flashing stops the daemon first, so discovery finds nothing and the
+    // old code went straight on to start it again — taking back the port
+    // esptool was writing through.
+    final probe = await discovery.ensureRunning();
+    expect(probe.state, LocalCliProbeState.down);
+    expect(probe.endpoint, isNull);
 
     expect(spawned, isFalse);
   });

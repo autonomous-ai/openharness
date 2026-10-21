@@ -2,12 +2,16 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../core/models.dart' show Agent;
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
+import '../state/harness_activity.dart';
+import '../terminal/terminal_theme.dart';
+import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
+import '../widgets/harness_activity_mark.dart';
 import 'controller.dart';
 import 'identity.dart';
 import 'machines.dart';
@@ -37,35 +41,30 @@ class SuperTabRoster extends StatefulWidget {
 class _SuperTabRosterState extends State<SuperTabRoster> {
   SuperTabController get c => widget.controller;
 
-  Agent? _native(SuperTabAgent agent) => widget.app
-      ?.stateOf(agent.machineId)
-      ?.agents
-      .where((a) => a.id == agent.harnessId)
-      .firstOrNull;
-
-  String _activity(SuperTabAgent agent) {
-    if (widget.app?.questionFor(agent.machineId, agent.harnessId) != null) {
-      return 'Needs you';
+  HarnessActivity _activity(SuperTabAgent agent) {
+    final app = widget.app;
+    final native = app == null
+        ? null
+        : harnessActivity(app, agent.machineId, agent.harnessId);
+    // Keep the shared lifecycle precedence. A retained workgroup question must
+    // not make a stopped or disconnected harness look available for input.
+    if (native == HarnessActivity.offline ||
+        native == HarnessActivity.paused ||
+        native == HarnessActivity.starting ||
+        native == HarnessActivity.failed ||
+        native == HarnessActivity.needsInput) {
+      return native!;
     }
-    final work = c.snapshot?.conversations
-        .where(
-          (g) =>
-              !g.archived &&
-              g.assignment?['agentId'] == agent.id &&
-              !const ['done', 'stopped'].contains(g.assignment?['status']),
-        )
-        .firstOrNull;
-    if (work?.assignment?['status'] == 'needs_human') return 'Needs you';
-    final native = _native(agent);
-    if (native?.isStopped == true) return 'Stopped';
-    if (widget.app?.stateOf(agent.machineId)?.nodeOnline == false) {
-      return 'Offline';
+    if (c.snapshot?.conversations.any(
+          (group) =>
+              !group.archived &&
+              group.assignment?['agentId'] == agent.id &&
+              group.assignment?['status'] == 'needs_human',
+        ) ==
+        true) {
+      return HarnessActivity.needsInput;
     }
-    if (native?.title case final title? when title.trim().isNotEmpty) {
-      return title;
-    }
-    if (work != null) return work.title;
-    return native == null ? 'Status unavailable' : 'Ready';
+    return native ?? HarnessActivity.unknown;
   }
 
   Future<void> _details(SuperTabAgent agent) => showAppDialog<void>(
@@ -121,9 +120,10 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     final project = c.snapshot!.projects
         .where((p) => p.id == agent.projectId)
         .firstOrNull;
-    final waiting = activity == 'Needs you';
-    final otherProject = project != null && project.id != c.selected?.projectId;
-    final subtitle = otherProject ? '$activity  ${project.name}' : activity;
+    final theme = terminalThemeFor(
+      grid.AppTheme.surfacePalette,
+      terminalThemeStore.value,
+    );
     return GestureDetector(
       onSecondaryTapUp: (event) async {
         final choice = await showMenu<String>(
@@ -144,11 +144,14 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         key: ValueKey('super-member-${agent.id}'),
         dense: true,
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 1),
-        horizontalTitleGap: 10,
-        leading: SuperTabAvatar(identity: 'agent:${agent.id}', name: name),
         title: Row(
           children: [
-            Flexible(
+            Tooltip(
+              message: engineIdentity(agent.engine).label,
+              child: EngineMark(engine: agent.engine, size: 20),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
               child: Tooltip(
                 message: name,
                 child: Text(
@@ -159,24 +162,31 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
                 ),
               ),
             ),
-            const SizedBox(width: 6),
-            Tooltip(
-              message: engineIdentity(agent.engine).label,
-              child: EngineMark(engine: agent.engine, size: 14),
+            const SizedBox(width: 8),
+            ActivityMark(
+              activity: activity,
+              color: activityColor(
+                activity,
+                theme,
+                color: appearancePrefsStore.value.prompt.color,
+              ),
             ),
           ],
         ),
-        subtitle: Tooltip(
-          message: [if (project != null) project.name, activity].join('\n'),
-          child: Text(
-            subtitle,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: DesktopChrome.metadata(
-              color: waiting ? grid.AppPalette.warn : null,
-            ),
-          ),
-        ),
+        subtitle: project == null
+            ? null
+            : Padding(
+                padding: const EdgeInsets.only(left: 30),
+                child: Tooltip(
+                  message: project.name,
+                  child: Text(
+                    project.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.metadata(),
+                  ),
+                ),
+              ),
         onTap: () => widget.onOpenAgent(agent),
         onLongPress: () => unawaited(_details(agent)),
       ),
@@ -249,24 +259,32 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
   }
 
   @override
-  Widget build(BuildContext context) => Material(
-    color: DesktopChrome.surface,
-    child: ListenableBuilder(
-      listenable: Listenable.merge([c, if (widget.app != null) widget.app!]),
-      builder: (context, _) => ListView(
-        key: PageStorageKey('super-tab-resources-${c.tabId}'),
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        children: [
-          ..._members(),
-          const SizedBox(height: 20),
-          SuperTabMachines(
-            controller: c,
-            app: widget.app,
-            onAddAgent: widget.onAddAgent,
-            embedded: true,
-          ),
-        ],
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    return Material(
+      color: DesktopChrome.surface,
+      child: ListenableBuilder(
+        listenable: Listenable.merge([
+          c,
+          if (widget.app != null) ...[widget.app!, widget.app!.agentUnread],
+          terminalThemeStore,
+          appearancePrefsStore,
+        ]),
+        builder: (context, _) => ListView(
+          key: PageStorageKey('super-tab-resources-${c.tabId}'),
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          children: [
+            ..._members(),
+            const SizedBox(height: 20),
+            SuperTabMachines(
+              controller: c,
+              app: widget.app,
+              onAddAgent: widget.onAddAgent,
+              embedded: true,
+            ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }

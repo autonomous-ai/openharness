@@ -46,7 +46,10 @@ export const sessionStore: SessionStoreContract = {
   },
 }
 
-/** Control reads the first identity-bearing opening, after Claude's bookkeeping. */
+/** Control reads the first identity-bearing opening, after Claude's bookkeeping. The byte limit is the bound:
+ * a resumed Claude Code 2.1.30x session opens with its title, name and modes and then one
+ * `file-history-snapshot` per earlier checkpoint, and two live transcripts measured on 2026-10-21 named their
+ * first `cwd` at records 48 and 60. A 20-record limit held them, and Change agent waited on them forever. */
 export const controlIdentity = {
-  maxBytes: 1024 * 1024, maxRecords: 20, id: ['sessionId'], cwd: ['cwd'], sidechain: 'isSidechain',
+  maxBytes: 1024 * 1024, maxRecords: 10_000, id: ['sessionId'], cwd: ['cwd'], sidechain: 'isSidechain',
 } as const satisfies import('../kit/controlIdentity.js').ControlIdentityRule

@@ -161,6 +161,8 @@ it('takes the Desktop\'s Add Phone card and each way into Add Phone, and no othe
   const context = { surface: 'desktop', release: '1.2.73', platform: 'macos', channel: 'production' }
   const counters = { ui_desktop_phone_offer_started: 2, ui_desktop_phone_offer_ok: 1, ui_desktop_phone_offer_cancelled: 1,
     ui_desktop_phone_offer_unknown: 1, ui_desktop_phone_offer_over_1m: 1, ui_desktop_add_phone_offer: 1,
+    ui_desktop_phone_offer_after_work_started: 1, ui_desktop_phone_offer_after_work_ok: 1,
+    ui_desktop_phone_offer_away_waited_started: 1, ui_desktop_phone_offer_away_finished_cancelled: 1,
     ui_desktop_add_phone_titlebar: 2, ui_desktop_add_phone_menu: 1, ui_desktop_add_phone_account: 1,
     ui_desktop_add_phone_machines: 1, ui_desktop_add_phone_command: 1 }
   expect((await submit({ ...good, context, counters })).statusCode).toBe(200)

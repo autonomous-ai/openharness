@@ -476,6 +476,75 @@ void main() {
       },
     );
 
+    test(
+      'the card offered after work waits for a CLI that forwards it, at 4',
+      () async {
+        await usage.flush();
+        usage.begin(ProductFlow.phoneOfferAfterWork)(ProductOutcome.ok);
+        usage.begin(ProductFlow.phoneOffer)(ProductOutcome.cancelled);
+        // A CLI at 3 forwards the first card's names, not this one's.
+        usage.proxyVocabulary = 3;
+        await usage.flush();
+        expect(addPhoneNames(), {
+          'ui_desktop_phone_offer_started',
+          'ui_desktop_phone_offer_cancelled',
+          'ui_desktop_phone_offer_under_1s',
+        });
+        usage.proxyVocabulary = 4;
+        await usage.flush();
+        expect(
+          {
+            for (final name in addPhoneNames())
+              if (name.contains('after_work')) name: totals()[name],
+          },
+          {
+            'ui_desktop_phone_offer_after_work_started': 1,
+            'ui_desktop_phone_offer_after_work_ok': 1,
+            'ui_desktop_phone_offer_after_work_under_1s': 1,
+          },
+        );
+      },
+    );
+
+    test('the cards after time away wait for 4, each read as itself', () async {
+      await usage.flush();
+      usage.begin(ProductFlow.phoneOfferAwayWaited)(ProductOutcome.ok);
+      usage.begin(ProductFlow.phoneOfferAwayFinished)(ProductOutcome.unknown);
+      usage.proxyVocabulary = 3;
+      await usage.flush();
+      expect(addPhoneNames().where((name) => name.contains('away')), isEmpty);
+      usage.proxyVocabulary = 4;
+      await usage.flush();
+      expect(
+        {
+          for (final name in addPhoneNames())
+            if (name.contains('away') && !name.contains('under_1s'))
+              name: totals()[name],
+        },
+        {
+          'ui_desktop_phone_offer_away_waited_started': 1,
+          'ui_desktop_phone_offer_away_waited_ok': 1,
+          'ui_desktop_phone_offer_away_finished_started': 1,
+          'ui_desktop_phone_offer_away_finished_unknown': 1,
+        },
+      );
+      expect(ProductFlow.phoneOfferAwayWaited.unbounded, isTrue);
+      expect(ProductFlow.phoneOfferAwayFinished.unbounded, isTrue);
+    });
+
+    test('the card offered after work is not ended by the 15-minute bound', () async {
+      await usage.flush();
+      usage.proxyVocabulary = 4;
+      final card = usage.begin(ProductFlow.phoneOfferAfterWork);
+      now = now.add(const Duration(minutes: 40));
+      await usage.flush();
+      await usage.flush();
+      expect(totals()['ui_desktop_phone_offer_after_work_unknown'], isNull);
+      card(ProductOutcome.cancelled);
+      await usage.flush();
+      expect(totals()['ui_desktop_phone_offer_after_work_cancelled'], 1);
+    });
+
     test('the card is not ended by the 15-minute observation bound', () async {
       await usage.flush();
       usage.proxyVocabulary = 3;

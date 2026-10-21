@@ -4,10 +4,11 @@ import { PRODUCT_USAGE_ADD_PHONE_METRICS, PRODUCT_USAGE_METRICS, PRODUCT_USAGE_U
 
 /** The contract revision this proxy forwards, sent on each of its answers as `x-harness-usage-vocabulary`.
  * 2: the Desktop's frame-phase counters (`frame_slow_*`, `frame_long_collector`). 3: its Add Phone card
- * (`ui_desktop_phone_offer_*`) and the ways Add Phone opened (`ui_desktop_add_phone_*`). The Desktop sends a
- * name newer than revision 1 only once a proxy has announced it, so an older CLI never sees one. Raise it with
- * each name the Desktop gates on it (`ProductHealthMeasure.vocabulary`, `ProductFlow.vocabulary`). */
-export const APP_USAGE_VOCABULARY = 3
+ * (`ui_desktop_phone_offer_*`) and the ways Add Phone opened (`ui_desktop_add_phone_*`). 4: the card offered
+ * after work or after time away (`ui_desktop_phone_offer_after_work_*`, `ui_desktop_phone_offer_away_*`). The
+ * Desktop sends a name newer than revision 1 only once a proxy has announced it, so an older CLI never sees one.
+ * Raise it with each name the Desktop gates on it (`ProductHealthMeasure.vocabulary`, `ProductFlow.vocabulary`). */
+export const APP_USAGE_VOCABULARY = 4
 export const APP_USAGE_VOCABULARY_HEADER = 'x-harness-usage-vocabulary'
 
 // hn's counts reach the daemon's own queue only through hn's `product_observe`; no app can file them.

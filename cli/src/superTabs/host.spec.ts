@@ -17,6 +17,8 @@ function setup(messageFields: Record<string, unknown> = {}) {
   const row = { tabId: 'tab', agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }
   let removed = false, revoked = false, status = 'queued', claimId: string | null = null
   const receipts: Record<string, unknown>[] = []
+  const holds: Record<string, unknown>[] = []
+  let clock = 0
   const call: CoreApi['account']['backend'] = vi.fn(async (method, path, body) => {
     let data: unknown
     if (path.includes('/hosts/')) data = removed ? [] : [row]
@@ -25,6 +27,7 @@ function setup(messageFields: Record<string, unknown> = {}) {
     else {
       const command = body as Record<string, unknown>
       if (command.type === 'claim') { claimId = command.claimId as string; status = 'claimed' }
+      else if (command.type === 'hold') holds.push(command)
       else { receipts.push(command); status = command.uncertain ? 'uncertain' : 'delivered' }
       data = { delivery: { id: 'delivery', claimId, status }, message: { id: 'message', conversationId: 'lead', text: 'Build the agreed feature.', author: { name: 'Collaborator' }, ...messageFields } }
     }
@@ -35,12 +38,13 @@ function setup(messageFields: Record<string, unknown> = {}) {
     account: { backend: call },
     turns: { onDelivery: vi.fn(fn => { listeners.add(fn); return () => { listeners.delete(fn) } }) },
   })
-  const open = () => { const host = new SuperTabHost(core, 'machine-1', { log: vi.fn() }); hosts.push(host); return host }
+  const log = vi.fn()
+  const open = () => { const host = new SuperTabHost(core, 'machine-1', { log, now: () => clock }); hosts.push(host); return host }
   const event = (state: TurnDelivery['state'], reason?: string) => {
     for (const fn of listeners) fn({ deliveryId: 'team:service:superTabs:delivery', sessionId: 'harness', state, reason })
   }
   const saved = () => JSON.parse(readFileSync(hostJournalFile(dir, 'machine-1'), 'utf8'))
-  return { core, call, open, event, receipts, saved, dir, remove: () => { removed = true }, revoke: (value = true) => { revoked = value }, foreignClaim: () => { claimId = 'another-process' } }
+  return { core, call, open, event, receipts, holds, log, wait: (ms: number) => { clock += ms }, saved, dir, remove: () => { removed = true }, revoke: (value = true) => { revoked = value }, foreignClaim: () => { claimId = 'another-process' } }
 }
 
 describe('Super Tab native delivery handoff', () => {
@@ -228,6 +232,50 @@ describe('Super Tab native delivery handoff', () => {
     await host.tick(); await host.tick()
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
     expect(t.receipts.every(r => r.uncertain === true)).toBe(true)
+  })
+
+  it('logs why the core withholds a delivery once per change of reason, with how long it has waited', async () => {
+    const t = setup(), host = t.open()
+    await host.tick()
+    for (const [reason, seconds] of [['team_waiting_draft', 0], ['team_waiting_draft', 5], ['team_waiting_idle', 10]] as const) {
+      t.wait(seconds * 1000 - (seconds === 10 ? 5_000 : 0)); t.event('rejected', reason); await host.tick()
+    }
+    t.event('rejected', 'team_waiting_idle')
+    const lines = t.log.mock.calls.map(([line]) => line as string).filter(line => line.includes('withheld'))
+    expect(lines).toEqual([
+      expect.stringContaining('withheld: team_waiting_draft, waiting 0s'),
+      expect.stringContaining('withheld: team_waiting_idle, waiting 10s'),
+    ])
+  })
+
+  it('tells the conversation once, in plain words, when a delivery waits over 30 seconds', async () => {
+    const t = setup(), host = t.open()
+    await host.tick()
+    t.event('rejected', 'team_waiting_draft'); await host.tick()
+    t.wait(29_000); t.event('rejected', 'team_waiting_draft'); await host.tick()
+    expect(t.holds).toEqual([])
+    t.wait(2_000); t.event('rejected', 'team_waiting_draft'); await host.tick()
+    t.event('rejected', 'team_waiting_draft'); await host.tick()
+    await vi.waitFor(() => expect(t.holds).toEqual([{ type: 'hold', claimId: expect.any(String), reason: 'team_waiting_draft' }]))
+    t.wait(60_000); t.event('rejected', 'team_waiting_draft'); await host.tick()
+    expect(t.holds).toHaveLength(1)
+  })
+
+  it('asks again for a notice that failed, but only after another 30 seconds, and says an unknown reason as unavailable', async () => {
+    const t = setup(), host = t.open()
+    await host.tick()
+    t.event('rejected', 'team_waiting_busy'); await host.tick()
+    const original = vi.mocked(t.call).getMockImplementation()!
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => {
+      if ((body as any)?.type === 'hold') throw new Error('Backend offline')
+      return original(method, path, body)
+    })
+    t.wait(31_000); t.event('rejected', 'team_waiting_busy'); await host.tick()
+    await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith('Backend offline'))
+    t.wait(10_000); t.event('rejected', 'team_waiting_busy'); await host.tick()
+    vi.mocked(t.call).mockImplementation(original)
+    t.wait(21_000); t.event('rejected', 'team_waiting_busy'); await host.tick()
+    await vi.waitFor(() => expect(t.holds).toEqual([expect.objectContaining({ reason: 'team_waiting_unavailable' })]))
   })
 
   it('withdraws queued input on removal or revoked machine access and cannot revive it by re-sharing', async () => {
