@@ -5,15 +5,18 @@ import type { AuthUser } from '../lib/ssoAuth.js'
 import { machineAlive } from '../lib/prisma.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
-import { applyCommand, authorizeCommandAccess, operationSchema, type Command, type CommandContext } from './commands.js'
+import { applyCommand, authorizeCommandAccess, operationSchema, postable, type Command, type CommandContext } from './commands.js'
+import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, MAX_ATTACHMENT_BYTES, objectKeyFor, publicUrl, type Attachment, type Attachments } from './attachments.js'
+import { randomBytes } from 'node:crypto'
+import type { Readable } from 'node:stream'
+import { logger } from '../utils/logger.js'
 import { canReadAgent, canReadProject, groupProject, projectsOf, readConversation, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
-import { attachmentsForSend, attachToMessage, SuperTabAttachmentStore } from './attachments.js'
 import {
   activeWork, actorKey, agent, author, conversation, createSuperTab, fail, person, stableId, visibleState,
-  SuperTabError, type Actor, type Agent, type Assignment, type AttachmentMeta, type Author, type MessageDraft, type SuperTabState,
+  SuperTabError, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
 } from './model.js'
 import { holdNoticeText, type HoldReason } from './holdNotice.js'
 import { closeAssignment, readDecision, recentRoutes, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
@@ -23,6 +26,9 @@ import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSche
 
 type Transaction = Prisma.TransactionClient
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
+type SendCommand = Extract<Command, { type: 'message.send' }>
+// Prisma on MongoDB: `usedBy: null` alone misses rows that never had the field.
+const unused = { OR: [{ usedBy: null }, { usedBy: { isSet: false } }] }
 const hash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const stateOf = (row: SuperTab): SuperTabState => {
   const state = row.state as unknown as SuperTabState
@@ -48,19 +54,13 @@ async function transaction<T>(db: PrismaClient, body: (tx: Transaction) => Promi
 /** Persistent coordination. Host adapters own execution and must confirm their local session grants. */
 export class SuperTabStore {
   readonly native: SuperTabNativeStore
-  readonly attachments: SuperTabAttachmentStore
-  constructor(private readonly db: PrismaClient, private readonly now: () => number = Date.now) {
+  constructor(private readonly db: PrismaClient, private readonly now: () => number = Date.now,
+    private readonly attachments: Attachments | null = null) {
     this.native = new SuperTabNativeStore({
       transaction: body => transaction(db, body),
       row: async (tx, user, tabId) => { const row = await this.row(tx, user, tabId); return { row, state: stateOf(row) } },
       agentGrant: (tx, state, target) => this.agentGrant(tx, state, target),
       contribution: (tx, state, actor, command) => this.contribution(tx, state, actor, command),
-    })
-    this.attachments = new SuperTabAttachmentStore({
-      transaction: body => transaction(db, body),
-      row: async (tx, user, tabId) => { const row = await this.row(tx, user, tabId); return { row, state: stateOf(row) } },
-      actor: (tx, user, state, asAgentId) => this.actor(tx, user, state, asAgentId),
-      now: () => this.now(),
     })
   }
 
@@ -356,8 +356,7 @@ export class SuperTabStore {
           }
           await this.agentGrant(tx, original, agent(original, delivery.agentId))
         }
-        // A resend carries the original's images with its text.
-        context.delivery = { ...delivery, text: message.text, attachments: (message.attachments ?? undefined) as AttachmentMeta[] | undefined }
+        context.delivery = { ...delivery, text: message.text, ...(message.attachments ? { attachments: message.attachments as unknown as Attachment[] } : {}) }
         await tx.superTabDelivery.update({ where: { id: delivery.id }, data: {
           status: command.resolution === 'received' ? 'confirmed' : command.resolution === 'resend' ? 'superseded' : 'cancelled',
           // The native receipt remains intact; the operation records the person's resolution.
@@ -371,9 +370,6 @@ export class SuperTabStore {
         const start = original.starts?.find(s => s.id === command.startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
         context.contribution = await this.contribution(tx, original, actor, start.request, true)
       }
-      if (command.type === 'message.send' && command.attachmentIds?.length) {
-        context.attachments = await attachmentsForSend(tx, tabId, actor, command.attachmentIds)
-      }
       if (command.type === 'message.send' && command.replyTo) {
         const reply = await tx.superTabMessage.findFirst({ where: { id: command.replyTo, tabId, conversationId: command.conversationId } })
         if (reply) context.reply = { id: reply.id, conversationId: reply.conversationId, author: reply.author as unknown as Author }
@@ -384,6 +380,7 @@ export class SuperTabStore {
         context.confirmedStopped = !!proof && !!execution && proof.machineId === execution.machineId &&
           proof.harnessId === execution.harnessId && proof.machineOwnerId === execution.machineOwnerId
       }
+      if (command.type === 'message.send' && command.attachmentIds?.length) context.attachments = await this.sendable(tx, tabId, actor, command)
       if (command.type === 'route.record') context.recentRoutes = await recentRoutes(tx, tabId, context.now)
       const decisionId = command.type === 'route.override' || command.type === 'route.modelResult' ? command.decisionId
         : command.type === 'work.assign' || command.type === 'agent.start' ? command.routeDecisionId : undefined
@@ -442,8 +439,11 @@ export class SuperTabStore {
         await closeAssignment(tx, tabId, command.assignmentId, command.status, context.now)
       }
       await this.writeMessages(tx, tabId, effects.state, effects.messages, revision)
-      if (command.type === 'message.send' && command.attachmentIds?.length) {
-        await attachToMessage(tx, tabId, command.attachmentIds, command.conversationId, effects.result.messageId as string)
+      if (context.attachments?.length) {
+        // Conflicts with a concurrent send of the same file: only one message can take it.
+        const taken = await tx.superTabAttachment.updateMany({ where: { tabId, id: { in: context.attachments.map(a => a.id) }, ...unused },
+          data: { usedBy: effects.result.messageId as string } })
+        if (taken.count !== context.attachments.length) fail('ATTACHMENT_USED', 'This file was already sent. Attach it again to send it in another message.')
       }
       // On 2026-10-20 a Lead answered a message it had already read, then answered it again when the held
       // delivery was finally typed. An agent's reply settles that agent's own deliveries of the message.
@@ -478,12 +478,68 @@ export class SuperTabStore {
     })
   }
 
+  /** Streams one file into the bucket for a later `message.send` by the same actor in the same conversation. Access is
+   * checked before a byte is stored; the row that makes it sendable is written only once the whole file is. */
+  async upload(user: AuthUser, tabId: string, conversationId: string, file: { name: string; mime: string; body: Readable }, asAgentId?: string) {
+    const attachments = this.attachments ?? fail('ATTACHMENTS_UNAVAILABLE', 'File attachments are not available on this server.', 503)
+    const name = attachmentName.safeParse(file.name), mime = attachmentMime.safeParse(file.mime)
+    if (!name.success || !mime.success) fail('INVALID_ATTACHMENT', 'Attach a file with a printable name and a content type.', 400)
+    const key = await transaction(this.db, async tx => {
+      const { actor } = await this.poster(tx, user, tabId, conversationId, asAgentId)
+      const key = actorKey(actor)
+      // Unsent files cost bucket space, so one actor gets a bounded number an hour.
+      const recent = await tx.superTabAttachment.count({ where: { tabId, actorKey: key, createdAt: { gte: new Date(this.now() - 3_600_000) } } })
+      if (recent >= 200) fail('RATE_LIMITED', 'You attached 200 files in the last hour. Wait before attaching more.', 429)
+      return key
+    })
+    const objectKey = objectKeyFor(attachments.prefix, tabId, name.data)
+    let size: number, stored = mime.data
+    try {
+      const checked = await checkedType(mime.data, file.body)
+      stored = checked.mime
+      size = await attachments.store.put(objectKey, { name: name.data, mime: stored }, checked.body, MAX_ATTACHMENT_BYTES)
+    } catch (error) {
+      if (error instanceof AttachmentTooLarge) fail('ATTACHMENT_TOO_LARGE', error.message, 413)
+      // The client's own stream breaking is the request's; anything else is the bucket's, and the person can try again.
+      if (file.body.errored || (error && typeof error === 'object' && 'code' in error && String(error.code).startsWith('FST_'))) throw error
+      logger.error('super-tab attachment storage failed', { tabId, error: error instanceof Error ? error.message : String(error) })
+      fail('ATTACHMENTS_UNAVAILABLE', 'Could not store the file just now. Try again.', 503)
+    }
+    const row = await this.db.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId,
+      actorKey: key, name: name.data, mime: stored, size, objectKey } })
+    return { attachment: { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, objectKey) } satisfies Attachment }
+  }
+
+  /** The actor, once it may post in this conversation. */
+  private async poster(tx: Transaction, user: AuthUser, tabId: string, conversationId: string, asAgentId?: string) {
+    const state = stateOf(await this.row(tx, user, tabId))
+    const actor = await this.actor(tx, user, state, asAgentId)
+    author(state, actor, true)
+    readConversation(state, actor, conversationId)
+    postable(state, actor, conversationId)
+    return { state, actor }
+  }
+
+  private async sendable(tx: Transaction, tabId: string, actor: Actor, command: SendCommand): Promise<Attachment[]> {
+    const attachments = this.attachments ?? fail('ATTACHMENTS_UNAVAILABLE', 'File attachments are not available on this server.', 503)
+    const ids = [...new Set(command.attachmentIds)]
+    const rows = await tx.superTabAttachment.findMany({ where: { tabId, id: { in: ids } } })
+    return ids.map(id => {
+      const row = rows.find(r => r.id === id)
+      if (!row || row.actorKey !== actorKey(actor) || row.conversationId !== command.conversationId) {
+        fail('ATTACHMENT_UNAVAILABLE', 'Attach this file again before sending it.', 400)
+      }
+      if (row.usedBy) fail('ATTACHMENT_USED', 'This file was already sent. Attach it again to send it in another message.')
+      return { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) }
+    })
+  }
+
   /** Records committed messages and one delivery per recipient, at the tab revision that carried them. */
   private async writeMessages(tx: Transaction, tabId: string, state: SuperTabState, messages: MessageDraft[], revision: number) {
     for (const message of messages) {
       await tx.superTabMessage.create({ data: { id: message.id, tabId, conversationId: message.conversationId,
         sequence: revision, author: json(message.author), ...(message.source ? { source: json(message.source) } : {}),
-        ...(message.attachments?.length ? { attachments: json(message.attachments) } : {}),
+        ...(message.attachments ? { attachments: json(message.attachments) } : {}),
         text: message.text, replyTo: message.replyTo, recipientIds: message.recipients } })
       for (const recipient of message.recipients) {
         const target = agent(state, recipient)

@@ -1,12 +1,11 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math';
-import 'dart:typed_data';
 
+import 'package:dio/dio.dart' show CancelToken, DioException, DioExceptionType;
 import 'package:flutter/foundation.dart';
 
 import '../state/harness_attachments.dart';
-import 'attachments.dart';
+import 'attachment_upload.dart';
 import 'model.dart';
 
 typedef SuperTabRequest = Future<Map<String, dynamic>> Function(
@@ -39,6 +38,8 @@ class SuperTabController extends ChangeNotifier {
     required this.accountId,
     required this.request,
     required this.save,
+    this.upload = refuseUpload,
+    this.uploadTimeout = const Duration(minutes: 2),
     Map<String, dynamic> initial = const {},
     this.pollInterval = const Duration(seconds: 3),
   }) {
@@ -97,11 +98,18 @@ class SuperTabController extends ChangeNotifier {
   final SuperTabRequest request;
   final Future<void> Function(Map<String, dynamic> state) save;
   final Duration pollInterval;
+
+  /// Sends one file to the backend.
+  final SuperTabUpload upload;
+
+  /// How long an upload may go without a byte moving before the send gives up.
+  final Duration uploadTimeout;
   SuperTabSnapshot? snapshot;
   String selectedId = 'lead';
   int revision = -1;
-  String? error, operationError;
-  bool loading = false, saving = false, accessRevoked = false;
+  String? error, operationError, operationErrorCode;
+  bool loading = false, saving = false, uploading = false;
+  bool accessRevoked = false;
   bool _disposed = false;
   Timer? _poll, _draftSave;
   Future<void>? _refreshing;
@@ -111,8 +119,14 @@ class SuperTabController extends ChangeNotifier {
   final _terminals = <String, String>{};
   final _mentions = <String, Map<String, String>>{};
   final _readAt = <String, int>{};
-  final _images = <String, SuperTabImages>{};
-  final _imageBytes = <String, Future<Uint8List>>{};
+  final _attachments = <String, HarnessAttachments>{};
+  // Files already uploaded for the message being sent, so a retry sends their
+  // ids rather than uploading them again.
+  final _uploaded = <HarnessAttachment, String>{};
+  final _progress = <HarnessAttachment, double>{};
+  CancelToken? _cancel;
+  ({String conversationId, List<HarnessAttachment> files})? _sending;
+  int _uploadRun = 0;
   final _messages = <String, List<SuperTabMessage>>{};
   final _before = <String, int?>{};
   final _reading = <String>{};
@@ -137,103 +151,30 @@ class SuperTabController extends ChangeNotifier {
       _pending == null ? null : superTabMap(_pending!['command']);
   String draft(String id) => _drafts[id] ?? '';
 
-  /// The images waiting in [conversationId]'s composer, kept in memory only.
-  SuperTabImages images(String conversationId) =>
-      _images[conversationId] ??= (SuperTabImages(
-        onDiscard: (id) => unawaited(
-          request(
-            'DELETE',
-            '$_path/attachments/${Uri.encodeComponent(id)}',
-          ).then((_) {}, onError: (Object _) {}),
-        ),
-      )..addListener(_changed));
-
-  /// An attached image's bytes, read part by part through the same relay as
-  /// every other request. The last few stay in memory; a failed read is
-  /// forgotten so the next one tries again.
-  Future<Uint8List> attachmentBytes(SuperTabAttachment attachment) {
-    final known = _imageBytes.remove(attachment.id);
-    if (known != null) return _imageBytes[attachment.id] = known;
-    final read = _readAttachment(attachment);
-    _imageBytes[attachment.id] = read;
-    // A screenshot is a few megabytes: eight stay, about the images in view.
-    while (_imageBytes.length > 8) {
-      _imageBytes.remove(_imageBytes.keys.first);
-    }
-    read.catchError((Object _) {
-      if (identical(_imageBytes[attachment.id], read)) {
-        _imageBytes.remove(attachment.id);
-      }
-      return Uint8List(0);
-    });
-    return read;
-  }
-
-  Future<Uint8List> _readAttachment(SuperTabAttachment attachment) async {
-    final bytes = BytesBuilder(copy: false);
-    for (var index = 0; index < attachment.parts; index++) {
-      final part = await request(
-        'GET',
-        '$_path/attachments/${Uri.encodeComponent(attachment.id)}/parts/$index',
-      );
-      bytes.add(base64Decode(part['data'] as String));
-    }
-    if (bytes.length != attachment.size) {
-      throw const FormatException('The image arrived incomplete.');
-    }
-    return bytes.takeBytes();
-  }
-
-  /// Uploads [file] in parts unless it already was, and returns its ID. An
-  /// interrupted upload resumes with the parts the backend is missing.
-  Future<String> _upload(SuperTabImages staged, HarnessAttachment file) async {
-    if (staged.uploadedId(file) case final id?) return id;
-    final bytes = file.bytes;
-    final parts = (bytes.length / kSuperTabImagePartBytes).ceil();
-    String part(int index) => base64Encode(
-      bytes.sublist(
-        index * kSuperTabImagePartBytes,
-        min(bytes.length, (index + 1) * kSuperTabImagePartBytes),
-      ),
+  /// The files waiting to go with the next message in a conversation. They
+  /// stay in memory: only the text of a draft is saved.
+  HarnessAttachments attachments(String id) => _attachments.putIfAbsent(id, () {
+    final files = HarnessAttachments(
+      limitBytes: kSuperTabAttachmentMaxBytes,
+      limitFiles: kSuperTabAttachmentMaxFiles,
     );
-    var id = staged.startedId(file);
-    List<int> missing = [for (var index = 1; index < parts; index++) index];
-    if (id != null) {
-      try {
-        final known = await request(
-          'GET',
-          '$_path/attachments/${Uri.encodeComponent(id)}',
-        );
-        missing = [
-          for (final index in known['missing'] as List? ?? const [])
-            (index as num).toInt(),
-        ];
-      } on SuperTabFailure catch (failure) {
-        if (failure.code != 'NOT_FOUND') rethrow;
-        staged.forget(file);
-        id = null;
+    // Taking a chip off while its files go up gives the upload up.
+    files.addListener(() {
+      if (uploading &&
+          _sending?.conversationId == id &&
+          !files.files.toSet().containsAll(_sending!.files)) {
+        cancelUpload();
       }
-    }
-    if (id == null) {
-      final created = await request(
-        'POST',
-        '$_path/attachments',
-        body: {'name': file.name, 'size': bytes.length, 'data': part(0)},
-      );
-      id = created['id'] as String;
-      staged.markStarted(file, id);
-    }
-    for (final index in missing) {
-      if (_disposed) throw const SuperTabFailure('CLOSED', 'Swarm closed.');
-      await request(
-        'POST',
-        '$_path/attachments/${Uri.encodeComponent(id)}/parts/$index',
-        body: {'data': part(index)},
-      );
-    }
-    staged.markUploaded(file, id);
-    return id;
-  }
+    });
+    return files;
+  });
+
+  /// Whether [file] is still on its way to the backend in a send.
+  bool isUploading(HarnessAttachment file) =>
+      uploading && !_uploaded.containsKey(file);
+
+  /// How much of [file] has gone up, from 0 to 1, while it is going up.
+  double? uploadProgress(HarnessAttachment file) => _progress[file];
 
   SuperTabAgent? terminalAgent(String conversationId) {
     return terminalAgents(conversationId).firstOrNull;
@@ -309,10 +250,6 @@ class SuperTabController extends ChangeNotifier {
     error = message;
     snapshot = null;
     _messages.clear();
-    _imageBytes.clear();
-    for (final staged in _images.values) {
-      staged.clear();
-    }
     _poll?.cancel();
     _changed();
   }
@@ -430,10 +367,12 @@ class SuperTabController extends ChangeNotifier {
               (id) => !next.projects.any((project) => project.id == id),
             );
         _messages.removeWhere((id, _) => !allowed.contains(id));
-        for (final id in _images.keys.where((id) => !allowed.contains(id))) {
-          _images[id]!.clear();
-        }
         _drafts.removeWhere((id, _) => !allowed.contains(id));
+        _attachments.removeWhere((id, files) {
+          if (allowed.contains(id)) return false;
+          files.dispose();
+          return true;
+        });
         _terminals.removeWhere((id, _) => !allowed.contains(id));
         _mentions.removeWhere((id, _) => !allowed.contains(id));
         _before.removeWhere((id, _) => !allowed.contains(id));
@@ -558,6 +497,7 @@ class SuperTabController extends ChangeNotifier {
     }
     saving = true;
     operationError = null;
+    operationErrorCode = null;
     _changed();
     try {
       // The receipt ID reaches durable local storage before the request can reach the server.
@@ -573,11 +513,14 @@ class SuperTabController extends ChangeNotifier {
           _drafts.remove(id);
           _mentions.remove(id);
         }
-        final sent = (command['attachmentIds'] as List? ?? const []).toSet();
-        final staged = _images[id];
-        if (staged != null && sent.isNotEmpty) {
-          for (final file in staged.files) {
-            if (sent.contains(staged.uploadedId(file))) staged.sent(file);
+        // Only what went with this message: more may have been added since.
+        final sent = command['attachmentIds'];
+        if (sent is List) {
+          for (final entry in _uploaded.entries.toList()) {
+            if (sent.contains(entry.value)) {
+              _attachments[id]?.remove(entry.key);
+              _uploaded.remove(entry.key);
+            }
           }
         }
       }
@@ -605,6 +548,7 @@ class SuperTabController extends ChangeNotifier {
         operationError = failure is SuperTabFailure
             ? failure.message
             : 'The action is not confirmed. Retry to check it.';
+        operationErrorCode = failure is SuperTabFailure ? failure.code : null;
         if (failure is SuperTabFailure &&
             failure.statusCode >= 400 &&
             failure.statusCode < 500 &&
@@ -617,13 +561,6 @@ class SuperTabController extends ChangeNotifier {
           } catch (_) {
             _pending = pending;
           }
-        }
-        if (failure is SuperTabFailure &&
-            failure.code == 'INVALID_ATTACHMENT') {
-          // An expired or already sent upload: the images still in the
-          // composer upload again on the next send.
-          final command = superTabMap(pending['command']);
-          _images[command['conversationId']]?.forgetUploads();
         }
         if (failure is SuperTabFailure &&
             const {
@@ -648,18 +585,19 @@ class SuperTabController extends ChangeNotifier {
           command['type'] == 'member.remove' &&
           command['userId'] == accountId);
 
-  /// Uploads the composer's images first, then sends the text with their
-  /// IDs. Images alone are a message too.
   Future<Map<String, dynamic>?> send({
     String? replyTo,
     List<String> recipients = const [],
   }) async {
-    final conversationId = selectedId;
-    final text = draft(conversationId).trim();
-    final staged = images(conversationId);
-    if ((text.isEmpty && staged.isEmpty) ||
+    final text = draft(selectedId).trim();
+    final files = attachments(selectedId).files;
+    if ((text.isEmpty && files.isEmpty) ||
         selected == null ||
-        selected!.archived) {
+        selected!.archived ||
+        !canWrite ||
+        uploading ||
+        saving ||
+        _pending != null) {
       return null;
     }
     final addressed = recipients.isEmpty
@@ -673,36 +611,131 @@ class SuperTabController extends ChangeNotifier {
       _changed();
       return null;
     }
-    final attachmentIds = <String>[];
-    if (!staged.isEmpty) {
-      if (_disposed || !canWrite || saving || _pending != null) return null;
-      saving = true;
-      operationError = null;
-      _changed();
-      try {
-        for (final file in staged.files) {
-          attachmentIds.add(await _upload(staged, file));
-        }
-      } catch (failure) {
-        if (_disposed) return null;
-        operationError = failure is SuperTabFailure
-            ? failure.message
-            : 'Could not upload the image. Try again.';
-        return null;
-      } finally {
-        saving = false;
-        _changed();
-      }
-      if (_disposed) return null;
-    }
-    return command({
+    final conversationId = selectedId;
+    final ids = await _uploadAll(conversationId, files);
+    if (ids == null) return null;
+    final result = await command({
       'type': 'message.send',
       'conversationId': conversationId,
       'text': text,
       'replyTo': replyTo,
       'recipientIds': addressed,
-      if (attachmentIds.isNotEmpty) 'attachmentIds': attachmentIds,
+      if (ids.isNotEmpty) 'attachmentIds': ids,
     });
+    // A refusal of the files themselves sends them up once more; one of the
+    // message (a mention, a recipient) leaves them uploaded.
+    if (result == null &&
+        _pending == null &&
+        operationErrorCode?.contains('ATTACHMENT') == true) {
+      _uploaded.clear();
+    }
+    return result;
+  }
+
+  /// Uploads each of [files] that has not gone up yet and returns their ids,
+  /// or null with [operationError] set when one could not. The draft and the
+  /// files stay where they are.
+  Future<List<String>?> _uploadAll(
+    String conversationId,
+    List<HarnessAttachment> files,
+  ) async {
+    if (files.isEmpty) return const [];
+    final run = ++_uploadRun;
+    uploading = true;
+    operationError = null;
+    _sending = (conversationId: conversationId, files: files);
+    _uploaded.removeWhere((file, _) => !files.contains(file));
+    _changed();
+    try {
+      final ids = <String>[];
+      for (final file in files) {
+        var id = _uploaded[file];
+        if (id == null) {
+          final answer = await _uploadFile(conversationId, file);
+          if (run != _uploadRun) return null;
+          id = superTabMap(answer['attachment'])['id'] as String;
+          _uploaded[file] = id;
+        }
+        ids.add(id);
+      }
+      return ids;
+    } catch (failure) {
+      if (!_disposed && run == _uploadRun) {
+        operationError = failure is SuperTabFailure
+            ? failure.message
+            : failure is TimeoutException
+            ? 'The upload stopped moving. Try again.'
+            : 'Could not upload ${files.length == 1 ? 'the file' : 'the files'}. Try again.';
+        operationErrorCode = failure is SuperTabFailure ? failure.code : null;
+      }
+      return null;
+    } finally {
+      if (run == _uploadRun) {
+        uploading = false;
+        _sending = null;
+        _progress.clear();
+        _changed();
+      }
+    }
+  }
+
+  /// Sends [file] to the backend and returns its attachment. Gives up when no
+  /// byte has moved for [uploadTimeout], or when the upload is cancelled.
+  Future<Map<String, dynamic>> _uploadFile(
+    String conversationId,
+    HarnessAttachment file,
+  ) async {
+    final token = _cancel = CancelToken();
+    Timer? watchdog;
+    var stalled = false;
+    void watch() {
+      watchdog?.cancel();
+      watchdog = Timer(uploadTimeout, () {
+        stalled = true;
+        token.cancel('stalled');
+      });
+    }
+
+    watch();
+    try {
+      // The token also ends a transport that ignores it.
+      return await Future.any([
+        upload(
+          tabId: tabId,
+          conversationId: conversationId,
+          name: file.name,
+          mime: mimeForName(file.name),
+          bytes: file.bytes,
+          cancel: token,
+          onProgress: (sent) {
+            watch();
+            _progress[file] = sent;
+            _changed();
+          },
+        ),
+        token.whenCancel.then<Map<String, dynamic>>(
+          (cancelled) => throw cancelled,
+        ),
+      ]);
+    } on DioException catch (failure) {
+      if (stalled && failure.type == DioExceptionType.cancel) {
+        throw TimeoutException('The upload stopped moving.');
+      }
+      rethrow;
+    } finally {
+      watchdog?.cancel();
+    }
+  }
+
+  /// Gives up the files on their way, whether they are stalled or not wanted
+  /// any more: the composer is free again, and the draft and files stay.
+  void cancelUpload() {
+    if (!uploading) return;
+    _cancel?.cancel('given up');
+    _uploadRun++;
+    uploading = false;
+    _sending = null;
+    _changed();
   }
 
   Future<void> flush() async {
@@ -715,10 +748,9 @@ class SuperTabController extends ChangeNotifier {
     _disposed = true;
     _poll?.cancel();
     _draftSave?.cancel();
-    for (final staged in _images.values) {
-      staged.dispose();
+    for (final files in _attachments.values) {
+      files.dispose();
     }
-    _imageBytes.clear();
     // The owner awaits flush when changing account or closing the tab.
     super.dispose();
   }

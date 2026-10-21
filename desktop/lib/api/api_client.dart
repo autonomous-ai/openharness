@@ -236,6 +236,28 @@ class ApiClient {
     );
   }
 
+  /// Posts [form] to [path] and answers whatever came back, a refusal too: a
+  /// file's way up has its own errors to read. A browser sends it to the
+  /// backend with its token; on a computer the local daemon passes it on.
+  Future<Response<dynamic>> postForm(
+    String path,
+    FormData form, {
+    CancelToken? cancelToken,
+    ProgressCallback? onSendProgress,
+  }) => _dio.post<dynamic>(
+    path,
+    data: form,
+    cancelToken: cancelToken,
+    onSendProgress: onSendProgress,
+    options: Options(
+      // The backend streams the file into storage before it answers.
+      receiveTimeout: const Duration(minutes: 2),
+      // The daemon answers 403 without it. The backend is not sent it: from a
+      // browser a custom header would add a CORS preflight.
+      headers: auth == null ? {'x-adapter-local': '1'} : null,
+    ),
+  );
+
   Future<Map<String, dynamic>?> me() async {
     final res = await _dio.get('/api/auth/me');
     return unwrapApiResponse(res) as Map<String, dynamic>?;

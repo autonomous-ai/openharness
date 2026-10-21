@@ -63,10 +63,18 @@ class NewHarnessAttachmentChips extends StatelessWidget {
     super.key,
     required this.attachments,
     required this.enabled,
+    this.isUploading,
+    this.progressOf,
   });
 
   final HarnessAttachments attachments;
   final bool enabled;
+
+  /// Whether a file is on its way somewhere, when files go up as they are sent.
+  final bool Function(HarnessAttachment file)? isUploading;
+
+  /// How much of a file has gone up, from 0 to 1, or null while unknown.
+  final double? Function(HarnessAttachment file)? progressOf;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -78,6 +86,8 @@ class NewHarnessAttachmentChips extends StatelessWidget {
         for (final file in attachments.files)
           NewHarnessAttachmentChip(
             file: file,
+            uploading: isUploading?.call(file) ?? false,
+            progress: progressOf?.call(file),
             onRemove: enabled ? () => attachments.remove(file) : null,
           ),
       ],

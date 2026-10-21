@@ -3,12 +3,13 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
+import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import type { Command } from '../src/superTabs/commands.js'
@@ -1064,121 +1065,125 @@ it('allocates workgroup numbers transactionally and replays the same number afte
   expect((await store.read(owner, tab)).state.conversations.map(c => c.number)).toEqual([undefined, 1, 2, 3])
 })
 
-describe('images attached to Swarm messages', () => {
-  const PART = 256 * 1024
-  const png = (size: number) => {
-    const bytes = Buffer.alloc(size, 7)
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 3, 0, 0, 0, 2]).copy(bytes)
-    return bytes
-  }
-  const http = (user: AuthUser, method: 'GET' | 'POST' | 'DELETE', url: string, payload?: object) =>
-    app.inject({ method, url, headers: { authorization: `Bearer ${user.sub}` }, ...(payload ? { payload } : {}) })
-  const upload = (user: AuthUser, tab: string, bytes: Buffer, name = 'screen.png') =>
-    http(user, 'POST', `/api/super-tabs/${tab}/attachments`, { name, size: bytes.length, data: bytes.subarray(0, PART).toString('base64') })
-  const send = (attachmentIds: string[], text = ''): Command =>
-    ({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [], attachmentIds })
-
-  it('uploads in parts, sends image-only messages, and lets only readers of the conversation see the bytes', async () => {
-    const { tab, lead } = await fixture()
-    await invite(tab)
-    const bytes = png(PART + 10)
-    const created = await upload(owner, tab, bytes)
-    expect(created.statusCode).toBe(200)
-    const image = created.json().data
-    expect(image).toMatchObject({ name: 'screen.png', mime: 'image/png', size: PART + 10, width: 3, height: 2, parts: 2, complete: false })
-    await expect(run(tab, send([image.id]))).rejects.toMatchObject({ code: 'ATTACHMENT_INCOMPLETE' })
-    const part = (data: Buffer, index = 1) => http(owner, 'POST', `/api/super-tabs/${tab}/attachments/${image.id}/parts/${index}`, { data: data.toString('base64') })
-    expect((await part(bytes.subarray(PART, PART + 5))).json().error.code).toBe('INVALID_ATTACHMENT')
-    expect((await part(bytes.subarray(PART), 2)).json().error.code).toBe('INVALID_ATTACHMENT')
-    // Unsent, the upload is its uploader's alone, to read or to send.
-    expect((await http(peer, 'GET', `/api/super-tabs/${tab}/attachments/${image.id}`)).statusCode).toBe(404)
-    expect((await http(peer, 'POST', `/api/super-tabs/${tab}/attachments/${image.id}/parts/1`, { data: bytes.subarray(PART).toString('base64') })).statusCode).toBe(404)
-    expect((await part(bytes.subarray(PART))).json().data).toEqual({ id: image.id, complete: true })
-    expect((await part(bytes.subarray(PART))).json().data).toEqual({ id: image.id, complete: true })
-    await expect(run(tab, send([image.id]), peer)).rejects.toMatchObject({ code: 'INVALID_ATTACHMENT' })
-
-    const operationId = randomUUID()
-    const sent = await run(tab, send([image.id]), owner, undefined, operationId)
-    expect((await run(tab, send([image.id]), owner, undefined, operationId)).result).toEqual(sent.result)
-    await expect(run(tab, send([image.id], 'Again'))).rejects.toMatchObject({ code: 'INVALID_ATTACHMENT' })
-    const meta = { id: image.id, name: 'screen.png', mime: 'image/png', size: PART + 10, width: 3, height: 2, parts: 2 }
-    const [row] = (await store.messages(peer, tab, 'lead', { messageId: sent.result.messageId as string })).messages
-    expect(row).toMatchObject({ text: '[image]', attachments: [meta] })
-    expect(JSON.stringify(row)).not.toContain(bytes.subarray(0, 64).toString('base64'))
-
-    // Sent, it is read with its conversation: a member, and the agent the message was delivered to.
-    const read = async (user: AuthUser, index: number, asAgentId?: string) => {
-      const response = await http(user, 'GET', `/api/super-tabs/${tab}/attachments/${image.id}/parts/${index}${asAgentId ? `?asAgentId=${asAgentId}` : ''}`)
-      return response.statusCode === 200 ? Buffer.from(response.json().data.data, 'base64') : response.statusCode
+describe('Super Tab chat attachments', () => {
+  const files = new MemoryAttachmentStore()
+  let attaching: SuperTabStore
+  let upload: FastifyInstance
+  beforeAll(async () => {
+    attaching = new SuperTabStore(db, Date.now, { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
+    upload = Fastify()
+    upload.setErrorHandler(errorHandler)
+    upload.addHook('onRequest', async (request, reply) => {
+      const user = [owner, peer, host].find(u => `Bearer ${u.sub}` === request.headers.authorization)
+      if (!user) return reply.code(401).send({ success: false })
+      request.user = user
+    })
+    await upload.register(superTabRoutes, { store: attaching })
+    await upload.ready()
+  })
+  afterAll(async () => { await upload?.close() })
+  type Part = [string, string] | [string, Uint8Array, string, string]
+  type Uploaded = { id: string; name: string; mime: string; size: number; url: string }
+  const post = async (tab: string, parts: Part[], user = owner, asAgentId?: string, server = upload) => {
+    const form = new FormData()
+    for (const part of parts) {
+      if (part.length === 2) form.append(part[0], part[1])
+      else form.append(part[0], new Blob([part[1]], { type: part[3] }), part[2])
     }
-    expect(Buffer.concat([await read(peer, 0) as Buffer, await read(host, 1, lead) as Buffer]).equals(bytes)).toBe(true)
-    expect(await read(peer, 2)).toBe(404)
-    expect((await http(peer, 'GET', `/api/super-tabs/${tab}/attachments/${image.id}`)).json().data).toEqual({ ...meta, complete: true })
-    const delivery = (await store.deliveries(host, tab, lead))[0]!
-    const claimed = await store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: 'claim' })
-    expect(claimed.message).toMatchObject({ id: sent.result.messageId, attachments: [meta] })
+    const encoded = new Request('http://upload.test', { method: 'POST', body: form })
+    const response = await server.inject({ method: 'POST', url: `/api/super-tabs/${tab}/attachments${asAgentId ? `?asAgentId=${asAgentId}` : ''}`,
+      headers: { authorization: `Bearer ${user.sub}`, 'content-type': encoded.headers.get('content-type')! }, payload: Buffer.from(await encoded.arrayBuffer()) })
+    const body = response.json()
+    return { status: response.statusCode, code: body.error?.code ?? body.code, attachment: body.data?.attachment as Uploaded }
+  }
+  const file = (tab: string, name = 'screen.png', bytes = new Uint8Array([1, 2, 3]), mime = 'image/png', conversationId = 'lead', user = owner, asAgentId?: string) =>
+    post(tab, [['conversationId', conversationId], ['file', bytes, name, mime]], user, asAgentId)
+  const send = (tab: string, attachmentIds: string[], user = owner, asAgentId?: string, text = '', operationId = randomUUID()) =>
+    attaching.execute(user, tab, { operationId, command: { type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [], attachmentIds } }, asAgentId)
+  const objectKey = (url: string) => url.slice('https://cdn.example.test/'.length)
 
-    // Another tab cannot name it, and leaving the tab ends access.
-    const other = (await store.create(owner, randomUUID(), 'Other')).id
-    await expect(run(other, send([image.id]))).rejects.toMatchObject({ code: 'INVALID_ATTACHMENT' })
-    expect((await http(owner, 'GET', `/api/super-tabs/${other}/attachments/${image.id}`)).statusCode).toBe(404)
-    await run(tab, { type: 'member.remove', userId: peer.sub }, peer)
-    expect(await read(peer, 0)).toBe(403)
-  })
-
-  it('takes only PNG, JPEG and WebP within 5 MB, and keeps an image out of a private project it was not sent to', async () => {
+  it('streams one file into the bucket under a random key and answers its metadata', async () => {
     const { tab } = await fixture()
-    expect((await upload(owner, tab, Buffer.from('GIF89a-and-more'), 'cat.png')).json().error.code).toBe('UNSUPPORTED_ATTACHMENT')
-    const tooLarge = await http(owner, 'POST', `/api/super-tabs/${tab}/attachments`, { name: 'big.png', size: 5 * 1024 * 1024 + 1, data: png(PART).toString('base64') })
-    expect(tooLarge.statusCode).toBe(400)
-    const short = await http(owner, 'POST', `/api/super-tabs/${tab}/attachments`, { name: 'short.png', size: 100, data: png(50).toString('base64') })
-    expect(short.json().error.code).toBe('INVALID_ATTACHMENT')
-    const { conversationId } = (await run(tab, { type: 'project.create', name: 'Private', visibility: 'private', brief: '' })).result as { conversationId: string }
-    const image = (await upload(owner, tab, png(100))).json().data
-    expect(image.complete).toBe(true)
-    await run(tab, { ...send([image.id], 'For the private project'), conversationId } as Command)
-    await invite(tab)
-    expect((await http(peer, 'GET', `/api/super-tabs/${tab}/attachments/${image.id}/parts/0`)).statusCode).toBe(404)
-    expect((await http(owner, 'GET', `/api/super-tabs/${tab}/attachments/${image.id}/parts/0`)).statusCode).toBe(200)
-    expect((await upload(peer, tab, png(100))).json().data.complete).toBe(true)
+    const bytes = new Uint8Array(2 * 1024 * 1024).map((_, i) => i % 251)
+    bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    const { status, attachment } = await file(tab, 'Screen Shot 1.png', bytes)
+    expect(status).toBe(200)
+    expect(attachment).toMatchObject({ name: 'Screen Shot 1.png', mime: 'image/png', size: bytes.byteLength })
+    expect(attachment.url).toMatch(new RegExp(`^https://cdn\\.example\\.test/super-tabs/${tab}/[0-9a-f]{32}/Screen_Shot_1\\.png$`))
+    expect(files.objects.get(objectKey(attachment.url))!.bytes.equals(Buffer.from(bytes))).toBe(true)
+    expect(files.objects.get(objectKey(attachment.url))).toMatchObject({ contentType: 'image/png', contentDisposition: "inline; filename*=UTF-8''Screen%20Shot%201.png" })
+    const html = await file(tab, 'page.html', new Uint8Array([60]), 'text/html')
+    expect(html.attachment.mime).toBe('text/html')
+    expect(files.objects.get(objectKey(html.attachment.url))).toMatchObject({ contentType: 'application/octet-stream', contentDisposition: "attachment; filename*=UTF-8''page.html" })
+    // A page renamed to .png is not an image: it is kept whole, as bytes to download.
+    const page = Buffer.from('<html><script>alert(1)</script></html>')
+    const disguised = await file(tab, 'cat.png', page, 'image/png')
+    expect(disguised.attachment.mime).toBe('application/octet-stream')
+    expect(files.objects.get(objectKey(disguised.attachment.url))).toMatchObject({ contentType: 'application/octet-stream', contentDisposition: "attachment; filename*=UTF-8''cat.png" })
+    expect(files.objects.get(objectKey(disguised.attachment.url))!.bytes.equals(page)).toBe(true)
   })
 
-  it('lets the uploader resume or delete an unsent image, and prunes unfinished uploads after an hour', async () => {
+  it('refuses an oversized, second, misordered or hidden-named file, and a server with no bucket', async () => {
     const { tab } = await fixture()
-    await invite(tab)
-    const bytes = png(2 * PART + 5)
-    const image = (await upload(owner, tab, bytes)).json().data
-    const meta = async (user = owner) => (await http(user, 'GET', `/api/super-tabs/${tab}/attachments/${image.id}`)).json()
-    expect((await meta()).data).toMatchObject({ parts: 3, complete: false, missing: [1, 2] })
-    await http(owner, 'POST', `/api/super-tabs/${tab}/attachments/${image.id}/parts/2`, { data: bytes.subarray(2 * PART).toString('base64') })
-    expect((await meta()).data.missing).toEqual([1])
-    const remove = (user: AuthUser, id = image.id) => http(user, 'DELETE', `/api/super-tabs/${tab}/attachments/${id}`)
-    expect((await remove(peer)).statusCode).toBe(404)
-    expect((await remove(owner)).json().data).toEqual({ id: image.id, deleted: true })
-    expect((await meta()).error.code).toBe('NOT_FOUND')
-    expect(await db.superTabAttachmentPart.count({ where: { attachmentId: image.id } })).toBe(0)
-    const sent = (await upload(owner, tab, png(100))).json().data
-    await run(tab, send([sent.id]))
-    expect((await remove(owner, sent.id)).json().error.code).toBe('ATTACHMENT_SENT')
-
-    const unfinished = (await upload(owner, tab, png(PART + 1))).json().data
-    const finished = (await upload(owner, tab, png(100))).json().data
-    await new SuperTabStore(db, () => Date.now() + 2 * 3_600_000).attachments.upload(owner, tab,
-      { name: 'later.png', size: 100, data: png(100).toString('base64') })
-    expect(await db.superTabAttachment.findUnique({ where: { id: unfinished.id } })).toBeNull()
-    expect(await db.superTabAttachment.findUnique({ where: { id: finished.id } })).not.toBeNull()
+    const before = files.objects.size
+    expect(await file(tab, 'big.bin', new Uint8Array(10 * 1024 * 1024 + 1), 'application/octet-stream')).toMatchObject({ status: 413, code: 'ATTACHMENT_TOO_LARGE' })
+    expect(await file(tab, 'exact.bin', new Uint8Array(10 * 1024 * 1024), 'application/octet-stream')).toMatchObject({ status: 200 })
+    expect(await post(tab, [['conversationId', 'lead'], ['file', new Uint8Array(1), 'a.png', 'image/png'], ['file', new Uint8Array(1), 'b.png', 'image/png']]))
+      .toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await post(tab, [['file', new Uint8Array(1), 'a.png', 'image/png'], ['conversationId', 'lead']])).toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await post(tab, [['conversationId', 'lead']])).toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await file(tab, 'evil‮gnp.exe')).toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    const json = await upload.inject({ method: 'POST', url: `/api/super-tabs/${tab}/attachments`, headers: { authorization: `Bearer ${owner.sub}` }, payload: { conversationId: 'lead' } })
+    expect([json.statusCode, json.json().error?.code ?? json.json().code]).toEqual([400, 'INVALID_ATTACHMENT'])
+    // The exact-size file, and the first of the two: the second is only seen after the first was stored. Its id was
+    // never answered to anyone, so nothing can send it.
+    expect(files.objects.size).toBe(before + 2)
+    expect(await post(tab, [['conversationId', 'lead'], ['file', new Uint8Array(1), 'a.png', 'image/png']], owner, undefined, app))
+      .toMatchObject({ status: 503, code: 'ATTACHMENTS_UNAVAILABLE' })
   })
 
-  it('refuses an empty message and carries the images when a person resends an uncertain delivery', async () => {
+  it('answers a bucket failure as unavailable, not as a server error', async () => {
+    const { tab } = await fixture()
+    const put = vi.spyOn(files, 'put').mockRejectedValueOnce(Object.assign(new Error('Forbidden'), { code: 403 }))
+    expect(await file(tab)).toMatchObject({ status: 503, code: 'ATTACHMENTS_UNAVAILABLE' })
+    put.mockRestore()
+    expect(await file(tab)).toMatchObject({ status: 200 })
+  })
+
+  it('sends uploaded files once, with empty text, and delivers their metadata to the agent', async () => {
     const { tab, lead } = await fixture()
-    await expect(run(tab, message('   '))).rejects.toMatchObject({ code: 'EMPTY_MESSAGE' })
-    const image = (await upload(owner, tab, png(100))).json().data
-    await run(tab, send([image.id], 'Look at this'))
-    const first = (await store.deliveries(host, tab, lead))[0]!
-    await store.delivery(host, tab, lead, first.id, { type: 'claim', claimId: 'claim' })
-    await store.delivery(host, tab, lead, first.id, { type: 'ack', claimId: 'claim', receipt: 'lost', uncertain: true })
-    await run(tab, { type: 'delivery.resolve', deliveryId: first.id, resolution: 'resend' })
-    const rows = (await store.messages(owner, tab, 'lead', {})).messages
-    expect(rows.at(-1)).toMatchObject({ text: 'Look at this', replyTo: rows.at(-2)!.id, attachments: [expect.objectContaining({ id: image.id })] })
+    const { attachment } = await file(tab, 'log.txt', new Uint8Array(10), 'text/plain')
+    const sent = await send(tab, [attachment.id])
+    const row = (await store.messages(owner, tab, 'lead', {})).messages.find(m => m.id === sent.result.messageId)!
+    expect(row).toMatchObject({ text: '', attachments: [attachment] })
+    const delivery = (await store.deliveries(host, tab, lead)).find(d => d.messageId === sent.result.messageId)!
+    expect((await store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() })).message!.attachments).toEqual([attachment])
+    await expect(send(tab, [attachment.id])).rejects.toMatchObject({ code: 'ATTACHMENT_USED' })
+    await expect(send(tab, [])).rejects.toMatchObject({ code: 'TEXT_REQUIRED' })
+  })
+
+  it('lets only the uploading actor send a file, only in its conversation, and an agent attach from its host', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const mine = (await file(tab)).attachment
+    await expect(send(tab, [mine.id], peer)).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Elsewhere', brief: '', checks: [] })).result.conversationId)
+    const elsewhere = (await file(tab, 'x.png', new Uint8Array(5), 'image/png', group)).attachment
+    await expect(send(tab, [elsewhere.id])).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
+    await expect(send(tab, ['missing-attachment'])).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
+    expect(await file(tab, 'a.png', new Uint8Array(1), 'image/png', 'lead', peer, lead)).toMatchObject({ status: 403, code: 'FORBIDDEN' })
+    expect(await file(tab, 'a.png', new Uint8Array(1), 'image/png', 'no-such-group')).toMatchObject({ status: 404 })
+    const fromAgent = (await file(tab, 'result.png', new Uint8Array(7), 'image/png', 'lead', host, lead)).attachment
+    const sent = await send(tab, [fromAgent.id], host, lead, 'Here is the screenshot.')
+    expect((await store.messages(owner, tab, 'lead', {})).messages.find(m => m.id === sent.result.messageId))
+      .toMatchObject({ author: { kind: 'agent', id: lead }, attachments: [{ name: 'result.png', size: 7 }] })
+  })
+
+  it('refuses a viewer before storing anything', async () => {
+    const { tab } = await fixture()
+    await invite(tab, 'viewer')
+    const before = files.objects.size
+    expect(await file(tab, 'a.png', new Uint8Array(1), 'image/png', 'lead', peer)).toMatchObject({ status: 403, code: 'READ_ONLY' })
+    expect(files.objects.size).toBe(before)
   })
 })

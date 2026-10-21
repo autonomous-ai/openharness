@@ -9,14 +9,13 @@ import { machineChoices } from '../lib/newCommand.js'
 import { START_REQUIREMENTS } from './capacity.js'
 import { CapacityReservations, type ReservationBook } from './reservations.js'
 import { ContributionPreparations, prepareContribution } from './contribution.js'
-import { attachmentsOf, saveAttachment } from './attachments.js'
+import { messageIdOf } from './attach.js'
 
 const HELP = {
   status: 'Read the shared tab roster and work.',
-  messages: 'messages GROUP: read recent messages in a conversation. A message with images lists them under attachments.',
+  messages: 'messages GROUP: read recent messages in a conversation.',
   message: 'message GROUP MESSAGE_ID: read one exact message, including an earlier question or result referenced by a reply.',
-  attachment: 'attachment ATTACHMENT_ID: save an image attached to a message on this machine and print its path. Open that path with your file-reading tool to see it.',
-  post: 'post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID]: reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID.',
+  post: 'post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]...: reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID. --attach sends a file (a screenshot, a log; up to 10 files of 10 MB each), and TEXT may then be empty.',
   start: 'start OPERATION_ID JSON: create one agent in a conversation on a machine you can access. Repeat exactly after an interruption; it follows the same native creation receipt. It does not assign work.',
   resume: 'resume START_ID: finish a pending start without creating another agent.',
   route: 'route GROUP JSON: before starting or assigning work, choose who does it. JSON: {"difficulty":"low|medium|high","risk":"low|medium|high","why":"one sentence","needs":{"tools":[],"devices":[],"cwd":"/absolute/repo"}}. Start or assign the pick with its routeDecisionId; to choose otherwise, pass overrideReason.',
@@ -105,10 +104,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'prepareContribution') return preparations.read(payload)
         if (payload.action === 'backend') {
           const { method, path } = payload
-          // DELETE only takes back one's own unsent image; every other route reads or writes.
-          if (typeof path !== 'string' || !/^\/api\/super-tabs(?:\/[A-Za-z0-9_-]+)*(?:\?[A-Za-z0-9_=&%-]+)?$/.test(path)
-            || !(['GET', 'POST'].includes(String(method))
-              || (method === 'DELETE' && /^\/api\/super-tabs\/[A-Za-z0-9_-]+\/attachments\/[A-Za-z0-9_-]+$/.test(path)))) {
+          if (!['GET', 'POST'].includes(String(method)) || typeof path !== 'string'
+            || !/^\/api\/super-tabs(?:\/[A-Za-z0-9_-]+)*(?:\?[A-Za-z0-9_=&%-]+)?$/.test(path)) {
             return { error: 'INVALID_REQUEST', detail: 'Choose a Super Tab endpoint.' }
           }
           const value = await backend(core, method as string, path, payload.body)
@@ -210,15 +207,16 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             return { ok: true, value: markAnswered(page, list(later), agentId) }
           } catch { return { ok: true, value: page } }
         }
-        if (payload.action === 'attachment' && identifier(payload.attachmentId)) {
-          const [attachment] = attachmentsOf({ attachments: [await backend(core, 'GET', `${path}/attachments/${payload.attachmentId}?${identity}`)] })
-          if (!attachment) return { error: 'ATTACHMENT_UNAVAILABLE', detail: 'This image cannot be read.' }
-          const file = await saveAttachment(target => backend(core, 'GET', target), payload.tabId, agentId, attachment)
-          return { ok: true, value: { id: attachment.id, name: attachment.name, mime: attachment.mime, size: attachment.size, path: file } }
-        }
         if (payload.action === 'command' && identifier(payload.operationId) && payload.command && typeof payload.command === 'object' && !Array.isArray(payload.command)) {
           return { ok: true, operationId: payload.operationId, value: await backend(core, 'POST', `${path}/commands`,
             { operationId: payload.operationId, command: payload.command, asAgentId: agentId }) }
+        }
+        // `post --attach` asks first whether this post already went out with its files.
+        if (payload.action === 'attachment' && identifier(payload.conversationId) && payload.step === 'sent' && identifier(payload.operationId)) {
+          const sent = object(await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}&messageId=${messageIdOf(payload.tabId, agentId, payload.operationId)}`))
+          const earlier = object(list(sent.messages)[0])
+          // The agent's id goes back too: the files are uploaded as this agent, through the daemon's local upload route.
+          return { ok: true, value: { agentId, attachmentIds: Array.isArray(earlier.attachments) ? list(earlier.attachments).map(a => String(a.id)) : null } }
         }
         return { error: 'INVALID_REQUEST' }
       } catch (error) {

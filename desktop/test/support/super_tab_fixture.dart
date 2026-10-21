@@ -1,5 +1,8 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:dio/dio.dart' show CancelToken;
+import 'package:harness/super_tabs/attachment_upload.dart';
 import 'package:harness/super_tabs/controller.dart';
 
 Map<String, dynamic> conversationFixture(String id, String title) => {
@@ -42,16 +45,6 @@ class ConversationServer {
   final routeDecisions = <String, Map<String, dynamic>>{};
   // The effective routing policy answered by GET .../routing-policy.
   Map<String, dynamic>? routingPolicy;
-  // Uploaded images by id: their metadata and base64 parts in order.
-  final attachments = <String, Map<String, dynamic>>{};
-  final attachmentParts = <String, List<String?>>{};
-  // Every attachment upload body, apart from [posts].
-  final uploads = <Map<String, dynamic>>[];
-  // Unsent uploads the client deleted.
-  final deletedAttachments = <String>[];
-  bool failUploads = false;
-  // Fails the upload request with this 1-based number, once.
-  int? failUploadAt;
   final state = <String, dynamic>{
     'version': 1,
     'id': 'tab',
@@ -68,18 +61,28 @@ class ConversationServer {
       conversationFixture('offline', 'Offline editing'),
     ],
   };
+  // The files fully uploaded, in order, bytes included.
+  final uploads = <Map<String, dynamic>>[];
+  // Makes the upload of the file with this name fail with failUploadCode.
+  String? failUpload;
+  String failUploadCode = 'ATTACHMENT_TOO_LARGE';
   Future<void> save(Map<String, dynamic> value) async {
     if (failSave) throw StateError('Disk full');
     saved = jsonDecode(jsonEncode(value)) as Map<String, dynamic>;
   }
 
-  void append(String text, {String conversationId = 'lead'}) {
+  void append(
+    String text, {
+    String conversationId = 'lead',
+    List<Map<String, dynamic>> attachments = const [],
+  }) {
     revision++;
     messages.add({
       'id': 'message-$revision',
       'conversationId': conversationId,
       'sequence': revision,
       'text': text,
+      'attachments': attachments,
       'createdAt': '2026-10-18T00:00:00Z',
       'author': {'kind': 'person', 'id': 'owner', 'name': 'owner@example.com'},
       'deliveries': <dynamic>[],
@@ -89,15 +92,52 @@ class ConversationServer {
     )['lastMessageSequence'] = revision;
   }
 
+  /// What the backend does with a file sent to its upload route.
+  Future<Map<String, dynamic>> upload({
+    required String tabId,
+    required String conversationId,
+    required String name,
+    required String mime,
+    required Uint8List bytes,
+    required CancelToken cancel,
+    required void Function(double sent) onProgress,
+  }) async {
+    if (name == failUpload) {
+      throw SuperTabFailure(
+        failUploadCode,
+        'The file is too large.',
+        statusCode: 413,
+      );
+    }
+    onProgress(.5);
+    final id = 'attachment-${uploads.length + 1}';
+    uploads.add({
+      'conversationId': conversationId,
+      'name': name,
+      'mime': mime,
+      'file': bytes,
+      'id': id,
+    });
+    onProgress(1);
+    return {'attachment': _attachment(id)};
+  }
+
+  Map<String, dynamic> _attachment(String id) {
+    final upload = uploads.firstWhere((u) => u['id'] == id);
+    return {
+      'id': id,
+      'name': upload['name'],
+      'mime': upload['mime'],
+      'size': (upload['file'] as List).length,
+      'url': 'https://cdn.harness.autonomous.ai/$id/${upload['name']}',
+    };
+  }
+
   Future<Map<String, dynamic>> request(
     String method,
     String path, {
     Map<String, dynamic>? body,
   }) async {
-    final segments = Uri.parse(path).pathSegments;
-    if (segments.length > 3 && segments[3] == 'attachments') {
-      return _attachment(method, segments, body);
-    }
     if (method == 'POST') {
       posts.add(Map<String, dynamic>.from(body!));
       if (reject) {
@@ -119,19 +159,15 @@ class ConversationServer {
       final command = body['command'] as Map;
       final output = <String, dynamic>{};
       if (command['type'] == 'message.send') {
-        final images = (command['attachmentIds'] as List? ?? const []).length;
-        // As the backend stores a message of images alone.
         append(
-          (command['text'] as String).isEmpty && images > 0
-              ? (images == 1 ? '[image]' : '[$images images]')
-              : command['text'] as String,
+          command['text'] as String,
           conversationId: command['conversationId'] as String,
+          attachments: [
+            for (final id in command['attachmentIds'] as List? ?? const [])
+              _attachment(id as String),
+          ],
         );
         messages.last['replyTo'] = command['replyTo'];
-        messages.last['attachments'] = [
-          for (final id in command['attachmentIds'] as List? ?? const [])
-            attachments[id],
-        ];
         output['messageId'] = 'message-$revision';
       } else if (command['type'] == 'conversation.create') {
         revision++;
@@ -251,68 +287,16 @@ class ConversationServer {
         as Map<String, dynamic>;
   }
 
-  Map<String, dynamic> _attachment(
-    String method,
-    List<String> segments,
-    Map<String, dynamic>? body,
-  ) {
-    final parts = segments.length > 4 ? attachmentParts[segments[4]] : null;
-    if (segments.length > 4 && parts == null) {
-      throw const SuperTabFailure('NOT_FOUND', 'This image is unavailable.');
-    }
-    if (method == 'DELETE') {
-      attachments.remove(segments[4]);
-      attachmentParts.remove(segments[4]);
-      deletedAttachments.add(segments[4]);
-      return {'id': segments[4], 'deleted': true};
-    }
-    if (method == 'GET' && segments.length == 5) {
-      final missing = [
-        for (var i = 0; i < parts!.length; i++)
-          if (parts[i] == null) i,
-      ];
-      return {
-        ...attachments[segments[4]]!,
-        'complete': missing.isEmpty,
-        if (missing.isNotEmpty) 'missing': missing,
-      };
-    }
-    if (method == 'GET') return {'data': parts![int.parse(segments[6])]};
-    uploads.add(Map<String, dynamic>.from(body!));
-    if (failUploads || failUploadAt == uploads.length) {
-      failUploadAt = null;
-      throw StateError('Connection lost');
-    }
-    if (segments.length == 4) {
-      final id = 'image-${uploads.where((u) => u.containsKey('name')).length}';
-      final size = body['size'] as int;
-      attachments[id] = {
-        'id': id,
-        'name': body['name'],
-        'mime': 'image/png',
-        'size': size,
-        'width': null,
-        'height': null,
-        'parts': (size / (256 * 1024)).ceil(),
-      };
-      attachmentParts[id] = [
-        body['data'] as String,
-        for (var i = 1; i < (attachments[id]!['parts'] as int); i++) null,
-      ];
-      return {...attachments[id]!, 'complete': size <= 256 * 1024};
-    }
-    parts![int.parse(segments[6])] = body['data'] as String;
-    return {'id': segments[4], 'complete': !parts.contains(null)};
-  }
-
   SuperTabController controller({
     Map<String, dynamic>? initial,
     String account = 'owner',
+    SuperTabUpload? upload,
   }) => SuperTabController(
     tabId: 'tab',
     accountId: account,
     request: request,
     save: save,
+    upload: upload ?? this.upload,
     initial: initial ?? const {},
     pollInterval: Duration.zero,
   );

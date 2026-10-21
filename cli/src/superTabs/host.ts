@@ -3,13 +3,13 @@ import { ContributedMachines } from './machines.js'
 import { retainContributions } from './retention.js'
 import { configurationObservation } from './configuration.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
+import { attachedFiles } from './attachments.js'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { CoreApi, TurnDelivery } from '../core/api.js'
 import { shellQuote } from '../orchestrator/prompts.js'
 import { noticeReason, WithheldDeliveries } from './withheld.js'
-import { attachmentsOf, saveAttachment, type SuperTabAttachment } from './attachments.js'
 
 type Json = Record<string, unknown>
 export class SuperTabHostError extends Error {
@@ -45,10 +45,8 @@ export interface SuperTabHostOptions {
   write?: (file: string, journal: Journal) => void
   log?: (message: string) => void
   observers?: typeof publishObservers
-  /** Saves an attached image on this machine and returns its path (attachments.ts); tests pass their own. */
-  saveAttachment?: (tabId: string, agentId: string, attachment: SuperTabAttachment) => Promise<string>
+  attachedFiles?: typeof attachedFiles
 }
-type AttachedImage = { attachment: SuperTabAttachment; path: string | null }
 
 export const hostJournalFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `host-${machineId}.json`)
 const typedId = (entry: Entry) => `team:service:superTabs:${entry.deliveryId}`
@@ -78,12 +76,13 @@ export class SuperTabHost {
   private readonly log: (message: string) => void
   private retentionError: string | null = null
   private readonly observers: typeof publishObservers
-  private readonly saveAttachment: NonNullable<SuperTabHostOptions['saveAttachment']>
+  private readonly attachedFiles: typeof attachedFiles
+  /** Each delivery's downloaded files, so input held by a busy terminal is not downloaded again on every retry. Only a
+   * complete download is kept: a failed one is tried again before the next delivery of the same message. */
+  private readonly files = new Map<string, string>()
   private readonly active = new Set<string>()
   private readonly authorized = new Map<string, number>()
   private readonly withheld = new WithheldDeliveries()
-  /** Images being saved for a claimed delivery, by delivery: done (`images`) or still running. */
-  private readonly downloads = new Map<string, { images: AttachedImage[] | null }>()
   private readonly stopHearing: () => void
   private stopped = false
   private running: Promise<void> | null = null
@@ -102,8 +101,7 @@ export class SuperTabHost {
     if (!identifier(machineId)) throw new SuperTabHostError('MACHINE_UNAVAILABLE', 'This machine is not signed in.')
     this.file = hostJournalFile(core.dataDir, machineId)
     this.observers = options.observers ?? publishObservers
-    this.saveAttachment = options.saveAttachment ?? ((tabId, agentId, attachment) =>
-      saveAttachment(path => backend(core, 'GET', path), tabId, agentId, attachment))
+    this.attachedFiles = options.attachedFiles ?? attachedFiles
     this.now = options.now ?? Date.now
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
@@ -154,7 +152,6 @@ export class SuperTabHost {
     this.native?.stop()
     this.machines?.stop()
     this.authorized.clear()
-    this.downloads.clear()
     try { this.observers(this.core.dataDir, this.machineId, [], 0) } catch { /* The old snapshot expires. */ }
     void this.core.turns.leaseDeliveries('superTabs', {})
     for (const id of this.active) this.core.turns.cancelDelivery(id)
@@ -290,6 +287,7 @@ export class SuperTabHost {
       }
     }
     if (this.stopped) return
+    for (const deliveryId of this.files.keys()) if (!this.journal.entries[deliveryId]) this.files.delete(deliveryId)
     for (const entry of Object.values(this.journal.entries)) {
       const id = typedId(entry)
       if (!seen.has(entry.deliveryId)) {
@@ -311,7 +309,6 @@ export class SuperTabHost {
     const id = typedId(entry)
     delete this.journal.entries[deliveryId]
     this.withheld.clear(deliveryId)
-    this.downloads.delete(deliveryId)
     this.authorized.delete(id)
     if (this.active.delete(id)) this.core.turns.cancelDelivery(id)
     this.persist()
@@ -354,27 +351,19 @@ export class SuperTabHost {
       this.authorized.set(id, this.now() + 2_500)
       return
     }
-    // Its images are still being saved: a later poll delivers it, and the claim below rechecks authority then.
-    if (this.downloads.get(deliveryId)?.images === null) return
     const result = object(await backend(this.core, 'POST', `${path}/${deliveryId}`, { type: 'claim', claimId: entry.claimId }))
     // The receipt check may have retired this held entry while the claim was in flight.
     if (this.stopped || this.journal.entries[deliveryId] !== entry) return
     const message = object(result.message)
     if (typeof message.text !== 'string' || !identifier(message.conversationId)) throw new Error('The delivery has no message.')
-    const attached = attachmentsOf(message)
-    let images: AttachedImage[] = []
-    if (attached.length) {
-      // Saving up to four 5 MB images takes seconds. It runs beside the poll, which keeps renewing every other
-      // delivery's lease meanwhile; this one is typed on the first poll after its images are saved.
-      const download = this.downloads.get(deliveryId)
-      if (!download) {
-        const started: { images: AttachedImage[] | null } = { images: null }
-        this.downloads.set(deliveryId, started)
-        void this.saveImages(entry, attached).then(saved => { started.images = saved; if (!this.stopped) void this.tick() })
-        return
-      }
-      images = download.images!
+    // Downloaded before the lease: a large file must not use up the 2.5 s the core gives a write.
+    let files = this.files.get(deliveryId)
+    if (files === undefined) {
+      const downloaded = await this.attachedFiles(message)
+      files = downloaded.text
+      if (downloaded.complete) this.files.set(deliveryId, files)
     }
+    if (this.stopped || this.journal.entries[deliveryId] !== entry) return
     this.authorized.set(id, this.now() + 2_500)
     if (!(await this.leases()) || this.stopped) { this.authorized.delete(id); return }
     if (this.active.has(id)) return
@@ -382,18 +371,8 @@ export class SuperTabHost {
     // The durable intent must exist before the core can write. A thrown disk write must not deliver.
     entry.stage = 'submitting'
     this.persist()
-    this.downloads.delete(deliveryId)
     this.active.add(id)
-    this.core.turns.deliver(entry.harnessId, this.prompt(entry, message, images), id)
-  }
-
-  /** An image that cannot be read never holds up its message: the agent is told, and how to fetch it later. */
-  private saveImages(entry: Entry, attached: SuperTabAttachment[]): Promise<AttachedImage[]> {
-    return Promise.all(attached.map(async attachment => ({ attachment,
-      path: await this.saveAttachment(entry.tabId, entry.agentId, attachment).catch(error => {
-        this.log(`attachment ${attachment.id} for delivery ${entry.deliveryId}: ${error instanceof Error ? error.message : String(error)}`)
-        return null
-      }) })))
+    this.core.turns.deliver(entry.harnessId, this.prompt(entry, message, files), id)
   }
 
   private async recordConfigurations(rows: unknown[]): Promise<void> {
@@ -408,7 +387,7 @@ export class SuperTabHost {
     }
   }
 
-  private prompt(entry: Entry, message: Json, images: AttachedImage[] = []): string {
+  private prompt(entry: Entry, message: Json, files: string): string {
     const command = `${this.core.daemon.command} super-tab --port ${this.core.daemon.port} --machine ${shellQuote(this.machineId)} --tab ${shellQuote(entry.tabId)} --agent ${shellQuote(entry.agentId)}`
     const group = message.conversationId as string
     const reply = identifier(message.replyTo)
@@ -424,9 +403,7 @@ export class SuperTabHost {
       + `Manage agreed work and delegation: ${command} help. Leads: route before starting or assigning: ${command} route GROUP JSON. Use independently verifiable outcomes; local helper subagents need no separate group.\n`
       + `Ask questions and post results in this conversation. ${SUPER_TAB_REPLY_STYLE} Replies to these delivered instructions must be posted here explicitly.\n\n`
       + native + reply + `Message ${String(message.id)} from ${String(object(message.author).name ?? 'a collaborator')}:\n${message.text}`
-      + (images.length ? `\n\n${images.map(({ attachment, path }) => path ? `Attached image: ${path}`
-        : `Attached image ${attachment.name} could not be fetched. Try again: ${command} attachment ${shellQuote(attachment.id)}`).join('\n')}`
-        + '\nOpen each attached image with your file-reading tool to see it.' : '')
+      + (files ? `${message.text ? '\n\n' : ''}${files}` : '')
   }
 
   /** Says why the core keeps holding this delivery: once in the log per change of reason, and once to the conversation after 30 s. */

@@ -178,45 +178,6 @@ describe('Super Tab native delivery handoff', () => {
     await host.reconcileReceipts()
     expect(Object.keys(t.saved().entries)).toEqual(['delivery'])
   })
-  it('saves the attached images on this machine and names their paths in the prompt', async () => {
-    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(20, 1)])
-    const t = setup({ text: '', attachments: [{ id: 'img1', name: 'screen shot', mime: 'image/png', size: png.length, parts: 2 },
-      { id: 'img2', name: 'gone.jpg', mime: 'image/jpeg', size: 10, parts: 1 }] })
-    const original = vi.mocked(t.call).getMockImplementation()!
-    let release!: () => void
-    const gate = new Promise<void>(resolve => { release = resolve })
-    vi.mocked(t.call).mockImplementation(async (method, path, body) => {
-      const part = /\/attachments\/(img\d)\/parts\/(\d)\?asAgentId=agent$/.exec(path)
-      if (!part) return original(method, path, body)
-      await gate
-      if (part[1] === 'img2') return { status: 404, body: { success: false, error: { code: 'NOT_FOUND', message: 'This image is unavailable.' } } }
-      const half = part[2] === '0' ? png.subarray(0, 10) : png.subarray(10)
-      return { status: 200, body: { success: true, data: { data: half.toString('base64') } } }
-    })
-    const host = t.open()
-    // The poll returns while the images are still being read: other deliveries' leases keep being renewed.
-    await host.tick()
-    await host.tick()
-    expect(t.core.turns.deliver).not.toHaveBeenCalled()
-    expect(t.core.turns.leaseDeliveries).toHaveBeenCalled()
-    release()
-    await vi.waitFor(() => expect(t.core.turns.deliver).toHaveBeenCalled())
-    await host.tick(); await host.tick()
-    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
-    const prompt = vi.mocked(t.core.turns.deliver).mock.calls[0]![1] as string
-    const saved = /^Attached image: (.+)$/m.exec(prompt)![1]!
-    expect(saved).toMatch(/[/\\]paste-drops[/\\][0-9a-f]{8}-screen-shot\.png$/)
-    expect(readFileSync(saved).equals(png)).toBe(true)
-    expect(prompt).toContain("Attached image gone.jpg could not be fetched. Try again: ")
-    expect(prompt).toContain("attachment 'img2'")
-    expect(prompt).toContain('Open each attached image with your file-reading tool to see it.')
-    expect(t.log).toHaveBeenCalledWith(expect.stringContaining('attachment img2 for delivery delivery'))
-  })
-  it('adds nothing about images to a message without them', async () => {
-    const t = setup()
-    await t.open().tick()
-    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]![1]).not.toContain('Attached image')
-  })
   it('tells the agent how to reply to this exact message, in short plain words', async () => {
     const t = setup({ author: { kind: 'person', id: 'p1', name: 'sam@example.com' }, text: 'How is it going?' })
     await t.open().tick()
@@ -417,4 +378,43 @@ it('confirms a stopped assignment only with fresh native evidence, including aft
   host.stop()
   await host.reconcileStops()
   expect(proof).toHaveLength(1)
+})
+
+describe('Super Tab attachments in delivered input', () => {
+  it('lists the downloaded files after the text and downloads them once while the terminal holds the input', async () => {
+    const file = { id: 'a1', name: 'screen.png', mime: 'image/png', size: 5, url: 'https://cdn.example.test/x/screen.png' }
+    const t = setup({ text: 'See the screenshot.', attachments: [file] })
+    const attachedFiles = vi.fn(async () => ({ text: 'Attached files:\n- /drops/1-screen.png (screen.png, 5 B)', complete: true }))
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), attachedFiles }); hosts.push(host)
+    await host.tick()
+    expect(attachedFiles).toHaveBeenCalledWith(expect.objectContaining({ attachments: [file] }))
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1])
+      .toMatch(/:\nSee the screenshot\.\n\nAttached files:\n- \/drops\/1-screen\.png \(screen\.png, 5 B\)$/)
+    t.event('rejected', 'team_waiting_busy')
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[1]?.[1]).toContain('/drops/1-screen.png')
+    expect(attachedFiles).toHaveBeenCalledTimes(1)
+  })
+  it('downloads a failed file again before the next delivery of the held input', async () => {
+    const t = setup({ text: 'Logs.', attachments: [{ id: 'a1', name: 'a.log', mime: 'text/plain', size: 1, url: 'https://cdn.example.test/a.log' }] })
+    const attachedFiles = vi.fn()
+      .mockResolvedValueOnce({ text: 'Attached files:\n- Could not download https://cdn.example.test/a.log (a.log, 1 B): HTTP 503', complete: false })
+      .mockResolvedValue({ text: 'Attached files:\n- /drops/a.log (a.log, 1 B)', complete: true })
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), attachedFiles }); hosts.push(host)
+    await host.tick()
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Could not download')
+    t.event('rejected', 'team_waiting_busy')
+    await host.tick()
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[1]?.[1]).toContain('/drops/a.log')
+    t.event('rejected', 'team_waiting_busy')
+    await host.tick()
+    expect(attachedFiles).toHaveBeenCalledTimes(2)
+  })
+  it('delivers a message of files alone', async () => {
+    const t = setup({ text: '', attachments: [{ id: 'a1', name: 'a.log', mime: 'text/plain', size: 1, url: 'https://cdn.example.test/a.log' }] })
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), attachedFiles: async () => ({ text: 'Attached files:\n- /drops/a.log (a.log, 1 B)', complete: true }) }); hosts.push(host)
+    await host.tick()
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toMatch(/from Collaborator:\nAttached files:\n/)
+  })
 })

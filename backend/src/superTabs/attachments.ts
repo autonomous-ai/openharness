@@ -1,210 +1,148 @@
 import { randomBytes } from 'node:crypto'
-import type { Prisma, SuperTab, SuperTabAttachment } from '@prisma/client'
+import { Readable, Transform, Writable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { z } from 'zod'
-import type { AuthUser } from '../lib/ssoAuth.js'
-import { actorKey, author, fail, stableId, type Actor, type AttachmentMeta, type SuperTabState } from './model.js'
-import { readConversation } from './projects.js'
 
-export const ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024
-export const ATTACHMENTS_PER_MESSAGE = 4
-/** The apps reach this backend through a machine's relay (cli/src/superTabs/service.ts `backend`), and a browser's relay
- * frame is 1 MiB (wsServer.ts `WS_LIMITS.web`) before E2EE sealing grows it. One 256 KiB part is about 342 KB of base64,
- * so a 5 MB image travels as up to 20 small requests instead of one that no relay carries. */
-export const ATTACHMENT_PART_BYTES = 256 * 1024
-const PART_CHARS = Math.ceil(ATTACHMENT_PART_BYTES / 3) * 4
-export const ATTACHMENT_BODY_LIMIT = PART_CHARS + 4096
-/** Uploads never sent are drafts someone abandoned: an unfinished one goes after an hour, a finished one after a day,
- * and one person keeps at most this many. The app deletes its own leftovers at once (`remove`); these bound the rest. */
-const UNSENT_LIMIT = 24
-const UNSENT_MS = 86_400_000
-const INCOMPLETE_MS = 3_600_000
+/** Metadata as a message stores and returns it. The bytes stay in the bucket. */
+export interface Attachment { id: string; name: string; mime: string; size: number; url: string }
 
-const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
-const data = z.string().min(1).max(PART_CHARS).regex(/^[A-Za-z0-9+/]+={0,2}$/, 'Send the bytes as base64.')
-export const uploadAttachmentSchema = z.object({
-  name: z.string().trim().min(1).max(200).refine(value => !/[\x00-\x1f\x7f]/.test(value)),
-  size: z.number().int().min(1).max(ATTACHMENT_MAX_BYTES),
-  data,
-}).strict()
-export const attachmentPartSchema = z.object({ data }).strict()
-export const attachmentIdsSchema = z.array(id).min(1).max(ATTACHMENTS_PER_MESSAGE)
+export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+export const MAX_ATTACHMENTS = 10
 
-type Transaction = Prisma.TransactionClient
-type ImageInfo = { mime: 'image/png' | 'image/jpeg' | 'image/webp'; width: number | null; height: number | null }
-interface Deps {
-  transaction<T>(body: (tx: Transaction) => Promise<T>): Promise<T>
-  row(tx: Transaction, user: AuthUser, tabId: string): Promise<{ row: SuperTab; state: SuperTabState }>
-  actor(tx: Transaction, user: AuthUser, state: SuperTabState, asAgentId?: string): Promise<Actor>
-  now(): number
+// Control, format (bidi overrides, zero-width) and line/paragraph separators: a name that hides its real shape.
+export const attachmentName = z.string().trim().min(1).max(255).refine(value => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value), 'Use a printable file name.')
+export const attachmentMime = z.string().trim().toLowerCase().max(200).regex(/^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/)
+
+export class AttachmentTooLarge extends Error {
+  constructor() { super(`A file can be at most ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`) }
 }
 
-const u16le = (bytes: Uint8Array, i: number) => (bytes[i] ?? 0) | ((bytes[i + 1] ?? 0) << 8)
+/** The bucket behind the CDN. Tests and the local rig use the in-memory store below. */
+export interface AttachmentStore {
+  /** Streams `body` into the object and answers its size. Past `cap` bytes it throws AttachmentTooLarge and leaves no object. */
+  put(objectKey: string, file: { name: string; mime: string }, body: Readable, cap: number): Promise<number>
+}
+export interface Attachments { store: AttachmentStore; prefix: string; publicBase: string }
 
-/** The type the bytes are, read from their own header: a name or a client's word is not trusted. Width and height
- * come along when the header holds them; a JPEG whose frame header is past the first part has none. */
-export function imageInfo(bytes: Uint8Array): ImageInfo | null {
-  const at = (i: number) => bytes[i] ?? 0
-  const u16 = (i: number) => (at(i) << 8) | at(i + 1)
-  const u32 = (i: number) => ((at(i) << 24) >>> 0) + (at(i + 1) << 16) + (at(i + 2) << 8) + at(i + 3)
-  const le24 = (i: number) => at(i) | (at(i + 1) << 8) | (at(i + 2) << 16)
-  const ascii = (i: number, text: string) => [...text].every((c, n) => at(i + n) === c.charCodeAt(0))
-  if (bytes.length >= 8 && [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((b, i) => at(i) === b)) {
-    return ascii(12, 'IHDR') && bytes.length >= 24 ? { mime: 'image/png', width: u32(16), height: u32(20) } : { mime: 'image/png', width: null, height: null }
-  }
-  if (bytes.length >= 3 && at(0) === 0xff && at(1) === 0xd8 && at(2) === 0xff) {
-    for (let i = 2; i + 9 < bytes.length;) {
-      if (at(i) !== 0xff) break
-      const marker = at(i + 1)
-      if (marker === 0xff) { i++; continue }
-      if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) return { mime: 'image/jpeg', width: u16(i + 7), height: u16(i + 5) }
-      if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd9)) { i += 2; continue }
-      i += 2 + u16(i + 2)
-    }
-    return { mime: 'image/jpeg', width: null, height: null }
-  }
-  if (bytes.length >= 16 && ascii(0, 'RIFF') && ascii(8, 'WEBP')) {
-    if (ascii(12, 'VP8 ') && bytes.length >= 30) return { mime: 'image/webp', width: u16le(bytes, 26) & 0x3fff, height: u16le(bytes, 28) & 0x3fff }
-    if (ascii(12, 'VP8L') && bytes.length >= 25) {
-      const [b0, b1, b2, b3] = [at(21), at(22), at(23), at(24)]
-      return { mime: 'image/webp', width: 1 + (((b1 & 0x3f) << 8) | b0), height: 1 + (((b3 & 0x0f) << 10) | (b2 << 2) | ((b1 & 0xc0) >> 6)) }
-    }
-    if (ascii(12, 'VP8X') && bytes.length >= 30) return { mime: 'image/webp', width: 1 + le24(24), height: 1 + le24(27) }
-    return { mime: 'image/webp', width: null, height: null }
-  }
+/** Anyone holding a link can open the file, so the key carries 128 random bits; the name segment is for people. */
+export function objectKeyFor(prefix: string, tabId: string, name: string): string {
+  const safe = name.replaceAll(/[^A-Za-z0-9._-]+/g, '_').replace(/^[._]+/, '').slice(-120) || 'file'
+  return [prefix.replace(/^\/+|\/+$/g, ''), tabId, randomBytes(16).toString('hex'), safe].filter(Boolean).join('/')
+}
+export const publicUrl = (base: string, objectKey: string) => `${base.replace(/\/+$/, '')}/${objectKey}`
+
+/** How the bucket serves a file. The CDN shares a parent domain with the apps, so only raster images keep their type
+ * and open in the browser. Anything else, HTML and SVG included, is stored as bytes to download, never run as a page.
+ * The message keeps the declared type for clients to show. */
+const INLINE = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+export function served(name: string, mime: string): { contentType: string; contentDisposition: string } {
+  const inline = INLINE.has(mime)
+  return { contentType: inline ? mime : 'application/octet-stream',
+    contentDisposition: `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}` }
+}
+
+/** The raster type the first bytes really are, or null. */
+export function imageTypeOf(head: Buffer): string | null {
+  const ascii = (at: number, text: string) => head.subarray(at, at + text.length).toString('latin1') === text
+  if (head.length >= 8 && head.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png'
+  if (head.length >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return 'image/jpeg'
+  if (ascii(0, 'GIF87a') || ascii(0, 'GIF89a')) return 'image/gif'
+  if (head.length >= 12 && ascii(0, 'RIFF') && ascii(8, 'WEBP')) return 'image/webp'
   return null
 }
-const partId = (attachmentId: string, index: number) => stableId('attachment-part', attachmentId, String(index))
-const partBytes = (record: SuperTabAttachment, index: number) =>
-  index === record.parts - 1 ? record.size - ATTACHMENT_PART_BYTES * (record.parts - 1) : ATTACHMENT_PART_BYTES
-export const attachmentMeta = (record: SuperTabAttachment): AttachmentMeta => ({ id: record.id, name: record.name, mime: record.mime,
-  size: record.size, width: record.width ?? null, height: record.height ?? null, parts: record.parts })
 
-/** What a message.send names, checked in its transaction: the sender's own finished uploads in this tab, each unsent.
- * An id from another tab, another person or an earlier message is refused rather than shared. */
-export async function attachmentsForSend(tx: Transaction, tabId: string, actor: Actor, ids: string[]): Promise<AttachmentMeta[]> {
-  if (new Set(ids).size !== ids.length) fail('INVALID_ATTACHMENT', 'Attach each image once.', 400)
-  const rows = await tx.superTabAttachment.findMany({ where: { id: { in: ids }, tabId } })
-  return ids.map(attachmentId => {
-    const record = rows.find(r => r.id === attachmentId)
-    if (!record || record.actorKey !== actorKey(actor) || record.messageId) fail('INVALID_ATTACHMENT', 'This image is no longer available. Attach it again.', 400)
-    if (!record.complete) fail('ATTACHMENT_INCOMPLETE', 'Wait for the image to finish uploading.')
-    return attachmentMeta(record)
-  })
+/** A file that claims to be an image is served as one only when its first bytes agree, and then as what they say: a
+ * renamed page or script never opens inline, and a .png that is really a JPEG still shows. `body` is handed back with
+ * those bytes in front, so the store still reads the whole file as a stream. */
+export async function checkedType(mime: string, body: Readable): Promise<{ mime: string; body: Readable }> {
+  if (!INLINE.has(mime)) return { mime, body }
+  // One iterator for the whole read: leaving a `for await` early would destroy the request stream.
+  const source = body[Symbol.asyncIterator]()
+  const parts: Buffer[] = []
+  let length = 0, done = false
+  while (length < 16) {
+    const next = await source.next()
+    if (next.done) { done = true; break }
+    parts.push(Buffer.from(next.value)); length += next.value.length
+  }
+  const head = Buffer.concat(parts)
+  const rest = async function* () {
+    if (head.length) yield head
+    while (!done) {
+      const next = await source.next()
+      if (next.done) return
+      yield Buffer.from(next.value)
+    }
+  }
+  return { mime: imageTypeOf(head) ?? 'application/octet-stream', body: Readable.from(rest()) }
 }
 
-/** Sent, an attachment is read with its message: whoever can read that conversation. */
-export async function attachToMessage(tx: Transaction, tabId: string, ids: string[], conversationId: string, messageId: string) {
-  const { count } = await tx.superTabAttachment.updateMany({ where: { id: { in: ids }, tabId, messageId: null }, data: { messageId, conversationId } })
-  // attachmentsForSend read them unsent in this transaction; anything else is a concurrent send, which must not commit.
-  if (count !== ids.length) fail('INVALID_ATTACHMENT', 'This image is no longer available. Attach it again.', 400)
+/** Counts what passes and fails the stream past `cap`, so a writer never commits more. */
+async function capped(body: Readable, cap: number, sink: Writable): Promise<number> {
+  let size = 0
+  await pipeline(body, new Transform({ transform(chunk: Buffer, _encoding, done) {
+    size += chunk.byteLength
+    done(size > cap ? new AttachmentTooLarge() : null, chunk)
+  } }), sink)
+  return size
 }
 
-/** The text stored for a message of images alone, so a client that shows no images still shows something. Clients
- * that draw the images hide it (desktop model.dart `SuperTabMessage.shownText`). */
-export const imagesPlaceholder = (count: number) => count === 1 ? '[image]' : `[${count} images]`
+/** A service account key the bucket is written with. */
+export interface ServiceAccount { projectId?: string; credentials: { client_email: string; private_key: string } }
 
-/** Images people attach to messages. Bytes never ride a message read; they are read part by part here. */
-export class SuperTabAttachmentStore {
-  constructor(private readonly deps: Deps) {}
+/** SUPER_TAB_ATTACHMENTS_CREDENTIALS: the base64 of a service account JSON key, or empty for application default
+ * credentials. A bad value stops the backend at startup. No message repeats any of the value: JSON.parse's own
+ * message quotes the text it failed on, so it is never passed on. */
+export function serviceAccountFrom(raw: string): ServiceAccount | null {
+  const value = raw.replaceAll(/\s+/g, '')
+  if (!value) return null
+  const invalid = (why: string): never => { throw new Error(`SUPER_TAB_ATTACHMENTS_CREDENTIALS ${why}. Set the base64 of the service account JSON key, or leave it empty to use application default credentials.`) }
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value) || value.length % 4 === 1) invalid('is not base64')
+  let key: Record<string, unknown> = {}
+  try { key = JSON.parse(Buffer.from(value, 'base64').toString('utf8')) } catch { invalid('does not decode to JSON') }
+  if (!key || typeof key !== 'object' || typeof key.client_email !== 'string' || !key.client_email
+    || typeof key.private_key !== 'string' || !key.private_key.includes('PRIVATE KEY')) invalid('is not a service account key with client_email and private_key')
+  return { ...(typeof key.project_id === 'string' ? { projectId: key.project_id } : {}),
+    credentials: { client_email: key.client_email as string, private_key: key.private_key as string } }
+}
 
-  private async writer(tx: Transaction, user: AuthUser, tabId: string, asAgentId?: string) {
-    const { state } = await this.deps.row(tx, user, tabId)
-    const actor = await this.deps.actor(tx, user, state, asAgentId)
-    author(state, actor, true)
-    return actor
+export class GcsAttachmentStore implements AttachmentStore {
+  private bucket: Promise<import('@google-cloud/storage').Bucket> | null = null
+  constructor(private readonly name: string, private readonly account: ServiceAccount | null = null) {}
+  // Loaded on first use, so a backend without a bucket never loads the client.
+  private files() {
+    this.bucket ??= import('@google-cloud/storage').then(({ Storage }) => new Storage(this.account ?? undefined).bucket(this.name))
+    return this.bucket
   }
-
-  /** Before it is sent only its uploader sees an attachment; after, whoever can read its conversation. Both fail alike. */
-  private async readable(tx: Transaction, user: AuthUser, tabId: string, attachmentId: string, asAgentId?: string) {
-    const { state } = await this.deps.row(tx, user, tabId)
-    const actor = await this.deps.actor(tx, user, state, asAgentId)
-    author(state, actor)
-    const record = await tx.superTabAttachment.findFirst({ where: { id: attachmentId, tabId } })
-    if (record?.conversationId) readConversation(state, actor, record.conversationId)
-    else if (!record || record.actorKey !== actorKey(actor)) fail('NOT_FOUND', 'This image is unavailable.', 404)
-    return record!
+  async put(objectKey: string, file: { name: string; mime: string }, body: Readable, cap: number) {
+    const { contentType, contentDisposition } = served(file.name, file.mime)
+    // One request, not a resumable session: a failed or refused stream aborts it and no object is written.
+    const sink = (await this.files()).file(objectKey).createWriteStream({ resumable: false, contentType,
+      metadata: { contentDisposition, cacheControl: 'public, max-age=31536000, immutable' } })
+    return capped(body, cap, sink)
   }
+}
 
-  /** Creates the attachment with its first part, which carries the header that proves the image's type. */
-  async upload(user: AuthUser, tabId: string, input: z.infer<typeof uploadAttachmentSchema>, asAgentId?: string) {
-    const request = uploadAttachmentSchema.parse(input)
-    const first = Buffer.from(request.data, 'base64')
-    const parts = Math.ceil(request.size / ATTACHMENT_PART_BYTES)
-    if (first.length !== Math.min(request.size, ATTACHMENT_PART_BYTES)) fail('INVALID_ATTACHMENT', 'The image arrived incomplete. Attach it again.', 400)
-    const info = imageInfo(first) ?? fail('UNSUPPORTED_ATTACHMENT', 'Attach a PNG, JPEG, or WebP image.', 400)
-    return this.deps.transaction(async tx => {
-      const actor = await this.writer(tx, user, tabId, asAgentId)
-      const key = actorKey(actor)
-      const stale = await tx.superTabAttachment.findMany({ where: { tabId, actorKey: key, messageId: null, OR: [
-        { createdAt: { lt: new Date(this.deps.now() - UNSENT_MS) } },
-        { complete: false, createdAt: { lt: new Date(this.deps.now() - INCOMPLETE_MS) } },
-      ] }, select: { id: true }, take: 100 })
-      if (stale.length) {
-        await tx.superTabAttachmentPart.deleteMany({ where: { attachmentId: { in: stale.map(s => s.id) } } })
-        await tx.superTabAttachment.deleteMany({ where: { id: { in: stale.map(s => s.id) } } })
-      }
-      if (await tx.superTabAttachment.count({ where: { tabId, actorKey: key, messageId: null } }) >= UNSENT_LIMIT) {
-        fail('ATTACHMENT_LIMIT', 'Too many images are waiting to be sent. Send or remove the ones in your messages, or try again in an hour.', 429)
-      }
-      const attachmentId = randomBytes(12).toString('hex')
-      // Unsent is an explicit null: MongoDB's `messageId: null` filter does not match a field that was never written.
-      const record = await tx.superTabAttachment.create({ data: { id: attachmentId, tabId, actorKey: key, conversationId: null, messageId: null,
-        name: request.name, mime: info.mime, size: request.size, width: info.width, height: info.height, parts, complete: parts === 1 } })
-      await tx.superTabAttachmentPart.create({ data: { id: partId(attachmentId, 0), attachmentId, index: 0, data: first } })
-      return { ...attachmentMeta(record), complete: record.complete }
-    })
+export class MemoryAttachmentStore implements AttachmentStore {
+  readonly objects = new Map<string, { bytes: Buffer; contentType: string; contentDisposition: string }>()
+  async put(objectKey: string, file: { name: string; mime: string }, body: Readable, cap: number) {
+    const chunks: Buffer[] = []
+    const size = await capped(body, cap, new Writable({ write(chunk: Buffer, _encoding, done) { chunks.push(chunk); done() } }))
+    this.objects.set(objectKey, { bytes: Buffer.concat(chunks), ...served(file.name, file.mime) })
+    return size
   }
+}
 
-  /** Repeating a part replaces it, so a retry after a lost reply is safe. A finished attachment no longer changes. */
-  async uploadPart(user: AuthUser, tabId: string, attachmentId: string, index: number, input: z.infer<typeof attachmentPartSchema>, asAgentId?: string) {
-    const bytes = Buffer.from(attachmentPartSchema.parse(input).data, 'base64')
-    return this.deps.transaction(async tx => {
-      const actor = await this.writer(tx, user, tabId, asAgentId)
-      const record = await tx.superTabAttachment.findFirst({ where: { id: attachmentId, tabId } })
-      if (!record || record.actorKey !== actorKey(actor)) fail('NOT_FOUND', 'This image is unavailable.', 404)
-      if (record.complete) return { id: record.id, complete: true }
-      if (index < 1 || index >= record.parts || bytes.length !== partBytes(record, index)) {
-        fail('INVALID_ATTACHMENT', 'The image arrived incomplete. Attach it again.', 400)
-      }
-      await tx.superTabAttachmentPart.upsert({ where: { attachmentId_index: { attachmentId, index } },
-        create: { id: partId(attachmentId, index), attachmentId, index, data: bytes }, update: { data: bytes } })
-      const complete = await tx.superTabAttachmentPart.count({ where: { attachmentId } }) === record.parts
-      // Always written: two final parts in parallel then conflict on this document and one retries, seeing both parts.
-      await tx.superTabAttachment.update({ where: { id: attachmentId }, data: { complete } })
-      return { id: record.id, complete }
-    })
+export function attachmentsFromEnv(env: { NODE_ENV: string; SUPER_TAB_ATTACHMENTS_BUCKET: string; SUPER_TAB_ATTACHMENTS_CREDENTIALS: string;
+  SUPER_TAB_ATTACHMENTS_PREFIX: string; SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: string }): Attachments | null {
+  // Every message carries these links and every agent's computer downloads from them: in production only over HTTPS.
+  // A local or test run may serve them from a plain loopback server.
+  if (env.NODE_ENV === 'production' && new URL(env.SUPER_TAB_ATTACHMENTS_PUBLIC_BASE).protocol !== 'https:') {
+    throw new Error('SUPER_TAB_ATTACHMENTS_PUBLIC_BASE must be an https:// address in production.')
   }
-
-  /** Its uploader takes back an image not yet sent: removed from the composer, replaced, or left over from a failed send. */
-  async remove(user: AuthUser, tabId: string, attachmentId: string, asAgentId?: string) {
-    return this.deps.transaction(async tx => {
-      const actor = await this.writer(tx, user, tabId, asAgentId)
-      const record = await tx.superTabAttachment.findFirst({ where: { id: attachmentId, tabId } })
-      if (!record || record.actorKey !== actorKey(actor)) fail('NOT_FOUND', 'This image is unavailable.', 404)
-      if (record.messageId) fail('ATTACHMENT_SENT', 'This image was already sent.')
-      await tx.superTabAttachmentPart.deleteMany({ where: { attachmentId } })
-      await tx.superTabAttachment.delete({ where: { id: attachmentId } })
-      return { id: attachmentId, deleted: true }
-    })
-  }
-
-  async read(user: AuthUser, tabId: string, attachmentId: string, asAgentId?: string) {
-    return this.deps.transaction(async tx => {
-      const record = await this.readable(tx, user, tabId, attachmentId, asAgentId)
-      // An unfinished upload is its uploader's alone: which parts it still needs lets an interrupted upload resume.
-      const missing = record.complete ? [] : await tx.superTabAttachmentPart.findMany({ where: { attachmentId }, select: { index: true } })
-        .then(have => Array.from({ length: record.parts }, (_, i) => i).filter(i => !have.some(p => p.index === i)))
-      return { ...attachmentMeta(record), complete: record.complete, ...(record.complete ? {} : { missing }) }
-    })
-  }
-
-  /** One part's bytes, base64 in the JSON reply like every relayed answer. */
-  async readPart(user: AuthUser, tabId: string, attachmentId: string, index: number, asAgentId?: string) {
-    return this.deps.transaction(async tx => {
-      const record = await this.readable(tx, user, tabId, attachmentId, asAgentId)
-      const part = await tx.superTabAttachmentPart.findUnique({ where: { attachmentId_index: { attachmentId, index } } })
-      if (!part || part.index >= record.parts) fail('NOT_FOUND', 'This part of the image is unavailable.', 404)
-      return { id: record.id, index, parts: record.parts, data: Buffer.from(part.data).toString('base64') }
-    })
-  }
+  // Read even without a bucket, so a broken key fails the deploy that set it rather than the one that adds the bucket.
+  const account = serviceAccountFrom(env.SUPER_TAB_ATTACHMENTS_CREDENTIALS)
+  if (!env.SUPER_TAB_ATTACHMENTS_BUCKET) return null
+  return { store: new GcsAttachmentStore(env.SUPER_TAB_ATTACHMENTS_BUCKET, account), prefix: env.SUPER_TAB_ATTACHMENTS_PREFIX,
+    publicBase: env.SUPER_TAB_ATTACHMENTS_PUBLIC_BASE }
 }

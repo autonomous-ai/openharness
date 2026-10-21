@@ -11,7 +11,7 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/new_harness_attachments.dart';
 import '../widgets/new_harness_paste.dart';
 import '../state/app_state.dart';
-import 'attachments.dart';
+import '../state/harness_attachments.dart';
 import 'roster.dart';
 import 'recording_notice.dart';
 import 'pull_requests.dart';
@@ -222,6 +222,8 @@ class _SuperTabViewState extends State<SuperTabView> {
     super.dispose();
   }
 
+  HarnessAttachments get _files => c.attachments(c.selectedId);
+
   Future<void> _send() async {
     final choices = _completionChoices;
     if (choices.isNotEmpty) {
@@ -232,8 +234,9 @@ class _SuperTabViewState extends State<SuperTabView> {
         c.selected == null ||
         c.selected!.archived ||
         c.saving ||
+        c.uploading ||
         c.hasPendingAction ||
-        (_composer.text.trim().isEmpty && c.images(c.selectedId).isEmpty)) {
+        (_composer.text.trim().isEmpty && _files.isEmpty)) {
       return;
     }
     final id = c.selectedId;
@@ -929,7 +932,6 @@ class _SuperTabViewState extends State<SuperTabView> {
       grouped: grouped,
       reply: reply,
       replyAuthor: reply == null ? null : _shownAuthor(c, reply),
-      loadAttachment: c.attachmentBytes,
       onReply: c.canWrite && c.selected?.archived == false
           ? () {
               setState(() => _replies[c.selectedId] = message);
@@ -1013,6 +1015,8 @@ class _SuperTabViewState extends State<SuperTabView> {
       );
     }
     final group = c.selected;
+    final writable = c.canWrite && group != null && !group.archived;
+    final busy = c.saving || c.uploading;
     final messages = c.messages(c.selectedId);
     final entries = superTabTranscriptEntries(messages);
     final byId = {for (final message in messages) message.id: message};
@@ -1023,8 +1027,6 @@ class _SuperTabViewState extends State<SuperTabView> {
         : messages.where((message) => message.sequence > newAfter).length;
     final reply = _replies[c.selectedId];
     final choices = _completionChoices;
-    final images = c.images(c.selectedId);
-    final writable = c.canWrite && group != null && !group.archived;
     return Column(
       children: [
         if (c.error != null)
@@ -1187,7 +1189,7 @@ class _SuperTabViewState extends State<SuperTabView> {
                 Expanded(
                   child: SuperTabReplyPreview(
                     author: 'Replying to ${_authorName(reply)}',
-                    text: reply.preview,
+                    text: reply.text,
                   ),
                 ),
                 AppIconButton(
@@ -1328,38 +1330,44 @@ class _SuperTabViewState extends State<SuperTabView> {
               }
               return KeyEventResult.ignored;
             },
-            child: NewHarnessDropZone(
-              attachments: images,
-              enabled: writable && !c.saving,
-              child: DecoratedBox(
-                key: const ValueKey('super-message-composer-surface'),
-                decoration: BoxDecoration(
-                  color: DesktopChrome.field,
-                  borderRadius: BorderRadius.circular(
-                    DesktopChrome.controlRadius,
-                  ),
-                  border: Border.all(color: DesktopChrome.rim),
+            child: DecoratedBox(
+              key: const ValueKey('super-message-composer-surface'),
+              decoration: BoxDecoration(
+                color: DesktopChrome.field,
+                borderRadius: BorderRadius.circular(
+                  DesktopChrome.controlRadius,
                 ),
+                border: Border.all(color: DesktopChrome.rim),
+              ),
+              child: NewHarnessDropZone(
+                attachments: _files,
+                enabled: writable && !busy,
                 child: GestureDetector(
                   behavior: HitTestBehavior.translucent,
-                  onTap: c.canWrite && group != null && !group.archived
-                      ? _focus.requestFocus
-                      : null,
+                  onTap: writable ? _focus.requestFocus : null,
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        if (!images.isEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 8, right: 8),
-                            child: NewHarnessAttachmentChips(
-                              key: const ValueKey('super-composer-images'),
-                              attachments: images,
-                              enabled: !c.saving,
-                            ),
-                          ),
+                        ListenableBuilder(
+                          listenable: _files,
+                          builder: (context, _) => _files.isEmpty
+                              ? const SizedBox.shrink()
+                              : Padding(
+                                  padding: const EdgeInsets.only(
+                                    bottom: 8,
+                                    right: 8,
+                                  ),
+                                  child: NewHarnessAttachmentChips(
+                                    attachments: _files,
+                                    enabled: !c.saving,
+                                    isUploading: c.isUploading,
+                                    progressOf: c.uploadProgress,
+                                  ),
+                                ),
+                        ),
                         ConstrainedBox(
                           constraints: BoxConstraints(
                             minHeight: grid.AppControl.heightFieldScaled,
@@ -1369,10 +1377,9 @@ class _SuperTabViewState extends State<SuperTabView> {
                             children: [
                               Expanded(
                                 child: NewHarnessPasteTarget(
-                                  attachments: images,
-                                  enabled: writable && !c.saving,
+                                  attachments: _files,
+                                  enabled: writable && !busy,
                                   focusNode: _focus,
-                                  readFiles: superTabCopiedImages,
                                   child: TextField(
                                     key: const ValueKey(
                                       'super-message-composer',
@@ -1380,10 +1387,7 @@ class _SuperTabViewState extends State<SuperTabView> {
                                     controller: _composer,
                                     focusNode: _focus,
                                     autofocus: !_terminalsVisible,
-                                    enabled:
-                                        c.canWrite &&
-                                        group != null &&
-                                        !group.archived,
+                                    enabled: writable,
                                     minLines: 1,
                                     maxLines:
                                         MediaQuery.sizeOf(context).height < 600
@@ -1425,18 +1429,25 @@ class _SuperTabViewState extends State<SuperTabView> {
                                   ),
                                 ),
                               ),
-                              ValueListenableBuilder(
-                                valueListenable: _composer,
-                                builder: (context, value, _) => AppIconButton(
+                              NewHarnessAttachButton(
+                                attachments: _files,
+                                enabled: writable && !busy,
+                              ),
+                              ListenableBuilder(
+                                listenable: Listenable.merge([
+                                  _composer,
+                                  _files,
+                                ]),
+                                builder: (context, _) => AppIconButton(
                                   icon: AppIcons.arrowUp,
                                   tooltip: 'Send message',
                                   color: DesktopChrome.accent,
                                   onPressed:
                                       writable &&
-                                          !c.saving &&
+                                          !busy &&
                                           !c.hasPendingAction &&
-                                          (value.text.trim().isNotEmpty ||
-                                              !images.isEmpty)
+                                          (_composer.text.trim().isNotEmpty ||
+                                              !_files.isEmpty)
                                       ? () => unawaited(_send())
                                       : null,
                                 ),

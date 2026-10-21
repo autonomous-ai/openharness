@@ -221,20 +221,40 @@ class SuperTabRoute {
   final List<SuperTabRouteChoice> alternatives;
 }
 
-/// An image sent with a message. A message read never carries its bytes;
-/// they are read in [parts] (SuperTabController.attachmentBytes).
+/// A file sent with a message. The chat never loads [url] by itself.
 class SuperTabAttachment {
   SuperTabAttachment.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       name = _text(row, 'name'),
       mime = _text(row, 'mime'),
       size = (row['size'] as num).toInt(),
-      width = (row['width'] as num?)?.toInt(),
-      height = (row['height'] as num?)?.toInt(),
-      parts = (row['parts'] as num).toInt();
-  final String id, name, mime;
-  final int size, parts;
-  final int? width, height;
+      url = _text(row, 'url');
+  final String id, name, mime, url;
+  final int size;
+
+  /// The kinds the backend serves to be seen in place; every other kind is
+  /// served as a download.
+  bool get isImage => const {
+    'image/png',
+    'image/jpeg',
+    'image/gif',
+    'image/webp',
+  }.contains(mime);
+}
+
+/// A message's files. A row that does not read is left out, so one bad row
+/// cannot hide the page of messages it came in.
+List<SuperTabAttachment> _attachments(Object? rows) => List.unmodifiable([
+  if (rows is List)
+    for (final row in rows) ?_tryAttachment(row),
+]);
+
+SuperTabAttachment? _tryAttachment(Object? row) {
+  try {
+    return SuperTabAttachment.fromJson(superTabMap(row));
+  } catch (_) {
+    return null;
+  }
 }
 
 class SuperTabMessage {
@@ -247,41 +267,18 @@ class SuperTabMessage {
       author = Map.unmodifiable(superTabMap(row['author'])),
       source = Map.unmodifiable(superTabMap(row['source'] ?? const {})),
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
+      attachments = _attachments(row['attachments']),
       deliveries = _list(
         row['deliveries'] ?? const [],
         (d) => Map<String, dynamic>.unmodifiable(d),
-      ),
-      attachments = _list(
-        row['attachments'] ?? const [],
-        SuperTabAttachment.fromJson,
       );
   final String id, conversationId, text;
-  final List<SuperTabAttachment> attachments;
-
-  /// One line for a quote of it: its text, or what it carries when it is
-  /// only images.
-  String get preview => shownText.trim().isNotEmpty || attachments.isEmpty
-      ? shownText
-      : attachments.length == 1
-      ? 'Image'
-      : '${attachments.length} images';
-
-  /// The text to draw beside its images. A message of images alone is stored
-  /// with `[image]` or `[N images]` (backend attachments.ts
-  /// `imagesPlaceholder`) for clients that cannot show them; this one does.
-  String get shownText =>
-      attachments.isNotEmpty &&
-          text ==
-              (attachments.length == 1
-                  ? '[image]'
-                  : '[${attachments.length} images]')
-      ? ''
-      : text;
   final String? replyTo;
   final int sequence;
   final Map<String, dynamic> author;
   final Map<String, dynamic> source;
   final DateTime? createdAt;
+  final List<SuperTabAttachment> attachments;
   final List<Map<String, dynamic>> deliveries;
   String get authorName => author['name'] as String? ?? 'Unknown';
   String get authorId => author['id'] as String? ?? '';

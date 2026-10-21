@@ -96,23 +96,6 @@ describe('Super Tab collaboration policy', () => {
       { reply: { id: posted.id, conversationId: 'elsewhere', author: posted.author } })).toThrow('Reply to a message in this conversation')
   })
 
-  it('sends images the store checked, with or without text, and refuses a message with neither', () => {
-    const f = fixture()
-    const lead = f.add('lead', 'owner', 'lead', true)
-    const image = { id: 'img1', name: 'screen.png', mime: 'image/png', size: 10, width: 2, height: 1, parts: 1 }
-    const send = (text: string, attachmentIds?: string[]): Command =>
-      ({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [], ...(attachmentIds ? { attachmentIds } : {}) })
-    const only = f.run(send('', ['img1']), owner, { attachments: [image] }).messages[0]!
-    expect(only).toMatchObject({ text: '[image]', recipients: [lead], attachments: [image] })
-    expect(f.run(send('', ['img1', 'img2']), owner, { attachments: [image, { ...image, id: 'img2' }] }).messages[0]!.text).toBe('[2 images]')
-    expect(f.run(send('Plain text')).messages[0]!).not.toHaveProperty('attachments')
-    expect(() => f.run(send(''))).toThrow('Write a message or attach an image')
-    expect(() => f.run(send('Hi', ['img1']))).toThrow('no longer available')
-    expect(() => f.run(send('Hi', ['img2']), owner, { attachments: [image] })).toThrow('no longer available')
-    expect(commandSchema.safeParse(send('Five', ['a', 'b', 'c', 'd', 'e'])).success).toBe(false)
-    expect(commandSchema.safeParse(send('Old client')).success).toBe(true)
-  })
-
   it('lets a viewer read and leave, but not send, assign, attach or invite', () => {
     const f = fixture()
     f.invite('viewer')
@@ -497,4 +480,27 @@ it('rejects embedded credentials in shared project metadata', () => {
   expect(commandSchema.safeParse({ type: 'project.repository', projectId: 'lead', repositoryUrl: 'https://token@github.com/example/project' }).success).toBe(false)
   expect(commandSchema.safeParse({ type: 'project.repository', projectId: 'lead', repositoryUrl: 'github.com/example/project' }).success).toBe(false)
   expect(commandSchema.safeParse({ type: 'project.repository', projectId: 'lead', repositoryUrl: null }).success).toBe(false)
+})
+
+describe('message attachments', () => {
+  const file = { id: 'file-1', name: 'screen.png', mime: 'image/png', size: 12, url: 'https://cdn.example.test/super-tabs/tab/abc/screen.png' }
+  const send = (attachmentIds?: string[], text = ''): Command => ({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [], ...(attachmentIds ? { attachmentIds } : {}) })
+  it('records verified files on the message and allows empty text with one', () => {
+    const f = fixture()
+    const sent = f.run(send(['file-1', 'file-1']), owner, { attachments: [file] })
+    expect(sent.messages).toEqual([expect.objectContaining({ text: '', attachments: [file] })])
+    expect(f.run(send(undefined, 'Plain text.')).messages[0]).not.toHaveProperty('attachments')
+  })
+  it('refuses empty text without files and a file the store did not verify', () => {
+    const f = fixture()
+    expect(() => f.run(send())).toThrow('Write a message or attach a file.')
+    expect(() => f.run(send(['file-1']))).toThrow('Upload this file again')
+    expect(() => commandSchema.parse(send(Array.from({ length: 11 }, (_, i) => `file-${i}`)))).toThrow()
+  })
+  it('resends a message with its files', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
+    const resent = f.run({ type: 'delivery.resolve', deliveryId: 'd', resolution: 'resend' }, owner,
+      { delivery: { id: 'd', conversationId: 'lead', agentId: lead, messageId: 'm', text: '', attachments: [file] } })
+    expect(resent.messages[0]).toMatchObject({ recipients: [lead], attachments: [file] })
+  })
 })

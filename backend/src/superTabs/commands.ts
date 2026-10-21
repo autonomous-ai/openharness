@@ -2,11 +2,11 @@ import { admitMachineStart, machineContribution } from './machines.js'
 import { z } from 'zod'
 import {
   activeWork, actorKey, agent, author, conversation, fail, person, stableId, numberConversations, nextConversationNumber,
-  type Actor, type Agent, type AttachmentMeta, type Author, type CommandEffects, type SuperTabState,
+  type Actor, type Agent, type Author, type CommandEffects, type SuperTabState,
 } from './model.js'
-import { attachmentIdsSchema, imagesPlaceholder } from './attachments.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSchema } from './routingPolicy.js'
+import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentProjectId, deleteProject, groupProject, manageProject, mutableProjects, projectMembers, projectOf, readAgent, readConversation, readProject, sameProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
@@ -71,9 +71,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('invite.revoke'), inviteId: id }).strict(),
   z.object({ type: z.literal('invite.accept'), inviteId: id }).strict(),
   z.object({ type: z.literal('member.remove'), userId: id }).strict(),
-  // Text may be empty when the message carries an image; applyCommand refuses a message with neither.
-  z.object({ type: z.literal('message.send'), conversationId: id, text: z.string().trim().max(32_000), replyTo: id.nullable(),
-    recipientIds: z.array(id).max(16), attachmentIds: attachmentIdsSchema.optional() }).strict(),
+  // Text may be empty when the message carries files; applyCommand checks that one of them is there.
+  z.object({ type: z.literal('message.send'), conversationId: id, text: z.string().trim().max(32_000), replyTo: id.nullable(), recipientIds: z.array(id).max(16),
+    attachmentIds: z.array(id).max(MAX_ATTACHMENTS).optional() }).strict(),
   z.object({ type: z.literal('delivery.resolve'), deliveryId: id, resolution: z.enum(['received', 'resend', 'cancel']) }).strict(),
   z.object({ type: z.literal('work.define'), conversationId: id, brief: text, checks: z.array(check).min(1).max(40) }).strict(),
   z.object({ type: z.literal('work.assign'), conversationId: id, agentId: id, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
@@ -97,9 +97,9 @@ export interface CommandContext {
   /** A host's receipt, not an elapsed lease, proves that an assignment stopped. */
   confirmedStopped?: boolean
   /** An uncertain receipt and its original message, read transactionally. */
-  delivery?: { id: string; conversationId: string; agentId: string; messageId: string; text: string; attachments?: AttachmentMeta[] }
-  /** The images a message.send names, checked by the store (attachments.ts `attachmentsForSend`). */
-  attachments?: AttachmentMeta[]
+  delivery?: { id: string; conversationId: string; agentId: string; messageId: string; text: string; attachments?: Attachment[] }
+  /** The files `message.send` names, each checked by the store: uploaded by this actor to this conversation, and unused. */
+  attachments?: Attachment[]
   /** Route decisions this tab recorded in the last hour, counted by the store. */
   recentRoutes?: number
   /** The decision a command names, read from SuperTabRouteDecision by the store. */
@@ -134,6 +134,12 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
     if (groupId && groupId !== context.routeDecision.conversationId) fail('ROUTE_MISMATCH', 'This routing decision belongs to another group.')
     readConversation(state, actor, context.routeDecision.conversationId)
   }
+}
+/** Who may post in a conversation may also upload a file to it. Writer access is checked by `author(state, actor, true)`. */
+export function postable(state: SuperTabState, actor: Actor, conversationId: string) {
+  const group = open(state, conversationId)
+  if (actor.kind === 'agent' && !group.agentIds.includes(actor.agentId)) fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
+  return group
 }
 function owner(state: SuperTabState, actor: Actor): void {
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Super Tab owner can manage invitations.', 403)
@@ -175,9 +181,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       brief: group.brief, checks: group.checks, assignment: group.assignment }))
   }
   const message = (conversationId: string, body: string, recipients: string[] = [], replyTo: string | null = null, source?: Record<string, unknown>,
-    attachments: AttachmentMeta[] = []) => {
+    attachments?: Attachment[]) => {
     effects.messages.push({ id: operationId, conversationId, author: sender, text: body, replyTo, recipients, ...(source ? { source } : {}),
-      ...(attachments.length ? { attachments } : {}) })
+      ...(attachments?.length ? { attachments } : {}) })
     result.messageId = operationId
   }
   const openDecision = (): RouteDecision => {
@@ -536,8 +542,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     }
     case 'message.send': {
-      const group = open(state, command.conversationId)
-      if (actor.kind === 'agent' && !group.agentIds.includes(actor.agentId)) fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
+      const group = postable(state, actor, command.conversationId)
+      const ids = [...new Set(command.attachmentIds ?? [])]
+      const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
+      if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
       if (command.replyTo && (!context.reply || context.reply.id !== command.replyTo || context.reply.conversationId !== group.id)) {
         fail('INVALID_REPLY', 'Reply to a message in this conversation.', 400)
       }
@@ -548,13 +556,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         agent(state, id)
         if (!group.agentIds.includes(id)) fail('INVALID_RECIPIENT', 'Choose an agent in this conversation.', 400)
       }
-      const attachments = command.attachmentIds?.length ? context.attachments ?? [] : []
-      if (attachments.length !== (command.attachmentIds?.length ?? 0) || attachments.some((a, i) => a.id !== command.attachmentIds![i])) {
-        fail('INVALID_ATTACHMENT', 'This image is no longer available. Attach it again.', 400)
-      }
-      if (!command.text && !attachments.length) fail('EMPTY_MESSAGE', 'Write a message or attach an image.', 400)
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
-      message(group.id, command.text || imagesPlaceholder(attachments.length), recipients, command.replyTo, undefined, attachments)
+      message(group.id, command.text, recipients, command.replyTo, undefined, attachments)
       break
     }
     case 'delivery.resolve': {
@@ -566,7 +569,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.resolution === 'resend') {
         open(state, group.id)
         if (!group.agentIds.includes(target.id)) fail('INVALID_RECIPIENT', 'This agent is no longer in the conversation.', 400)
-        message(group.id, delivery.text, [target.id], delivery.messageId, undefined, delivery.attachments ?? [])
+        message(group.id, delivery.text, [target.id], delivery.messageId, undefined, delivery.attachments)
       } else {
         message(group.id, command.resolution === 'received'
           ? `Checked ${target.name}’s terminal and confirmed the earlier instruction was received.`

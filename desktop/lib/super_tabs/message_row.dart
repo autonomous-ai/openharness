@@ -6,7 +6,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
-import 'attachments.dart';
+import 'attachment_chips.dart';
 import 'identity.dart';
 import 'message_text.dart';
 import 'model.dart';
@@ -29,7 +29,6 @@ class SuperTabMessageRow extends StatefulWidget {
     this.onOpenAgent,
     this.references = const {},
     this.onOpenGroup,
-    this.loadAttachment,
   });
 
   final SuperTabMessage message;
@@ -44,10 +43,6 @@ class SuperTabMessageRow extends StatefulWidget {
   final VoidCallback? onReply, onOpenAgent;
   final VoidCallback onReturnToComposer;
   final List<Widget> receipts;
-
-  /// Reads an attached image's bytes; without it, images are not shown.
-  final Future<Uint8List> Function(SuperTabAttachment attachment)?
-  loadAttachment;
 
   // Routing notes share the message body column, including grouped messages.
   static const horizontalInset = 24.0;
@@ -276,7 +271,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                         widget.reply?.authorName ??
                                         'Earlier message',
                                     text:
-                                        widget.reply?.preview ??
+                                        widget.reply?.text ??
                                         'The original message isn’t loaded.',
                                   ),
                                 ),
@@ -288,23 +283,25 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     style: DesktopChrome.metadata(),
                                   ),
                                 ),
-                              if (message.shownText.isNotEmpty ||
-                                  message.attachments.isEmpty)
+                              if (message.text.isNotEmpty)
                                 ConstrainedBox(
                                   constraints: const BoxConstraints(
                                     maxWidth: 960,
                                   ),
                                   child: SuperTabMessageText(
-                                    message.shownText,
+                                    message.text,
                                     references: widget.references,
                                     onOpenGroup: widget.onOpenGroup,
                                   ),
                                 ),
-                              if (message.attachments.isNotEmpty &&
-                                  widget.loadAttachment != null)
-                                SuperTabMessageImages(
-                                  attachments: message.attachments,
-                                  load: widget.loadAttachment!,
+                              if (message.attachments.isNotEmpty)
+                                Padding(
+                                  padding: EdgeInsets.only(
+                                    top: message.text.isEmpty ? 0 : 8,
+                                  ),
+                                  child: SuperTabAttachmentChips(
+                                    message.attachments,
+                                  ),
                                 ),
                               SuperTabPullRequestLinks(message.text),
                               ...widget.receipts,

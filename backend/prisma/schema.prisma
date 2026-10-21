@@ -1017,44 +1017,29 @@ model SuperTabMessage {
   author          Json
   source          Json?
   text            String
+  /// Files posted with the message (superTabs/attachments.ts); the bytes live in the attachments bucket.
+  attachments     Json?
   replyTo         String?
   recipientIds    String[]
-  /// Metadata of the images sent with it (superTabs/attachments.ts); never their bytes.
-  attachments     Json?
   createdAt       DateTime @default(now())
 
   @@index([tabId, conversationId, sequence])
 }
 
-/// An image a member attached to a Super Tab message (superTabs/attachments.ts). Until it is sent only its
-/// uploader can read it; after that, whoever can read the message's conversation. The bytes are in parts.
+/// One uploaded file, which one message of the actor that uploaded it can send once.
 model SuperTabAttachment {
-  id              String   @id @map("_id")
-  tabId           String
-  actorKey        String
-  conversationId  String?
-  messageId       String?
-  name            String
-  mime            String
-  size            Int
-  width           Int?
-  height          Int?
-  parts           Int
-  complete        Boolean  @default(false)
-  createdAt       DateTime @default(now())
+  id             String   @id @map("_id")
+  tabId          String
+  conversationId String
+  actorKey       String
+  name           String
+  mime           String
+  size           Int
+  objectKey      String
+  usedBy         String?
+  createdAt      DateTime @default(now())
 
-  @@index([tabId, actorKey, messageId, createdAt])
-}
-
-/// One part of an attachment's bytes. Parts keep every upload and read small enough for the machine relay
-/// the apps reach the backend through.
-model SuperTabAttachmentPart {
-  id            String @id @map("_id")
-  attachmentId  String
-  index         Int
-  data          Bytes
-
-  @@unique([attachmentId, index])
+  @@index([tabId, actorKey, createdAt])
 }
 
 model SuperTabOperation {
