@@ -271,6 +271,11 @@ describe('the dial\'s host, wired to the core', () => {
     expect(core.agents.setRuntime).toHaveBeenCalledWith('a1', 'opus', 'high')
     expect(core.agents.runtimeModels).toHaveBeenCalledWith('a1')
     expect(core.agents.fork).toHaveBeenCalledWith('a1')
+    // A Super Tab wait is shown, never answered: nothing reaches the pane.
+    w.answer('a1', 'supertab:as-1:needs_human', { q: 'Yes' })
+    expect(await w.answerReviewed!({ agentId: 'a1', requestId: 'supertab:as-1:needs_human' } as never)).toBe(false)
+    expect(core.questions.answer).toHaveBeenCalledTimes(1)
+    expect(core.questions.answerReviewed).toHaveBeenCalledTimes(1)
   })
 
   it('tells the windows on this computer what a hand at this desk did, and the owner\'s apps the device status', () => {
@@ -470,6 +475,19 @@ describe('what the windows say, reaching the dial', () => {
       expect(decideTier.mock.calls.map(([i]) => i.durationS)).toEqual([60, 10])
     })
 
+    it('follows a tier the recaps already decided, asking nobody again, and still silences the agent on screen', () => {
+      const decideTier = vi.fn()
+      const { port } = start({ decideTier })
+      port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'done', recap: 'Deployed', tier: 'list' } })
+      expect(calls('summary')).toEqual([['a1', 'Deployed', 'done', 'list', undefined, false]])
+      expect(decideTier).not.toHaveBeenCalled()
+      expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · .* · list · recaps · decided upstream · 0ms$/))
+      port.desk(['a2'], true)
+      port.card({ type: 'commander_event', agentId: 'a2', payload: { kind: 'summary', text: 'done', tier: 'alert' } })
+      expect(calls('summary').at(-1)).toEqual(['a2', 'done', 'done', 'silent', undefined, false])
+      expect(decideTier).not.toHaveBeenCalled()
+    })
+
     const summaryCalls = () => calls('summary')
     it('is silent without asking Jev when the agent is on screen or the turn was a sub-agent\'s', () => {
       const decideTier = vi.fn()
@@ -548,6 +566,15 @@ describe('what the windows say, reaching the dial', () => {
     port.card({ type: 'commander_question_close', agentId: 'a1', payload: { requestId: 'r1' } })
     port.card({ type: 'agent_deleted', payload: {} })
     expect(seen.cable.calls.map(([name]) => name)).toEqual(['start', 'turnStarted', 'turnDone', 'turnError', 'turnStep', 'question', 'questionClose'])
+  })
+
+  it('hands the dial a Super Tab wait with its tab and what it needs, as an alert', () => {
+    const { port } = start()
+    port.card({ type: 'commander_question', agentId: 'a1', payload: { requestId: 'supertab:as-1:blocked', questions: [{ q: 'Stuck: no key' }], superTab: 'Pilot', attention: 'stuck' } })
+    port.card({ type: 'commander_question', agentId: 'a2', payload: { requestId: 'r2', questions: [], superTab: 'Pilot', attention: 'urgent' } })
+    expect(calls('question')).toEqual([['a1', 'supertab:as-1:blocked', [{ q: 'Stuck: no key' }], { superTab: 'Pilot', attention: 'stuck' }],
+      ['a2', 'r2', [], undefined]])
+    expect(logs.some((l) => /notify · .* · alert · rule:super-tab · question/.test(l))).toBe(true)
   })
 
   it('hands the dial a tool card as a step, and a processing card\'s latest sentence beside the status', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { JevUnavailable } from './jev/jevClient.js'
-import { createTierDecider, type TierInput } from './notifyTier.js'
+import { createTierDecider, fallbackTier, isTier, type TierInput } from './notifyTier.js'
 
 const base: TierInput = {
   agent: 'lamp', engine: 'codex', recap: 'Shipped the thing.', durationS: 300,
@@ -13,6 +13,17 @@ const make = (jev: any, extra: object = {}) => {
 }
 
 describe('notifyTier', () => {
+  it('reads only the three tiers as one', () => {
+    for (const tier of ['alert', 'list', 'silent']) expect(isTier(tier)).toBe(true)
+    for (const value of [undefined, null, '', 'ALERT', 'loud', 1, {}]) expect(isTier(value)).toBe(false)
+  })
+
+  it('falls back to a list entry for a turn of two minutes or more, silence for a shorter or unknown one', () => {
+    expect(fallbackTier(120)).toBe('list')
+    expect(fallbackTier(119)).toBe('silent')
+    expect(fallbackTier(null)).toBe('silent')
+  })
+
   it('failed → alert by rule, Jev never asked', async () => {
     const jev = vi.fn()
     const { decide } = make(jev)
@@ -55,6 +66,9 @@ describe('notifyTier', () => {
     expect(await slow.decide(base)).toMatchObject({ tier: 'list', by: 'fallback:timeout' })
     const bad = make(vi.fn(async () => ({})))
     expect(await bad.decide({ ...base, durationS: 10 })).toMatchObject({ tier: 'silent', by: 'fallback:no-answer' })
+    // Anything else it throws is not Jev saying why: the rule all the same, said as an error.
+    const broken = make(vi.fn(async () => { throw new Error('socket hang up') }))
+    expect(await broken.decide(base)).toMatchObject({ tier: 'list', by: 'fallback:error' })
   })
 
   it('jev null → fallback without calling anything', async () => {

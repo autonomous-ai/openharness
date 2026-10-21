@@ -556,6 +556,12 @@ void main() {
         'held': true,
         'retryable': true,
       },
+      'IDENTITY_UNAVAILABLE for a replaced program': (_) => {
+        'error': 'IDENTITY_UNAVAILABLE',
+        'held': true,
+        'retryable': true,
+        'hold': 'PROGRAM_REPLACED',
+      },
       'SERVICE_UNAVAILABLE': (_) => {'error': 'SERVICE_UNAVAILABLE'},
       'a held reply without an error': (p) => {...handoffOk(p), 'held': true},
       'an empty reply without project identity': (_) => {
@@ -587,7 +593,12 @@ void main() {
           connection.handoff = reply;
           expect(
             await app.changeAgent('m', 'a0', 'claude'),
-            contains('Waiting'),
+            anyOf(
+              contains('Waiting'),
+              contains('not confirmed yet'),
+              contains('took too long'),
+              contains('Restart Harness'),
+            ),
           );
           expect(connection.handoffCalls, hasLength(1));
           expect(connection.recentReads, 0);
@@ -605,6 +616,25 @@ void main() {
         },
       );
     }
+
+    test('says which hold it is, by the reply\'s code alone', () async {
+      final (connection, app) = await open();
+      connection.handoff = (_) => {
+        'error': 'IDENTITY_UNAVAILABLE',
+        'held': true,
+        'hold': 'PROGRAM_REPLACED',
+        'reason': 'words from the machine are never shown',
+      };
+      final message = await app.changeAgent('m', 'a0', 'claude');
+      expect(message, contains('was updated while this harness was running'));
+      expect(message, contains('Restart Harness'));
+      expect(message, isNot(contains('words from the machine')));
+      connection.handoff = (_) => {'error': 'TIMEOUT', 'held': true};
+      expect(
+        await app.changeAgent('m', 'a0', 'claude'),
+        'Preparing the handoff took too long. Try switching again.',
+      );
+    });
 
     test(
       'unreadable history holds even if the mirror has no saved text',
@@ -638,7 +668,10 @@ void main() {
         final (connection, app) = await open();
         connection.recent = {'asks': <String>[], 'events': <Object>[]};
         arrange(connection);
-        expect(await app.changeAgent('m', 'a0', 'claude'), contains('Waiting'));
+        expect(
+          await app.changeAgent('m', 'a0', 'claude'),
+          anyOf(contains('Waiting'), contains('took too long')),
+        );
         expect(connection.recentReads, 0);
         expect(connection.creations, isEmpty);
         expect(connection.events, isNot(contains('save/stop')));

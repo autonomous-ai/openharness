@@ -35,6 +35,9 @@ export interface RecapsLinkDeps {
   /** Where its cards and recaps go: the core API checks each frame's type. */
   clients: Pick<CoreApi['clients'], 'turnCard' | 'turnSummary'>
   lastTurn: CoreApi['transcripts']['lastTurn']
+  /** Harness's Jev, asked for how loudly a turn ends (lib/notifyTier.ts): the process holds no credential, so
+   *  this one route is all of the account's backend it may reach, signed by the core. */
+  jev: (body: unknown) => Promise<{ status: number; body: Record<string, unknown> }>
   log?: (line: string) => void
   now?: () => number
 }
@@ -100,6 +103,7 @@ export function createRecapsLink(deps: RecapsLinkDeps) {
     /** The core's answers to the process's questions (core/serviceLinks.ts `answer`, for `recaps`). */
     async answer(query: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
       if (query === 'lastTurn' && typeof payload.sessionId === 'string') return { turn: await deps.lastTurn(payload.sessionId) }
+      if (query === 'jev') return { ...await deps.jev(payload.body) }
       return { error: 'UNKNOWN_QUERY' }
     },
     /** The process went: no card of it is busy any more, and the core's heartbeats stop with their turns. */

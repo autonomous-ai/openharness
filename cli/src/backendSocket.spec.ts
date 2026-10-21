@@ -183,8 +183,8 @@ describe('reviewed permanent deletion RPCs', () => {
     const { sealTerminalBinary } = await import('./lib/e2ee/terminalSeal.js')
     const raw = sealTerminalBinary(new Uint8Array(32).fill(7), 9, { kind: 1, streamId: '00112233-4455-6677-8899-aabbccddeeff', seq: 1, bytes: new TextEncoder().encode('ls\r'), compressed: false })!
     const gateway = gatewayOf(socket) as any
+    // Opened as it arrives, outside the connection's line: told at once.
     gateway.enqueueTerminalBinary('web:gone', raw)
-    await gateway.downChains.get('web:gone')
     expect(upstreamOf(socket).queue.map((item: { msg: unknown }) => item.msg)).toContainEqual({ t: 'up', targetConnId: 'web:gone', frame: { type: 'e2e_session_unknown', payload: { refused: { type: 'terminal_binary', kind: 1, n: 9 } } } })
   })
 
@@ -2577,6 +2577,68 @@ describe('BackendSocket outbound queue', () => {
     ws.message({ t: 'down', connId: '', frame: { type: '__clients', payload: { commander: 0 } } })
     await vi.waitFor(() => expect(drop).toHaveBeenCalledWith('device'))
 
+    await socket.stop()
+  })
+
+  it('re-announces to an app that joins: once per web session, never for a device, and a failing replay costs only itself', async () => {
+    const socket = relaySocket('token')
+    const joined = vi.fn()
+    socket.fromGateway.client('r0', { role: 'web', label: null, identity: 'PUB', direct: false })
+    socket.onRemoteAppJoined = joined
+    socket.fromGateway.client('d1', { role: 'device', label: null, identity: 'DEV', direct: false })
+    expect(joined).not.toHaveBeenCalled()
+    socket.fromGateway.client('r1', { role: 'web', label: null, identity: 'PUB', direct: false })
+    // The same session said again (a label it was paired under, learned later) is not a second arrival.
+    socket.fromGateway.client('r1', { role: 'web', label: 'Phone', identity: 'PUB', direct: false })
+    expect(joined).toHaveBeenCalledTimes(1)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    socket.onRemoteAppJoined = () => { throw new Error('replay broke') }
+    socket.fromGateway.client('r2', { role: 'web', label: null, identity: 'PUB2', direct: false })
+    socket.onRemoteAppJoined = () => { throw 'not an error' }
+    socket.fromGateway.client('r3', { role: 'web', label: null, identity: 'PUB3', direct: false })
+    expect(warn.mock.calls.map(([line]) => line)).toEqual([
+      '[backend] re-announcing to a remote app failed: replay broke',
+      '[backend] re-announcing to a remote app failed: not an error',
+    ])
+    expect(socket.remoteClient('r2')?.role).toBe('web')
+    expect(socket.remoteClient('r3')?.role).toBe('web')
+    warn.mockRestore()
+    await socket.stop()
+  })
+
+  it('sends a frame for the apps away from this desk to the relay alone: never a window here, nothing while serving this computer only', async () => {
+    const socket = relaySocket('token')
+    const broadcast = vi.spyOn(gatewayOf(socket), 'broadcast')
+    const frames: Record<string, unknown>[] = []
+    socket.registerLocalClient('local:window', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    const asked = { type: 'commander_question', agentId: 'a1', dbSessionId: 's1', payload: { requestId: 'q1', questions: [] } }
+    socket.sendRemote(asked)
+    expect(broadcast).toHaveBeenCalledExactlyOnceWith(asked, undefined)
+    expect(frames.filter((frame) => frame.type === 'commander_question')).toEqual([])
+    // Said in the frame log like any frame for the web audience, when it is on.
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const wasOn = env.LOG_FRAMES
+    env.LOG_FRAMES = true
+    try { socket.sendRemote(asked) } finally { env.LOG_FRAMES = wasOn }
+    expect(log.mock.calls.map(([line]) => line)).toContain('[frame] → web commander_question · requestId=q1')
+    log.mockRestore()
+    broadcast.mockClear()
+    socket.serveThisComputerOnly()
+    socket.sendRemote(asked)
+    expect(broadcast).not.toHaveBeenCalled()
+    await socket.unregisterLocalClient('local:window')
+    await socket.stop()
+  })
+
+  it('says whether an app away from this desk holds a session: a web one, never a device', async () => {
+    const socket = relaySocket('token')
+    expect(socket.hasRemoteApp()).toBe(false)
+    socket.fromGateway.client('d1', { role: 'device', label: null, identity: 'DEV', direct: false })
+    expect(socket.hasRemoteApp()).toBe(false)
+    socket.fromGateway.client('r1', { role: 'web', label: null, identity: 'PUB', direct: false })
+    expect(socket.hasRemoteApp()).toBe(true)
+    socket.fromGateway.client('r1', null)
+    expect(socket.hasRemoteApp()).toBe(false)
     await socket.stop()
   })
 

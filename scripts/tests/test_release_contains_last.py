@@ -133,6 +133,23 @@ class ReleaseContainsLastTests(unittest.TestCase):
                 result = self.release(kind, '--dry-run')
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_a_backend_patch_stays_within_1_to_99(self):
+        # v1.2.100_backend was cut on October 21, 2026: the backend lacked the rollover Desktop already had.
+        for last, args, following in (('1.2.99', [], '1.3.1'), ('1.2.100', [], '1.3.1'), ('1.2.5', ['minor'], '1.3.1'),
+                                      ('1.2.5', ['major'], '2.0.1')):
+            with self.subTest(last=last, args=args):
+                self.tag('backend', last, self.newer)
+                result = self.release('backend', *args, '--dry-run')
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(f'new tag : v{following}_backend', result.stdout)
+                self.git('tag', '-d', f'v{last}_backend')
+                self.git('push', '-q', 'origin', f':refs/tags/v{last}_backend')
+        for exact in ('1.4.0', '1.4.100'):
+            with self.subTest(exact=exact):
+                result = self.release('backend', exact, '--dry-run')
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('1 to 99', result.stderr)
+
     def test_a_first_release_has_nothing_to_contain(self):
         self.live(cli='0.0.0', desktop='0.0.0')
         for kind in RELEASES:

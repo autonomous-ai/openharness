@@ -276,17 +276,21 @@ def machine_prompt_journey():
         # The question is asked in its own box; the panel's search line stays the search.
         shown('┌─' + title)
         shown('[ Cancel ]  [ ' + action + ' ]')
-        assert 'Search machines, links and steps' in screen()
+        assert 'Search machines' in screen()
 
+    # The list's own column: the preview beside it may name the row too.
+    list_x = 40
     hn('devices')
-    shown('Set password…')
-    click_text('Set password…')
+    shown('Remote password')
+    shown('not set')
+    # With no password yet, its one row asks for one at once.
+    click_text('Remote password', before=list_x)
     shown('New remote password')
     dialog('Set Remote Password', 'Continue')
     paste_password()
     assert '│' + '•' * len('fixture pasted password') in screen(), 'the password is typed into the dialog input'
     # A list click used to become Enter and accept the unfinished password.
-    click_text('Refresh links')
+    click_text('Add a machine', before=list_x)
     shown('New remote password')
     assert 'Repeat password' not in screen()
     click_text('Continue')
@@ -301,13 +305,17 @@ def machine_prompt_journey():
     shown('Nothing changed')
     assert not actions() and 'fixture pasted password' not in screen()
 
-    click_text('Set password…')
+    click_text('Remote password', before=list_x)
     paste_password()
     click_text('Continue')
     paste_password()
     click_text('Continue')
     click_text('[ Yes ]')
     wait(lambda: actions() == ['set'], 'one explicitly confirmed password write')
+    # Once there is one, its row opens Change and Clear.
+    shown('✓ Remote password')
+    click_text('Remote password', before=list_x)
+    shown('Change password…')
     shown('Clear password…')
     click_text('Clear password…')
     shown('Prevent new links')
@@ -321,8 +329,12 @@ def machine_prompt_journey():
         snapshot(f'machine-confirmation-{cols}x{rows}')
     click_text('Cancel')
     assert actions() == ['set']
-    keys('Escape')
     tmux('resize-window', '-t', 'test', '-x', '170', '-y', '44')
+    # Esc leaves the password's level first, then closes the panel.
+    keys('Escape')
+    shown('Your machines')
+    keys('Escape')
+    wait(lambda: 'Machines & devices' not in screen(), 'the panel closes')
     shown('Alpha task terminal')
     print('PASS workspace: machine prompts accept mouse confirmation, protect pasted passwords, cancel and resize', flush=True)
 

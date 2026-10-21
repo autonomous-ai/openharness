@@ -51,6 +51,17 @@ it('limits the owner proxy to Super Tab endpoints and preserves backend failures
   vi.mocked(t.core.account.backend).mockResolvedValueOnce({ status: 403, body: { success: false, error: { code: 'FORBIDDEN', message: 'Access withdrawn' } } })
   expect(await t.ask({ action: 'backend', method: 'GET', path: '/api/super-tabs/tab' }, owner)).toEqual({ error: 'FORBIDDEN', detail: 'Access withdrawn', status: 403 })
 })
+it('documents how a lead shares its project repository for other machines', async () => {
+  const t = setup()
+  const answer = await t.ask({ action: 'help' }, owner) as { help: { commands: Array<Record<string, unknown>> } }
+  expect(answer.help.commands).toContainEqual({ type: 'project.repository', projectId: 'PROJECT', repositoryUrl: 'https://github.com/OWNER/REPOSITORY' })
+})
+it('tells the Lead that start works only on a machine in the Swarm\'s Machines list', async () => {
+  const t = setup()
+  const answer = await t.ask({ action: 'help' }, owner) as { help: { start: string } }
+  expect(answer.help.start).toContain('create one agent in a conversation on a machine in this Swarm\'s Machines list; to use another machine, a person adds it to the Swarm first.')
+  expect(answer.help.start).toContain('Repeat exactly after an interruption')
+})
 it('resolves a native caller to its exact contribution and rechecks it before every agent command', async () => {
   const t = setup()
   expect(await t.ask({ action: 'status', tabId: 'tab', harnessId: 'native' }, owner)).toMatchObject({ ok: true })
@@ -64,6 +75,14 @@ it('resolves a native caller to its exact contribution and rechecks it before ev
   expect(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).toMatchObject({ error: 'AGENT_UNAVAILABLE' })
   t.agent.machineId = 'machine-1'; vi.mocked(t.core.agents.byAgent).mockReturnValue(undefined)
   expect(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).toMatchObject({ error: 'AGENT_UNAVAILABLE' })
+})
+
+it('tells the Lead which branch a started agent works from, and how to choose another', async () => {
+  const t = setup()
+  const help = (await t.ask({ action: 'help' }, owner)).help as { start: string; startRequest: Record<string, unknown> }
+  expect(help.start).toContain('default branch, fetched first')
+  expect(help.start).toContain('branchRef')
+  expect(help.startRequest).toMatchObject({ worktree: true, branchRef: 'refs/remotes/origin/BASE_BRANCH' })
 })
 
 it('keeps host capacity separate from account authority and closes it on disconnect or identity change', async () => {
@@ -349,4 +368,27 @@ describe('which messages still need an answer', () => {
     expect(failed.ok).toBe(true)
     expect(failed.value.messages[0]).not.toHaveProperty('answered')
   })
+})
+
+describe('post --attach steps', () => {
+  it('reads whether this post already went out with files, as the agent', async () => {
+    const t = setup()
+    const messageId = createHash('sha256').update(JSON.stringify(['tab', `agent:${t.agentId}`, 'op'])).digest('hex').slice(0, 24)
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method: string, path: string) => ({ status: 200, body: { success: true, data:
+      path.includes('/messages?') ? { messages: [{ id: messageId, attachments: [{ id: 'f0' }] }] } : { state: { agents: [t.agent] } } } }))
+    expect(await t.ask({ action: 'attachment', step: 'sent', tabId: 'tab', agentId: t.agentId, conversationId: 'lead', operationId: 'op' }, owner))
+      .toEqual({ ok: true, value: { agentId: t.agentId, attachmentIds: ['f0'] } })
+    expect(t.call).toHaveBeenLastCalledWith('GET', `/api/super-tabs/tab/conversations/lead/messages?asAgentId=${t.agentId}&messageId=${messageId}`, undefined)
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method: string, path: string) => ({ status: 200, body: { success: true, data:
+      path.includes('/messages?') ? { messages: [] } : { state: { agents: [t.agent] } } } }))
+    expect(await t.ask({ action: 'attachment', step: 'sent', tabId: 'tab', agentId: t.agentId, conversationId: 'lead', operationId: 'op' }, owner))
+      .toEqual({ ok: true, value: { agentId: t.agentId, attachmentIds: null } })
+  })
+})
+
+it('teaches agents to say when their work needs a person or is stuck', async () => {
+  const t = setup()
+  const help = (await t.ask({ action: 'help' }, owner)) as { help: { command: string; commands: Array<Record<string, unknown>> } }
+  expect(help.help.commands.filter(c => c.type === 'work.status').map(c => c.status)).toEqual(['working', 'needs_human', 'blocked', 'done'])
+  expect(help.help.command).toContain('needs_human')
 })

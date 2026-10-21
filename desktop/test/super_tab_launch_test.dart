@@ -48,6 +48,10 @@ class SuperTabFixtureConnection extends WsConn {
   static const streamId = '00112233-4455-6677-8899-aabbccddeeff';
   Map<String, dynamic>? native;
   String nativeName = 'Lead';
+  Map<String, dynamic> nativeProject = {
+    'cwd': '/work/project',
+    'label': 'Project',
+  };
   bool cancelledCreation = false;
   Future<Map<String, dynamic>> Function(String, Map<String, dynamic>)?
   creationRecovery;
@@ -272,7 +276,7 @@ class SuperTabFixtureConnection extends WsConn {
         'engine': payload['engine'],
         'closeSupported': true,
         'terminal': {'available': true},
-        'project': {'cwd': '/work/project', 'label': 'Project'},
+        'project': nativeProject,
       };
       if (loseCreate) {
         loseCreate = false;
@@ -728,6 +732,26 @@ void main() {
       },
     );
   }
+
+  test(
+    'a lead in a GitHub checkout shares its repository for other machines',
+    () async {
+      // The daemon's frame carries origin in its canonical form, without a scheme.
+      final f = SuperTabLaunchFixture()
+        ..connection.nativeProject = {
+          'name': 'project',
+          'cwd': '/work/project/mobile',
+          'root': '/work/project',
+          'remote': 'github.com/example/project',
+        };
+      final box = await f.box(engine: 'claude');
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect(f.connection.joins.single['command']['project'], {
+        'cwd': '/work/project',
+        'repositoryUrl': 'https://github.com/example/project',
+      });
+    },
+  );
 
   test('the lead prompt routes before starting or assigning work', () async {
     final f = SuperTabLaunchFixture()..connection.nativeName = 'hi';

@@ -954,22 +954,35 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
       ? await this.conversationHistory(plainHistory, historyRange, meta.paneWidth)
       : { history: seedsHistory ? (await this.runControlCommand(plainHistory)).stdout : Buffer.alloc(0), rows: null }
     let printing = false
-    const capture = await this.runControlCommand(baseCapture, () => {
-      // `%end` is the ordered cut. Notifications observed before it are
-      // represented by capture-pane; only later output may follow the keyframe.
-      if (print) printing = printInProgress(this.snapshotPostCut, print)
-      this.snapshotPostCut = []
-      this.snapshotPostCutBytes = 0
-    })
+    // The cursor is read again with the grid, in the same write: tmux answers both before it reads the pane
+    // again (`runTogether`). Taken only from the read above, before the history captures, the cursor of a
+    // pane that printed meanwhile was a step behind the grid it came with — the receiver then drew the next
+    // output at the old place. A keystroke echoed while its own keyframe is taken is exactly that, and its
+    // keyframe no longer holds the keystroke back (backendSocket.ts `enqueueTerminalBinary`).
+    const [screenMetadata, capture] = await Promise.all(this.runControlCommands([
+      { command: `display-message -p -t ${this.runtime.paneId} '${PANE_META_FORMAT}'` },
+      {
+        command: baseCapture,
+        onEnd: () => {
+          // `%end` is the ordered cut. Notifications observed before it are
+          // represented by capture-pane; only later output may follow the keyframe.
+          if (print) printing = printInProgress(this.snapshotPostCut, print)
+          this.snapshotPostCut = []
+          this.snapshotPostCutBytes = 0
+        },
+      },
+    ]))
     if (!capture.ok) return { state: 'failed', reason: 'tmux snapshot failed' }
     if (printing) return 'printing'
-    const bytes = tmuxKeyframe(capture.stdout, meta, history, historyRows, { conversation, tuiOwnsScrollback })
+    const screen = screenMetadata.ok ? parsePaneMeta(screenMetadata.stdout) : null
+    if (!screen || screen.windowPanes !== 1) return { state: 'failed', reason: 'tmux snapshot metadata is invalid' }
+    const bytes = tmuxKeyframe(capture.stdout, screen, history, historyRows, { conversation, tuiOwnsScrollback })
     return {
       state: 'succeeded',
       value: {
         bytes,
-        cols: meta.paneWidth,
-        rows: meta.paneHeight,
+        cols: screen.paneWidth,
+        rows: screen.paneHeight,
       },
     }
   }
@@ -1062,11 +1075,11 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
    * keystroke path (chunking there is fine for typing, but reads as several separate pastes to a
    * program's own paste-detector once split across multiple `send-keys` commands).
    */
-  async pasteRaw(text: string): Promise<TerminalActionResult> {
+  async pasteRaw(text: string, allowed?: () => boolean): Promise<TerminalActionResult> {
     if (this.readOnly) return terminalActionNotStarted('VIEW_ONLY')
     if (this.closed) return terminalActionNotStarted('terminal stream is closed')
     if (text.length === 0) return TERMINAL_ACTION_SUCCEEDED
-    const pasted = await pasteRawIntoTmux(this.runtime.paneId, text)
+    const pasted = await pasteRawIntoTmux(this.runtime.paneId, text, () => !this.closed && (allowed?.() ?? true))
     return pasted
       ? TERMINAL_ACTION_SUCCEEDED
       : terminalActionNotStarted('tmux paste-buffer could not be sent')

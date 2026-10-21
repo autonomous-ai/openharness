@@ -242,6 +242,17 @@ export function isRelayedPair(local: string, remote?: string): boolean {
   return relay.test(local) || (typeof remote === 'string' && relay.test(remote))
 }
 
+/**
+ * The nominated pair as `<ours>→<peer's>` candidate types and whether it crosses TURN, for the
+ * channel-open line. A phone on 4G sits behind its carrier's NAT, so a direct pair is rare there and
+ * every key pays the round trip through Cloudflare instead; without this the log could not say which
+ * path a slow round of typing ran on.
+ */
+export function describePair(local: string, remote?: string): string {
+  const type = (line?: string): string => /\btyp (\w+)/.exec(line ?? '')?.[1] ?? '?'
+  return `${type(local)}→${type(remote)} (${isRelayedPair(local, remote) ? 'TURN' : 'direct'})`
+}
+
 function channelCanSend(channel: RTCDataChannel | null): channel is RTCDataChannel {
   return channel?.readyState === 'open'
     && channel.bufferedAmount < TERMINAL_P2P_MAX_BUFFERED_BYTES
@@ -553,6 +564,9 @@ interface ResponderEntry {
   timeout: ReturnType<typeof setTimeout>
   disconnectGraceTimer: ReturnType<typeof setTimeout> | null
   closing: boolean
+  /** How the answer's time was spent, said once it is sent and once the channel opens: the phone's own log
+   *  times only its side (offer to answer took ~0.7s on 2026-10-15, with no line here saying where). */
+  timing: { offeredAt: number; stunMs: number; libraryMs: number; turn: boolean }
 }
 
 /** Target side: one responder per authenticated source connId. */
@@ -646,6 +660,15 @@ export class TerminalP2pResponderPool {
   }
 
   async closeConnection(connId: string, reason = 'closed', notifyPeer = true): Promise<void> {
+    // A connection that is gone takes its offers still in flight with it. One inside its STUN race has no
+    // entry yet, and finding its generation unchanged it went on to build a responder — a TURN allocation
+    // with it — for nobody, kept to the negotiation timeout. P2P signals no longer queue behind the
+    // connection's other frames (the gateway's `signalChains`), which is what lets a disconnect overtake its
+    // offer (review, 2026-10-19).
+    if (reason === 'client_disconnected') {
+      this.offerSeq.delete(connId)
+      this.shadowOfferSeq.delete(connId)
+    }
     const entry = this.entries.get(connId)
     if (entry && !entry.closing) {
       this.entries.delete(connId)
@@ -723,7 +746,9 @@ export class TerminalP2pResponderPool {
       : []
     // The offerer raced these too, and may well have landed on a different server. That is fine: a
     // srflx candidate is each peer's own public address, so the two sides need not agree on who to ask.
+    const offeredAt = performance.now()
     const selection = await this.selectStunUrls(offeredStunUrls)
+    const selectedAt = performance.now()
     const { RTCPeerConnection } = await import('werift')
     if (!stillCurrent()) return null
     const turn = turnChoice(readTurn(payload.turn), selection.udpReachable)
@@ -735,6 +760,7 @@ export class TerminalP2pResponderPool {
       ready: false,
       closing: false,
       disconnectGraceTimer: null,
+      timing: { offeredAt, stunMs: selectedAt - offeredAt, libraryMs: performance.now() - selectedAt, turn: !!turn },
       timeout: setTimeout(() => {
         if (entry.ready) this.deps.onUnavailable?.(connId, 'negotiation_timeout')
         void (stillCurrent() ? this.closeConnection(connId, 'negotiation_timeout') : this.closeShadow(connId, 'negotiation_timeout'))
@@ -789,6 +815,9 @@ export class TerminalP2pResponderPool {
         if (state === 'open') {
           entry.ready = true
           clearTimeout(entry.timeout)
+          const pair = entry.pc.iceTransports.map((t) => t.getSelectedCandidatePair?.()).find((p) => p?.local?.candidate)
+          const over = pair ? `, over ${describePair(pair.local.candidate, pair.remote?.candidate)}` : ''
+          console.log(`[terminal-p2p] conn=${connId.slice(0, 8)} channel open +${Math.round(performance.now() - entry.timing.offeredAt)}ms after the offer${over}`)
         } else if ((state === 'closed' || state === 'closing') && entry.ready) {
           entry.ready = false
           if (this.entries.get(connId) === entry) this.deps.onUnavailable?.(connId, 'channel_closed')
@@ -832,6 +861,10 @@ export class TerminalP2pResponderPool {
         protocolVersion: TERMINAL_P2P_PROTOCOL_VERSION,
         sdp: local.sdp,
       })
+      const { offeredAt, stunMs, libraryMs, turn } = entry.timing
+      const total = performance.now() - offeredAt
+      console.log(`[terminal-p2p] conn=${connId.slice(0, 8)} answered +${Math.round(total)}ms after the offer`
+        + ` (stun ${Math.round(stunMs)}ms, peer library ${Math.round(libraryMs)}ms, gather and answer ${Math.round(total - stunMs - libraryMs)}ms${turn ? ', with TURN' : ''})`)
     } catch {
       await close('answer_failed')
     }

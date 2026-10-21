@@ -754,6 +754,34 @@ if [ "$1" = "load-buffer" ]; then cat > /dev/null; fi
     }
   })
 
+  it('does not paste a buffer once the paste is no longer allowed, and deletes it', async () => {
+    // Asked again between load-buffer and paste-buffer: the stream the paste came on may have closed meanwhile.
+    const dir = mkdtempSync(join(tmpdir(), 'harness-tmux-allowed-'))
+    const argsFile = join(dir, 'args')
+    writeFileSync(join(dir, 'tmux'), `#!/bin/sh
+printf '%s\\n' "$1" >> "$TMUX_GATE_ARGS"
+if [ "$1" = "load-buffer" ]; then cat > /dev/null; fi
+`)
+    chmodSync(join(dir, 'tmux'), 0o700)
+    writeFileSync(argsFile, '')
+    const previous = { path: process.env.PATH, args: process.env.TMUX_GATE_ARGS }
+    try {
+      process.env.PATH = `${dir}:${previous.path ?? ''}`
+      process.env.TMUX_GATE_ARGS = argsFile
+      assumeTmuxVersion({ major: 3, minor: 7 })
+      const answers = [true, false]
+      expect(await pasteRawIntoTmux('%7', 'clipboard', () => answers.shift() ?? false)).toBe(false)
+      expect(readFileSync(argsFile, 'utf8').trim().split('\n')).toEqual(['load-buffer', 'delete-buffer'])
+    } finally {
+      resetTmuxVersionCache()
+      if (previous.path === undefined) delete process.env.PATH
+      else process.env.PATH = previous.path
+      if (previous.args === undefined) delete process.env.TMUX_GATE_ARGS
+      else process.env.TMUX_GATE_ARGS = previous.args
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('gives up a paste whose tmux never takes its buffer, so the terminals waiting behind it open', async () => {
     // A tmux client whose server does not answer waits as long as the server does. Inside the notify room
     // that held every terminal open, every session made or killed, and every terminal closed with it.

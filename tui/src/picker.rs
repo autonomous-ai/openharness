@@ -37,7 +37,8 @@ pub struct Row {
     /// Its line comes before its right column wherever both don't fit (a question, a failure).
     pub line_first: bool,
     /// A search lists a lower tier's matches first, however well a higher one's match (the command
-    /// list: hn's own, then tmux's).
+    /// list: hn's own, then tmux's) — among the rows that show what was typed, then again among
+    /// the rows only their searched keywords name.
     pub tier: u8,
 }
 
@@ -433,6 +434,9 @@ impl Picker {
             }
             sorted = !self.keep_order && q.sortable() && (o.no_sort == self.sort_flipped);
             if sorted { scored.sort_by(|a, b| a.0.cmp(&b.0)) }
+            // Rows lit only in their searched keywords (a command's group) come after every row
+            // that shows what you typed, however well they scored: `mach` lists the machine ones first.
+            let (scored, behind): (Vec<_>, Vec<_>) = if self.search_extra { scored.into_iter().partition(|(_, _, hits)| !hits.is_empty()) } else { (scored, Vec::new()) };
             // Rows its keywords name (`codex`: the Codex harnesses) come before rows the query
             // found only as letters scattered through the line (c…o…d…e…x in `gpu-box`).
             let plain: Vec<String> = q.positive_terms().into_iter().filter(|w| w.chars().count() >= 3).map(|w| w.to_lowercase()).collect();
@@ -448,12 +452,12 @@ impl Picker {
             } else { Vec::new() };
             // Rows its keywords name, or where what was said found it, before rows the query found
             // only as letters scattered through the line.
-            let (weak, strong): (Vec<_>, Vec<_>) = if hidden.is_empty() && said_all.is_empty() { (Vec::new(), scored) } else { scored.into_iter().partition(|(_, i, _)| scattered(*i) && !said_all.contains(i)) };
-            let taken: std::collections::HashSet<usize> = strong.iter().map(|(_, i, _)| *i).chain(hidden.iter().copied()).chain(weak.iter().map(|(_, i, _)| *i)).collect();
+            let (weak, strong): (Vec<_>, Vec<_>) = if hidden.is_empty() && behind.is_empty() && said_all.is_empty() { (Vec::new(), scored) } else { scored.into_iter().partition(|(_, i, _)| scattered(*i) && !said_all.contains(i)) };
+            let taken: std::collections::HashSet<usize> = strong.iter().chain(&behind).map(|(_, i, _)| *i).chain(hidden.iter().copied()).chain(weak.iter().map(|(_, i, _)| *i)).collect();
             let said: Vec<usize> = said_all.into_iter().filter(|i| !taken.contains(i)).collect();
             let mut seen = std::collections::HashSet::new();
             let said: Vec<usize> = said.into_iter().filter(|i| seen.insert(*i)).collect();
-            self.visible = strong.into_iter().map(|(_, i, hits)| (i, hits)).chain(hidden.into_iter().map(|i| (i, Vec::new()))).chain(said.into_iter().map(|i| (i, Vec::new()))).chain(weak.into_iter().map(|(_, i, hits)| (i, hits))).collect();
+            self.visible = strong.into_iter().chain(behind).map(|(_, i, hits)| (i, hits)).chain(hidden.into_iter().map(|i| (i, Vec::new()))).chain(said.into_iter().map(|i| (i, Vec::new()))).chain(weak.into_iter().map(|(_, i, hits)| (i, hits))).collect();
         }
         // --tac: the input order reversed (wherever the order is the input's).
         if crate::theme::fzf_opts().tac && !sorted { self.visible.reverse() }
@@ -968,6 +972,25 @@ mod tests {
         assert_eq!(ids(&p), ["a"]);
         p.set_query("login-flake");
         assert_eq!(ids(&p), ["b"]);
+    }
+
+    // Seen 2026-10-21 in Commands: `mach` listed Open harness and New pane (their group, Machines,
+    // is in their keywords) above List machines and Connect machines.
+    #[test]
+    fn rows_that_show_the_query_come_before_rows_only_their_keywords_name() {
+        let mut p = Picker::new("t", "");
+        p.live = true;
+        p.search_extra = true;
+        p.set_rows(vec![
+            Row::new("open", "Open harness").extra("open harnesses machine").right("D-b s"),
+            Row::new("pane", "New pane").extra("new-pane Machines").right("D-b T"),
+            Row::new("list", "List machines").extra("machines Machines").right("D-b @"),
+            Row::new("connect", "Connect machines").extra("devices Machines"),
+            Row::new("menu", "machine-menu").extra("machine-menu").tier(1),
+        ]);
+        let ids = |p: &Picker| p.visible.iter().map(|(i, _)| p.rows[*i].id.clone()).collect::<Vec<_>>();
+        p.set_query("mach");
+        assert_eq!(ids(&p), ["list", "connect", "menu", "open", "pane"], "what you see named first, a lower tier among them; the keywords' finds after");
     }
 
     /// A live list (C-b s) finds what its rows show but what changes as you look: the question,

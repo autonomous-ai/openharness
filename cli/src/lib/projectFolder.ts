@@ -12,7 +12,7 @@ import type { ScmLaunchRecord } from '../scm/types.js'
  *  harness and the time. `suggested` marks a name the app made up (from the first task — the phone has
  *  no name field), which is numbered past a folder that exists rather than refused. */
 export type ProjectFolder = { source: 'new'; name?: string; suggested?: boolean } | { source: 'remote'; repositoryUrl: string; name: string }
-  | { source: 'worktree'; gitSource: string; branchRef?: string; branchName?: string; existingBranch?: boolean; placeholder?: boolean }
+  | { source: 'worktree'; gitSource: string; branchRef?: string; branchName?: string; existingBranch?: boolean; placeholder?: boolean; fromDefaultBranch?: boolean }
   | { source: 'branch'; gitSource: string; branchRef?: string; branchName?: string }
 
 /** Where this daemon and the desktop app put the workspaces they make. A folder directly inside it is
@@ -33,8 +33,12 @@ export function parseProjectFolder(payload: Record<string, unknown>): ProjectFol
   if (payload.projectSource === undefined) return null
   if (payload.projectSource === 'worktree' || payload.projectSource === 'branch') {
     const ref = payload.branchRef
+    // `branchBase: 'default'` starts a new worktree from the remote's default branch rather than from `HEAD`; it
+    // is for a start that names no branch, and for a worktree.
+    const base = payload.branchBase
     if (!validGitPath(payload.gitSource) || payload.repositoryUrl !== undefined ||
         (ref !== undefined && (typeof ref !== 'string' || ref.length > 1024 || !/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/.test(ref))) ||
+        (base !== undefined && (base !== 'default' || ref !== undefined || payload.projectSource !== 'worktree')) ||
         (payload.projectSource === 'branch' && (typeof ref !== 'string' || !ref.startsWith('refs/heads/')))) {
       throw new ProjectFolderError('INVALID_PROJECT_SOURCE', 'Choose a Git project and branch.')
     }
@@ -45,7 +49,8 @@ export function parseProjectFolder(payload: Record<string, unknown>): ProjectFol
       }
       return { source: 'worktree', gitSource: payload.gitSource, ...(typeof ref === 'string' ? { branchRef: ref } : {}),
         branchName: name, ...(payload.branchMode === 'existing' ? { existingBranch: true } : {}),
-        ...(payload.branchMode === 'placeholder' ? { placeholder: true } : {}) }
+        ...(payload.branchMode === 'placeholder' ? { placeholder: true } : {}),
+        ...(base === 'default' ? { fromDefaultBranch: true } : {}) }
     }
     // A new branch for the folder itself, named by `branchRef` too.
     if (payload.projectSource === 'branch' && name !== undefined) {
@@ -54,7 +59,8 @@ export function parseProjectFolder(payload: Record<string, unknown>): ProjectFol
       }
       return { source: 'branch', gitSource: payload.gitSource, branchRef: ref, branchName: name }
     }
-    return { source: payload.projectSource, gitSource: payload.gitSource, ...(typeof ref === 'string' ? { branchRef: ref } : {}) }
+    return { source: payload.projectSource, gitSource: payload.gitSource, ...(typeof ref === 'string' ? { branchRef: ref } : {}),
+      ...(base === 'default' ? { fromDefaultBranch: true } : {}) }
   }
   if (payload.projectSource === 'new' && payload.repositoryUrl === undefined) {
     // Slugged again here: the name becomes a path segment, so it is never taken on trust.
@@ -167,7 +173,7 @@ export async function prepareProjectFolder(
       // The isolated-workspace path, through the SCM seam. The git implementation makes exactly the
       // prepareGitProject call this used to make.
       const { cwd, launchRecord } = await scmByKind('git')!.prepareIsolated(project.gitSource, {
-        root, base: project.branchRef,
+        root, base: project.branchRef, ...(project.fromDefaultBranch ? { fromDefaultBranch: true } : {}),
         ...(project.branchName ? { name: project.branchName, existing: project.existingBranch === true, placeholder: project.placeholder === true } : {}),
       })
       options.onPrepared?.({ cwd, scmLaunchRecord: launchRecord })
@@ -272,9 +278,26 @@ function cloneRepository(url: string, destination: string): Promise<void> {
       clearTimeout(forceKill)
       if (timedOut) reject(new ProjectFolderError('CLONE_TIMEOUT', 'Cloning took too long. Check the connection and retry.'))
       else if (code === 0) resolve()
-      else reject(new ProjectFolderError('CLONE_FAILED', /authentication|permission denied|could not read username|repository not found/i.test(diagnostic)
-        ? 'Could not access this repository. Check the URL and GitHub access on the selected machine.'
-        : 'Could not clone the repository. Check the URL and connection, then retry.'))
+      else reject(cloneFailure(diagnostic))
     })
   })
+}
+
+/** CLONE_FAILED because the host refused this machine's credentials, not because of the network or the URL. The code
+ *  stays CLONE_FAILED for the apps; a caller that knows another way in can tell the two apart. */
+export class RepositoryAccessError extends ProjectFolderError {}
+
+/** What git's diagnostic of a failed clone becomes. A private GitHub repository answers "not found" without access. */
+export function cloneFailure(diagnostic: string): ProjectFolderError {
+  return /authentication|permission denied|could not read username|repository not found/i.test(diagnostic)
+    ? new RepositoryAccessError('CLONE_FAILED', 'Could not access this repository. Check the URL and GitHub access on the selected machine.')
+    : new ProjectFolderError('CLONE_FAILED', 'Could not clone the repository. Check the URL and connection, then retry.')
+}
+
+/** The same GitHub repository over the other transport, for parseProjectFolder's two forms; null for anything else. */
+export function otherGitHubTransport(url: string): string | null {
+  const ssh = /^git@github\.com:([^/\s]+\/[^/\s]+)$/.exec(url)
+  if (ssh) return `https://github.com/${ssh[1]}`
+  const https = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)$/.exec(url)
+  return https ? `git@github.com:${https[1]}` : null
 }

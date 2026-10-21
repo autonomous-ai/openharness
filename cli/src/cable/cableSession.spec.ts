@@ -3108,6 +3108,77 @@ describe('hello capabilities', () => {
     } finally { await session.stop() }
   })
 
+  it('carries a Super Tab wait on the question frame, keeps its agent asking through its turns and resyncs it', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ ...PRO_HELLO, superTab: 'wait-v1' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      port.sent.length = 0
+      const asked = [{ q: 'Stuck: no access to staging' }]
+      await session.question('a1', 'supertab:as1:blocked', asked, { superTab: 'Pilot', attention: 'stuck' })
+      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a1', id: 'supertab:as1:blocked', questions: asked, superTab: 'Pilot', attention: 'stuck' }])
+      // Not answerable on a device: nothing to read or review.
+      port.say({ t: 'question.read', agentId: 'a1', requestId: 'read-1' })
+      await vi.waitFor(() => expect(port.types()).toContain('question.state'))
+      expect(ofType(port, 'question.state')[0]).toMatchObject({ ok: false })
+      // It outlives the agent's turns on the device itself (the Pro keeps it): nothing is asked again, so it alerts
+      // once, and the library page keeps the agent asking.
+      port.sent.length = 0
+      await session.turnStarted('a1')
+      await session.summary('a1', 'Tried again.', 'Still no access.', 'list')
+      await session.turnDone('a1')
+      await session.turnError('a1', 'Failed')
+      expect(port.types()).not.toContain('question')
+      expect(port.types()).not.toContain('question.close')
+      expect((session as unknown as { liveTurns: Map<string, string> }).liveTurns.get('a1')).toBe('question')
+      // A resync shows it again, with the tab.
+      port.sent.length = 0
+      port.say({ t: 'resync' })
+      await vi.waitFor(() => expect(port.types()).toContain('question'))
+      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a1', id: 'supertab:as1:blocked', superTab: 'Pilot', attention: 'stuck' }])
+      // A Pro whose session came back asks for the agents, having dropped its questions: the wait is asked again.
+      port.sent.length = 0
+      port.say({ t: 'agents.list' })
+      await vi.waitFor(() => expect(port.types()).toContain('question'))
+      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a1', id: 'supertab:as1:blocked', superTab: 'Pilot' }])
+      // Closed with no turn open, it leaves the agent idle, not working; closed mid-turn, the turn goes on.
+      const live = (session as unknown as { liveTurns: Map<string, string> }).liveTurns
+      await session.questionClose('a1', 'supertab:as1:other')   // not the wait it holds: nothing
+      expect(live.get('a1')).toBe('question')
+      await session.questionClose('a1', 'supertab:as1:blocked')
+      expect(live.has('a1')).toBe(false)
+      await session.question('a1', 'supertab:as1:needs_human', asked, { superTab: 'Pilot', attention: 'decision' })
+      await session.turnStarted('a1')
+      await session.questionClose('a1', 'supertab:as1:needs_human')
+      expect(live.get('a1')).toBe('working')
+      await session.turnDone('a1')
+      expect(live.has('a1')).toBe(false)
+      // An engine's question in its place is a plain one.
+      await session.question('a2', 'supertab:as2:needs_human', [{ q: 'Which?' }], { superTab: 'Pilot', attention: 'decision' })
+      await session.question('a2', 'tool-1', [{ key: 'k', q: 'Go?', options: ['yes'] }])
+      await session.turnDone('a2')
+      expect((session as unknown as { liveTurns: Map<string, string> }).liveTurns.has('a2')).toBe(false)
+      // Without a Super Tab, the frame is as it always was.
+      await session.question('a3', 'tool-2', [{ key: 'k', q: 'Go?', options: ['yes'] }])
+      expect(ofType(port, 'question').at(-1)).not.toHaveProperty('superTab')
+    } finally { await session.stop() }
+  })
+
+  it('sends Super Tab waits only to a device that says it shows them', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ ...PRO_HELLO })   // a Pro from before the wait, or a round dial: it would offer an answer screen
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      port.sent.length = 0
+      await session.question('a1', 'supertab:as1:blocked', [{ q: 'Stuck: no key' }], { superTab: 'Pilot', attention: 'stuck' })
+      await session.questionClose('a1', 'supertab:as1:blocked')
+      port.say({ t: 'agents.list' })
+      await settle()
+      expect(port.types()).not.toContain('question')
+      expect(port.types()).not.toContain('question.close')
+    } finally { await session.stop() }
+  })
+
   it('sends turn.stats only to a stats: turn-v1 device, and only when there is something to say', async () => {
     const { session, port } = await connect(richHost())
     try {

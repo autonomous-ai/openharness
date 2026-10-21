@@ -8,15 +8,20 @@ library;
 /// showing — the desktop's `AgentUnread` rule.
 enum NoticeKind { done, question }
 
-/// How far one piece of news goes — escalating, each step doing everything the
-/// one before it does.
+/// How far one piece of news goes. [chime], [mark] and [alert] escalate, each
+/// doing everything the one before it does; [filed] is a mark on its own.
 enum AgentNotice {
   /// Not news. Nothing at all.
   none,
 
+  /// Worth a glance later, not now — the daemon's `list` tier. The agent is
+  /// marked, with no tap and no system notice: the dial files a drawer row
+  /// without a beep or a wake.
+  filed,
+
   /// The person is looking straight at this agent. The tap still comes — the
-  /// dial's beep ALWAYS sounds — but nothing is filed for later: they are
-  /// already where the news is.
+  /// dial's beep ALWAYS sounded before the daemon sent a tier — but nothing is
+  /// filed for later: they are already where the news is.
   chime,
 
   /// The app is in front of the person, on something else. Chime, and mark the
@@ -27,8 +32,8 @@ enum AgentNotice {
   /// notification — the dial waking its dark panel.
   alert;
 
-  bool get chimes => this != none;
-  bool get marks => this == mark || this == alert;
+  bool get chimes => this == chime || this == mark || this == alert;
+  bool get marks => this == filed || this == mark || this == alert;
   bool get alerts => this == alert;
 }
 

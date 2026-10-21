@@ -134,10 +134,6 @@ void main() {
 
   for (final (code, message) in [
     (
-      'PROJECT_HAS_AGENTS',
-      'Stop and remove this project’s agents before deleting it.',
-    ),
-    (
       'STARTS_PENDING',
       'Resolve this project’s pending agent starts before deleting it.',
     ),

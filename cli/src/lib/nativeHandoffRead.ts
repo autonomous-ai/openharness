@@ -8,10 +8,15 @@ import { nativeFileKey, verifyNativePathFacts, type NativePathFact } from '../en
 import { nativeUnavailable } from '../engines/kit/nativeEvidence.js'
 import { readSessionTurns, type ReadOptions, type TurnSource } from './sessionSearch/sessionTurns.js'
 import { nativeContentVersion, type NativeHandoffRead } from './handoffAuthority.js'
+import { sessionStoreOf } from '../engines/sessionStoreContracts.js'
+import { readCompactSummary } from './compactSummary.js'
+
+/** The engine's compaction summary of the transcript read, if it keeps one: `failed` when it could not be read. */
+export interface SummaryRead { text: string | null; failed: boolean }
 
 export async function readNativeHandoff(source: TurnSource, ownerAgentId: string, profile: string | undefined, cwd: string | null,
   options: ReadOptions,
-): Promise<{ turns: Awaited<ReturnType<typeof readSessionTurns>>; witness: NativeHandoffRead }> {
+): Promise<{ turns: Awaited<ReturnType<typeof readSessionTurns>>; witness: NativeHandoffRead; summary: SummaryRead }> {
   let handle: FileHandle | undefined
   try {
     const engine = source.engine as AgentEngine, path = source.transcriptPath!
@@ -29,6 +34,16 @@ export async function readNativeHandoff(source: TurnSource, ownerAgentId: string
     proof.verify(nativeFileKey(before)); verifyNativePathFacts(route)
     const version = nativeContentVersion(before)
     const turns = await readSessionTurns({ ...source, transcriptPath: location.path }, { ...options, handle, end: Number(before.size) })
+    // On the same verified descriptor and within the same verified size, before the version is checked again:
+    // a summary that cannot be read is left out of the record, never a reason to hold the switch.
+    const rule = sessionStoreOf(engine)?.compactSummary
+    let summary: SummaryRead = { text: null, failed: false }
+    if (rule) {
+      try {
+        if (options.shouldStop?.()) throw new Error('deadline')
+        summary = { text: await readCompactSummary(handle, Number(before.size), rule), failed: false }
+      } catch { summary = { text: null, failed: true } }
+    }
     if (nativeContentVersion(await handle.stat({ bigint: true })) !== version) {
       return nativeUnavailable('the conversation changed during its handoff read')
     }
@@ -36,7 +51,7 @@ export async function readNativeHandoff(source: TurnSource, ownerAgentId: string
     if (nativeContentVersion(await handle.stat({ bigint: true })) !== version) {
       return nativeUnavailable('the conversation changed during final handoff verification')
     }
-    return { turns, witness: { ownerAgentId, engine, sessionId: source.sessionId, path, readPath: location.path,
+    return { turns, summary, witness: { ownerAgentId, engine, sessionId: source.sessionId, path, readPath: location.path,
       profile, cwd, fileKey: nativeFileKey(before), version, route } }
   } catch (error) {
     if ((error as { code?: string })?.code === 'IDENTITY_UNAVAILABLE' || (error as { code?: string })?.code === 'DEADLINE') throw error

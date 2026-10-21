@@ -166,6 +166,8 @@ static uint64_t agent_sig(const pod_agent_t *a, bool with_event) {
     h = fnv_bytes(h, &a->tokens_in, sizeof a->tokens_in);
     h = fnv_bytes(h, &a->tokens_out, sizeof a->tokens_out);
     h = fnv_str(h, a->question);
+    h = fnv_str(h, a->super_tab);
+    h = fnv_bytes(h, &a->attention, sizeof a->attention);
     h = fnv_bytes(h, &a->state, sizeof a->state);
     h = fnv_bytes(h, &a->since_ms, sizeof a->since_ms);
     h = fnv_bytes(h, &a->elapsed_s, sizeof a->elapsed_s);
@@ -450,9 +452,14 @@ static pod_agent_t *fresh_agent(pod_model_t *m, const char *id, uint32_t now_ms)
 }
 
 static void set_state(pod_model_t *m, pod_agent_t *a, pod_state_t s, uint32_t now_ms) {
+    // A Super Tab's question is the agent's work waiting on a person, not a dialog in its pane: a turn that starts or
+    // ends, a library sweep or a send does not end it. Only question.close (or the link going) does.
+    if (a->state == POD_ASKING && a->super_tab[0] && s != POD_ASKING) { a->wait_after = (uint8_t)s; return; }
     if (s == POD_WORKING && a->state != POD_WORKING) a->since_ms = now_ms;
     if (s != POD_ASKING) {
         a->question[0] = 0;
+        a->super_tab[0] = 0;
+        a->attention = POD_ATTN_NONE;
         if (a->state == POD_ASKING) {   // the question is over, however: its toast entry is stale
             int u = unread_idx(m, a->id);
             if (u >= 0 && m->unread[u].ask) unread_drop(m, u);
@@ -568,24 +575,44 @@ void pod_model_turn_stats(pod_model_t *m, const char *id, int32_t passed, int32_
 
 // question / question_close carry no clock, so they leave event_ms alone (the library status that
 // accompanies a question refreshes it).
-void pod_model_question(pod_model_t *m, const char *id, const char *text) {
+void pod_model_question(pod_model_t *m, const char *id, const char *text) { pod_model_question_tab(m, id, text, NULL, POD_ATTN_NONE); }
+
+void pod_model_question_tab(pod_model_t *m, const char *id, const char *text, const char *super_tab, pod_attention_t attention) {
     int i = find_idx(m, id);
     if (i < 0) return;
     pod_agent_t *a = &m->agents[i];
     uint64_t before = agent_sig(a, true);
     if (a->state != POD_ASKING && m->clock_set) { a->act_ms = m->clock_ms; a->has_act = true; }
     a->sent = false;
+    const bool tab = super_tab && super_tab[0];
+    // A plain question that ends goes back to work (question_close); a Super Tab wait to what it held back.
+    if (tab && !(a->state == POD_ASKING && a->super_tab[0]))
+        a->wait_after = (uint8_t)(a->state == POD_ASKING ? POD_WORKING : a->state);
     a->state = POD_ASKING;
     a->activity[0] = 0;
     copy_str(a->question, sizeof a->question, text);
+    copy_str(a->super_tab, sizeof a->super_tab, tab ? super_tab : "");
+    a->attention = (uint8_t)(!tab ? POD_ATTN_NONE : attention == POD_ATTN_STUCK ? POD_ATTN_STUCK : POD_ATTN_DECISION);
     if (before != agent_sig(a, true)) m->revision++;
+}
+
+pod_attention_t pod_model_attention(const pod_model_t *m, const pod_agent_t *a) {
+    if (!a || !a->super_tab[0] || pod_model_eff(m, a) != POD_ASKING) return POD_ATTN_NONE;
+    return a->attention == POD_ATTN_STUCK ? POD_ATTN_STUCK : POD_ATTN_DECISION;
 }
 
 void pod_model_question_close(pod_model_t *m, const char *id) {
     int i = find_idx(m, id);
     if (i < 0 || m->agents[i].state != POD_ASKING) return;
-    m->agents[i].state = POD_WORKING;
+    pod_agent_t *a = &m->agents[i];
+    // A plain question is answered mid-turn: the turn goes on. A Super Tab wait outlived its turns, so the agent takes
+    // the state they left it in: idle or done, not a Working nobody is doing.
+    const pod_state_t next = a->super_tab[0] ? (pod_state_t)a->wait_after : POD_WORKING;
+    a->state = next == POD_ASKING ? POD_WORKING : next;
+    if (a->state != POD_WORKING) { a->activity[0] = 0; a->verb[0] = 0; a->step_count = 0; a->turn_started = false; }
     m->agents[i].question[0] = 0;
+    m->agents[i].super_tab[0] = 0;
+    m->agents[i].attention = POD_ATTN_NONE;
     int u = unread_idx(m, id);
     if (u >= 0 && m->unread[u].ask) unread_drop(m, u);   // answered: its toast entry is stale
     m->revision++;
@@ -673,9 +700,16 @@ void pod_model_recap(pod_model_t *m, const char *id, const char *recap, bool res
 void pod_model_link(pod_model_t *m, bool up) {
     if (m->linked == up) return;
     m->linked = up;
-    if (!up)   // a drop forgets every open question (pro_app clears them): the daemon re-sends what is still owed
+    if (!up) {   // a drop forgets every open question (pro_app clears them): the daemon re-sends what is still owed
         for (int i = m->unread_count - 1; i >= 0; i--)
             if (m->unread[i].ask) unread_drop(m, i);
+        // A Super Tab wait becomes a plain question, which the next turn or sweep ends as any other: nothing vouches
+        // for it with the cable gone, and the daemon asks it again on the next link if it still waits.
+        for (int i = 0; i < m->agent_count; i++) {
+            m->agents[i].super_tab[0] = 0;
+            m->agents[i].attention = POD_ATTN_NONE;
+        }
+    }
     m->revision++;
 }
 

@@ -91,7 +91,6 @@ void main() {
     await repeated;
     expect(find.byType(Dialog), findsOneWidget);
     await _menu(tester, 'showLayout');
-    await _menu(tester, 'flashFirmware');
     expect(find.byType(Dialog), findsOneWidget);
     Navigator.of(tester.element(find.byType(Dialog))).pop();
     await tester.pump(const Duration(milliseconds: 300));
@@ -184,7 +183,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.byType(SettingsScreen), findsOneWidget);
-    for (final method in ['showShortcuts', 'showLayout', 'flashFirmware']) {
+    for (final method in ['showShortcuts', 'showLayout']) {
       await _menu(tester, method);
     }
     await tester.pump();

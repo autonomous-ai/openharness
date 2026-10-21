@@ -196,6 +196,7 @@ import { createGuestCreate } from './agents/guestCreate.js'
 import { createStoreLink } from './storeLink.js'
 import { createModelsLink } from './modelsLink.js'
 import { createRecapsLink } from './recapsLink.js'
+import { HOSTED_JEV_PATH } from '../lib/jev/jevClient.js'
 import { createAgentCleanupLink } from './agentCleanupLink.js'
 import { AGENT_CLEANUP_FALLBACKS, RECAPS_FALLBACKS, TERMINALS_OFF } from './api.js'
 import { answerAgentQuery } from './agentQueries.js'
@@ -204,6 +205,7 @@ import { createTerminalWatch } from './terminalWatch.js'
 import { createSharingLink } from './sharingLink.js'
 import { createAgentSettingsSync, createExperimentHooks, wakeExperiments } from './experiments.js'
 import { answerExperimentQuery, createForExperiment, creationForExperiment } from './experimentQueries.js'
+import { createSuperTabAttention } from './superTabAttention.js'
 import { answerConnectorsQuery } from './connectorsQueries.js'
 import { answerSharedMachinesQuery } from './sharedMachinesQueries.js'
 import { inlineSharedMachinesPort } from '../lib/sharedMachinesPort.js'
@@ -227,7 +229,7 @@ import { wakeGateway } from './gatewayWake.js'
 import { createViewersWake, VIEWERS_ON_DEMAND, wakeViewers } from './viewersWake.js'
 import { createWifiLink } from './wifiLink.js'
 import { wifiDoors } from './wifiAgents.js'
-import { autonomousDeviceLocalRequest } from '../lib/deviceManagementHttp.js'
+import { autonomousDeviceLocalRequest, deviceAddonRoutes } from '../lib/deviceManagementHttp.js'
 import { loadOrCreateHookCredential } from '../lib/hookAuth.js'
 import { attachLocalWsServer, LOCAL_WS_PATH, LOCAL_WS_PROTOCOL_VERSION } from '../localWsServer.js'
 import { TERMINAL_BINARY_VERSION } from '../lib/terminalBinary.js'
@@ -250,6 +252,7 @@ import { createRuntimeTransport } from './engines/runtimeTransport.js'
 import { RuntimeProfileController } from '../lib/runtimeControl.js'
 import { installTimestampedConsole, sid, prepareLogFile, trimLogFile, LOG_CHECK_INTERVAL_MS } from '../lib/log.js'
 import { backendHttpBase } from '../lib/controlPlane.js'
+import { forwardAttachmentUpload } from '../lib/superTabAttachmentProxy.js'
 
 // Daemon stdout/stderr. Capped at LOG_MAX_BYTES — see prepareLogFile/trimLogFile in lib/log.ts.
 const LOG_FILE = DAEMON_LOG_FILE
@@ -822,6 +825,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ask: (agentId, requestId, question) => cloudAgents?.doors.ask(agentId, requestId, question),
     unask: (agentId, requestId) => cloudAgents?.doors.unask(agentId, requestId),
   }
+  // The Super Tab members here waiting on a person, on the devices alone (core/superTabAttention.ts). Read only once
+  // the questions exist, below: the service starts after them.
+  const superTabWaits = createSuperTabAttention({
+    send: (frame) => ports.devices?.card(frame),
+    asking: (agentId) => [...openQuestions.values()].some((asked) => asked.agentId === agentId),
+  })
   // Shared tabs' relay, a socket per shared tab held by the gateway (gateway/tabRelay.ts), and which of them the core saw
   // opened: opened again after a gateway-only restart, closed when Agent Messages' process goes (core/gatewayLink.ts).
   const tabRelay = tabRelayOf(() => gatewayOps.tabRelay)
@@ -831,6 +840,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const coreApi = createCoreApi({
     nativeTurns: async (agentId, cursor) => nativeTurns.read(agentId, cursor),
     cloud: cloudDoors,
+    superTabs: { attention: (items) => superTabWaits.attention(items) },
     cloudRows: () => (cloudAgents?.dialRows() ?? []) as unknown as RegisteredSession[],
     // Agents' terminals: a literal-argv launch, and a read-only view for Share's observers (core/terminalWatch.ts).
     terminals: { ...TERMINALS_OFF, ...createTerminalOpener({ createBackend, registry, announceSession, blocksFolder: (cwd) => !!backendRef?.purgeAgentService?.blocksFolder(cwd), noBackendCode: createUnavailable }), watch: terminalWatch.watch },
@@ -920,6 +930,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (attached) for (const frame of openQuestions.values()) ports.devices?.card(frame)
       if (attached) void mirror.liveCards().then((cards) => { for (const frame of cards) ports.devices?.card(frame) })
       if (attached) for (const frame of cloudAgents?.liveCards() ?? []) ports.devices?.card(frame)
+      if (attached) superTabWaits.replay()
     },
     // What a device or another machine asks of an agent here: the SAME handlers the backend socket
     // drives, called directly — the slash-command adaptation and the turn and question plumbing live there.
@@ -1095,8 +1106,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const cableWatchingLocal = (): boolean => dialWatching
 
   const deviceIsWatching = (): boolean => backend.hasCommander() || cableWatchingLocal() || wifiCore.connected()
-  /** Anyone who can DRAW a question: a device, a cabled dial, or a desktop window on this computer. */
-  const someoneCanAnswer = (): boolean => deviceIsWatching() || backend.hasLocalClient()
+  /** Anyone who can DRAW a question: a device, a cabled dial, a desktop window on this computer, or an app away
+   *  from this desk (the phone), which is sent it over the relay (core/questions.ts). */
+  const someoneCanAnswer = (): boolean => deviceIsWatching() || backend.hasLocalClient() || backend.hasRemoteApp()
   // A page a program in a harness's pane opens (Claude Code's `/login`) goes to the phone typing there, and the
   // sign-in the phone catches comes back to the program (core/terminals/browser.ts, lib/browserShim.ts).
   const browser = createBrowser({
@@ -1129,6 +1141,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     streamingAvailable: terminalBackends.some((backend) => !!backend.openStream),
     diagnostic: (event, fields) => console.log(`[terminal-stream] ${event}`, fields),
+    typingTrace: env.TYPING_TRACE ? (line) => console.log(`[typing] ${line}`) : undefined,
     // The keystroke prewarm (grid-reads-without-waking issue 03): typing into a pane whose agent runs on
     // a sleeping grid starts that grid while the person types. Here, in the daemon's own input path, so
     // an older desktop and typing from a phone get it too; an agent on its own login has no `grid`.
@@ -1334,6 +1347,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   cloudAgents = createCloudAgents({ port: () => ports.cloud, clients: backend, openQuestions: asking.openQuestions, deviceInput })
   const cloud = cloudAgents
   backend.questionProvider = createQuestionResponse((payload) => cloud.answer(payload) ?? asking.answer(payload))
+  // An app away from this desk is told what is still being asked as it connects (core/questions.ts).
+  backend.onRemoteAppJoined = () => asking.reannounceRemote()
   const openQuestions = asking.openQuestions
   // The agents on this machine (core/agents/list.ts), in the socket's frames, with its monitor readings.
   backend.agentsProvider = createAgentList({
@@ -1357,6 +1372,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Recaps: turn cards, notifications, cut by the recaps (services/recaps.ts) from the lifecycle the core tells (core/turns/recaps.ts).
   const recaps = createRecaps({
     port: () => ports.recaps, turnActivity, clients: backend, deviceIsWatching, cableWatchingLocal, sessionTurnOpen,
+    remoteApp: () => backend.hasRemoteApp(),
     bySession: (sessionId) => registry.bySession(sessionId), resolve: (id) => registry.resolve(id), live: () => registry.list(),
     stopped: (agentId) => stoppedAgents.get(agentId),
     orchestratorRoleOf: (agentId) => ports.orchestrator?.roleOf(agentId) ?? null,
@@ -1466,7 +1482,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (outOfProcess.has('wifi')) ports.wifi = wifiLink.port
   // What the core tells the recaps in their own process, and reads back from what they said (core/recapsLink.ts).
   const recapsLink = createRecapsLink({ notify: (frame, opts) => serviceLinks.notify('recaps', frame, opts), buffered: () => serviceLinks.buffered('recaps'),
-    call: (type, payload) => serviceLinks.call('recaps', type, payload), clients: coreApi.clients, lastTurn: coreApi.transcripts.lastTurn })
+    call: (type, payload) => serviceLinks.call('recaps', type, payload), clients: coreApi.clients, lastTurn: coreApi.transcripts.lastTurn,
+    jev: (body) => proxyBackend('POST', HOSTED_JEV_PATH, body) })
   // What the core tells the agent cleanup in its own process, and answers it (core/agentCleanupLink.ts).
   const agentCleanupLink = createAgentCleanupLink(coreApi, (frame, opts) => serviceLinks.notify('agentCleanup', frame, opts))
   const usageLink = createUsageLink({ call: payload => ports.usage?.read(payload.target as AgentUsageTarget) ?? Promise.resolve({}), changed: agentEvents.onTokenUsageChanged })
@@ -2010,6 +2027,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
           if ('unavailable' in answer) throw Object.assign(new Error('The Wi-Fi device service is not running on this computer. See the daemon\'s log.'), { code: 'UNAVAILABLE' })
           return { receipt: answer.receipt }
         },
+        ...deviceAddonRoutes((op, input) => ports.wifi?.addon(op, input) ?? Promise.resolve({ unavailable: true as const })),
       }, method, target, body)
     },
     resolveHookAgent: engineHooks.resolveHookAgent,
@@ -2070,6 +2088,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onAgentSettingsWrite: (body) => agentSettings.settingsWrite(body),
     onProductFeedback: (body) => proxyBackend('POST', '/api/product-usage/feedback', body),
     onSignInAnswer: (action, body) => proxyBackend('POST', `/api/auth/qr/${action}`, body),
+    onSuperTabAttachment: (req, res, path) => forwardAttachmentUpload(req, res, path,
+      { accessToken: () => auth.accessToken(), environment: autonomousEnv, base: backendHttpBase() }),
     onProductUsageReport: (body) => proxyBackend('POST', '/api/product-usage/report', body),
     onProductUsageRead: () => proxyBackend('GET', '/api/product-usage/settings'),
     onProductUsageWrite: (body) => proxyBackend('POST', '/api/product-usage/settings', body),
@@ -3088,7 +3108,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const payload = card.payload as Record<string, unknown> | undefined
     const full = card.type === 'commander_event' && payload?.kind === 'summary' && typeof card.agentId === 'string'
       ? mirror.lastFullText(registry.byAgent(card.agentId)?.sessionId ?? card.agentId) ?? cloudAgents?.said(card.agentId) : undefined
+    // An engine's question takes the place of a Super Tab wait on the devices, which shows again once it closes.
+    superTabWaits.before(card)
     ports.devices?.card(full ? { ...card, payload: { ...payload, fullText: full } } : card)
+    superTabWaits.after(card)
   }
 
   // Last: every handler is wired and the restored agents are confirmed, so requests that arrived while

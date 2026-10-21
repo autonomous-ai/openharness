@@ -1,4 +1,5 @@
 import { readHookCredential } from '../hookAuth.js'
+import { runAddonCommand } from './addonCommand.js'
 
 /** Native UI writes the displayed device code to stdin so it never appears in process arguments. */
 async function stdinCode(): Promise<string> {
@@ -10,6 +11,7 @@ async function stdinCode(): Promise<string> {
   return value.trim()
 }
 export async function runAutonomousDeviceCommand(argv: string[], dataDir: string, port: number): Promise<number> {
+  if (argv[0] === 'addon') return runAddonCommand(argv.slice(1), dataDir, port)
   const json = argv.includes('--json'), args: string[] = []
   let device: string | undefined
   const flags = new Set<string>()
@@ -25,7 +27,7 @@ export async function runAutonomousDeviceCommand(argv: string[], dataDir: string
   const print = (value: unknown) => console.log(JSON.stringify(value, null, json ? undefined : 2))
   if (invalid || !route || (verb === 'pair' && !device) || ((fromStdin || device !== undefined) && verb !== 'pair')
     || args.length !== (verb === 'pair' ? fromStdin ? 1 : 2 : verb === 'revoke' ? 2 : args[0] ? 1 : 0)) {
-    print({ error: { code: 'INVALID_ARGUMENT', message: 'Usage: harness autonomous-device pair <code> --device <id> | pair --code-stdin --device <id> | discover | pair-status | list | status | revoke <fingerprint> [--json]' } })
+    print({ error: { code: 'INVALID_ARGUMENT', message: 'Usage: harness autonomous-device pair <code> --device <id> | pair --code-stdin --device <id> | discover | pair-status | list | status | revoke <fingerprint> | addon state|propose|proposal [--json]' } })
     return 1
   }
   const credential = readHookCredential(dataDir)

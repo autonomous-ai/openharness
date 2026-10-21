@@ -12,6 +12,16 @@ List<T> _list<T>(Object? value, T Function(Map<String, dynamic>) read) =>
     ? List.unmodifiable(value.map((row) => read(superTabMap(row))))
     : throw const FormatException('Invalid Swarm list.');
 
+/// Work that waits on a person: the agent needs a decision (`needs_human`) or
+/// is stuck (`blocked`). Both stay active work until the agent moves on.
+bool superTabWorkWaits(Object? status) =>
+    status == 'needs_human' || status == 'blocked';
+
+/// How a work status reads in the app. `blocked` is what the agent calls it;
+/// people read Stuck. Statuses this build does not know read as sent.
+String superTabWorkStatusLabel(String status) =>
+    status == 'blocked' ? 'stuck' : status.replaceAll('_', ' ');
+
 class SuperTabPerson {
   SuperTabPerson.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -221,6 +231,42 @@ class SuperTabRoute {
   final List<SuperTabRouteChoice> alternatives;
 }
 
+/// A file sent with a message. The chat never loads [url] by itself.
+class SuperTabAttachment {
+  SuperTabAttachment.fromJson(Map<String, dynamic> row)
+    : id = _text(row, 'id'),
+      name = _text(row, 'name'),
+      mime = _text(row, 'mime'),
+      size = (row['size'] as num).toInt(),
+      url = _text(row, 'url');
+  final String id, name, mime, url;
+  final int size;
+
+  /// The kinds the backend serves to be seen in place; every other kind is
+  /// served as a download.
+  bool get isImage => const {
+    'image/png',
+    'image/jpeg',
+    'image/gif',
+    'image/webp',
+  }.contains(mime);
+}
+
+/// A message's files. A row that does not read is left out, so one bad row
+/// cannot hide the page of messages it came in.
+List<SuperTabAttachment> _attachments(Object? rows) => List.unmodifiable([
+  if (rows is List)
+    for (final row in rows) ?_tryAttachment(row),
+]);
+
+SuperTabAttachment? _tryAttachment(Object? row) {
+  try {
+    return SuperTabAttachment.fromJson(superTabMap(row));
+  } catch (_) {
+    return null;
+  }
+}
+
 class SuperTabMessage {
   SuperTabMessage.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -231,6 +277,7 @@ class SuperTabMessage {
       author = Map.unmodifiable(superTabMap(row['author'])),
       source = Map.unmodifiable(superTabMap(row['source'] ?? const {})),
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
+      attachments = _attachments(row['attachments']),
       deliveries = _list(
         row['deliveries'] ?? const [],
         (d) => Map<String, dynamic>.unmodifiable(d),
@@ -241,6 +288,7 @@ class SuperTabMessage {
   final Map<String, dynamic> author;
   final Map<String, dynamic> source;
   final DateTime? createdAt;
+  final List<SuperTabAttachment> attachments;
   final List<Map<String, dynamic>> deliveries;
   String get authorName => author['name'] as String? ?? 'Unknown';
   String get authorId => author['id'] as String? ?? '';
@@ -265,11 +313,24 @@ class SuperTabMessage {
   bool get uncertain => deliveries.any((d) => d['status'] == 'uncertain');
 }
 
+/// The `remote` a daemon reports for a project: `host/owner/repo`, already
+/// without credentials or transport (the CLI's `canonicalRepository`). A port
+/// there may be SSH's, so only a plain host is read as an HTTPS address.
+final _canonicalRemote = RegExp(
+  r'^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}/\S+$',
+  caseSensitive: false,
+);
+
 /// A remote may contain a developer's embedded credential. Never share it.
+/// Contributed machines clone this address, so a daemon's canonical remote
+/// becomes the HTTPS URL that Harness's GitHub project source also clones.
 String? superTabRepositoryUrl(String? remote) {
   if (remote == null || remote.isEmpty) return null;
   if (remote.startsWith('git@') && !remote.contains('://')) return remote;
-  final uri = Uri.tryParse(remote);
+  final address = _canonicalRemote.hasMatch(remote)
+      ? 'https://$remote'
+      : remote;
+  final uri = Uri.tryParse(address);
   if (uri == null ||
       uri.host.isEmpty ||
       !['https', 'http', 'ssh', 'git'].contains(uri.scheme)) {
@@ -279,5 +340,5 @@ String? superTabRepositoryUrl(String? remote) {
       !(uri.scheme == 'ssh' && uri.userInfo == 'git')) {
     return null;
   }
-  return remote;
+  return address;
 }

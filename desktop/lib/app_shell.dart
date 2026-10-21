@@ -34,7 +34,6 @@ import 'widgets/layout_palette.dart';
 import 'widgets/environment_preflight_screen.dart';
 import 'widgets/environment_setup_screen.dart';
 import 'widgets/export_logs_dialog.dart';
-import 'widgets/flash_firmware_dialog.dart';
 import 'widgets/in_window_menu_bar.dart';
 import 'widgets/setup_tour.dart';
 import 'widgets/sign_in_step.dart';
@@ -292,8 +291,6 @@ class _RootShellState extends ConsumerState<RootShell>
       case 'checkForUpdates':
         final app = ref.read(appStateProvider);
         await _menuDialog(() => checkForUpdatesAndShowResult(context, app));
-      case 'flashFirmware':
-        await _menuDialog(() => showFlashFirmwareDialog(context));
       case 'exportLogs':
         await _menuDialog(() => showExportLogsDialog(context));
       case 'showLayout':

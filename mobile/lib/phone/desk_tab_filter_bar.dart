@@ -39,6 +39,9 @@ class DeskTabFilterChoice {
 /// A `+` after the last tab ([onNewTab]) is the desktop's `+` after its tabs:
 /// a New Tab, which becomes a tab on every computer once its first harness is
 /// in it.
+///
+/// Holding a tab's chip ([onLongPress]) is the desktop's right-click on a tab:
+/// Rename Tab and Close Tab. All is no tab, and holding it does nothing.
 class DeskTabFilterBar extends StatefulWidget {
   const DeskTabFilterBar({
     super.key,
@@ -46,6 +49,7 @@ class DeskTabFilterBar extends StatefulWidget {
     required this.selected,
     required this.onSelected,
     this.onNewTab,
+    this.onLongPress,
   });
 
   final List<DeskTabFilterChoice> choices;
@@ -57,6 +61,10 @@ class DeskTabFilterBar extends StatefulWidget {
 
   /// The `+` after the last chip. Null leaves it out.
   final VoidCallback? onNewTab;
+
+  /// A tab's chip held, with its [DeskTabFilterChoice.id]. Never for All. Null
+  /// leaves a held chip a slow tap.
+  final ValueChanged<String>? onLongPress;
 
   /// Drawn height: a chip, with a gap over it that parts it from the field
   /// and one under it that parts it from the first row.
@@ -125,6 +133,14 @@ class _DeskTabFilterBarState extends State<DeskTabFilterBar> {
         alignmentPolicy: policy,
       );
     }
+  }
+
+  /// What holding the chip for [id] does: nothing for All, nor without a
+  /// [DeskTabFilterBar.onLongPress].
+  VoidCallback? _held(String? id) {
+    final held = widget.onLongPress;
+    if (id == null || held == null) return null;
+    return () => held(id);
   }
 
   void _readEdges([ScrollMetrics? metrics]) {
@@ -197,6 +213,7 @@ class _DeskTabFilterBarState extends State<DeskTabFilterBar> {
                       choice: choices[i],
                       selected: choices[i].id == widget.selected,
                       onTap: () => widget.onSelected(choices[i].id),
+                      onLongPress: _held(choices[i].id),
                     ),
                   ],
                   if (widget.onNewTab case final onNewTab?) ...[
@@ -219,11 +236,13 @@ class _FilterChip extends StatefulWidget {
     required this.choice,
     required this.selected,
     required this.onTap,
+    this.onLongPress,
   });
 
   final DeskTabFilterChoice choice;
   final bool selected;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
 
   @override
   State<_FilterChip> createState() => _FilterChipState();
@@ -256,10 +275,15 @@ class _FilterChipState extends State<_FilterChip> {
         : empty
         ? tty.dim
         : tty.faint;
+    final held = widget.onLongPress;
     return Semantics(
       button: true,
       selected: selected,
       label: '${choice.name}, ${choice.count}',
+      // The chip's own semantics are excluded below, its gesture's with them: a screen reader's
+      // hold reaches the menu through this.
+      onLongPress: held,
+      onLongPressHint: held == null ? null : 'Rename or close',
       excludeSemantics: true,
       child: TouchTarget(
         child: GestureDetector(
@@ -271,6 +295,15 @@ class _FilterChipState extends State<_FilterChip> {
             HapticFeedback.selectionClick();
             widget.onTap();
           },
+          // Released here as well as in `onTapCancel`: the chip must not stay sunk under the sheet
+          // this opens, which outlives the gesture that opened it.
+          onLongPress: held == null
+              ? null
+              : () {
+                  _press(false);
+                  HapticFeedback.mediumImpact();
+                  held();
+                },
           child: AnimatedContainer(
             duration: AppMotion.press,
             curve: AppMotion.curve,

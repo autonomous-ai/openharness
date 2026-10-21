@@ -265,7 +265,7 @@ class LocalCliDiscovery {
     if (!last.alive) {
       // Same reason as the supervisor: while the dial is being flashed the daemon is down on purpose
       // and its port belongs to esptool. Down is the honest answer here — it really is not running.
-      if (SerialPortLease.held || SerialPortLease.heldByAnotherProcess()) {
+      if (SerialPortLease.heldByAnotherProcess()) {
         return last;
       }
       try {
@@ -289,9 +289,7 @@ class LocalCliDiscovery {
       last = await probe();
       if (last.ready) return last;
       if (!last.alive) {
-        if (spawned ||
-            SerialPortLease.held ||
-            SerialPortLease.heldByAnotherProcess()) {
+        if (spawned || SerialPortLease.heldByAnotherProcess()) {
           return last;
         }
         spawned = true;
@@ -424,7 +422,7 @@ class LocalCliDiscovery {
           // The daemon is DELIBERATELY down while the dial is being flashed — it was stopped so the
           // port could be handed over. Starting it here takes the port back mid-write and kills the
           // flash, which is what made a firmware update fail at a few tens of kilobytes.
-          if (SerialPortLease.held || SerialPortLease.heldByAnotherProcess()) {
+          if (SerialPortLease.heldByAnotherProcess()) {
             return;
           }
           // Down on purpose as well: `harness uninstall` stopped it and is removing its files. A

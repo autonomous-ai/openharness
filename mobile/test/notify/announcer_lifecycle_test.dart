@@ -17,6 +17,7 @@ void main() {
     replay: false,
     subagent: false,
     reply: 'Fixed the login screen.',
+    tier: null,
   );
 
   // First, and deliberately before any `testWidgets`: with no binding at all

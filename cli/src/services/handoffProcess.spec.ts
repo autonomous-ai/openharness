@@ -159,6 +159,10 @@ it('refuses malformed read/publication replies and never sends a revoked publica
   expect(ask).not.toHaveBeenCalled()
   expect(await core.conversations.publish(prepared, { requestId: 'routed', current: () => true })).toEqual(result)
   expect(ask).toHaveBeenLastCalledWith('publish', { prepared, originRequestId: 'routed' })
+  // A compaction summary the record could not include is reported, not refused (lib/compactSummary.ts).
+  const unsummarized = { ...result, degraded: ['summary'] }
+  ask.mockResolvedValueOnce({ value: unsummarized })
+  expect(await core.conversations.publish(prepared, { requestId: 'routed', current: () => true })).toEqual(unsummarized)
   for (const value of [null, {}, { ...result, cwd: '/other' }, { ...result, file: 'other' }, { ...result, gitRepo: null }, { ...result, degraded: null }, { ...result, degraded: ['unknown'] }]) {
     ask.mockResolvedValueOnce({ value })
     await expect(core.conversations.publish(prepared, { current: () => true })).rejects.toMatchObject({ code: 'HANDOFF_UNAVAILABLE' })

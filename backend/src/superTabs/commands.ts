@@ -6,6 +6,7 @@ import {
 } from './model.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSchema } from './routingPolicy.js'
+import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentProjectId, deleteProject, groupProject, manageProject, mutableProjects, projectMembers, projectOf, readAgent, readConversation, readProject, sameProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
@@ -18,7 +19,7 @@ const configuration = z.object({
   engineVersion: z.string().max(160).nullable(),
 }).strict()
 const path = z.string().min(1).max(4096).regex(/^\//).refine(value => !/[\x00-\x1f\x7f]/.test(value))
-const project = z.object({ cwd: path, repositoryUrl: z.string().max(4096).refine(value => {
+const repositoryUrl = z.string().max(4096).refine(value => {
   if (/[\x00-\x20\x7f]/.test(value)) return false
   if (/^git@[^/@:]+:[^@]+$/.test(value)) return true
   try {
@@ -26,7 +27,8 @@ const project = z.object({ cwd: path, repositoryUrl: z.string().max(4096).refine
     return ['https:', 'http:', 'ssh:', 'git:'].includes(uri.protocol) && !!uri.hostname && !uri.password &&
       (!uri.username || (uri.protocol === 'ssh:' && uri.username === 'git'))
   } catch { return false }
-}, 'Share a repository URL without credentials.').nullable() }).strict()
+}, 'Share a repository URL without credentials.')
+const project = z.object({ cwd: path, repositoryUrl: repositoryUrl.nullable() }).strict()
 export const startRequestSchema = z.object({
   conversationId: id, machineId: id, engine: z.string().min(1).max(80), name: title, cwd: path,
   worktree: z.boolean(), branchRef: z.string().max(1024).regex(/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/).optional(),
@@ -52,6 +54,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.sharing'), projectId: id, visibility: z.enum(['public', 'private']), memberIds: z.array(id).max(200) }).strict(),
   z.object({ type: z.literal('project.cadence'), projectId: id, minutes: z.union([z.literal(1), z.literal(5), z.literal(15), z.literal(30)]) }).strict(),
   z.object({ type: z.literal('project.report'), projectId: id, throughRevision: z.number().int().nonnegative().safe(), text: text.nullable() }).strict(),
+  z.object({ type: z.literal('project.repository'), projectId: id, repositoryUrl }).strict(),
   z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000), checks: z.array(check).max(40) }).strict(),
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
@@ -68,12 +71,14 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('invite.revoke'), inviteId: id }).strict(),
   z.object({ type: z.literal('invite.accept'), inviteId: id }).strict(),
   z.object({ type: z.literal('member.remove'), userId: id }).strict(),
-  z.object({ type: z.literal('message.send'), conversationId: id, text, replyTo: id.nullable(), recipientIds: z.array(id).max(16) }).strict(),
+  // Text may be empty when the message carries files; applyCommand checks that one of them is there.
+  z.object({ type: z.literal('message.send'), conversationId: id, text: z.string().trim().max(32_000), replyTo: id.nullable(), recipientIds: z.array(id).max(16),
+    attachmentIds: z.array(id).max(MAX_ATTACHMENTS).optional() }).strict(),
   z.object({ type: z.literal('delivery.resolve'), deliveryId: id, resolution: z.enum(['received', 'resend', 'cancel']) }).strict(),
   z.object({ type: z.literal('work.define'), conversationId: id, brief: text, checks: z.array(check).min(1).max(40) }).strict(),
   z.object({ type: z.literal('work.assign'), conversationId: id, agentId: id, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   z.object({ type: z.literal('work.status'), conversationId: id, assignmentId: id,
-    status: z.enum(['working', 'needs_human', 'review', 'done', 'stopped']), result: text.nullable() }).strict(),
+    status: z.enum(['working', 'needs_human', 'blocked', 'review', 'done', 'stopped']), result: text.nullable() }).strict(),
   z.object({ type: z.literal('route.record'), conversationId: id, decision: routeRecordSchema }).strict(),
   z.object({ type: z.literal('route.override'), decisionId: id, candidateId: z.string().regex(/^c\d{1,2}$/), reason }).strict(),
   z.object({ type: z.literal('route.modelResult'), decisionId: id, startId: id, model: z.string().min(1).max(200), effort: z.string().min(1).max(80) }).strict(),
@@ -92,7 +97,9 @@ export interface CommandContext {
   /** A host's receipt, not an elapsed lease, proves that an assignment stopped. */
   confirmedStopped?: boolean
   /** An uncertain receipt and its original message, read transactionally. */
-  delivery?: { id: string; conversationId: string; agentId: string; messageId: string; text: string }
+  delivery?: { id: string; conversationId: string; agentId: string; messageId: string; text: string; attachments?: Attachment[] }
+  /** The files `message.send` names, each checked by the store: uploaded by this actor to this conversation, and unused. */
+  attachments?: Attachment[]
   /** Route decisions this tab recorded in the last hour, counted by the store. */
   recentRoutes?: number
   /** The decision a command names, read from SuperTabRouteDecision by the store. */
@@ -127,6 +134,12 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
     if (groupId && groupId !== context.routeDecision.conversationId) fail('ROUTE_MISMATCH', 'This routing decision belongs to another group.')
     readConversation(state, actor, context.routeDecision.conversationId)
   }
+}
+/** Who may post in a conversation may also upload a file to it. Writer access is checked by `author(state, actor, true)`. */
+export function postable(state: SuperTabState, actor: Actor, conversationId: string) {
+  const group = open(state, conversationId)
+  if (actor.kind === 'agent' && !group.agentIds.includes(actor.agentId)) fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
+  return group
 }
 function owner(state: SuperTabState, actor: Actor): void {
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Super Tab owner can manage invitations.', 403)
@@ -167,8 +180,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     if (group.assignment) effects.previousAttempts.push(structuredClone({ conversationId: group.id,
       brief: group.brief, checks: group.checks, assignment: group.assignment }))
   }
-  const message = (conversationId: string, body: string, recipients: string[] = [], replyTo: string | null = null, source?: Record<string, unknown>) => {
-    effects.messages.push({ id: operationId, conversationId, author: sender, text: body, replyTo, recipients, ...(source ? { source } : {}) })
+  const message = (conversationId: string, body: string, recipients: string[] = [], replyTo: string | null = null, source?: Record<string, unknown>,
+    attachments?: Attachment[]) => {
+    effects.messages.push({ id: operationId, conversationId, author: sender, text: body, replyTo, recipients, ...(source ? { source } : {}),
+      ...(attachments?.length ? { attachments } : {}) })
     result.messageId = operationId
   }
   const openDecision = (): RouteDecision => {
@@ -212,6 +227,23 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.text) message(group.id, command.text, [], null, { kind: 'project-report' })
       break
     }
+    case 'project.repository': {
+      // Desktop once dropped the daemon's scheme-less remote, so some leads recorded a folder without an address and
+      // other machines could not clone it. Its owner or lead fills it in; an address already shared is never replaced.
+      const project = readProject(state, actor, command.projectId)
+      author(state, actor, true)
+      const group = conversation(state, project.leadConversationId)
+      if (!(actor.kind === 'person' && actor.userId === project.ownerId) && !(actor.kind === 'agent' && group.leadId === actor.agentId)) {
+        fail('PROJECT_OWNER_REQUIRED', 'Only the project owner or its lead can share its repository.', 403)
+      }
+      // On a tab from before projects this is `state.project` itself (projectsOf).
+      const repository = project.repository ?? fail('PROJECT_FOLDER_REQUIRED', 'Start this project’s lead in its repository first.')
+      if (repository.repositoryUrl && repository.repositoryUrl !== command.repositoryUrl) {
+        fail('PROJECT_REPOSITORY_SET', 'This project already shares another repository.')
+      }
+      repository.repositoryUrl = command.repositoryUrl
+      break
+    }
     case 'project.create': {
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person creates a project and chooses its lead.', 403)
       if (state.paused) fail('PAUSED', 'New work is paused in this swarm.')
@@ -231,9 +263,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       project.name = command.name
       break
     }
-    case 'project.delete':
+    case 'project.delete': {
+      // Its owner confirmed a permanent delete; nothing in Desktop removes agents one by one, so the project takes its
+      // own agents with it. Their machines release the native sessions as they would for any removed agent.
+      const project = manageProject(state, actor, command.projectId)
+      for (const target of state.agents.filter(a => agentProjectId(state, a) === project.id)) removeAgent(target)
       deleteProject(state, actor, command.projectId)
       break
+    }
     case 'project.sharing': {
       const project = manageProject(state, actor, command.projectId)
       project.members = projectMembers(state, command.memberIds)
@@ -365,6 +402,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       controls(state, actor, command.request.conversationId)
       open(state, command.request.conversationId)
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
+      // The Lead's account has machines the Swarm never prepared (no clone of the project), so a Lead may start only where the
+      // Swarm already lists a machine: a contributed one, or one an agent of the Swarm runs on. A person's start may name any
+      // machine of theirs, because the first Lead is created before anything is listed.
+      if (actor.kind === 'agent' && !state.machines?.some(m => m.machineId === command.request.machineId)
+        && !state.agents.some(a => a.machineId === command.request.machineId)) fail('MACHINE_NOT_LISTED', 'Add this machine to the Swarm first.', 403)
       const grant = context.contribution ?? fail('HOST_REQUIRED', 'Choose a machine shared with the contributor.', 403)
       const contributor = person(state, grant.contributorId)
       if (contributor.role === 'viewer') fail('READ_ONLY', 'A viewer cannot start agents.', 403)
@@ -510,8 +552,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     }
     case 'message.send': {
-      const group = open(state, command.conversationId)
-      if (actor.kind === 'agent' && !group.agentIds.includes(actor.agentId)) fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
+      const group = postable(state, actor, command.conversationId)
+      const ids = [...new Set(command.attachmentIds ?? [])]
+      const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
+      if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
       if (command.replyTo && (!context.reply || context.reply.id !== command.replyTo || context.reply.conversationId !== group.id)) {
         fail('INVALID_REPLY', 'Reply to a message in this conversation.', 400)
       }
@@ -523,7 +567,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (!group.agentIds.includes(id)) fail('INVALID_RECIPIENT', 'Choose an agent in this conversation.', 400)
       }
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
-      message(group.id, command.text, recipients, command.replyTo)
+      message(group.id, command.text, recipients, command.replyTo, undefined, attachments)
       break
     }
     case 'delivery.resolve': {
@@ -535,7 +579,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.resolution === 'resend') {
         open(state, group.id)
         if (!group.agentIds.includes(target.id)) fail('INVALID_RECIPIENT', 'This agent is no longer in the conversation.', 400)
-        message(group.id, delivery.text, [target.id], delivery.messageId)
+        message(group.id, delivery.text, [target.id], delivery.messageId, undefined, delivery.attachments)
       } else {
         message(group.id, command.resolution === 'received'
           ? `Checked ${target.name}’s terminal and confirmed the earlier instruction was received.`
@@ -652,10 +696,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       assignment.status = command.status
       assignment.result = command.result
       if (changed) {
-        const label = { working: 'Working', needs_human: 'Needs a human', review: 'Ready for review', done: 'Done', stopped: 'Stopped' }[command.status]
+        const label = { working: 'Working', needs_human: 'Needs a human', blocked: 'Stuck', review: 'Ready for review', done: 'Done', stopped: 'Stopped' }[command.status]
         const lead = group.leadId
+        // Stuck is the Lead's to hear as a human decision is: either way the work waits on someone.
         const tellLead = actor.kind === 'agent' && actor.agentId === assignment.agentId && lead && lead !== actor.agentId &&
-          ['needs_human', 'review', 'done'].includes(command.status)
+          ['needs_human', 'blocked', 'review', 'done'].includes(command.status)
         message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}`, tellLead ? [lead] : [])
       }
       break

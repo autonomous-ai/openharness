@@ -10,6 +10,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/empty_state.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
+import 'add_device/add_device_page.dart';
 import 'welcome/connect_computer.dart';
 import 'welcome/set_up_computer.dart' show ComputerSteps;
 import 'welcome/your_computer.dart';
@@ -534,6 +535,20 @@ class _ConnectBarState extends State<_ConnectBar> {
                     icon: LucideIcons.laptopMinimal300,
                     label: 'Add computer',
                     onPressed: widget.onSetUp,
+                  ),
+                  // A Harness with no screen, or one locked as it starts: Settings' Set up a device,
+                  // here too, where the computers are.
+                  const SizedBox(height: 4),
+                  Center(
+                    child: TtyTextButton(
+                      key: const ValueKey('machines-set-up-device'),
+                      label: 'Set up a device',
+                      onPressed: () => Navigator.of(context).push(
+                        phoneRoute(
+                          (_) => AddDevicePage(notifier: widget.notifier),
+                        ),
+                      ),
+                    ),
                   ),
                   // A desktop from before shows its Add Phone QR code rather than an address: the
                   // camera pairs with it. "QR code", not "Add Phone code" — a desktop menu's name

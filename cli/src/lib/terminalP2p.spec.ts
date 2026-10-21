@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  describePair,
   isRelayedPair,
   readTurn,
   relayCanReach,
@@ -45,15 +46,23 @@ describe('terminal WebRTC data channel', () => {
       onData: (data) => resolveInitiatorData(typeof data === 'string' ? Buffer.from(data) : data),
     })
 
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     try {
       initiator.start()
       expect(await initiator.waitUntilReady(5_000)).toBe(true)
       expect(initiator.send('terminal-input')).toBe(true)
       expect(await responderData).toBe('terminal-input')
+      // The answering side says where its time went: the phone times only its own steps.
+      const said = log.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith('[terminal-p2p] conn=source-1'))
+      expect(said).toEqual([
+        expect.stringMatching(/^\[terminal-p2p\] conn=source-1 answered \+\d+ms after the offer \(stun \d+ms, peer library \d+ms, gather and answer \d+ms\)$/),
+        expect.stringMatching(/^\[terminal-p2p\] conn=source-1 channel open \+\d+ms after the offer, over host→host \(direct\)$/),
+      ])
 
       expect(responder.send('source-1', Buffer.from([0x48, 0x54, 0x52, 0x4d]))).toBe(true)
       expect(await initiatorData).toEqual(Buffer.from([0x48, 0x54, 0x52, 0x4d]))
     } finally {
+      log.mockRestore()
       await initiator.stop('test_complete', false)
       await responder.stop()
     }
@@ -150,6 +159,43 @@ describe('terminal WebRTC data channel', () => {
       expect(states).toContainEqual({ state: 'failed', reason: 'negotiation_timeout' })
     } finally {
       vi.useRealTimers()
+    }
+  })
+
+  it('builds no responder for a connection that went away while its offer was in the stun race', async () => {
+    // The gateway's P2P signals no longer wait behind the connection's other frames, so its disconnect can
+    // land while an offer is still racing STUN — and the responder used to be built anyway, a TURN
+    // allocation with it, for nobody, until the negotiation timeout.
+    let resolveOffer!: (payload: TerminalP2pSignal) => void
+    const offered = new Promise<TerminalP2pSignal>((resolve) => { resolveOffer = resolve })
+    const initiator = new TerminalP2pInitiator({
+      policy: { enabled: true, protocolVersion: 1, stunUrls: [], openWaitMs: 1_500 },
+      sendSignal: (type, payload) => { if (type === 'p2p_offer') resolveOffer(payload) },
+      onData: () => { /* no peer in this test */ },
+      selectStunUrls: async () => ({ urls: [], udpReachable: null }),
+    })
+    initiator.start()
+    const offer = await offered
+    await initiator.stop('test_complete', false)
+
+    let release!: (selection: { urls: string[]; udpReachable: boolean | null }) => void
+    const gate = new Promise<{ urls: string[]; udpReachable: boolean | null }>((resolve) => { release = resolve })
+    const signals: string[] = []
+    const responder = new TerminalP2pResponderPool({
+      sendSignal: (_connId, type) => { signals.push(type) },
+      onData: () => { /* no data in this test */ },
+      selectStunUrls: () => gate,
+    })
+    try {
+      const answering = responder.handleSignal('source-1', 'p2p_offer', offer)
+      await responder.closeConnection('source-1', 'client_disconnected', false)
+      release({ urls: [], udpReachable: null })
+      await answering
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(signals).toEqual([])
+      expect(responder.send('source-1', 'anything')).toBe(false)
+    } finally {
+      await responder.stop()
     }
   })
 
@@ -262,6 +308,15 @@ describe('terminal WebRTC data channel', () => {
     expect(isRelayedPair(SRFLX, SRFLX)).toBe(false)
     expect(isRelayedPair(HOST, SRFLX)).toBe(false)
     expect(isRelayedPair(SRFLX)).toBe(false) // remote unknown
+  })
+
+  it('names the nominated pair by its candidate types and says when it crosses TURN', () => {
+    expect(describePair(HOST, HOST)).toBe('host→host (direct)')
+    expect(describePair(SRFLX, SRFLX)).toBe('srflx→srflx (direct)')
+    // A phone on 4G behind carrier NAT: its own relay candidate carries the pair.
+    expect(describePair(SRFLX, RELAY)).toBe('srflx→relay (TURN)')
+    expect(describePair(RELAY, HOST)).toBe('relay→host (TURN)')
+    expect(describePair(SRFLX)).toBe('srflx→? (direct)') // remote unknown
   })
 
   it('does not mistake a host address that merely contains the word', () => {

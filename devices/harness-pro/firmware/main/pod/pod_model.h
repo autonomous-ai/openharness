@@ -37,6 +37,13 @@ typedef struct {
     uint32_t since_ms, elapsed_s, event_ms;
     bool has_event;                      // event_ms is set (an agent with none takes any feed, wrap or not)
     char activity[POD_ACTIVITY_BYTES], question[320], recap[POD_RECAP_BYTES];
+    // The open question's Super Tab (the shared project it was asked in; "" = a plain question) and what it needs
+    // (pod_attention_t: decision or stuck; NONE without a Super Tab). Set and cleared with question[].
+    char super_tab[SUPER_TAB_MAX];
+    uint8_t attention;
+    // What a Super Tab question holds back (a pod_state_t): the state the agent's turns and sweeps would have given it,
+    // taken once the question closes. Before the first such feed, the state it had when asked.
+    uint8_t wait_after;
     char verb[POD_VERB_BYTES];
     char steps[POD_STEPS_MAX][POD_STEP_BYTES];   // this turn's tools and previous activity sentences, newest first (cut on a codepoint)
     uint16_t step_at_s[POD_STEPS_MAX];   // seconds into the turn each step arrived (steps[] order); 0xFFFF = unknown (no turn start seen)
@@ -157,6 +164,11 @@ void pod_model_turn(pod_model_t *, const char *id, const char *kind, const char 
 // turn.stats: the last turn's test and commit counts (-1 leaves a field unknown). Unknown agents are ignored.
 void pod_model_turn_stats(pod_model_t *, const char *id, int32_t passed, int32_t failed, int32_t commits, int32_t tokens_in, int32_t tokens_out);
 void pod_model_question(pod_model_t *, const char *id, const char *text);
+// The same for a Super Tab's question: super_tab (NULL or "" = a plain one, attention ignored) and what it needs.
+// Unlike a plain one it survives the agent's turns and library sweeps: only question_close (or the link) ends it.
+void pod_model_question_tab(pod_model_t *, const char *id, const char *text, const char *super_tab, pod_attention_t attention);
+// What the agent's open question asks for: DECISION or STUCK while it asks (pod_model_eff) a Super Tab's question, else NONE.
+pod_attention_t pod_model_attention(const pod_model_t *, const pod_agent_t *);
 void pod_model_question_close(pod_model_t *, const char *id);
 void pod_model_recap(pod_model_t *, const char *id, const char *recap, bool restore);
 void pod_model_link(pod_model_t *, bool up);

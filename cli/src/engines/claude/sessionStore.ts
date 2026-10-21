@@ -36,6 +36,19 @@ export const sessionStore: SessionStoreContract = {
    * never a turn, so a continuation counts only once a turn is in it (or the file is too long to be those lines).
    */
   continuation: { type: 'continued-in', field: 'continuedInSessionId', suffix: '.jsonl', tailBytes: 4 * 1024, turns: ['user', 'assistant'], headBytes: 256 * 1024 },
+  /** On compaction Claude Code writes what it still remembers of the earlier conversation as a user record
+   *  flagged `isCompactSummary` (its normalizer drops it from turns). The handoff quotes the latest one, without the
+   *  wrapper Claude puts around it: an opening line, a pointer to its raw transcript outside the project, and orders
+   *  to resume "without asking the user any further questions", which contradict the record's "wait for the user"
+   *  (every real summary on the reviewer's machine ended with them, 2026-10-21). */
+  compactSummary: {
+    flag: 'isCompactSummary', text: ['message', 'content'],
+    wrapper: {
+      opening: ['This session is being continued from a previous conversation'],
+      closing: ['If you need specific details from before compaction', 'Continue the conversation from where it left off',
+        'The messages after this summary are the most recent messages'],
+    },
+  },
   /** A prompt, an answer, and the system records a turn ends with: a title, a file snapshot or a mode is not work. */
   activity: {
     at: 'timestamp',

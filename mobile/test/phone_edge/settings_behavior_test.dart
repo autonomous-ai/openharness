@@ -182,9 +182,9 @@ void main() {
     await close(tester, app);
   });
 
-  // ⚠️ A phone over the relay never hears a question — `commander_question` goes to the dial and the
-  // computer's own window only — so the row promises what does reach it, and nothing else.
-  testWidgets('Notifications: a harness finishing, a new device — never "needs you"', (
+  // ⚠️ The row promises what reaches a phone over the relay, and nothing else: a question does since
+  // 2026-10-21 (`commander_question`, cli core/questions.ts `sendRemote`).
+  testWidgets('Notifications: a harness finishing or needing you, a new device', (
     tester,
   ) async {
     final app = await openSettings(tester);
@@ -200,12 +200,12 @@ void main() {
       find.descendant(
         of: row,
         matching: find.text(
-          'When a harness finishes, or a new device joins your account.',
+          'When a harness finishes or needs you, or a new device joins your account.',
         ),
       ),
       findsOneWidget,
     );
-    expect(find.textContaining('needs you'), findsNothing);
+    expect(find.textContaining('needs you'), findsOneWidget);
     await close(tester, app);
   });
 

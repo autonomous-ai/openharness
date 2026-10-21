@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart' show SemanticsAction;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/phone/desk_tab_filter_bar.dart';
 
@@ -15,6 +16,7 @@ void main() {
     WidgetTester tester, {
     VoidCallback? onNewTab,
     ValueChanged<String?>? onSelected,
+    ValueChanged<String>? onLongPress,
   }) => tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
@@ -23,10 +25,65 @@ void main() {
           selected: null,
           onSelected: onSelected ?? (_) {},
           onNewTab: onNewTab,
+          onLongPress: onLongPress,
         ),
       ),
     ),
   );
+
+  bool canHold(WidgetTester tester, String label) => tester
+      .getSemantics(find.bySemanticsLabel(label))
+      .getSemanticsData()
+      .hasAction(SemanticsAction.longPress);
+
+  testWidgets('holding a tab chip hands back its tab, and picks nothing', (
+    tester,
+  ) async {
+    final held = <String>[];
+    final picked = <String?>[];
+    await pumpBar(tester, onLongPress: held.add, onSelected: picked.add);
+
+    await tester.longPress(find.text('Docker'));
+    await tester.pump();
+
+    expect(held, ['t2']);
+    expect(picked, isEmpty);
+  });
+
+  testWidgets('holding All does nothing: it is no tab', (tester) async {
+    final held = <String>[];
+    final picked = <String?>[];
+    await pumpBar(tester, onLongPress: held.add, onSelected: picked.add);
+
+    await tester.longPress(find.text('All'));
+    await tester.pump();
+
+    expect(held, isEmpty);
+  });
+
+  testWidgets('a screen reader reaches the hold on a tab chip, not on All', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    await pumpBar(tester, onLongPress: (_) {});
+
+    expect(canHold(tester, 'Desktop, 2'), isTrue);
+    expect(canHold(tester, 'All, 3'), isFalse);
+    semantics.dispose();
+  });
+
+  testWidgets('with nothing to hold for, a held chip is still a tap', (
+    tester,
+  ) async {
+    final picked = <String?>[];
+    await pumpBar(tester, onSelected: picked.add);
+
+    await tester.longPress(find.text('Docker'));
+    await tester.pump();
+
+    expect(picked, ['t2']);
+    expect(canHold(tester, 'Docker, 1'), isFalse);
+  });
 
   testWidgets('a tap on the + asks for a new tab, and picks no chip', (
     tester,

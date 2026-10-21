@@ -18,7 +18,7 @@ import { realpath, stat } from 'fs/promises'
 import { basename, dirname, isAbsolute, join, sep } from 'path'
 import { env } from '../config/env.js'
 import type { SessionStoreContract } from '../engines/facets/sessionStore.js'
-import { identityBytes, identityEntries, identityFile, identityHead, identityScanBudget, IdentityReadUnavailable } from '../engines/kit/identityScan.js'
+import { identityBytes, identityEntries, identityFile, identityHead, identityLines, identityScanBudget, IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { sessionIdentityMetaOf } from '../engines/sessionFiles.js'
 import { exactTranscript, exactWorkspaces } from '../engines/kit/exactTranscript.js'
 import { readSessionHeader } from '../engines/kit/sessionIdentity.js'
@@ -110,37 +110,41 @@ async function transcripts(root: string, budget: { remaining: number }, out: Tra
  */
 const CWD_SCAN_LINES = 20
 const CWD_SCAN_CHARS = 256 * 1024
+/**
+ * Claude writes a `file-history-snapshot` record (tens of KB each) per checkpoint, and a long or resumed session can
+ * open with dozens of them before the first record that carries its cwd: 4–5 MB in, at line 50–60. They are passed
+ * over unread and uncounted, inside this byte bound, so such a session no longer holds every agent in its folder.
+ */
+const CWD_SCAN_BYTES = 32 * 1024 * 1024
+const UNCOUNTED_RECORD = /^\{\s*"type"\s*:\s*"file-history-snapshot"/
 
 /**
  * The first `cwd` in a transcript's head and, when asked, its opening flag named `sidechain` (an engine's session
- * store declares it: `scan.sidechain`). One bounded read (256 KB — transcripts run to hundreds of MB) shared by
- * every file engine that declares its cwd in-file. Without a flag it stops at the first cwd, exactly as it always did.
+ * store declares it: `scan.sidechain`). One bounded streaming read (the first 20 counted lines, 256 K characters,
+ * within 32 MB; transcripts run to hundreds of MB) shared by every file engine that declares its cwd in-file. Without
+ * a flag it stops at the first cwd, exactly as it always did.
  */
 async function readTranscriptHead(path: string, sidechain: string | null, requestedCwd?: string): Promise<{ cwd: string; side: boolean | undefined } | null> {
   try {
-    // Preserve the existing UTF-16 character budget, including non-ASCII paths. Four
-    // UTF-8 bytes per code unit is sufficient even when the cutoff splits a surrogate
-    // pair; a byte budget equal to the character budget would silently shrink the scan.
-    const bytes = await identityBytes(path, CWD_SCAN_CHARS * 4 + 1)
-    const text = bytes.subarray(0, CWD_SCAN_CHARS * 4).toString('utf-8')
-    const head = text.slice(0, CWD_SCAN_CHARS)
-    const complete = bytes.length <= CWD_SCAN_CHARS * 4 && text.length <= CWD_SCAN_CHARS
-      && head.split('\n').length <= CWD_SCAN_LINES
     let cwd = ''
     let side: boolean | undefined
     let malformed = false
-    for (const line of head.split('\n', CWD_SCAN_LINES)) {
-      if (!line.trim()) continue
-      let obj: Record<string, unknown>
-      try { obj = JSON.parse(line) as Record<string, unknown> } catch { malformed = true; continue }
-      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) { malformed = true; continue }
-      if (!cwd && typeof obj.cwd === 'string' && obj.cwd) cwd = obj.cwd
-      if (cwd && !isAbsolute(cwd)) throw new IdentityReadUnavailable('the transcript working directory is invalid')
-      if (sidechain && side === undefined && typeof obj[sidechain] === 'boolean') side = obj[sidechain] as boolean
-      if (cwd && requestedCwd && !await sameDir(cwd, requestedCwd)) return { cwd, side }
-      if (side === true || (cwd && (!sidechain || side !== undefined))) return { cwd, side }
-    }
-    if (!complete) throw new IdentityReadUnavailable('the transcript header exceeds the read limit')
+    let found: { cwd: string; side: boolean | undefined } | null = null
+    const ended = await identityLines(path, { maxBytes: CWD_SCAN_BYTES, maxLines: CWD_SCAN_LINES, maxChars: CWD_SCAN_CHARS },
+      start => UNCOUNTED_RECORD.test(start), async line => {
+        if (!line.trim()) return false
+        let obj: Record<string, unknown>
+        try { obj = JSON.parse(line) as Record<string, unknown> } catch { malformed = true; return false }
+        if (!obj || typeof obj !== 'object' || Array.isArray(obj)) { malformed = true; return false }
+        if (!cwd && typeof obj.cwd === 'string' && obj.cwd) cwd = obj.cwd
+        if (cwd && !isAbsolute(cwd)) throw new IdentityReadUnavailable('the transcript working directory is invalid')
+        if (sidechain && side === undefined && typeof obj[sidechain] === 'boolean') side = obj[sidechain] as boolean
+        if (cwd && requestedCwd && !await sameDir(cwd, requestedCwd)) { found = { cwd, side }; return true }
+        if (side === true || (cwd && (!sidechain || side !== undefined))) { found = { cwd, side }; return true }
+        return false
+      })
+    if (found) return found
+    if (ended === 'limit') throw new IdentityReadUnavailable('the transcript header exceeds the read limit')
     if (!cwd || (sidechain && side === undefined && malformed)) {
       throw new IdentityReadUnavailable('the transcript header is incomplete or invalid')
     }

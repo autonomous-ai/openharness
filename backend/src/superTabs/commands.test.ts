@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
-import { createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
+import { activeWork, createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -169,6 +169,24 @@ describe('Super Tab collaboration policy', () => {
     expect(f.state.conversations[1]!.checks[0]!.evidence).toBeNull()
   })
 
+  it('tells the Lead when the assignee is stuck and keeps the work active', () => {
+    const f = fixture()
+    const lead = f.add('lead', 'owner', 'lead', true)
+    const group = f.group()
+    const worker = f.add('worker', 'owner', group)
+    const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
+    const as: Actor = { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }
+    const stuck = f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'blocked', result: 'The staging database refuses my key.' }, as)
+    expect(stuck.messages[0]).toMatchObject({ conversationId: group, text: 'Stuck\n\nThe staging database refuses my key.', recipients: [lead] })
+    expect(f.state.conversations[1]!.assignment!.status).toBe('blocked')
+    expect(activeWork(f.state.conversations[1]!)).toBe(true)
+    expect(() => f.run({ type: 'work.assign', conversationId: f.group(), agentId: worker })).toThrow('active assignment')
+    const decision = f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', result: 'Ship to everyone, or behind a flag?' }, as)
+    expect(decision.messages[0]).toMatchObject({ text: 'Needs a human\n\nShip to everyone, or behind a flag?', recipients: [lead] })
+    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'working', result: null }, as)
+    expect(f.state.conversations[1]!.assignment!.status).toBe('working')
+  })
+
   it('allows discussion while paused and refuses new work, without mutating rejected state', () => {
     const f = fixture()
     f.run({ type: 'tab.pause', paused: true })
@@ -201,7 +219,7 @@ it('starts only in the chosen conversation, captures authority, and never assign
   const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
   const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
   const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
-  const request = { conversationId: group, machineId: 'target', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
+  const request = { conversationId: group, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
   const startId = f.run({ type: 'agent.start', request }, actor, { contribution }).result.startId as string
   expect(f.state.starts![0]).toMatchObject({ request, hostGrant: 'grant-1', dispatched: false })
@@ -216,6 +234,42 @@ it('starts only in the chosen conversation, captures authority, and never assign
   expect(f.state.conversations[0]!.agentIds).toEqual([lead])
   f.run({ type: 'tab.pause', paused: true })
   expect(() => f.run({ type: 'agent.start', request }, actor, { contribution })).toThrow('paused')
+})
+
+describe('agent.start on the Swarm\'s listed machines', () => {
+  const request = (group: string, machineId: string) => ({ conversationId: group, machineId, engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
+    requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } })
+  const grant = { machineOwnerId: 'target-owner', contributorId: 'owner' }
+
+  it('refuses an agent\'s start on a machine nobody listed, and records nothing', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+    const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    expect(() => f.run({ type: 'agent.start', request: request(group, 'account-vm') }, actor, { contribution: grant }))
+      .toThrow(expect.objectContaining({ code: 'MACHINE_NOT_LISTED', status: 403, message: 'Add this machine to the Swarm first.' }))
+    expect(f.state.starts ?? []).toEqual([])
+  })
+
+  it('lets an agent start on the Lead\'s own machine, where an agent of the Swarm runs', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+    const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    f.run({ type: 'agent.start', request: request(group, 'host') }, actor, { contribution: grant })
+    expect(f.state.starts).toHaveLength(1)
+  })
+
+  it('lets an agent start on a contributed machine', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+    const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    f.state.machines = [{ machineId: 'contributed', name: 'Mini', contributorId: 'owner', membershipGeneration: f.state.people[0]!.generation, generation: 'g1',
+      cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false, observation: { receivedAt: 1000 } } as never]
+    f.run({ type: 'agent.start', request: request(group, 'contributed') }, actor, { contribution: grant })
+    expect(f.state.starts).toHaveLength(1)
+  })
+
+  it('keeps a person\'s start on a machine of their own, before anything is listed', () => {
+    const f = fixture(), group = f.group()
+    f.run({ type: 'agent.start', request: request(group, 'my-laptop') }, owner, { contribution: grant })
+    expect(f.state.starts).toHaveLength(1)
+  })
 })
 
 describe('tab.routingPolicy', () => {
@@ -244,6 +298,9 @@ const record = (patch: Record<string, unknown> = {}) => ({ assessment: { difficu
 function routed() {
   const f = fixture()
   const lead = f.add('lead', 'owner', 'lead', true), worker = f.add('worker')
+  // An agent runs on 'machine', so the Swarm lists it and a start there is allowed.
+  f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'machine', harnessId: 'remote', name: 'Remote', configuration: config, lead: false },
+    owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } })
   const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
   const define = (group: string) => f.run({ type: 'work.define', conversationId: group, brief: 'Build it.', checks: [{ description: 'Tests pass.', independent: false }] })
   /** Records a completed native start for an agent, as the decision's `new` final refers to it. */
@@ -477,4 +534,30 @@ it('restricts recording a legacy project to the owner or controlling lead', () =
 })
 it('rejects embedded credentials in shared project metadata', () => {
   expect(commandSchema.safeParse({ type: 'tab.project', machineId: 'host', project: { cwd: '/repo', repositoryUrl: 'https://token@github.com/example/project' } }).success).toBe(false)
+  expect(commandSchema.safeParse({ type: 'project.repository', projectId: 'lead', repositoryUrl: 'https://token@github.com/example/project' }).success).toBe(false)
+  expect(commandSchema.safeParse({ type: 'project.repository', projectId: 'lead', repositoryUrl: 'github.com/example/project' }).success).toBe(false)
+  expect(commandSchema.safeParse({ type: 'project.repository', projectId: 'lead', repositoryUrl: null }).success).toBe(false)
+})
+
+describe('message attachments', () => {
+  const file = { id: 'file-1', name: 'screen.png', mime: 'image/png', size: 12, url: 'https://cdn.example.test/super-tabs/tab/abc/screen.png' }
+  const send = (attachmentIds?: string[], text = ''): Command => ({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [], ...(attachmentIds ? { attachmentIds } : {}) })
+  it('records verified files on the message and allows empty text with one', () => {
+    const f = fixture()
+    const sent = f.run(send(['file-1', 'file-1']), owner, { attachments: [file] })
+    expect(sent.messages).toEqual([expect.objectContaining({ text: '', attachments: [file] })])
+    expect(f.run(send(undefined, 'Plain text.')).messages[0]).not.toHaveProperty('attachments')
+  })
+  it('refuses empty text without files and a file the store did not verify', () => {
+    const f = fixture()
+    expect(() => f.run(send())).toThrow('Write a message or attach a file.')
+    expect(() => f.run(send(['file-1']))).toThrow('Upload this file again')
+    expect(() => commandSchema.parse(send(Array.from({ length: 11 }, (_, i) => `file-${i}`)))).toThrow()
+  })
+  it('resends a message with its files', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
+    const resent = f.run({ type: 'delivery.resolve', deliveryId: 'd', resolution: 'resend' }, owner,
+      { delivery: { id: 'd', conversationId: 'lead', agentId: lead, messageId: 'm', text: '', attachments: [file] } })
+    expect(resent.messages[0]).toMatchObject({ recipients: [lead], attachments: [file] })
+  })
 })

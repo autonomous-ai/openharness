@@ -52,6 +52,8 @@ void main() {
       ('turn_started', {'userMessage': 'hi'}),
       ('text_delta', {'content': 'Hello!'}),
       ('turn_ended', <String, dynamic>{}),
+      // The recap the daemon sends after every turn's end, which the mark waits for.
+      ('turn_summary', <String, dynamic>{}),
     ]) {
       await app.handleEventForTest('m', {
         'type': type,

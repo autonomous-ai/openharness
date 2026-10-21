@@ -84,8 +84,8 @@ describe('bounded session metadata discovery', () => {
     vi.mocked(fs.open).mockResolvedValueOnce(handle)
     try {
       await expect(read()).resolves.toMatchObject({ sessionId: 'session-id' })
-      expect(reads).toHaveBeenCalledTimes(1)
-      expect(reads.mock.calls[0].slice(1)).toEqual([0, LIMIT * 4 + 1, 0])
+      expect(reads).toHaveBeenCalledTimes(1) // The cwd is in the first bounded chunk; the rest is never read.
+      expect(reads.mock.calls[0].slice(1)).toEqual([0, 64 * 1024, 0])
       expect(handle.fd).toBe(-1)
     } finally { if (handle.fd !== -1) await handle.close() }
   })

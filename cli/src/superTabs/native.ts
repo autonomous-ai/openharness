@@ -3,6 +3,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { dirname, join } from 'node:path'
 import type { CoreApi } from '../core/api.js'
 import { nativeTurnCursorIn, type NativeTurnCursor, type NativeTurnObservation } from '../lib/nativeTurnObservations.js'
+import { REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
 import { backend, SuperTabHostError } from './host.js'
 import { identifier, object } from './wire.js'
 
@@ -27,6 +28,13 @@ const validIdOrNull = (value: unknown) => value === null || identifier(value)
 const copyEvent = (event: NativeTurnObservation): Omit<Event, 'contextId' | 'previousEventId'> => ({
   turnId: event.turnId, kind: event.kind, text: event.text, truncated: event.truncated, interrupted: event.interrupted,
 })
+
+/** The core reads no turns for an agent whose conversation it has not identified. Say why, so the person
+ *  restarts the agent instead of updating a Harness that is already current. */
+function unidentified(hold: string | undefined): string {
+  if (hold?.includes(REPLACED_PROGRAM)) return 'This agent’s program was updated while it was running. Restart the agent, then retry.'
+  return 'Harness hasn’t identified this terminal’s conversation yet. Retry in a moment, or restart the agent.'
+}
 
 /** Durable conversation recording stays outside the core. Capturing a bounded
  * page never waits for the backend; flushing the outbox never writes into an agent. */
@@ -127,9 +135,12 @@ export class NativeRecorder {
       const existing = this.journal.agents[harnessId]?.contexts[contextId]
       if (existing?.blocked) throw new Error(existing.blocked)
       if (renew && (!existing || existing.until <= this.now())) throw new Error('Terminal recording expired. Reopen the terminal from this conversation.')
-      const page = await this.core.transcripts.nativeTurns?.(harnessId)
+      const read = this.core.transcripts.nativeTurns
+      if (!read) throw new Error('Update this machine’s Harness to record native terminal conversations.')
+      const page = await read(harnessId)
       this.available()
-      if (!page || closed?.aborted) throw new Error('Update this machine’s Harness to record native terminal conversations.')
+      if (closed?.aborted) throw new Error('This terminal request is no longer available.')
+      if (!page) throw new Error(unidentified(this.core.agents.byAgent(harnessId)?.identityHold))
       if (!existing && !this.journal.agents[harnessId] && Object.keys(this.journal.agents).length >= 128) throw new Error('Too many recorded terminals are active.')
       if (!existing && Object.keys(this.journal.agents[harnessId]?.contexts ?? {}).length >= 256) throw new Error('Too many terminal contexts are active.')
       this.commit(next => {

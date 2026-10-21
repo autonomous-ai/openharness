@@ -18,6 +18,12 @@ const WINDOW_MS = 30 * 60_000
 const RECAP_MAX = 600
 const LONG_TURN_S = 120
 
+/** Whether a frame's `tier` is one: anything else is read as no tier at all. */
+export const isTier = (value: unknown): value is Tier => value === 'alert' || value === 'list' || value === 'silent'
+
+/** The rule when Jev cannot say: a turn that ran 120 s or more is worth a glance later, a shorter one is not. */
+export const fallbackTier = (durationS: number | null): Tier => (durationS !== null && durationS >= LONG_TURN_S ? 'list' : 'silent')
+
 const QUESTIONS: Record<string, JevChoice> = {
   tier: {
     type: 'choice',
@@ -72,10 +78,8 @@ export function createTierDecider(opts: {
     if (input.onScreen) return rule('silent', 'onScreen')
     if (!input.recap.trim()) return rule('silent', 'empty')
 
-    const fallback = (reason: string) => {
-      const long = input.durationS !== null && input.durationS >= LONG_TURN_S
-      return finish(long ? 'list' : 'silent', `fallback:${reason}`, input.durationS === null ? 'duration unknown' : `${input.durationS}s`)
-    }
+    const fallback = (reason: string) =>
+      finish(fallbackTier(input.durationS), `fallback:${reason}`, input.durationS === null ? 'duration unknown' : `${input.durationS}s`)
     if (!opts.jev) return fallback('off')
 
     const state = {

@@ -9,7 +9,7 @@ function harness() {
   const port = {
     session: vi.fn(), request: vi.fn(async () => {}), dropped: vi.fn(), revoked: vi.fn(), resume: vi.fn(async () => {}), card: vi.fn(),
     turnStarted: vi.fn(), turnEnded: vi.fn(), stream: vi.fn(), transcript: vi.fn(), delivery: vi.fn(), dispatched: vi.fn(),
-    inputStatus: vi.fn(), agentGone: vi.fn(), appFocus: vi.fn(async () => {}), revealed: vi.fn(), receipt: vi.fn(), stop: vi.fn(),
+    inputStatus: vi.fn(), agentGone: vi.fn(), appFocus: vi.fn(async () => {}), revealed: vi.fn(), receipt: vi.fn(), addon: vi.fn(), stop: vi.fn(),
   } satisfies WifiPort
   let on: WifiPort | null = port
   const clients = new Map<string, RemoteClient>()

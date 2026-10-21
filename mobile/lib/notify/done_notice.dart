@@ -8,6 +8,31 @@ library;
 
 import 'agent_notice.dart';
 
+/// How loudly the daemon says one finished turn should be told — decided once
+/// for every screen (`cli/src/lib/notifyTier.ts`: rules first, Jev for the
+/// rest, "list if it ran 120 s or more" when Jev cannot answer). It rides the
+/// `turn_summary` that follows `turn_ended`, as its payload's `tier`.
+enum NoticeTier {
+  /// News now: the dial beeps, wakes and files a drawer row.
+  alert,
+
+  /// Worth a glance later: a drawer row, no beep, no wake.
+  list,
+
+  /// Not news: nothing is filed.
+  silent,
+}
+
+/// Reads the wire's `"alert" | "list" | "silent"`. Null when absent or a word
+/// this build does not know — the old rule applies, as the dial's
+/// `ui_notify_summary` falls back to its flags.
+NoticeTier? noticeTierFrom(Object? raw) => switch (raw) {
+  'alert' => NoticeTier.alert,
+  'list' => NoticeTier.list,
+  'silent' => NoticeTier.silent,
+  _ => null,
+};
+
 /// One turn's end, as the machine socket reported it.
 ///
 /// The flags come straight off the `turn_ended` frame. Every one of them is
@@ -32,10 +57,17 @@ typedef TurnEnd = ({
   /// SUMMARY, never on the bare `done`: a tools-only or phantom turn has no
   /// summary, stays silent, and the notification always has words in it.
   String? reply,
+
+  /// The daemon's [NoticeTier] for this turn, from the `turn_summary` after
+  /// it — never on `turn_ended` itself, which leaves before it is decided.
+  /// Null from a daemon that does not decide one, or did not say in time:
+  /// every end that is news escalates as it always did.
+  NoticeTier? tier,
 });
 
 /// Reads a [TurnEnd] off one `turn_ended` frame. [reply] is what the phone saw
-/// the turn say (`SessionPreview.turnReply`), which the frame does not carry.
+/// the turn say (`SessionPreview.turnReply`), which the frame does not carry;
+/// nor its tier, which the `turn_summary` after it does.
 TurnEnd turnEndFrom(
   Map<String, dynamic> event,
   Map<String, dynamic> payload, {
@@ -45,19 +77,38 @@ TurnEnd turnEndFrom(
   replay: event['replay'] == true,
   subagent: event['subagent'] == true,
   reply: reply,
+  tier: null,
 );
+
+/// Whether a turn's end is news at all — what no tier can change: not killed,
+/// not a replay, not a sub-agent's, and it said something.
+bool isNewsEnd(TurnEnd end) {
+  if (end.aborted || end.replay || end.subagent) return false;
+  final reply = end.reply;
+  return reply != null && reply.trim().isNotEmpty;
+}
 
 /// Decides what one turn's end is worth.
 ///
 /// [inFront] is whether the app is on screen at all; [watching] whether the
 /// agent it is showing is the one that finished — only meaningful in front.
+///
+/// The [TurnEnd] flags say whether the end is news at all; its tier, when
+/// the daemon sends one, says how loud. As on the dial
+/// (`ui_notify_summary`, 2026-10-19): the agent on screen already shows its
+/// own news and gets nothing, a `list` turn is a mark with no tap and no
+/// notice, and only an `alert` goes as far as the phone's place allows.
 AgentNotice decideDoneNotice(
   TurnEnd end, {
   required bool inFront,
   required bool watching,
 }) {
-  if (end.aborted || end.replay || end.subagent) return AgentNotice.none;
-  final reply = end.reply;
-  if (reply == null || reply.trim().isEmpty) return AgentNotice.none;
-  return escalate(inFront: inFront, watching: watching);
+  if (!isNewsEnd(end)) return AgentNotice.none;
+  final tier = end.tier;
+  if (tier == null) return escalate(inFront: inFront, watching: watching);
+  if (tier == NoticeTier.silent || (inFront && watching)) {
+    return AgentNotice.none;
+  }
+  if (tier == NoticeTier.list) return AgentNotice.filed;
+  return escalate(inFront: inFront, watching: false);
 }

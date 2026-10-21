@@ -143,3 +143,62 @@ describe('a session served on after the service restarted (services/wifi.ts)', (
     expect(f.send).not.toHaveBeenCalled()
   })
 })
+
+describe('device add-ons over the E2EE relay', () => {
+  it('advertises add-ons, keeps what the device publishes, and seals a proposal to that device alone', async () => {
+    let crypto: { identity: string } = { identity: 'lamp' }
+    const send = vi.fn()
+    let relay: AutonomousDeviceRelay | undefined
+    const service = new AutonomousDeviceService({ now: () => 0, machineId: 'machine', agents: () => [], submit: vi.fn(), cancelDelivery: () => true,
+      stop: async () => true, answer: async () => true, recent: () => [], emit: (frame, deviceId) => relay?.emit(frame, deviceId) })
+    relay = new AutonomousDeviceRelay({ sessionRole: () => 'device', sessionIdentity: (connId) => connId === 'other' ? 'other-device' : crypto.identity,
+      unwrapDown: (_c, frame) => ({ ...frame, payload: (frame.payload as { __e2e: unknown }).__e2e }),
+      wrapTarget: (_c, type, payload) => ({ type, payload: { __e2e: payload } }) }, send, service, 'machine')
+    const request = (connId: string, payload: Record<string, unknown>) => relay!.handle(connId, { type: 'autonomous_device_request', payload: { __e2e: payload } })
+    const opened = (i: number) => (send.mock.calls[i][1] as { payload: { __e2e: Record<string, unknown> } }).payload.__e2e
+
+    await request('conn', { type: 'hello', proto: 1, requestId: randomUUID() })
+    expect(opened(0).capabilities).toEqual(expect.arrayContaining(['addon.publish', 'addon.decision']))
+    await request('other', { type: 'hello', proto: 1, requestId: randomUUID() })
+    send.mockClear()
+
+    await request('conn', { type: 'addon.publish', requestId: randomUUID(), values: [{ topic: 'room/presence', value: { someone: true } }] })
+    expect(opened(0)).toMatchObject({ type: 'addon.publish_result', topics: 1 })
+    expect(service.addons.state()).toMatchObject([{ deviceId: 'lamp', online: true, topics: { 'room/presence': { value: { someone: true } } } }])
+    send.mockClear()
+
+    const proposal = service.addons.propose({ addon: 'evening-glow', idempotencyKey: 'k1', act: 'light', holdsMs: 30_000, params: { colour: 'warm', level: 2 } })
+    expect(send).toHaveBeenCalledOnce()
+    expect(send.mock.calls[0][0]).toBe('conn')
+    expect(opened(0)).toEqual({ type: 'event', serverInstanceId: service.serverInstanceId, machineId: 'machine', kind: 'addon.proposal',
+      payload: { proposalId: proposal.proposalId, addon: 'evening-glow', act: 'light', holdsMs: 30_000, params: { colour: 'warm', level: 2 }, expiresAt: 30_000 } })
+    send.mockClear()
+
+    // Not in the replay log: a device that reconnects is not handed lapsed proposals.
+    await request('conn', { type: 'hello', proto: 1, requestId: randomUUID(), resume: { serverInstanceId: service.serverInstanceId, cursor: 0 } })
+    expect(send.mock.calls.map((_, i) => opened(i).kind).filter(Boolean)).not.toContain('addon.proposal')
+    send.mockClear()
+
+    await request('other', { type: 'addon.decision', requestId: randomUUID(), proposalId: proposal.proposalId, decision: 'kept' })
+    expect(opened(0)).toMatchObject({ type: 'addon.decision_result', error: { code: 'PROPOSAL_UNKNOWN' } })
+    await request('conn', { type: 'addon.decision', requestId: randomUUID(), proposalId: proposal.proposalId, decision: 'kept', reason: 'evening, someone here' })
+    expect(opened(1)).toMatchObject({ type: 'addon.decision_result', state: 'kept' })
+    expect(service.addons.proposal(proposal.proposalId)).toMatchObject({ state: 'kept', reason: 'evening, someone here' })
+
+    // A new hello clears what it published: it publishes its whole set again.
+    await request('conn', { type: 'hello', proto: 1, requestId: randomUUID() })
+    expect(service.addons.state('lamp')).toEqual([])
+    await request('conn', { type: 'addon.publish', requestId: randomUUID(), values: [{ topic: 'room/presence', value: { someone: false } }] })
+    send.mockClear()
+    // A restored session (the service restarted, no hello) is asked to publish again.
+    relay.drop('conn')
+    relay.restore('conn', 'lamp')
+    expect(send.mock.calls.map((_, i) => opened(i).kind)).toContain('addon.republish')
+    // The device's last link closing marks it offline; unpairing forgets it.
+    relay.drop('conn')
+    expect(service.addons.state('lamp')[0].online).toBe(false)
+    relay.revoke('lamp')
+    expect(service.addons.state('lamp')).toEqual([])
+    crypto = { identity: 'lamp' }
+  })
+})

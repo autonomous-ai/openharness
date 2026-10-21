@@ -17,6 +17,8 @@ function setup(messageFields: Record<string, unknown> = {}) {
   const row = { tabId: 'tab', agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }
   let removed = false, revoked = false, status = 'queued', claimId: string | null = null
   const receipts: Record<string, unknown>[] = []
+  const holds: Record<string, unknown>[] = []
+  let clock = 0
   const call: CoreApi['account']['backend'] = vi.fn(async (method, path, body) => {
     let data: unknown
     if (path.includes('/hosts/')) data = removed ? [] : [row]
@@ -25,6 +27,7 @@ function setup(messageFields: Record<string, unknown> = {}) {
     else {
       const command = body as Record<string, unknown>
       if (command.type === 'claim') { claimId = command.claimId as string; status = 'claimed' }
+      else if (command.type === 'hold') holds.push(command)
       else { receipts.push(command); status = command.uncertain ? 'uncertain' : 'delivered' }
       data = { delivery: { id: 'delivery', claimId, status }, message: { id: 'message', conversationId: 'lead', text: 'Build the agreed feature.', author: { name: 'Collaborator' }, ...messageFields } }
     }
@@ -35,12 +38,13 @@ function setup(messageFields: Record<string, unknown> = {}) {
     account: { backend: call },
     turns: { onDelivery: vi.fn(fn => { listeners.add(fn); return () => { listeners.delete(fn) } }) },
   })
-  const open = () => { const host = new SuperTabHost(core, 'machine-1', { log: vi.fn() }); hosts.push(host); return host }
+  const log = vi.fn()
+  const open = () => { const host = new SuperTabHost(core, 'machine-1', { log, now: () => clock }); hosts.push(host); return host }
   const event = (state: TurnDelivery['state'], reason?: string) => {
     for (const fn of listeners) fn({ deliveryId: 'team:service:superTabs:delivery', sessionId: 'harness', state, reason })
   }
   const saved = () => JSON.parse(readFileSync(hostJournalFile(dir, 'machine-1'), 'utf8'))
-  return { core, call, open, event, receipts, saved, dir, remove: () => { removed = true }, revoke: (value = true) => { revoked = value }, foreignClaim: () => { claimId = 'another-process' } }
+  return { core, call, open, event, receipts, holds, log, wait: (ms: number) => { clock += ms }, saved, dir, remove: () => { removed = true }, revoke: (value = true) => { revoked = value }, foreignClaim: () => { claimId = 'another-process' } }
 }
 
 describe('Super Tab native delivery handoff', () => {
@@ -230,6 +234,50 @@ describe('Super Tab native delivery handoff', () => {
     expect(t.receipts.every(r => r.uncertain === true)).toBe(true)
   })
 
+  it('logs why the core withholds a delivery once per change of reason, with how long it has waited', async () => {
+    const t = setup(), host = t.open()
+    await host.tick()
+    for (const [reason, seconds] of [['team_waiting_draft', 0], ['team_waiting_draft', 5], ['team_waiting_idle', 10]] as const) {
+      t.wait(seconds * 1000 - (seconds === 10 ? 5_000 : 0)); t.event('rejected', reason); await host.tick()
+    }
+    t.event('rejected', 'team_waiting_idle')
+    const lines = t.log.mock.calls.map(([line]) => line as string).filter(line => line.includes('withheld'))
+    expect(lines).toEqual([
+      expect.stringContaining('withheld: team_waiting_draft, waiting 0s'),
+      expect.stringContaining('withheld: team_waiting_idle, waiting 10s'),
+    ])
+  })
+
+  it('tells the conversation once, in plain words, when a delivery waits over 30 seconds', async () => {
+    const t = setup(), host = t.open()
+    await host.tick()
+    t.event('rejected', 'team_waiting_draft'); await host.tick()
+    t.wait(29_000); t.event('rejected', 'team_waiting_draft'); await host.tick()
+    expect(t.holds).toEqual([])
+    t.wait(2_000); t.event('rejected', 'team_waiting_draft'); await host.tick()
+    t.event('rejected', 'team_waiting_draft'); await host.tick()
+    await vi.waitFor(() => expect(t.holds).toEqual([{ type: 'hold', claimId: expect.any(String), reason: 'team_waiting_draft' }]))
+    t.wait(60_000); t.event('rejected', 'team_waiting_draft'); await host.tick()
+    expect(t.holds).toHaveLength(1)
+  })
+
+  it('asks again for a notice that failed, but only after another 30 seconds, and says an unknown reason as unavailable', async () => {
+    const t = setup(), host = t.open()
+    await host.tick()
+    t.event('rejected', 'team_waiting_busy'); await host.tick()
+    const original = vi.mocked(t.call).getMockImplementation()!
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => {
+      if ((body as any)?.type === 'hold') throw new Error('Backend offline')
+      return original(method, path, body)
+    })
+    t.wait(31_000); t.event('rejected', 'team_waiting_busy'); await host.tick()
+    await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith('Backend offline'))
+    t.wait(10_000); t.event('rejected', 'team_waiting_busy'); await host.tick()
+    vi.mocked(t.call).mockImplementation(original)
+    t.wait(21_000); t.event('rejected', 'team_waiting_busy'); await host.tick()
+    await vi.waitFor(() => expect(t.holds).toEqual([expect.objectContaining({ reason: 'team_waiting_unavailable' })]))
+  })
+
   it('withdraws queued input on removal or revoked machine access and cannot revive it by re-sharing', async () => {
     const t = setup(), host = t.open()
     await host.tick(); t.revoke(); await host.tick()
@@ -330,4 +378,116 @@ it('confirms a stopped assignment only with fresh native evidence, including aft
   host.stop()
   await host.reconcileStops()
   expect(proof).toHaveLength(1)
+})
+
+describe('Super Tab attachments in delivered input', () => {
+  it('lists the downloaded files after the text and downloads them once while the terminal holds the input', async () => {
+    const file = { id: 'a1', name: 'screen.png', mime: 'image/png', size: 5, url: 'https://cdn.example.test/x/screen.png' }
+    const t = setup({ text: 'See the screenshot.', attachments: [file] })
+    const attachedFiles = vi.fn(async () => ({ text: 'Attached files:\n- /drops/1-screen.png (screen.png, 5 B)', complete: true }))
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), attachedFiles }); hosts.push(host)
+    await host.tick()
+    expect(attachedFiles).toHaveBeenCalledWith(expect.objectContaining({ attachments: [file] }))
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1])
+      .toMatch(/:\nSee the screenshot\.\n\nAttached files:\n- \/drops\/1-screen\.png \(screen\.png, 5 B\)$/)
+    t.event('rejected', 'team_waiting_busy')
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[1]?.[1]).toContain('/drops/1-screen.png')
+    expect(attachedFiles).toHaveBeenCalledTimes(1)
+  })
+  it('downloads a failed file again before the next delivery of the held input', async () => {
+    const t = setup({ text: 'Logs.', attachments: [{ id: 'a1', name: 'a.log', mime: 'text/plain', size: 1, url: 'https://cdn.example.test/a.log' }] })
+    const attachedFiles = vi.fn()
+      .mockResolvedValueOnce({ text: 'Attached files:\n- Could not download https://cdn.example.test/a.log (a.log, 1 B): HTTP 503', complete: false })
+      .mockResolvedValue({ text: 'Attached files:\n- /drops/a.log (a.log, 1 B)', complete: true })
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), attachedFiles }); hosts.push(host)
+    await host.tick()
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Could not download')
+    t.event('rejected', 'team_waiting_busy')
+    await host.tick()
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[1]?.[1]).toContain('/drops/a.log')
+    t.event('rejected', 'team_waiting_busy')
+    await host.tick()
+    expect(attachedFiles).toHaveBeenCalledTimes(2)
+  })
+  it('delivers a message of files alone', async () => {
+    const t = setup({ text: '', attachments: [{ id: 'a1', name: 'a.log', mime: 'text/plain', size: 1, url: 'https://cdn.example.test/a.log' }] })
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), attachedFiles: async () => ({ text: 'Attached files:\n- /drops/a.log (a.log, 1 B)', complete: true }) }); hosts.push(host)
+    await host.tick()
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toMatch(/from Collaborator:\nAttached files:\n/)
+  })
+})
+
+describe('Super Tab waits for the Harness Pro', () => {
+  it('hands the core the roster\'s waits on the first roster and on each change, and takes them back on stop', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
+    const waiting = { tabId: 'tab', tabName: 'Pilot', attention: { assignmentId: 'as-1', status: 'blocked', result: 'No key' },
+      agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }
+    let rows: unknown[] = [waiting], offline = false
+    const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) => {
+      if (offline) throw new Error('Host offline')
+      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }
+    })
+    const superTabs = { attention: vi.fn() }
+    const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
+      agents: { byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
+    const open = () => { const host = new SuperTabHost(core, 'machine-1', { log: vi.fn() }); hosts.push(host); return host }
+    const first = open()
+    await first.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(1)
+    expect(superTabs.attention).toHaveBeenLastCalledWith([{ agentId: 'harness', requestId: 'supertab:as-1:blocked', superTab: 'Pilot', attention: 'stuck', text: 'Stuck: No key' }])
+    await first.tick()
+    // A failed roster read closes nothing.
+    offline = true
+    await first.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(1)
+    offline = false
+    rows = [{ ...waiting, attention: null }]
+    await first.tick()
+    expect(superTabs.attention).toHaveBeenLastCalledWith([])
+    first.stop()
+    expect(superTabs.attention).toHaveBeenCalledTimes(2)
+    // A new host always hands over its first roster, so it closes what an earlier one raised; stopping takes its own back.
+    const next = open()
+    await next.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(3)
+    rows = [waiting]
+    await next.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(4)
+    superTabs.attention.mockImplementationOnce(() => { throw new Error('Core gone') })
+    next.stop()
+    expect(superTabs.attention).toHaveBeenLastCalledWith([])
+  })
+
+  it('keeps a wait through a moment its harness is missing from the live agents, and closes it after 3 s', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
+    const rows = [{ tabId: 'tab', tabName: 'Pilot', attention: { assignmentId: 'as-1', status: 'needs_human', result: 'Ship it?' },
+      agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }]
+    const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }))
+    let here = true, clock = 0
+    const superTabs = { attention: vi.fn() }
+    const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
+      agents: { byAgent: vi.fn(() => (here ? { agentId: 'harness' } : undefined) as never), terminalAvailable: vi.fn(() => true) } })
+    const host = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(host)
+    await host.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(1)
+    here = false
+    await host.tick()
+    clock += 2_000
+    await host.tick()
+    here = true
+    await host.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(1)   // back within 3 s: the same wait, never closed
+    here = false
+    await host.tick()
+    clock += 3_000
+    await host.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(2)
+    expect(superTabs.attention).toHaveBeenLastCalledWith([])
+    // Never raised while missing: a harness the core does not have is not waited on.
+    clock += 10_000
+    await host.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(2)
+  })
 })
