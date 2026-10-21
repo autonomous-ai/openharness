@@ -73,7 +73,8 @@ describe('install.ps1, as written', () => {
 
   it('moves a running daemon to the new build when it is run again over an install', () => {
     expect(source).toContain('$before = Read-HarnessCurrentCli -Root $root')
-    expect(source).toContain('$null = Restart-HarnessDaemon -Command $command -Before $before -After $version')
+    expect(source).toContain('$ptyBefore = Read-HarnessCurrentPty -Root $root')
+    expect(source).toContain('$null = Restart-HarnessDaemon -Command $command -Before $before -After $version -PtyBefore $ptyBefore -PtyAfter $ptyAfter')
   })
 
   it('keeps exactly one app-default line off in the CLI source', () => {
@@ -582,6 +583,22 @@ describe.runIf(windows)('install.ps1, run again over a live install', { timeout:
     const stopped = fakeHarness('stopped')
     expect(ps(`Restart-HarnessDaemon -Command '${stopped.command}' -Before '1.0.0' -After '1.0.1'`).stdout).toBe('False')
     expect(stopped.calls()).toEqual(['status'])
+  })
+
+  it('restarts the daemon when only the terminal host moved', () => {
+    const harness = fakeHarness('running - backend connected')
+    const run = ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.1' -After '1.0.1' -PtyBefore '2.0.0' -PtyAfter '2.0.1'`)
+    expect(last(run.stdout), run.stderr).toBe('True')
+    expect(run.stdout).toContain('Moving the running Harness to terminal host 2.0.1 (your agents keep running)...')
+    expect(harness.calls()).toEqual(['status', 'stop', 'start'])
+  })
+
+  it('does not restart the daemon when neither the CLI nor the terminal host changed', () => {
+    const harness = fakeHarness('running - backend connected')
+    expect(ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.1' -After '1.0.1' -PtyBefore '2.0.1' -PtyAfter '2.0.1'`).stdout).toBe('False')
+    // A first terminal host install has nothing running to move.
+    expect(ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.1' -After '1.0.1' -PtyBefore '' -PtyAfter '2.0.1'`).stdout).toBe('False')
+    expect(harness.calls()).toEqual([])
   })
 
   it('closes without the setup steps when this computer is signed in and Harness runs', () => {
