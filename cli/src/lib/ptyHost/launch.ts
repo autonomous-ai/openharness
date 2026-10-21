@@ -36,7 +36,7 @@ function runnable(file: string): boolean {
   }
 }
 
-const VERSION_DIR = /^\d+(\.\d+)*$/
+export const VERSION_DIR = /^\d+(\.\d+)*$/
 
 /**
  * Orders two versions: their dotted numbers first, then a pre-release (`-dev.win1`) before its release, as semver
