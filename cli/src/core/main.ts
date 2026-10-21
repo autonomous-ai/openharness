@@ -73,8 +73,8 @@ import { findLiveSession, findResumedTranscript } from '../lib/sessionRepair.js'
 import { processSessionOf } from '../engines/sessionStores.js'
 import { createHandoffDependencies } from './handoffDependencies.js'
 import { TmuxBackend } from '../lib/tmuxBackend.js'
-import { isDrainBackend, ptyHostBackends, PtyHostDrain, rowsOnInstance } from '../lib/ptyHost/drain.js'
-import { removeUnusedPtyVersions } from '../lib/ptyHost/launch.js'
+import { isDrainBackend, ptyHostBackends, PtyHostDrain, rowInstancesOf, rowsOnInstance, withoutCreateHost } from '../lib/ptyHost/drain.js'
+import { removeUnusedPtyVersions, targetHost } from '../lib/ptyHost/launch.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from '../lib/hostTheme.js'
 import { restoreAgents, type RestoreAgentsDeps, type RestoreSummary } from '../lib/restoreAgents.js'
 import { restoreTerminals } from '../lib/restoreTerminals.js'
@@ -568,10 +568,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // local socket and the backend link, leaves for an update, and says what is missing.
   const candidates: TerminalBackend[] = []
   if (terminalConfig.backends.includes('tmux')) candidates.push(new TmuxBackend(() => hostTheme))
-  // The Harness PTY host (pty/): reached, or started detached so its panes outlive this daemon. A host of the
-  // protocol before, still running from before an update, is a drain backend beside it (lib/ptyHost/drain.ts).
+  // The Harness PTY host (pty/): reached, or started detached so its panes outlive this daemon. New panes go to the
+  // target's host, the build this daemon would start; any other host, still running from before an update, is a
+  // drain backend beside it (lib/ptyHost/drain.ts). The target is read here once, for this core's life: it runs the
+  // binary (`harness-pty version`, up to 5 s), and an update that moves it starts a new core.
+  const ptyTarget = terminalConfig.backends.includes('ptyhost') ? targetHost() : null
+  if (terminalConfig.backends.includes('ptyhost')) {
+    console.log(ptyTarget ? `[terminal] ptyhost: target ${ptyTarget.instance}` : '[terminal] ptyhost: target unknown')
+  }
   const ptyHosts = terminalConfig.backends.includes('ptyhost')
-    ? ptyHostBackends(env.HARNESS_PTY_DIR, { rowsOn: (instanceId) => rowsOnInstance(registry.list(), instanceId) })
+    ? ptyHostBackends(env.HARNESS_PTY_DIR, { target: ptyTarget, rowInstances: () => rowInstancesOf(registry.list()) })
     : null
   const ptyHostBackend = ptyHosts?.create ?? null
   if (ptyHosts) candidates.push(ptyHosts.create, ...ptyHosts.drain)
@@ -584,7 +590,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const loginShellEnvPromise = warmLoginShellEnvironment()
   console.log(`[terminal] enabled backends: ${terminalConfig.backends.join(', ')}`)
   const prepared = await preparing
-  const terminalBackends = prepared.filter((p) => p.result.state === 'ready').map((p) => p.backend)
+  const readyBackends = prepared.filter((p) => p.result.state === 'ready').map((p) => p.backend)
+  // With no target, the create backend took whichever host answered, which a drain backend may be on too.
+  const terminalBackends = ptyHosts ? withoutCreateHost(readyBackends, ptyHosts.create) : readyBackends
   // The first backend that could not be readied, and why, for the status's `discoveryError`.
   const terminalUnavailable = prepared.flatMap(({ backend, result }) => result.state === 'unavailable'
     ? [{ backend: backend.name, reason: result.reason, code: result.code }] : [])[0] ?? null
