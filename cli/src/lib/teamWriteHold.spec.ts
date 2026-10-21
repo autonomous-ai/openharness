@@ -44,4 +44,8 @@ it('does not read the IDE context chip in an empty Claude composer as a human dr
   // Anything typed beside a chip is still somebody's draft.
   expect(teamWriteHold('claude', idle.replace('[⧉ In .env]', '[⧉ In .env] fix the'))).toBe('team_waiting_draft')
   expect(teamWriteHold('claude', idle.replace('[⧉ In .env]', 'fix the [⧉ In .env]'))).toBe('team_waiting_draft')
+  // The same Lead pane at 11:05, once its footer carried an OSC 8 link to the open PR: the user's next message sat
+  // as Queued behind the same chip.
+  const linked = readFileSync(new URL('./__fixtures__/claude-ide-chip-idle-pr-link.txt', import.meta.url), 'utf8')
+  expect(teamWriteHold('claude', linked)).toBeNull()
 })
