@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
 import 'phone_navigation.dart';
+import 'phone_status.dart';
 import 'phone_sheet.dart';
 import 'settings_row.dart';
 import 'tty.dart';
@@ -74,6 +75,19 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
     super.dispose();
   }
 
+  /// Online both ways: the account says it runs, and this phone's own line to it is not down — the
+  /// first to know when it restarts (a clean restart tells the relay at once; the account's list
+  /// is only as fresh as its last read).
+  bool _isOnline() {
+    final state = _app.stateOf(_id);
+    if (state != null &&
+        phoneMachineStatusOf(state) == PhoneMachineStatus.offline) {
+      return false;
+    }
+    return _app.machines.where((m) => m.machineId == _id).firstOrNull?.status ==
+        'running';
+  }
+
   String _versionsNow() {
     final parts = _app.osParts(_id);
     String? of(String key) => parts[key]?['running'] as String?;
@@ -95,10 +109,16 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
       if (asking || !mounted || _started.isEmpty) return;
       asking = true;
       try {
-        final machine = _app.machines
-            .where((m) => m.machineId == _id)
-            .firstOrNull;
-        if (_restarting && machine?.status != 'running') {
+        if (_restarting) {
+          // The account's word, asked afresh: the list held here is not, while this page waits.
+          try {
+            await _app.refreshMachines();
+          } catch (_) {
+            // Asked again in a moment.
+          }
+          if (!mounted || _started.isEmpty) return;
+        }
+        if (_restarting && !_isOnline()) {
           _wentDown = true;
           if (encrypted) {
             // Waiting at its password now: the rest is the Unlock page's.
@@ -234,11 +254,8 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
     final restartRequired =
         (_app.osStatus[_id]?['update'] as Map?)?['restartRequired'] == true;
     final computer = _app.harnessOsComputers[_id];
-    // Gone down for its restart, or offline to the account: what it last said, nothing to start.
-    final online =
-        !(_restarting && _wentDown) &&
-        _app.machines.where((m) => m.machineId == _id).firstOrNull?.status ==
-            'running';
+    // Gone down for its restart, or offline: what it last said, nothing to start.
+    final online = !(_restarting && _wentDown) && _isOnline();
     Text say(String text) => Text(text, style: tty.style(color: tty.dim));
 
     SettingsRow row(String key, String title) {
