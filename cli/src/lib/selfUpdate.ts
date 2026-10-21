@@ -186,7 +186,7 @@ export const RUNTIME_DOWNLOAD_LIMITS: TransferLimits = { idleMs: 300_000, deadli
 export class TransferStalledError extends Error {}
 
 /** GET `url` whole within `limits`: the status, and the body once it has all arrived. */
-async function fetchWithin(url: string, limits: TransferLimits, expectedBytes?: number): Promise<{ ok: boolean; status: number; body: Buffer }> {
+export async function fetchWithin(url: string, limits: TransferLimits, expectedBytes?: number): Promise<{ ok: boolean; status: number; body: Buffer }> {
   const controller = new AbortController()
   let stalled!: (error: TransferStalledError) => void
   const gaveUp = new Promise<never>((_, reject) => { stalled = reject })
