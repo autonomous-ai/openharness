@@ -5,7 +5,7 @@ import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DigestMismatchError } from '../selfUpdate.js'
 import {
-  PTY_PAYLOAD_FILES, PtyPayloadRefused, preparePtyPayload, ptyManifestUrl, ptyPlatformKey, ptyUpdateWanted, type PtyEntry,
+  PTY_PAYLOAD_FILES, PtyPayloadRefused, fetchPtyEntry, preparePtyPayload, ptyManifestUrl, ptyPlatformKey, ptyUpdateWanted, sweepStagingFolders, type PtyEntry,
 } from './ptyPayload.js'
 
 let tmp: string
@@ -95,5 +95,77 @@ describe('preparePtyPayload', () => {
     await vi.advanceTimersByTimeAsync(5_000)
     await assertion
     expect(leftovers()).toEqual([])
+  })
+})
+
+describe('preparePtyPayload failure kinds', () => {
+  it('a network error from the download is rethrown as it is, leaving no staging', async () => {
+    const boom = new Error('ECONNRESET')
+    const err = await run({ download: async () => { throw boom } }).catch((e) => e)
+    expect(err).toBe(boom)
+    expect(err).not.toBeInstanceOf(PtyPayloadRefused)
+    expect(leftovers()).toEqual([])
+  })
+  it('an unzip that fails to spawn is rethrown as it is, leaving no staging', async () => {
+    const boom = new Error('spawn unzip ENOENT')
+    const err = await run({ unzip: async () => { throw boom } }).catch((e) => e)
+    expect(err).toBe(boom)
+    expect(leftovers()).toEqual([])
+  })
+  it('a probe that rejects is a refusal', async () => {
+    await expect(run({ probe: async () => { throw new Error('exit 1') } })).rejects.toBeInstanceOf(PtyPayloadRefused)
+    expect(leftovers()).toEqual([])
+  })
+})
+
+describe('sweepStagingFolders', () => {
+  it('removes stale staging folders and nothing else', () => {
+    const root = join(tmp, 'rt', 'pty')
+    mkdirSync(join(root, '.staging-1-2'), { recursive: true })
+    mkdirSync(join(root, '.staging-3-4'), { recursive: true })
+    mkdirSync(join(root, '0.10.0'), { recursive: true })
+    expect(sweepStagingFolders(join(tmp, 'rt'))).toBe(2)
+    expect(readdirSync(root)).toEqual(['0.10.0'])
+    expect(sweepStagingFolders(join(tmp, 'nothing'))).toBe(0)
+  })
+})
+
+describe('fetchPtyEntry', () => {
+  const good = { version: '0.11.0', url: 'https://cdn.example/p.zip', sha256: 'b'.repeat(64), size: 10 }
+  const serve = (body: string, status = 200) => vi.stubGlobal('fetch', async () => new Response(body, { status }))
+  const manifest = (e: object) => JSON.stringify({ pty: { 'win32-x64': e, 'win32-arm64': { ...good, version: '0.12.0' } } })
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('reads the entry of the platform from the published shape', async () => {
+    serve(manifest(good))
+    expect(await fetchPtyEntry('https://m.example/pty/metadata.json', 'win32-x64')).toEqual(good)
+    expect((await fetchPtyEntry('https://m.example/pty/metadata.json', 'win32-arm64'))?.version).toBe('0.12.0')
+  })
+  it('an absent platform is null', async () => {
+    serve(JSON.stringify({ pty: { 'win32-arm64': good } }))
+    expect(await fetchPtyEntry('https://m.example/m.json', 'win32-x64')).toBeNull()
+  })
+  it('a top-level entry (not the published shape) is null', async () => {
+    serve(JSON.stringify({ 'win32-x64': good }))
+    expect(await fetchPtyEntry('https://m.example/m.json', 'win32-x64')).toBeNull()
+  })
+  it.each([
+    ['an http url', { url: 'http://cdn.example/p.zip' }],
+    ['a 63-char sha', { sha256: 'b'.repeat(63) }],
+    ['a non-hex sha', { sha256: 'z'.repeat(64) }],
+    ['size 0', { size: 0 }],
+    ['size 1.5', { size: 1.5 }],
+    ['size "10"', { size: '10' }],
+  ])('%s is null', async (_n, bad) => {
+    serve(manifest({ ...good, ...bad }))
+    expect(await fetchPtyEntry('https://m.example/m.json', 'win32-x64')).toBeNull()
+  })
+  it('a non-2xx response is null', async () => {
+    serve(manifest(good), 404)
+    expect(await fetchPtyEntry('https://m.example/m.json', 'win32-x64')).toBeNull()
+  })
+  it('malformed JSON is null', async () => {
+    serve('{nope')
+    expect(await fetchPtyEntry('https://m.example/m.json', 'win32-x64')).toBeNull()
   })
 })

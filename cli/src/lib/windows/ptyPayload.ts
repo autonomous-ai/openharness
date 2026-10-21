@@ -35,13 +35,17 @@ export function ptyPlatformKey(arch: string = process.arch): 'win32-x64' | 'win3
   return null
 }
 
-/** Fetch the manifest and return this platform's entry, or null when it is absent or malformed. The same
- *  checks the CLI manifest gets: an https url, a sha256 hex digest and a positive integer size. */
+/** Fetch the manifest `{ "pty": { "<platform key>": entry } }` and return this platform's entry, or null
+ *  when the response is not 2xx, the JSON is malformed, or the entry is absent or invalid: an https url, a
+ *  64-digit sha256 hex digest and a positive integer size. */
 export async function fetchPtyEntry(url: string, key: string, limits: TransferLimits = MANIFEST_LIMITS): Promise<PtyEntry | null> {
   const res = await fetchWithin(url, limits)
   if (!res.ok) return null
-  const json = JSON.parse(res.body.toString('utf8')) as Record<string, unknown>
-  const e = json?.[key] as Partial<PtyEntry> | undefined
+  let json: unknown
+  try { json = JSON.parse(res.body.toString('utf8')) } catch { return null }
+  const platforms = (json as { pty?: unknown } | null)?.pty
+  if (!platforms || typeof platforms !== 'object') return null
+  const e = (platforms as Record<string, unknown>)[key] as Partial<PtyEntry> | undefined
   if (!e || typeof e.version !== 'string' || !e.version) return null
   if (typeof e.url !== 'string' || !/^https:\/\//.test(e.url)) return null
   if (typeof e.sha256 !== 'string' || !/^[0-9a-fA-F]{64}$/.test(e.sha256)) return null
@@ -70,19 +74,21 @@ export interface PreparePtyDeps {
 }
 
 /** `tar.exe` is the bsdtar Windows ships (install.ps1's Expand-HarnessZip falls back to it too); `unzip`
- *  stands in elsewhere so the tests can run. The zip goes through a file inside `dest`, removed after. */
+ *  stands in elsewhere so the tests can run. tar.exe reads its arguments in the ANSI code page, so a profile
+ *  path outside it (CJK on a Western Windows) breaks extraction: as install.ps1 does, run it in the staging
+ *  folder with an ASCII relative zip name. The zip is removed after. */
 async function unzipWithTool(zip: Buffer, dest: string): Promise<void> {
-  const file = join(dest, '.payload.zip')
-  writeFileSync(file, zip)
+  const name = 'payload.zip'
+  writeFileSync(join(dest, name), zip)
   const [cmd, args] = process.platform === 'win32'
-    ? ['tar.exe', ['-xf', file, '-C', dest]] as const
-    : ['unzip', ['-q', '-o', file, '-d', dest]] as const
+    ? [join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe'), ['-xf', name]] as const
+    : ['unzip', ['-q', '-o', name]] as const
   try {
     await new Promise<void>((resolve, reject) => {
-      execFile(cmd, [...args], { windowsHide: true, timeout: 60_000 }, (err) => (err ? reject(err) : resolve()))
+      execFile(cmd, [...args], { cwd: dest, windowsHide: true, timeout: 60_000 }, (err) => (err ? reject(err) : resolve()))
     })
   } finally {
-    rmSync(file, { force: true })
+    rmSync(join(dest, name), { force: true })
   }
 }
 
@@ -147,8 +153,30 @@ export async function preparePtyPayload(entry: PtyEntry, runtimeDir: string, dep
     if (sv !== entry.version) throw new PtyPayloadRefused(`harness-serial reports version ${String(sv)}, expected ${entry.version}`)
     return { version: entry.version, staging, protocol: h.protocol, features: h.features as string[] }
   } catch (e) {
-    rmSync(staging, { recursive: true, force: true })
-    if (e instanceof PtyPayloadRefused) throw e
-    throw new PtyPayloadRefused(e instanceof Error ? e.message : String(e))
+    removeFolder(staging)
+    // Content failures are refusals (the caller backs off); anything else (network, disk, a missing unzip
+    // tool) is transient and rethrown as it is, so the next check retries, as selfUpdate's refuse vs rethrow.
+    throw e
   }
+}
+
+/** Deleting a just-run exe on Windows often fails EBUSY/EPERM; that must not replace the real error. */
+function removeFolder(dir: string): boolean {
+  try {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Delete stale `<runtime>/pty/.staging-*` folders left by an interrupted run; those still locked stay for
+ *  the next sweep. Returns how many were removed. */
+export function sweepStagingFolders(runtimeDir: string): number {
+  const root = join(runtimeDir, 'pty')
+  let names: string[]
+  try { names = readdirSync(root) } catch { return 0 }
+  let removed = 0
+  for (const n of names) if (n.startsWith('.staging-') && removeFolder(join(root, n))) removed++
+  return removed
 }
