@@ -8,7 +8,10 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/new_harness_attachments.dart';
+import '../widgets/new_harness_paste.dart';
 import '../state/app_state.dart';
+import '../state/harness_attachments.dart';
 import 'roster.dart';
 import 'recording_notice.dart';
 import 'pull_requests.dart';
@@ -219,6 +222,8 @@ class _SuperTabViewState extends State<SuperTabView> {
     super.dispose();
   }
 
+  HarnessAttachments get _files => c.attachments(c.selectedId);
+
   Future<void> _send() async {
     final choices = _completionChoices;
     if (choices.isNotEmpty) {
@@ -229,8 +234,9 @@ class _SuperTabViewState extends State<SuperTabView> {
         c.selected == null ||
         c.selected!.archived ||
         c.saving ||
+        c.uploading ||
         c.hasPendingAction ||
-        _composer.text.trim().isEmpty) {
+        (_composer.text.trim().isEmpty && _files.isEmpty)) {
       return;
     }
     final id = c.selectedId;
@@ -1009,6 +1015,8 @@ class _SuperTabViewState extends State<SuperTabView> {
       );
     }
     final group = c.selected;
+    final writable = c.canWrite && group != null && !group.archived;
+    final busy = c.saving || c.uploading;
     final messages = c.messages(c.selectedId);
     final entries = superTabTranscriptEntries(messages);
     final byId = {for (final message in messages) message.id: message};
@@ -1331,82 +1339,120 @@ class _SuperTabViewState extends State<SuperTabView> {
                 ),
                 border: Border.all(color: DesktopChrome.rim),
               ),
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: c.canWrite && group != null && !group.archived
-                    ? _focus.requestFocus
-                    : null,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minHeight: grid.AppControl.heightFieldScaled,
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
+              child: NewHarnessDropZone(
+                attachments: _files,
+                enabled: writable && !busy,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: writable ? _focus.requestFocus : null,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Expanded(
-                          child: TextField(
-                            key: const ValueKey('super-message-composer'),
-                            controller: _composer,
-                            focusNode: _focus,
-                            autofocus: !_terminalsVisible,
-                            enabled:
-                                c.canWrite && group != null && !group.archived,
-                            minLines: 1,
-                            maxLines: MediaQuery.sizeOf(context).height < 600
-                                ? 3
-                                : 8,
-                            maxLength: 32000,
-                            keyboardType: TextInputType.multiline,
-                            textAlignVertical: TextAlignVertical.center,
-                            style: DesktopChrome.text(),
-                            decoration: InputDecoration(
-                              // The row centers the line. Inheriting a decorated
-                              // field's minimum height leaves slack below its text.
-                              isCollapsed: true,
-                              constraints: const BoxConstraints(),
-                              visualDensity: VisualDensity.standard,
-                              hintStyle: DesktopChrome.text(
-                                color: DesktopChrome.muted,
-                              ),
-                              contentPadding: EdgeInsets.zero,
-                              hintText: group == null
-                                  ? 'Loading conversation…'
-                                  : c.canWrite
-                                  ? 'Message ${group.title}'
-                                  : 'Read-only conversation',
-                              border: InputBorder.none,
-                              enabledBorder: InputBorder.none,
-                              focusedBorder: InputBorder.none,
-                              disabledBorder: InputBorder.none,
-                              filled: false,
-                              counterText: '',
-                            ),
-                            onChanged: (text) {
-                              c.setDraft(c.selectedId, text);
-                              setState(() {
-                                _mentionIndex = 0;
-                                _dismissedMention = null;
-                              });
-                            },
-                          ),
+                        ListenableBuilder(
+                          listenable: _files,
+                          builder: (context, _) => _files.isEmpty
+                              ? const SizedBox.shrink()
+                              : Padding(
+                                  padding: const EdgeInsets.only(
+                                    bottom: 8,
+                                    right: 8,
+                                  ),
+                                  child: NewHarnessAttachmentChips(
+                                    attachments: _files,
+                                    enabled: !c.saving,
+                                    isUploading: c.isUploading,
+                                    progressOf: c.uploadProgress,
+                                  ),
+                                ),
                         ),
-                        ValueListenableBuilder(
-                          valueListenable: _composer,
-                          builder: (context, value, _) => AppIconButton(
-                            icon: AppIcons.arrowUp,
-                            tooltip: 'Send message',
-                            color: DesktopChrome.accent,
-                            onPressed:
-                                c.canWrite &&
-                                    group != null &&
-                                    !group.archived &&
-                                    !c.saving &&
-                                    !c.hasPendingAction &&
-                                    value.text.trim().isNotEmpty
-                                ? () => unawaited(_send())
-                                : null,
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            minHeight: grid.AppControl.heightFieldScaled,
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Expanded(
+                                child: NewHarnessPasteTarget(
+                                  attachments: _files,
+                                  enabled: writable && !busy,
+                                  focusNode: _focus,
+                                  child: TextField(
+                                    key: const ValueKey(
+                                      'super-message-composer',
+                                    ),
+                                    controller: _composer,
+                                    focusNode: _focus,
+                                    autofocus: !_terminalsVisible,
+                                    enabled: writable,
+                                    minLines: 1,
+                                    maxLines:
+                                        MediaQuery.sizeOf(context).height < 600
+                                        ? 3
+                                        : 8,
+                                    maxLength: 32000,
+                                    keyboardType: TextInputType.multiline,
+                                    textAlignVertical: TextAlignVertical.center,
+                                    style: DesktopChrome.text(),
+                                    decoration: InputDecoration(
+                                      // The row centers the line. Inheriting a decorated
+                                      // field's minimum height leaves slack below its text.
+                                      isCollapsed: true,
+                                      constraints: const BoxConstraints(),
+                                      visualDensity: VisualDensity.standard,
+                                      hintStyle: DesktopChrome.text(
+                                        color: DesktopChrome.muted,
+                                      ),
+                                      contentPadding: EdgeInsets.zero,
+                                      hintText: group == null
+                                          ? 'Loading conversation…'
+                                          : c.canWrite
+                                          ? 'Message ${group.title}'
+                                          : 'Read-only conversation',
+                                      border: InputBorder.none,
+                                      enabledBorder: InputBorder.none,
+                                      focusedBorder: InputBorder.none,
+                                      disabledBorder: InputBorder.none,
+                                      filled: false,
+                                      counterText: '',
+                                    ),
+                                    onChanged: (text) {
+                                      c.setDraft(c.selectedId, text);
+                                      setState(() {
+                                        _mentionIndex = 0;
+                                        _dismissedMention = null;
+                                      });
+                                    },
+                                  ),
+                                ),
+                              ),
+                              NewHarnessAttachButton(
+                                attachments: _files,
+                                enabled: writable && !busy,
+                              ),
+                              ListenableBuilder(
+                                listenable: Listenable.merge([
+                                  _composer,
+                                  _files,
+                                ]),
+                                builder: (context, _) => AppIconButton(
+                                  icon: AppIcons.arrowUp,
+                                  tooltip: 'Send message',
+                                  color: DesktopChrome.accent,
+                                  onPressed:
+                                      writable &&
+                                          !busy &&
+                                          !c.hasPendingAction &&
+                                          (_composer.text.trim().isNotEmpty ||
+                                              !_files.isEmpty)
+                                      ? () => unawaited(_send())
+                                      : null,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],

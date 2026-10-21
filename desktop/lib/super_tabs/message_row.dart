@@ -6,6 +6,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
+import 'attachment_chips.dart';
 import 'identity.dart';
 import 'message_text.dart';
 import 'model.dart';
@@ -282,16 +283,26 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     style: DesktopChrome.metadata(),
                                   ),
                                 ),
-                              ConstrainedBox(
-                                constraints: const BoxConstraints(
-                                  maxWidth: 960,
+                              if (message.text.isNotEmpty)
+                                ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 960,
+                                  ),
+                                  child: SuperTabMessageText(
+                                    message.text,
+                                    references: widget.references,
+                                    onOpenGroup: widget.onOpenGroup,
+                                  ),
                                 ),
-                                child: SuperTabMessageText(
-                                  message.text,
-                                  references: widget.references,
-                                  onOpenGroup: widget.onOpenGroup,
+                              if (message.attachments.isNotEmpty)
+                                Padding(
+                                  padding: EdgeInsets.only(
+                                    top: message.text.isEmpty ? 0 : 8,
+                                  ),
+                                  child: SuperTabAttachmentChips(
+                                    message.attachments,
+                                  ),
                                 ),
-                              ),
                               SuperTabPullRequestLinks(message.text),
                               ...widget.receipts,
                             ],

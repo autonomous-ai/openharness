@@ -244,6 +244,7 @@ import { createRuntimeTransport } from './engines/runtimeTransport.js'
 import { RuntimeProfileController } from '../lib/runtimeControl.js'
 import { installTimestampedConsole, sid, prepareLogFile, trimLogFile, LOG_CHECK_INTERVAL_MS } from '../lib/log.js'
 import { backendHttpBase } from '../lib/controlPlane.js'
+import { forwardAttachmentUpload } from '../lib/superTabAttachmentProxy.js'
 
 // Daemon stdout/stderr. Capped at LOG_MAX_BYTES — see prepareLogFile/trimLogFile in lib/log.ts.
 const LOG_FILE = DAEMON_LOG_FILE
@@ -2028,6 +2029,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onAgentSettingsWrite: (body) => agentSettings.settingsWrite(body),
     onProductFeedback: (body) => proxyBackend('POST', '/api/product-usage/feedback', body),
     onSignInAnswer: (action, body) => proxyBackend('POST', `/api/auth/qr/${action}`, body),
+    onSuperTabAttachment: (req, res, path) => forwardAttachmentUpload(req, res, path,
+      { accessToken: () => auth.accessToken(), environment: autonomousEnv, base: backendHttpBase() }),
     onProductUsageReport: (body) => proxyBackend('POST', '/api/product-usage/report', body),
     onProductUsageRead: () => proxyBackend('GET', '/api/product-usage/settings'),
     onProductUsageWrite: (body) => proxyBackend('POST', '/api/product-usage/settings', body),

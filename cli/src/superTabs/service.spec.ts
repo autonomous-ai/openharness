@@ -355,3 +355,19 @@ describe('which messages still need an answer', () => {
     expect(failed.value.messages[0]).not.toHaveProperty('answered')
   })
 })
+
+describe('post --attach steps', () => {
+  it('reads whether this post already went out with files, as the agent', async () => {
+    const t = setup()
+    const messageId = createHash('sha256').update(JSON.stringify(['tab', `agent:${t.agentId}`, 'op'])).digest('hex').slice(0, 24)
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method: string, path: string) => ({ status: 200, body: { success: true, data:
+      path.includes('/messages?') ? { messages: [{ id: messageId, attachments: [{ id: 'f0' }] }] } : { state: { agents: [t.agent] } } } }))
+    expect(await t.ask({ action: 'attachment', step: 'sent', tabId: 'tab', agentId: t.agentId, conversationId: 'lead', operationId: 'op' }, owner))
+      .toEqual({ ok: true, value: { agentId: t.agentId, attachmentIds: ['f0'] } })
+    expect(t.call).toHaveBeenLastCalledWith('GET', `/api/super-tabs/tab/conversations/lead/messages?asAgentId=${t.agentId}&messageId=${messageId}`, undefined)
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method: string, path: string) => ({ status: 200, body: { success: true, data:
+      path.includes('/messages?') ? { messages: [] } : { state: { agents: [t.agent] } } } }))
+    expect(await t.ask({ action: 'attachment', step: 'sent', tabId: 'tab', agentId: t.agentId, conversationId: 'lead', operationId: 'op' }, owner))
+      .toEqual({ ok: true, value: { agentId: t.agentId, attachmentIds: null } })
+  })
+})

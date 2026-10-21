@@ -3,6 +3,7 @@ import { ContributedMachines } from './machines.js'
 import { retainContributions } from './retention.js'
 import { configurationObservation } from './configuration.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
+import { attachedFiles } from './attachments.js'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -44,6 +45,7 @@ export interface SuperTabHostOptions {
   write?: (file: string, journal: Journal) => void
   log?: (message: string) => void
   observers?: typeof publishObservers
+  attachedFiles?: typeof attachedFiles
 }
 
 export const hostJournalFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `host-${machineId}.json`)
@@ -74,6 +76,10 @@ export class SuperTabHost {
   private readonly log: (message: string) => void
   private retentionError: string | null = null
   private readonly observers: typeof publishObservers
+  private readonly attachedFiles: typeof attachedFiles
+  /** Each delivery's downloaded files, so input held by a busy terminal is not downloaded again on every retry. Only a
+   * complete download is kept: a failed one is tried again before the next delivery of the same message. */
+  private readonly files = new Map<string, string>()
   private readonly active = new Set<string>()
   private readonly authorized = new Map<string, number>()
   private readonly withheld = new WithheldDeliveries()
@@ -95,6 +101,7 @@ export class SuperTabHost {
     if (!identifier(machineId)) throw new SuperTabHostError('MACHINE_UNAVAILABLE', 'This machine is not signed in.')
     this.file = hostJournalFile(core.dataDir, machineId)
     this.observers = options.observers ?? publishObservers
+    this.attachedFiles = options.attachedFiles ?? attachedFiles
     this.now = options.now ?? Date.now
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
@@ -280,6 +287,7 @@ export class SuperTabHost {
       }
     }
     if (this.stopped) return
+    for (const deliveryId of this.files.keys()) if (!this.journal.entries[deliveryId]) this.files.delete(deliveryId)
     for (const entry of Object.values(this.journal.entries)) {
       const id = typedId(entry)
       if (!seen.has(entry.deliveryId)) {
@@ -348,6 +356,14 @@ export class SuperTabHost {
     if (this.stopped || this.journal.entries[deliveryId] !== entry) return
     const message = object(result.message)
     if (typeof message.text !== 'string' || !identifier(message.conversationId)) throw new Error('The delivery has no message.')
+    // Downloaded before the lease: a large file must not use up the 2.5 s the core gives a write.
+    let files = this.files.get(deliveryId)
+    if (files === undefined) {
+      const downloaded = await this.attachedFiles(message)
+      files = downloaded.text
+      if (downloaded.complete) this.files.set(deliveryId, files)
+    }
+    if (this.stopped || this.journal.entries[deliveryId] !== entry) return
     this.authorized.set(id, this.now() + 2_500)
     if (!(await this.leases()) || this.stopped) { this.authorized.delete(id); return }
     if (this.active.has(id)) return
@@ -356,7 +372,7 @@ export class SuperTabHost {
     entry.stage = 'submitting'
     this.persist()
     this.active.add(id)
-    this.core.turns.deliver(entry.harnessId, this.prompt(entry, message), id)
+    this.core.turns.deliver(entry.harnessId, this.prompt(entry, message, files), id)
   }
 
   private async recordConfigurations(rows: unknown[]): Promise<void> {
@@ -371,7 +387,7 @@ export class SuperTabHost {
     }
   }
 
-  private prompt(entry: Entry, message: Json): string {
+  private prompt(entry: Entry, message: Json, files: string): string {
     const command = `${this.core.daemon.command} super-tab --port ${this.core.daemon.port} --machine ${shellQuote(this.machineId)} --tab ${shellQuote(entry.tabId)} --agent ${shellQuote(entry.agentId)}`
     const group = message.conversationId as string
     const reply = identifier(message.replyTo)
@@ -387,6 +403,7 @@ export class SuperTabHost {
       + `Manage agreed work and delegation: ${command} help. Leads: route before starting or assigning: ${command} route GROUP JSON. Use independently verifiable outcomes; local helper subagents need no separate group.\n`
       + `Ask questions and post results in this conversation. ${SUPER_TAB_REPLY_STYLE} Replies to these delivered instructions must be posted here explicitly.\n\n`
       + native + reply + `Message ${String(message.id)} from ${String(object(message.author).name ?? 'a collaborator')}:\n${message.text}`
+      + (files ? `${message.text ? '\n\n' : ''}${files}` : '')
   }
 
   /** Says why the core keeps holding this delivery: once in the log per change of reason, and once to the conversation after 30 s. */

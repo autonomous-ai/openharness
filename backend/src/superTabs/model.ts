@@ -129,6 +129,7 @@ export interface MessageDraft {
   recipients: string[]
   /** Structured row kind for clients; `native` is written by native.ts, `route`/`route-override` by commands. */
   source?: Record<string, unknown>
+  attachments?: import('./attachments.js').Attachment[]
 }
 export interface CommandEffects {
   state: SuperTabState

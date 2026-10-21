@@ -1017,11 +1017,29 @@ model SuperTabMessage {
   author          Json
   source          Json?
   text            String
+  /// Files posted with the message (superTabs/attachments.ts); the bytes live in the attachments bucket.
+  attachments     Json?
   replyTo         String?
   recipientIds    String[]
   createdAt       DateTime @default(now())
 
   @@index([tabId, conversationId, sequence])
+}
+
+/// One uploaded file, which one message of the actor that uploaded it can send once.
+model SuperTabAttachment {
+  id             String   @id @map("_id")
+  tabId          String
+  conversationId String
+  actorKey       String
+  name           String
+  mime           String
+  size           Int
+  objectKey      String
+  usedBy         String?
+  createdAt      DateTime @default(now())
+
+  @@index([tabId, actorKey, createdAt])
 }
 
 model SuperTabOperation {

@@ -244,6 +244,12 @@ const fields = {
   // and every `harness` command with it).
   HARNESS_STORE_CATALOG_URL: url((address) => !address.username && !address.password && (address.protocol === 'https:'
     || (address.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(address.hostname)))),
+  // Where Super Tab chat files are served: the backend's SUPER_TAB_ATTACHMENTS_PUBLIC_BASE. The host downloads a
+  // delivered message's files from here alone, so a message cannot make this computer fetch any other address.
+  // Public HTTPS; loopback HTTP for the local Super Tab rig.
+  SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: (raw: string | undefined) => url((address) => !address.username && !address.password && !address.search
+    && (address.protocol === 'https:' || (address.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(address.hostname))))(raw)
+    ?? 'https://cdn.harness.autonomous.ai',
   // This computer's stable id, minted once and never regenerated (see computerIdFile above). Pin it
   // explicitly on a box with no durable home — a container or CI job that gets a fresh ~/.harness on
   // every boot would otherwise look like a NEW computer each time and collect a machine per start.

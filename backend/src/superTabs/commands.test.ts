@@ -481,3 +481,26 @@ it('rejects embedded credentials in shared project metadata', () => {
   expect(commandSchema.safeParse({ type: 'project.repository', projectId: 'lead', repositoryUrl: 'github.com/example/project' }).success).toBe(false)
   expect(commandSchema.safeParse({ type: 'project.repository', projectId: 'lead', repositoryUrl: null }).success).toBe(false)
 })
+
+describe('message attachments', () => {
+  const file = { id: 'file-1', name: 'screen.png', mime: 'image/png', size: 12, url: 'https://cdn.example.test/super-tabs/tab/abc/screen.png' }
+  const send = (attachmentIds?: string[], text = ''): Command => ({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [], ...(attachmentIds ? { attachmentIds } : {}) })
+  it('records verified files on the message and allows empty text with one', () => {
+    const f = fixture()
+    const sent = f.run(send(['file-1', 'file-1']), owner, { attachments: [file] })
+    expect(sent.messages).toEqual([expect.objectContaining({ text: '', attachments: [file] })])
+    expect(f.run(send(undefined, 'Plain text.')).messages[0]).not.toHaveProperty('attachments')
+  })
+  it('refuses empty text without files and a file the store did not verify', () => {
+    const f = fixture()
+    expect(() => f.run(send())).toThrow('Write a message or attach a file.')
+    expect(() => f.run(send(['file-1']))).toThrow('Upload this file again')
+    expect(() => commandSchema.parse(send(Array.from({ length: 11 }, (_, i) => `file-${i}`)))).toThrow()
+  })
+  it('resends a message with its files', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
+    const resent = f.run({ type: 'delivery.resolve', deliveryId: 'd', resolution: 'resend' }, owner,
+      { delivery: { id: 'd', conversationId: 'lead', agentId: lead, messageId: 'm', text: '', attachments: [file] } })
+    expect(resent.messages[0]).toMatchObject({ recipients: [lead], attachments: [file] })
+  })
+})

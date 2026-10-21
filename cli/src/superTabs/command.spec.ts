@@ -1,4 +1,5 @@
 import { expect, it, vi } from 'vitest'
+import { resolve } from 'node:path'
 import { parseSuperTabArgs, superTabCommand } from './command.js'
 const where = { port: 14001, dataDir: '/fixture', machineId: 'machine' }
 const prefix = ['--tab', 'tab', '--agent', 'agent']
@@ -65,4 +66,67 @@ it('posts a reply to one message with --reply-to, and rejects a bad id', () => {
   for (const tail of [['--reply-to'], ['--reply-to', '../x'], ['--reply-to', ''], ['--reply-to', 'a', 'b'], ['--reply', 'a']]) {
     expect(() => parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', ...tail], where)).toThrow('harness super-tab')
   }
+})
+it('parses repeated --attach, allows empty text with a file, and refuses empty text alone', () => {
+  expect(parseSuperTabArgs([...prefix, 'post', 'lead', '', 'op-1', '--attach', 'a.png', '--reply-to', 'm1', '--attach', 'b.log'], where).payload)
+    .toMatchObject({ attach: [resolve('a.png'), resolve('b.log')], command: { text: '', replyTo: 'm1' } })
+  expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1'], where).payload).not.toHaveProperty('attach')
+  for (const tail of [[], ['--attach'], ['--attach', '']]) {
+    expect(() => parseSuperTabArgs([...prefix, 'post', 'lead', ' ', 'op-1', ...tail], where)).toThrow('harness super-tab')
+  }
+})
+it('uploads each --attach file to the daemon\'s local upload route as the agent, then sends the message with their ids', async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const dir = mkdtempSync(join(tmpdir(), 'super-tab-attach-'))
+  try {
+    writeFileSync(join(dir, 'shot.png'), Buffer.from([1, 2, 3]))
+    writeFileSync(join(dir, 'big.bin'), Buffer.alloc(10 * 1024 * 1024 + 1))
+    const calls: Array<Record<string, unknown>> = []
+    const request = vi.fn(async (_type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
+      calls.push(payload)
+      if (payload.step === 'sent') return { ok: true, value: { agentId: 'agent-1', attachmentIds: null } }
+      return { ok: true, value: { revision: 9, result: { messageId: 'm' } } }
+    })
+    let uploads = 0
+    const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      const file = (init!.body as FormData).get('file') as File
+      return file.name === 'denied.png'
+        ? new Response(JSON.stringify({ success: false, error: { code: 'FORBIDDEN', message: 'Not in this conversation.' } }), { status: 403 })
+        : new Response(JSON.stringify({ success: true, data: { attachment: { id: `f${++uploads}` } } }), { status: 200 })
+    })
+    const deps = { where: () => where, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }), print: vi.fn(),
+      fetch: fetch as unknown as typeof globalThis.fetch }
+    expect(await superTabCommand([...prefix, 'post', 'lead', '', 'op', '--attach', join(dir, 'shot.png'), '--attach', join(dir, 'shot.png')], deps)).toBe(0)
+    expect(calls.map(c => c.step ?? c.action)).toEqual(['sent', 'command'])
+    const [url, init] = fetch.mock.calls[0]!
+    expect(url).toBe('http://127.0.0.1:14001/api/super-tabs/tab/attachments?asAgentId=agent-1')
+    expect(init!.headers).toMatchObject({ 'x-adapter-local': '1' })
+    const form = init!.body as FormData
+    expect([...form.keys()]).toEqual(['conversationId', 'file'])
+    expect(form.get('file')).toMatchObject({ name: 'shot.png', type: 'image/png', size: 3 })
+    // Its own deadline, well past a service answer's half minute.
+    expect(init!.signal).toBeInstanceOf(AbortSignal)
+    expect(calls.at(-1)).toMatchObject({ operationId: 'op', command: { type: 'message.send', text: '', attachmentIds: ['f1', 'f2'] } })
+    expect(calls.at(-1)).not.toHaveProperty('attach')
+    expect(request.mock.calls.every(c => (c as unknown[])[2] === 30_000)).toBe(true)
+
+    // Already sent: nothing is uploaded and the send returns its receipt.
+    calls.length = 0
+    request.mockImplementationOnce(async () => ({ ok: true, value: { agentId: 'agent-1', attachmentIds: ['f0'] } }))
+    expect(await superTabCommand([...prefix, 'post', 'lead', '', 'op', '--attach', join(dir, 'shot.png')], deps)).toBe(0)
+    expect(calls.map(c => c.step ?? c.action)).toEqual(['command'])
+    expect(calls[0]).toMatchObject({ command: { attachmentIds: ['f0'] } })
+    expect(fetch).toHaveBeenCalledTimes(2)
+
+    // A refused or oversized file stops the post: nothing is sent.
+    calls.length = 0
+    writeFileSync(join(dir, 'denied.png'), Buffer.from([1]))
+    expect(await superTabCommand([...prefix, 'post', 'lead', 'x', 'op2', '--attach', join(dir, 'denied.png')], deps)).toBe(1)
+    expect(JSON.parse(deps.print.mock.calls.at(-1)![0]).error).toBe('Not in this conversation.')
+    expect(await superTabCommand([...prefix, 'post', 'lead', 'x', 'op3', '--attach', join(dir, 'big.bin')], deps)).toBe(1)
+    expect(JSON.parse(deps.print.mock.calls.at(-1)![0]).error).toContain('over the 10.0 MB limit')
+    expect(calls.map(c => c.step ?? c.action)).toEqual(['sent', 'sent'])
+  } finally { rmSync(dir, { recursive: true, force: true }) }
 })
