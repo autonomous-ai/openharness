@@ -29,11 +29,32 @@ const QUESTIONS: Record<string, JevChoice> = {
     type: 'choice',
     instructions: 'An AI coding agent just finished a turn while its owner was looking at something else. Choose how loudly to tell them.',
     criteria: {
-      alert: 'A substantial result the person would want to know about now, such as a long task finished, a build or deploy done, or a requested deliverable ready. Less likely when alerts_30m is already high.',
+      alert: 'A substantial result the person would want to know about now, such as a long task finished, a build or deploy done, or a requested deliverable ready. Less likely when recent already shows several alerts.',
       list: 'Real progress worth a glance later, such as a small feature or a fix with edits.',
       silent: 'Chatter, such as an acknowledgement, a short answer, a no-op, or a step inside a longer job.',
     },
   },
+}
+
+/**
+ * What Jev is shown of a turn: four fields of text. Harness's hosted Jev takes nothing else (backend
+ * routes/jevRoute.ts: `state` is a record of strings, four keys at most), and on 2026-10-21 every decision
+ * there was refused with a 400 — the state carried numbers and nested objects — so every turn fell back
+ * to the duration rule and none was ever an alert.
+ */
+export function tierState(input: TierInput, recent: { alerts: number; lists: number }): Record<string, string> {
+  const { testsPassed, testsFailed, commits } = input.stats
+  const turn = [
+    input.durationS === null ? 'duration unknown' : `ran ${input.durationS} s`,
+    ...(testsPassed !== undefined || testsFailed !== undefined ? [`tests ${testsPassed ?? 0} passed, ${testsFailed ?? 0} failed`] : []),
+    ...(commits ? [`${commits} ${commits === 1 ? 'commit' : 'commits'}`] : []),
+  ]
+  return {
+    agent: input.engine ? `${input.agent || 'an agent'} (${input.engine})` : input.agent || 'an agent',
+    recap: input.recap.slice(0, RECAP_MAX),
+    turn: turn.join('; '),
+    recent: `${recent.alerts} alerts and ${recent.lists} list entries in the last 30 minutes`,
+  }
 }
 
 /** Logs one decision line and the day's running count per tier, so the volume can be read from the log (no storage). */
@@ -82,11 +103,7 @@ export function createTierDecider(opts: {
       finish(fallbackTier(input.durationS), `fallback:${reason}`, input.durationS === null ? 'duration unknown' : `${input.durationS}s`)
     if (!opts.jev) return fallback('off')
 
-    const state = {
-      agent: input.agent, engine: input.engine, recap: input.recap.slice(0, RECAP_MAX), duration_s: input.durationS,
-      work: { tests_passed: input.stats.testsPassed, tests_failed: input.stats.testsFailed, commits: input.stats.commits },
-      recent: { alerts_30m: count('alert'), lists_30m: count('list') },
-    }
+    const state = tierState(input, { alerts: count('alert'), lists: count('list') })
     const abort = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     const late = new Promise<'timeout'>((resolve) => { timer = setTimeout(() => { abort.abort(); resolve('timeout') }, budgetMs) })

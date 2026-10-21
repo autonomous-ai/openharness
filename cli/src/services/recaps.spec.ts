@@ -317,7 +317,7 @@ describe('the recaps', () => {
       await turn(tell, watching)
       await vi.waitFor(() => expect(core.clients.turnSummary).toHaveBeenCalled())
       expect(backend).toHaveBeenCalledExactlyOnceWith('POST', '/api/route/jev', expect.objectContaining({
-        state: expect.objectContaining({ agent: 'app', engine: 'codex', duration_s: 0 }) }))
+        state: { agent: 'app (codex)', recap: expect.any(String), turn: 'ran 0 s', recent: '0 alerts and 0 list entries in the last 30 minutes' } }))
       expect(vi.mocked(core.clients.turnSummary).mock.calls[0][0]).toMatchObject({ payload: { tier: 'alert' } })
     })
   })

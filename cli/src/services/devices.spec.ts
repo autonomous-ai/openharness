@@ -418,9 +418,8 @@ describe('what the windows say, reaching the dial', () => {
       ]))
       expect(backend).toHaveBeenCalledExactlyOnceWith('POST', '/api/route/jev', {
         state: {
-          agent: '', engine: '', recap: 'The requested build is ready.', duration_s: null,
-          work: { tests_passed: undefined, tests_failed: undefined, commits: undefined },
-          recent: { alerts_30m: 0, lists_30m: 0 },
+          agent: 'an agent', recap: 'The requested build is ready.', turn: 'duration unknown',
+          recent: '0 alerts and 0 list entries in the last 30 minutes',
         },
         questions: { tier: {
           type: 'choice', instructions: expect.any(String),
