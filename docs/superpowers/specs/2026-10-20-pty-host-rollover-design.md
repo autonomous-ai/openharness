@@ -495,13 +495,10 @@ These calls are this design's, not yet confirmed by the owner:
 
 Found by the ARM64 VM end to end ([results](../../testing/pty-rollover-e2e.md)) and not fixed.
 
-- **A terminal's row reads `offline` after a payload handover**, though its shell answers input. The same was seen on
-  a CLI-only update in the Windows CLI run (G3 there), so it is not new to this work.
 - **An agent with no session id never moves and keeps its old host alive** until its pane ends (by design: it cannot
-  resume). On the VM an engine at its sign-in screen was such a pane.
-- **A shell pane appeared under the draining host when a stopped agent row was opened** through the driver. It had no
-  row and kept the host running until it was killed. Not root-caused; the stopped row may still name the old host.
-- **A drained host leaves its `.lock` and `.panes` files in `run/`**; only the discovery file and the version folder go.
+  resume). On the VM an engine at its sign-in screen was such a pane. The same holds for the shell an exited engine
+  leaves in its pane (on Windows the host's `afterExit` shell): it becomes a terminal row on that host, and a terminal
+  never moves.
 - **The moves of idle agents and the desktop-only cases are unproven on a real machine**: they need a signed-in
   engine and the desktop UI. The protocol rule's "updates once the payload lands" half needs a host build of
   protocol 3.

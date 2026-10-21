@@ -99,6 +99,12 @@ the 10 s poll. `.lock` and `.panes` of that instance stayed in `run\`.
 
 These are in the spec's Known limits.
 
+Fixed after the run: 1 (fdd4129a4: nothing reactivated a shell row after the core marked every row dormant, on any
+host), 4 (455b0a2c1: the daemon removes the lock and pane counter with the discovery file). 3 was not a pane made on the
+draining host: it was the `afterExit` shell of the Codex pane that was ended with Ctrl+C, kept as a terminal row
+(`94184a03`, which the log shows as `move ...: skipped (a terminal)`); no code change, the spec's note on terminals
+that never move covers it.
+
 ## Clean-up
 
 Done: the user's scheduled tasks, every process of the user, the fake CDN lines in the hosts file (byte-identical to
