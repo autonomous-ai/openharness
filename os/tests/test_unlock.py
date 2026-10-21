@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -156,6 +157,30 @@ class Unlock(unittest.TestCase):
         typed = 'a "b" \'c\' $d \\e  f'
         self.assertEqual(self.request('POST', '/setup/unlock', typed.encode())[0], 200)
         self.assertEqual((self.root / 'given').read_text(), typed)
+
+
+ENABLE = Path(__file__).resolve().parents[1] / 'root/usr/lib/harness-os/enable-unlock'
+
+
+@unittest.skipUnless(sys.platform.startswith('linux'), 'GNU sed, as on Harness OS')
+class EnableUnlock(unittest.TestCase):
+    """An encrypted computer installed before the startup's hotspot gets it with the package."""
+
+    def hooks_after(self, hooks):
+        with tempfile.TemporaryDirectory() as temp:
+            conf = Path(temp) / 'mkinitcpio.conf'
+            conf.write_text(f'HOOKS=({hooks})\nCOMPRESSION="zstd"\n')
+            subprocess.run(['sh', str(ENABLE)], check=True, capture_output=True,
+                           env=dict(os.environ, HARNESS_MKINITCPIO_CONF=str(conf)))
+            return conf.read_text().splitlines()[0]
+
+    def test_it_goes_before_sd_encrypt_once_and_only_where_the_disk_is_encrypted(self):
+        before = 'base systemd autodetect microcode modconf kms keyboard sd-vconsole plymouth block sd-encrypt filesystems fsck'
+        after = before.replace('block sd-encrypt', 'block harness-unlock sd-encrypt')
+        self.assertEqual(self.hooks_after(before), f'HOOKS=({after})')
+        self.assertEqual(self.hooks_after(after), f'HOOKS=({after})')
+        plain = 'base systemd autodetect microcode modconf kms keyboard sd-vconsole block filesystems fsck'
+        self.assertEqual(self.hooks_after(plain), f'HOOKS=({plain})')
 
 
 if __name__ == '__main__':
