@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { PtyHostBackend } from './ptyHostBackend.js'
+import { PTY_HOST_INSTANCE, PTY_HOST_INSTANCE_SOURCE } from './ptyHost/instance.js'
 import { listDiscoveries } from './ptyHost/launch.js'
 import { PTY_PROTOCOL } from './ptyHost/protocol.js'
 import { removeTree, runTerminalBackendContract, SHELL } from './terminalBackend.contract.js'
@@ -79,7 +80,11 @@ async function readyBackend(home: string): Promise<PtyHostBackend> {
       // A Windows host draws a new pipe name each start; the reconnect followed the discovery file to it.
       if (process.platform === 'win32') {
         expect(after.endpoint).not.toBe(before.endpoint)
-        expect(after.endpoint).toMatch(/^\\\\\.\\pipe\\harness-pty-[0-9a-f]{16}-[0-9a-f]{16}-p\d+$/)
+        // `harness-pty-<16 hex of the user and home>-<16 random hex>-<instance>` (pty/src/transport/windows.rs): the
+        // instance is the host's own, `p<protocol>-<version>`, dashes and all.
+        expect(after.instance).toMatch(PTY_HOST_INSTANCE)
+        expect(after.endpoint).toMatch(new RegExp(String.raw`^\\\\\.\\pipe\\harness-pty-[0-9a-f]{16}-[0-9a-f]{16}-${PTY_HOST_INSTANCE_SOURCE}$`))
+        expect(after.endpoint.endsWith(`-${after.instance}`)).toBe(true)
       }
       expect(replaced).toHaveLength(1)
       expect(await backend.paneState(created.runtime)).toBe('gone')

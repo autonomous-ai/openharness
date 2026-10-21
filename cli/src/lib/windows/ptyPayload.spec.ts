@@ -17,7 +17,13 @@ function zipOf(names: readonly string[]): Buffer {
   const src = join(tmp, 'src'); rmSync(src, { recursive: true, force: true }); mkdirSync(src)
   for (const n of names) writeFileSync(join(src, n), n)
   const out = join(tmp, 'p.zip'); rmSync(out, { force: true })
-  execFileSync('zip', ['-q', '-j', out, ...names.map((n) => join(src, n))])
+  // Windows has no `zip`: its own bsdtar writes one (`-a` picks the format from the .zip suffix), and the payload's
+  // default unzip there is that same tar.exe, so these cases go through the real Windows unpack.
+  if (process.platform === 'win32') {
+    execFileSync(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe'), ['-a', '-c', '-f', out, ...names], { cwd: src, windowsHide: true })
+  } else {
+    execFileSync('zip', ['-q', '-j', out, ...names.map((n) => join(src, n))])
+  }
   return readFileSync(out)
 }
 
