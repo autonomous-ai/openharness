@@ -249,10 +249,13 @@ describe('agent.start on the Swarm\'s listed machines', () => {
     expect(f.state.starts ?? []).toEqual([])
   })
 
-  it('lets an agent start on the Lead\'s own machine, where an agent of the Swarm runs', () => {
-    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+  // A new Lead may be only Claude or Codex, but on any machine: adding it is what lists that machine.
+  it.each(['claude', 'codex'])('lists the machine a %s Lead is added on, so the Lead may start agents there', engine => {
+    const f = fixture()
+    const lead = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'lead-machine', harnessId: 'lead', name: 'Lead',
+      configuration: { ...config, engine }, lead: true }, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
     const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
-    f.run({ type: 'agent.start', request: request(group, 'host') }, actor, { contribution: grant })
+    f.run({ type: 'agent.start', request: request(f.group(), 'lead-machine') }, actor, { contribution: grant })
     expect(f.state.starts).toHaveLength(1)
   })
 
@@ -333,6 +336,20 @@ describe('route.record and route.override', () => {
       { chars: 10, missing: Array.from({ length: 11 }, (_, i) => `s${i}`) }, { chars: 10, missing: ['x'.repeat(41)] }, { chars: 10, missing: [''] },
       { chars: 10, missing: [], extra: 1 }]) {
       expect(() => run(record({ context }))).toThrow()
+    }
+  })
+  it('keeps the size and each candidate\'s quota fit, and still takes a record without them', () => {
+    const f = routed()
+    const run = (decision: unknown) => f.run({ type: 'route.record', conversationId: 'lead', decision } as Command, f.leadActor, { recentRoutes: 0 })
+    const fit = { status: 'short', coverage: -0.2, effectiveCost: 1.5, expiring: 0, spend: { '5-hour': 45, weekly: 6 }, account: 'remote-1:codex' }
+    const sized = (size: unknown, patch: Record<string, unknown> = {}) => record({ assessment: { difficulty: 'high', risk: 'low', why: 'Schema change.', size },
+      candidates: [candidate('c0', { fit: { ...fit, ...patch } }), candidate('c1', { model: 'sonnet', quality: 2, cost: 2, fit: { status: 'unknown', coverage: null, effectiveCost: 2, expiring: 0, spend: {} } })] })
+    expect(run(sized('large')).routeDecisions[0]).toMatchObject({ record: { assessment: { size: 'large' }, candidates: [{ fit }, { fit: { status: 'unknown', coverage: null } }] } })
+    expect(run(record()).routeDecisions[0]).toMatchObject({ record: { pick: 'c0' } })
+    expect(() => run(sized('huge'))).toThrow()
+    for (const patch of [{ status: 'maybe' }, { coverage: Infinity }, { effectiveCost: -1 }, { expiring: -1 }, { spend: { daily: 1 } },
+      { spend: { weekly: -1 } }, { account: '' }, { extra: 1 }]) {
+      expect(() => run(sized('small', patch))).toThrow()
     }
   })
   it('refuses a pick outside the candidates, a non-lead agent and a busy hour', () => {

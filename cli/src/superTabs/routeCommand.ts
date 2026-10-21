@@ -6,7 +6,7 @@ import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { startRequirements } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { object, within } from './wire.js'
-import { choose, contextSize, decide, jevQuestion, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, type Assessment, type Attempt, type MemberFrame, type Policy, type Probe, type TaskFolder } from './route.js'
+import { choose, contextSize, decide, jevQuestion, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, type Assessment, type Attempt, type Commitment, type MemberFrame, type Policy, type Probe, type TaskFolder } from './route.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
 import type { JevChoiceAnswer } from '../lib/jev/jevClient.js'
@@ -160,7 +160,10 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const ended = endedWork(conversations, agents, decisions, attempts, input.conversationId)
   const probes = probed.flat().map(p => p.kind === 'member' ? { ...p, repo: repoMatch(folder, p.frame ?? null, p.machineId === where.machineId),
     earlier: ended.filter(e => e.agentId === p.agentId).reverse().slice(0, 3).map(e => ({ group: e.group, outcome: e.outcome })) } : p)
-  const choice = choose(probes, policy, assessment, Date.now())
+  // Picks started or assigned and still at work hold part of their account's quota; the log, and so this, is per Swarm.
+  const working = (decisions ?? []).filter(d => d.final && d.outcome === null && typeof d.account === 'string')
+    .map(d => ({ account: d.account, spend: object(d.spend), size: d.size, createdAt: Date.parse(String(d.createdAt)) }) as Commitment)
+  const choice = choose(probes, policy, assessment, Date.now(), working)
   if ('error' in choice) return choice
   // What Jev could not be told, for the decision log: pick quality can later be compared with how complete this was.
   const missing = [...(messages ? [] : ['messages']), ...(decisions ? [] : ['route log']), ...(attempts ? [] : ['attempts']), ...(folder && ['unknown', 'missing'].includes(folder.kind) ? ['task folder'] : []),
@@ -181,8 +184,12 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     else answer = object(jev.answers).who as JevChoiceAnswer | undefined
   }
   const verdict = decide(choice, answer, unavailable)
-  const recorded = await scoped({ action: 'command', operationId: `route-${newId()}`,
-    command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf(choice, verdict, assessment, policy, question && { chars: contextSize(question), missing }) } })
+  const operationId = `route-${newId()}`
+  const record = (v1: boolean) => scoped({ action: 'command', operationId,
+    command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf(choice, verdict, assessment, policy, question && { chars: contextSize(question), missing }, v1) } })
+  let recorded = await record(false)
+  // A backend from before phase 1 refuses the new fields as invalid; the decision is still worth keeping in the shape it knows.
+  if (recorded.error === 'VALIDATION_ERROR') recorded = await record(true)
   if (typeof recorded.error === 'string' && !TRANSPORT.has(recorded.error)) return recorded
   const routeDecisionId = recorded.ok === true ? object(object(recorded.value).result).routeDecisionId : undefined
   const decision = typeof routeDecisionId === 'string' ? `,"routeDecisionId":"${routeDecisionId}"` : ''
@@ -192,7 +199,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     ok: true, ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : { unrecorded: true }),
     pick: publicOf(verdict.pick), via: verdict.via, p: verdict.p, belowFloor: choice.belowFloor, why: verdict.why,
     alternatives: choice.shown.filter(s => s.id !== verdict.pick.id).slice(0, 2).map(publicOf),
-    warnings: [...(Array.isArray(effective.warnings) ? effective.warnings : []), ...(value.machinesUnreadable === true ? [MACHINES_UNREADABLE] : [])],
+    warnings: [...(Array.isArray(effective.warnings) ? effective.warnings : []), ...(value.machinesUnreadable === true ? [MACHINES_UNREADABLE] : []), ...(choice.short ? [choice.short] : [])],
     next: verdict.pick.kind === 'member'
       ? `Assign with: command OPERATION_ID {"type":"work.assign","conversationId":"${input.conversationId}","agentId":"${verdict.pick.agentId}"${decision}}`
       : `Start with: start OPERATION_ID ${JSON.stringify({ conversationId: input.conversationId, name: 'Builder', cwd: text(machines.get(verdict.pick.machineId)?.pool?.cwd) ?? assessment.needs.cwd ?? '/absolute/repo/on/that/machine',

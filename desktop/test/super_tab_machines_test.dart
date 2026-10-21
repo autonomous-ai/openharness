@@ -8,6 +8,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/widgets/engine_identity.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 
@@ -497,6 +498,62 @@ void main() {
       },
     );
   }
+
+  testWidgets('A machine card shows quota for Claude Code and Codex only', (
+    tester,
+  ) async {
+    final f = SuperTabLaunchFixture();
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+    f.connection.server.state['machines'] = [
+      {
+        'machineId': 'm',
+        'contributorId': 'owner',
+        'observation': {
+          'receivedAt': DateTime.now().millisecondsSinceEpoch,
+          'quotas': [
+            for (final engine in ['claude', 'codex', 'opencode', 'cursor'])
+              {
+                'engine': engine,
+                'known': engine == 'claude',
+                'windows': [
+                  {'name': '5-hour', 'usedPercent': 40},
+                ],
+              },
+          ],
+        },
+      },
+    ];
+    final c = await f.app.superTabs.open(tabId);
+    await c.refresh();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 300,
+            height: 400,
+            child: SuperTabMachines(
+              controller: c,
+              app: f.app,
+              onAddAgent: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widgetList<EngineMark>(find.byType(EngineMark))
+          .map((mark) => mark.engine)
+          .toSet(),
+      {'claude', 'codex'},
+    );
+
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+    f.app.superTabs.dispose();
+    await tester.pump();
+  });
 
   testWidgets(
     'Configure on a machine card reads as editing: title "Configure machine", button "Save"',

@@ -23,7 +23,7 @@ const conversations = (assignment: unknown = null) => [
   { id: 'g1', title: 'API', leadId: 'lead', agentIds: ['lead'], archived: false, brief: 'Add the endpoint.', checks: [{ description: 'Tests pass' }], assignment },
 ]
 const tab = (assignment: unknown = null) => ({ revision: 3, state: { id: 'tab', agents, conversations: conversations(assignment) } })
-const usage = { providers: [{ provider: 'claude', outcome: 'answered', httpStatus: 200, account: 'acct', body: { five_hour: { utilization: 40, resets_at: '2026-10-19T12:00:00Z' }, seven_day: { utilization: 10 } } }] }
+const usage = { providers: [{ provider: 'claude', outcome: 'answered', httpStatus: 200, account: 'acct', body: { five_hour: { utilization: 40, resets_at: new Date(Date.now() + 3 * 3_600_000).toISOString() }, seven_day: { utilization: 10 } } }] }
 function daemon(machineId: string, options: { agents?: string[]; frames?: Record<string, Record<string, unknown>>; capacity?: Record<string, unknown>; terminalAvailable?: boolean; tools?: Record<string, boolean>; devices?: Record<string, boolean>; usage?: unknown; listFails?: boolean; engines?: unknown } = {}) {
   return {
     machineId, close: vi.fn(),
@@ -245,7 +245,9 @@ describe('routeTask', () => {
     const titles = (recorded(s).command.decision.candidates as Array<{ title: string }>).map(c => c.title)
     expect(titles.some(t => t.startsWith('Multiply'))).toBe(true)
     expect(titles.some(t => t.startsWith('Collab'))).toBe(false)
-    expect(recorded(s).command.decision.excluded.some((e: { title: string }) => e.title.startsWith('Collab'))).toBe(false)
+    // Left out because others' quota fits, which the log says.
+    expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([{ title: 'Collab · Claude sonnet medium · theirs',
+      reason: 'Its quota could not be read in full, and another candidate\'s quota fits this task.' }]))
   })
   it('opens a machine only members know and probes its members, but starts nothing new there', async () => {
     const two = tab(); two.state.agents = [{ ...agents[0], machineId: 'theirs' }, agents[1]] as never
@@ -269,6 +271,29 @@ describe('routeTask', () => {
     const rated = Object.fromEntries((recorded(s).command.decision.candidates as Array<{ title: string; quality: number; cost: number }>)
       .filter(c => /hand/.test(c.title)).map(c => [c.title.split(' · ')[0], [c.quality, c.cost]]))
     expect(rated).toEqual({ 'Opus hand': [3, 3], 'Sonnet hand': [2, 2], 'Codex hand': [3, 2] })
+  })
+  it('counts the quota open picks hold on the same account, and tells the Lead when nobody is expected to cover the task', async () => {
+    const pick = { conversationId: 'g1', title: 'Pick', outcome: null, assignmentId: 'as1', createdAt: new Date().toISOString(), final: { kind: 'new', engine: 'claude', model: 'opus' } }
+    const decisions = [{ ...pick, id: 'd1', account: 'acct', spend: { '5-hour': 45, weekly: 6 }, size: 'medium' },
+      // A finished pick, one not yet started and one from before phase 1 hold nothing.
+      { ...pick, id: 'd2', account: 'acct', spend: { '5-hour': 45 }, size: 'medium', outcome: 'done' }, { ...pick, id: 'd3', account: 'acct', spend: { '5-hour': 45 }, size: 'medium', final: null }, { ...pick, id: 'd4' }]
+    const s = scoped({ history: { ok: true, value: { messages: [], decisions, attempts: [] } } })
+    const result = await routeTask(input, s, where as never, opener(), () => 'op')
+    // 60% left less the 10% reserve and the 45% the open pick holds leaves 5% for a task that needs 30%.
+    expect(recorded(s).command.decision.candidates.every((c: { fit: { status: string; account: string } }) => c.fit.status === 'short' && c.fit.account === 'acct')).toBe(true)
+    expect(result.warnings).toEqual(['w', expect.stringMatching(/^No candidate is expected to cover this task; its 5-hour quota is expected to run out partway and resets in 3h\.$/)])
+  })
+  it('records again in the shape an older backend knows when it refuses the new fields as invalid', async () => {
+    const s = scoped(), base = s.getMockImplementation()!
+    let refused = 0
+    s.mockImplementation(async payload => payload.action === 'command' && !refused++ ? { error: 'VALIDATION_ERROR', detail: 'decision.candidates.0: Unrecognized key: "fit"', status: 400 } : base(payload))
+    expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
+    const [phase1, v1] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
+    expect(phase1.command.decision.assessment.size).toBe('medium')
+    expect(phase1.command.decision.candidates[0]).toHaveProperty('fit')
+    expect(v1.operationId).toBe(phase1.operationId)
+    expect(v1.command.decision.assessment).not.toHaveProperty('size')
+    expect(v1.command.decision.candidates.some((c: object) => 'fit' in c)).toBe(false)
   })
   it('falls back to the policy order when Jev is unavailable, and still routes when recording fails', async () => {
     const result = await routeTask(input, scoped({ jev: { ok: true, value: { unavailable: 'BUSY' } }, record: { error: 'BACKEND_UNAVAILABLE' } }), where as never, opener())

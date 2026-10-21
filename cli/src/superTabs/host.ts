@@ -437,7 +437,7 @@ export class SuperTabHost {
     return `You are participating in a shared Super Tab conversation (${group}). Other humans and agents see messages posted there.\n`
       + `Read its state: ${command} status\nRead this conversation: ${command} messages ${shellQuote(group)}\n`
       + `Reply there: ${command} post ${shellQuote(group)} 'your message' UNIQUE_OPERATION_ID --reply-to ${shellQuote(String(message.id))}\n`
-      + `Manage agreed work and delegation: ${command} help. Leads: route before starting or assigning: ${command} route GROUP JSON. Use independently verifiable outcomes; local helper subagents need no separate group.\n`
+      + `Manage agreed work and delegation: ${command} help. Leads: route before starting or assigning: ${command} route GROUP JSON. Use independently verifiable outcomes. Leads coordinate: multi-part work or work over about 15 minutes goes to Swarm agents in groups; a Lead does only small work itself and uses its own subagents only to read and look things up.\n`
       + `Ask questions and post results in this conversation. ${SUPER_TAB_REPLY_STYLE} Replies to these delivered instructions must be posted here explicitly.\n\n`
       + native + reply + `Message ${String(message.id)} from ${String(object(message.author).name ?? 'a collaborator')}:\n${message.text}`
       + (files ? `${message.text ? '\n\n' : ''}${files}` : '')

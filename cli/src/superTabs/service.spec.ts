@@ -192,6 +192,20 @@ describe('routeHistory for Jev', () => {
     expect(JSON.stringify(decisions)).not.toContain('bigbig')
     const last = await contextOf(setup(), async path => path.includes('/messages') ? ok({ messages: [] }) : ok([unfinished]))
     expect(last.value.decisions).toEqual([{ id: 'dx', conversationId: 'g1', title: 'unknown pick', via: 'order', outcome: 'superseded', assignmentId: null, createdAt: '2026-10-19T09:00:00Z', final: null }])
+    // The pick's account, spend and size go with it, so the route can count what an open pick still holds.
+    const fit = { status: 'fits', coverage: 2, effectiveCost: 3, expiring: 0, spend: { '5-hour': 45, weekly: 6 }, account: 'k1' }
+    const sized = (size?: string) => ({ ...decision(0), record: { pick: 'c1', via: 'jev', assessment: size ? { size } : {}, candidates: [{ id: 'c0', title: 'Other' }, { id: 'c1', title: 'Pick', fit }] } })
+    const phase1 = await contextOf(setup(), async path => path.includes('/messages') ? ok({ messages: [] }) : ok([sized('large'), sized()]))
+    expect(phase1.value.decisions).toMatchObject([{ account: 'k1', spend: { '5-hour': 45, weekly: 6 }, size: 'large' }, { size: 'medium' }])
+    // An override runs another candidate: a person's choice holds its own account; a Lead's choice outside the list holds none.
+    const other = { ...fit, account: 'k0', spend: { '5-hour': 30, weekly: 4 } }
+    const overridden = (override: Record<string, unknown>) => ({ ...sized('large'), override,
+      record: { ...sized('large').record, candidates: [{ id: 'c0', title: 'Other', fit: other }, { id: 'c1', title: 'Pick', fit }] } })
+    const moved = await contextOf(setup(), async path => path.includes('/messages') ? ok({ messages: [] })
+      : ok([overridden({ by: 'person', candidateId: 'c0', reason: 'r' }), overridden({ by: 'lead', reason: 'r' })]))
+    const [person, lead] = moved.value.decisions as Array<Record<string, unknown>>
+    expect(person).toMatchObject({ title: 'Pick', account: 'k0', spend: { '5-hour': 30, weekly: 4 } })
+    expect(lead).not.toHaveProperty('account')
   })
   it('gives every attempt of the group, newest first, with only what Jev needs and no more than fifty', async () => {
     const t = setup()
