@@ -224,7 +224,7 @@ claude under a terminal backend ──writes──▶ ~/.claude/projects/**.json
 - **Two backends: `tmux` and `ptyhost`.** tmux is the backend on macOS and Linux. `ptyhost` is the
   Harness PTY host (`pty/`, `harness-pty`), a long-lived process of its own with a ConPTY per pane: the
   backend on Windows, and buildable on Unix for its tests. Its home is `HARNESS_PTY_DIR`
-  (`~/.harness/pty`), with its discovery file in `run/` and its log in `logs/pty-host.log`;
+  (`~/.harness/pty`), with its discovery file in `run/` and its log in `logs/pty-host-<instance>.log` (one per host build);
   `HARNESS_PTY_BIN` overrides the host binary. The retired Herdr backend has been removed.
   `TERMINAL_BACKENDS=herdr` is not an error — it is dropped with a warning and the daemon runs on the
   platform's default, because the CLI self-updates and a retired setting must not stop an unattended

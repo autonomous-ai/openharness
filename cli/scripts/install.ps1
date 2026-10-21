@@ -399,7 +399,13 @@ function Install-HarnessPty {
       Move-Item -LiteralPath $unpacked -Destination $target
     } finally { Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue }
   }
-  Write-HarnessPointer -Path (Join-Path $ptyRoot 'current-pty') -Value $version
+  $pointer = Join-Path $ptyRoot 'current-pty'
+  $before = ''
+  if (Test-Path -LiteralPath $pointer -PathType Leaf) { $before = ([string](Get-Content -LiteralPath $pointer -TotalCount 1)).Trim() }
+  Write-HarnessPointer -Path $pointer -Value $version
+  # An explicit install supersedes a host the updater put on probation: left, its marker would let the next probation
+  # roll this install back to the version before it (pty-pending.json, cli/src/lib/windows/ptyInstall.ts).
+  if ($before -ne $version) { Remove-Item -LiteralPath (Join-Path $ptyRoot 'pty-pending.json') -Force -ErrorAction SilentlyContinue }
   $bin = Join-Path $Root 'bin'
   New-Item -ItemType Directory -Force -Path $bin | Out-Null
   Copy-HarnessFile -Source (Join-Path $target 'harness-launch.exe') -Destination (Join-Path $bin 'harness-launch.exe')
@@ -562,7 +568,10 @@ function Restart-HarnessDaemon {
   $start = Start-Process -FilePath $Command -ArgumentList 'start' -NoNewWindow -PassThru
   $null = $start.Handle
   $start.WaitForExit()
-  if ($start.ExitCode -ne 0) { Write-Host "  Harness did not start again on version ${After}. Run 'harness start'." }
+  if ($start.ExitCode -ne 0) {
+    if ($cliMoved) { Write-Host "  Harness did not start again on version ${After}. Run 'harness start'." }
+    else { Write-Host "  Harness did not start again on terminal host ${PtyAfter}. Run 'harness start'." }
+  }
   return $true
 }
 

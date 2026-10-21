@@ -349,7 +349,7 @@ jobs:
         run: |
           # Each tree under its own path below logs\ (the same file name is in more than one), as it is under the profile:
           # the master's and the core's cli\data\harness.log, harness-launch.exe's cli\data\logs\launch.log, the terminal
-          # host's pty\logs\pty-host.log, the dial's logs\dial-*.log. Every path starts with a dot, which upload-artifact
+          # host's pty\logs\pty-host-<instance>.log, the dial's logs\dial-*.log. Every path starts with a dot, which upload-artifact
           # takes for hidden and leaves out unless include-hidden-files says otherwise: run 39083518767 uploaded nothing.
           # Each file copied is named here, so the job's own output says what the artifact holds.
           $logs = "$env:RUNNER_TEMP\logs"

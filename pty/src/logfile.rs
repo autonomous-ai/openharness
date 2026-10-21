@@ -116,9 +116,9 @@ impl FileLog {
 }
 
 impl State {
-    /// `pty-host.log` → `pty-host-<instance>.log.1` (replacing it), then a new, empty `pty-host.log`. When the
-    /// rename fails the same file is reopened, and its size counted from zero: the next try is
-    /// another cap's worth of lines away.
+    /// `pty-host-<instance>.log` → `pty-host-<instance>.log.1` (replacing it), then a new, empty
+    /// `pty-host-<instance>.log`. When the rename fails the same file is reopened, and its size
+    /// counted from zero: the next try is another cap's worth of lines away.
     fn rotate(&mut self) {
         self.file = None;
         let renamed = crate::files::rename(&self.path, &self.rotated).is_ok();
