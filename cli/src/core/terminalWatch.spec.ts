@@ -39,6 +39,16 @@ const setup = (over: Partial<TerminalWatchDeps> = {}) => {
 }
 
 describe('a read-only view of agents\' terminals', () => {
+  it('says whether a viewer has an agent open, and no when nobody ever watched', async () => {
+    const quiet = setup()
+    expect(quiet.watch.isWatched('agent-1')).toBe(false)
+    const lookedAt = vi.fn((id: string) => id === 'agent-1')
+    const { watch } = setup({ manager: (() => ({ handleFrame: vi.fn(), closeConnection: vi.fn(), stop: vi.fn(), isLookedAt: lookedAt })) as never })
+    await watch.watch.frame('observer:ken', 'terminal_open', { agentId: 'agent-1' })
+    expect(watch.isWatched('agent-1')).toBe(true)
+    expect(watch.isWatched('agent-2')).toBe(false)
+  })
+
   it('builds no stream manager until its first viewer, and a read-only one then', async () => {
     const { watch, m, agent } = setup()
     expect(m.built).toHaveLength(0)

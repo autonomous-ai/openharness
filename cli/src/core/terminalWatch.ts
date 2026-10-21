@@ -29,7 +29,7 @@ export interface TerminalWatchDeps {
   /** The processes that may watch: a viewer is only ever an experiment's. */
   watchers: ReadonlySet<string>
   /** Swapped in tests for a manager they can drive. */
-  manager?: (deps: ConstructorParameters<typeof TerminalStreamManager>[0]) => Pick<TerminalStreamManager, 'handleFrame' | 'closeConnection' | 'stop'>
+  manager?: (deps: ConstructorParameters<typeof TerminalStreamManager>[0]) => Pick<TerminalStreamManager, 'handleFrame' | 'closeConnection' | 'stop'> & Partial<Pick<TerminalStreamManager, 'isLookedAt'>>
 }
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
@@ -47,7 +47,7 @@ export function createTerminalWatch(deps: TerminalWatchDeps) {
     }
     return shown
   }
-  let manager: Pick<TerminalStreamManager, 'handleFrame' | 'closeConnection' | 'stop'> | null = null
+  let manager: Pick<TerminalStreamManager, 'handleFrame' | 'closeConnection' | 'stop'> & Partial<Pick<TerminalStreamManager, 'isLookedAt'>> | null = null
   /** Built at the first viewer: a daemon no one shares costs no stream manager. */
   const streams = () => manager ??= (deps.manager ?? ((d) => new TerminalStreamManager(d)))({
     readOnly: true,
@@ -76,6 +76,9 @@ export function createTerminalWatch(deps: TerminalWatchDeps) {
   return {
     /** The watch of the core's own `CoreApi`, for a feature in this process. */
     watch,
+
+    /** Whether a Share viewer has this agent's terminal open (a viewer is a person, never a `watch: true` reader). */
+    isWatched(agentId: string): boolean { return manager?.isLookedAt?.(agentId) ?? false },
 
     /** A process's viewer's frame (`watch_frame`) or its end (`watch_close`): null for any other query. */
     async answer(service: string, query: string, payload: Payload): Promise<Payload | null> {

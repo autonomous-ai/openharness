@@ -1506,4 +1506,60 @@ describe('TerminalStreamManager', () => {
     await vi.advanceTimersByTimeAsync(2)
     expect(binarySent.length).toBe(afterLeadingEdge + 1)
   })
+
+  describe('who is looking', () => {
+    const open = (connId: string, extra: Record<string, unknown> = {}) =>
+      manager.handleFrame(connId, 'terminal_open', {
+        requestId: `open-${connId}`, protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30, ...extra,
+      })
+    beforeEach(async () => {
+      await manager.stop()
+      manager = newManager({ isLoopback: (connId) => connId.startsWith('local:') })
+    })
+
+    it('a loopback stream whose window lists other agents is not looked at', async () => {
+      await open('local:desktop')
+      manager.setVisibleAgents('local:desktop', ['agent-other'])
+      expect(manager.isLookedAt('agent-1')).toBe(false)
+      manager.setVisibleAgents('local:desktop', ['agent-1'])
+      expect(manager.isLookedAt('agent-1')).toBe(true)
+    })
+
+    it('a loopback stream whose window never sent a list is looked at', async () => {
+      await open('local:desktop')
+      expect(manager.isLookedAt('agent-1')).toBe(true)
+      manager.setVisibleAgents('local:desktop', null)
+      expect(manager.isLookedAt('agent-1')).toBe(true)
+    })
+
+    it('a mobile or web stream is looked at, a takeover:false one included', async () => {
+      await open('web-1')
+      await open('web-2', { takeover: false })
+      expect(manager.isLookedAt('agent-1')).toBe(true)
+      await manager.closeConnection('web-1')
+      expect(manager.isLookedAt('agent-1')).toBe(true)
+      await manager.closeConnection('web-2')
+      expect(manager.isLookedAt('agent-1')).toBe(false)
+    })
+
+    it('a watch:true stream is never looked at', async () => {
+      await open('web-1', { watch: true })
+      await open('local:desktop', { watch: true })
+      expect(manager.isLookedAt('agent-1')).toBe(false)
+    })
+
+    it('a minimized window\'s empty list frees its agents', async () => {
+      await open('local:desktop')
+      manager.setVisibleAgents('local:desktop', [])
+      expect(manager.isLookedAt('agent-1')).toBe(false)
+    })
+
+    it('closing the connection forgets its list', async () => {
+      await open('local:desktop')
+      manager.setVisibleAgents('local:desktop', [])
+      await manager.closeConnection('local:desktop')
+      await open('local:desktop')
+      expect(manager.isLookedAt('agent-1')).toBe(true)
+    })
+  })
 })

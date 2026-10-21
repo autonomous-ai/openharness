@@ -236,6 +236,9 @@ export class TerminalStreamManager {
   // The agent each loopback window last said it has focused (`app_focus`), null for none. A window that
   // never said is absent, and all its terminals keep the short window, as before focus was followed.
   private readonly focusByConn = new Map<string, string | null>()
+  // The agents whose tiles each loopback window shows (`app_focus.visibleAgents`). A window that never
+  // sent a list is absent, and counts as looking at everything it streams (older desktops).
+  private readonly visibleByConn = new Map<string, ReadonlySet<string>>()
   private readonly now: () => number
   private readonly expiryTimer: ReturnType<typeof setInterval>
   private lastSweepAt: number
@@ -1450,6 +1453,30 @@ export class TerminalStreamManager {
     }
   }
 
+  /**
+   * The agents the loopback window on `connId` has on screen; null when it never sent a list (it then
+   * counts as looking at all its streams). `[]` is a minimized or tray-hidden window.
+   */
+  setVisibleAgents(connId: string, agentIds: readonly string[] | null): void {
+    if (agentIds === null) this.visibleByConn.delete(connId)
+    else this.visibleByConn.set(connId, new Set(agentIds))
+  }
+
+  /**
+   * Whether a person can see this agent's terminal right now. A `watch: true` stream never counts (no
+   * person behind it). A phone or web stream does, including a `takeover: false` neighbour. A loopback
+   * window counts when it lists the agent, or never listed anything.
+   */
+  isLookedAt(agentId: string): boolean {
+    for (const state of this.streams.values()) {
+      if (state.agentId !== agentId || state.closing || state.watchOnly) continue
+      if (!state.loopback) return true
+      const visible = this.visibleByConn.get(state.connId)
+      if (!visible || visible.has(agentId)) return true
+    }
+    return false
+  }
+
   private flushWindow(connId: string, agentId: string, loopback: boolean): number {
     if (!loopback) return OUTPUT_FLUSH_MS
     const focused = this.focusByConn.get(connId)
@@ -1458,6 +1485,7 @@ export class TerminalStreamManager {
 
   async closeConnection(connId: string, reason = 'connection closed', notify = false): Promise<void> {
     this.focusByConn.delete(connId)
+    this.visibleByConn.delete(connId)
     const states = [...this.streams.values()].filter((state) => state.connId === connId)
     await Promise.all(states.map((state) => this.closeStream(state, reason, notify)))
   }
@@ -1479,6 +1507,7 @@ export class TerminalStreamManager {
   async stop(): Promise<void> {
     clearInterval(this.expiryTimer)
     this.focusByConn.clear()
+    this.visibleByConn.clear()
     await this.closeAll('terminal manager stopped')
   }
 }
