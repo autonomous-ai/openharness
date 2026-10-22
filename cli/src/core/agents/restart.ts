@@ -131,7 +131,7 @@ export function createAgentRestarter({
     // process-swap choreography below applies. A terminal that ADOPTED an engine restarts the
     // engine, like any agent: the tile said Restart about the engine it shows.
     if (isTerminalEngine(engine)) {
-      agentReconciler.holdRoute(routeKey)
+      const releaseRoute = agentReconciler.holdRoute(routeKey, null)
       try {
         // The same opening a fresh terminal tile prints (`onCreateAgent`'s `terminalHint`): a
         // restarted tile is a fresh shell too, and should look like one.
@@ -152,7 +152,7 @@ export function createAgentRestarter({
         console.log(`[restart] ${sid(session.agentId)} terminal · fresh shell`)
         return { ok: true, session: refreshed, resumed: false }
       } finally {
-        agentReconciler.releaseRoute(routeKey)
+        releaseRoute()
       }
     }
     if (!session.processIdentity) return { ok: false, error: 'NO_ACTIVE_PROCESS' }
@@ -187,7 +187,9 @@ export function createAgentRestarter({
     if (!current()) return changed
     if (!built.ok) return built
 
-    agentReconciler.holdRoute(routeKey)
+    // Shell startup and native checks can outlast the reconciler's default 30-second hold.
+    // Keep this route through publication, and release only this operation's own reservation.
+    const releaseRoute = agentReconciler.holdRoute(routeKey, null)
     try {
       const restartPermission = await downgradedPermission(session,
         await bypassPermissionFor(session, () => liveBypassPermission(session)), 'restart', built.overrides.native)
@@ -222,7 +224,7 @@ export function createAgentRestarter({
         + (session.gridLaunch ? ` · grid ${session.gridLaunch.networkName}` : ''))
       return { ok: true, session: refreshed, resumed: outcome.resumed }
     } finally {
-      agentReconciler.releaseRoute(routeKey)
+      releaseRoute()
     }
   })
   return restartAgentHandler
