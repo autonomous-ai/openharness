@@ -845,6 +845,16 @@ describe('cancelling work', () => {
     expect(() => f.run(cancel, peer)).toThrow('Lead')
     expect(() => f.run(cancel, { kind: 'agent', agentId: otherLead, machineOwnerId: 'host-owner' })).toThrow()
   })
+  it('names the owner when the owner cancels and drops a trailing full stop from the reason', () => {
+    const { f, cancel } = active()
+    const text = f.run({ ...cancel, reason: 'Obsolete.' } as Command).messages[0]!.text
+    expect(text).toBe('The tab owner cancelled this task: Obsolete. Stop working on it.')
+  })
+  it('refuses cancelling work whose worker already left', () => {
+    const { f, worker, cancel } = active()
+    f.run({ type: 'agent.remove', agentId: worker })
+    expect(() => f.run(cancel)).toThrow('left the Super Tab')
+  })
   it('refuses work that already finished', () => {
     const { f, group, leadActor, assignmentId, cancel } = active()
     f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'stopped', result: null }, owner, { confirmedStopped: true })

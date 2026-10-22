@@ -17,7 +17,7 @@ export class SuperTabHostError extends Error {
   constructor(readonly code: string, message: string, readonly status = 503) { super(message) }
 }
 export { identifier, object } from './wire.js'
-import { identifier, object } from './wire.js'
+import { ENDED_WORK, identifier, object } from './wire.js'
 
 /** The core signs each request. Neither the service nor its journal holds an account credential. */
 export async function backend(core: CoreApi, method: string, path: string, body?: unknown): Promise<unknown> {
@@ -242,7 +242,7 @@ export class SuperTabHost {
       if (!Array.isArray(current.conversations) || current.conversations.map(object).some(c => {
         if (c.leadId === agent.id) return true
         const work = object(c.assignment)
-        return work.agentId === agent.id && !['done', 'stopped'].includes(String(work.status))
+        return work.agentId === agent.id && !ENDED_WORK.includes(String(work.status))
       })) return
       // A refusal no retry can change is told to the Lead once: until 2026-10-22 it went only to this machine's log,
       // and a stopped worker stayed open with no one told why.
