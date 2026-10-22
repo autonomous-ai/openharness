@@ -6253,6 +6253,18 @@ class AppNotifier extends ChangeNotifier {
     final next = (hotspot: hotspot, encrypted: status['encrypted'] == true);
     if (harnessOsComputers[machineId] == next) return;
     harnessOsComputers[machineId] = next;
+    _saveHarnessOs();
+  }
+
+  /// Signed out from here: no Unlock for it any more. Its unlock would open the disk of a computer
+  /// that is set up again — with a sign-in, Set up a device — before it is online anywhere.
+  void forgetHarnessOs(String machineId) {
+    if (harnessOsComputers.remove(machineId) == null) return;
+    _saveHarnessOs();
+    notifyListeners();
+  }
+
+  void _saveHarnessOs() {
     final json = jsonEncode({
       for (final entry in harnessOsComputers.entries)
         entry.key: {

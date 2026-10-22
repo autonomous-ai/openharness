@@ -52,6 +52,7 @@ Future<void> signOutComputer(
   if (!confirmed || !context.mounted) return;
   final messenger = ScaffoldMessenger.maybeOf(context);
   final reply = await notifier.osDevice(machineId, {'action': 'sign_out'});
+  if (reply['started'] == true) notifier.forgetHarnessOs(machineId);
   messenger?.showSnackBar(
     SnackBar(
       content: Text(
