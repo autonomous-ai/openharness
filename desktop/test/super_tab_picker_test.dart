@@ -50,6 +50,16 @@ void main() {
         'configuration': {'engine': 'claude'},
       },
     ];
+    // The teammate's machine reports to the Swarm, so its row is online and the
+    // details it opens offer to attach its running agent.
+    f.connection.server.state['machines'] = <dynamic>[
+      {
+        'machineId': 'teammate-machine',
+        'name': 'Teammate Mac',
+        'contributorId': 'owner',
+        'observation': {'receivedAt': DateTime.now().millisecondsSinceEpoch},
+      },
+    ];
     f.app.machineStates['m']!.agents = [
       const Agent(
         id: 'local-agent',
@@ -114,7 +124,9 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final machine = find.byKey(const ValueKey('super-machine-teammate-machine'));
+    final machine = find.byKey(
+      const ValueKey('super-machine-teammate-machine'),
+    );
     if (machine.evaluate().isEmpty &&
         find.byTooltip('Conversations').evaluate().isNotEmpty) {
       await tester.tap(find.byTooltip('Conversations'));

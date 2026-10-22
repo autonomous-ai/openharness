@@ -533,6 +533,51 @@ void main() {
     },
   );
 
+  testWidgets(
+    'an offline machine is reached through "Offline · N", and its details still attach a running agent',
+    (tester) async {
+      final server = ConversationServer();
+      server.state['machines'] = [
+        {
+          'machineId': 'gone',
+          'name': 'Old Mini',
+          'contributorId': 'owner',
+          'observation': {
+            'receivedAt': DateTime.now()
+                .subtract(const Duration(minutes: 10))
+                .millisecondsSinceEpoch,
+          },
+        },
+      ];
+      final c = server.controller();
+      await c.refresh();
+      final attached = <String>[];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabMachines(
+              controller: c,
+              onAddAgent: (group) => attached.add(group.id),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final row = find.byKey(const ValueKey('super-machine-gone'));
+      expect(row, findsNothing);
+      await tester.tap(find.byKey(const ValueKey('super-machines-offline')));
+      await tester.pumpAndSettle();
+      await tester.tap(row);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Attach running agent'));
+      await tester.pumpAndSettle();
+      expect(attached, [c.selected!.id]);
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    },
+  );
+
   for (final brightness in [Brightness.dark, Brightness.light]) {
     for (final textScale in [1.0, 2.0]) {
       for (final width in [280.0, 380.0]) {
