@@ -84,7 +84,7 @@ describe('five-part task persistence', () => {
     const row = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!
     expect(row.task).toEqual(task)
     expect(row.brief).toContain('Goal:\nKeep drafts')
-    await run(tab, { type: 'work.assign', conversationId: group, agentId: worker }, host, lead)
+    await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })
     const messages = (await store.messages(owner, tab, group, {})).messages
     const delivered = messages.at(-1)!.text
     for (const part of ['Goal:', 'Changes:', 'Constraints:', 'Owns:', 'Acceptance checks:', ...Object.values(task).flat(), checks[0]!.description]) expect(delivered).toContain(part)
@@ -1152,7 +1152,11 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const helper = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'Helper', configuration: config, lead: false })).result.agentId as string
     const request = { conversationId: 'lead', machineId, engine: 'codex', name: 'Builder', cwd: '/work', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
-    const operationId = randomUUID(), command: Command = { type: 'agent.start', request }
+    const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Docs.' },
+      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, title: 'New agent', label: 'New agent' }],
+      excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
+    const routeDecisionId = (await run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)).result.routeDecisionId as string
+    const operationId = randomUUID(), command: Command = { type: 'agent.start', request, routeDecisionId, overrideReason: 'The helper machine has the repository.' }
     const first = await run(tab, command, host, lead, operationId)
     await run(tab, { type: 'agent.remove', agentId: helper })
     // A new start on the machine is refused now, but the recorded one keeps its receipt.

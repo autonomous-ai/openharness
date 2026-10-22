@@ -219,6 +219,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       ...(attachments?.length ? { attachments } : {}) })
     result.messageId = operationId
   }
+  /** An agent starts or assigns only what the route chose; a person may still do either by hand. */
+  const routed = (routeDecisionId?: string) => {
+    if (actor.kind === 'agent' && !routeDecisionId) fail('ROUTE_REQUIRED', 'Route this task first, then start or assign the pick with its routeDecisionId.', 400)
+  }
   const openDecision = (): RouteDecision => {
     const decision = context.routeDecision ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
     if (decision.outcome) fail('ROUTE_CLOSED', 'This routing decision is no longer open. Route the task again.')
@@ -436,6 +440,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     case 'agent.start': {
       controls(state, actor, command.request.conversationId)
+      routed(command.routeDecisionId)
       requireWorkerDecisions(state, actor, open(state, command.request.conversationId))
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
       // The Lead's account has machines the Swarm never prepared (no clone of the project), so a Lead may start only where the
@@ -772,6 +777,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('START_PENDING', 'Wait for the host to finish this agent’s launch and model selection.')
       }
       controls(state, actor, command.conversationId)
+      routed(command.routeDecisionId)
       const group = open(state, command.conversationId)
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
       if (activeWork(group)) fail('WORK_ACTIVE', 'The current assignment must finish or be reconciled before reassignment.')
