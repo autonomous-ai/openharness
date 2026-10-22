@@ -28,19 +28,28 @@ import 'section_heading.dart';
 
 export 'machine_status.dart';
 
-/// The owner's agent slots run 1–8 in this dialog, though the backend itself
-/// accepts up to 16: the number an owner picks here is what fits their machine,
-/// and preparation's memory-based suggestion already lands in this range
-/// (`cli/src/superTabs/contribution.ts`). Widening the UI to the backend's
-/// ceiling would only invite a number the machine cannot run.
-const kSuperTabAgentSlotsMin = 1;
-const kSuperTabAgentSlotsMax = 8;
+/// The owner's agent slots run 1–8 here, though the backend itself accepts up
+/// to 16: widening the UI to the backend's ceiling would only invite a number
+/// the machine cannot run.
+const _agentSlotsMin = 1;
+const _agentSlotsMax = 8;
 
-/// A number the dialog may hold and send: in range, or the floor when nothing
-/// is known yet — a contributed machine always offers at least one slot.
-int clampSuperTabAgentSlots(num? value) => value == null
-    ? kSuperTabAgentSlotsMin
-    : value.toInt().clamp(kSuperTabAgentSlotsMin, kSuperTabAgentSlotsMax);
+/// What one more agent needs to start, the CLI's own figure
+/// (`START_REQUIREMENTS.memoryBytes`, `cli/src/superTabs/capacity.ts`).
+const _agentMemoryBytes = 2 * 1024 * 1024 * 1024;
+
+int _clampAgentSlots(num value) =>
+    value.toInt().clamp(_agentSlotsMin, _agentSlotsMax);
+
+/// What this machine's free memory suggests, by the CLI's own arithmetic: one
+/// agent per [_agentMemoryBytes] free. Null when the reading does not say how
+/// much memory there is.
+int? _suggestedAgentSlots(MachineResources? resources) {
+  final total = resources?.memoryTotalBytes;
+  final used = resources?.memoryUsedBytes;
+  if (total == null || used == null) return null;
+  return _clampAgentSlots(((total - used) / _agentMemoryBytes).floor());
+}
 
 class SuperTabMachines extends StatefulWidget {
   const SuperTabMachines({
@@ -92,8 +101,8 @@ class _MachineChoice {
 }
 
 /// "Agent slots" — how many agents this machine offers the Swarm — with the one
-/// thing the number is not: a promise. Preparation suggests it from what is
-/// free now, and what is free moves.
+/// thing the number is not: a promise. Its free memory is what it was suggested
+/// from, and what is free moves.
 ///
 /// A stepper rather than a number field, so no keystroke can leave the dialog
 /// holding a count the backend would refuse; both buttons go dead at the bounds
@@ -103,12 +112,16 @@ class _AgentSlots extends StatelessWidget {
     required this.value,
     required this.busy,
     required this.onChanged,
+    this.cappedFrom,
   });
 
-  /// Null until preparation has answered and the machine has no number yet.
-  final int? value;
+  final int value;
   final bool busy;
   final ValueChanged<int> onChanged;
+
+  /// The number this machine was contributed with, when it is above what this
+  /// form offers: saving would lower it, and the owner is told so.
+  final int? cappedFrom;
 
   @override
   Widget build(BuildContext context) {
@@ -139,15 +152,12 @@ class _AgentSlots extends StatelessWidget {
                     icon: AppIcons.minus,
                     size: 16,
                     tooltip: 'Fewer slots',
-                    onPressed:
-                        busy || value == null || value <= kSuperTabAgentSlotsMin
+                    onPressed: busy || value <= _agentSlotsMin
                         ? null
                         : () => onChanged(value - 1),
                   ),
                   Text(
-                    // No number is known yet, so there is none to show and
-                    // none to send — Save waits for the same preparation.
-                    value?.toString() ?? '–',
+                    value.toString(),
                     key: const ValueKey('agent-slots-value'),
                     style: DesktopChrome.control(),
                   ),
@@ -156,8 +166,7 @@ class _AgentSlots extends StatelessWidget {
                     icon: AppIcons.plus,
                     size: 16,
                     tooltip: 'More slots',
-                    onPressed:
-                        busy || value == null || value >= kSuperTabAgentSlotsMax
+                    onPressed: busy || value >= _agentSlotsMax
                         ? null
                         : () => onChanged(value + 1),
                   ),
@@ -171,6 +180,14 @@ class _AgentSlots extends StatelessWidget {
           'Each new agent still needs free memory when it starts.',
           style: DesktopChrome.metadata(),
         ),
+        if (cappedFrom case final from?) ...[
+          const SizedBox(height: 4),
+          Text(
+            'This machine was set to $from agent slots. This form offers up to '
+            '$_agentSlotsMax, and saving here lowers it.',
+            style: DesktopChrome.metadata(),
+          ),
+        ],
       ],
     );
   }
@@ -504,54 +521,73 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     var busy = false;
     String? setupId;
     // The agent slots the owner is choosing. A machine already in this Swarm
-    // starts at the number it has (null means it has none yet — a new machine,
-    // filling in with preparation's suggestion below).
-    int? slotsFor(String? id) {
+    // starts at the number it has; a new one starts at what its free memory
+    // suggests, worked out here rather than by preparation (below).
+    int? storedSlots(String? id) {
       final row = id == null
           ? null
           : c.snapshot?.machines.where((m) => m['machineId'] == id).firstOrNull;
       final current = row?['maxAgents'];
-      return current is num ? clampSuperTabAgentSlots(current) : null;
+      return current is num ? current.toInt() : null;
     }
 
-    int? slots = slotsFor(machineId);
-    // The open dialog and its own setState, once it is built: preparation
+    /// A machine contributed before this form had a range keeps its number
+    /// until the owner saves, and is told when saving would lower it.
+    int? storedOverRange(String? id) {
+      final stored = storedSlots(id);
+      return stored != null && stored > _agentSlotsMax ? stored : null;
+    }
+
+    // Readings this dialog has taken itself, keyed by machine. The panel's own
+    // samples stand in for a machine it already reads.
+    final suggestions = <String, int>{};
+    int slotsFor(String? id) {
+      final stored = storedSlots(id);
+      if (stored != null) return _clampAgentSlots(stored);
+      return suggestions[id] ??
+          _suggestedAgentSlots(_samples[id]?.$1) ??
+          _agentSlotsMin;
+    }
+
+    var slots = slotsFor(machineId);
+    var slotsEdited = false;
+    // The open dialog and its own setState, once it is built: a reading
     // answers while the form is open, and the field has to repaint when it
-    // does. Both are read only while the dialog is still there — a suggestion
-    // that arrives after it closed has nothing to repaint.
+    // does. Both are read only while the dialog is still there — one that
+    // arrives after it closed has nothing to repaint.
     BuildContext? dialog;
     void Function(void Function())? repaint;
-    var suggesting = false;
+    final reading = <String>{};
 
-    /// Ask preparation what it would suggest, so the field starts where the
-    /// machine's own memory says rather than leaving the owner to guess. Any
-    /// failure stays quiet — Save runs the same preparation and reports it
-    /// there, in the words it already uses.
+    /// Start the field where this machine's own memory says, without asking
+    /// preparation: preparation sets the project up, probes engines and takes
+    /// one of its 32 setup slots, and opening a form the owner may cancel is
+    /// no reason to do that. A machine with a number of its own needs no
+    /// reading at all.
     Future<void> suggestSlots() async {
       final id = machineId;
-      if (id == null || !canSelect(app.stateOf(id))) return;
-      // The same preparation Save runs, and through the same receipt: one
-      // setup per dialog, read rather than repeated.
-      setupId ??= superTabOperationId();
-      Map<String, dynamic> prepared;
+      if (id == null ||
+          storedSlots(id) != null ||
+          !canSelect(app.stateOf(id)) ||
+          !reading.add(id)) {
+        return;
+      }
+      MachineResources? resources;
       try {
-        prepared = await app.superTabMachineRequest(id, {
-          'action': 'prepareContribution',
-          'tabId': c.tabId,
-          'scope': 'swarm',
-          'operationId': setupId,
-        });
+        resources = await (widget.readLocal ?? app.readMachineResources)(id);
       } catch (_) {
         return;
       }
-      // The picker may have moved on to another machine, whose own number is
+      final suggested = _suggestedAgentSlots(resources);
+      // The picker may have moved on to another machine, whose own reading is
       // the one that belongs in the field now — or the dialog may have closed.
-      if (machineId != id || dialog?.mounted != true) return;
-      final suggested = prepared['maxAgents'];
-      if (prepared['state'] != 'ready' || suggested is! num) return;
-      // Never over a number the machine already had, or one the owner has set.
-      if (slots != null) return;
-      repaint?.call(() => slots = clampSuperTabAgentSlots(suggested));
+      if (suggested == null || machineId != id || dialog?.mounted != true) {
+        return;
+      }
+      suggestions[id] = suggested;
+      // Never over a number the owner has set meanwhile.
+      if (slotsEdited) return;
+      repaint?.call(() => slots = suggested);
     }
 
     await showAppDialog<void>(
@@ -564,12 +600,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             builder: (context, update) {
               dialog = context;
               repaint = update;
-              if (!suggesting) {
-                suggesting = true;
-                // Not awaited: the form is usable immediately, and the number
-                // only has to be there by the time the owner reads it.
-                unawaited(suggestSlots());
-              }
+              // Not awaited: the form is usable immediately, and the number
+              // only has to be there by the time the owner reads it. Each
+              // machine is read once, so a rebuild does not read again.
+              unawaited(suggestSlots());
               Future<void> save() async {
                 if (busy ||
                     !c.canWrite ||
@@ -616,26 +650,23 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   }
                   if (!context.mounted || !c.canWrite) return;
                   final machine = app.stateOf(selected);
-                  // A Save pressed before preparation's answer reached the
-                  // field still contributes the number it was about to show,
-                  // rather than a slot count nobody chose.
-                  final suggested = prepared['maxAgents'];
-                  if (slots == null && suggested is num) {
-                    slots = clampSuperTabAgentSlots(suggested);
+                  // An earlier lost reply leaves an uncertain attempt holding
+                  // its own receipt, and only one action may be in flight:
+                  // check that one first, then send the number the owner is
+                  // looking at — the stored attempt cannot know it was changed.
+                  if (c.pendingCommand?['type'] == 'machine.contribute') {
+                    await c.retry();
+                    if (!context.mounted || !c.canWrite) return;
                   }
-                  final result =
-                      c.pendingCommand?['type'] == 'machine.contribute'
-                      ? await c.retry()
-                      : await c.command({
-                          'type': 'machine.contribute',
-                          'machineId': selected,
-                          'name': machine!.machine.displayName,
-                          'cwd': prepared['cwd'],
-                          if (prepared['scope'] != null)
-                            'scope': prepared['scope'],
-                          'engines': prepared['engines'],
-                          'maxAgents': clampSuperTabAgentSlots(slots),
-                        });
+                  final result = await c.command({
+                    'type': 'machine.contribute',
+                    'machineId': selected,
+                    'name': machine!.machine.displayName,
+                    'cwd': prepared['cwd'],
+                    if (prepared['scope'] != null) 'scope': prepared['scope'],
+                    'engines': prepared['engines'],
+                    'maxAgents': slots,
+                  });
                   if (result == null) {
                     throw SuperTabFailure(
                       'CONTRIBUTION_FAILED',
@@ -690,6 +721,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                               // Another machine has its own number: the one it
                               // already offers, or its own suggestion.
                               slots = slotsFor(id);
+                              slotsEdited = false;
                             });
                             unawaited(suggestSlots());
                           },
@@ -739,7 +771,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                         _AgentSlots(
                           value: slots,
                           busy: busy,
-                          onChanged: (next) => update(() => slots = next),
+                          cappedFrom: storedOverRange(machineId),
+                          onChanged: (next) => update(() {
+                            slots = next;
+                            slotsEdited = true;
+                          }),
                         ),
                       ],
                       if (error != null) ...[
