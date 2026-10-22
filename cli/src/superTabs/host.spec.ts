@@ -634,3 +634,24 @@ it('backs off transient close failures and caps retries for the same runtime', a
   await t.poll()
   expect(t.lease).toHaveBeenCalledTimes(6)
 })
+
+
+it('backs off unavailable launch-receipt reads without writing any close leases', async () => {
+  const t = releaseFixture()
+  t.lookup.mockRejectedValue(new Error('Core temporarily unavailable'))
+  for (let i = 0; i < 10; i++) await t.poll(130_000)
+  expect(t.lookup).toHaveBeenCalledTimes(5)
+  expect(t.lease).not.toHaveBeenCalled()
+})
+
+it('rechecks authoritative native absence before retrying a lost acknowledgement', async () => {
+  const t = releaseFixture('swarm', { closed: true })
+  t.remove.mockImplementationOnce(() => { throw new Error('Lost acknowledgement') })
+  await t.poll()
+  t.close.mockResolvedValue({ error: 'NOT_SWARM_STARTED' })
+  await t.poll(5_000)
+  await t.poll(130_000)
+  expect(t.lease).toHaveBeenCalledOnce()
+  expect(t.remove).toHaveBeenCalledOnce()
+  expect(t.close).toHaveBeenLastCalledWith({ agentId: 'harness' })
+})
