@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:harness_mobile/core/client_build.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/ws/ws_pool.dart';
 
@@ -44,6 +45,23 @@ void main() {
     expect(pool.has('other'), isFalse);
     expect(conn.machineId, 'm');
     expect(conn.endpointKey, 'cloud:ws://fixture.invalid:test');
+  });
+
+  test('every connection is given the build to tell the relay about', () {
+    Future<ClientBuild> build() async => const ClientBuild(release: '1.0.9');
+    final tagged = WsPool(
+      wsBaseUrl: 'ws://fixture.invalid',
+      autonomousEnv: 'test',
+      accessTokenProvider: (_, _) => Completer<String>().future,
+      clientBuild: build,
+      onAuthFailure: (_) {},
+      onStatus: (_, _) {},
+      onEvent: (_, _) {},
+    );
+    addTearDown(tagged.closeAll);
+    expect(tagged.connFor('a').clientBuild, same(build));
+    expect(tagged.connFor('b').clientBuild, same(build));
+    expect(pool.connFor('a').clientBuild, isNull);
   });
 
   test('its callbacks carry the machine they are for', () async {

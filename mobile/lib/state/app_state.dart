@@ -1,4 +1,5 @@
 import '../core/app_version.dart';
+import '../core/client_build.dart';
 import '../core/install_source.dart';
 import '../core/test_run.dart';
 import '../measurement/launch_measurement.dart';
@@ -2544,6 +2545,9 @@ class AppNotifier extends ChangeNotifier {
       wsBaseUrl: config.wsBaseUrl,
       autonomousEnv: _autonomousEnv,
       accessTokenProvider: _socketToken,
+      // Which release, and whether a debug or simulator build, goes in the socket's query. A test dials
+      // as itself, with a fake channel, and says neither.
+      clientBuild: kIsWeb || kUnderTest ? null : runningClientBuild,
       relayCodecs: viewer.relayCodecs,
       transportPlugins: viewer.transportPlugins,
       onAuthFailure: _signedOutAtRuntime,
