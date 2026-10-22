@@ -6145,8 +6145,29 @@ class AppNotifier extends ChangeNotifier {
 
   bool updateAvailable(String machineId) {
     final update = osStatus[machineId]?['update'];
-    return update is Map && update['available'] == true;
+    if (update is! Map || update['available'] != true) return false;
+    final parts = osParts(machineId);
+    // Named part by part: only what changes. A computer that does not name its parts says it whole.
+    if (parts.isEmpty) return true;
+    return osNewRelease(machineId) ||
+        parts['hn']?['available'] == true ||
+        parts['cli']?['available'] == true;
   }
+
+  /// A Harness OS release newer than the one running — 0.1.9 after 0.1.8, not a later build of
+  /// 0.1.8, which a computer on 0.1.8 still offers (os/release_update.py compared whole packages).
+  bool osNewRelease(String machineId) {
+    final os = osParts(machineId)['os'];
+    if (os?['available'] != true) return false;
+    final next = os?['next'] as String?, running = os?['running'] as String?;
+    return next == null ||
+        running == null ||
+        releaseOf(next) != releaseOf(running);
+  }
+
+  /// A package version as its release: `0.1.8.r1792577066.g8df82cc2bc-1` is `0.1.8`.
+  static String releaseOf(String version) =>
+      RegExp(r'^\d+\.\d+\.\d+').firstMatch(version)?.group(0) ?? version;
 
   /// Each part of a Harness OS computer, as its last status said (CLI osDevice.ts `update.parts`):
   /// `os`, `hn`, `cli`, each `{running, available, next}`. Empty from a computer that does not say.
@@ -6167,7 +6188,7 @@ class AppNotifier extends ChangeNotifier {
     final update = osStatus[machineId]?['update'];
     if (update is! Map) return false;
     if (update['restartRequired'] == true) return true;
-    return osParts(machineId)['os']?['available'] == true;
+    return osNewRelease(machineId);
   }
 
   static const _harnessOsKey = 'harness_os_computers';
