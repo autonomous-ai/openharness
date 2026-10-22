@@ -21,7 +21,7 @@ import 'swarm_state_test.dart' show createApp, MemoryStore;
 const tabId = '0123456789abcdef01234567';
 
 class SuperTabFixtureConnection extends WsConn {
-  SuperTabFixtureConnection(this.store)
+  SuperTabFixtureConnection(this.store, {bool local = false})
     : super(
         wsBaseUrl: 'ws://fixture.invalid',
         autonomousEnv: 'test',
@@ -30,6 +30,10 @@ class SuperTabFixtureConnection extends WsConn {
         onAuthFailure: (_) {},
         onEvent: (_) {},
         onStatus: (_) {},
+        transportKind: local
+            ? WsTransportKind.localPlaintext
+            : WsTransportKind.cloudE2ee,
+        localWsUri: local ? Uri.parse('ws://127.0.0.1:1/ws') : null,
       ) {
     server.state['id'] = tabId;
   }
@@ -322,8 +326,8 @@ class SuperTabFixtureConnection extends WsConn {
 }
 
 class SuperTabLaunchFixture {
-  SuperTabLaunchFixture() {
-    connection = SuperTabFixtureConnection(store);
+  SuperTabLaunchFixture({bool local = false}) {
+    connection = SuperTabFixtureConnection(store, local: local);
     app = createApp(
       store: store,
       connectionForTest: (_) => connection,

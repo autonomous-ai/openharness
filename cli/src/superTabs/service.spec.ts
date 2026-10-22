@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { CoreApi } from '../core/api.js'
 import { superTabService } from './service.js'
-import type { SuperTabHost } from './host.js'
+import { SuperTabHostError, type SuperTabHost } from './host.js'
 import { createJevDecide, type JevDecide } from '../lib/jev/jevClient.js'
 
 // The real client would read the developer's OpenRouter key; the account backend is the only part under test.
@@ -543,4 +543,71 @@ it('documents finished worker decisions and explains an older backend without re
     : { status: 200, body: { success: true, data: { state: { agents: [t.agent] } } } })
   const reply = await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'release', command: { type: 'agent.release', agentId: 'worker', decision: 'stop' } }, owner)
   expect(reply).toMatchObject({ detail: 'This backend does not support releasing workers yet. Update the backend and try again.' })
+})
+
+describe('the Swarm cards the devices ask for', () => {
+  function withCards() {
+    const cards = { want: vi.fn(), open: vi.fn(), recap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped', at: 5, none: false })), onCards: undefined as unknown, onRecap: undefined as unknown }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn() }
+    const core = fakeCore({ superTabs })
+    const make = vi.fn(() => cards as never)
+    const service = superTabService(core, { cards: make })
+    return { cards, superTabs, make, core, ask: service.requests.super_tabs, port: service.port }
+  }
+  it('starts and stops the reader as a capable Pro comes and goes, and hands what it reads to the core', async () => {
+    const t = withCards()
+    expect(await t.ask({ action: 'cardsWanted', on: true }, owner)).toEqual({ ok: true })
+    expect(t.cards.want).toHaveBeenLastCalledWith(true, [])
+    expect(await t.ask({ action: 'cardsWanted', on: true, include: ['s1', 'bad id', 'x'.repeat(48), 7] }, owner)).toEqual({ ok: true })
+    expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'])
+    expect(await t.ask({ action: 'cardsWanted', on: false }, owner)).toEqual({ ok: true })
+    expect(t.cards.want).toHaveBeenLastCalledWith(false, [])
+    // One reader for the machine, whose answers go to the core.
+    expect(t.make).toHaveBeenCalledOnce()
+    ;(t.cards.onCards as (items: unknown[]) => void)([])
+    ;(t.cards.onRecap as (recap: unknown) => void)({ tabId: 't1' })
+    expect(t.superTabs.cards).toHaveBeenCalledWith([])
+    expect(t.superTabs.cardRecap).toHaveBeenCalledWith({ tabId: 't1' })
+    // The service going away stops the polling; the next ask makes a new reader.
+    t.port.stop()
+    expect(t.cards.want).toHaveBeenLastCalledWith(false)
+    await t.ask({ action: 'cardsWanted', on: true }, owner)
+    expect(t.make).toHaveBeenCalledTimes(2)
+    // A different machine id (the daemon was set up again) is a different reader, and the old one stops.
+    vi.spyOn(t.core.daemon, 'machineId').mockReturnValue('machine-2')
+    await t.ask({ action: 'cardsWanted', on: true }, owner)
+    expect(t.make).toHaveBeenCalledTimes(3)
+  })
+  it('reads one Lead\'s recap and notes which one the Pro has open', async () => {
+    const t = withCards()
+    expect(await t.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1' }, owner)).toEqual({ ok: true, tabId: 't1', leadId: 'l1', text: 'Shipped', at: 5, none: false })
+    expect(await t.ask({ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1' }, owner)).toEqual({ ok: true })
+    expect(t.cards.open).toHaveBeenLastCalledWith('s1', 't1', 'l1')
+    expect(await t.ask({ action: 'cardOpen', session: 's1', tabId: 't1', leadId: null }, owner)).toEqual({ ok: true })
+    expect(t.cards.open).toHaveBeenLastCalledWith('s1', 't1', null)
+    for (const bad of [{ action: 'cardRecap', tabId: 'bad id', leadId: 'l1' }, { action: 'cardRecap', tabId: 't1' }, { action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'bad id' }, { action: 'cardOpen', session: 's1', leadId: null },
+      { action: 'cardOpen', tabId: 't1', leadId: null }, { action: 'cardRecap', tabId: 'x'.repeat(48), leadId: 'l1' }]) {
+      expect(await t.ask(bad, owner)).toEqual({ error: 'INVALID_REQUEST' })
+    }
+  })
+  it('answers a backend refusal while reading a recap as the service does any other', async () => {
+    const t = withCards()
+    t.cards.recap.mockRejectedValueOnce(new SuperTabHostError('FORBIDDEN', 'Access withdrawn', 403))
+    expect(await t.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1' }, owner)).toEqual({ error: 'FORBIDDEN', detail: 'Access withdrawn', status: 403 })
+  })
+  it('refuses all three to anyone but the machine\'s owner, like the other actions', async () => {
+    const t = withCards()
+    for (const action of ['cardsWanted', 'cardRecap', 'cardOpen']) {
+      expect(await t.ask({ action, on: true, tabId: 't1', leadId: 'l1' }, visitor)).toEqual({ error: 'OWNER_REQUIRED' })
+      expect(await t.ask({ action, on: true, tabId: 't1', leadId: 'l1' }, { local: false, owner: true })).toEqual({ error: 'OWNER_REQUIRED' })
+    }
+    expect(t.make).not.toHaveBeenCalled()
+  })
+  it('refuses all three to an account owner who is not at this computer', async () => {
+    const t = withCards()
+    for (const action of ['cardsWanted', 'cardRecap', 'cardOpen']) {
+      expect(await t.ask({ action, on: true, session: 's1', tabId: 't1', leadId: 'l1' }, { local: false, owner: true, accountOwner: true } as never)).toEqual({ error: 'OWNER_REQUIRED' })
+    }
+    expect(t.make).not.toHaveBeenCalled()
+  })
 })

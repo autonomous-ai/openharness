@@ -1746,6 +1746,12 @@ class AppNotifier extends ChangeNotifier {
       // The closed list is read from these names, so it can change on its own.
       if (changed || namesChanged) notifyListeners();
     },
+    onSelection: (controller) {
+      if (_disposed || controller.accountId != currentUser?.id) return;
+      // The Harness Pro shows the open project's Leads, so a project change
+      // is a change to the desk it was told about.
+      _announceOpenPanesToDial();
+    },
     onSnapshot: (controller) {
       if (_disposed || controller.accountId != currentUser?.id) return;
       var shown = false;
@@ -3927,6 +3933,48 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  Future<void> _openSuperTabProject(
+    MachineState source,
+    String tabId,
+    String projectId,
+  ) async {
+    final open = swarms.where((s) => s.superTabId == tabId).firstOrNull;
+    final name = open?.name ?? _superTabNames[tabId];
+    // A tab this account does not belong to is nobody's to open.
+    if (name == null) return;
+    _requestDeviceWindow(source);
+    // Every announce until the project lands says the device caused it: the
+    // open and the refresh can take longer than the daemon's echo window, and
+    // an announce naming the tab's old project would pull the device off the
+    // Lead it just picked.
+    final pick = ++_devicePick;
+    _announceFromDevice = true;
+    final abandon = Timer(const Duration(seconds: 5), () {
+      if (_devicePick == pick) _announceFromDevice = false;
+    });
+    try {
+      _fromDevice(
+        () => open == null ? openSuperTab(tabId, name) : selectSwarm(open.id),
+      );
+      final controller = await superTabs.open(tabId);
+      if (_disposed || _devicePick != pick || !_announceFromDevice) return;
+      if (controller.snapshot == null) await controller.refresh();
+      if (_disposed || _devicePick != pick || !_announceFromDevice) return;
+      final project = controller.snapshot?.projects
+          .where((p) => p.id == projectId)
+          .firstOrNull;
+      if (project == null) return;
+      controller.select(project.leadConversationId);
+      // Selecting what is already selected announces nothing by itself.
+      _announceOpenPanesToDial();
+    } catch (error) {
+      appLog.warn('super-tab', 'Could not open the picked project: $error');
+    } finally {
+      abandon.cancel();
+      if (_devicePick == pick) _announceFromDevice = false;
+    }
+  }
+
   void _noteNavigation() {
     _paneFocusByUser = !_navigatingFromDevice;
     // A device's move is not a person opening anything — but it does leave a
@@ -5081,6 +5129,9 @@ class AppNotifier extends ChangeNotifier {
   /// unchanged and the `foreground` flag riding with it is the point.
   void announceWindowForeground() => _announceOpenPanesToDial();
 
+  bool _announceFromDevice = false;
+  int _devicePick = 0;
+
   /// The tile roster and the tabs, to every daemon this window reaches over
   /// its loopback ([_deskConnection]) — never a relayed machine's.
   void _announceOpenPanesToDial() {
@@ -5136,11 +5187,22 @@ class AppNotifier extends ChangeNotifier {
           ];
     // The swarms travel with the tiles: the dial names the one on screen above the agent and offers
     // the others, and a pick there comes back as `dial_swarm`.
+    final fromDevice = _announceFromDevice;
     final swarmRows = [
       for (final swarm in swarms)
         {
           'id': swarm.id,
           'name': swarm.name,
+          // The backend tab and the project open in it, for a device that
+          // draws the Swarm's Leads and asks for one by these ids. Left out
+          // while the tab has not loaded: a project is not guessed.
+          if (swarm.superTabId case final tabId?) ...{
+            'superTabId': tabId,
+            if (superTabs.peek(tabId) case final controller?)
+              if (controller.snapshot?.projectFor(controller.selectedId)
+                  case final project?)
+                'projectId': project.id,
+          },
           'agentIds': [
             for (final pane in swarm.panes)
               if (onDial(pane)) pane.agentId!,
@@ -5186,6 +5248,9 @@ class AppNotifier extends ChangeNotifier {
             .sendTerminalFrame('app_swarms', {
               'active': activeSwarmId,
               'swarms': swarmRows,
+              // Set on the announces a device's pick caused, so the daemon
+              // does not send the pick back to the device as a new focus.
+              if (fromDevice) 'fromDevice': true,
               // Only the active one's. It is the only grid the device draws, and sending every tab's
               // geometry would be two dozen shapes to carry one.
               'tiles': activeTiles,
@@ -20140,6 +20205,15 @@ class AppNotifier extends ChangeNotifier {
             _requestDeviceWindow(machine);
           }
           _fromDevice(() => selectSwarm(swarmId));
+        }
+        break;
+      case 'dial_super_tab':
+        // The Harness Pro picked a Lead's project. Show that Swarm, then the
+        // project's Lead chat as a click on its row in the sidebar does.
+        final tabId = payload['superTabId'];
+        final projectId = payload['projectId'];
+        if (tabId is String && projectId is String) {
+          await _openSuperTabProject(machine, tabId, projectId);
         }
         break;
       case 'dial_forked':

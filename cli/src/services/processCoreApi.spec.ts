@@ -221,6 +221,17 @@ describe('the core API a light service runs on in its own process', () => {
     expect(ask).toHaveBeenCalledWith('super_tab_attention', { items: [] })
   })
 
+  it('tells the core the Swarm cards and recaps as two queries, never waiting on or throwing from them', async () => {
+    const ask = vi.fn(async (_query: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> => { throw new Error('gone') })
+    const doors = processCoreApi('/data', 'superTabs', { ask }).superTabs!
+    const recap = { tabId: 't1', leadId: 'l1', text: 'Shipped', at: 1, none: false }
+    doors.cards([])
+    doors.cardRecap(recap)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(ask).toHaveBeenCalledWith('super_tab_cards', { items: [] })
+    expect(ask).toHaveBeenCalledWith('super_tab_card_recap', { recap })
+  })
+
   it('acts on the core for an experiment: agents made, turns stopped and delivered, windows told, each asked', async () => {
     const answers: Record<string, Record<string, unknown> | Error> = {
       create: { ok: true, agentId: 'made' }, stop_turn: {}, windows: {}, deliver: {}, cancel_delivery: { cancelled: true },

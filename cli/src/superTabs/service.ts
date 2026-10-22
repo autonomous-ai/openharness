@@ -10,6 +10,7 @@ import { START_REQUIREMENTS } from './capacity.js'
 import { CapacityReservations, type ReservationBook } from './reservations.js'
 import { ContributionPreparations, prepareContribution } from './contribution.js'
 import { messageIdOf } from './attach.js'
+import { cardId, SwarmCards } from './cards.js'
 
 const HELP = {
   status: 'Read the shared tab roster and work.',
@@ -84,6 +85,8 @@ export interface SuperTabServiceOptions {
   reservations?: (core: CoreApi, machineId: string) => ReservationBook
   /** Jev for `route`; Harness's hosted key through the backend when the person has no key of their own. */
   jev?: (core: CoreApi) => JevDecide
+  /** The Swarm cards' reader (superTabs/cards.ts), for a spec. */
+  cards?: (core: CoreApi, machineId: string) => SwarmCards
 }
 export function superTabService(core: CoreApi, options: SuperTabServiceOptions = {}): { requests: ServiceRequests; port: SuperTabsPort } {
   const preparations = new ContributionPreparations(input => (options.prepareContribution ?? prepareContribution)(core, input))
@@ -102,7 +105,19 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     host.start()
     return host
   }
-  const disconnect = () => { preparations.clear(); host?.stop(); host = null; book?.stop(); book = null; bookMachine = null }
+  // The Swarm cards for a Harness Pro (superTabs/cards.ts), read while a device that shows them is attached and told to the core.
+  let swarmCards: SwarmCards | null = null, cardsMachine: string | null = null
+  const cards = () => {
+    const machine = core.daemon.machineId()
+    if (cardsMachine !== machine) { swarmCards?.want(false); swarmCards = null; cardsMachine = machine }
+    if (!swarmCards) {
+      swarmCards = (options.cards ?? ((api, id) => new SwarmCards(api, id)))(core, machine)
+      swarmCards.onCards = items => core.superTabs?.cards(items)
+      swarmCards.onRecap = recap => core.superTabs?.cardRecap(recap)
+    }
+    return swarmCards
+  }
+  const disconnect = () => { preparations.clear(); host?.stop(); host = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null }
   const port = {
     connected: () => {
       if (identifier(core.daemon.machineId()) && existsSync(hostJournalFile(core.dataDir, core.daemon.machineId()))) wake()
@@ -130,6 +145,23 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (!asker.owner || (!asker.local && asker.accountOwner !== true)) return { error: 'OWNER_REQUIRED' }
         if (payload.action === 'swarmRole') return { ok: true, role: await port.swarmRole(String(payload.harnessId ?? '')) }
         if (payload.action === 'prepareContribution') return preparations.read(payload)
+        // The devices' (core/devicesLink.ts): a Harness Pro that shows the Swarm cards is attached or gone, wants a Lead's recap, or
+        // has one open. They read the account's Swarms as the person, and need no agent.
+        // Only this computer's own devices ask: an account owner on another machine does not make this one read the Swarms.
+        if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen') {
+          if (!asker.local) return { error: 'OWNER_REQUIRED' }
+          if (payload.action === 'cardsWanted') {
+            const include = Array.isArray(payload.include) ? payload.include.filter(cardId) : []
+            cards().want(payload.on === true, include)
+            return { ok: true }
+          }
+          if (payload.action === 'cardRecap' && cardId(payload.tabId) && cardId(payload.leadId)) return { ok: true, ...await cards().recap(payload.tabId, payload.leadId) }
+          if (payload.action === 'cardOpen' && cardId(payload.session) && cardId(payload.tabId) && (payload.leadId === null || cardId(payload.leadId))) {
+            cards().open(payload.session, payload.tabId, payload.leadId)
+            return { ok: true }
+          }
+          return { error: 'INVALID_REQUEST' }
+        }
         if (payload.action === 'backend') {
           const { method, path } = payload
           if (!['GET', 'POST'].includes(String(method)) || typeof path !== 'string'

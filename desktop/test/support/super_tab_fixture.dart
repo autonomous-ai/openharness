@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -36,6 +37,8 @@ class ConversationServer {
   int revision = 0;
   bool loseReply = false, reject = false, failSave = false, failReads = false;
   Map<String, dynamic>? saved;
+  // While set, every read waits for it: a slow server.
+  Completer<void>? holdReads;
   // Makes every command answer with this refusal: {code, message}.
   Map<String, String>? refuse;
   final posts = <Map<String, dynamic>>[];
@@ -245,6 +248,7 @@ class ConversationServer {
       }
       return result;
     }
+    if (holdReads case final hold?) await hold.future;
     if (failReads) throw StateError('Offline');
     final uri = Uri.parse(path);
     if (uri.pathSegments.last == 'routing-policy') {

@@ -120,6 +120,16 @@ typedef struct {
     uint8_t unread_count;
     pod_read_out_t reads[POD_READS_MAX];
     uint8_t read_count;
+    // The Swarm cards (hello swarmCard:v1): the daemon's list, in card order, with each Lead's cached recap text (PSRAM, owned here).
+    pod_swarm_t swarms[SWARMS_CARD_MAX];
+    uint8_t swarm_n;                     // the received ones, in the order of want[]
+    char want[SWARMS_CARD_MAX][ID_MAX];  // the last `supertabs` id list: set and order; a Swarm not here is dropped, one not received yet is absent
+    uint8_t want_n;
+    bool swarm_ids;                      // a `supertabs` list has arrived on this link (want[] is then the truth; before it, a Swarm that is not here may just not be sent yet)
+    // supertab.focus: the desktop opened this Swarm project. Kept until the view that acts on it clears focus_pending (a focus for a
+    // Swarm the list does not hold yet waits for it).
+    bool focus_pending;
+    char focus_tab[ID_MAX], focus_lead[ID_MAX];
 } pod_model_t;
 
 // Copy src into dst[cap], cut on a UTF-8 codepoint boundary (always valid, always NUL-terminated); src may be dst.
@@ -172,6 +182,26 @@ pod_attention_t pod_model_attention(const pod_model_t *, const pod_agent_t *);
 void pod_model_question_close(pod_model_t *, const char *id);
 void pod_model_recap(pod_model_t *, const char *id, const char *recap, bool restore);
 void pod_model_link(pod_model_t *, bool up);
+
+// ---- the Swarm cards ----
+// The `supertabs` id list (at most SWARMS_CARD_MAX, bad or repeated ids skipped): Swarms not listed are dropped and their texts freed, the
+// rest are put in this order; a listed Swarm not received yet stays absent until pod_model_supertab brings it.
+void pod_model_supertab_ids(pod_model_t *, const char (*ids)[ID_MAX], int n);
+// One `supertab` frame: replaces that Swarm's data (a new one is placed by the id list's order). A Lead that was in the old data (same Lead id)
+// keeps its recap state and text; the texts of Leads that left are freed. Stamps since_at_ms with now_ms. Ignored when the id is not in the list.
+void pod_model_supertab(pod_model_t *, const pod_swarm_t *s, uint32_t now_ms);
+// A Lead's last message: LOADED with a copy of `text` (cut to SWARM_TEXT_MAX - 1 on a codepoint), or EMPTY when `none`. Unknown Swarm/Lead: dropped.
+void pod_model_supertab_recap(pod_model_t *, const char *tab, const char *lead, const char *text, uint32_t at, bool none);
+// The Lead view asks for / lets go of a Lead's last message: loading puts a cold one (NONE) to LOADING (the texts arrive as pod_model_supertab_recap);
+// close sends a LOADING, LOADED or EMPTY one back to NONE and frees its text (only the open Lead gets pushes, so a closed one would go stale).
+void pod_model_supertab_loading(pod_model_t *, const char *tab, const char *lead);
+void pod_model_supertab_close(pod_model_t *, const char *tab, const char *lead);
+// supertab.focus: record it as pending (focus_pending, focus_tab, focus_lead); the latest one wins.
+void pod_model_supertab_focus(pod_model_t *, const char *tab, const char *lead);
+const pod_swarm_t *pod_model_swarm_for_tab(const pod_model_t *, const char *tab_id);   // the desk tab's Swarm (its `tab` link); NULL for "" or none
+const pod_swarm_t *pod_model_swarm(const pod_model_t *, const char *swarm_id);
+// Index of the Lead in the Swarm, or -1.
+int pod_model_lead_index(const pod_swarm_t *, const char *lead_id);
 
 const pod_agent_t *pod_model_find(const pod_model_t *, const char *id);
 // The agents with the most recent task (the newer of act_ms and lib_ms), at most max, newest first. An agent with

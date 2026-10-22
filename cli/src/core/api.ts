@@ -22,6 +22,7 @@ import type { NativeTurnRead } from '../lib/nativeTurnObservations.js'
 import type { ReviewedAnswer } from '../cable/questionInbox.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { AppSwarms } from '../cable/cableSession.js'
+import type { LeadRecap, SwarmCard } from '../superTabs/cards.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import type { AutonomousDeviceAgent, AutonomousDeviceDelivery, AutonomousDeviceReceipt } from '../lib/autonomous-device/service.js'
 import type { StoreAgent } from '../lib/autonomous-device/store.js'
@@ -349,6 +350,10 @@ export interface CoreApi {
   cloud?: CloudCore
   /** The Super Tab service's door into the core (superTabs/attention.ts): absent from a core or a process that offers it none. */
   superTabs?: SuperTabsCore
+  /** The devices' way to the Super Tab service's `super_tabs` requests, for the Swarm cards alone (`cardsWanted`, `cardRecap`,
+   *  `cardOpen`; core/devicesLink.ts refuses any other action): its answer, or SERVICE_UNAVAILABLE. Absent from a core or a
+   *  process that offers none. */
+  superTabRequest?: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>
   /** The Wi-Fi device's doors into the core (services/wifi.ts): each one call it made when it ran here. */
   wifi: {
     /** What it lists and reads in line (`WifiView`), asked again before each request it answers. */
@@ -1172,6 +1177,11 @@ export interface SuperTabAttention {
 export interface SuperTabsCore {
   /** Every wait, replacing the last set: the core raises what is new on the devices and closes what is gone. */
   attention(items: SuperTabAttention[]): void
+  /** Every Swarm this account is in, whole, each time it changes: the core keeps the last list for a dial that attaches
+   *  later and hands it to the devices (core/superTabCards.ts). */
+  cards(items: SwarmCard[]): void
+  /** What one Lead last said, pushed when the recap on a Harness Pro's screen moved on. */
+  cardRecap(recap: LeadRecap): void
 }
 
 /** What the cloud service answers the core: done, or why not, in words a person reads. */
@@ -1211,7 +1221,7 @@ export type ForkResult = { ok: true; agentId: string } | { ok: false; error: str
  *  this desk did on a dial, and a spoken task offered to the window's palette. Never to the cloud. */
 export const DEVICE_WINDOW_FRAMES = [
   'dial_open', 'dial_notification_read', 'dial_forked', 'dial_focus', 'dial_swarm', 'dial_scroll', 'dial_status',
-  'voice_route_request',
+  'voice_route_request', 'dial_super_tab',
 ] as const
 export type DeviceWindowFrame = { type: (typeof DEVICE_WINDOW_FRAMES)[number]; payload: Record<string, unknown> }
 
@@ -1247,6 +1257,10 @@ export interface DevicesPort {
   desk(agentIds: string[], foreground: boolean): void
   /** The window's tabs, or null once it has gone. */
   swarms(swarms: AppSwarms | null): void
+  /** The Swarms' cards for a Harness Pro (core/superTabCards.ts), whole; replayed to a dial that attaches. */
+  swarmCards(items: SwarmCard[]): void
+  /** One Lead's last message, for the recap a Harness Pro has open. */
+  swarmCardRecap(recap: LeadRecap): void
   /** What the window still has unread, newest first. */
   unread(items: UnreadNotification[]): void
   /** The window moved to an agent. */
@@ -1286,7 +1300,7 @@ const DEVICES_UNAVAILABLE = 'the devices service is unavailable'
  * picking no agent and sending nothing, the Wi-Fi device finds no desk to walk, and a shutdown goes on.
  */
 export const DEVICES_FALLBACKS: PortFallbacks<DevicesPort> = {
-  card: undefined, desk: undefined, swarms: undefined, unread: undefined, appFocus: undefined, seen: undefined,
+  card: undefined, desk: undefined, swarms: undefined, swarmCards: undefined, swarmCardRecap: undefined, unread: undefined, appFocus: undefined, seen: undefined,
   settings: undefined, windowFocus: undefined, windowReply: undefined, voiceReply: undefined, windowGone: undefined,
   routeTask: later({ agentId: '', machineId: '', name: '', confidence: 0, reason: DEVICES_UNAVAILABLE, candidates: [], weighed: 0, machines: 0, via: '' }),
   routeSend: later({ ok: false, machine: '', reason: DEVICES_UNAVAILABLE }),
@@ -1790,6 +1804,8 @@ export interface CoreApiDeps {
   cloud?: CloudCore
   /** The Super Tab service's door (core/superTabAttention.ts). */
   superTabs?: SuperTabsCore
+  /** The devices' way to the Super Tab service's card requests. */
+  superTabRequest?: CoreApi['superTabRequest']
   /** The running cloud harnesses as list rows (`agents.cloud`). */
   cloudRows?: () => RegisteredSession[]
   lastTurn: CoreApi['transcripts']['lastTurn']
@@ -1805,7 +1821,7 @@ export function createCoreApi({
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, creationStatus, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText, activitySnapshot, activity, summaries,
   closeAgent, activityAt,
-  signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, superTabs, cloudRows, lastTurn, nativeTurns, turnCard, turnSummary,
+  signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, superTabs, superTabRequest, cloudRows, lastTurn, nativeTurns, turnCard, turnSummary,
   log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
   // The devices reach the windows through these alone, and only with their own frames: a devices process
@@ -1898,5 +1914,6 @@ export function createCoreApi({
     wifi,
     ...(cloud ? { cloud } : {}),
     ...(superTabs ? { superTabs } : {}),
+    ...(superTabRequest ? { superTabRequest } : {}),
   }
 }
