@@ -456,7 +456,7 @@ it('starts only in the chosen conversation, captures authority, and never assign
   const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
   const request = { conversationId: group, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
-  const startId = f.run({ type: 'agent.start', request }, actor, { contribution }).result.startId as string
+  const startId = f.run({ type: 'agent.start', request, ...via }, actor, { contribution, ...decisionIn(group) }).result.startId as string
   expect(f.state.starts![0]).toMatchObject({ request, hostGrant: 'grant-1', dispatched: false })
   expect(f.state.agents).toHaveLength(1)
   expect(f.state.conversations).toHaveLength(2)
@@ -468,7 +468,7 @@ it('starts only in the chosen conversation, captures authority, and never assign
   expect(f.state.conversations[1]).toMatchObject({ agentIds: [lead, worker], assignment: null })
   expect(f.state.conversations[0]!.agentIds).toEqual([lead])
   f.run({ type: 'tab.pause', paused: true })
-  expect(() => f.run({ type: 'agent.start', request }, actor, { contribution })).toThrow('paused')
+  expect(() => f.run({ type: 'agent.start', request, ...via }, actor, { contribution, ...decisionIn(group) })).toThrow('paused')
 })
 
 describe('agent.start on the Swarm\'s listed machines', () => {
@@ -479,7 +479,7 @@ describe('agent.start on the Swarm\'s listed machines', () => {
   it('refuses an agent\'s start on a machine nobody listed, and records nothing', () => {
     const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
     const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
-    expect(() => f.run({ type: 'agent.start', request: request(group, 'account-vm') }, actor, { contribution: grant }))
+    expect(() => f.run({ type: 'agent.start', request: request(group, 'account-vm'), ...via }, actor, { contribution: grant, ...decisionIn(group) }))
       .toThrow(expect.objectContaining({ code: 'MACHINE_NOT_LISTED', status: 403, message: 'Add this machine to the Swarm first.' }))
     expect(f.state.starts ?? []).toEqual([])
   })
@@ -490,7 +490,8 @@ describe('agent.start on the Swarm\'s listed machines', () => {
     const lead = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'lead-machine', harnessId: 'lead', name: 'Lead',
       configuration: { ...config, engine }, lead: true }, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
     const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
-    f.run({ type: 'agent.start', request: request(f.group(), 'lead-machine') }, actor, { contribution: grant })
+    const group = f.group()
+    f.run({ type: 'agent.start', request: request(group, 'lead-machine'), ...via }, actor, { contribution: grant, ...decisionIn(group) })
     expect(f.state.starts).toHaveLength(1)
   })
 
@@ -499,7 +500,7 @@ describe('agent.start on the Swarm\'s listed machines', () => {
     const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
     f.state.machines = [{ machineId: 'contributed', name: 'Mini', contributorId: 'owner', membershipGeneration: f.state.people[0]!.generation, generation: 'g1',
       cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false, observation: { receivedAt: 1000 } } as never]
-    f.run({ type: 'agent.start', request: request(group, 'contributed') }, actor, { contribution: grant })
+    f.run({ type: 'agent.start', request: request(group, 'contributed'), ...via }, actor, { contribution: grant, ...decisionIn(group) })
     expect(f.state.starts).toHaveLength(1)
   })
 
@@ -532,6 +533,9 @@ const candidate = (id: string, patch: Record<string, unknown> = {}) => ({ id, ki
 const record = (patch: Record<string, unknown> = {}) => ({ assessment: { difficulty: 'high', risk: 'low', why: 'Schema change.' },
   candidates: [candidate('c0'), candidate('c1', { model: 'sonnet', quality: 2, cost: 2 })], excluded: [], floor: 3, notes: false,
   pick: 'c0', via: 'jev', p: 0.82, belowFloor: false, why: 'Highest quality within quota.', ...patch })
+/** What an agent passes to start or assign: a routing decision of `conversationId`. Its pick differs from the call, so it carries a reason. */
+const via = { routeDecisionId: 'd1', overrideReason: 'Test.' }
+const decisionIn = (conversationId = 'lead') => ({ routeDecision: { id: 'd1', conversationId, record: record(), final: null, override: null, assignmentId: null, outcome: null } as unknown as RouteDecision })
 /** The base fixture plus a coordinating Lead and a worker, both on one host. */
 function routed() {
   const f = fixture()
@@ -684,7 +688,7 @@ describe('decisions linked to work', () => {
   it('refuses a second link while the first assignment of the decision is still running', () => {
     const f = routed()
     f.define('lead')
-    const running = f.run({ type: 'work.assign', conversationId: 'lead', agentId: f.worker }, f.leadActor)
+    const running = f.run({ type: 'work.assign', conversationId: 'lead', agentId: f.worker, ...via }, f.leadActor, decisionIn())
     const assignmentId = running.result.assignmentId as string
     const request = { conversationId: 'lead', machineId: 'machine', engine: 'claude', model: 'opus', effort: 'high', name: 'Builder', cwd: '/repo', worktree: false,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
@@ -753,6 +757,28 @@ describe('decisions linked to work', () => {
     expect(() => f.run(assign, f.leadActor, { routeDecision: overridden })).toThrow('reason')
     const effects = f.run({ ...assign, overrideReason: 'The opus agent is already warm.' }, f.leadActor, { routeDecision: overridden })
     expect(effects.routeDecisions[0]).toMatchObject({ op: 'final', final, override: { by: 'lead', reason: 'The opus agent is already warm.' } })
+  })
+})
+
+describe('agents route before they start or assign', () => {
+  const request = { conversationId: 'lead', machineId: 'machine', engine: 'claude', model: 'opus', effort: 'high', name: 'Builder', cwd: '/repo', worktree: false,
+    requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+  const refused = expect.objectContaining({ code: 'ROUTE_REQUIRED', status: 400, message: expect.stringContaining('Route this task first') })
+
+  it('refuses a Lead\'s start and assignment without a routing decision, and records nothing', () => {
+    const f = routed()
+    f.define('lead')
+    expect(() => f.run({ type: 'agent.start', request }, f.leadActor, { contribution: f.contribution })).toThrow(refused)
+    expect(() => f.run({ type: 'work.assign', conversationId: 'lead', agentId: f.worker }, f.leadActor)).toThrow(refused)
+    expect(f.state.starts ?? []).toEqual([])
+    expect(f.state.conversations.find(c => c.id === 'lead')!.assignment ?? null).toBeNull()
+  })
+
+  it('lets a person start and assign by hand, without routing', () => {
+    const f = routed()
+    f.define('lead')
+    expect(f.run({ type: 'agent.start', request }, owner, { contribution: f.contribution }).result.startId).toBeTruthy()
+    expect(f.run({ type: 'work.assign', conversationId: 'lead', agentId: f.worker }, owner).result.assignmentId).toBeTruthy()
   })
 })
 
@@ -829,8 +855,8 @@ describe('message attachments', () => {
     const { f, group, worker, other, leadActor } = finished()
     expect(visibleState(f.state, owner).agents.find(a => a.id === worker)).toHaveProperty('workDecision', 'awaiting')
     f.run({ type: 'work.define', conversationId: group, brief: 'Next task', checks: [{ description: 'Done', independent: false }] })
-    expect(() => f.run({ type: 'work.assign', conversationId: group, agentId: other }, leadActor)).toThrow('reuse, keep or stop')
-    f.run({ type: 'work.assign', conversationId: group, agentId: worker }, leadActor)
+    expect(() => f.run({ type: 'work.assign', conversationId: group, agentId: other, ...via }, leadActor, decisionIn(group))).toThrow('reuse, keep or stop')
+    f.run({ type: 'work.assign', conversationId: group, agentId: worker, ...via }, leadActor, decisionIn(group))
     expect(f.state.agents.find(a => a.id === worker)).not.toHaveProperty('workDecision')
     expect(() => f.run({ type: 'agent.release', agentId: worker, decision: 'stop' } as Command, leadActor)).toThrow('active work')
   })
@@ -841,9 +867,9 @@ describe('message attachments', () => {
     f.run(release, leadActor)
     expect(f.state.agents.find(a => a.id === worker)).toHaveProperty('workDecision', 'keep')
     f.run({ ...release, decision: 'stop' } as Command)
-    expect(() => f.run({ type: 'work.assign', conversationId: group, agentId: worker }, leadActor)).toThrow('stopping')
+    expect(() => f.run({ type: 'work.assign', conversationId: group, agentId: worker, ...via }, leadActor, decisionIn(group))).toThrow('stopping')
     expect(() => f.run(release, leadActor)).toThrow('stopping')
-    f.run({ type: 'work.assign', conversationId: group, agentId: other }, leadActor)
+    f.run({ type: 'work.assign', conversationId: group, agentId: other, ...via }, leadActor, decisionIn(group))
   })
   it('allows only the execution host of a requested stop to acknowledge removal', () => {
     const { f, worker, other, leadActor, workerActor } = finished()
@@ -867,10 +893,10 @@ it('blocks routing and starts until a finished worker is kept or stopped', () =>
   const request = { conversationId: group, machineId: 'machine', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: false,
     requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
   expect(() => f.run(route, f.leadActor)).toThrow('reuse, keep or stop')
-  expect(() => f.run({ type: 'agent.start', request }, f.leadActor, { contribution: f.contribution })).toThrow('reuse, keep or stop')
+  expect(() => f.run({ type: 'agent.start', request, ...via }, f.leadActor, { contribution: f.contribution, ...decisionIn(group) })).toThrow('reuse, keep or stop')
   f.run({ type: 'agent.release', agentId: f.worker, decision: 'keep' }, f.leadActor)
   expect(f.run(route, f.leadActor).routeDecisions).toHaveLength(1)
-  expect(f.run({ type: 'agent.start', request }, f.leadActor, { contribution: f.contribution }).result.startId).toBeTruthy()
+  expect(f.run({ type: 'agent.start', request, ...via }, f.leadActor, { contribution: f.contribution, ...decisionIn(group) }).result.startId).toBeTruthy()
 })
 
 it('requires the exact stop request for host acknowledgement and prevents promotion while stopping', () => {

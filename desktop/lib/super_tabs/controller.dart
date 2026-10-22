@@ -50,6 +50,7 @@ class SuperTabController extends ChangeNotifier {
       );
       projectsGroupOpen = initial['projectsGroupOpen'] as bool? ?? true;
       machinesGroupOpen = initial['machinesGroupOpen'] as bool? ?? true;
+      offlineMachinesOpen = initial['offlineMachinesOpen'] as bool? ?? false;
       selectedId = initial['selectedId'] as String? ?? 'lead';
       final drafts = initial['drafts'];
       if (drafts is Map) {
@@ -149,6 +150,9 @@ class SuperTabController extends ChangeNotifier {
   final expandedProjects = <String>{};
   bool projectsGroupOpen = true, machinesGroupOpen = true;
 
+  /// Whether the Machines group's "Offline · N" disclosure is open; it starts closed.
+  bool offlineMachinesOpen = false;
+
   void toggleProject(String id) {
     if (!expandedProjects.remove(id)) expandedProjects.add(id);
     _saveSoon();
@@ -163,6 +167,12 @@ class SuperTabController extends ChangeNotifier {
 
   void toggleMachinesGroup() {
     machinesGroupOpen = !machinesGroupOpen;
+    _saveSoon();
+    _changed();
+  }
+
+  void toggleOfflineMachines() {
+    offlineMachinesOpen = !offlineMachinesOpen;
     _saveSoon();
     _changed();
   }
@@ -297,6 +307,7 @@ class SuperTabController extends ChangeNotifier {
     'expandedProjects': expandedProjects.toList(),
     'projectsGroupOpen': projectsGroupOpen,
     'machinesGroupOpen': machinesGroupOpen,
+    'offlineMachinesOpen': offlineMachinesOpen,
     'drafts': Map<String, String>.of(_drafts),
     'terminals': Map<String, String>.of(_terminals),
 

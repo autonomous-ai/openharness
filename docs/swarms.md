@@ -96,23 +96,30 @@ machine is therefore picked up within about 5 seconds. When nothing changes it s
 a report every 15 seconds, so that a silent machine can be told from a quiet one; a pass
 that fails waits a whole 15 seconds before the next.
 
-Each machine in the sidebar has a status dot before its name, and the age of its reading
-at the end of its metrics line ("4s ago"):
+Each machine in the sidebar is one line, at a project row's height and on its columns: a
+status dot where the project chevrons sit, the name where project names start, and at the
+end up to three of its agents, overlapping, then +N, the last centered under the heading's +.
+When two machines share a name, each is followed by its owner in muted text ("MacBook Pro ·
+tony"). The only other mark is a warning before the agents when one of the machine's model
+allowances is under 10% ("Claude Code: 2% left" on hover). Online machines come first, by
+name; offline ones follow under "Offline · N", closed until opened, which the Desktop
+remembers like the groups themselves. Clicking a machine opens its details.
 
-| State | When | Dot | Age |
+| State | When | Dot | Hover begins |
 | --- | --- | --- | --- |
-| Live | reading under 20 s old | green, with one short ping as each new reading arrives | `4s ago` |
-| Late | 20 s to 35 s | amber | `28s ago`, in amber |
-| Offline | 35 s or more (one named constant) | hollow grey ring; the name is muted | `3 min ago` |
-| Unknown | the Desktop cannot read the Swarm (contributing machines only) | dashed grey ring; the name is muted; not offline | `1 min ago` |
-| Refreshing | back from the background, no new reading yet | grey, breathing | `refreshing…` |
+| Live | reading under 20 s old | green, with one short ping as each new reading arrives | `Updated 4s ago` |
+| Late | 20 s to 35 s | amber | `Updated 28s ago` |
+| Offline | 35 s or more (one named constant) | hollow grey ring; the name is muted | `Offline · last seen 3 min ago` |
+| Unknown | the Desktop cannot read the Swarm (contributing machines only) | dashed grey ring; the name is muted; not offline | `Can't reach Harness · data from 1 min ago` |
+| Refreshing | back from the background, no new reading yet | grey, breathing | `Refreshing…` |
 
-Hovering or focusing a row says it in words ("Updated 4s ago", "Offline · last seen 3 min
-ago", "Can't reach Harness · data from 1 min ago", "Refreshing…"), and the row's screen-reader
-label is the machine's name, its state and that text, so colour is never the only signal.
-Old numbers are always kept, dimmed, for offline, unknown and refreshing machines, never
-blanked. The Machines heading carries a pill, "Live" or "Reconnecting · 1m" while the Swarm
-cannot be read. The pings and the breathing stop when the platform asks for reduced motion.
+Hovering or focusing a row says the rest in words: its state and age, then its numbers and
+any allowance running out ("Updated 13s ago · CPU 37% free · GPU 4% free · RAM 18 GB free ·
+SSD 208 GB free"). The row's screen-reader label is the machine's name, its state and that
+text, so colour is never the only signal. Old numbers are always kept there for offline,
+unknown and refreshing machines, never blanked. While the Swarm cannot be read, the Machines
+heading carries a pill, "Reconnecting · 1m"; a live Swarm shows none. The pings and the
+breathing stop when the platform asks for reduced motion.
 A machine reports every 15 s, so 35 s is two missed reports plus a margin.
 
 This computer is read directly by the Desktop, every 15 seconds, so it stays live while the

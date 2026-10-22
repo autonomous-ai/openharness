@@ -6,12 +6,15 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/machine_details.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/section_heading.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/engine_identity.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
@@ -55,6 +58,24 @@ Future<void> _openAddMachineDialog(
 }
 
 final _picker = find.byKey(const ValueKey('swarm-machine-picker'));
+
+/// What hovering or focusing a machine row says.
+String _tipOf(WidgetTester tester, Finder row) => tester
+    .widget<Tooltip>(
+      find.ancestor(of: row, matching: find.byType(Tooltip)).first,
+    )
+    .message!;
+
+/// The words on a machine's line: its name, and its owner's when the name is shared.
+String _lineOf(WidgetTester tester, String id) => find
+    .descendant(
+      of: find.byKey(ValueKey('super-machine-$id')),
+      matching: find.byType(RichText),
+    )
+    .evaluate()
+    .map((e) => (e.widget as RichText).text.toPlainText())
+    .join();
+
 Finder _option(String id) => find.byKey(ValueKey('swarm-machine-option-$id'));
 
 void main() {
@@ -83,7 +104,7 @@ void main() {
     },
   );
   testWidgets(
-    'machine rows show known capacity and allowances, and an offline machine keeps its old readings dimmed',
+    'a machine is one line; its numbers and age are in its tooltip, and an offline one waits under "Offline · 1"',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(280, 700));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -130,28 +151,34 @@ void main() {
       await tester.pumpAndSettle();
       final offline = find.byKey(const ValueKey('super-machine-offline'));
       final online = find.byKey(const ValueKey('super-machine-online'));
-      // Offline: said by the row's tooltip, and its old numbers stay, dimmed, instead of being blanked.
-      expect(find.byTooltip('Offline · last seen 1 min ago'), findsOneWidget);
+      // The list says no number, age or allowance; the row's tooltip does.
+      expect(find.textContaining('CPU'), findsNothing);
+      expect(find.textContaining('GB'), findsNothing);
+      expect(find.textContaining('ago'), findsNothing);
+      expect(find.byType(EngineMark), findsNothing);
       expect(
-        find.descendant(of: offline, matching: find.textContaining('CPU')),
-        findsOneWidget,
+        _tipOf(tester, online),
+        matches(
+          RegExp(
+            r'^Updated (just now|\ds ago) · CPU 100% free · RAM 0 GB free · SSD 141 GB free$',
+          ),
+        ),
+      );
+      expect(tester.getSize(online).height, 36);
+      // Offline machines start out of sight, under their disclosure.
+      expect(offline, findsNothing);
+      expect(find.text('Offline · 1'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('super-machines-offline')));
+      await tester.pumpAndSettle();
+      expect(c.offlineMachinesOpen, isTrue);
+      expect(
+        _tipOf(tester, offline),
+        'Offline · last seen 1 min ago · CPU 100% free · RAM 0 GB free · SSD 141 GB free',
       );
       expect(
-        find.descendant(of: offline, matching: find.byType(EngineMark)),
-        findsOneWidget,
+        tester.getTopLeft(offline).dy,
+        greaterThan(tester.getTopLeft(online).dy),
       );
-      double dimmest(Finder row) => tester
-          .widgetList<Opacity>(
-            find.descendant(of: row, matching: find.byType(Opacity)),
-          )
-          .map((o) => o.opacity)
-          .fold(1.0, (a, b) => a < b ? a : b);
-      expect(dimmest(offline), lessThan(1));
-      expect(dimmest(online), 1);
-      expect(find.text('CPU 100%'), findsNWidgets(2));
-      expect(find.text('RAM 0 GB'), findsNWidgets(2));
-      expect(find.text('SSD 141 GB'), findsNWidgets(2));
-      expect(find.byType(EngineMark), findsNWidgets(2));
       // The entire row opens its details, including keyboard activation.
       Focus.of(tester.element(find.text('Studio Mac'))).requestFocus();
       await tester.pump();
@@ -184,7 +211,7 @@ void main() {
       );
       await tester.tap(find.text('Close'));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-machine-offline')));
+      await tester.tap(offline);
       await tester.pumpAndSettle();
       expect(find.byType(AlertDialog), findsOneWidget);
       expect(
@@ -195,6 +222,311 @@ void main() {
       expect(find.text('Available capacity'), findsNothing);
       expect(find.text('Model allowances'), findsNothing);
       expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    },
+  );
+
+  testWidgets(
+    'online machines come first by name; offline ones follow under a closed, saved "Offline · N"',
+    (tester) async {
+      final server = ConversationServer();
+      final now = DateTime.now().millisecondsSinceEpoch;
+      Map<String, dynamic> machine(String id, String name, int ageMs) => {
+        'machineId': id,
+        'name': name,
+        'contributorId': 'owner',
+        'observation': {'receivedAt': now - ageMs},
+      };
+      server.state['machines'] = [
+        machine('z', 'Zed Mac', 0),
+        machine('g', 'Gamma', 600000),
+        machine('a', 'alpha Mac', 25000),
+        machine('b', 'Beta', 600000),
+      ];
+      final c = server.controller();
+      await c.refresh();
+      Future<void> show() async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: ListenableBuilder(
+                listenable: c,
+                builder: (context, _) => SuperTabMachines(
+                  controller: c,
+                  embedded: true,
+                  onAddAgent: (_) {},
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      double y(String key) => tester.getTopLeft(find.byKey(ValueKey(key))).dy;
+      await show();
+      // Late is online too; case does not decide the order.
+      expect(y('super-machine-a'), lessThan(y('super-machine-z')));
+      expect(y('super-machine-z'), lessThan(y('super-machines-offline')));
+      expect(find.text('Offline · 2'), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-machine-b')), findsNothing);
+      expect(find.byKey(const ValueKey('super-machine-g')), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('super-machines-offline')));
+      await tester.pumpAndSettle();
+      expect(y('super-machines-offline'), lessThan(y('super-machine-b')));
+      expect(y('super-machine-b'), lessThan(y('super-machine-g')));
+
+      // Saved, and read back by the next controller for this Swarm.
+      await c.flush();
+      expect(server.saved!['offlineMachinesOpen'], isTrue);
+      final reopened = server.controller(initial: server.saved!);
+      expect(reopened.offlineMachinesOpen, isTrue);
+      reopened.dispose();
+      expect(server.controller().offlineMachinesOpen, isFalse);
+
+      // Nothing offline, no disclosure.
+      server.state['machines'] = [machine('z', 'Zed Mac', 0)];
+      await c.refresh();
+      await show();
+      expect(
+        find.byKey(const ValueKey('super-machines-offline')),
+        findsNothing,
+      );
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    },
+  );
+
+  testWidgets(
+    'a name two machines share is told apart by its owner, and only then',
+    (tester) async {
+      final server = ConversationServer();
+      final now = DateTime.now().millisecondsSinceEpoch;
+      server.state['people'] = [
+        {'id': 'tony', 'email': 'tony@example.com', 'role': 'owner'},
+        {'id': 'dee', 'email': 'dee@example.com', 'role': 'collaborator'},
+      ];
+      Map<String, dynamic> machine(String id, String name, String owner) => {
+        'machineId': id,
+        'name': name,
+        'contributorId': owner,
+        'observation': {'receivedAt': now},
+      };
+      server.state['machines'] = [
+        machine('t', 'MacBooks-MacBook-Pro-9.local', 'tony'),
+        machine('d', 'MacBook Pro', 'dee'),
+        machine('s', 'Studio', 'dee'),
+      ];
+      final c = server.controller();
+      await c.refresh();
+      final semantics = tester.ensureSemantics();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabMachines(controller: c, onAddAgent: (_) {}),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(_lineOf(tester, 't'), 'MacBook Pro · tony');
+      expect(_lineOf(tester, 'd'), 'MacBook Pro · dee');
+      expect(_lineOf(tester, 's'), 'Studio');
+      // The owner is in muted ink, after the name.
+      final span = tester
+          .widget<RichText>(
+            find.descendant(
+              of: find.byKey(const ValueKey('super-machine-t')),
+              matching: find.byType(RichText),
+            ),
+          )
+          .text;
+      TextSpan? owner;
+      span.visitChildren((child) {
+        if (child is TextSpan && child.text == ' · tony') owner = child;
+        return owner == null;
+      });
+      expect(owner!.style!.color, DesktopChrome.muted);
+      expect(
+        tester
+            .getSemantics(find.byKey(const ValueKey('super-machine-t')))
+            .label,
+        startsWith('MacBook Pro · tony, Live, Updated'),
+      );
+      semantics.dispose();
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    },
+  );
+
+  testWidgets(
+    'agents: up to three overlapping avatars then +N, centered on the + column; none shows nothing',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(320, 700));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final server = ConversationServer();
+      final now = DateTime.now().millisecondsSinceEpoch;
+      server.state['agents'] = [
+        for (final (machine, count) in [('five', 5), ('two', 2)])
+          for (var i = 0; i < count; i++)
+            {
+              'id': '$machine-$i',
+              'name': 'Harness $i',
+              'displayName': '${machine == 'five' ? 'Five' : 'Two'} $i',
+              'machineId': machine,
+              'harnessId': 'native-$machine-$i',
+              'contributorId': 'owner',
+              'configuration': {'engine': 'codex'},
+            },
+      ];
+      server.state['machines'] = [
+        for (final id in ['five', 'two', 'none'])
+          {
+            'machineId': id,
+            'name': id,
+            'contributorId': 'owner',
+            'observation': {'receivedAt': now},
+          },
+      ];
+      final c = server.controller();
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabMachines(
+              controller: c,
+              embedded: true,
+              onAddAgent: (_) {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      Finder inRow(String id, Finder finder) => find.descendant(
+        of: find.byKey(ValueKey('super-machine-$id')),
+        matching: finder,
+      );
+      List<Rect> avatars(String id) => [
+        for (final e in inRow(id, find.byType(SuperTabAvatar)).evaluate())
+          tester.getRect(find.byWidget(e.widget)),
+      ]..sort((a, b) => a.left.compareTo(b.left));
+
+      final five = avatars('five');
+      expect(five, hasLength(3));
+      expect(inRow('five', find.text('+2')), findsOneWidget);
+      for (var i = 1; i < five.length; i++) {
+        expect(five[i].left - five[i - 1].left, closeTo(13, .01));
+      }
+      expect(five.first.width, 16);
+      final rowFive = tester.getRect(
+        find.byKey(const ValueKey('super-machine-five')),
+      );
+      for (final a in five) {
+        expect(a.center.dy, closeTo(rowFive.center.dy, .5));
+      }
+      // The last mark, +2, centers where the heading's + does (embedded: 16 from the edge).
+      expect(
+        tester.getCenter(inRow('five', find.text('+2'))).dx,
+        closeTo(rowFive.right - 16, .5),
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('super-machine-agents-five')),
+          matching: find.byType(SuperTabAvatar),
+        ),
+        findsNWidgets(3),
+      );
+      expect(
+        find.byTooltip(
+          [for (var i = 0; i < 5; i++) 'Five $i — Engineer'].join('\n'),
+        ),
+        findsOneWidget,
+      );
+
+      final two = avatars('two');
+      expect(two, hasLength(2));
+      expect(inRow('two', find.textContaining('+')), findsNothing);
+      final rowTwo = tester.getRect(
+        find.byKey(const ValueKey('super-machine-two')),
+      );
+      expect(two.last.center.dx, closeTo(rowTwo.right - 16, .5));
+
+      expect(avatars('none'), isEmpty);
+      expect(
+        find.byKey(const ValueKey('super-machine-agents-none')),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    },
+  );
+
+  testWidgets(
+    'an allowance under 10% is the one warning a row shows, and says which',
+    (tester) async {
+      final server = ConversationServer();
+      final now = DateTime.now().millisecondsSinceEpoch;
+      Map<String, dynamic> machine(String id, int used, {int age = 0}) => {
+        'machineId': id,
+        'name': id,
+        'contributorId': 'owner',
+        'observation': {
+          'receivedAt': now - age,
+          'quotas': [
+            {
+              'engine': 'codex',
+              'known': true,
+              'windows': [
+                {'name': '5-hour', 'usedPercent': used},
+              ],
+            },
+          ],
+        },
+      };
+      server.state['machines'] = [
+        machine('low', 98),
+        machine('fine', 90),
+        // An old reading's allowance is no warning about now.
+        machine('gone', 99, age: 600000),
+      ];
+      final c = server.controller();
+      await c.refresh();
+      c.offlineMachinesOpen = true;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabMachines(controller: c, onAddAgent: (_) {}),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final warning = find.byKey(const ValueKey('super-machine-attention-low'));
+      expect(warning, findsOneWidget);
+      expect(find.byTooltip('Codex: 2% left'), findsOneWidget);
+      expect(
+        _tipOf(tester, find.byKey(const ValueKey('super-machine-low'))),
+        endsWith(' · Codex: 2% left'),
+      );
+      expect(
+        find.byKey(const ValueKey('super-machine-attention-fine')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('super-machine-attention-gone')),
+        findsNothing,
+      );
+      // At the end, centered on the + column when nothing follows it.
+      final row = tester.getRect(
+        find.byKey(const ValueKey('super-machine-low')),
+      );
+      expect(tester.getCenter(warning).dx, closeTo(row.right - 28, .5));
       await tester.pumpWidget(const SizedBox());
       await c.flush();
       c.dispose();
@@ -314,73 +646,89 @@ void main() {
               ),
             );
             await tester.pumpAndSettle();
-            if (capture != null) {
-              // A frame can settle before asynchronous bitmap decoding has
-              // finished. Wait for the real asset before photographing it.
-              await tester.runAsync(
-                () => precacheImage(
-                  AssetImage(engineIdentity('codex').asset!),
-                  tester.element(find.byType(EngineMark).first),
-                ).timeout(const Duration(seconds: 10)),
-              );
-              await tester.pumpAndSettle();
-            }
             final row = find.byKey(const ValueKey('super-machine-m'));
-            final header = find.byKey(const ValueKey('super-machine-header-m'));
-            final avatars = tester
-                .widgetList<SuperTabAvatar>(
-                  find.descendant(
-                    of: header,
-                    matching: find.byType(SuperTabAvatar),
-                  ),
-                )
-                .toList();
-            expect(avatars.first.identity, 'person:owner');
-            expect(avatars.first.name, 'dee');
-            expect(avatars[1].identity, 'agent:agent-0');
-            expect(avatars[1].name, 'Atlas');
+            final rowRect = tester.getRect(row);
+            expect(rowRect.width, width);
+            // One line at a project row's height and on its columns.
+            if (textScale == 1) expect(rowRect.height, 36);
+            final dot = tester.getRect(
+              find.descendant(
+                of: row,
+                matching: find.byType(SuperTabMachineDot),
+              ),
+            );
+            // Level 1, one indent step in from the heading's columns.
+            final indent = SuperTabSectionHeading.indentFor(1);
+            expect(dot.center.dx, closeTo(rowRect.left + indent + 16, .01));
+            expect(dot.center.dy, closeTo(rowRect.center.dy, .5));
             expect(
-              find.byTooltip('dee@example.com\nMachine owner'),
+              tester
+                  .getTopLeft(
+                    find
+                        .descendant(of: row, matching: find.byType(RichText))
+                        .first,
+                  )
+                  .dx,
+              rowRect.left + indent + 32,
+            );
+            // Left to right, as they read: the first agent is drawn last, on top.
+            final avatars =
+                tester
+                    .widgetList<SuperTabAvatar>(
+                      find.descendant(
+                        of: row,
+                        matching: find.byType(SuperTabAvatar),
+                      ),
+                    )
+                    .toList()
+                  ..sort(
+                    (a, b) => tester
+                        .getTopLeft(find.byWidget(a))
+                        .dx
+                        .compareTo(tester.getTopLeft(find.byWidget(b)).dx),
+                  );
+            // No owner avatar; the PM first, at most three agents, the rest as +N.
+            expect(
+              avatars.map((a) => a.identity),
+              isNot(contains('person:owner')),
+            );
+            expect(avatars.first.identity, 'agent:agent-0');
+            expect(avatars.first.name, 'Atlas');
+            expect(avatars.length, lessThanOrEqualTo(3));
+            expect(find.text('+${8 - avatars.length}'), findsOneWidget);
+            if (width == 380 && textScale == 1) expect(avatars, hasLength(3));
+            expect(
+              find.textContaining('Atlas — Product Manager'),
+              findsNothing,
+            );
+            expect(
+              find.byTooltip(
+                [
+                  'Atlas — Product Manager',
+                  for (var i = 1; i < 8; i++) 'Engineer $i — Engineer',
+                ].join('\n'),
+              ),
               findsOneWidget,
             );
-            expect(find.byTooltip('Atlas\nProduct Manager'), findsOneWidget);
-            expect(find.byTooltip('New work paused'), findsOneWidget);
-            expect(find.textContaining('agents'), findsNothing);
-            expect(find.text('dee'), findsNothing);
-            final hiddenAgents = 8 - (avatars.length - 1);
+            // Paused, the numbers and the age are in the row's tooltip, not on the line.
             expect(
-              find.text('+$hiddenAgents'),
-              hiddenAgents == 0 ? findsNothing : findsOneWidget,
+              _tipOf(tester, row),
+              matches(
+                RegExp(
+                  r'^Updated (just now|\ds ago) · New work paused · CPU 73% free · GPU 93% free · RAM 28 GB free · SSD 141 GB free$',
+                ),
+              ),
             );
-            if (width == 280) expect(hiddenAgents, greaterThan(0));
-            for (final value in [
-              'CPU 73%',
-              'GPU 93%',
-              'RAM 28 GB',
-              'SSD 141 GB',
-              '70%',
-            ]) {
-              expect(find.text(value), findsOneWidget);
+            expect(find.byIcon(AppIcons.pause), findsNothing);
+            for (final value in ['CPU', 'GPU', 'RAM', 'SSD', '70%', 'dee']) {
+              expect(find.textContaining(value), findsNothing);
             }
-            final rowRect = tester.getRect(row);
             final ink = find.descendant(
               of: row,
               matching: find.byType(InkWell),
+              matchRoot: true,
             );
-            expect(tester.getRect(ink), rowRect);
-            expect(rowRect.width, width);
-            final headerRect = tester.getRect(header);
-            for (final avatar
-                in find
-                    .descendant(
-                      of: header,
-                      matching: find.byType(SuperTabAvatar),
-                    )
-                    .evaluate()) {
-              final rect = tester.getRect(find.byWidget(avatar.widget));
-              expect(rect.center.dy, closeTo(headerRect.center.dy, .1));
-              expect(rect.right, lessThanOrEqualTo(rowRect.right - 16));
-            }
+            expect(tester.getRect(ink.first), rowRect);
             expect(tester.takeException(), isNull);
 
             // The blank right edge and all capacity/allowance lines belong to
@@ -406,6 +754,17 @@ void main() {
             await tester.tapAt(Offset(rowRect.right - 2, rowRect.center.dy));
             await mouse.removePointer();
             await tester.pumpAndSettle();
+            if (capture != null) {
+              // A frame can settle before asynchronous bitmap decoding has
+              // finished. Wait for the real asset before photographing it.
+              await tester.runAsync(
+                () => precacheImage(
+                  AssetImage(engineIdentity('codex').asset!),
+                  tester.element(find.byType(EngineMark).first),
+                ).timeout(const Duration(seconds: 10)),
+              );
+              await tester.pumpAndSettle();
+            }
             final dialog = find.byType(AlertDialog);
             final details = find.byType(SuperTabMachineDetails);
             expect(dialog, findsOneWidget);
@@ -971,8 +1330,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.byType(EngineMark), findsOneWidget);
-    expect(tester.widget<EngineMark>(find.byType(EngineMark)).engine, 'claude');
+    // The list shows no allowance at all; the details show the known one.
+    expect(find.byType(EngineMark), findsNothing);
     await tester.tap(find.byKey(const ValueKey('super-machine-m')));
     await tester.pumpAndSettle();
     expect(
@@ -999,6 +1358,8 @@ void main() {
       ];
       final c = await f.app.superTabs.open(tabId);
       await c.refresh();
+      // Never reported, so offline: under the disclosure.
+      c.offlineMachinesOpen = true;
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(

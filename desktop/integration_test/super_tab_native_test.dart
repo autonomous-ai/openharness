@@ -90,6 +90,12 @@ void main() {
         ...conversationFixture('design-lead', 'Lead'),
         'projectId': 'design',
       });
+      // A workgroup under Lamp OS, so the sidebar's tree shows a second level.
+      (server.state['conversations'] as List).add({
+        ...conversationFixture('polish', 'Sidebar polish'),
+        'projectId': 'lead',
+        'number': 20,
+      });
       server.state['machines'] = [
         {
           'machineId': 'm',
@@ -131,6 +137,27 @@ void main() {
                 },
             ],
             'runningHarnessIds': [f.connection.native!['id']],
+          },
+        },
+        // A second Studio Mac, so the list tells the two apart by owner, and one long offline, under its
+        // closed "Offline · 1".
+        {
+          'machineId': 'm-twin',
+          'name': 'Studio Mac',
+          'contributorId': 'person-0',
+          'observation': {
+            'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            'resources': {'cpuPercent': 40},
+          },
+        },
+        {
+          'machineId': 'm-old',
+          'name': 'Old Mini',
+          'contributorId': 'person-1',
+          'observation': {
+            'receivedAt': DateTime.now()
+                .subtract(const Duration(minutes: 20))
+                .millisecondsSinceEpoch,
           },
         },
       ];
@@ -241,15 +268,54 @@ void main() {
       expect(find.text('CHATS'), findsNothing);
       expect(find.text('New group'), findsNothing);
       expect(find.byTooltip('New project'), findsOneWidget);
-      // Left sidebar: both Projects and Machines groups start open.
-      expect(find.text('Studio Mac'), findsOneWidget);
+      // Left sidebar: both Projects and Machines groups start open, one line a machine, the two Studio Macs told
+      // apart by owner, and the offline machine under its closed disclosure.
+      expect(find.text('Studio Mac · owner'), findsOneWidget);
+      expect(find.text('Studio Mac · person0'), findsOneWidget);
+      expect(find.text('Offline · 1'), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-machine-m-old')), findsNothing);
+      expect(find.textContaining('CPU'), findsNothing);
       await shot('sidebar-groups');
+      debugPrint(
+        'Swarm fixture: open the tree: a workgroup and the offline machines',
+      );
+      final leadWasOpen = c!.expandedProjects.contains('lead');
+      if (!leadWasOpen) {
+        await tester.tap(
+          find.byKey(const ValueKey('super-project-expand-lead')),
+        );
+      }
+      await tester.tap(find.byKey(const ValueKey('super-machines-offline')));
+      await tester.pumpAndSettle();
+      expect(find.text('#20 Sidebar polish'), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-machine-m-old')), findsOneWidget);
+      // Each level one step further in than the one above it.
+      double textX(String row, String label) => tester
+          .getTopLeft(
+            find.descendant(
+              of: find.byKey(ValueKey(row)),
+              matching: find.text(label),
+            ),
+          )
+          .dx;
+      expect(
+        textX('super-group-polish', '#20 Sidebar polish'),
+        greaterThan(textX('super-group-lead', 'Lamp OS')),
+      );
+      await shot('sidebar-tree');
+      if (!leadWasOpen) {
+        await tester.tap(
+          find.byKey(const ValueKey('super-project-expand-lead')),
+        );
+      }
+      await tester.tap(find.byKey(const ValueKey('super-machines-offline')));
+      await tester.pumpAndSettle();
       debugPrint('Swarm fixture: empty project disclosure');
       await tester.tap(
         find.byKey(const ValueKey('super-project-expand-design')),
       );
       await tester.pumpAndSettle();
-      expect(c!.selectedId, 'lead');
+      expect(c.selectedId, 'lead');
       expect(c.expandedProjects.contains('design'), isTrue);
       expect(find.text('No workgroups yet'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('super-group-lead')));
@@ -319,7 +385,7 @@ void main() {
       await tester.tap(find.byTooltip('Collapse Machines'));
       await tester.pumpAndSettle();
       expect(find.text('Design'), findsNothing);
-      expect(find.text('Studio Mac'), findsNothing);
+      expect(find.textContaining('Studio Mac'), findsNothing);
       await shot('sidebar-collapsed');
       await tester.tap(find.byTooltip('Expand Projects'));
       await tester.pumpAndSettle();

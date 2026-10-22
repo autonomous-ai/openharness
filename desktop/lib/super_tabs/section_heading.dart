@@ -12,6 +12,8 @@ class SuperTabSectionHeading extends StatelessWidget {
     this.onAdd,
     this.addTooltip,
     this.trailing,
+    this.actions = const [],
+    this.endInset = 12,
     this.collapsed,
     this.onToggleCollapsed,
   });
@@ -23,6 +25,15 @@ class SuperTabSectionHeading extends StatelessWidget {
   /// Beside the title, before the add action: a status the heading carries, such as the Machines pill.
   final Widget? trailing;
 
+  /// Compact actions right before the add action, each an [AppIconButton]
+  /// the size of the add action itself, such as Machines' Your devices.
+  final List<Widget> actions;
+
+  /// The space after the last action. The left sidebar passes 0, so that
+  /// its + is centered on the column of its rows' trailing dots
+  /// ([ProjectSidebar.markerInset]).
+  final double endInset;
+
   /// Whether a collapsible group's body is currently hidden. Ignored unless
   /// [onToggleCollapsed] is set.
   final bool? collapsed;
@@ -31,10 +42,22 @@ class SuperTabSectionHeading extends StatelessWidget {
   /// that toggles it, aligned with the icon column project/machine rows share.
   final VoidCallback? onToggleCollapsed;
 
-  /// The chevron and add button are both a fixed 32 px square; the gap
-  /// before the add button is 4 px; the title always keeps at least this
+  /// The chevron and every action are a fixed 32 px square; the gap
+  /// before the actions is 4 px; the title always keeps at least this
   /// much room, even when the trailing pill is at its widest.
-  static const _actionWidth = 32.0;
+  static const actionWidth = 32.0;
+
+  /// One step of the sidebar's tree: a group's rows sit one step in from its heading, and the rows under one
+  /// of those (a project's workgroups, the offline machines) two.
+  static const indentStep = 16.0;
+
+  /// Where a collapsible heading's chevron column starts.
+  static const _leadingInset = 4.0;
+
+  /// Where the icon column of a row at [level] starts, from the row's leading edge; its text starts right
+  /// after that 32 px column, as the heading's does. Level 0 is the heading's own.
+  static double indentFor(int level) => _leadingInset + level * indentStep;
+
   static const _trailingGap = 4.0;
   static const _minTitleWidth = 40.0;
 
@@ -42,7 +65,12 @@ class SuperTabSectionHeading extends StatelessWidget {
   Widget build(BuildContext context) {
     final collapsible = onToggleCollapsed != null;
     return Padding(
-      padding: EdgeInsets.fromLTRB(collapsible ? 4 : 16, 0, 12, 4),
+      padding: EdgeInsets.fromLTRB(
+        collapsible ? _leadingInset : 16,
+        0,
+        endInset,
+        4,
+      ),
       child: ConstrainedBox(
         constraints: const BoxConstraints(minHeight: 32),
         child: LayoutBuilder(
@@ -54,8 +82,9 @@ class SuperTabSectionHeading extends StatelessWidget {
             final pillMaxWidth = trailing == null
                 ? 0.0
                 : (constraints.maxWidth -
-                          (collapsible ? _actionWidth : 0) -
-                          (onAdd != null ? _actionWidth : 0) -
+                          (collapsible ? actionWidth : 0) -
+                          actions.length * actionWidth -
+                          (onAdd != null ? actionWidth : 0) -
                           _trailingGap -
                           _minTitleWidth)
                       .clamp(0.0, double.infinity);
@@ -103,6 +132,7 @@ class SuperTabSectionHeading extends StatelessWidget {
                   ),
                   const SizedBox(width: _trailingGap),
                 ],
+                ...actions,
                 if (onAdd != null)
                   AppIconButton(
                     icon: AppIcons.plus,
