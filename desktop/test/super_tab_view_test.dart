@@ -304,7 +304,7 @@ void main() {
   }
 
   testWidgets(
-    'global roster stays scrollable with 20 people and opens an agent directly',
+    'global roster stays scrollable with 20 people and opens agent details',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1100, 700));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -369,6 +369,9 @@ void main() {
       await tester.ensureVisible(member);
       await tester.pumpAndSettle();
       await tester.tap(member);
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, 'Open terminal'));
       await tester.pumpAndSettle();
       expect(target?.id, 'agent-0');
       expect(find.byType(Dialog), findsNothing);

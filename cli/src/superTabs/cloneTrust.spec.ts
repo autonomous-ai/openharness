@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { lstat } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -30,7 +30,9 @@ vi.mock('node:fs/promises', async original => {
 let home = ''
 beforeEach(() => {
   vi.clearAllMocks()
-  home = mkdtempSync(join(tmpdir(), 'swarm-clone-trust-'))
+  // Discovery uses physical paths. On macOS tmpdir's /var spelling resolves through /private/var;
+  // keep fixture comparisons physical too, and exercise intentional aliases in the symlink tests.
+  home = realpathSync(mkdtempSync(join(tmpdir(), 'swarm-clone-trust-')))
   vi.stubEnv('HOME', home); vi.stubEnv('USERPROFILE', home)
   vi.stubEnv('CLAUDE_CONFIG_DIR', join(home, 'claude')); vi.stubEnv('CODEX_HOME', join(home, 'codex'))
   mkdirSync(process.env.CLAUDE_CONFIG_DIR!, { recursive: true }); mkdirSync(process.env.CODEX_HOME!, { recursive: true })

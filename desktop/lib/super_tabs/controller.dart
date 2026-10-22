@@ -8,6 +8,7 @@ import '../logging/app_log.dart';
 import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
 import 'model.dart';
+import 'review_verdict.dart';
 
 typedef SuperTabRequest = Future<Map<String, dynamic>> Function(
   String method,
@@ -275,6 +276,24 @@ class SuperTabController extends ChangeNotifier {
       (m) => m.source['kind'] != 'update-request',
     ),
   );
+
+  /// "Reviewer: Ada · Ready: yes on 1a2b3c4d5", from the newest `Ready:` message a
+  /// reviewer of [group] posted in the loaded history. Null without a reviewer.
+  String? reviewLine(SuperTabConversation? group) {
+    final state = snapshot;
+    if (group == null) return null;
+    final reviewers = state?.reviewers(group) ?? const <SuperTabAgent>[];
+    if (reviewers.isEmpty) return null;
+    final ids = {for (final r in reviewers) r.id};
+    final verdict = messages(group.id).reversed
+        .where((m) => m.fromAgent && ids.contains(m.authorId))
+        .map((m) => parseSuperTabVerdict(m.text))
+        .nonNulls
+        .firstOrNull;
+    final names = reviewers.map((r) => state!.agentName(r.id)).join(', ');
+    return 'Reviewer: $names · ${verdict?.label ?? 'No verdict yet'}';
+  }
+
   bool hasOlder(String id) => _before[id] != null;
   int _loadedMessageSequence(String id) =>
       _messages[id]?.reversed

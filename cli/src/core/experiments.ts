@@ -16,14 +16,19 @@ import type { BackendNotice } from './api.js'
 
 type Experiments = Readonly<Record<string, { state: readonly string[] }>>
 
-/** Whether any of `state` is in `dataDir`: a path under it, or `dir/*.ext` for a file of that kind in that folder. */
+/** Whether any of `state` is in `dataDir`: a path under it, or `dir/prefix*suffix` for a file of that kind in that folder.
+ *  The star was only read after a slash, so `super-tabs/host-*.json` was looked up as that literal file name and never
+ *  found: a machine contributed to a Swarm never woke the Swarm service at a start, and after the master re-executed
+ *  (every update) it stayed off until some request started it (remote-deepseek, 3 hours offline, 2026-10-22). */
 export function stateIsThere(dataDir: string, state: readonly string[]): boolean {
   return state.some((entry) => {
-    const star = entry.lastIndexOf('/*')
+    const slash = entry.lastIndexOf('/')
+    const star = entry.indexOf('*', slash + 1)
     if (star < 0) return existsSync(join(dataDir, entry))
-    const suffix = entry.slice(star + 2)
+    const prefix = entry.slice(slash + 1, star)
+    const suffix = entry.slice(star + 1)
     try {
-      return readdirSync(join(dataDir, entry.slice(0, star))).some((name) => name.endsWith(suffix))
+      return readdirSync(join(dataDir, entry.slice(0, slash))).some((name) => name.startsWith(prefix) && name.endsWith(suffix))
     } catch {
       return false
     }

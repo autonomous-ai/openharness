@@ -1,15 +1,15 @@
 /** `harness super-tab route GROUP JSON`: the Lead's routing step (docs/superpowers/specs/2026-10-19-super-tab-routing-v1-design.md).
- * Reads the tab, the effective policy and the account's machines; probes each machine once per engine with
- * the same admission `start` uses; then orders, asks Jev, and records the decision in the tab. */
+ * Reads the tab, its rules, the effective policy and the account's machines; probes each machine once per engine with
+ * the same admission `start` uses; then filters and orders by the rules (docs/plans/2026-10-22-swarm-rules-routing.md)
+ * and records the decision in the tab. */
 import { randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { startRequirements } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { choose, contextSize, decide, jevQuestion, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, type Assessment, type Attempt, type Commitment, type MemberFrame, type Policy, type Probe, type TaskFolder } from './route.js'
+import { choose, decide, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
-import type { JevChoiceAnswer } from '../lib/jev/jevClient.js'
 
 type Json = Record<string, unknown>
 const ENGINES = ['claude', 'codex']
@@ -51,27 +51,24 @@ function withLaunchEffort(member: Json, starts: Json[]): Json {
 }
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
 
-/** Work that ended in this Super Tab, oldest first: the log's decisions, the group's attempts and each group's last
- * assignment, joined by assignment id. The log knows which agent a decision started; the attempts are every earlier
- * assignment of this group, also those `work.define` took out of the state (a person's assignment has no decision);
- * the state knows the agent and the result of each group's last one. */
-interface Ended { assignmentId: string; groupId: string; group: string; agentId: string | null; agent: string; outcome: string; result?: string }
-function endedWork(conversations: Json[], agents: Json[], decisions: Json[] | null, attempts: Json[] | null, attemptsGroup: string): Ended[] {
+/** Work that ended in this Super Tab, oldest first, for each member's earlier work: the log's decisions, the group's
+ * attempts and each group's last assignment, joined by assignment id. The log knows which agent a decision started; the
+ * attempts are every earlier assignment of this group, also those `work.define` took out of the state (a person's
+ * assignment has no decision); the state knows the agent of each group's last one. */
+interface Ended { assignmentId: string; group: string; agentId: string | null; outcome: string }
+function endedWork(conversations: Json[], decisions: Json[] | null, attempts: Json[] | null, attemptsGroup: string): Ended[] {
   const titleOf = (id: unknown) => String(conversations.find(c => c.id === id)?.title ?? 'another group')
-  const nameOf = (id: unknown) => text(agents.find(a => a.id === id)?.name)
   const ended: Ended[] = [...(decisions ?? [])].reverse().flatMap(d => {
     const final = object(d.final)
     return typeof d.assignmentId === 'string' && ENDED_WORK.includes(String(d.outcome)) && final.kind
-      ? [{ assignmentId: d.assignmentId, groupId: String(d.conversationId), group: titleOf(d.conversationId), outcome: String(d.outcome),
-          agentId: final.kind === 'member' ? String(final.agentId) : null,
-          agent: final.kind === 'member' ? nameOf(final.agentId) ?? 'An agent' : `New agent (${String(final.engine)} ${String(final.model)})` }]
+      ? [{ assignmentId: d.assignmentId, group: titleOf(d.conversationId), outcome: String(d.outcome), agentId: final.kind === 'member' ? String(final.agentId) : null }]
       : []
   })
-  // The assignment's own record wins on agent and outcome; a started agent the tab no longer has keeps the log's name.
+  // The assignment's own record wins on the agent: a started agent is a member by then.
   const join = (assignment: Json, groupId: string) => {
-    const result = text(assignment.result) ?? undefined, known = ended.find(e => e.assignmentId === assignment.id)
-    if (known) return Object.assign(known, { agentId: String(assignment.agentId), agent: nameOf(assignment.agentId) ?? known.agent, result })
-    const added: Ended = { assignmentId: String(assignment.id), groupId, group: titleOf(groupId), agentId: String(assignment.agentId), agent: nameOf(assignment.agentId) ?? 'An agent', outcome: String(assignment.status), result }
+    const known = ended.find(e => e.assignmentId === assignment.id)
+    if (known) return Object.assign(known, { agentId: String(assignment.agentId) })
+    const added: Ended = { assignmentId: String(assignment.id), group: titleOf(groupId), agentId: String(assignment.agentId), outcome: String(assignment.status) }
     ended.push(added)
     return added
   }
@@ -102,8 +99,9 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
       return { error: 'AGENT_UNAVAILABLE', detail: error instanceof Error ? error.message : 'The request to the machine failed.' }
     }
   }
-  const assessment = parseAssessment(input.assessment)
-  if (typeof assessment === 'string') return { error: 'INVALID_REQUEST', detail: assessment }
+  const parsed = parseAssessment(input.assessment)
+  if (typeof parsed === 'string') return { error: 'INVALID_REQUEST', detail: parsed }
+  let assessment = parsed
   const cwd = assessment.needs.cwd
   const context = await scoped({ action: 'routeContext' })
   if (context.error || context.ok !== true) return context
@@ -120,6 +118,9 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     ...conversations.filter(c => active(c.assignment)).map(c => String(object(c.assignment).agentId))])
   // A review group is assigned only to a Reviewer, and a Reviewer nothing else.
   const review = typeof group.reviewOf === 'string'
+  if (review) assessment = { ...assessment, kind: 'review' }
+  // A backend from before rules keeps none, so routing there is the policy order alone.
+  const rules = list(state.rules).filter(r => r.rule && typeof r.text === 'string') as unknown as SwarmRule[]
   const members = agents.filter(a => !busy.has(String(a.id)) && (a.role === 'reviewer') === review && ENGINES.includes(String(object(a.configuration).engine))).map(a => withLaunchEffort(a, list(state.starts)))
   // A new agent starts only on a machine in the Swarm's Machines list (the backend refuses any other): a contributed machine, or
   // one an agent of the Swarm runs on. The Lead runs here, so its own machine is always listed. Of the account's machines
@@ -157,38 +158,19 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const folder: TaskFolder | null = !cwd ? null : read ?? { cwd, kind: 'unknown', name: null, root: null, remote: null }
   const past = object(history?.ok === true ? history.value : {})
   const decisions = Array.isArray(past.decisions) ? list(past.decisions) : null
-  const messages = Array.isArray(past.messages) ? list(past.messages).map(m => ({ from: String(m.from), text: String(m.text) })) : null
   const attempts = Array.isArray(past.attempts) ? list(past.attempts) : null
-  const ended = endedWork(conversations, agents, decisions, attempts, input.conversationId)
+  const ended = endedWork(conversations, decisions, attempts, input.conversationId)
   const probes = probed.flat().map(p => p.kind === 'member' ? { ...p, repo: repoMatch(folder, p.frame ?? null, p.machineId === where.machineId),
     earlier: ended.filter(e => e.agentId === p.agentId).reverse().slice(0, 3).map(e => ({ group: e.group, outcome: e.outcome })) } : p)
   // Picks started or assigned and still at work hold part of their account's quota; the log, and so this, is per Swarm.
   const working = (decisions ?? []).filter(d => d.final && d.outcome === null && typeof d.account === 'string')
     .map(d => ({ account: d.account, spend: object(d.spend), size: d.size, createdAt: Date.parse(String(d.createdAt)) }) as Commitment)
-  const choice = choose(probes, policy, assessment, Date.now(), working)
+  const choice = choose(probes, policy, assessment, Date.now(), working, rules)
   if ('error' in choice) return choice
-  // What Jev could not be told, for the decision log: pick quality can later be compared with how complete this was.
-  const missing = [...(messages ? [] : ['messages']), ...(decisions ? [] : ['route log']), ...(attempts ? [] : ['attempts']), ...(folder && ['unknown', 'missing'].includes(folder.kind) ? ['task folder'] : []),
-    ...(choice.shown.some(s => s.kind === 'member' && !s.frame) ? ['member activity'] : []),
-    ...(choice.shown.some(s => s.kind === 'new' && (s.load!.agents === null || s.load!.freeMemoryBytes === null)) ? ['machine load'] : [])]
-
-  let answer: JevChoiceAnswer | undefined, unavailable: string | null = null, question: ReturnType<typeof jevQuestion> | undefined
-  if (choice.shown.length > 1) {
-    const checks = list(group.checks).map(c => String(c.description ?? ''))
-    // Every attempt in this group that ended: a worker that stopped on this task is a worse choice.
-    const attempts: Attempt[] = ended.filter(e => e.groupId === input.conversationId).map(e => ({ agent: e.agent, outcome: e.outcome, ...(e.result ? { result: e.result } : {}) }))
-    const recent = decisions?.slice(0, 5).map(d => ({ title: String(d.title), ...(typeof d.via === 'string' ? { via: d.via } : {}), outcome: text(d.outcome) })) ?? null
-    question = jevQuestion({ title: String(group.title ?? ''), brief: String(group.brief ?? ''), checks, messages, noneInLatest: past.noneInLatest === true, folder, attempts, recent }, assessment, policy, choice)
-    const reply = await scoped({ action: 'routeJev', conversationId: input.conversationId, ...question })
-    if (typeof reply.error === 'string' && !TRANSPORT.has(reply.error)) return reply
-    const jev = object(reply.value)
-    if (reply.ok !== true || typeof jev.unavailable === 'string') unavailable = typeof jev.unavailable === 'string' ? jev.unavailable : 'UNAVAILABLE'
-    else answer = object(jev.answers).who as JevChoiceAnswer | undefined
-  }
-  const verdict = decide(choice, answer, unavailable)
+  const verdict = decide(choice)
   const operationId = `route-${newId()}`
   const record = (v1: boolean) => scoped({ action: 'command', operationId,
-    command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf(choice, verdict, assessment, policy, question && { chars: contextSize(question), missing }, v1) } })
+    command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf(choice, verdict, assessment, policy, v1) } })
   let recorded = await record(false)
   // A backend from before phase 1 refuses the new fields as invalid; the decision is still worth keeping in the shape it knows.
   if (recorded.error === 'VALIDATION_ERROR') recorded = await record(true)

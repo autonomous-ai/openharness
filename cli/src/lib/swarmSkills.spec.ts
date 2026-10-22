@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { prepareSwarmSkill, parseSwarmSkill } from './swarmSkills.js'
+import { prepareSwarmSkill, parseSwarmSkill, recordSwarmSkillNotice, refreshSwarmSkill } from './swarmSkills.js'
 import { agentLaunchArgs } from './agentAttribution.js'
 import { buildLaunchOverrides } from './launchOverrides.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
@@ -51,6 +51,52 @@ describe('built-in Swarm skills', () => {
     const text = readFileSync(prepared.file, 'utf8')
     expect(text.startsWith(`---\nname: swarm-${role}\n`)).toBe(true)
     expect(createHash('sha256').update(text).digest('hex')).toBe(sha256)
+  })
+
+  describe('a running session after a CLI update', () => {
+    const skill = { role: 'dev' as const, key: 'running' }
+    // What an older CLI left: its own text, and either no record (before records) or a record of that text.
+    const older = (workspace: string, recorded: boolean) => {
+      const { file } = prepareSwarmSkill(workspace, skill)
+      const text = '---\nname: swarm-dev\n---\nAn older release of this skill.\n', version = createHash('sha256').update(text).digest('hex')
+      writeFileSync(file, text)
+      if (recorded) writeFileSync(join(dirname(file), 'version.json'), JSON.stringify({ text: version, notified: version }))
+      else rmSync(join(dirname(file), 'version.json'))
+      return file
+    }
+    it.each([false, true])('rewrites an older skill file and owes one notice until it is recorded (recorded before: %s)', recorded => {
+      const workspace = fixture(), file = older(workspace, recorded)
+      const sync = refreshSwarmSkill(workspace, skill)!
+      expect(sync).toMatchObject({ file, owed: true })
+      expect(readFileSync(file, 'utf8')).toBe(readFileSync(prepareSwarmSkill(fixture(), skill).file, 'utf8'))
+      // Not yet recorded: a later pass, or another daemon, still owes the same notice for the same text.
+      expect(refreshSwarmSkill(workspace, skill)).toEqual(sync)
+      recordSwarmSkillNotice(workspace, skill, sync.version)
+      expect(refreshSwarmSkill(workspace, skill)).toMatchObject({ file, owed: false })
+      // The agent's own edits after the update are its own: the record says the file already holds this text.
+      writeFileSync(file, 'edited')
+      expect(refreshSwarmSkill(workspace, skill)).toMatchObject({ owed: false })
+      expect(readFileSync(file, 'utf8')).toBe('edited')
+    })
+    it('owes nothing for a file already on the built-in text, new or from before records', () => {
+      const fresh = fixture()
+      prepareSwarmSkill(fresh, skill)
+      expect(refreshSwarmSkill(fresh, skill)).toMatchObject({ owed: false })
+      const legacy = fixture(), { file } = prepareSwarmSkill(legacy, skill)
+      rmSync(join(dirname(file), 'version.json'))
+      expect(refreshSwarmSkill(legacy, skill)).toMatchObject({ owed: false })
+    })
+    it('does nothing for a session whose skill was never prepared in this workspace', () => {
+      expect(refreshSwarmSkill(fixture(), skill)).toBeNull()
+      expect(refreshSwarmSkill(join(fixture(), 'removed-worktree'), skill)).toBeNull()
+    })
+    it('never writes through a redirected skill file', () => {
+      const workspace = fixture(), file = older(workspace, false), target = join(fixture(), 'elsewhere.md')
+      writeFileSync(target, 'kept')
+      rmSync(file); symlinkSync(target, file)
+      expect(() => refreshSwarmSkill(workspace, skill)).toThrow('plain file')
+      expect(readFileSync(target, 'utf8')).toBe('kept')
+    })
   })
 
   it('keeps standalone session skills out of Git, including git add -A', () => {

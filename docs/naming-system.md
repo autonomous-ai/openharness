@@ -101,7 +101,7 @@ Its project names open their product manager chats; a separate chevron reveals e
 An expanded project without workgroups says **No workgroups yet**. **Your devices** opens the
 existing Devices tab. The navigation, conversation and people panes have draggable dividers.
 Agents have individual display names and the same avatar treatment as people. Their role badges
-are **PM** and **Dev**; project context appears underneath. Engine names belong in details.
+are **PM**, **Dev** and **Rev**; project context appears underneath. Engine names belong in details.
 Chat headings and quoted replies use the same current agent identity as the roster, including
 older messages. When an agent has left, its recorded author name remains available in history.
 Machine rows are one line: a status dot, the name, a chip for each known model allowance

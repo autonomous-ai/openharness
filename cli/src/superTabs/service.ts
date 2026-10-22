@@ -4,7 +4,6 @@ import { createHash } from 'node:crypto'
 import type { CoreApi, ServiceRequests, SuperTabsPort } from '../core/api.js'
 import { backend, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHost, SuperTabHostError } from './host.js'
 import { within } from './wire.js'
-import { createJevDecide, type JevDecide } from '../lib/jev/jevClient.js'
 import { machineChoices } from '../lib/newCommand.js'
 import { START_REQUIREMENTS } from './capacity.js'
 import { CapacityReservations, type ReservationBook } from './reservations.js'
@@ -13,18 +12,18 @@ import { messageIdOf } from './attach.js'
 import { cardId, SwarmCards } from './cards.js'
 
 const HELP = {
-  status: 'Read the shared tab roster and work.',
+  status: 'Read the shared tab roster and work. Its rules are the owner\'s routing rules, each in the owner\'s own words.',
   messages: 'messages GROUP: read recent messages in a conversation.',
   message: 'message GROUP MESSAGE_ID: read one exact message, including an earlier question or result referenced by a reply.',
   post: 'post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]...: reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID. --attach sends a file (a screenshot, a log; up to 10 files of 10 MB each), and TEXT may then be empty.',
   start: 'start OPERATION_ID JSON: create one agent in a conversation on a machine in this Swarm\'s Machines list; to use another machine, a person adds it to the Swarm first. Repeat exactly after an interruption; it follows the same native creation receipt. It does not assign work. With worktree true, the agent starts from the repository\'s default branch, fetched first, unless you set branchRef (refs/heads/BRANCH, or refs/remotes/origin/BRANCH to fetch it first) to start from another branch, such as the one this work builds on. Set role "reviewer" to start a Reviewer; leave role out for a Builder. The role is kept for the session. A Reviewer runs on claude or codex and is assigned only review groups (conversation.create with reviewOf naming the group it reviews); a review group is assigned only to a Reviewer. Add the Reviewer to the reviewed group with conversation.agent so it is told when that work is ready for review and can pass its independent check. Start one with a routeDecisionId like any agent.',
   release: 'When a Builder finishes, decide reuse, keep or stop; prefer stop unless more work is coming soon. Reuse assigns new work; agent.release records keep or requests stop. Wait for the execution host to confirm a stop. A person can withdraw a stuck stop; the session cannot receive new work in that Swarm. Its native capacity stays reserved until its host confirms stopping. Other Swarms wait up to two minutes for an in-flight close, then may reuse it.',
   resume: 'resume START_ID: finish a pending start without creating another agent.',
-  route: 'route GROUP JSON: before you start an agent or assign work to another agent, choose who does it. Work you do yourself is not routed. JSON: {"difficulty":"low|medium|high","risk":"low|medium|high","size":"small|medium|large","why":"one sentence","needs":{"tools":[],"devices":[],"cwd":"/absolute/repo"}}. size is how long the work runs: small about 20 minutes, medium about an hour, large about three hours. Start or assign the pick with its routeDecisionId; to choose otherwise, pass overrideReason. An agent\'s start or work.assign without a routeDecisionId is refused, so route first; a person can still start and assign by hand.',
+  route: 'route GROUP JSON: before you start an agent or assign work to another agent, choose who does it. Work you do yourself is not routed. JSON: {"difficulty":"low|medium|high","risk":"low|medium|high","size":"small|medium|large","why":"one sentence","kind":"optional word such as ui or docs","needs":{"tools":[],"devices":[],"cwd":"/absolute/repo"}}. size is how long the work runs: small about 20 minutes, medium about an hour, large about three hours. Candidates that break the owner\'s hard rules are left out; soft rules (a preferred engine for the kind, idle agents first) rank the rest. Start or assign the pick with its routeDecisionId; to choose otherwise, pass overrideReason. An agent\'s start or work.assign without a routeDecisionId is refused, so route first; a person can still start and assign by hand.',
   capacity: 'capacity MACHINE_ID JSON: inspect machine, engine and quota headroom. JSON uses the start request fields below. Unknown allowances are not reported as free tokens.',
   startRequest: { conversationId: 'GROUP', machineId: 'MACHINE', engine: 'codex', name: 'Builder', cwd: '/absolute/repo/on/that/machine', worktree: true, branchRef: 'refs/remotes/origin/BASE_BRANCH', requirements: START_REQUIREMENTS,
     model: 'opus', effort: 'high', routeDecisionId: 'DECISION' },
-  command: 'command OPERATION_ID JSON: send one of the commands below. Reuse exactly the same ID and JSON after an interrupted request. When your assignment needs a person to decide, set work.status needs_human; when you cannot go on, blocked. Set working again once it moves.',
+  command: 'command OPERATION_ID JSON: send one of the commands below. Reuse exactly the same ID and JSON after an interrupted request. When your assignment needs a person to decide, set work.status needs_human; when you cannot go on, blocked. Set working again once it moves. rule.set and rule.remove change the owner\'s routing rules: only the owner does, or the Lead passing on the owner\'s request, with askedIn naming the owner\'s message. A start, assignment or route that breaks a hard rule (forbidModel, machines, minEffort) is refused for agents; preferEngine and preferIdle only rank.',
   commands: [
     { type: 'project.report', projectId: 'PROJECT', throughRevision: 123, text: 'What changed, what is blocked, and what comes next. Use null when nothing merits repeating.' },
     { type: 'project.repository', projectId: 'PROJECT', repositoryUrl: 'https://github.com/OWNER/REPOSITORY' },
@@ -35,6 +34,12 @@ const HELP = {
     { type: 'work.define', conversationId: 'GROUP', task: { goal: 'What to deliver', changes: 'What changes', constraints: 'What must stay true', owns: ['Paths or code areas'] }, checks: [{ description: 'Observable acceptance evidence', independent: false }] },
     { type: 'work.cancel', conversationId: 'GROUP', assignmentId: 'ATTEMPT', reason: 'Lead or tab owner only: why the task is cancelled, in one short sentence' },
     { type: 'agent.release', agentId: 'AGENT', decision: 'keep|stop' },
+    { type: 'rule.set', rule: { kind: 'forbidModel', model: 'haiku' }, text: 'The owner\'s words: No Haiku.', askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } },
+    { type: 'rule.set', rule: { kind: 'minEffort', effort: 'high' }, text: 'At least high effort.', askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } },
+    { type: 'rule.set', rule: { kind: 'machines', machineIds: ['MACHINE'] }, text: 'Only these machines.', askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } },
+    { type: 'rule.set', rule: { kind: 'preferEngine', taskKind: 'ui', engine: 'codex' }, text: 'Codex for UI work.', askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } },
+    { type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Reuse idle agents first.', askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } },
+    { type: 'rule.remove', ruleId: 'RULE', askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } },
     { type: 'work.assign', conversationId: 'GROUP', agentId: 'AGENT', routeDecisionId: 'DECISION' },
     { type: 'work.status', conversationId: 'GROUP', assignmentId: 'ATTEMPT', status: 'working', result: null },
     // Both reach the Lead and alert the Harness Pro on the machine running the agent until the status moves on.
@@ -84,8 +89,6 @@ export interface SuperTabServiceOptions {
   capacity?: typeof readCapabilities
   host?: (core: CoreApi, machineId: string) => SuperTabHost
   reservations?: (core: CoreApi, machineId: string) => ReservationBook
-  /** Jev for `route`; Harness's hosted key through the backend when the person has no key of their own. */
-  jev?: (core: CoreApi) => JevDecide
   /** The Swarm cards' reader (superTabs/cards.ts), for a spec. */
   cards?: (core: CoreApi, machineId: string) => SwarmCards
 }
@@ -201,27 +204,17 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             machines: readable ? machineChoices(object(object(machines.body).data), null).filter(m => !m.toAdd).map(m => ({ machineId: m.machineId, name: m.label, status: m.status })) : [],
             ...(readable ? {} : { machinesUnreadable: true }) } }
         }
-        // What Jev reads besides the candidates. Apart from `routeContext` so the Lead reads it while it probes the
-        // machines; the group's Lead only, like the route itself.
+        // The route log and the group's attempts, for the quota open picks hold and what members did before. Apart from
+        // `routeContext` so the Lead reads it while it probes the machines; the group's Lead only, like the route itself.
         if (payload.action === 'routeHistory') {
           const group = list(state.conversations).find(c => c.id === payload.conversationId)
           if (!group || group.leadId !== agentId) return { error: 'LEAD_REQUIRED', detail: 'The coordinating Lead of this group owns routing.', status: 403 }
-          const [written, logged, tried] = await Promise.all([
-            within(backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}`)),
+          const [logged, tried] = await Promise.all([
             within(backend(core, 'GET', `${path}/route-decisions?${identity}`)),
             // An older backend has no such route: its 404 is unreadable like any other failure.
             within(backend(core, 'GET', `${path}/conversations/${payload.conversationId}/attempts?${identity}`)),
           ])
-          // Jev reads the group's talk as roles: an email is a person's name here, so it never leaves this step.
-          // Native rows are an agent's own transcript and route rows are the log's, so only the talk is kept.
-          const rows = Array.isArray(object(written).messages) ? list(object(written).messages) : null
-          const messages = rows?.filter(m => !m.source).slice(-10).map(m => {
-            const by = object(m.author)
-            return { from: by.kind === 'person' ? 'person' : by.id === group.leadId ? 'Lead' : String(list(state.agents).find(a => a.id === by.id)?.name ?? 'agent'),
-              text: String(m.text ?? '').slice(0, 1000) }
-          })
-          // The log's records carry every candidate's line; Jev needs only who was picked and how it went. The route also
-          // needs the account and expected spend of what actually runs, which an open pick still holds: after an override
+          // The log's records carry every candidate's line; the route needs only who was picked and how it went, and the account and expected spend of what actually runs, which an open pick still holds: after an override
           // that is the person's chosen candidate, and a Lead's own choice outside the list has no known account.
           const decisions = Array.isArray(logged) ? logged.slice(0, 50).map(object).map(d => {
             const record = object(d.record), final = object(d.final), candidates = list(record.candidates), pick = candidates.find(c => c.id === record.pick)
@@ -233,28 +226,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           }) : null
           // Every attempt the group had, also the ones `work.define` took out of the state; the server already cut the results.
           const attempts = Array.isArray(tried) ? tried.slice(0, 50).map(object).map(a => ({ id: a.id, agentId: a.agentId, status: a.status, result: typeof a.result === 'string' ? a.result.slice(0, 500) : null, createdAt: a.createdAt ?? null })) : null
-          return { ok: true, value: { ...(messages ? { messages, ...(rows!.length && !messages.length ? { noneInLatest: true } : {}) } : { messagesUnreadable: true }),
-            ...(decisions ? { decisions } : { decisionsUnreadable: true }), ...(attempts ? { attempts } : { attemptsUnreadable: true }) } }
-        }
-        if (payload.action === 'routeJev') {
-          // Jev costs money and the decision is the Lead's, so both rules are checked before it is asked.
-          const group = Array.isArray(state.conversations) ? state.conversations.map(object).find(c => c.id === payload.conversationId) : undefined
-          if (!group || group.leadId !== agentId) return { error: 'LEAD_REQUIRED', detail: 'The coordinating Lead of this group owns routing.', status: 403 }
-          const decisions = await backend(core, 'GET', `${path}/route-decisions?${identity}`)
-          const hourAgo = Date.now() - 60 * 60_000
-          if ((Array.isArray(decisions) ? decisions : []).filter(d => Date.parse(String(object(d).createdAt)) >= hourAgo).length >= 30) {
-            return { error: 'RATE_LIMITED', detail: 'This Super Tab routed 30 tasks in the last hour. Wait before routing again.', status: 429 }
-          }
-          const decide = (options.jev ?? (api => createJevDecide({ backend: (m, p, b) => api.account.backend(m, p, b) })))(core)
-          try {
-            // Routing never waits on Jev beyond three seconds; the policy order decides instead.
-            return { ok: true, value: { answers: await decide(payload.state, object(payload.questions) as never, AbortSignal.timeout(3000)) } }
-          } catch (error) {
-            // A timeout is a DOMException whose `code` is a number; Jev's own refusals carry a string code.
-            const name = error instanceof Error ? error.name : ''
-            const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : null
-            return { ok: true, value: { unavailable: name === 'TimeoutError' || name === 'AbortError' ? 'TIMEOUT' : code ?? 'UNAVAILABLE' } }
-          }
+          return { ok: true, value: { ...(decisions ? { decisions } : { decisionsUnreadable: true }), ...(attempts ? { attempts } : { attemptsUnreadable: true }) } }
         }
         if (payload.action === 'messages' && identifier(payload.conversationId)) {
           const page = await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}`)
@@ -280,6 +252,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           try { value = await send(command) } catch (error) {
             if (command.type === 'agent.release' && error instanceof SuperTabHostError && error.status === 400 && ['VALIDATION_ERROR', 'INVALID_REQUEST'].includes(error.code)) {
               return { error: 'RELEASE_UNSUPPORTED', detail: 'This backend does not support releasing Builders yet. Update the backend and try again.' }
+            }
+            // A backend from before rules does not know the command type at all; a malformed rule is the Lead's to fix.
+            if (['rule.set', 'rule.remove'].includes(String(command.type)) && error instanceof SuperTabHostError && error.status === 400 && /discriminator/i.test(error.message)) {
+              return { error: 'RULES_UNSUPPORTED', detail: 'This Swarm\'s server does not support rules yet.' }
             }
             if (!['conversation.create', 'work.define'].includes(String(command.type)) || !command.task || !(error instanceof SuperTabHostError)) throw error
             const oldSchema = error.status === 400 && error.code === 'VALIDATION_ERROR'
