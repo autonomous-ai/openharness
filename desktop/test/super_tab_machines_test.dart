@@ -2085,6 +2085,95 @@ void main() {
     },
   );
 
+  testWidgets(
+    'a new machine no reading answered for contributes what was suggested',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['project'] = {
+        'machineId': 'm',
+        'cwd': '/work/project',
+        'scope': 'swarm',
+        'repositoryUrl': null,
+      };
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      // This machine's memory does not answer — a reading that failed or had
+      // not arrived — so the field has no suggestion of its own and sits at
+      // the floor of the range.
+      await _openAddMachineDialog(tester, f, c, readLocal: (_) async => null);
+      expect(_agentSlots(tester), '1');
+
+      // The owner never touched it, so the 1 is not a number they chose and
+      // must not be what the machine is contributed with: preparation's own
+      // suggestion is the number the field would have shown.
+      await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
+      await _settleSave(tester);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(f.connection.server.posts.single['command']!['maxAgents'], 4);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'a check of an earlier attempt that fails says why that attempt is unclear',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['project'] = {
+        'machineId': 'm',
+        'cwd': '/work/project',
+        'scope': 'swarm',
+        'repositoryUrl': null,
+      };
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openAddMachineDialog(
+        tester,
+        f,
+        c,
+        readLocal: (_) async => _reading(freeGiB: 8),
+      );
+      f.connection.server.loseReply = true;
+      await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
+      await _settleSave(tester);
+      expect(find.byType(AlertDialog), findsOneWidget);
+
+      // Now the earlier attempt cannot be checked either, and the reason it
+      // gives is the one worth reading.
+      f.connection.server.refuse = {
+        'code': 'MACHINE_NOT_FOUND',
+        'message': 'This machine is no longer linked to this Swarm.',
+      };
+      await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
+      await _settleSave(tester);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(
+        find.text('This machine is no longer linked to this Swarm.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Could not add this machine'), findsNothing);
+      // The check re-sent the attempt it was already holding, untouched, and
+      // no second, new one followed it out.
+      expect(f.connection.server.posts, hasLength(2));
+      expect(
+        f.connection.server.posts.last['command'],
+        f.connection.server.posts.first['command'],
+      );
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
   testWidgets('a machine over the range opens at 8, and 8 is what saves', (
     tester,
   ) async {

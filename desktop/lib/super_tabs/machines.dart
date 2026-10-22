@@ -541,12 +541,17 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     // Readings this dialog has taken itself, keyed by machine. The panel's own
     // samples stand in for a machine it already reads.
     final suggestions = <String, int>{};
+
+    /// What this machine's own memory says, once a reading has answered. Null
+    /// while one is still coming, or when it failed.
+    int? memorySuggestion(String? id) => id == null
+        ? null
+        : suggestions[id] ?? _suggestedAgentSlots(_samples[id]?.$1);
+
     int slotsFor(String? id) {
       final stored = storedSlots(id);
       if (stored != null) return _clampAgentSlots(stored);
-      return suggestions[id] ??
-          _suggestedAgentSlots(_samples[id]?.$1) ??
-          _agentSlotsMin;
+      return memorySuggestion(id) ?? _agentSlotsMin;
     }
 
     var slots = slotsFor(machineId);
@@ -650,12 +655,34 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   }
                   if (!context.mounted || !c.canWrite) return;
                   final machine = app.stateOf(selected);
+                  // A machine with no number of its own whose reading failed,
+                  // or had not answered yet, is showing the floor rather than
+                  // a suggestion. The owner never chose that, so send what
+                  // preparation offered instead — the number the field would
+                  // have shown had the reading arrived.
+                  final offered = prepared['maxAgents'];
+                  if (!slotsEdited &&
+                      storedSlots(selected) == null &&
+                      memorySuggestion(selected) == null &&
+                      offered is num) {
+                    slots = _clampAgentSlots(offered);
+                  }
                   // An earlier lost reply leaves an uncertain attempt holding
                   // its own receipt, and only one action may be in flight:
                   // check that one first, then send the number the owner is
                   // looking at — the stored attempt cannot know it was changed.
                   if (c.pendingCommand?['type'] == 'machine.contribute') {
-                    await c.retry();
+                    // If that attempt cannot be confirmed, its own error is
+                    // the one worth showing: it says why it is still unclear.
+                    if (await c.retry() == null) {
+                      if (!context.mounted) return;
+                      throw SuperTabFailure(
+                        c.operationErrorCode ?? 'CONTRIBUTION_FAILED',
+                        c.operationError ??
+                            'The earlier attempt is still not confirmed. '
+                                'Try again to check it.',
+                      );
+                    }
                     if (!context.mounted || !c.canWrite) return;
                   }
                   final result = await c.command({
