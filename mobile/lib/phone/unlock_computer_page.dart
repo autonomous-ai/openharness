@@ -6,7 +6,9 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/shared/widgets/app_icon_button.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
+import 'add_device/add_device_page.dart';
 import 'add_device/setup_hotspot.dart';
+import 'phone_navigation.dart';
 import 'settings_row.dart';
 import 'tty.dart';
 import 'tty_controls.dart';
@@ -285,10 +287,12 @@ class _UnlockComputerPageState extends State<UnlockComputerPage> {
         _poll?.cancel();
         _show(
           _Step.starting,
-          error: _newWifi == null
-              ? '$_name has not come online. If its Wi-Fi changed, unlock it again and choose its Wi-Fi.'
-              : '$_name has not come online on "$_newWifi". If the password was wrong, it opens '
-                    '"${widget.hotspotName}" again in a few minutes: set it up from Settings ▸ Set up a device.',
+          // Unlocked and still not online: signed out (a sign-out keeps it on the account's list,
+          // offline), or off its Wi-Fi. Either way its hotspot is back for Set up a device.
+          error:
+              '$_name is unlocked but has not come online'
+              '${_newWifi == null ? '' : ' on "$_newWifi"'}. If it was signed out, or its Wi-Fi is '
+              'wrong, it is waiting on "${widget.hotspotName}" to be set up: use Set up a device.',
         );
       }
     });
@@ -521,11 +525,19 @@ class _UnlockComputerPageState extends State<UnlockComputerPage> {
         ];
       case _Step.starting:
         return [
-          if (_error.isNotEmpty)
+          if (_error.isNotEmpty) ...[
             TtyPrimaryButton(
-              label: 'Try again',
+              key: const Key('unlock-set-up'),
+              label: 'Set up a device',
+              onPressed: () => Navigator.of(context).pushReplacement(
+                phoneRoute((_) => AddDevicePage(notifier: _app)),
+              ),
+            ),
+            TtyTextButton(
+              label: 'Unlock again',
               onPressed: () => _show(_Step.start),
             ),
+          ],
         ];
       case _Step.done:
         return [

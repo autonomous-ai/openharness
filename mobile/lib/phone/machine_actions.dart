@@ -8,6 +8,8 @@ import 'package:harness_mobile/widgets/rename_agent_dialog.dart'
     show showMachineRenameDialog;
 
 import 'change_wifi_page.dart';
+import 'computer_password_page.dart';
+import 'computer_ssh_page.dart';
 import 'computer_version_page.dart';
 import 'link_page.dart';
 import 'phone_navigation.dart';
@@ -22,6 +24,44 @@ import 'unlock_computer_page.dart';
 String? _ssidOf(AppNotifier notifier, String machineId) {
   final wifi = notifier.osStatus[machineId]?['wifi'];
   return wifi is Map ? wifi['ssid'] as String? : null;
+}
+
+/// Sign out ▸ a Harness OS computer signed out of this account, for another one to set it up
+/// (CLI osDevice.ts `sign_out`, os/setup.py `sign_out`): it forgets its Wi-Fi and opens its own
+/// hotspot. Its harnesses, projects and files stay — the same computer, on whichever account signs
+/// it in next. Asked first: it is out of reach of this phone until it is set up again.
+Future<void> signOutComputer(
+  BuildContext context,
+  AppNotifier notifier,
+  String machineId,
+) async {
+  final name =
+      notifier.stateOf(machineId)?.machine.displayName ?? 'The computer';
+  final hotspot =
+      notifier.harnessOsComputers[machineId]?.hotspot ?? 'Harness-…';
+  final confirmed = await confirmPhoneAction(
+    context,
+    icon: LucideIcons.logOut300,
+    title: 'Sign out $name?',
+    message:
+        'It signs out of this account and forgets its Wi-Fi, then opens its own Wi-Fi "$hotspot" '
+        'to be set up again — with Set up a device, on this account or another. Its harnesses, '
+        'projects and files stay on it.',
+    confirmLabel: 'Sign out',
+  );
+  if (!confirmed || !context.mounted) return;
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  final reply = await notifier.osDevice(machineId, {'action': 'sign_out'});
+  if (reply['started'] == true) notifier.forgetHarnessOs(machineId);
+  messenger?.showSnackBar(
+    SnackBar(
+      content: Text(
+        reply['started'] == true
+            ? '$name is signing out. Set it up again from Set up a device, near it.'
+            : 'Could not reach $name. Try again.',
+      ),
+    ),
+  );
 }
 
 /// The sheet of what can be done TO a computer — Settings ▸ Computers.
@@ -159,9 +199,45 @@ void openMachineActions(
               ),
             ),
           ),
+          if (notifier.osFeature(machineId, 'password'))
+            PhoneSheetAction(
+              icon: LucideIcons.keyRound300,
+              label: 'Change password…',
+              chevron: true,
+              onTap: () => Navigator.of(context).push(
+                phoneRoute(
+                  (_) => ComputerPasswordPage(
+                    notifier: notifier,
+                    machineId: machineId,
+                  ),
+                ),
+              ),
+            ),
+          if (notifier.osFeature(machineId, 'ssh'))
+            PhoneSheetAction(
+              icon: LucideIcons.terminal300,
+              label: 'SSH',
+              chevron: true,
+              onTap: () => Navigator.of(context).push(
+                phoneRoute(
+                  (_) =>
+                      ComputerSshPage(notifier: notifier, machineId: machineId),
+                ),
+              ),
+            ),
         ],
       ];
       destructive = [
+        if (notifier.runsHarnessOs(machineId) &&
+            notifier.osFeature(machineId, 'sign_out'))
+          PhoneSheetAction(
+            icon: LucideIcons.logOut300,
+            label: 'Sign out…',
+            destructive: true,
+            enabled: !removing,
+            onTap: () =>
+                unawaited(signOutComputer(context, notifier, machineId)),
+          ),
         // No confirmation, the same as before: this sheet is the step between the tap and the
         // unlink. Removing from the account asks, because it reaches every device.
         PhoneSheetAction(
