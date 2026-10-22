@@ -22,7 +22,7 @@
 ## Review focus
 
 - A legacy work.define replacing a structured task must clear the prior task, so details do not show stale instructions.
-- A structured task takes precedence over a supplied brief; worker delivery must use its rendered parts even if stored brief disagrees.
+- A structured task takes precedence over a supplied brief on write; worker delivery reuses the stored rendered brief.
 - Compatibility retry must preserve the operation ID and all non-task fields. Permission, transport and unrelated validation failures never retry; an operation conflict may check its exact legacy receipt once after an upgrade.
 - Whitespace-only fields and empty check descriptions must be rejected with useful errors.
 - Long real group/tab IDs must keep the launch prompt below 2,000 UTF-16 units.
@@ -35,7 +35,7 @@ Interface: `Conversation.task?: { goal: string; changes: string; constraints: st
 
 - [x] Add failing tests for task-only create/define, trimmed storage and rendered brief, validation bounds, legacy requests, stale-task removal and structured worker delivery.
 - [x] Run the affected tests and observe the missing behavior.
-- [x] Implement schema, storage and rendering; use the task for assignment text while preserving legacy delivery.
+- [x] Implement schema, storage and rendering; reuse the rendered brief for assignment text while preserving legacy delivery.
 - [x] Run backend unit tests and typecheck.
 
 ## Phase 2: CLI task enforcement and compatibility

@@ -35,14 +35,14 @@ void main() {
     () {
       for (final lead in [true, false]) {
         final prompt = superTabLaunchPrompt(
-          tabId: 't' * 24,
-          conversationId: 'c' * 24,
+          tabId: 't' * 160,
+          conversationId: 'c' * 160,
           lead: lead,
         );
         expect(
           prompt,
           contains(
-            'goal, changes, constraints, owned code and acceptance checks',
+            'goal, changes, constraints, owned paths, checks',
           ),
         );
         expect(prompt.length, lessThanOrEqualTo(2000));

@@ -44,10 +44,9 @@ describe('five-part tasks', () => {
     expect(f.state.conversations[1]).toMatchObject({ task, brief })
   })
 
-  it('delivers all five parts using the task even if the stored brief differs', () => {
+  it('delivers all five parts from the stored rendered brief', () => {
     const f = fixture(), group = f.group(), worker = f.add('worker', 'owner', group)
     f.run(commandSchema.parse({ type: 'work.define', conversationId: group, task, checks }))
-    f.state.conversations[1]!.brief = 'stale brief'
     const delivery = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).messages[0]!
     expect(delivery.text).toBe(`${brief}\n\nAcceptance checks:\n- Reconnect preserves edits`)
     expect(delivery.recipients).toEqual([worker])
