@@ -104,7 +104,8 @@ nmcli = network.nmcli
 
 
 def log(message):
-    print(f'harness-setup: {message}', flush=True)
+    # On stderr, the journal's as well: stdout is the answer the daemon reads (password, ssh).
+    print(f'harness-setup: {message}', file=sys.stderr, flush=True)
 
 
 
