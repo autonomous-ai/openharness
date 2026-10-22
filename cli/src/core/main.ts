@@ -1,3 +1,6 @@
+import { createSwarmSkillAdoption } from './agents/swarmSkills.js'
+import { swarmRoleThrough } from './superTabSkills.js'
+import { retainedHarnesses } from '../superTabs/retention.js'
 import { createGridAssignments } from './agents/gridAssignments.js'
 import { createQuestionControls } from './engines/questionControls.js'
 import { masterRunsEngineQuestionControl } from '../harnessd/services.js'
@@ -73,6 +76,8 @@ import { findLiveSession, findResumedTranscript } from '../lib/sessionRepair.js'
 import { processSessionOf } from '../engines/sessionStores.js'
 import { createHandoffDependencies } from './handoffDependencies.js'
 import { TmuxBackend } from '../lib/tmuxBackend.js'
+import { tmuxAvailableNow } from '../lib/tmuxOnPath.js'
+import { createTerminalBackendRecovery } from '../lib/terminalBackendRecovery.js'
 import { isDrainBackend, ptyHostBackends, ptyHostOnProbation, PtyHostDrain, rowInstancesOf, rowsOnInstance, untilHostAttached, withoutCreateHost } from '../lib/ptyHost/drain.js'
 import { removeUnusedPtyVersions, targetHost } from '../lib/ptyHost/launch.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from '../lib/hostTheme.js'
@@ -206,6 +211,7 @@ import { createSharingLink } from './sharingLink.js'
 import { createAgentSettingsSync, createExperimentHooks, wakeExperiments } from './experiments.js'
 import { answerExperimentQuery, createForExperiment, creationForExperiment } from './experimentQueries.js'
 import { createSuperTabAttention } from './superTabAttention.js'
+import { createSuperTabCards } from './superTabCards.js'
 import { answerConnectorsQuery } from './connectorsQueries.js'
 import { answerSharedMachinesQuery } from './sharedMachinesQueries.js'
 import { inlineSharedMachinesPort } from '../lib/sharedMachinesPort.js'
@@ -589,7 +595,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // STATE the daemon runs on without, never a reason to refuse to start: it still serves its status, the
   // local socket and the backend link, leaves for an update, and says what is missing.
   const candidates: TerminalBackend[] = []
-  if (terminalConfig.backends.includes('tmux')) candidates.push(new TmuxBackend(() => hostTheme))
+  const configuredTmux = terminalConfig.backends.includes('tmux') ? new TmuxBackend(() => hostTheme) : null
+  if (configuredTmux) candidates.push(configuredTmux)
   // The Harness PTY host (pty/): reached, or started detached so its panes outlive this daemon. New panes go to the
   // target's host, the build this daemon would start; any other host, still running from before an update, is a
   // drain backend beside it (lib/ptyHost/drain.ts). The target is read here once, for this core's life: it runs the
@@ -616,21 +623,33 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // With no target, the create backend took whichever host answered, which a drain backend may be on too.
   const terminalBackends = ptyHosts ? withoutCreateHost(readyBackends, ptyHosts.create) : readyBackends
   // The first backend that could not be readied, and why, for the status's `discoveryError`.
-  const terminalUnavailable = prepared.flatMap(({ backend, result }) => result.state === 'unavailable'
+  let terminalUnavailable: { backend: TerminalBackend['name']; reason: string; code: string } | null = prepared.flatMap(({ backend, result }) => result.state === 'unavailable'
     ? [{ backend: backend.name, reason: result.reason, code: result.code }] : [])[0] ?? null
   // The backend new panes are made on. Every other pane operation reaches the pane's own backend
   // through the coordinator (`terminals.backendFor`).
-  const createBackend: TerminalBackend | null = terminalBackends.find((backend) => !isDrainBackend(backend)) ?? null
+  let createBackend: TerminalBackend | null = terminalBackends.find((backend) => !isDrainBackend(backend)) ?? null
   // What a create, fork or resume answers while there is none: the configured backend's code, not always tmux's.
   const createUnavailable = noBackendCode(terminalConfig.backends)
   // A hook's tmux runtime hint is taken only while tmux is the backend new panes are made on
   // (core/engines/hooks.ts). Restart, retarget, restore and adoption reach each pane's own backend
   // through the coordinator, gated on what it can do (`canRestart`, `isHeld`, `killHeld`).
-  const tmuxBackend = createBackend instanceof TmuxBackend ? createBackend : null
+  let tmuxBackend = createBackend instanceof TmuxBackend ? createBackend : null
   const terminals = new TerminalBackendCoordinator(
     terminalBackends,
     terminalConfig.backends,
   )
+  const recoverBackend = createTerminalBackendRecovery({
+    backend: configuredTmux,
+    available: tmuxAvailableNow,
+    ownedPanes: () => ownedPanesOf(registry.list(), 'tmux'),
+    recovered: (backend) => {
+      terminalBackends.push(backend)
+      terminals.replaceBackends(terminalBackends)
+      createBackend = tmuxBackend = backend
+      if (terminalUnavailable?.backend === 'tmux') terminalUnavailable = null
+      console.log('[terminal] tmux recovered')
+    },
+  })
   // Shut down a drained host once it has no pane, and take its backend out of `terminalBackends` (stepped after
   // each reconcile pass, below).
   const ptyDrain = ptyHosts?.drain.length
@@ -831,6 +850,17 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     send: (frame) => ports.devices?.card(frame),
     asking: (agentId) => [...openQuestions.values()].some((asked) => asked.agentId === agentId),
   })
+  // The Swarms' cards and Leads' recaps for the Harness Pro, on the devices alone (core/superTabCards.ts): kept whole, and shown
+  // again to a dial that attaches.
+  const routeSuperTabs = (payload: Record<string, unknown>): Promise<Record<string, unknown>> => new Promise((resolve) => {
+    const asker = { local: true, owner: true }
+    if (!(serviceLinksRef?.route('super_tabs', payload, asker, resolve) || serviceHost.route('super_tabs', payload, asker, resolve))) resolve({ error: 'SERVICE_UNAVAILABLE' })
+  })
+  const superTabCards = createSuperTabCards({
+    swarmCards: (items) => ports.devices?.swarmCards(items),
+    swarmCardRecap: (recap) => ports.devices?.swarmCardRecap(recap),
+    request: (payload) => routeSuperTabs(payload),
+  })
   // Shared tabs' relay, a socket per shared tab held by the gateway (gateway/tabRelay.ts), and which of them the core saw
   // opened: opened again after a gateway-only restart, closed when Agent Messages' process goes (core/gatewayLink.ts).
   const tabRelay = tabRelayOf(() => gatewayOps.tabRelay)
@@ -840,7 +870,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const coreApi = createCoreApi({
     nativeTurns: async (agentId, cursor) => nativeTurns.read(agentId, cursor),
     cloud: cloudDoors,
-    superTabs: { attention: (items) => superTabWaits.attention(items) },
+    superTabs: { attention: (items) => superTabWaits.attention(items), cards: (items) => superTabCards.cards(items), cardRecap: (recap) => superTabCards.recap(recap) },
+    // The devices' `cardsWanted`, `cardRecap` and `cardOpen`, and no other action of the Super Tab service (core/superTabCards.ts `ask`).
+    superTabRequest: (payload) => superTabCards.ask(payload),
     cloudRows: () => (cloudAgents?.dialRows() ?? []) as unknown as RegisteredSession[],
     // Agents' terminals: a literal-argv launch, and a read-only view for Share's observers (core/terminalWatch.ts).
     terminals: { ...TERMINALS_OFF, ...createTerminalOpener({ createBackend, registry, announceSession, blocksFolder: (cwd) => !!backendRef?.purgeAgentService?.blocksFolder(cwd), noBackendCode: createUnavailable }), watch: terminalWatch.watch },
@@ -931,6 +963,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (attached) void mirror.liveCards().then((cards) => { for (const frame of cards) ports.devices?.card(frame) })
       if (attached) for (const frame of cloudAgents?.liveCards() ?? []) ports.devices?.card(frame)
       if (attached) superTabWaits.replay()
+      if (attached) superTabCards.replay()
     },
     // What a device or another machine asks of an agent here: the SAME handlers the backend socket
     // drives, called directly — the slash-command adaptation and the turn and question plumbing live there.
@@ -1538,6 +1571,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // The gateway first hears what it starts from, then the shared tabs it held before a restart.
       if (service === 'gateway') { gatewayLink?.connected(); tabRelay.connected() }
       if (service === 'devices') devicesLink.connected()
+      if (service === 'superTabs') superTabCards.serviceUp()
       if (service === 'wifi') wifiCore.started(appVoiceFocus ?? null)
       if (service === 'viewers') viewersLink.connected()
       devicesWake.connected(service)
@@ -1560,7 +1594,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (service === 'gateway') gatewayLink?.disconnected()
       // Agent Messages' process went: its tabs' sockets have no one to hear them, and it opens them again as it starts.
       if (service === 'messages') tabRelay.closeOpened()
-      if (service === 'devices') devicesLink.disconnected()
+      if (service === 'devices') { devicesLink.disconnected(); superTabCards.devicesGone() }
       if (service === 'wifi') wifiCore.stopped()
       if (service === 'recaps') recapsLink.disconnected()
       void terminalWatch.gone(service)
@@ -1992,7 +2026,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     dataDir: env.ADAPTER_DATA_DIR,
   })
   // Which agent a hook belongs to, and what a SessionEnd means (core/engines/hooks.ts).
-  const engineHooks = createEngineHooks({ tmuxBackend, ptyHostBackend, agentReconciler, registry, panePending: restorePanes.pending, syncSession })
+  const engineHooks = createEngineHooks({ get tmuxBackend() { return tmuxBackend }, ptyHostBackend, agentReconciler, registry, panePending: restorePanes.pending, syncSession })
   // What agents may do: the account's experiments, kept in this daemon's data folder for its launches
   // (lib/agentSettings.ts, core/experiments.ts). Started once bound, below.
   const agentSettings = createAgentSettingsSync({ dataDir: env.ADAPTER_DATA_DIR, backend: proxyBackend, session: readAuthSession,
@@ -2320,6 +2354,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // What a relaunch needs to bring a pane back (core/agents/launch.ts). Declared before the restore
   // pass below, which calls these for every pane it rebuilds.
   const launchAuthority = createLaunchAuthority({ byAgent: id => registry.byAgent(id), revision: restoreRevision, cancelled: id => launchCancelled(id) })
+  const adoptSwarmSkill = createSwarmSkillAdoption({
+    authority: launchAuthority,
+    candidate: id => retainedHarnesses(env.ADAPTER_DATA_DIR).has(id),
+    role: outOfProcess.has('superTabs')
+      ? swarmRoleThrough((type, payload) => serviceLinks.call('superTabs', type, payload, 3500))
+      : id => ports.superTabs?.swarmRole(id) ?? Promise.resolve(undefined),
+    save: (id, skill) => registry.setSwarmSkill(id, skill),
+  })
   const launchHelpers = createLaunchHelpers({
     authority: launchAuthority,
     prepareApiTools,
@@ -2629,6 +2671,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     native: prepareNativeLaunch,
     dshLaunch,
     createBackend,
+    recoverBackend,
     noBackendCode: createUnavailable,
     registry,
     externalResume: externalResumes.create,
@@ -2709,6 +2752,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Stopping, purging and resuming an agent (core/agents/lifecycle.ts).
   const lifecycle = createAgentLifecycle({
+    adoptSwarmSkill,
     settlePane: restorePanes.settle,
     cancelExternal: externalResumes.cancel,
     registry,
@@ -2723,6 +2767,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     markDeleted,
     clearDeleted,
     stopNative: (session, current, confirmUnused) => nativeControls.stop(session, current, confirmUnused),
+    atFolderTrust: async (session) => (await screens.read(session, await captureTerminal(session.agentId, 80)))?.messageHold === 'trust_open',
+    atEmptyComposer: async (session) => {
+      const reading = await screens.read(session, await captureTerminal(session.agentId, 80))
+      return !!reading && !reading.busy && !reading.question && reading.messageHold === null && reading.teamHold === null
+    },
     sessionCheckpoints,
     mirror,
     sessionSearch,
@@ -2773,6 +2822,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Restarting an agent in its own pane (core/agents/restart.ts).
   const restartAgent = createAgentRestarter({
+    adoptSwarmSkill,
     native: prepareNativeLaunch,
     restartJobs,
     registry,
@@ -3042,6 +3092,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The web-tools cache lives exactly as long as the sign-in. `harness logout` and `reset` stop
     // the daemon outright; this is the one sign-out the daemon learns of from inside.
     ports.models?.signedOut()
+    superTabCards.reset()
     void shutdown('revoked')
   }
 
@@ -3069,7 +3120,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // blocking: an unplugged cable is this daemon's ordinary state.
   // In their own process they are told everything the windows said as they connect (core/devicesLink.ts):
   // said here too, it reached a dial still opening its port, before its greeting.
-  if (outOfProcess.has('devices')) ports.devices = devicesLink.port
+  // The Swarm cards the Super Tab service sent before this line had no devices to reach: they are shown now.
+  if (outOfProcess.has('devices')) { ports.devices = devicesLink.port; superTabCards.replay() }
   else {
     serviceHost.start('devices', (core, started) => inline!.startDevices(core, started, {
       logsDir: env.HARNESS_LOGS_DIR, testDialPort: harnessd.HARNESSD_TEST_DIAL_PORT,

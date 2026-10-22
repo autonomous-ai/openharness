@@ -5,8 +5,8 @@ import { randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { startRequirements } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
-import { object, within } from './wire.js'
-import { choose, contextSize, decide, jevQuestion, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, type Assessment, type Attempt, type MemberFrame, type Policy, type Probe, type TaskFolder } from './route.js'
+import { ENDED_WORK, object, within } from './wire.js'
+import { choose, contextSize, decide, jevQuestion, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, type Assessment, type Attempt, type Commitment, type MemberFrame, type Policy, type Probe, type TaskFolder } from './route.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
 import type { JevChoiceAnswer } from '../lib/jev/jevClient.js'
@@ -22,7 +22,7 @@ const NO_PROJECT_FOLDER = 'This machine does not have the project folder. Add it
 const OFFLINE = 'Machine is offline or unreachable.'
 const UNKNOWN_QUOTA: Probe['quota'] = { known: false, leftPercent: null, resetsAt: null }
 const UNKNOWN_LOAD: NonNullable<Probe['load']> = { agents: null, freeMemoryBytes: null, hasFolder: null }
-const active = (assignment: unknown) => { const a = object(assignment); return !!a.id && !['done', 'stopped'].includes(String(a.status)) }
+const active = (assignment: unknown) => { const a = object(assignment); return !!a.id && !ENDED_WORK.includes(String(a.status)) }
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
 /** The Lead's machine, for the task's folder; replaced in tests. */
 interface FolderReader { describe: typeof describeScmProject; isDirectory: (path: string) => Promise<boolean> }
@@ -61,7 +61,7 @@ function endedWork(conversations: Json[], agents: Json[], decisions: Json[] | nu
   const nameOf = (id: unknown) => text(agents.find(a => a.id === id)?.name)
   const ended: Ended[] = [...(decisions ?? [])].reverse().flatMap(d => {
     const final = object(d.final)
-    return typeof d.assignmentId === 'string' && ['done', 'stopped'].includes(String(d.outcome)) && final.kind
+    return typeof d.assignmentId === 'string' && ENDED_WORK.includes(String(d.outcome)) && final.kind
       ? [{ assignmentId: d.assignmentId, groupId: String(d.conversationId), group: titleOf(d.conversationId), outcome: String(d.outcome),
           agentId: final.kind === 'member' ? String(final.agentId) : null,
           agent: final.kind === 'member' ? nameOf(final.agentId) ?? 'An agent' : `New agent (${String(final.engine)} ${String(final.model)})` }]
@@ -118,7 +118,9 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // The group's Lead and the tab Lead coordinate; neither is a worker candidate even when idle.
   const busy = new Set([String(group.leadId), String(conversations.find(c => c.id === 'lead')?.leadId),
     ...conversations.filter(c => active(c.assignment)).map(c => String(object(c.assignment).agentId))])
-  const members = agents.filter(a => !busy.has(String(a.id)) && ENGINES.includes(String(object(a.configuration).engine))).map(a => withLaunchEffort(a, list(state.starts)))
+  // A review group is assigned only to a Reviewer, and a Reviewer nothing else.
+  const review = typeof group.reviewOf === 'string'
+  const members = agents.filter(a => !busy.has(String(a.id)) && (a.role === 'reviewer') === review && ENGINES.includes(String(object(a.configuration).engine))).map(a => withLaunchEffort(a, list(state.starts)))
   // A new agent starts only on a machine in the Swarm's Machines list (the backend refuses any other): a contributed machine, or
   // one an agent of the Swarm runs on. The Lead runs here, so its own machine is always listed. Of the account's machines
   // only those count; the rest were never prepared with the project and would only be excluded for a missing folder
@@ -160,7 +162,10 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const ended = endedWork(conversations, agents, decisions, attempts, input.conversationId)
   const probes = probed.flat().map(p => p.kind === 'member' ? { ...p, repo: repoMatch(folder, p.frame ?? null, p.machineId === where.machineId),
     earlier: ended.filter(e => e.agentId === p.agentId).reverse().slice(0, 3).map(e => ({ group: e.group, outcome: e.outcome })) } : p)
-  const choice = choose(probes, policy, assessment, Date.now())
+  // Picks started or assigned and still at work hold part of their account's quota; the log, and so this, is per Swarm.
+  const working = (decisions ?? []).filter(d => d.final && d.outcome === null && typeof d.account === 'string')
+    .map(d => ({ account: d.account, spend: object(d.spend), size: d.size, createdAt: Date.parse(String(d.createdAt)) }) as Commitment)
+  const choice = choose(probes, policy, assessment, Date.now(), working)
   if ('error' in choice) return choice
   // What Jev could not be told, for the decision log: pick quality can later be compared with how complete this was.
   const missing = [...(messages ? [] : ['messages']), ...(decisions ? [] : ['route log']), ...(attempts ? [] : ['attempts']), ...(folder && ['unknown', 'missing'].includes(folder.kind) ? ['task folder'] : []),
@@ -181,8 +186,12 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     else answer = object(jev.answers).who as JevChoiceAnswer | undefined
   }
   const verdict = decide(choice, answer, unavailable)
-  const recorded = await scoped({ action: 'command', operationId: `route-${newId()}`,
-    command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf(choice, verdict, assessment, policy, question && { chars: contextSize(question), missing }) } })
+  const operationId = `route-${newId()}`
+  const record = (v1: boolean) => scoped({ action: 'command', operationId,
+    command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf(choice, verdict, assessment, policy, question && { chars: contextSize(question), missing }, v1) } })
+  let recorded = await record(false)
+  // A backend from before phase 1 refuses the new fields as invalid; the decision is still worth keeping in the shape it knows.
+  if (recorded.error === 'VALIDATION_ERROR') recorded = await record(true)
   if (typeof recorded.error === 'string' && !TRANSPORT.has(recorded.error)) return recorded
   const routeDecisionId = recorded.ok === true ? object(object(recorded.value).result).routeDecisionId : undefined
   const decision = typeof routeDecisionId === 'string' ? `,"routeDecisionId":"${routeDecisionId}"` : ''
@@ -192,10 +201,10 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     ok: true, ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : { unrecorded: true }),
     pick: publicOf(verdict.pick), via: verdict.via, p: verdict.p, belowFloor: choice.belowFloor, why: verdict.why,
     alternatives: choice.shown.filter(s => s.id !== verdict.pick.id).slice(0, 2).map(publicOf),
-    warnings: [...(Array.isArray(effective.warnings) ? effective.warnings : []), ...(value.machinesUnreadable === true ? [MACHINES_UNREADABLE] : [])],
+    warnings: [...(Array.isArray(effective.warnings) ? effective.warnings : []), ...(value.machinesUnreadable === true ? [MACHINES_UNREADABLE] : []), ...(choice.short ? [choice.short] : [])],
     next: verdict.pick.kind === 'member'
       ? `Assign with: command OPERATION_ID {"type":"work.assign","conversationId":"${input.conversationId}","agentId":"${verdict.pick.agentId}"${decision}}`
-      : `Start with: start OPERATION_ID ${JSON.stringify({ conversationId: input.conversationId, name: 'Builder', cwd: text(machines.get(verdict.pick.machineId)?.pool?.cwd) ?? assessment.needs.cwd ?? '/absolute/repo/on/that/machine',
+      : `Start with: start OPERATION_ID ${JSON.stringify({ conversationId: input.conversationId, name: review ? 'Reviewer' : 'Builder', ...(review ? { role: 'reviewer' } : {}), cwd: text(machines.get(verdict.pick.machineId)?.pool?.cwd) ?? assessment.needs.cwd ?? '/absolute/repo/on/that/machine',
         worktree: true, requirements: startRequirements(assessment.needs), machineId: verdict.pick.machineId, engine: verdict.pick.engine, model: verdict.pick.model,
         effort: verdict.pick.effort, ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : {}) })}, then assign the started agent${decision ? ' with the same routeDecisionId' : ''}. It starts from the repository's default branch, fetched first; add "branchRef":"refs/remotes/origin/BRANCH" to start from another branch.`,
   }

@@ -44,6 +44,7 @@ abstract final class AppIcons {
   static const calendarDays = LucideIcons.calendarDays400;
   static const chartNoAxesColumn = LucideIcons.chartNoAxesColumn400;
   static const check = LucideIcons.check400;
+  static const checkCheck = LucideIcons.checkCheck400;
   static const chevronDown = LucideIcons.chevronDown400;
   static const chevronLeft = LucideIcons.chevronLeft400;
   static const chevronRight = LucideIcons.chevronRight400;
@@ -135,6 +136,7 @@ abstract final class AppIcons {
   static const minus = LucideIcons.minus400;
   static const monitor = LucideIcons.monitor400;
   static const monitorOff = LucideIcons.monitorOff400;
+  static const monitorSmartphone = LucideIcons.monitorSmartphone400;
   static const music = LucideIcons.music400;
   static const packageCheck = LucideIcons.packageCheck400;
   static const packageOpen = LucideIcons.packageOpen400;

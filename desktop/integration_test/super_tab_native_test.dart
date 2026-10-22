@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:window_manager/window_manager.dart';
@@ -39,6 +40,10 @@ void main() {
       await windowManager
           .setSize(const Size(1280, 800))
           .timeout(const Duration(seconds: 10));
+      // macOS stops delivering frames to a fully occluded native test window.
+      // Keep only this isolated fixture above other running Harness builds.
+      await windowManager.setAlwaysOnTop(true);
+      addTearDown(() => windowManager.setAlwaysOnTop(false));
       await windowManager.show().timeout(const Duration(seconds: 10));
       await windowManager.focus().timeout(const Duration(seconds: 10));
       debugPrint('Swarm fixture: create lead');
@@ -68,6 +73,9 @@ void main() {
       f.app.machineStates['m']!.agents = [Agent.fromJson(f.connection.native!)];
       final server = f.connection.server;
       server.state['name'] = 'Company';
+      for (final agent in server.state['agents'] as List) {
+        agent['displayName'] = agent['id'] == 'lead-agent' ? 'Atlas' : 'Sage';
+      }
       server.state['projects'] = [
         projectFixture('lead', 'Lamp OS', 'lead'),
         projectFixture(
@@ -81,6 +89,12 @@ void main() {
       (server.state['conversations'] as List).add({
         ...conversationFixture('design-lead', 'Lead'),
         'projectId': 'design',
+      });
+      // A workgroup under Lamp OS, so the sidebar's tree shows a second level.
+      (server.state['conversations'] as List).add({
+        ...conversationFixture('polish', 'Sidebar polish'),
+        'projectId': 'lead',
+        'number': 20,
       });
       server.state['machines'] = [
         {
@@ -125,6 +139,45 @@ void main() {
             'runningHarnessIds': [f.connection.native!['id']],
           },
         },
+        // A second Studio Mac, owned by someone else, and one long offline, under its
+        // closed "Offline · 1".
+        {
+          'machineId': 'm-twin',
+          'name': 'Studio Mac',
+          'contributorId': 'person-0',
+          'observation': {
+            'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            'resources': {'cpuPercent': 40},
+          },
+        },
+        // A Codex-only machine: its Claude slot stays blank, so its Codex % lines up with the others'.
+        {
+          'machineId': 'm-codex',
+          'name': 'Build Box',
+          'contributorId': 'person-1',
+          'observation': {
+            'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            'quotas': [
+              {
+                'engine': 'codex',
+                'known': true,
+                'windows': [
+                  {'name': '5-hour', 'usedPercent': 30},
+                ],
+              },
+            ],
+          },
+        },
+        {
+          'machineId': 'm-old',
+          'name': 'Old Mini',
+          'contributorId': 'person-1',
+          'observation': {
+            'receivedAt': DateTime.now()
+                .subtract(const Duration(minutes: 20))
+                .millisecondsSinceEpoch,
+          },
+        },
       ];
       (server.state['conversations'] as List)[0]['agentIds'] = ['lead-agent'];
       (server.state['conversations'] as List)[0]['leadId'] = 'lead-agent';
@@ -149,8 +202,24 @@ void main() {
       server.append(
         'Keep changes on the device and sync when the connection returns.',
       );
+      final instruction = server.messages.last;
+      final deliveredAt = DateTime.now().subtract(const Duration(seconds: 42));
+      instruction['deliveries'] = [
+        // Typed loosely: the test advances this row through hold, uncertain and answered below.
+        <String, Object?>{
+          'id': 'native-receipt',
+          'agentId': 'lead-agent',
+          'status': 'delivered',
+          'deliveredAt': deliveredAt.toIso8601String(),
+        },
+      ];
       server.append('Routed to Multiply');
       server.messages.last['source'] = routeRow()['source'];
+      server.messages.last['author'] = {
+        'kind': 'agent',
+        'id': 'lead-agent',
+        'name': 'Lead',
+      };
       server.routeDecisions['d1'] = decision();
       debugPrint('Swarm fixture: load conversation controller');
       final c = await tester.runAsync(() async {
@@ -199,9 +268,6 @@ void main() {
         const Duration(seconds: 10),
       );
       debugPrint('Swarm fixture: conversation settled');
-      expect(find.byTooltip('Invite people'), findsOneWidget);
-      expect(find.text('CHATS'), findsNothing);
-      expect(find.text('New group'), findsNothing);
       final folder = Platform.environment['SUPER_TAB_NATIVE_SHOTS'];
       Future<void> shot(String name) async {
         if (folder == null) return;
@@ -216,7 +282,199 @@ void main() {
         image.dispose();
       }
 
+      expect(find.byTooltip('Invite people'), findsOneWidget);
+      expect(find.text('CHATS'), findsNothing);
+      expect(find.text('New group'), findsNothing);
+      expect(find.byTooltip('New project'), findsOneWidget);
+      // Left sidebar: both Projects and Machines groups start open, one line a machine: its name, its Claude and
+      // Codex allowances and its agents, never its owner, and the offline machine under its closed disclosure.
+      // Both Studio Macs are online rows. A busy one's name may be shortened to
+      // keep its allowance on the line; it then carries its whole name on hover.
+      for (final id in ['m', 'm-twin']) {
+        final row = find.byKey(ValueKey('super-machine-$id'));
+        expect(row, findsOneWidget, reason: id);
+        final shown = tester
+            .widget<RichText>(
+              find.descendant(of: row, matching: find.byType(RichText)).first,
+            )
+            .text
+            .toPlainText();
+        expect(
+          shown == 'Studio Mac' ||
+              (shown.endsWith('…') &&
+                  'Studio Mac'.startsWith(
+                    shown.substring(0, shown.length - 1),
+                  ) &&
+                  find
+                      .descendant(
+                        of: row,
+                        matching: find.byTooltip('Studio Mac'),
+                      )
+                      .evaluate()
+                      .isNotEmpty),
+          isTrue,
+          reason: '$id shows "$shown"',
+        );
+        // Never its owner.
+        for (final who in ['owner', 'person0']) {
+          expect(
+            find.descendant(of: row, matching: find.textContaining(who)),
+            findsNothing,
+            reason: '$id names $who',
+          );
+        }
+      }
+      // Claude's chip always shows here; Codex's is the first to give way when the sidebar is narrow.
+      Finder chip(String engine, String figure) => find.descendant(
+        of: find.byKey(ValueKey('super-machine-allowance-m-$engine')),
+        matching: find.text(figure),
+      );
+      expect(chip('claude', '50%'), findsOneWidget);
+      if (find
+          .byKey(const ValueKey('super-machine-allowance-m-codex'))
+          .evaluate()
+          .isNotEmpty) {
+        expect(chip('codex', '88%'), findsOneWidget);
+        // The Codex-only machine's figure lines up with Studio Mac's.
+        double figureLeft(String id) => tester
+            .getTopLeft(find.byKey(ValueKey('super-machine-figure-$id-codex')))
+            .dx;
+        expect(figureLeft('m-codex'), closeTo(figureLeft('m'), .01));
+      }
+      expect(
+        find.byKey(const ValueKey('super-machine-figure-m-codex-claude')),
+        findsNothing,
+      );
+      expect(find.text('Offline · 1'), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-machine-m-old')), findsNothing);
+      expect(find.textContaining('CPU'), findsNothing);
+      await shot('sidebar-groups');
+      debugPrint(
+        'Swarm fixture: open the tree: a workgroup and the offline machines',
+      );
+      final leadWasOpen = c!.expandedProjects.contains('lead');
+      if (!leadWasOpen) {
+        await tester.tap(
+          find.byKey(const ValueKey('super-project-expand-lead')),
+        );
+      }
+      await tester.tap(find.byKey(const ValueKey('super-machines-offline')));
+      await tester.pumpAndSettle();
+      expect(find.text('#20 Sidebar polish'), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-machine-m-old')), findsOneWidget);
+      // Each level one step further in than the one above it.
+      double textX(String row, String label) => tester
+          .getTopLeft(
+            find.descendant(
+              of: find.byKey(ValueKey(row)),
+              matching: find.text(label),
+            ),
+          )
+          .dx;
+      expect(
+        textX('super-group-polish', '#20 Sidebar polish'),
+        greaterThan(textX('super-group-lead', 'Lamp OS')),
+      );
+      await shot('sidebar-tree');
+      if (!leadWasOpen) {
+        await tester.tap(
+          find.byKey(const ValueKey('super-project-expand-lead')),
+        );
+      }
+      await tester.tap(find.byKey(const ValueKey('super-machines-offline')));
+      await tester.pumpAndSettle();
+      debugPrint('Swarm fixture: empty project disclosure');
+      await tester.tap(
+        find.byKey(const ValueKey('super-project-expand-design')),
+      );
+      await tester.pumpAndSettle();
+      expect(c.selectedId, 'lead');
+      expect(c.expandedProjects.contains('design'), isTrue);
+      expect(find.text('No workgroups yet'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+      await tester.pumpAndSettle();
+      expect(c.selectedId, 'lead');
+      final swarmId = f.app.activeSwarmId;
+      debugPrint('Swarm fixture: open Devices');
+      await tester.tap(find.byKey(const ValueKey('super-your-devices')));
+      // This fixture reserves the utility's conversation pane without a machine.
+      // Assert navigation while that pane waits for a connection instead of
+      // waiting for its indeterminate progress animation to settle.
+      await tester
+          .pump(const Duration(milliseconds: 100))
+          .timeout(const Duration(seconds: 10));
+      debugPrint('Swarm fixture: Devices frame painted');
+      expect(f.app.activeSwarm.isDevices, isTrue);
+      expect(f.app.activeSwarm.panes.first.isDevices, isTrue);
+      expect(f.app.activeSwarm.panes.last.isViewer, isFalse);
+      expect(f.app.takeMachinesRequest(), isNull);
+      f.app.selectSwarm(swarmId);
+      await tester.pumpAndSettle();
+      debugPrint('Swarm fixture: returned from Devices');
       await shot('conversation');
+      expect(find.textContaining('Delivered '), findsOneWidget);
+      expect(find.text('Queued'), findsNothing);
+      final receipt =
+          (instruction['deliveries'] as List).single as Map<String, Object?>;
+      receipt.addAll({
+        'status': 'claimed',
+        'holdReason': 'team_waiting_idle',
+        'holdSince': DateTime.now()
+            .subtract(const Duration(seconds: 34))
+            .toIso8601String(),
+      });
+      await c.refresh();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.textContaining('Atlas is busy · waiting'), findsOneWidget);
+      expect(
+        find.text(
+          "Atlas is finishing another task. Your message goes in by itself when it's done.",
+        ),
+        findsOneWidget,
+      );
+      await shot('receipt-held');
+      receipt['status'] = 'uncertain';
+      await c.refresh();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text("Couldn't confirm delivery"), findsOneWidget);
+      for (final label in ['Open terminal', 'Send again', 'It arrived']) {
+        expect(find.text(label), findsOneWidget);
+      }
+      await shot('receipt-uncertain');
+      receipt.addAll({
+        'status': 'answered',
+        'deliveredAt': deliveredAt.toIso8601String(),
+        'answeredAt': deliveredAt
+            .add(const Duration(seconds: 72))
+            .toIso8601String(),
+      });
+      await c.refresh();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('Replied · 1m 12s'), findsOneWidget);
+      await shot('receipt-replied');
+      debugPrint('Swarm fixture: collapse both left sidebar groups');
+      await tester.tap(find.byTooltip('Collapse Projects'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Collapse Machines'));
+      await tester.pumpAndSettle();
+      expect(find.text('Design'), findsNothing);
+      expect(find.textContaining('Studio Mac'), findsNothing);
+      await shot('sidebar-collapsed');
+      await tester.tap(find.byTooltip('Expand Projects'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Expand Machines'));
+      await tester.pumpAndSettle();
+      expect(find.text('Lead'), findsNothing);
+      expect(find.text('Atlas'), findsNWidgets(2));
+      expect(find.text('Available capacity'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('super-machine-m')));
+      await tester.pumpAndSettle();
+      expect(find.text('Available capacity'), findsOneWidget);
+      expect(find.text('CPU'), findsOneWidget);
+      expect(find.text('86%'), findsOneWidget);
+      await shot('machine-details');
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
       expect(
         tester.getTopLeft(find.text('Routed to Multiply')).dx,
         tester.getTopLeft(find.byType(SuperTabMessageText).first).dx,
@@ -237,7 +495,7 @@ void main() {
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       await tester.tap(
-        find.byKey(ValueKey('super-member-${c!.snapshot!.agents.single.id}')),
+        find.byKey(ValueKey('super-member-${c.snapshot!.agents.single.id}')),
       );
       debugPrint('Swarm fixture: terminal requested');
       for (var i = 0; i < 30 && f.app.activeSwarm.panes.isEmpty; i++) {
@@ -269,12 +527,51 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
       debugPrint('Swarm fixture: terminal ready');
       await shot('terminal');
+      final liveSession = f.app.activeSwarm.panes.single.session;
+      final nativePanel = tester.element(find.byType(TerminalPanel));
+      final initialMiddle = tester
+          .getSize(find.byKey(const ValueKey('super-center-pane')))
+          .width;
+      await tester.drag(
+        find.byKey(const ValueKey('super-resize-left')),
+        const Offset(30, 0),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.drag(
+        find.byKey(const ValueKey('super-resize-right')),
+        const Offset(-30, 0),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(
+        tester.getSize(find.byKey(const ValueKey('super-center-pane'))).width,
+        closeTo(initialMiddle - 60, 1),
+      );
+      expect(f.app.activeSwarm.panes.single.session, same(liveSession));
+      expect(tester.element(find.byType(TerminalPanel)), same(nativePanel));
+      expect(
+        f.app.activeSwarm.panes.single.session?.streamId,
+        SuperTabFixtureConnection.streamId,
+      );
+      await shot('terminal-resized');
+      final focusRequest = f.app.paneFocusRequest;
+      final divider = find.byKey(const ValueKey('super-resize-right'));
+      tester
+          .widget<Focus>(
+            find.descendant(of: divider, matching: find.byType(Focus)),
+          )
+          .focusNode!
+          .requestFocus();
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(f.app.paneFocusRequest, focusRequest + 1);
+      expect(f.app.activeSwarm.panes.single.session, same(liveSession));
       expect(find.byType(PaneGrid), findsOneWidget);
       expect(
         tester
             .widget<Text>(find.byKey(const ValueKey('terminal-pane-title')))
             .data,
-        'Lead',
+        'Atlas',
       );
       var reviews = 0;
       f.app.reviewSessionClose = (_, {tabName, canStop}) async {
@@ -393,6 +690,16 @@ void main() {
       expect(find.text('#1 Offline editing'), findsWidgets);
       expect(tester.takeException(), isNull);
       await shot('group-terminals');
+      await tester.tap(find.byKey(const ValueKey('super-member-lead-agent')));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(
+        find.byKey(const ValueKey('super-agent-group-open')),
+        findsOneWidget,
+      );
+      await shot('agent-workgroups');
+      await tester.tap(find.byKey(const ValueKey('super-agent-group-cancel')));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(c.selectedId, 'offline');
 
       await tester.pumpWidget(const SizedBox());
       await c.flush();

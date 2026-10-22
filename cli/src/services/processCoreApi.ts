@@ -120,7 +120,10 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       live,
       displayName: (session) => (session as ShownAgent).displayName ?? '',
       byAgent: (agentId) => live().find((session) => session.agentId === agentId),
+      closeSwarm: async request => await (ask?.('close_swarm', { ...request }) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }))
+        .catch(() => ({ error: 'SERVICE_UNAVAILABLE' })),
       stopped: async agentId => (await ask?.('stopped', { agentId }).catch(() => null))?.stopped === true,
+      gone: async agentId => (await ask?.('gone', { agentId }).catch(() => null))?.gone === true,
       creationStatus: async creationId => creationObservation(creationId,
         (await ask?.('creation_status', { creationId }).catch(() => null))?.observation),
       resolve: (id) => resolveAgent(live(), id),
@@ -237,6 +240,9 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       // hears the next, and a new core the host's first roster (superTabs/host.ts).
       superTabs: {
         attention: (items) => { void ask('super_tab_attention', { items }).catch(() => {}) },
+        // The Swarm cards, whole each time they change, and one Lead's recap (core/superTabCards.ts).
+        cards: (items) => { void ask('super_tab_cards', { items }).catch(() => {}) },
+        cardRecap: (recap) => { void ask('super_tab_card_recap', { recap }).catch(() => {}) },
       } satisfies SuperTabsCore,
     } : {}),
   }

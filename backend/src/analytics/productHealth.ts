@@ -2,6 +2,9 @@ import { PRODUCT_USAGE_METRICS, PRODUCT_USAGE_SETUP_METRICS, PRODUCT_USAGE_ACTIO
 import { cleanUsageContext, type ProductUsageContext } from '../types/productHealthContract.js'
 
 const allowed = new Set<string>(PRODUCT_USAGE_METRICS)
+// Read from the margins too, though not reported by the clients: the relay's count of the phone's opens by release
+// (lib/dailyTracking.ts mobileOpenMetrics), which shares the phone's release label and its coverage threshold.
+const readableMargins = new Set<string>([...PRODUCT_USAGE_METRICS, 'relay_mobile_opens'])
 // Two marginal tables in the existing expiring total store. No release/platform cross-product,
 // account joins, per-report rows, or arbitrary attributes survive ingestion.
 export function healthBreakdowns(context: ProductUsageContext | undefined, metric: string): string[] {
@@ -25,7 +28,7 @@ export function dailyProductHealth(rows: Row[], now: Date) {
       const c = days.get(day) ?? {}; c[row.metric] = (c[row.metric] ?? 0) + row.value; days.set(day, c)
     } else {
       const m = /^breakdown:(release|platform):(cli|desktop|phone):([^:]+):(.+)$/.exec(row.metric)
-      if (!m || !allowed.has(m[4])) continue
+      if (!m || !readableMargins.has(m[4])) continue
       const context = cleanUsageContext({ surface: m[2], release: m[1] === 'release' ? m[3] : 'unknown',
         platform: m[1] === 'platform' ? m[3] : 'other', channel: 'production' })
       if (!context || (m[1] === 'release' && context.release !== m[3])) continue

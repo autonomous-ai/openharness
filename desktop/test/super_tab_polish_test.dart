@@ -30,6 +30,7 @@ void gap(ConversationServer server, {String author = 'lead-agent'}) {
       'kind': 'agent',
       'id': author,
       'name': 'Lead',
+      'displayName': author == 'lead-agent' ? 'Atlas' : 'Sage',
     }
     ..['source'] = {'kind': 'native', 'phase': 'gap'};
 }
@@ -60,6 +61,11 @@ ConversationServer polishFixture() {
       {
         'id': pair.$1,
         'name': pair.$2,
+        'displayName': switch (pair.$1) {
+          'lead-agent' => 'Atlas',
+          'builder' => 'Nova',
+          _ => 'Sage',
+        },
         'projectId': 'lead',
         'machineId': 'm',
         'harnessId': pair.$1,
@@ -85,6 +91,11 @@ ConversationServer polishFixture() {
     {...conversationFixture('long-lead', 'Lead'), 'projectId': 'long'},
   ]);
   server.state['machines'] = [
+    {
+      'machineId': 'offline',
+      'name': 'MacBooks-MacBook-Pro-19.local',
+      'contributorId': 'leo',
+    },
     {
       'machineId': 'm',
       'name': 'M2',
@@ -126,8 +137,8 @@ ConversationServer polishFixture() {
 
   server.append('How is offline editing coming along?');
   lead(
-    'The implementation is ready. Builder is checking reconnects, '
-    'and Reviewer is testing restart recovery.',
+    'The implementation is ready. Nova is checking reconnects, '
+    'and Sage is testing restart recovery.',
   );
   lead(
     '**Progress**\n- Edits survive a restart.\n- Reconnecting syncs each edit once.\n\n'
@@ -368,29 +379,23 @@ void main() {
         if (profile.scale > 1) {
           await tester.tap(find.byTooltip('Members and machines'));
           await tester.pumpAndSettle();
-          await tester.ensureVisible(find.text('Machines'));
-          await tester.pumpAndSettle();
-          expect(tester.takeException(), isNull);
           await shot('-resources');
+          expect(tester.takeException(), isNull);
           await tester.sendKeyEvent(LogicalKeyboardKey.escape);
           await tester.pumpAndSettle();
           await tester.tap(find.byTooltip('Conversations'));
           await tester.pumpAndSettle();
+          expect(find.text('Machines'), findsOneWidget);
+          expect(tester.takeException(), isNull);
           await shot('-projects');
           expect(tester.takeException(), isNull);
         } else {
           expect(find.text('Machines'), findsOneWidget);
-          // Resources share one scroll area, so Machines follows the roster.
+          expect(find.text('Projects'), findsOneWidget);
+          // The Machines group lives beside Projects in the left sidebar.
           expect(
-            tester.getTopLeft(find.text('Machines')).dy,
-            lessThan(
-              tester
-                      .getBottomLeft(
-                        find.byKey(const ValueKey('super-member-reviewer')),
-                      )
-                      .dy +
-                  60,
-            ),
+            tester.getTopLeft(find.text('Machines')).dx,
+            tester.getTopLeft(find.text('Projects')).dx,
           );
         }
         // Capture one row treatment across disclosure, label and nested work.

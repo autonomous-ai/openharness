@@ -456,7 +456,9 @@ class NewHarnessController extends ChangeNotifier {
     engine = draft?.engine ?? engine;
     // A Finder is chosen as a harness is: by itself, or with its chat's agent.
     _finder =
-        isFinderEngine(draft?.harnessId ?? harnessId) || isFinderEngine(engine);
+        _allowedEngines == null &&
+        (isFinderEngine(draft?.harnessId ?? harnessId) ||
+            isFinderEngine(engine));
     if (isFinderEngine(engine)) engine = null;
     _harnessId = _finder
         ? null
@@ -473,6 +475,11 @@ class NewHarnessController extends ChangeNotifier {
         ? engine
         : _initialEngine(isHarnessId(engine) ? null : engine);
     if (_finder) _engine = _finderChat(_engine);
+    // A new Lead opened beside another pane inherits its agent, which may be
+    // one a Lead cannot run (OpenCode); it gives way as a guest's does.
+    if (_allowedEngines != null && !compatibleEngines.contains(_engine)) {
+      _engine = compatibleEngines.first;
+    }
     _restorePermissionMode();
     _model = _noAgentSetup ? null : draft?.model;
     _modelUsage = modelUsage;
@@ -601,7 +608,13 @@ class NewHarnessController extends ChangeNotifier {
   final String? _home;
 
   late String _engine;
-  String? _harnessId;
+  String? _chosenHarness;
+
+  /// A destination that allows only some agents (integration.engines, a new
+  /// Lead) starts the agent itself, never a Store harness, as a guest does.
+  String? get _harnessId => _allowedEngines == null ? _chosenHarness : null;
+  set _harnessId(String? id) => _chosenHarness = id;
+  List<String>? get _allowedEngines => integration?.engines;
 
   /// What the Harness row answers: a Store harness, the Finder, or null for
   /// an agent on its own. Both of the first two run on [engine].
@@ -704,6 +717,8 @@ class NewHarnessController extends ChangeNotifier {
 
   List<String> get compatibleEngines => asGuest
       ? const ['claude', 'codex']
+      : _allowedEngines != null
+      ? _allowedEngines!
       // A Finder's chat runs beside it on this computer: an agent, never
       // the cloud or a bare shell.
       : _finder
@@ -739,10 +754,12 @@ class NewHarnessController extends ChangeNotifier {
     final allowed = compatibleEngines;
     final remembered = requested ?? _rememberedChoice;
     if (remembered != null &&
-        (requested != null ||
-            !_desktopChoices ||
-            allowed.contains(remembered) ||
-            _harnessId == app.agentPreference.successfulLaunch?.harnessId)) {
+        (allowed.contains(remembered) ||
+            _allowedEngines == null &&
+                (requested != null ||
+                    !_desktopChoices ||
+                    _harnessId ==
+                        app.agentPreference.successfulLaunch?.harnessId))) {
       return remembered;
     }
     // Nothing remembered: the agent this person already uses, when the
@@ -1380,8 +1397,10 @@ class NewHarnessController extends ChangeNotifier {
   String get _settingsEngine => _agentPreview ?? _engine;
   LocalCodexProfile? get _settingsProfile =>
       _settingsEngine == _engine ? _profile : null;
-  List<PermissionMode> get _settingsModes =>
-      permissionModesOf(_baseOf(_settingsEngine));
+  String? get _forcedPermissionMode => integration?.forcedPermissionMode;
+  List<PermissionMode> get _settingsModes => _forcedPermissionMode != null
+      ? const []
+      : permissionModesOf(_baseOf(_settingsEngine));
   String get _settingsMode =>
       _settingsModes.any((mode) => mode.id == _permissionFor(_settingsEngine))
       ? _permissionFor(_settingsEngine)
@@ -1389,7 +1408,9 @@ class NewHarnessController extends ChangeNotifier {
   bool get takesTask => isCloud || takesFirstTask(_base);
   bool get taskTooLong => task.trim().length > kFirstTaskMaxLength;
   List<PermissionMode> get _modes =>
-      _noAgentSetup || isCloud ? const [] : permissionModesOf(_base);
+      _noAgentSetup || isCloud || _forcedPermissionMode != null
+      ? const []
+      : permissionModesOf(_base);
   bool get hasModes => _modes.isNotEmpty;
   String get mode =>
       _modes.any((mode) => mode.id == _mode) ? _mode : kDefaultPermissionMode;
@@ -1408,7 +1429,9 @@ class NewHarnessController extends ChangeNotifier {
 
   /// Settings are offered separately so browsing never inserts list rows.
   List<NewHarnessOption> agentSettingsFor(String engine) {
-    final modes = permissionModesOf(_baseOf(engine));
+    final modes = _forcedPermissionMode != null
+        ? const <PermissionMode>[]
+        : permissionModesOf(_baseOf(engine));
     final mode =
         modes.where((mode) => mode.id == _permissionFor(engine)).firstOrNull ??
         modes.where((mode) => mode.id == kDefaultPermissionMode).firstOrNull;
@@ -1688,10 +1711,10 @@ class NewHarnessController extends ChangeNotifier {
     // The machine model has no OS field. Its own home response (or a known
     // project path before that response) owns the syntax, never this host.
     // A relative query carries no style evidence over the committed project.
-    final absoluteHint = hint != null &&
+    final absoluteHint =
+        hint != null &&
             (p.posix.isAbsolute(hint) ||
-                p.windows.isAbsolute(hint) &&
-                    !p.windows.isRootRelative(hint))
+                p.windows.isAbsolute(hint) && !p.windows.isRootRelative(hint))
         ? hint
         : null;
     final ownerPath =
@@ -2840,7 +2863,7 @@ class NewHarnessController extends ChangeNotifier {
       NewHarnessField.harness => [
         ..._harnessOptions(),
         // A guest starts nothing from the Store there (asGuest).
-        if (offersStore && !asGuest) _store,
+        if (offersStore && !asGuest && _allowedEngines == null) _store,
       ],
       NewHarnessField.launch ||
       NewHarnessField.task ||
@@ -3086,8 +3109,9 @@ class NewHarnessController extends ChangeNotifier {
   }
 
   List<NewHarnessOption> _harnessOptions() {
-    // A guest there starts Claude Code or Codex, nothing from the Store (asGuest).
-    if (asGuest) {
+    // A guest there starts Claude Code or Codex, nothing from the Store (asGuest);
+    // so does a new Lead.
+    if (asGuest || _allowedEngines != null) {
       return _ranked([
         for (final id in compatibleEngines)
           NewHarnessOption(id: id, title: labelOf(id), engine: id),
@@ -3292,8 +3316,7 @@ class NewHarnessController extends ChangeNotifier {
       // `~/` keeps its slash: joined with nothing it came back as the home
       // folder itself, which then read as "the folder `me` under /home" — the
       // list showed one row, your own home, and Tab completed to `~/me/`.
-      if (text == '~/' ||
-          paths.style == p.Style.windows && text == '~\\') {
+      if (text == '~/' || paths.style == p.Style.windows && text == '~\\') {
         return '$home${text.substring(1)}';
       }
       if (text.startsWith('~/') ||
@@ -3481,7 +3504,8 @@ class NewHarnessController extends ChangeNotifier {
       total = 0;
       return [_browse, _changeMachine];
     }
-    final trailing = full.endsWith('/') ||
+    final trailing =
+        full.endsWith('/') ||
         paths.style == p.Style.windows && full.endsWith('\\');
     final parent = trailing ? paths.normalize(full) : paths.dirname(full);
     // While Tab is cycling the candidates, the line holds one of them but the
@@ -3981,9 +4005,17 @@ class NewHarnessController extends ChangeNotifier {
         );
       }
     }
-    final permissionMode = hasModes ? mode : null;
+    final forcedMode = _forcedPermissionMode;
+    // Only Claude Code and Codex name a full mode. Other engines use their
+    // existing approving launch flags through bypassPermission.
+    final permissionMode = forcedMode == null
+        ? (hasModes ? mode : null)
+        : permissionModesOf(base).any((mode) => mode.id == forcedMode)
+        ? forcedMode
+        : null;
     final bypass =
-        permissionMode != null && permissionModeApproves(permissionMode);
+        forcedMode != null ||
+        (permissionMode != null && permissionModeApproves(permissionMode));
     final folder = _project.folder;
     final firstMessage = task.trim();
     String launchMessage = firstMessage;
@@ -4015,7 +4047,10 @@ class NewHarnessController extends ChangeNotifier {
     final launchSetup = LaunchSetup(
       engine: base,
       harnessId: harness,
-      permissionMode: permissionMode ?? kDefaultPermissionMode,
+      // A Swarm's required mode is not the person's next ordinary launch choice.
+      permissionMode: _forcedPermissionMode != null
+          ? _permissionFor(base)
+          : permissionMode ?? kDefaultPermissionMode,
       model: model,
       profile: base == 'codex' && model == null && !asGuest ? _profile : null,
       profileMachineId: _machineId,
@@ -4042,6 +4077,7 @@ class NewHarnessController extends ChangeNotifier {
           : null,
       model: model,
       dsh: harness,
+      swarmRole: integration?.swarmRole,
       // Sent exactly as written; an agent that cannot take one is never sent it.
       prompt: takesTask && files.isEmpty && launchMessage.isNotEmpty
           ? launchMessage

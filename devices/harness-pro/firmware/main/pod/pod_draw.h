@@ -3,7 +3,7 @@
 // Pro runs (ht_run_t.pro_kind >= POD_KIND_BASE) that ht_pro_raster hands to pod_draw_raster.
 #include "pod_types.h"
 
-enum { POD_KIND_BASE = 16, POD_CELL = 16, POD_ARC, POD_GRAD, POD_TRI };
+enum { POD_KIND_BASE = 16, POD_CELL = 16, POD_ARC, POD_GRAD, POD_TRI, POD_VEIL };
 
 // A dial pet frame at (x, y). zoom is in eighths (8 = 1x, 16 = an exact 2x nearest-neighbour scale, 9..15 and >16 clamp to 1x, 0 draws nothing); the frame pointer
 // and zoom live in the run so a new frame changes the picture's bytes.
@@ -37,4 +37,8 @@ bool pod_tri(ht_scene_t *s, int x0, int y0, int x1, int y1, int x2, int y2, uint
 // but bleeds a pixel outward, so two triangles that share it leave no seam (anti-aliasing both sides of a shared
 // edge composites to only 75% along it). Use it only for edges that lie inside the figure.
 bool pod_tri_inner(ht_scene_t *s, int x0, int y0, int x1, int y1, int x2, int y2, uint16_t ink, unsigned inner);
+// A veil over what is already drawn in the rect, to clip and fade a neighbour peeking in at a card's edge: the part on the card's side of the line
+// x = edge (the left of it when inside_left, else the right) is mixed `k` of 255 toward the card's vertical gradient (top at row gy0, bottom gh rows
+// further down), the rest is painted `bg`, which clips whatever spilled past the card. One run; the rect's rows must be clear of the card's corners.
+void pod_veil(ht_scene_t *s, int x, int y, int w, int h, int edge, bool inside_left, int gy0, int gh, uint16_t top, uint16_t bottom, uint16_t bg, unsigned k);
 void pod_draw_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out);

@@ -1389,14 +1389,31 @@ impl App {
             }
             // This computer first, then the ones that are up.
             app.fleet.machines.sort_by_key(|m| (!m.local, !m.online(), m.name.to_lowercase()));
-            let ids: Vec<String> = app.fleet.machines.iter()
-                .filter(|m| m.online() && (matches!(m.reach, Reach::Unknown | Reach::Error(_)) || (m.reach == Reach::NeedsLink && app.fleet.shares.contains_key(&m.id))))
-                .map(|m| m.id.clone()).collect();
-            for id in ids { app.connect(&id) }
-            for machine in app.fleet.machines.iter_mut() { if !machine.online() && machine.reach == Reach::Unknown { machine.reach = Reach::Offline } }
+            app.dial_listed();
             crate::workspace_controls::refresh_workspace(app);
             crate::input::refill(app);
         });
+    }
+
+    /// The machines the list says are up that hn has no link to are dialled; the others are offline.
+    /// Offline is among them: a link that dropped while the list read the machine offline (its daemon
+    /// restarting for an update, the Mac asleep) is given up (redial_due), and only this dials it again.
+    /// Left out, the machine read "offline" while up until hn restarted (a shared Mac, 2026-10-22).
+    pub fn dial_listed(&mut self) {
+        let ids: Vec<String> = self.fleet.machines.iter()
+            .filter(|m| m.online() && (matches!(m.reach, Reach::Unknown | Reach::Error(_) | Reach::Offline) || (m.reach == Reach::NeedsLink && self.fleet.shares.contains_key(&m.id))))
+            .map(|m| m.id.clone()).collect();
+        for id in ids { self.connect(&id) }
+        for machine in self.fleet.machines.iter_mut() { if !machine.online() && machine.reach == Reach::Unknown { machine.reach = Reach::Offline } }
+    }
+
+    /// Dial [machine_id] when nothing is dialling it: no link, no retry pending (its backoff decides when), and this
+    /// computer's daemon, which every link goes through, is up. For a dial asked on demand (composition `wake`),
+    /// which a waiting command asks again every 100 ms.
+    pub fn dial_if_idle(&mut self, machine_id: &str) -> bool {
+        if self.daemon_down || self.links.get(machine_id).is_some_and(|s| s.link.is_some() || s.retry_at.is_some()) { return false }
+        self.connect(machine_id);
+        true
     }
 
     pub fn connect(&mut self, machine_id: &str) {
@@ -7523,6 +7540,49 @@ mod recovery_tests {
             assert!(app.links["test-peer"].link.is_none() && app.links["test-peer"].retry_at.is_none(), "{case}: no longer dialled");
             assert_eq!(connects(&mut app), [pair("remote_connect", "started"), pair("remote_connect", "failed")], "{case}");
         }
+    }
+
+    /// Its link dropped while the list read it offline (its daemon restarting for an update, the Mac asleep),
+    /// so hn stopped dialling and kept it Offline. The list saying it is up again never dialled it: only
+    /// Unknown and Error were, and a shell's `claude @<it>` answered "That computer is offline" until hn
+    /// restarted (a shared Mac, 2026-10-22).
+    #[tokio::test]
+    async fn a_machine_back_online_is_dialled_again_after_hn_gave_up_on_it() {
+        let mut app = fixture();
+        undialled(&mut app);
+        app.connect("test-peer");
+        app.fleet.machine_mut("test-peer").unwrap().status = "offline".into();
+        fail(&mut app, "test-peer", "DISCONNECTED");
+        redial(&mut app, "test-peer");
+        assert_eq!(app.fleet.machine("test-peer").unwrap().reach, Reach::Offline);
+        assert!(app.links["test-peer"].link.is_none() && app.links["test-peer"].retry_at.is_none(), "given up while offline");
+        app.fleet.machine_mut("test-peer").unwrap().status = "online".into();
+        app.dial_listed();
+        assert!(app.links["test-peer"].link.is_some(), "the list says it is up: dial it");
+        assert_eq!(app.fleet.machine("test-peer").unwrap().reach, Reach::Connecting);
+        app.links["test-peer"].link.as_ref().unwrap().close();
+    }
+
+    /// A composed command dials a computer that is up but not linked (composition `wake`), and asks again every
+    /// 100 ms while it waits up to 25 s. A dial that fails at once was redialled on each ask, past its backoff:
+    /// some 250 dials (review of #1571). It dials only a machine with no link and no retry pending, and not while
+    /// this computer's daemon, which every link goes through, is down.
+    #[tokio::test]
+    async fn dialling_on_demand_keeps_the_backoff() {
+        let mut app = fixture();
+        undialled(&mut app);
+        assert!(app.dial_if_idle("test-peer"));
+        assert!(!app.dial_if_idle("test-peer"), "dialling already");
+        fail(&mut app, "test-peer", "TIMEOUT");
+        assert!(app.links["test-peer"].retry_at.is_some(), "the backoff is on");
+        assert!(!app.dial_if_idle("test-peer"), "the backoff decides when it dials again");
+        assert!(app.links["test-peer"].link.is_none());
+        app.links.get_mut("test-peer").unwrap().retry_at = None;
+        app.daemon_down = true;
+        assert!(!app.dial_if_idle("test-peer"), "nothing reaches it while this computer's daemon is down");
+        app.daemon_down = false;
+        assert!(app.dial_if_idle("test-peer"));
+        app.links["test-peer"].link.as_ref().unwrap().close();
     }
 
     /// A shared machine refused until one of the two daemons reads the sharing (#1381) was redialled

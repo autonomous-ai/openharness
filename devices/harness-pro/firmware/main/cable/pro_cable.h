@@ -24,6 +24,11 @@ bool pro_cable_send_scroll(pro_scroll_phase_t phase, int dy, int velocity);
 // Never waits (the render task sends it); false when it could not go out, and pro_app asks again.
 bool pro_cable_request_library(int offset, uint32_t request);
 
+// The Swarm cards' three frames to the daemon, `t` one of "supertab.recap.get" (the Lead's last message), "supertab.open" (the
+// recap on screen; `lead` NULL or "" when it closes) and "supertab.select" (pick the Lead on the desktop). Anything else, or
+// no `tab`, sends nothing. Never waits (the render and touch tasks send it); a busy link loses it, so the caller asks again.
+bool pro_cable_supertab_send(const char *t, const char *tab, const char *lead);
+
 // Voice: begin sends voice.begin and remembers `upload_id` (<= 23 chars) to match the reply; pcm is a CABLE_TYPE_PCM
 // frame (16-bit mono); end finishes the recording (the reply arrives as pro_app_voice_result); abort/cancel discard it.
 bool pro_cable_voice_begin(const char *agent_id, const char *lang, int sample_rate, const char *upload_id);

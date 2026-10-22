@@ -13,13 +13,12 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
 import 'controller.dart';
+import 'dialog_scope.dart';
 import 'identity.dart';
-import 'machines.dart';
 import 'model.dart';
 import 'section_heading.dart';
 
-/// Tab-wide membership above tab-wide execution capacity. Group selection does
-/// not change who appears here or what machines the team has contributed.
+/// Tab-wide people and capacity, with agents from the selected project.
 class SuperTabRoster extends StatefulWidget {
   const SuperTabRoster({
     super.key,
@@ -40,6 +39,125 @@ class SuperTabRoster extends StatefulWidget {
 
 class _SuperTabRosterState extends State<SuperTabRoster> {
   SuperTabController get c => widget.controller;
+
+  String? _agentProjectId(SuperTabAgent agent) => agent.hasProjectId
+      ? agent.projectId
+      : c.snapshot?.conversations
+            .where(
+              (group) =>
+                  group.agentIds.contains(agent.id) || group.leadId == agent.id,
+            )
+            .firstOrNull
+            ?.projectId;
+
+  String _role(SuperTabAgent agent) =>
+      c.snapshot!.isLead(agent.id) ? 'Product Manager' : 'Engineer';
+
+  bool _canRemove(SuperTabAgent agent) =>
+      c.canWrite && (c.isOwner || agent.contributorId == c.accountId);
+
+  Future<void> _remove(SuperTabAgent agent) async {
+    var busy = false, attempted = false;
+    final name = c.snapshot!.agentName(agent.id);
+    final machine =
+        widget.app?.stateOf(agent.machineId)?.machine.displayName ??
+        c.snapshot?.machines
+                .where((m) => m['machineId'] == agent.machineId)
+                .firstOrNull?['name']
+            as String? ??
+        'its computer';
+    await showAppDialog<void>(
+      context: context,
+      builder: (context) => SuperTabDialogScope(
+        controller: c,
+        child: StatefulBuilder(
+          builder: (context, update) => ListenableBuilder(
+            listenable: c,
+            builder: (context, _) {
+              final current = c.snapshot?.agent(agent.id);
+              final pending = c.pendingCommand;
+              final checking =
+                  pending?['type'] == 'agent.remove' &&
+                  pending?['agentId'] == agent.id;
+              final available = current != null || checking || busy;
+              final permitted = _canRemove(current ?? agent);
+              final enabled =
+                  permitted &&
+                  !busy &&
+                  !c.saving &&
+                  (checking || !c.hasPendingAction);
+              return PopScope(
+                canPop: !busy,
+                child: AlertDialog(
+                  title: Text(
+                    available
+                        ? 'Remove $name from this Swarm?'
+                        : 'Agent unavailable',
+                  ),
+                  content: SizedBox(
+                    width: 400,
+                    child: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            available && permitted
+                                ? 'Any open task needs to be assigned again or closed. Its session on $machine is left to its owner.'
+                                : 'This action is no longer available.',
+                          ),
+                          if (attempted && c.operationError != null) ...[
+                            const SizedBox(height: 12),
+                            Text(c.operationError!),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                  actions: [
+                    TextButton(
+                      autofocus: true,
+                      onPressed: busy ? null : () => Navigator.pop(context),
+                      child: Text(
+                        checking || !available || !permitted
+                            ? 'Close'
+                            : 'Cancel',
+                      ),
+                    ),
+                    if (available && permitted)
+                      FilledButton(
+                        style: grid.dangerButtonStyle(),
+                        onPressed: !enabled
+                            ? null
+                            : () async {
+                                update(() {
+                                  busy = true;
+                                  attempted = true;
+                                });
+                                final result = checking
+                                    ? await c.retry()
+                                    : await c.command({
+                                        'type': 'agent.remove',
+                                        'agentId': agent.id,
+                                      });
+                                if (!context.mounted) return;
+                                if (result != null) {
+                                  Navigator.pop(context);
+                                } else {
+                                  update(() => busy = false);
+                                }
+                              },
+                        child: Text(checking ? 'Retry' : 'Remove from Swarm'),
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
 
   HarnessActivity _activity(SuperTabAgent agent) {
     final app = widget.app;
@@ -77,7 +195,13 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Text(_role(agent)),
             Text(engineIdentity(agent.engine).label),
+            if (agent.name != c.snapshot!.agentName(agent.id))
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text('Harness: ${agent.name}'),
+              ),
             for (final field in [
               ('Model', 'model'),
               ('Effort', 'effort'),
@@ -118,7 +242,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
   Widget _agent(SuperTabAgent agent) {
     final name = c.snapshot!.agentName(agent.id), activity = _activity(agent);
     final project = c.snapshot!.projects
-        .where((p) => p.id == agent.projectId)
+        .where((p) => p.id == _agentProjectId(agent))
         .firstOrNull;
     final theme = terminalThemeFor(
       grid.AppTheme.surfacePalette,
@@ -136,30 +260,73 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           ),
           items: [
             const PopupMenuItem(value: 'details', child: Text('Details')),
+            if (_canRemove(c.snapshot?.agent(agent.id) ?? agent))
+              const PopupMenuItem(
+                value: 'remove',
+                child: Text('Remove from Swarm'),
+              ),
           ],
         );
         if (choice == 'details' && mounted) await _details(agent);
+        if (choice == 'remove' && mounted) {
+          final current = c.snapshot?.agent(agent.id);
+          if (current != null && _canRemove(current)) await _remove(current);
+        }
       },
       child: ListTile(
         key: ValueKey('super-member-${agent.id}'),
         dense: true,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 1),
+        minTileHeight: 48,
+        minVerticalPadding: 6,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16),
         title: Row(
           children: [
             Tooltip(
               message: engineIdentity(agent.engine).label,
-              child: EngineMark(engine: agent.engine, size: 20),
+              child: SuperTabAvatar(
+                identity: 'agent:${agent.id}',
+                name: name,
+                size: 24,
+              ),
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
             Expanded(
-              child: Tooltip(
-                message: name,
-                child: Text(
-                  name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: DesktopChrome.control(medium: true),
-                ),
+              child: Row(
+                children: [
+                  Flexible(
+                    child: Tooltip(
+                      message: name,
+                      child: Text(
+                        name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: DesktopChrome.control(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Tooltip(
+                    message: _role(agent),
+                    child: Semantics(
+                      label: _role(agent),
+                      excludeSemantics: true,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 5,
+                          vertical: 1,
+                        ),
+                        decoration: BoxDecoration(
+                          color: grid.AppSurface.hoverFill,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          c.snapshot!.isLead(agent.id) ? 'PM' : 'Dev',
+                          style: DesktopChrome.metadata(),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(width: 8),
@@ -176,7 +343,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         subtitle: project == null
             ? null
             : Padding(
-                padding: const EdgeInsets.only(left: 30),
+                padding: const EdgeInsets.only(left: 32),
                 child: Tooltip(
                   message: project.name,
                   child: Text(
@@ -195,12 +362,17 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
 
   List<Widget> _members() {
     final state = c.snapshot;
-    final leads =
-        state?.agents.where((a) => state.isLead(a.id)).toList() ??
+    final projectId = c.selected?.projectId;
+    final members =
+        state?.agents
+            .where(
+              (agent) =>
+                  projectId != null && _agentProjectId(agent) == projectId,
+            )
+            .toList() ??
         const <SuperTabAgent>[];
-    final agents =
-        state?.agents.where((a) => !state.isLead(a.id)).toList() ??
-        const <SuperTabAgent>[];
+    final leads = members.where((a) => state!.isLead(a.id)).toList();
+    final agents = members.where((a) => !state!.isLead(a.id)).toList();
     return [
       SuperTabSectionHeading(
         'Humans',
@@ -210,11 +382,15 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
       for (final person in state?.people ?? const <SuperTabPerson>[])
         ListTile(
           dense: true,
+          minTileHeight: 36,
+          minVerticalPadding: 6,
+          minLeadingWidth: 24,
           contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-          horizontalTitleGap: 10,
+          horizontalTitleGap: 8,
           leading: SuperTabAvatar(
             identity: 'person:${person.id}',
             name: superTabPersonName(person.email),
+            size: 24,
           ),
           title: Tooltip(
             message: person.email,
@@ -246,7 +422,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             ),
           ),
         ),
-      const SizedBox(height: 20),
+      const SizedBox(height: 16),
       SuperTabSectionHeading(
         'Agents',
         onAdd: c.canWrite && c.selected != null
@@ -273,16 +449,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         builder: (context, _) => ListView(
           key: PageStorageKey('super-tab-resources-${c.tabId}'),
           padding: const EdgeInsets.symmetric(vertical: 12),
-          children: [
-            ..._members(),
-            const SizedBox(height: 20),
-            SuperTabMachines(
-              controller: c,
-              app: widget.app,
-              onAddAgent: widget.onAddAgent,
-              embedded: true,
-            ),
-          ],
+          children: _members(),
         ),
       ),
     );

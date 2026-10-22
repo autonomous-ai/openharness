@@ -1,7 +1,7 @@
 // cli/src/superTabs/route.spec.ts
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { choose, contextSize, decide, floorFor, jevQuestion, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, scrub, type Assessment, type MemberFrame, type Policy, type Probe, type TaskFolder } from './route.js'
+import { choose, contextSize, decide, floorFor, jevQuestion, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, scrub, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type TaskFolder } from './route.js'
 
 const policy: Policy = { version: 1, floor: { low: 1, medium: 2, high: 3 }, quotaReserve: 10, notes: 'Frontend prefers Claude.', models: [
   { engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, enabled: true },
@@ -9,14 +9,25 @@ const policy: Policy = { version: 1, floor: { low: 1, medium: 2, high: 3 }, quot
   { engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2, enabled: true },
   { engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, enabled: false },
 ] }
-const a = (patch: Partial<Assessment> = {}): Assessment => ({ difficulty: 'medium', risk: 'low', why: 'API change.', needs: { tools: [], devices: [] }, ...patch })
+const a = (patch: Partial<Assessment> = {}): Assessment => ({ difficulty: 'medium', risk: 'low', size: 'medium', why: 'API change.', needs: { tools: [], devices: [] }, ...patch })
 const probe = (patch: Partial<Probe> = {}): Probe => ({ kind: 'new', machineId: 'm1', machineName: 'remote-1', engine: 'claude', model: 'sonnet',
   effort: 'medium', quality: 2, cost: 2, quota: { known: true, leftPercent: 50, resetsAt: 1_000 }, activity: 'new', known: true, refusals: [], ...patch })
 
+const NOW = 1_000_000_000, M = 60_000, H = 3_600_000, D = 86_400_000
+/** A reading with a 5-hour and a weekly window, each as [percent left, resets in] (either may be missing). */
+type Win = [left: number, resetsIn: number | null] | null
+const windows = (five: Win, week: Win, account?: string): Probe['quota'] => {
+  const read = ([['5-hour', five], ['weekly', week]] as const).flatMap(([name, w]) => w ? [{ name, leftPercent: w[0], resetsAt: w[1] === null ? null : NOW + w[1] }] : [])
+  return { known: true, leftPercent: Math.min(...read.map(w => w.leftPercent)), resetsAt: null, windows: read, ...(account ? { account } : {}) }
+}
+const ok = (r: ReturnType<typeof choose>) => { if ('error' in r) throw new Error('x'); return r }
+
 describe('assessment and floor', () => {
   it('parses a Lead assessment and explains what is wrong', () => {
-    expect(parseAssessment({ difficulty: 'high', risk: 'low', why: ' Schema. ', needs: { tools: ['git'] } }))
-      .toEqual({ difficulty: 'high', risk: 'low', why: 'Schema.', needs: { tools: ['git'], devices: [] } })
+    expect(parseAssessment({ difficulty: 'high', risk: 'low', size: 'large', why: ' Schema. ', needs: { tools: ['git'] } }))
+      .toEqual({ difficulty: 'high', risk: 'low', size: 'large', why: 'Schema.', needs: { tools: ['git'], devices: [] } })
+    expect(parseAssessment({ difficulty: 'high', risk: 'low', size: 'huge', why: 'x' })).toContain('size')
+    expect(parseAssessment({ difficulty: 'high', risk: 'low', size: 'toString', why: 'x' })).toContain('size')
     expect(parseAssessment({ difficulty: 'hard', risk: 'low', why: 'x' })).toContain('difficulty')
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x'.repeat(301) })).toContain('300')
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', needs: { cwd: 'relative' } })).toContain('absolute')
@@ -37,6 +48,10 @@ describe('quota and rates', () => {
     expect(quotaOf2({ known: true, windows: [{ usedPercent: 10, resetsAt: 1_800_000_000_000 }] }).resetsAt).toBe(1_800_000_000_000)
     expect(quotaOf2({ known: true, windows: [{ usedPercent: 10, resetsAt: 'soon' }] }).resetsAt).toBeNull()
     expect(quotaOf2({ known: false, windows: [] })).toEqual({ known: false, leftPercent: null, resetsAt: null })
+    // The reading's account key goes with it, read or not, so models on one subscription share it.
+    expect(quotaOf2({ known: false, windows: [], account: 'k1' })).toEqual({ known: false, leftPercent: null, resetsAt: null, account: 'k1' })
+    expect(quotaOf2({ known: true, windows: [{ usedPercent: 10, resetsAt: null }], account: 'k1' }).account).toBe('k1')
+    expect(quotaOf2({ known: true, windows: [{ usedPercent: 10, resetsAt: null }], account: null })).not.toHaveProperty('account')
   })
   it('rates a member by its policy row, then by model, else conservatively', () => {
     expect(rateFor(policy, 'claude', 'opus', 'high')).toEqual({ quality: 3, cost: 3 })
@@ -50,37 +65,37 @@ describe('choose', () => {
     expect(choose([probe({ refusals: ['Machine is offline.'] })], policy, a())).toEqual({ error: 'NO_CANDIDATE',
       excluded: [{ title: 'New agent · Claude sonnet medium · remote-1', reason: 'Machine is offline.' }] })
   })
-  it('shows only floor-meeting candidates, ordered by cost, quota, reset and member first', () => {
+  it('shows only floor-meeting candidates, ordered by effective cost, quality, room on the tightest window, member first', () => {
     const r = choose([
-      probe({ model: 'opus', effort: 'high', quality: 3, cost: 3 }),
-      probe({ machineId: 'm2', machineName: 'mac', quota: { known: true, leftPercent: 80, resetsAt: 5_000 } }),
-      probe({ quota: { known: true, leftPercent: 80, resetsAt: 2_000 } }),
-      probe({ kind: 'member', agentId: 'a1', name: 'Multiply', quota: { known: true, leftPercent: 80, resetsAt: 2_000 }, activity: 'idle' }),
+      probe({ model: 'opus', effort: 'high', quality: 3, cost: 3, quota: windows([80, 3 * H], [90, 5 * D]) }),
+      probe({ machineId: 'm2', machineName: 'mac', quota: windows([80, 3 * H], [90, 5 * D], 'B') }),
+      probe({ quota: windows([60, 3 * H], [90, 5 * D]) }),
+      probe({ kind: 'member', agentId: 'a1', name: 'Multiply', quota: windows([60, 3 * H], [90, 5 * D]), activity: 'idle' }),
+      probe({ kind: 'member', agentId: 'a2', name: 'Elsewhere', repo: 'different', quota: windows([60, 3 * H], [90, 5 * D]), activity: 'idle' }),
       probe({ model: 'haiku', effort: 'auto', quality: 1, cost: 1 }),
-      probe(),
-    ], policy, a())
+    ], policy, a(), NOW)
     if ('error' in r) throw new Error('unexpected')
     expect(r.belowFloor).toBe(false)
+    // A member in another repository saves no start, so it ranks as a new agent would.
     expect(r.shown.map(s => s.title)).toEqual([
-      'Multiply · Claude sonnet medium · remote-1',
-      'New agent · Claude sonnet medium · remote-1',
       'New agent · Claude sonnet medium · mac',
+      'Multiply · Claude sonnet medium · remote-1',
+      'Elsewhere · Claude sonnet medium · remote-1',
       'New agent · Claude sonnet medium · remote-1',
       'New agent · Claude opus high · remote-1',
     ])
     expect(r.shown.map(s => s.id)).toEqual(['c0', 'c1', 'c2', 'c3', 'c4'])
   })
-  it('marks belowFloor when nobody meets it, keeps the quota reserve, and prefers known candidates', () => {
-    const r = choose([probe({ quality: 1 }), probe({ quality: 1, quota: { known: true, leftPercent: 5, resetsAt: null } })], policy, a({ difficulty: 'high' }))
-    if ('error' in r) throw new Error('unexpected')
+  it('marks belowFloor when nobody meets it, and shows those that fit before the unknown and the short', () => {
+    const r = ok(choose([probe({ quality: 1 }), probe({ quality: 1, machineName: 'mac', quota: windows([90, null], [90, null]) })], policy, a({ difficulty: 'high' }), NOW))
     expect(r.belowFloor).toBe(true)
-    expect(r.shown).toHaveLength(1)
-    const onlyReserve = choose([probe({ quota: { known: true, leftPercent: 5, resetsAt: null } })], policy, a())
-    if ('error' in onlyReserve) throw new Error('unexpected')
-    expect(onlyReserve.shown).toHaveLength(1)
-    const unknown = choose([probe({ known: false, quota: { known: false, leftPercent: null, resetsAt: null } }), probe()], policy, a())
-    if ('error' in unknown) throw new Error('unexpected')
-    expect(unknown.shown.map(s => s.known)).toEqual([true])
+    expect(r.shown.map(s => s.fit.status)).toEqual(['fits'])
+    expect(r.excluded).toEqual([{ title: 'New agent · Claude sonnet medium · remote-1', reason: 'Its quota could not be read in full, and another candidate\'s quota fits this task.' }])
+    // Under the reserve is short, and goes after a candidate that is only partly known.
+    const reserve = ok(choose([probe({ quota: windows([10, null], [90, null]) }), probe({ machineName: 'mac', quota: windows([90, null], null) })], policy, a(), NOW))
+    expect(reserve.shown.map(s => [s.machineName, s.fit.status])).toEqual([['mac', 'unknown']])
+    expect(reserve.excluded[0].reason).toBe('The 5-hour window is expected to run out right away.')
+    expect(reserve.short).toBeUndefined()
   })
   it('shows at most 12 candidates', () => {
     const r = choose(Array.from({ length: 20 }, (_, i) => probe({ machineId: `m${i}`, machineName: `box-${String(i).padStart(2, '0')}` })), policy, a())
@@ -89,9 +104,96 @@ describe('choose', () => {
   })
 })
 
+/** The phase 1 examples (docs/plans/2026-10-21-swarm-routing-phase1.md), on the default policy with a 10% reserve. */
+describe('strength, fit and effective cost', () => {
+  const defaults: Policy = { ...policy, notes: '', models: policy.models.map(m => ({ ...m, enabled: true })) }
+  const OPUS = { engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3 } as const
+  const SONNET = { engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2 } as const
+  const HAIKU = { engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1 } as const
+  const CODEX = { engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2 } as const
+  const on = (row: Partial<Probe>, machine: string, quota: Probe['quota']) => probe({ ...row, machineId: machine, machineName: machine, quota })
+  const route = (probes: Probe[], patch: Partial<Assessment>, now = NOW, open: Commitment[] = []) => ok(choose(probes, defaults, a(patch), now, open))
+  const picks = (r: ReturnType<typeof route>) => r.shown.map(s => `${s.model} on ${s.machineName}`)
+
+  it('1. high, medium: Opus high, though its window resets in 40 minutes, over Sonnet with more left', () => {
+    const r = route([on(OPUS, 'a', windows([70, 40 * M], [80, 5 * D], 'A')), on(SONNET, 'b', windows([90, 3 * H], [80, 5 * D], 'B'))], { difficulty: 'high', size: 'medium' })
+    expect(picks(r)).toEqual(['opus on a'])
+    // Strength filters: the weaker model is neither shown nor excluded.
+    expect(r.excluded).toEqual([])
+    expect(r.shown[0].label).toContain('fits: needs about 30% of the 5-hour window (60% left, resets in 40m, otherwise unused); weekly 6% of 70%')
+    expect(r.shown[0].fit).toEqual({ status: 'fits', coverage: 2, effectiveCost: 0, expiring: 1, spend: { '5-hour': 45, weekly: 6 }, account: 'A' })
+  })
+  it('2. high, large: Codex, because Opus high is expected to run out', () => {
+    const r = route([on(OPUS, 'a', windows([25, 4 * H], [80, 5 * D], 'A')), on(CODEX, 'a', windows([85, 3 * H], [80, 5 * D]))], { difficulty: 'high', size: 'large' })
+    expect(picks(r)).toEqual(['default on a'])
+    expect(r.shown[0].fit.account).toBe('a:codex')
+    expect(r.excluded).toEqual([{ title: 'New agent · Claude opus high · a', reason: 'The 5-hour window is expected to run out about a quarter of the way in; resets in 4h.' }])
+  })
+  it('3. low, small: Haiku on the account whose weekly window has room, not on the one nearly spent for the week', () => {
+    const A = windows([80, 4 * H], [12, 5 * D], 'A'), B = windows([60, 4 * H], [70, 5 * D], 'B')
+    const r = route([OPUS, SONNET, HAIKU].flatMap(row => [on(row, 'a', A), on(row, 'b', B)]), { difficulty: 'low', size: 'small' })
+    expect(picks(r)[0]).toBe('haiku on b')
+    // A's weekly budget is 0.4% a day; Haiku's 0.5% costs it 1 + 1 × 0.5 / 0.4.
+    expect(r.shown.find(s => s.model === 'haiku' && s.machineName === 'a')!.fit.effectiveCost).toBe(2.25)
+  })
+  it('4. low, small: Opus high on the account whose 5-hour window resets in 20 minutes, which would otherwise go unused', () => {
+    const A = windows([60, 20 * M], [60, 2 * D], 'A'), B = windows([90, 4 * H], [80, 5 * D], 'B')
+    const r = route([OPUS, SONNET, HAIKU].flatMap(row => [on(row, 'a', A), on(row, 'b', B)]), { difficulty: 'low', size: 'small' })
+    expect(picks(r).slice(0, 4)).toEqual(['opus on a', 'sonnet on a', 'haiku on a', 'haiku on b'])
+  })
+  it('5. two high, medium routes a minute apart go to two accounts', () => {
+    const probes = [on(OPUS, 'a', windows([60, 3 * H], [80, 5 * D], 'A')), on(OPUS, 'b', windows([58, 3 * H], [80, 5 * D], 'B'))]
+    const first = route(probes, { difficulty: 'high', size: 'medium' })
+    expect(picks(first)[0]).toBe('opus on a')
+    const held: Commitment = { account: first.shown[0].fit.account, spend: first.shown[0].fit.spend, size: 'medium', createdAt: NOW }
+    const second = route(probes, { difficulty: 'high', size: 'medium' }, NOW + M, [held])
+    expect(picks(second)).toEqual(['opus on b'])
+    expect(second.excluded[0]).toMatchObject({ title: 'New agent · Claude opus high · a', reason: expect.stringContaining('expected to run out') })
+    // Once its run time is over a pick holds nothing.
+    expect(picks(route(probes, { difficulty: 'high', size: 'medium' }, NOW + 2 * H, [held]))[0]).toBe('opus on a')
+  })
+  it('6. high, large: a window that resets in an hour needs only the part of the task before the reset', () => {
+    const r = route([on(OPUS, 'a', windows([40, H], [80, 5 * D]))], { difficulty: 'high', size: 'large' })
+    expect(r.shown[0].fit).toMatchObject({ status: 'fits', coverage: 1.2 })
+    expect(r.shown[0].label).toContain('needs about 25% of the 5-hour window')
+  })
+  it('7. high, large: Codex and never Sonnet when every strong candidate is short, and the Lead is told', () => {
+    const r = route([on(OPUS, 'a', windows([30, 4 * H], [80, 5 * D], 'A')), on(CODEX, 'a', windows([40, 4.5 * H], [80, 5 * D])),
+      on(SONNET, 's', windows([95, 4 * H], [80, 5 * D], 'S'))], { difficulty: 'high', size: 'large' })
+    expect(picks(r)).toEqual(['default on a', 'opus on a'])
+    expect(r.shown.map(s => s.fit.status)).toEqual(['short', 'short'])
+    expect(r.short).toBe('No candidate is expected to cover this task; its 5-hour quota is expected to run out partway and resets in 4h30.')
+  })
+  it('8. an assessment without size is taken for medium', () => {
+    const size = parseAssessment({ difficulty: 'high', risk: 'low', why: 'x' }) as Assessment
+    expect(size.size).toBe('medium')
+    expect(ok(choose([on(OPUS, 'a', windows([90, 3 * H], [80, 5 * D]))], defaults, size, NOW)).shown[0].fit.spend).toEqual({ '5-hour': 45, weekly: 6 })
+  })
+  it('reads what a pick holds per window, and leaves the weekly charge to work that is not hard', () => {
+    // A pick logged with only a 5-hour spend holds nothing of the weekly window.
+    const held: Commitment = { account: 'A', spend: { '5-hour': 30 }, size: 'large', createdAt: NOW }
+    const r = route([on(SONNET, 'a', windows([90, 5 * H], [20, 7 * D], 'A'))], { size: 'medium' }, NOW, [held])
+    expect(r.shown[0].fit).toMatchObject({ status: 'fits', coverage: 1.67 })
+    // Weekly use above a day's share costs more, unless the task is hard.
+    expect(r.shown[0].fit.effectiveCost).toBeGreaterThan(2)
+    expect(route([on(SONNET, 'a', windows([90, 5 * H], [20, 7 * D], 'A'))], { difficulty: 'high', size: 'medium' }).shown[0].fit.effectiveCost).toBe(2)
+    // A weekly window with no reset is one day's budget; one with nothing usable is short already, not charged.
+    expect(route([on(SONNET, 'a', windows([90, 5 * H], [20, null]))], {}).shown[0].fit.effectiveCost).toBe(2)
+    const spent = route([on(SONNET, 'a', windows([90, 5 * H], [5, 7 * D]))], {})
+    expect(spent.shown[0].fit).toMatchObject({ status: 'short', effectiveCost: 2 })
+    expect(spent.short).toBe('No candidate is expected to cover this task; its weekly quota is expected to run out partway and resets in 7 days.')
+  })
+  it('orders the short by how far they get, then by the policy order, and says when no reset is known', () => {
+    const r = route([on(SONNET, 'b', windows([25, null], [80, null], 'B')), on(SONNET, 'a', windows([25, null], [80, null], 'A')), on(SONNET, 'c', windows([30, null], [80, null], 'C'))], {})
+    expect(picks(r)).toEqual(['sonnet on c', 'sonnet on a', 'sonnet on b'])
+    expect(r.short).toBe('No candidate is expected to cover this task; its 5-hour quota is expected to run out partway.')
+    expect(r.shown[0].label).toContain('short: needs about 30% of the 5-hour window (20% left); weekly 4% of 70%')
+    expect(route([on(SONNET, 'a', windows(null, [80, null]))], {}).shown[0].label).toContain('unknown: 5-hour window unknown; weekly 4% of 70%')
+  })
+})
+
 const base = { title: 'T', brief: '', checks: [] as string[], messages: [] as Array<{ from: string; text: string }> | null, folder: null as TaskFolder | null,
   attempts: [] as Array<{ agent: string; outcome: string; result?: string }>, recent: [] as Array<{ title: string; via: string; outcome: string | null }> | null }
-const ok = (r: ReturnType<typeof choose>) => { if ('error' in r) throw new Error('x'); return r }
 const frame = (patch: Partial<MemberFrame> = {}): MemberFrame => ({ title: 'Fix auth', project: 'api', cwd: '/w/api', root: '/w/api', remote: 'github.com/acme/api', branch: 'feat/auth', updatedAt: 1_000_000 - 2 * 3_600_000, ...patch })
 const folder = (patch: Partial<TaskFolder> = {}): TaskFolder => ({ cwd: '/w/api', kind: 'git', name: 'api', root: '/w/api', remote: 'github.com/acme/api', ...patch })
 
@@ -125,10 +227,14 @@ describe('Jev context and verdict', () => {
   })
   it('produces a record the backend schema accepts', () => {
     const c = choice(), v = decide(c, { choice: 'c1', probabilities: { c0: 0.2, c1: 0.8 } }, null)
-    expect(recordOf(c, v, a(), policy)).toEqual({ assessment: { difficulty: 'medium', risk: 'low', why: 'API change.' },
+    const v1 = { assessment: { difficulty: 'medium', risk: 'low', why: 'API change.' },
       candidates: c.shown.map(s => ({ id: s.id, kind: s.kind, ...(s.agentId ? { agentId: s.agentId } : {}), machineId: s.machineId,
         engine: s.engine, model: s.model, effort: s.effort, quality: s.quality, cost: s.cost, title: s.title, label: s.label })),
-      excluded: [], floor: 2, notes: true, pick: 'c1', via: 'jev', p: 0.8, belowFloor: false, why: v.why })
+      excluded: [], floor: 2, notes: true, pick: 'c1', via: 'jev', p: 0.8, belowFloor: false, why: v.why }
+    expect(recordOf(c, v, a(), policy)).toEqual({ ...v1, assessment: { ...v1.assessment, size: 'medium' },
+      candidates: v1.candidates.map(x => ({ ...x, fit: { status: 'unknown', coverage: null, effectiveCost: 2, expiring: 0, spend: { '5-hour': 30, weekly: 4 }, account: 'm1:claude' } })) })
+    // For a backend from before sizes and fit.
+    expect(recordOf(c, v, a(), policy, undefined, true)).toEqual(v1)
     // The policy order says which fallback decided; the other routes carry none.
     const order = decide(c, undefined, 'BUSY')
     expect(recordOf(c, order, a(), policy)).toMatchObject({ via: 'order', fallback: 'unavailable', why: order.why })
@@ -142,10 +248,10 @@ describe('edges', () => {
     expect(parseAssessment({ difficulty: 'low', risk: 'urgent', why: 'x' })).toContain('risk')
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 7 })).toContain('why')
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', needs: null }))
-      .toEqual({ difficulty: 'low', risk: 'low', why: 'x', needs: { tools: [], devices: [] } })
+      .toEqual({ difficulty: 'low', risk: 'low', size: 'medium', why: 'x', needs: { tools: [], devices: [] } })
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', needs: { tools: 'git', devices: [1], cwd: 5 } })).toContain('absolute')
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', needs: { devices: ['cam'], cwd: '/work' } }))
-      .toEqual({ difficulty: 'low', risk: 'low', why: 'x', needs: { tools: [], devices: ['cam'], cwd: '/work' } })
+      .toEqual({ difficulty: 'low', risk: 'low', size: 'medium', why: 'x', needs: { tools: [], devices: ['cam'], cwd: '/work' } })
   })
   it('keeps the tightest window whatever its order and drops an unusable reset', () => {
     expect(quotaOf2({ known: true, windows: [{ usedPercent: 70, resetsAt: 1_800_000_000 }, { usedPercent: 20, resetsAt: null }] }))
@@ -175,10 +281,10 @@ describe('edges', () => {
       probe({ kind: 'member', agentId: 'a1', quota: { known: true, leftPercent: null, resetsAt: null } }),
       probe({ machineName: 'mac', quota: { known: true, leftPercent: 40, resetsAt: null } }),
     ], policy, a()))
-    expect(r.shown.map(s => s.title)).toEqual(['New agent · Claude sonnet medium · mac', 'Member · Claude sonnet medium · remote-1'])
-    expect(r.shown[1].label).toContain('Member ·')
-    expect(r.shown[1].label).toContain('quota unknown')
-    expect(r.shown[0].label).toContain('quota 40% left')
+    expect(r.shown.map(s => s.title)).toEqual(['Member · Claude sonnet medium · remote-1', 'New agent · Claude sonnet medium · mac'])
+    expect(r.shown[0].label).toContain('Member ·')
+    expect(r.shown[0].label).toContain('quota unknown')
+    expect(r.shown[1].label).toContain('quota 40% left')
     expect(ok(choose([probe({ known: false, quota: unknownQuota })], policy, a())).shown[0].label).toContain('quota unknown')
     expect(ok(choose([probe({ quota: { known: true, leftPercent: 50, resetsAt: 0 } })], policy, a())).shown[0].label).toContain('resets in 1m')
   })
@@ -186,6 +292,8 @@ describe('edges', () => {
     const label = (resetsAt: number) => ok(choose([probe({ quota: { known: true, leftPercent: 50, resetsAt } })], policy, a(), 1_000_000)).shown[0].label
     expect(label(1_000_000 + 30 * 60_000)).toContain('quota 50% left, resets in 30m')
     expect(label(1_000_000 + 2 * 3_600_000)).toContain('resets in 2h')
+    expect(label(1_000_000 + 4.5 * 3_600_000)).toContain('resets in 4h30')
+    expect(label(1_000_000 + 20 * 3_600_000)).toContain('resets in 20h')
     expect(label(1_000_000 + 5 * 86_400_000)).toContain('resets in 5 days')
     expect(label(1_000_000 - 5_000)).toContain('resets in 1m')
     // Without a clock argument it reads the real one.

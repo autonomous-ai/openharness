@@ -5,6 +5,7 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/project_visibility.dart';
+import 'package:harness/super_tabs/section_heading.dart';
 
 import 'support/super_tab_fixture.dart';
 
@@ -65,20 +66,18 @@ void main() {
       expect(find.byIcon(AppIcons.lock), findsOneWidget);
       expect(
         find.byKey(const ValueKey('super-project-expand-design')),
-        findsNothing,
+        findsOneWidget,
       );
       expect(find.text('Leads'), findsNothing);
-      expect(find.text('Projects'), findsNothing);
+      expect(find.text('Projects'), findsOneWidget);
       expect(find.text('Humans'), findsOneWidget);
       expect(find.text('Agents'), findsOneWidget);
-      final create = find.byKey(const ValueKey('super-new-project'));
+      final create = find.byTooltip('New project');
       final project = find.byKey(const ValueKey('super-group-lead'));
       expect(
         tester.getBottomLeft(create).dy,
         lessThan(tester.getTopLeft(project).dy),
       );
-      expect(tester.getRect(create).left, tester.getRect(project).left);
-      expect(tester.getRect(create).right, tester.getRect(project).right);
       await tester.tap(find.byKey(const ValueKey('super-project-expand-lead')));
       await tester.pumpAndSettle();
       expect(c.selectedId, 'lead');
@@ -93,7 +92,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('super-group-lead')));
       await tester.pumpAndSettle();
       expect(c.selectedId, 'lead');
-      await tester.tap(find.byKey(const ValueKey('super-new-project')));
+      await tester.tap(find.byTooltip('New project'));
       expect(creations, 1);
       expect(server.posts, isEmpty);
       expect(tester.takeException(), isNull);
@@ -127,10 +126,11 @@ void main() {
         of: project,
         matching: find.text('Lamp OS'),
       );
+      // A workgroup sits one indent step in from its project.
       expect(
         tester.getTopLeft(find.text('#12 Offline editing')).dx -
             tester.getTopLeft(projectName).dx,
-        8,
+        SuperTabSectionHeading.indentStep,
       );
 
       // A child row's formerly empty inset is part of its one click target.

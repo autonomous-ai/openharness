@@ -661,7 +661,7 @@ dependencies = [
 
 [[package]]
 name = "harness-tui"
-version = "0.1.39"
+version = "0.1.42"
 dependencies = [
  "alacritty_terminal",
  "base64",

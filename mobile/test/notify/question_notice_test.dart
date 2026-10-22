@@ -52,7 +52,7 @@ void main() {
     );
     expect(
       decideQuestionNotice(isNew: true, inFront: true, watching: false),
-      AgentNotice.mark,
+      AgentNotice.alert,
     );
     expect(
       decideQuestionNotice(isNew: true, inFront: false, watching: true),

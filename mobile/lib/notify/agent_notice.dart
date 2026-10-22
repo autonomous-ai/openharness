@@ -8,8 +8,8 @@ library;
 /// showing — the desktop's `AgentUnread` rule.
 enum NoticeKind { done, question }
 
-/// How far one piece of news goes. [chime], [mark] and [alert] escalate, each
-/// doing everything the one before it does; [filed] is a mark on its own.
+/// How far one piece of news goes. [chime] and [alert] escalate, [alert]
+/// doing everything [chime] does; [filed] is a mark on its own.
 enum AgentNotice {
   /// Not news. Nothing at all.
   none,
@@ -24,23 +24,22 @@ enum AgentNotice {
   /// filed for later: they are already where the news is.
   chime,
 
-  /// The app is in front of the person, on something else. Chime, and mark the
-  /// agent — the dial's badge.
-  mark,
-
-  /// The app is not in front of anybody. Mark it, and post a system
-  /// notification — the dial waking its dark panel.
+  /// About an agent the person is not looking at — the app on another one, or
+  /// not in front at all. Chime, mark it, and post a system notification: the
+  /// OS's own banner, over this app too (owner, 2026-10-21: "notification dạng
+  /// truyền thống"). Until then the app in front got only the tap and the mark,
+  /// and a notice could only reach a phone in the second or two before iOS
+  /// suspends a backgrounded app — so it almost never reached one at all.
   alert;
 
-  bool get chimes => this == chime || this == mark || this == alert;
-  bool get marks => this == filed || this == mark || this == alert;
+  bool get chimes => this == chime || this == alert;
+  bool get marks => this == filed || this == alert;
   bool get alerts => this == alert;
 }
 
 /// How far news that IS news goes, by where the person is. [watching] — the
 /// agent on screen is the one it is about — only counts in front.
 AgentNotice escalate({required bool inFront, required bool watching}) {
-  if (!inFront) return AgentNotice.alert;
-  if (watching) return AgentNotice.chime;
-  return AgentNotice.mark;
+  if (inFront && watching) return AgentNotice.chime;
+  return AgentNotice.alert;
 }

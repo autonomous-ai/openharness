@@ -53,7 +53,8 @@ type HookQuery = Parameters<ResolveHookAgent>[0]
 const recordKey = (session: RegisteredSession | undefined): string =>
   session ? `${session.agentId}\u0000${session.processIdentity?.pid ?? ''}\u0000${session.processIdentity?.startMarker ?? ''}` : ''
 
-export function createEngineHooks({ tmuxBackend, ptyHostBackend, agentReconciler, registry, panePending, syncSession }: EngineHookDeps) {
+export function createEngineHooks(deps: EngineHookDeps) {
+  const { ptyHostBackend, agentReconciler, registry, panePending, syncSession } = deps
   /**
    * The agents on the hinted panes: those whose recorded process the caller descends from, the rest,
    * and of the rest those with no live process recorded at all (none yet, or one that has exited).
@@ -125,7 +126,7 @@ export function createEngineHooks({ tmuxBackend, ptyHostBackend, agentReconciler
     const arrival = processRows().then(rows => rows?.map(row => ({ ...row })) ?? null)
     const resolved: TerminalRuntimeRef[] = []
     for (const hint of runtimeHints ?? []) {
-      if (hint.backend === 'tmux') { if (tmuxBackend) resolved.push({ backend: 'tmux', paneId: hint.paneId }) }
+      if (hint.backend === 'tmux') { if (deps.tmuxBackend) resolved.push({ backend: 'tmux', paneId: hint.paneId }) }
       else {
         // Held to the registry's own rule for a ptyhost runtime (`p<n>` instance, `%<n>` pane): a hint that is
         // not one is ignored, as a hint for a backend that is not configured is.

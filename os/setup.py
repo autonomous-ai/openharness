@@ -24,20 +24,26 @@ the phone names, and a computer already signed in keeps its account (`login --ti
 """
 import argparse
 import array
+import ctypes
+import ctypes.util
 import fcntl
+import hmac
 import http.server
 import importlib.util
 import json
 from pathlib import Path
 import pwd
 import queue
+import re
 import shutil
 import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -98,7 +104,8 @@ nmcli = network.nmcli
 
 
 def log(message):
-    print(f'harness-setup: {message}', flush=True)
+    # On stderr, the journal's as well: stdout is the answer the daemon reads (password, ssh).
+    print(f'harness-setup: {message}', file=sys.stderr, flush=True)
 
 
 
@@ -774,6 +781,14 @@ HN = '/usr/lib/harness/harness-tui'
 # The account's daemon on this computer (cli hookServer), for the desk.
 DAEMON = 'http://127.0.0.1:18473'
 RESET_UNIT = 'harness-factory-reset'
+SIGN_OUT_UNIT = 'harness-sign-out'
+# The password as installed (installer.py INITIAL_ACCOUNT): root's, inside the encrypted disk.
+INITIAL_ACCOUNT = STATE / 'initial-account.json'
+CMDLINE = Path('/proc/cmdline')
+SSHD = 'sshd.service'
+# A phone sets this computer up next (network.py UNLOCKED_BY_PHONE): the screen's Wi-Fi page keeps
+# off the radio the hotspot needs, until a key there.
+PHONE_SETS_UP = Path('/run/harness-os/unlocked-by-phone')
 
 
 def as_user(*command, timeout=30):
@@ -822,11 +837,7 @@ def forget_desk():
     """This computer's tabs and panes off the account's desk, which every computer shows: closing its
     windows alone was raced by the sign-out, and they came back at the next sign-in. A tab of its own
     goes; one shared with other computers keeps theirs."""
-    status = as_user('/usr/bin/harness', 'auth', 'status', '--json')
-    try:
-        machine = json.loads(status.stdout).get('machineId') if status else None
-    except ValueError:
-        machine = None
+    machine = this_machine()
     tabs = desk_ops() if machine else None
     ops = []
     for tab in tabs or []:
@@ -841,84 +852,267 @@ def forget_desk():
         log('factory reset: the desk kept some tabs of this computer')
 
 
-def factory_reset(keep_wifi=False, keep_workspace=False):
-    """This computer as it was just flashed: no account, no harnesses, the first workspace still to come,
-    and (unless [keep_wifi]) no Wi-Fi, so it opens its setup hotspot for a phone. It stays the same
-    computer: its id and its device key are kept, as a new key for the same computer is refused by the
-    account until the old one is removed. The engines' own sign-ins and ~/projects are the person's.
-    Its workspace goes too — hn's tabs and panes, here and on the account's desk, and what hn keeps
-    (~/.harness/tui) — unless [keep_workspace].
-    For the reset button and `harness factory-reset`."""
-    log('factory reset' + (', keeping the workspace' if keep_workspace else ''))
-    if not keep_workspace:
-        # While still signed in: the account keeps the tabs (the desk, the same on every computer),
-        # and one left there comes back at the next sign-in in the first workspace's place.
-        forget_desk()
-        windows = as_user(HN, 'list-windows', '-F', '#{window_index}')
-        for index in sorted((int(n) for n in (windows.stdout.split() if windows else []) if n.isdigit()), reverse=True):
-            as_user(HN, 'kill-window', '-t', f':{index}')
-    as_user('/usr/bin/harness', 'logout', timeout=60)
-    if not keep_workspace:
-        # hn before its files: it writes its tabs out as it ends, and wrote the old ones back.
-        as_user(HN, 'kill-server')
-        subprocess.run(['/usr/bin/pkill', '-u', USER, '-x', 'harness-tui'], capture_output=True)
-        try:
-            shutil.rmtree(f'/tmp/hn-{pwd.getpwnam(USER).pw_uid}', ignore_errors=True)
-        except KeyError:
-            pass
-    # Every harness and terminal: the daemon, then the tmux server its panes run in.
-    as_user('systemctl', '--user', 'stop', 'harness-daemon', timeout=60)
-    as_user('tmux', 'kill-server')
-    harness = HOME / '.harness'
-    keep = {'computer-id': True, 'cli': {'data': {'e2e': True}}}
-    if keep_workspace:
-        keep['tui'] = True
-    wipe(harness, keep)
-    (HOME / '.local/state/harness-os/onboarded').unlink(missing_ok=True)
-    for path in (RESULT, FROM_PHONE, SCREEN):
-        path.unlink(missing_ok=True)
-    as_user('systemctl', '--user', 'start', 'harness-daemon', timeout=60)
-    # hn again from its sign-in page. Its server outlives the screen unit (KillMode=process).
-    as_user(HN, 'kill-server')
-    subprocess.run(['/usr/bin/pkill', '-u', USER, '-x', 'harness-tui'], capture_output=True)
-    as_user('systemctl', '--user', 'restart', 'hn-screen', timeout=60)
-    if not keep_wifi:
-        for row in rows('-f', 'UUID,TYPE', 'connection', 'show'):
-            if len(row) == 2 and row[1] == '802-11-wireless':
-                nmcli('connection', 'delete', 'uuid', row[0])
-    # The watcher opens the hotspot for a phone (headless or not: asked for).
+def this_machine():
+    """This computer's machine in its account, while signed in."""
+    status = as_user('/usr/bin/harness', 'auth', 'status', '--json')
+    try:
+        return json.loads(status.stdout).get('machineId') if status else None
+    except ValueError:
+        return None
+
+
+def remove_from_account():
+    """This computer off its account (the local daemon's DELETE /api/machines/<id>, as a phone's
+    Remove from account), before it starts again as a new computer: none left behind there, offline."""
+    machine = this_machine()
+    if not machine:
+        return
+    request = urllib.request.Request(DAEMON + '/api/machines/' + urllib.parse.quote(machine, safe=''),
+                                     headers={'X-Adapter-Local': '1'}, method='DELETE')
+    try:
+        with urllib.request.urlopen(request, timeout=20):
+            log('removed from its account')
+    except (OSError, ValueError) as error:
+        log(f'factory reset: could not remove this computer from its account ({error})')
+
+
+def forget_wifi():
+    for row in rows('-f', 'UUID,TYPE', 'connection', 'show'):
+        if len(row) == 2 and row[1] == '802-11-wireless':
+            nmcli('connection', 'delete', 'uuid', row[0])
+
+
+def open_hotspot():
+    """The watcher opens the hotspot for a phone at once (headless or not: asked for), and the screen's
+    Wi-Fi page, opening as the computer goes offline, leaves the radio to it until a key there."""
     NOW.parent.mkdir(parents=True, exist_ok=True)
     NOW.touch()
+    PHONE_SETS_UP.touch()
+
+
+def sign_out(keep_wifi=False):
+    """Signed out for another account (a phone's Sign out): this computer forgets its Wi-Fi and opens
+    its hotspot to be set up again — a phone on the other account sets it up as before. Its harnesses,
+    projects and everything else of the person stay, as a sign-out and a sign-in at the screen keep them."""
+    log('signing out; the harnesses and projects stay')
+    as_user('/usr/bin/harness', 'logout', timeout=60)
+    FROM_PHONE.unlink(missing_ok=True)
+    if not keep_wifi:
+        forget_wifi()
+    open_hotspot()
+    log('signed out')
+
+
+def luks_device():
+    """The encrypted disk this computer starts from (installer.py: rd.luks.name=<uuid>=cryptroot), or None."""
+    match = re.search(r'(?:^|\s)rd\.luks\.name=([0-9A-Fa-f-]+)=', CMDLINE.read_text())
+    return Path('/dev/disk/by-uuid') / match[1] if match else None
+
+
+def opens_disk(device, secret):
+    return subprocess.run(['cryptsetup', 'open', '--test-passphrase', '--key-file=-', str(device)],
+                          input=secret.encode(), capture_output=True, timeout=120).returncode == 0
+
+
+def opens_account(secret):
+    """[secret] is the account's password, as its shadow entry hashes it (libxcrypt's crypt)."""
+    shadow = next((line.split(':')[1] for line in Path('/etc/shadow').read_text().splitlines()
+                   if line.split(':', 1)[0] == USER), '')
+    if not shadow or shadow[0] in '!*':
+        return False
+    libcrypt = ctypes.CDLL(ctypes.util.find_library('crypt'))
+    libcrypt.crypt.restype, libcrypt.crypt.argtypes = ctypes.c_char_p, [ctypes.c_char_p, ctypes.c_char_p]
+    result = libcrypt.crypt(secret.encode(), shadow.encode())
+    return result is not None and hmac.compare_digest(result, shadow.encode())
+
+
+def replace_disk_key(device, old, new):
+    """[new] among the disk's passphrases in place of [old]: added with [old], then [old] removed. The
+    two only in /run, root's, for the moment cryptsetup reads them."""
+    folder = Path(tempfile.mkdtemp(prefix='harness-key-', dir='/run'))
+    try:
+        old_file, new_file = folder / 'old', folder / 'new'
+        old_file.write_bytes(old.encode())
+        new_file.write_bytes(new.encode())
+        subprocess.run(['cryptsetup', 'luksAddKey', '--batch-mode', '--key-file', str(old_file), str(device), str(new_file)],
+                       check=True, capture_output=True, timeout=180)
+        subprocess.run(['cryptsetup', 'luksRemoveKey', '--batch-mode', str(device), str(old_file)],
+                       check=True, capture_output=True, timeout=180)
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def account_record():
+    try:
+        record = json.loads(INITIAL_ACCOUNT.read_text())
+    except (OSError, ValueError):
+        return {}
+    return record if isinstance(record, dict) else {}
+
+
+def save_account_record(record):
+    INITIAL_ACCOUNT.parent.mkdir(parents=True, exist_ok=True)
+    partial = INITIAL_ACCOUNT.with_name(INITIAL_ACCOUNT.name + '.partial')
+    partial.write_text(json.dumps(record) + '\n')
+    partial.chmod(0o600)
+    partial.replace(INITIAL_ACCOUNT)
+
+
+def change_password(request):
+    """From a phone (the daemon, through sudo; JSON on stdin): the computer's one password changed —
+    the disk's, asked at every start where it is encrypted, and the account's (SSH, sudo, the lock
+    screen) together, as the installer set them. The current one first, as the disk checks it."""
+    current = request.get('current') if isinstance(request, dict) else None
+    new = request.get('new') if isinstance(request, dict) else None
+    if not isinstance(current, str) or not isinstance(new, str) or not new:
+        return {'error': 'BAD_REQUEST', 'message': 'Enter the current password and a new one.'}
+    if any(c in new for c in '\n\r\0') or len(new.encode()) > 512:
+        return {'error': 'BAD_REQUEST', 'message': 'That password cannot be used.'}
+    if new == current:
+        return {'error': 'SAME', 'message': 'That is the password already.'}
+    device = luks_device()
+    if not (opens_disk(device, current) if device else opens_account(current)):
+        return {'error': 'WRONG_PASSWORD', 'message': 'That is not the computer\'s password.'}
+    if device:
+        replace_disk_key(device, current, new)
+        record = account_record()
+        record['current'] = new
+        save_account_record(record)
+    subprocess.run(['chpasswd'], input=f'{USER}:{new}\n'.encode(), check=True, capture_output=True, timeout=60)
+    log('the computer\'s password changed' + (', the disk\'s with it' if device else ''))
+    return {'ok': True, 'disk': device is not None}
+
+
+def restore_initial_password():
+    """The password as installed (installer.py save_initial_password), account and disk. A computer
+    installed before it was kept, or whose disk password changed outside a phone, keeps what it has."""
+    record = account_record()
+    if record.get('shadow'):
+        subprocess.run(['usermod', '-p', record['shadow'], USER], capture_output=True, timeout=60)
+    else:
+        log('factory reset: no password from the installation; the current one stays')
+    device, initial, current = luks_device(), record.get('initial'), record.get('current')
+    if not device or not initial or current == initial:
+        return
+    if current and opens_disk(device, current):
+        replace_disk_key(device, current, initial)
+        record['current'] = initial
+        save_account_record(record)
+        log('factory reset: the disk password is the installation\'s again')
+    elif not opens_disk(device, initial):
+        log('factory reset: the disk password changed outside a phone; it stays')
+
+
+def ssh(action='status'):
+    """SSH for this computer's network, off as installed: on, off, or how it is, with the addresses
+    it answers on (the private ones, for `ssh me@<address>`)."""
+    if action in ('on', 'off'):
+        subprocess.run(['systemctl', 'enable' if action == 'on' else 'disable', '--now', SSHD],
+                       capture_output=True, timeout=60)
+    def state(verb):
+        return subprocess.run(['systemctl', verb, SSHD], capture_output=True, text=True, timeout=15).stdout.strip()
+    try:
+        links = json.loads(subprocess.run(['ip', '-4', '-j', 'addr', 'show', 'scope', 'global'],
+                                          capture_output=True, text=True, timeout=15).stdout or '[]')
+    except ValueError:
+        links = []
+    addresses = [{'interface': link.get('ifname'), 'address': info.get('local')}
+                 for link in links if isinstance(link, dict) and link.get('ifname') != HOTSPOT
+                 for info in link.get('addr_info') or [] if info.get('local') and info.get('local') != ADDRESS]
+    return {'enabled': state('is-enabled') == 'enabled', 'active': state('is-active') == 'active',
+            'user': USER, 'addresses': addresses}
+
+
+def factory_reset(keep_wifi=False, keep_ssh=False):
+    """This computer as just installed: off its account and a new computer to it (a new computer id and
+    device key), everything of the person gone — /home/me as the installer made it, so its projects,
+    the engines' sign-ins and the hn/CLI updates it downloaded too — its Wi-Fi forgotten, SSH off, the
+    password as installed, and its setup hotspot open for a phone. The installed Harness OS stays.
+    For `harness factory-reset` at the computer (and, later, its reset button). [keep_wifi], [keep_ssh]:
+    for a test machine reached over them."""
+    log('factory reset: everything of the person goes')
+    # While signed in and its daemon up: off the account, then signed out.
+    forget_desk()
+    remove_from_account()
+    as_user('/usr/bin/harness', 'logout', timeout=60)
+    account = pwd.getpwnam(USER)
+    # Every process of the person: the screen's session, the daemon, hn, tmux and its harnesses.
+    subprocess.run(['loginctl', 'terminate-user', USER], capture_output=True, timeout=60)
+    subprocess.run(['systemctl', 'stop', f'user@{account.pw_uid}.service'], capture_output=True, timeout=120)
+    subprocess.run(['pkill', '-KILL', '-u', USER], capture_output=True)
+    time.sleep(1)
+    shutil.rmtree(f'/tmp/hn-{account.pw_uid}', ignore_errors=True)
+    # Home as the installer made it: the skeleton and an empty ~/projects.
+    wipe(HOME, {})
+    subprocess.run(['cp', '-a', '/etc/skel/.', str(HOME)], check=True, timeout=120)
+    (HOME / 'projects').mkdir(exist_ok=True)
+    subprocess.run(['chown', '-R', f'{account.pw_uid}:{account.pw_gid}', str(HOME)], check=True, timeout=120)
+    HOME.chmod(0o700)
+    for path in (RESULT, FROM_PHONE, SCREEN):
+        path.unlink(missing_ok=True)
+    restore_initial_password()
+    if not keep_ssh:
+        subprocess.run(['systemctl', 'disable', '--now', SSHD], capture_output=True, timeout=60)
+    if not keep_wifi:
+        forget_wifi()
+    # Started again as at boot: the person's daemon (lingering), and the screen's first use.
+    subprocess.run(['systemctl', 'start', f'user@{account.pw_uid}.service'], capture_output=True, timeout=120)
+    subprocess.run(['systemctl', 'restart', 'getty@tty1.service'], capture_output=True, timeout=60)
+    open_hotspot()
     log('factory reset done')
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('command', nargs='?', choices=['watch', 'now', 'name', 'join', 'reset'], default='watch')
-    parser.add_argument('--keep-wifi', action='store_true', help='reset: keep the saved Wi-Fi')
-    parser.add_argument('--keep-workspace', action='store_true',
-                        help="reset: keep hn's tabs and panes, here and on the account's desk")
+    parser.add_argument('command', nargs='?', choices=['watch', 'now', 'name', 'join', 'reset', 'sign-out',
+                                                       'password', 'ssh'], default='watch')
+    parser.add_argument('action', nargs='?', choices=['status', 'on', 'off'], help='ssh: status, on or off')
+    parser.add_argument('--keep-wifi', action='store_true', help='reset, sign-out: keep the saved Wi-Fi')
+    parser.add_argument('--keep-ssh', action='store_true', help='reset: leave SSH as it is')
     parser.add_argument('--here', action='store_true', help=argparse.SUPPRESS)
     arguments = parser.parse_args()
-    if arguments.command == 'reset':
+    if arguments.command in ('reset', 'sign-out'):
+        reset = arguments.command == 'reset'
         if arguments.here:
-            factory_reset(keep_wifi=arguments.keep_wifi, keep_workspace=arguments.keep_workspace)
+            if reset:
+                factory_reset(keep_wifi=arguments.keep_wifi, keep_ssh=arguments.keep_ssh)
+            else:
+                sign_out(keep_wifi=arguments.keep_wifi)
             return
         # In a unit of its own: the computer leaves its Wi-Fi, and whatever asked (an SSH session, the
-        # button's handler) may go with it before the reset is done. `journalctl -u harness-factory-reset`.
-        command = ['/usr/bin/systemd-run', f'--unit={RESET_UNIT}', '--collect', '--quiet',
-                   '/usr/bin/python3', str(Path(__file__).resolve()), 'reset', '--here']
+        # daemon for a phone) may go with it before it is done. `journalctl -u harness-factory-reset`.
+        command = ['/usr/bin/systemd-run', f'--unit={RESET_UNIT if reset else SIGN_OUT_UNIT}', '--collect', '--quiet',
+                   '/usr/bin/python3', str(Path(__file__).resolve()), arguments.command, '--here']
         if arguments.keep_wifi:
             command.append('--keep-wifi')
-        if arguments.keep_workspace:
-            command.append('--keep-workspace')
+        if arguments.keep_ssh:
+            command.append('--keep-ssh')
         started = subprocess.run(command, capture_output=True, text=True)
         if started.returncode:
-            raise SystemExit('Could not start the reset: ' + (started.stderr.strip() or 'systemd-run failed'))
-        print('Resetting this computer. It signs out, closes every harness'
-              + ('' if arguments.keep_workspace else ', forgets its tabs')
-              + ('' if arguments.keep_wifi else ', forgets its Wi-Fi')
-              + ' and opens its setup hotspot for a phone in about a minute.')
+            raise SystemExit('Could not start: ' + (started.stderr.strip() or 'systemd-run failed'))
+        if reset:
+            print('Resetting this computer to as it was installed: it leaves its account, and everything in '
+                  '/home/me goes — projects, sign-ins, harnesses, settings'
+                  + ('' if arguments.keep_wifi else '; its Wi-Fi is forgotten')
+                  + '. Its password is the installation\'s again, and its setup hotspot opens for a phone '
+                  'in about a minute.')
+        else:
+            print('Signing out. Its harnesses and projects stay; it opens its setup hotspot to be set up again.')
+        return
+    if arguments.command == 'password':
+        # From the daemon, through sudo: both passwords as JSON on stdin, never in argv; the answer on stdout.
+        try:
+            request = json.loads(sys.stdin.read(4096) or '{}')
+        except ValueError:
+            request = None
+        try:
+            print(json.dumps(change_password(request)))
+        except (OSError, subprocess.SubprocessError) as error:
+            log(f'the password did not change: {error}')
+            print(json.dumps({'error': 'FAILED', 'message': 'The password could not be changed. Try again.'}))
+        return
+    if arguments.command == 'ssh':
+        print(json.dumps(ssh(arguments.action or 'status')))
         return
     if arguments.command == 'join':
         # From the daemon, through sudo: the Wi-Fi as JSON on stdin, never in argv.

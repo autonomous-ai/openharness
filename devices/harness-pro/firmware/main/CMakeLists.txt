@@ -38,6 +38,7 @@ idf_component_register(
         "pod/home/ph_inbox.c"
         "pod/home/ph_ota.c"
         "pod/home/ph_overview.c"
+        "pod/home/ph_lead.c"
         "pod/home/ph_recap.c"
         "pod/home/ph_talk.c"
         "pod/home/ph_toast.c"

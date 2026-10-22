@@ -1,10 +1,16 @@
 import 'package:flutter/material.dart';
 
+import '../core/machine_resources.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/appearance_prefs_store.dart';
+import '../state/app_state.dart';
+import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
+import 'machines.dart';
 import 'model.dart';
+import 'section_heading.dart';
 
 class ProjectSidebar extends StatelessWidget {
   const ProjectSidebar({
@@ -12,14 +18,47 @@ class ProjectSidebar extends StatelessWidget {
     required this.controller,
     required this.onSelect,
     required this.needsHuman,
+    required this.onAddAgent,
+    this.app,
     this.onNewProject,
+    this.onYourDevices,
+    this.readLocal,
+    this.now = DateTime.now,
   });
   final SuperTabController controller;
   final ValueChanged<String> onSelect;
   final int Function(SuperTabConversation group) needsHuman;
+  final ValueChanged<SuperTabConversation> onAddAgent;
+  final AppNotifier? app;
   final VoidCallback? onNewProject;
+  final VoidCallback? onYourDevices;
 
-  Widget _row(SuperTabConversation group, {SuperTabProject? project}) {
+  /// Forwarded to the embedded [SuperTabMachines]; a test gives it to have
+  /// the Machines group's readings taken without a real machine.
+  @visibleForTesting
+  final Future<MachineResources?> Function(String machineId)? readLocal;
+
+  /// Forwarded to the embedded [SuperTabMachines]; a test gives it to pin
+  /// the clock its readings' ages are counted against.
+  @visibleForTesting
+  final DateTime Function() now;
+
+  /// A row's chevron (or the room for one), at its level's indent; its name starts right after.
+  static const _iconColumn = SuperTabSectionHeading.actionWidth;
+  static const _dotSize = 6.0;
+
+  /// The space after a row's trailing unread dot: it centers the dot on the
+  /// headings' + ([SuperTabSectionHeading.endInset] 0), whatever the width.
+  static const markerInset =
+      SuperTabSectionHeading.actionWidth / 2 - _dotSize / 2;
+
+  /// A project's lead row (level 1, under the heading) or a workgroup (level 2, under its project).
+  Widget _row(
+    SuperTabConversation group, {
+    SuperTabProject? project,
+    bool closed = false,
+  }) {
+    final level = project != null ? 1 : (closed ? 3 : 2);
     final selected = controller.selectedId == group.id;
     final groups = project == null
         ? [group]
@@ -28,10 +67,8 @@ class ProjectSidebar extends StatelessWidget {
           );
     final waiting = groups.any((g) => needsHuman(g) > 0);
     final unread = groups.any(controller.unread);
-    final expanded = controller.expandedProjects.contains(project?.id);
-    final hasChildren =
-        project != null &&
-        groups.any((g) => g.id != project.leadConversationId);
+    final expanded =
+        project != null && controller.expandedProjects.contains(project.id);
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
       child: Material(
@@ -46,7 +83,8 @@ class ProjectSidebar extends StatelessWidget {
           borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
           child: Row(
             children: [
-              if (project != null && hasChildren)
+              SizedBox(width: SuperTabSectionHeading.indentFor(level)),
+              if (project != null)
                 IconButton(
                   key: ValueKey('super-project-expand-${project.id}'),
                   icon: Icon(
@@ -68,8 +106,8 @@ class ProjectSidebar extends StatelessWidget {
                       '${expanded ? 'Collapse' : 'Expand'} ${project.name}',
                   onPressed: () => controller.toggleProject(project.id),
                 )
-              else if (project != null)
-                const SizedBox(width: 32),
+              else
+                const SizedBox(width: _iconColumn),
               Expanded(
                 child: Semantics(
                   label: project?.isPrivate == true ? 'Private project' : null,
@@ -79,35 +117,38 @@ class ProjectSidebar extends StatelessWidget {
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(minHeight: 36),
                       child: Padding(
-                        padding: EdgeInsets.fromLTRB(
-                          project == null ? 44 : 4,
+                        padding: const EdgeInsets.fromLTRB(
+                          0,
                           8,
-                          12,
+                          markerInset,
                           8,
                         ),
                         child: Row(
                           children: [
-                            if (project?.isPrivate == true) ...[
-                              Icon(
-                                AppIcons.lock,
-                                size: 14,
-                                color: DesktopChrome.muted,
-                              ),
-                              const SizedBox(width: 6),
-                            ],
                             Expanded(
                               child: Text(
                                 project?.name ?? group.label,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: DesktopChrome.control(
-                                  medium: project != null || unread || selected,
+                                  medium: unread || selected,
                                   color: selected || unread || project != null
                                       ? DesktopChrome.foreground
                                       : DesktopChrome.muted,
                                 ),
                               ),
                             ),
+                            if (project?.isPrivate == true) ...[
+                              const SizedBox(width: 8),
+                              Tooltip(
+                                message: 'Private project',
+                                child: Icon(
+                                  AppIcons.lock,
+                                  size: 14,
+                                  color: DesktopChrome.muted,
+                                ),
+                              ),
+                            ],
                             if (waiting) ...[
                               const SizedBox(width: 8),
                               Tooltip(
@@ -125,8 +166,8 @@ class ProjectSidebar extends StatelessWidget {
                               Semantics(
                                 label: 'Unread messages',
                                 child: Container(
-                                  width: 6,
-                                  height: 6,
+                                  width: _dotSize,
+                                  height: _dotSize,
                                   decoration: BoxDecoration(
                                     shape: BoxShape.circle,
                                     color: DesktopChrome.accent,
@@ -148,63 +189,157 @@ class ProjectSidebar extends StatelessWidget {
     );
   }
 
+  /// A project's "Closed (N)" row and, when it is open, the archived groups under it.
+  List<Widget> _closed(SuperTabProject project) {
+    final groups = controller.snapshot!.conversations
+        .where(
+          (g) =>
+              g.projectId == project.id &&
+              g.id != project.leadConversationId &&
+              g.archived,
+        )
+        .toList();
+    if (groups.isEmpty) return const [];
+    final open = controller.closedOpenProjects.contains(project.id);
+    return [
+      Padding(
+        padding: const EdgeInsets.only(bottom: 2),
+        child: Material(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+          clipBehavior: Clip.antiAlias,
+          child: Semantics(
+            button: true,
+            expanded: open,
+            child: InkWell(
+              key: ValueKey('super-closed-${project.id}'),
+              onTap: () => controller.toggleClosed(project.id),
+              hoverColor: grid.AppSurface.hoverFill,
+              focusColor: grid.AppSurface.hoverFill,
+              borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+              child: Row(
+                children: [
+                  SizedBox(width: SuperTabSectionHeading.indentFor(2)),
+                  SizedBox(
+                    width: _iconColumn,
+                    child: Icon(
+                      open ? AppIcons.chevronDown : AppIcons.chevronRight,
+                      size: AppIcons.inlineSize,
+                      color: DesktopChrome.muted,
+                    ),
+                  ),
+                  Expanded(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(minHeight: 36),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          'Closed (${groups.length})',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: DesktopChrome.control(
+                            color: DesktopChrome.muted,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+      if (open)
+        for (final group in groups) _row(group, closed: true),
+    ];
+  }
+
+  List<Widget> _workgroups(SuperTabProject project) {
+    final groups = controller.snapshot!.conversations.where(
+      (g) =>
+          g.projectId == project.id &&
+          g.id != project.leadConversationId &&
+          !g.archived,
+    );
+    return groups.isEmpty
+        ? [
+            Padding(
+              padding: EdgeInsets.fromLTRB(
+                SuperTabSectionHeading.indentFor(2) + _iconColumn,
+                8,
+                12,
+                10,
+              ),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'No workgroups yet',
+                  style: DesktopChrome.metadata(),
+                ),
+              ),
+            ),
+          ]
+        : [for (final group in groups) _row(group)];
+  }
+
   @override
   Widget build(BuildContext context) {
     final snapshot = controller.snapshot;
     return Material(
       color: DesktopChrome.surface,
-      child: Column(
+      child: ListView(
+        padding: const EdgeInsets.all(8),
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
-            child: OutlinedButton(
-              key: const ValueKey('super-new-project'),
-              onPressed: controller.canWrite ? onNewProject : null,
-              style: OutlinedButton.styleFrom(
-                foregroundColor: DesktopChrome.muted,
-                backgroundColor: Colors.transparent,
-                disabledBackgroundColor: Colors.transparent,
-                alignment: Alignment.centerLeft,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-                ),
-                textStyle: DesktopChrome.control(),
-              ),
-              child: const Row(
-                children: [
-                  Icon(AppIcons.plus, size: 16),
-                  SizedBox(width: 8),
-                  Flexible(child: Text('New Project')),
-                ],
-              ),
-            ),
+          SuperTabSectionHeading(
+            'Projects',
+            onAdd: controller.canWrite ? onNewProject : null,
+            addTooltip: 'New project',
+            endInset: 0,
+            collapsed: !controller.projectsGroupOpen,
+            onToggleCollapsed: controller.toggleProjectsGroup,
           ),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.all(8),
-              children: [
-                for (final project
-                    in snapshot?.projects ?? const <SuperTabProject>[])
-                  if (snapshot?.conversation(project.leadConversationId)
-                      case final lead?)
-                    Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _row(lead, project: project),
-                        if (controller.expandedProjects.contains(project.id))
-                          for (final group in snapshot!.conversations)
-                            if (group.projectId == project.id &&
-                                group.id != project.leadConversationId &&
-                                !group.archived)
-                              _row(group),
-                      ],
-                    ),
-              ],
-            ),
+          if (controller.projectsGroupOpen)
+            for (final project
+                in snapshot?.projects ?? const <SuperTabProject>[])
+              if (snapshot?.conversation(project.leadConversationId)
+                  case final lead?)
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _row(lead, project: project),
+                    if (controller.expandedProjects.contains(project.id)) ...[
+                      ..._workgroups(project),
+                      ..._closed(project),
+                    ],
+                  ],
+                ),
+          const SizedBox(height: 16),
+          // Machine online/offline, unread marks and theme changes do not touch
+          // the controller the rest of this sidebar rebuilds on, so this group
+          // watches them itself — the same sources the roster merged before the
+          // move (roster.dart).
+          ListenableBuilder(
+            listenable: Listenable.merge([
+              controller,
+              if (app != null) ...[app!, app!.agentUnread],
+              terminalThemeStore,
+              appearancePrefsStore,
+            ]),
+            builder: (context, _) {
+              grid.AppTheme.watch(context);
+              return SuperTabMachines(
+                controller: controller,
+                app: app,
+                onAddAgent: onAddAgent,
+                embedded: true,
+                collapsed: !controller.machinesGroupOpen,
+                onToggleCollapsed: controller.toggleMachinesGroup,
+                onYourDevices: onYourDevices,
+                readLocal: readLocal,
+                now: now,
+              );
+            },
           ),
         ],
       ),

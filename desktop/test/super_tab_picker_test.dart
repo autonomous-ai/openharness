@@ -73,6 +73,8 @@ void main() {
     final c = await f.app.superTabs.open(tabId);
     await c.refresh();
     c.select('offline');
+    // The teammate's machine has no reading, so it sits under the closed "Offline" disclosure.
+    c.offlineMachinesOpen = true;
     await f.app.agentPreference.remember('codex');
     await f.app.projectHistory.select('m', '/work/project');
     final map = MemoryKeymap();
@@ -114,13 +116,22 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    if (find.byTooltip('Members and machines').evaluate().isNotEmpty) {
-      await tester.tap(find.byTooltip('Members and machines'));
+    final machine = find.byKey(const ValueKey('super-machine-teammate-machine'));
+    if (machine.evaluate().isEmpty &&
+        find.byTooltip('Conversations').evaluate().isNotEmpty) {
+      await tester.tap(find.byTooltip('Conversations'));
       await tester.pumpAndSettle();
     }
-    await tester.tap(
-      find.byKey(const ValueKey('super-machine-teammate-machine')),
-    );
+    // The teammate's machine is not online here, so it sits under the closed "Offline" disclosure.
+    final offline = find.byKey(const ValueKey('super-machines-offline'));
+    if (machine.evaluate().isEmpty && offline.evaluate().isNotEmpty) {
+      await tester.ensureVisible(offline);
+      await tester.tap(offline);
+      await tester.pumpAndSettle();
+    }
+    await tester.ensureVisible(machine);
+    await tester.pumpAndSettle();
+    await tester.tap(machine);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Attach running agent'));
     await tester.pumpAndSettle();

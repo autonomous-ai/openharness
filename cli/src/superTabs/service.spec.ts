@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
+import type { CoreApi } from '../core/api.js'
 import { superTabService } from './service.js'
-import type { SuperTabHost } from './host.js'
+import { SuperTabHostError, type SuperTabHost } from './host.js'
 import { createJevDecide, type JevDecide } from '../lib/jev/jevClient.js'
 
 // The real client would read the developer's OpenRouter key; the account backend is the only part under test.
@@ -13,12 +14,136 @@ const owner = { local: true, owner: true }, visitor = { local: false, owner: fal
 function setup(options: { jev?: () => JevDecide; prepareContribution?: typeof import('./contribution.js').prepareContribution } = {}) {
   const agentId = createHash('sha256').update(JSON.stringify(['machine-1', 'native'])).digest('hex').slice(0, 24)
   const agent = { id: agentId, machineId: 'machine-1', harnessId: 'native' }
-  const call = vi.fn(async () => ({ status: 200, body: { success: true, data: { state: { agents: [agent] } } } }))
+  const call = vi.fn<CoreApi['account']['backend']>(async () => ({ status: 200, body: { success: true, data: { state: { agents: [agent] } } } }))
   const core = fakeCore({ account: { backend: call }, agents: { byAgent: vi.fn(() => ({ agentId: 'native' }) as never) } })
   const start = vi.fn(), stop = vi.fn()
   const service = superTabService(core, { host: () => ({ machineId: 'machine-1', start, stop }) as unknown as SuperTabHost, ...options })
   return { ...service, call, core, agent, agentId, start, stop, ask: service.requests.super_tabs }
 }
+describe('restart role lookup through the service', () => {
+  it('does not start the delivery loop when a personal session restarts', async () => {
+    const host = vi.fn(() => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn(), swarmRole: async () => null }) as never)
+    const core = fakeCore({ account: { backend: vi.fn(async () => ({ status: 200, body: { data: [] } })) } })
+    const service = superTabService(core, { host })
+    expect(await service.port.swarmRole('personal')).toBeNull()
+    expect(host).not.toHaveBeenCalled()
+    service.port.stop()
+  })
+  it('answers the same current role in inline and process requests, for the owner only', async () => {
+    const agent = { id: 'agent', machineId: 'machine-1', harnessId: 'old-native' }
+    const call = vi.fn<CoreApi['account']['backend']>(async (_method, path) => ({ status: 200, body: { data:
+      path.includes('/hosts/') ? [{ tabId: 'tab', agent }] : { state: { agents: [agent], conversations: [{ leadId: 'agent' }] } } } }))
+    const service = superTabService(fakeCore({ account: { backend: call } }))
+    expect(await service.port.swarmRole('old-native')).toBe('lead')
+    expect(await service.requests.super_tabs({ action: 'swarmRole', harnessId: 'old-native' }, owner)).toEqual({ ok: true, role: 'lead' })
+    expect(await service.requests.super_tabs({ action: 'swarmRole', harnessId: 'old-native' }, visitor)).toMatchObject({ error: 'OWNER_REQUIRED' })
+    call.mockRejectedValueOnce(new Error('Offline'))
+    expect(await service.port.swarmRole('old-native')).toBeUndefined()
+    service.port.stop()
+  })
+  it('bounds an unavailable backend lookup without delaying restart indefinitely', async () => {
+    vi.useFakeTimers()
+    try {
+      const core = fakeCore({ account: { backend: () => new Promise(() => {}) } })
+      const service = superTabService(core)
+      const read = service.port.swarmRole('old-native')
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(await read).toBeUndefined()
+      service.port.stop()
+    } finally { vi.useRealTimers() }
+  })
+})
+
+describe('five-part task commands', () => {
+  const task = { goal: 'Save edits', changes: 'Persist drafts', constraints: 'No dependencies', owns: ['cli/src/superTabs'] }
+  const brief = 'Goal:\nSave edits\n\nChanges:\nPersist drafts\n\nConstraints:\nNo dependencies\n\nOwns:\n- cli/src/superTabs'
+  const checks = [{ description: 'Draft survives reconnect', independent: false }]
+  const send = (t: ReturnType<typeof setup>, command: Record<string, unknown>) => t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'task-op', command }, owner)
+
+  for (const type of ['conversation.create', 'work.define']) {
+    const base = { type, ...(type === 'conversation.create' ? { title: 'Drafts' } : { conversationId: 'group' }) }
+    it(`${type} requires each task part and a nonempty acceptance check`, async () => {
+      for (const [field, invalid] of [
+        ['goal', { task: { ...task, goal: ' ' } }], ['changes', { task: { ...task, changes: '' } }],
+        ['constraints', { task: { ...task, constraints: null } }], ['owns', { task: { ...task, owns: [] } }],
+        ['owns', { task: { ...task, owns: [' '] } }], ['goal', { task: undefined }],
+        ['acceptance checks', { checks: [] }], ['acceptance checks', { checks: [{ description: ' ' }] }],
+      ] as const) {
+        const t = setup()
+        expect(await send(t, Object.assign({ ...base, task, checks }, invalid))).toMatchObject({ error: 'TASK_REQUIRED', detail: expect.stringContaining(field) })
+        expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(0)
+      }
+    })
+    it(`${type} sends the complete template and renders its compatibility brief`, async () => {
+      const t = setup()
+      expect(await send(t, { ...base, brief: 'ignored', task: { ...task, goal: ' Save edits ', owns: [' cli/src/superTabs '] }, checks })).toMatchObject({ ok: true })
+      expect(t.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'task-op', asAgentId: t.agentId, command: { ...base, task, brief, checks } })
+    })
+    it(`${type} retries an old backend's task refusal once using the same operation`, async () => {
+      const t = setup(), original = t.call.getMockImplementation()!
+      t.call.mockImplementation(async (...args) => args[0] === 'POST' && (args[2] as { command: { task?: unknown } }).command.task
+        ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "task"' } } } as never
+        : original(...args))
+      expect(await send(t, { ...base, task, checks })).toMatchObject({ ok: true })
+      expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(2)
+      expect(t.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'task-op', asAgentId: t.agentId, command: { ...base, brief, checks } })
+    })
+  }
+  it('preserves other errors and never repeats a failed compatibility retry', async () => {
+    for (const [status, code, message, count] of [
+      [403, 'FORBIDDEN', 'Unrecognized key: "task"', 1], [400, 'VALIDATION_ERROR', 'Invalid title', 1],
+      [503, 'BACKEND_UNAVAILABLE', 'Offline', 1], [400, 'VALIDATION_ERROR', 'Unrecognized key: "task"', 2],
+    ] as const) {
+      const t = setup(), original = t.call.getMockImplementation()!
+      t.call.mockImplementation(async (...args) => args[0] === 'POST'
+        ? { status, body: { success: false, error: { code, message } } } as never : original(...args))
+      expect(await send(t, { type: 'work.define', conversationId: 'group', task, checks })).toMatchObject({ error: code, detail: message })
+      expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(count)
+    }
+  })
+  it('recovers a committed legacy receipt after a lost reply and backend upgrade', async () => {
+    const t = setup(), original = t.call.getMockImplementation()!
+    let upgraded = false, recorded: string | null = null
+    t.call.mockImplementation(async (...args) => {
+      if (args[0] !== 'POST') return original(...args)
+      const body = args[2] as { command: Record<string, unknown> }
+      if (!upgraded && body.command.task) return { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "task"' } } }
+      if (!recorded) { recorded = JSON.stringify(body); upgraded = true; throw new Error('Reply lost after commit') }
+      return JSON.stringify(body) === recorded
+        ? { status: 200, body: { success: true, data: { result: { conversationId: 'only-group' } } } }
+        : { status: 409, body: { success: false, error: { code: 'OPERATION_REUSED', message: 'Choose a new operation ID for different content.' } } }
+    })
+    const command = { type: 'conversation.create', title: 'Drafts', task, checks }
+    expect(await send(t, command)).toMatchObject({ error: 'SUPER_TAB_UNAVAILABLE' })
+    expect(await send(t, command)).toMatchObject({ ok: true, value: { result: { conversationId: 'only-group' } } })
+    expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(4)
+    // A real content change must still fail even when its receipt is checked in legacy form.
+    expect(await send(t, { ...command, title: 'Different work' })).toMatchObject({ error: 'OPERATION_REUSED' })
+  })
+  it('does not strip task fields from unrelated commands', async () => {
+    const t = setup(), original = t.call.getMockImplementation()!
+    t.call.mockImplementation(async (...args) => args[0] === 'POST'
+      ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "task"' } } }
+      : original(...args))
+    expect(await send(t, { type: 'message.send', task })).toMatchObject({ error: 'VALIDATION_ERROR' })
+    expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(1)
+  })
+  it('documents all five parts in both command examples', async () => {
+    const t = setup(), answer = await t.ask({ action: 'help' }, owner) as { help: { commands: Array<Record<string, unknown>> } }
+    for (const type of ['conversation.create', 'work.define']) {
+      expect(answer.help.commands.find(c => c.type === type)).toMatchObject({ task: { goal: expect.any(String), changes: expect.any(String), constraints: expect.any(String), owns: expect.any(Array) }, checks: [expect.objectContaining({ description: expect.any(String) })] })
+    }
+  })
+  it('rejects oversized task sections, ownership and compatibility briefs before sending', async () => {
+    for (const invalid of [{ ...task, goal: 'x'.repeat(8001) }, { ...task, owns: Array(41).fill('path') },
+      { ...task, owns: ['x'.repeat(4097)] }, { ...task, owns: Array(40).fill('x'.repeat(200)) }]) {
+      const t = setup()
+      expect(await send(t, { type: 'conversation.create', title: 'Drafts', task: invalid, checks })).toMatchObject({ error: 'INVALID_TASK' })
+      expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(0)
+    }
+  })
+})
+
 it('keeps a shared machine controller out of the host account while accepting its own paired apps', async () => {
   const t = setup()
   for (const accountOwner of [undefined, false]) {
@@ -83,6 +208,8 @@ it('tells the Lead which branch a started agent works from, and how to choose an
   expect(help.start).toContain('default branch, fetched first')
   expect(help.start).toContain('branchRef')
   expect(help.startRequest).toMatchObject({ worktree: true, branchRef: 'refs/remotes/origin/BASE_BRANCH' })
+  expect(help.start).toContain('role "reviewer"')
+  expect(help.start).toContain('reviewOf')
 })
 
 it('keeps host capacity separate from account authority and closes it on disconnect or identity change', async () => {
@@ -192,6 +319,20 @@ describe('routeHistory for Jev', () => {
     expect(JSON.stringify(decisions)).not.toContain('bigbig')
     const last = await contextOf(setup(), async path => path.includes('/messages') ? ok({ messages: [] }) : ok([unfinished]))
     expect(last.value.decisions).toEqual([{ id: 'dx', conversationId: 'g1', title: 'unknown pick', via: 'order', outcome: 'superseded', assignmentId: null, createdAt: '2026-10-19T09:00:00Z', final: null }])
+    // The pick's account, spend and size go with it, so the route can count what an open pick still holds.
+    const fit = { status: 'fits', coverage: 2, effectiveCost: 3, expiring: 0, spend: { '5-hour': 45, weekly: 6 }, account: 'k1' }
+    const sized = (size?: string) => ({ ...decision(0), record: { pick: 'c1', via: 'jev', assessment: size ? { size } : {}, candidates: [{ id: 'c0', title: 'Other' }, { id: 'c1', title: 'Pick', fit }] } })
+    const phase1 = await contextOf(setup(), async path => path.includes('/messages') ? ok({ messages: [] }) : ok([sized('large'), sized()]))
+    expect(phase1.value.decisions).toMatchObject([{ account: 'k1', spend: { '5-hour': 45, weekly: 6 }, size: 'large' }, { size: 'medium' }])
+    // An override runs another candidate: a person's choice holds its own account; a Lead's choice outside the list holds none.
+    const other = { ...fit, account: 'k0', spend: { '5-hour': 30, weekly: 4 } }
+    const overridden = (override: Record<string, unknown>) => ({ ...sized('large'), override,
+      record: { ...sized('large').record, candidates: [{ id: 'c0', title: 'Other', fit: other }, { id: 'c1', title: 'Pick', fit }] } })
+    const moved = await contextOf(setup(), async path => path.includes('/messages') ? ok({ messages: [] })
+      : ok([overridden({ by: 'person', candidateId: 'c0', reason: 'r' }), overridden({ by: 'lead', reason: 'r' })]))
+    const [person, lead] = moved.value.decisions as Array<Record<string, unknown>>
+    expect(person).toMatchObject({ title: 'Pick', account: 'k0', spend: { '5-hour': 30, weekly: 4 } })
+    expect(lead).not.toHaveProperty('account')
   })
   it('gives every attempt of the group, newest first, with only what Jev needs and no more than fifty', async () => {
     const t = setup()
@@ -391,4 +532,84 @@ it('teaches agents to say when their work needs a person or is stuck', async () 
   const help = (await t.ask({ action: 'help' }, owner)) as { help: { command: string; commands: Array<Record<string, unknown>> } }
   expect(help.help.commands.filter(c => c.type === 'work.status').map(c => c.status)).toEqual(['working', 'needs_human', 'blocked', 'done'])
   expect(help.help.command).toContain('needs_human')
+})
+
+it('documents finished worker decisions and explains an older backend without release support', async () => {
+  const t = setup()
+  const help = (await t.ask({ action: 'help' }, owner)).help as { commands: unknown[]; release: string }
+  expect(help.commands).toContainEqual({ type: 'agent.release', agentId: 'AGENT', decision: 'keep|stop' })
+  expect(help.commands).toContainEqual(expect.objectContaining({ type: 'work.cancel', assignmentId: 'ATTEMPT' }))
+  expect(help.release).toContain('prefer stop')
+  t.call.mockImplementation(async (...args: unknown[]) => args[0] === 'POST'
+    ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'Invalid request' } } } as never
+    : { status: 200, body: { success: true, data: { state: { agents: [t.agent] } } } })
+  const reply = await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'release', command: { type: 'agent.release', agentId: 'worker', decision: 'stop' } }, owner)
+  expect(reply).toMatchObject({ detail: 'This backend does not support releasing Builders yet. Update the backend and try again.' })
+})
+
+describe('the Swarm cards the devices ask for', () => {
+  function withCards() {
+    const cards = { want: vi.fn(), open: vi.fn(), recap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped', at: 5, none: false })), onCards: undefined as unknown, onRecap: undefined as unknown }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn() }
+    const core = fakeCore({ superTabs })
+    const make = vi.fn(() => cards as never)
+    const service = superTabService(core, { cards: make })
+    return { cards, superTabs, make, core, ask: service.requests.super_tabs, port: service.port }
+  }
+  it('starts and stops the reader as a capable Pro comes and goes, and hands what it reads to the core', async () => {
+    const t = withCards()
+    expect(await t.ask({ action: 'cardsWanted', on: true }, owner)).toEqual({ ok: true })
+    expect(t.cards.want).toHaveBeenLastCalledWith(true, [])
+    expect(await t.ask({ action: 'cardsWanted', on: true, include: ['s1', 'bad id', 'x'.repeat(48), 7] }, owner)).toEqual({ ok: true })
+    expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'])
+    expect(await t.ask({ action: 'cardsWanted', on: false }, owner)).toEqual({ ok: true })
+    expect(t.cards.want).toHaveBeenLastCalledWith(false, [])
+    // One reader for the machine, whose answers go to the core.
+    expect(t.make).toHaveBeenCalledOnce()
+    ;(t.cards.onCards as (items: unknown[]) => void)([])
+    ;(t.cards.onRecap as (recap: unknown) => void)({ tabId: 't1' })
+    expect(t.superTabs.cards).toHaveBeenCalledWith([])
+    expect(t.superTabs.cardRecap).toHaveBeenCalledWith({ tabId: 't1' })
+    // The service going away stops the polling; the next ask makes a new reader.
+    t.port.stop()
+    expect(t.cards.want).toHaveBeenLastCalledWith(false)
+    await t.ask({ action: 'cardsWanted', on: true }, owner)
+    expect(t.make).toHaveBeenCalledTimes(2)
+    // A different machine id (the daemon was set up again) is a different reader, and the old one stops.
+    vi.spyOn(t.core.daemon, 'machineId').mockReturnValue('machine-2')
+    await t.ask({ action: 'cardsWanted', on: true }, owner)
+    expect(t.make).toHaveBeenCalledTimes(3)
+  })
+  it('reads one Lead\'s recap and notes which one the Pro has open', async () => {
+    const t = withCards()
+    expect(await t.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1' }, owner)).toEqual({ ok: true, tabId: 't1', leadId: 'l1', text: 'Shipped', at: 5, none: false })
+    expect(await t.ask({ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1' }, owner)).toEqual({ ok: true })
+    expect(t.cards.open).toHaveBeenLastCalledWith('s1', 't1', 'l1')
+    expect(await t.ask({ action: 'cardOpen', session: 's1', tabId: 't1', leadId: null }, owner)).toEqual({ ok: true })
+    expect(t.cards.open).toHaveBeenLastCalledWith('s1', 't1', null)
+    for (const bad of [{ action: 'cardRecap', tabId: 'bad id', leadId: 'l1' }, { action: 'cardRecap', tabId: 't1' }, { action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'bad id' }, { action: 'cardOpen', session: 's1', leadId: null },
+      { action: 'cardOpen', tabId: 't1', leadId: null }, { action: 'cardRecap', tabId: 'x'.repeat(48), leadId: 'l1' }]) {
+      expect(await t.ask(bad, owner)).toEqual({ error: 'INVALID_REQUEST' })
+    }
+  })
+  it('answers a backend refusal while reading a recap as the service does any other', async () => {
+    const t = withCards()
+    t.cards.recap.mockRejectedValueOnce(new SuperTabHostError('FORBIDDEN', 'Access withdrawn', 403))
+    expect(await t.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1' }, owner)).toEqual({ error: 'FORBIDDEN', detail: 'Access withdrawn', status: 403 })
+  })
+  it('refuses all three to anyone but the machine\'s owner, like the other actions', async () => {
+    const t = withCards()
+    for (const action of ['cardsWanted', 'cardRecap', 'cardOpen']) {
+      expect(await t.ask({ action, on: true, tabId: 't1', leadId: 'l1' }, visitor)).toEqual({ error: 'OWNER_REQUIRED' })
+      expect(await t.ask({ action, on: true, tabId: 't1', leadId: 'l1' }, { local: false, owner: true })).toEqual({ error: 'OWNER_REQUIRED' })
+    }
+    expect(t.make).not.toHaveBeenCalled()
+  })
+  it('refuses all three to an account owner who is not at this computer', async () => {
+    const t = withCards()
+    for (const action of ['cardsWanted', 'cardRecap', 'cardOpen']) {
+      expect(await t.ask({ action, on: true, session: 's1', tabId: 't1', leadId: 'l1' }, { local: false, owner: true, accountOwner: true } as never)).toEqual({ error: 'OWNER_REQUIRED' })
+    }
+    expect(t.make).not.toHaveBeenCalled()
+  })
 })

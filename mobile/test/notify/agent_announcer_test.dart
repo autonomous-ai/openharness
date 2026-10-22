@@ -68,12 +68,13 @@ void main() {
     expect(system.shown, isEmpty);
   });
 
-  test('elsewhere in the app: a chime and a mark, no notice', () {
+  test('elsewhere in the app: a chime, a mark and the notice, the banner over the app', () {
     announcer.turnEnded(agent, news, watching: () => false);
 
     expect(chimes, 1);
     expect(announcer.unread.contains(ref), isTrue);
-    expect(system.shown, isEmpty);
+    expect(system.shown, hasLength(1));
+    expect(system.shown.single.agent, ref);
   });
 
   test(
@@ -352,7 +353,15 @@ void main() {
     });
 
     test('never asks the OS to cancel a notice it did not post', () {
-      announcer.turnEnded(agent, news, watching: () => false);
+      // A `list` turn: marked, and no notice posted.
+      announcer.turnEnded(agent, (
+        aborted: false,
+        replay: false,
+        subagent: false,
+        reply: news.reply,
+        tier: NoticeTier.list,
+      ), watching: () => false);
+      expect(system.shown, isEmpty);
       announcer.seen(ref);
       expect(announcer.unread.contains(ref), isFalse);
       expect(system.cancelled, isEmpty);
@@ -417,11 +426,12 @@ void main() {
       expect(announcer.unread.kindFor(ref), NoticeKind.done);
     });
 
-    test('a new question elsewhere: a chime and a question mark', () {
-      expect(ask(), AgentNotice.mark);
+    test('a new question elsewhere: a chime, a question mark and the banner over the app', () {
+      expect(ask(), AgentNotice.alert);
       expect(chimes, 1);
       expect(announcer.unread.kindFor(ref), NoticeKind.question);
       expect(announcer.unread.anyQuestion, isTrue);
+      expect(system.shown.single.kind, NoticeKind.question);
     });
 
     test('the same question heard again is not news', () {
@@ -432,7 +442,7 @@ void main() {
 
     test('the dialog moving to its next page is a new question', () {
       ask();
-      expect(ask(id: 'q2'), AgentNotice.mark);
+      expect(ask(id: 'q2'), AgentNotice.alert);
     });
 
     test('away: one notice, of the question kind, saying the question', () {
@@ -481,7 +491,7 @@ void main() {
         tier: null,
       ), watching: () => false);
       expect(announcer.unread.contains(ref), isFalse);
-      expect(ask(), AgentNotice.mark, reason: 'a new turn may ask it again');
+      expect(ask(), AgentNotice.alert, reason: 'a new turn may ask it again');
     });
 
     test('a deleted agent takes its mark and its notice with it', () {

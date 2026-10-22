@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:dio/dio.dart' show CancelToken, DioException, DioExceptionType;
 import 'package:flutter/foundation.dart';
 
+import '../logging/app_log.dart';
 import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
 import 'model.dart';
@@ -47,6 +48,9 @@ class SuperTabController extends ChangeNotifier {
       expandedProjects.addAll(
         (initial['expandedProjects'] as List? ?? const []).whereType<String>(),
       );
+      projectsGroupOpen = initial['projectsGroupOpen'] as bool? ?? true;
+      machinesGroupOpen = initial['machinesGroupOpen'] as bool? ?? true;
+      offlineMachinesOpen = initial['offlineMachinesOpen'] as bool? ?? false;
       selectedId = initial['selectedId'] as String? ?? 'lead';
       final drafts = initial['drafts'];
       if (drafts is Map) {
@@ -113,6 +117,19 @@ class SuperTabController extends ChangeNotifier {
   bool _disposed = false;
   Timer? _poll, _draftSave;
   Future<void>? _refreshing;
+
+  /// The latest read of the Swarm's state failed (and the tab is still ours). While it is, what the
+  /// machines last reported cannot be told from what they report now: a machine is neither online nor
+  /// offline, and the Swarm says its backend is unreachable instead of calling machines offline.
+  bool get backendUnreachable => _refreshFailing && !accessRevoked;
+  bool _refreshFailing = false;
+
+  /// Since when the reads have been failing, while [backendUnreachable]: the first failure of this run of them.
+  DateTime? unreachableSince;
+
+  /// How many reads of the Swarm's state have been answered. A sidebar that is waiting for a new reading (back from
+  /// the background) knows it has one when this moves.
+  int stateReads = 0;
   Future<void> _persisting = Future.value();
   Map<String, dynamic>? _pending;
   final _drafts = <String, String>{};
@@ -131,9 +148,42 @@ class SuperTabController extends ChangeNotifier {
   final _before = <String, int?>{};
   final _reading = <String>{};
   final expandedProjects = <String>{};
+  bool projectsGroupOpen = true, machinesGroupOpen = true;
+
+  /// Whether the Machines group's "Offline · N" disclosure is open; it starts closed.
+  bool offlineMachinesOpen = false;
 
   void toggleProject(String id) {
     if (!expandedProjects.remove(id)) expandedProjects.add(id);
+    _saveSoon();
+    _changed();
+  }
+
+  /// Projects whose "Closed (N)" row is open; every one starts collapsed and
+  /// the choice is not saved.
+  final closedOpenProjects = <String>{};
+
+  void toggleClosed(String projectId) {
+    if (!closedOpenProjects.remove(projectId)) {
+      closedOpenProjects.add(projectId);
+    }
+    _changed();
+  }
+
+  void toggleProjectsGroup() {
+    projectsGroupOpen = !projectsGroupOpen;
+    _saveSoon();
+    _changed();
+  }
+
+  void toggleMachinesGroup() {
+    machinesGroupOpen = !machinesGroupOpen;
+    _saveSoon();
+    _changed();
+  }
+
+  void toggleOfflineMachines() {
+    offlineMachinesOpen = !offlineMachinesOpen;
     _saveSoon();
     _changed();
   }
@@ -226,8 +276,15 @@ class SuperTabController extends ChangeNotifier {
     ),
   );
   bool hasOlder(String id) => _before[id] != null;
+  int _loadedMessageSequence(String id) =>
+      _messages[id]?.reversed
+          .where((m) => m.source['kind'] != 'update-request')
+          .firstOrNull
+          ?.sequence ??
+      0;
   bool unread(SuperTabConversation group) =>
-      group.lastMessageSequence > (_readAt[group.id] ?? 0);
+      max(group.lastMessageSequence, _loadedMessageSequence(group.id)) >
+      (_readAt[group.id] ?? 0);
 
   void start() {
     if (_disposed) return;
@@ -259,6 +316,9 @@ class SuperTabController extends ChangeNotifier {
     'accountId': accountId,
     'selectedId': selectedId,
     'expandedProjects': expandedProjects.toList(),
+    'projectsGroupOpen': projectsGroupOpen,
+    'machinesGroupOpen': machinesGroupOpen,
+    'offlineMachinesOpen': offlineMachinesOpen,
     'drafts': Map<String, String>.of(_drafts),
     'terminals': Map<String, String>.of(_terminals),
 
@@ -317,7 +377,9 @@ class SuperTabController extends ChangeNotifier {
   void select(String id) {
     if (snapshot?.conversation(id) == null || id == selectedId) return;
     if (!snapshot!.isProjectLead(id)) {
-      expandedProjects.add(snapshot!.conversation(id)!.projectId);
+      final group = snapshot!.conversation(id)!;
+      expandedProjects.add(group.projectId);
+      if (group.archived) closedOpenProjects.add(group.projectId);
     }
     selectedId = id;
     _saveSoon();
@@ -325,11 +387,14 @@ class SuperTabController extends ChangeNotifier {
     unawaited(loadMessages(id));
   }
 
-  /// A visible transcript passes its loaded boundary: a newer snapshot may
-  /// already advertise messages that have not arrived on this client yet.
+  /// A visible transcript passes the boundary it displayed. The loaded messages
+  /// are authoritative: snapshots can arrive either before or after their tail.
   void markRead(String id, {int? through}) {
-    final advertised = snapshot?.conversation(id)?.lastMessageSequence ?? 0;
-    final last = through == null ? advertised : min(through, advertised);
+    if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+      return;
+    }
+    final loaded = _loadedMessageSequence(id);
+    final last = min(through ?? loaded, loaded);
     if ((_readAt[id] ?? 0) >= last) return;
     _readAt[id] = last;
     _saveSoon();
@@ -344,10 +409,20 @@ class SuperTabController extends ChangeNotifier {
   Future<void> _read() async {
     loading = snapshot == null;
     _changed();
+    final took = Stopwatch()..start();
     try {
       final answer = await request('GET', _path);
       if (_disposed || accessRevoked) return;
+      _refreshFailing = false;
+      unreachableSince = null;
+      stateReads++;
       final nextRevision = (answer['revision'] as num).toInt();
+      // How long the Swarm took to answer, and nothing it said: the log shows a slow or failing
+      // backend, which the sidebar's ages and the machines' states otherwise only hint at.
+      appLog.debug(
+        'swarm',
+        'state read in ${took.elapsedMilliseconds} ms (revision $nextRevision)',
+      );
       final next = SuperTabSnapshot.fromJson(superTabMap(answer['state']));
       if (next.id != tabId) {
         throw const FormatException('A different Swarm was returned.');
@@ -390,6 +465,16 @@ class SuperTabController extends ChangeNotifier {
       await loadMessages(selectedId);
     } catch (failure) {
       _readFailure(failure);
+      if (!_disposed && !accessRevoked) {
+        _refreshFailing = true;
+        unreachableSince ??= DateTime.now();
+      }
+      // The kind and code of the failure, never its message: a refusal can quote what was sent.
+      appLog.warn(
+        'swarm',
+        'state read failed after ${took.elapsedMilliseconds} ms: '
+            '${failure is SuperTabFailure ? '${failure.code} (status ${failure.statusCode})' : failure.runtimeType}',
+      );
     } finally {
       loading = false;
       _changed();
@@ -457,6 +542,48 @@ class SuperTabController extends ChangeNotifier {
         for (final m in _messages[id] ?? <SuperTabMessage>[]) m.id: m,
         for (final m in incoming) m.id: m,
       };
+      final own = combined.values
+          .where(
+            (m) => !m.fromAgent && !m.fromTerminal && m.authorId == accountId,
+          )
+          .fold<SuperTabMessage?>(
+            null,
+            (latest, m) =>
+                latest == null || m.sequence > latest.sequence ? m : latest,
+          );
+      if (!older &&
+          own != null &&
+          own.deliveries.isNotEmpty &&
+          own.deliveries.any(
+            (d) => !const {
+              'answered',
+              'cancelled',
+              'superseded',
+            }.contains(d['status']),
+          ) &&
+          !incoming.any((m) => m.id == own.id)) {
+        // New replies (or a long stream of agent updates) otherwise leave the
+        // original row outside this page and its inline receipt stuck at Sent.
+        final receipt = await request(
+          'GET',
+          '$_path/conversations/${Uri.encodeComponent(id)}/messages?messageId=${Uri.encodeComponent(own.id)}',
+        );
+        if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+          return;
+        }
+        final rows = (receipt['messages'] as List)
+            .map((m) => SuperTabMessage.fromJson(superTabMap(m)))
+            .toList();
+        if (rows.length > 1 ||
+            rows.any((m) => m.id != own.id || m.conversationId != id)) {
+          throw const FormatException(
+            'A different message receipt was returned.',
+          );
+        }
+        for (final row in rows) {
+          combined[row.id] = row;
+        }
+      }
       _messages[id] = combined.values.toList()
         ..sort((a, b) => a.sequence.compareTo(b.sequence));
       if (older || !_before.containsKey(id)) {

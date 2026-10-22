@@ -28,6 +28,7 @@ import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
 
 import { PLAYER_STATES, type PlayerSession } from './playerLibrary.js'
+import type { LeadRecap, SwarmCard } from '../superTabs/cards.js'
 import type { ActivitySnapshot, AppSwarms, SuperTabAsk, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
 import type { WindowRoute } from './windowRoute.js'
 import type { SelectionCommand, SelectionResult } from './windowSelection.js'
@@ -104,6 +105,14 @@ export interface CableHostWiring {
   forkAgent?: (agentId: string) => Promise<{ ok: true; agentId: string } | { ok: false; error: string; detail?: string }>
   /** The dial picked a swarm: the window switches to it. */
   swarmSelected?: (swarmId: string) => void
+  /** A Harness Pro came with Swarm cards (true) or the last one went (false): the core reads the Swarms only meanwhile. */
+  swarmCardsWanted?: (on: boolean) => void
+  /** One Lead's last message, read on request; null when it could not be read. */
+  swarmCardRecap?: (tabId: string, leadId: string) => Promise<LeadRecap | null>
+  /** The recap a device (one cable `session`) has open, or null once closed. */
+  swarmCardOpen?: (session: string, tabId: string, leadId: string | null) => void
+  /** A device picked a Lead: the window opens that Swarm tab and project. */
+  superTabSelected?: (superTabId: string, projectId: string) => void
   /** A finger on the dial's glass, in pieces, while it is down. */
   scrolled?: (phase: 'down' | 'move' | 'up', dy: number, velocity: number) => void
   /** The dial came, went, or started taking an update — see CableSession's onDialStatus. */
@@ -392,9 +401,43 @@ export class DaemonCableHost implements CableHost {
     if (!app) return { selected: '', swarms: [], tiles: [] }
     return {
       selected: app.active,
-      swarms: app.swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agentIds.length, agentIds: s.agentIds, panes: s.panes })),
+      swarms: app.swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agentIds.length, agentIds: s.agentIds, panes: s.panes, ...(s.superTabId ? { superTabId: s.superTabId } : {}) })),
       tiles: app.tiles,
     }
+  }
+
+  /** The Swarm cards the core last handed the devices; a device that attaches later is shown them (core/superTabCards.ts replays). */
+  private cards: SwarmCard[] = []
+
+  setSwarmCards(items: SwarmCard[]): void {
+    this.cards = items
+  }
+
+  swarmCards(): SwarmCard[] {
+    return this.cards
+  }
+
+  swarmCardsWanted(on: boolean): void {
+    this.wiring.swarmCardsWanted?.(on)
+  }
+
+  swarmCardRecap(tabId: string, leadId: string): Promise<LeadRecap | null> {
+    return this.wiring.swarmCardRecap?.(tabId, leadId) ?? Promise.resolve(null)
+  }
+
+  swarmCardOpen(session: string, tabId: string, leadId: string | null): void {
+    this.wiring.swarmCardOpen?.(session, tabId, leadId)
+  }
+
+  superTabSelected(superTabId: string, projectId: string): void {
+    this.wiring.superTabSelected?.(superTabId, projectId)
+  }
+
+  /** The active tab when it is a Swarm with an open project; `fromDevice` when the announce was a device's own pick. */
+  activeSwarmProject(): { superTabId: string; projectId: string; fromDevice: boolean } | null {
+    const app = this.swarms
+    const tab = app?.swarms.find((s) => s.id === app.active)
+    return app && tab?.superTabId && tab.projectId ? { superTabId: tab.superTabId, projectId: tab.projectId, fromDevice: app.fromDevice === true } : null
   }
 
   selectSwarm(swarmId: string): void {

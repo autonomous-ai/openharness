@@ -19,10 +19,12 @@ import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
 import 'message_row.dart';
+import 'message_receipt.dart';
 import 'route_row.dart';
 import 'work_details.dart';
 import 'project_sidebar.dart';
 import 'project_options.dart';
+import 'pane_layout.dart';
 
 typedef _ComposerChoice = ({String label, String? detail, VoidCallback choose});
 
@@ -60,9 +62,11 @@ class SuperTabView extends StatefulWidget {
   State<SuperTabView> createState() => _SuperTabViewState();
 }
 
-class _SuperTabViewState extends State<SuperTabView> {
+class _SuperTabViewState extends State<SuperTabView>
+    with WidgetsBindingObserver {
   final _composer = TextEditingController();
   final _focus = FocusNode(debugLabel: 'Swarm message');
+  final _pullRequestsFocus = FocusNode(debugLabel: 'Project pull requests');
   final _scroll = <String, ScrollController>{};
   final _latest = <String, int>{};
   final _following = <String, bool>{};
@@ -74,6 +78,8 @@ class _SuperTabViewState extends State<SuperTabView> {
   bool _sidebarOpen = false;
   bool _rosterOpen = false;
   bool _showPullRequests = false;
+  bool _viewEnabled = true;
+  bool _chatCovered = false;
   final _loadingOlder = <String>{};
   int _mentionIndex = 0;
   String? _dismissedMention;
@@ -96,9 +102,24 @@ class _SuperTabViewState extends State<SuperTabView> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _composer.addListener(_composerMoved);
     c.addListener(_changed);
     _changed();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _viewEnabled =
+        TickerMode.valuesOf(context).enabled &&
+        ModalRoute.isCurrentOf(context) != false;
+    _readVisibleTailAfterFrame();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _readVisibleTailAfterFrame();
   }
 
   @override
@@ -117,6 +138,10 @@ class _SuperTabViewState extends State<SuperTabView> {
       _replies.clear();
       _selected = null;
       _changed();
+    } else {
+      // The cached transcript is laid out even while a terminal is in front.
+      // Returning to Chat need not fetch or append a message to make it read.
+      _readVisibleTailAfterFrame();
     }
   }
 
@@ -155,11 +180,14 @@ class _SuperTabViewState extends State<SuperTabView> {
     setState(() {});
     if (firstView || (grew && atEnd)) {
       _followEnd(id);
+    } else if (atEnd) {
+      _readVisibleTailAfterFrame();
     }
   }
 
   void _followEnd(String id) {
     final request = ++_scrollRequest;
+    final sequence = _latest[id] ?? 0;
     _jumpingToEnd = true;
     void advance(int attempt) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -186,7 +214,7 @@ class _SuperTabViewState extends State<SuperTabView> {
           } else {
             _jumpingToEnd = false;
             if (scroll.position.extentAfter < 40) {
-              _readToEnd(id, _latest[id] ?? 0);
+              _readToEnd(id, sequence);
             }
           }
         });
@@ -198,12 +226,57 @@ class _SuperTabViewState extends State<SuperTabView> {
     advance(0);
   }
 
+  bool get _chatIsVisible {
+    if (!mounted ||
+        !_viewEnabled ||
+        _chatCovered ||
+        c.accessRevoked ||
+        _terminalsVisible ||
+        _showPullRequests) {
+      return false;
+    }
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    if (lifecycle != null && lifecycle != AppLifecycleState.resumed) {
+      return false;
+    }
+    final app = widget.app;
+    if (app != null &&
+        (!app.inForeground ||
+            app.currentUser?.id != c.accountId ||
+            app.activeSwarm.superTabId != c.tabId)) {
+      return false;
+    }
+    var hidden = false;
+    context.visitAncestorElements((element) {
+      if (element.widget case Offstage(offstage: true)) hidden = true;
+      return !hidden;
+    });
+    return !hidden;
+  }
+
+  void _readVisibleTailAfterFrame() {
+    final id = c.selectedId;
+    final sequence = c.messages(id).lastOrNull?.sequence ?? 0;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_jumpingToEnd) _readToEnd(id, sequence);
+    });
+    // Widget updates already have a frame in progress. Reuse it so routine
+    // polling does not request an otherwise unnecessary frame after each build.
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
   void _readToEnd(String id, int sequence) {
+    final scroll = _scroll[id];
+    if (c.selectedId != id ||
+        !_chatIsVisible ||
+        scroll == null ||
+        !scroll.hasClients ||
+        scroll.position.extentAfter >= 40) {
+      return;
+    }
     _following[id] = true;
     if (_newAfter.containsKey(id)) setState(() => _newAfter.remove(id));
-    if (!_terminalsVisible && !_showPullRequests) {
-      c.markRead(id, through: sequence);
-    }
+    c.markRead(id, through: sequence);
   }
 
   void _jumpToLatest() {
@@ -213,9 +286,11 @@ class _SuperTabViewState extends State<SuperTabView> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     c.removeListener(_changed);
     _composer.dispose();
     _focus.dispose();
+    _pullRequestsFocus.dispose();
     for (final scroll in _scroll.values) {
       scroll.dispose();
     }
@@ -609,7 +684,15 @@ class _SuperTabViewState extends State<SuperTabView> {
 
   Widget _sidebar() => ProjectSidebar(
     controller: c,
+    app: widget.app,
+    onAddAgent: widget.onAddAgent,
     onNewProject: widget.onNewProject,
+    onYourDevices: widget.app?.devicesEnabled != true
+        ? null
+        : () {
+            _closeSidebar();
+            widget.app!.openDevices();
+          },
     needsHuman: (group) => _needsHuman(group).length,
     onSelect: (id) {
       c.select(id);
@@ -636,6 +719,18 @@ class _SuperTabViewState extends State<SuperTabView> {
       _rosterOpen = false;
     });
     widget.onOpenTerminal(agent);
+  }
+
+  void _leaveResize() {
+    if (_terminalsVisible) {
+      FocusManager.instance.primaryFocus?.unfocus();
+      final app = widget.app, paneId = widget.app?.focusedPaneId;
+      if (app != null && paneId != null) app.focusPane(paneId, reveal: true);
+    } else if (_showPullRequests) {
+      _pullRequestsFocus.requestFocus();
+    } else {
+      _focus.requestFocus();
+    }
   }
 
   bool get _terminalsVisible =>
@@ -686,6 +781,7 @@ class _SuperTabViewState extends State<SuperTabView> {
                 onPressed: () {
                   setState(() => _showPullRequests = false);
                   widget.onCloseTerminal?.call();
+                  _readVisibleTailAfterFrame();
                   WidgetsBinding.instance.addPostFrameCallback((_) {
                     if (mounted) _focus.requestFocus();
                   });
@@ -711,6 +807,7 @@ class _SuperTabViewState extends State<SuperTabView> {
               const SizedBox(width: 4),
               AppIconButton(
                 key: const ValueKey('super-pull-requests'),
+                focusNode: _pullRequestsFocus,
                 icon: AppIcons.gitPullRequest,
                 size: AppIcons.inlineSize,
                 tooltip: 'Pull requests',
@@ -778,6 +875,7 @@ class _SuperTabViewState extends State<SuperTabView> {
                       const [
                         'done',
                         'stopped',
+                        'cancelled',
                       ].contains(group.assignment!['status'])
                   ? () => _groupAction('archive', group)
                   : null,
@@ -799,89 +897,15 @@ class _SuperTabViewState extends State<SuperTabView> {
     );
   }
 
-  Future<void> _reviewDelivery(
+  Future<void> _resolveDelivery(
     SuperTabMessage message,
-    Map<String, dynamic> delivery,
+    SuperTabDelivery delivery,
+    String resolution,
   ) async {
     final c = this.c;
-    final agent = c.snapshot?.agent(delivery['agentId'] as String);
-    final resolution = await showAppDialog<String>(
-      context: context,
-      builder: (context) => ListenableBuilder(
-        listenable: c,
-        builder: (context, _) => !c.canWrite
-            ? AlertDialog(
-                content: const Text(
-                  'This delivery is no longer available to change.',
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Close'),
-                  ),
-                ],
-              )
-            : AlertDialog(
-                title: DesktopDialogHeader(
-                  title:
-                      'Check delivery to ${agent == null ? 'agent' : _agentName(agent)}',
-                  padding: EdgeInsets.zero,
-                  onClose: () => Navigator.pop(context),
-                ),
-                content: SizedBox(
-                  width: 440,
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (agent != null) ...[
-                          TextButton(
-                            onPressed: () => Navigator.pop(context, 'open'),
-                            child: const Text('Open terminal'),
-                          ),
-                          const SizedBox(height: 16),
-                        ],
-                        const Text(
-                          'This instruction may already have reached the terminal. Inspect it before sending again.',
-                        ),
-                        const SizedBox(height: 16),
-                        SelectableText(message.text),
-                      ],
-                    ),
-                  ),
-                ),
-                actions: [
-                  Wrap(
-                    spacing: DesktopChrome.controlGap,
-                    runSpacing: DesktopChrome.controlGap,
-                    alignment: WrapAlignment.end,
-                    children: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, 'cancel'),
-                        child: const Text('Dismiss warning'),
-                      ),
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, 'received'),
-                        child: const Text('Already received'),
-                      ),
-                      FilledButton(
-                        onPressed: () => Navigator.pop(context, 'resend'),
-                        child: const Text('Send again'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-      ),
-    );
-    if (!mounted ||
-        widget.controller != c ||
-        resolution == null ||
-        !c.canWrite) {
-      return;
-    }
+    if (!c.canWrite || c.saving || delivery.id == null) return;
     if (resolution == 'open') {
+      final agent = c.snapshot?.agent(delivery.agentId);
       if (agent != null) {
         c.select(message.conversationId);
         widget.onOpenTerminal(agent);
@@ -890,7 +914,7 @@ class _SuperTabViewState extends State<SuperTabView> {
     }
     await c.command({
       'type': 'delivery.resolve',
-      'deliveryId': delivery['id'],
+      'deliveryId': delivery.id,
       'resolution': resolution,
     });
   }
@@ -898,8 +922,9 @@ class _SuperTabViewState extends State<SuperTabView> {
   Widget _message(
     SuperTabMessage message,
     bool grouped,
-    Map<String, SuperTabMessage> byId,
-  ) {
+    Map<String, SuperTabMessage> byId, {
+    bool showReceipt = false,
+  }) {
     final route = message.route;
     if (route != null) {
       return SuperTabRouteRow(
@@ -951,21 +976,18 @@ class _SuperTabViewState extends State<SuperTabView> {
               style: DesktopChrome.metadata(),
             ),
           ),
-        if (message.queued)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Text('Queued', style: DesktopChrome.metadata()),
-          ),
-        for (final delivery in message.deliveries.where(
-          (d) => d['status'] == 'uncertain',
-        ))
-          TextButton(
-            onPressed: c.canWrite && delivery['id'] is String
-                ? () => _reviewDelivery(message, delivery)
-                : null,
-            child: Text(
-              'Check delivery to ${c.snapshot?.agentName(delivery['agentId'] as String, fallback: 'agent') ?? 'agent'}',
-            ),
+        if (showReceipt)
+          SuperTabMessageReceipt(
+            key: ValueKey('super-message-receipt-${message.id}'),
+            message: message,
+            controller: c,
+            app: widget.app,
+            machineName: widget.machineName,
+            onResolve: (delivery, resolution) =>
+                unawaited(_resolveDelivery(message, delivery, resolution)),
+            onAddLead: () {
+              if (c.selected case final group?) widget.onAddAgent(group);
+            },
           ),
       ],
     );
@@ -1017,7 +1039,22 @@ class _SuperTabViewState extends State<SuperTabView> {
     final group = c.selected;
     final writable = c.canWrite && group != null && !group.archived;
     final busy = c.saving || c.uploading;
-    final messages = c.messages(c.selectedId);
+    final allMessages = c.messages(c.selectedId);
+    final latestOwn = allMessages.reversed
+        .where(
+          (m) => !m.fromAgent && !m.fromTerminal && m.authorId == c.accountId,
+        )
+        .firstOrNull;
+    // Older Desktops still show this plain notice. The inline receipt owns the
+    // same explanation here, including after delivery settles, so it never resurfaces stale.
+    final messages = allMessages
+        .where(
+          (m) =>
+              !(m.source['kind'] == 'delivery-hold' &&
+                  m.source['messageId'] == latestOwn?.id &&
+                  m.source['deliveryId'] == latestOwn?.receiptDelivery?.id),
+        )
+        .toList();
     final entries = superTabTranscriptEntries(messages);
     final byId = {for (final message in messages) message.id: message};
     final grouped = SuperTabMessageRow.consecutiveUpdates(messages);
@@ -1053,8 +1090,8 @@ class _SuperTabViewState extends State<SuperTabView> {
                         ? 'Conversation unavailable.'
                         : group == null
                         ? 'Loading conversation…'
-                        : group.id == 'lead'
-                        ? 'Discuss the plan with your lead.'
+                        : c.snapshot!.isProjectLead(group.id)
+                        ? 'Discuss the plan with your product manager.'
                         : 'Start the conversation.',
                     style: DesktopChrome.text(color: DesktopChrome.muted),
                   ),
@@ -1136,6 +1173,7 @@ class _SuperTabViewState extends State<SuperTabView> {
                                     message,
                                     grouped.contains(message.id),
                                     byId,
+                                    showReceipt: message.id == latestOwn?.id,
                                   ),
                               ],
                             );
@@ -1278,191 +1316,221 @@ class _SuperTabViewState extends State<SuperTabView> {
               ),
             ),
           ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
-          child: Focus(
-            onKeyEvent: (node, event) {
-              final keys = HardwareKeyboard.instance;
-              final composing = _composer.value.composing;
-              if (_focus.hasFocus &&
-                  event is KeyDownEvent &&
-                  choices.isNotEmpty &&
-                  !keys.isControlPressed &&
-                  !keys.isMetaPressed &&
-                  !keys.isAltPressed &&
-                  !keys.isShiftPressed &&
-                  !(composing.isValid && !composing.isCollapsed)) {
-                final key = event.logicalKey;
-                if (key == LogicalKeyboardKey.arrowDown ||
-                    key == LogicalKeyboardKey.arrowUp) {
-                  _moveCompletion(
-                    (_mentionIndex +
-                            (key == LogicalKeyboardKey.arrowDown ? 1 : -1)) %
-                        choices.length,
-                  );
-                  return KeyEventResult.handled;
-                }
-                if (key == LogicalKeyboardKey.tab ||
-                    key == LogicalKeyboardKey.enter) {
-                  choices[_mentionIndex.clamp(0, choices.length - 1)].choose();
-                  return KeyEventResult.handled;
-                }
-                if (key == LogicalKeyboardKey.escape) {
-                  setState(
-                    () => _dismissedMention = _composer.text.substring(
-                      0,
-                      _composer.selection.baseOffset,
-                    ),
-                  );
-                  return KeyEventResult.handled;
-                }
-              }
-              if (_focus.hasFocus &&
-                  event is KeyDownEvent &&
-                  event.logicalKey == LogicalKeyboardKey.enter &&
-                  !keys.isShiftPressed &&
-                  !keys.isControlPressed &&
-                  !keys.isMetaPressed &&
-                  !keys.isAltPressed &&
-                  !(composing.isValid && !composing.isCollapsed)) {
-                unawaited(_send());
-                return KeyEventResult.handled;
-              }
-              return KeyEventResult.ignored;
-            },
-            child: DecoratedBox(
-              key: const ValueKey('super-message-composer-surface'),
-              decoration: BoxDecoration(
-                color: DesktopChrome.field,
-                borderRadius: BorderRadius.circular(
-                  DesktopChrome.controlRadius,
+        if (group != null && group.archived)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'This group is closed. You can read it but not write.',
+                    style: DesktopChrome.metadata(),
+                  ),
                 ),
-                border: Border.all(color: DesktopChrome.rim),
-              ),
-              child: NewHarnessDropZone(
-                attachments: _files,
-                enabled: writable && !busy,
-                child: GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onTap: writable ? _focus.requestFocus : null,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        ListenableBuilder(
-                          listenable: _files,
-                          builder: (context, _) => _files.isEmpty
-                              ? const SizedBox.shrink()
-                              : Padding(
-                                  padding: const EdgeInsets.only(
-                                    bottom: 8,
-                                    right: 8,
+                if (c.canWrite)
+                  TextButton(
+                    key: const ValueKey('super-group-reopen'),
+                    onPressed: c.saving
+                        ? null
+                        : () => _groupAction('archive', group),
+                    child: const Text('Reopen'),
+                  ),
+              ],
+            ),
+          )
+        else
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
+            child: Focus(
+              onKeyEvent: (node, event) {
+                final keys = HardwareKeyboard.instance;
+                final composing = _composer.value.composing;
+                if (_focus.hasFocus &&
+                    event is KeyDownEvent &&
+                    choices.isNotEmpty &&
+                    !keys.isControlPressed &&
+                    !keys.isMetaPressed &&
+                    !keys.isAltPressed &&
+                    !keys.isShiftPressed &&
+                    !(composing.isValid && !composing.isCollapsed)) {
+                  final key = event.logicalKey;
+                  if (key == LogicalKeyboardKey.arrowDown ||
+                      key == LogicalKeyboardKey.arrowUp) {
+                    _moveCompletion(
+                      (_mentionIndex +
+                              (key == LogicalKeyboardKey.arrowDown ? 1 : -1)) %
+                          choices.length,
+                    );
+                    return KeyEventResult.handled;
+                  }
+                  if (key == LogicalKeyboardKey.tab ||
+                      key == LogicalKeyboardKey.enter) {
+                    choices[_mentionIndex.clamp(0, choices.length - 1)]
+                        .choose();
+                    return KeyEventResult.handled;
+                  }
+                  if (key == LogicalKeyboardKey.escape) {
+                    setState(
+                      () => _dismissedMention = _composer.text.substring(
+                        0,
+                        _composer.selection.baseOffset,
+                      ),
+                    );
+                    return KeyEventResult.handled;
+                  }
+                }
+                if (_focus.hasFocus &&
+                    event is KeyDownEvent &&
+                    event.logicalKey == LogicalKeyboardKey.enter &&
+                    !keys.isShiftPressed &&
+                    !keys.isControlPressed &&
+                    !keys.isMetaPressed &&
+                    !keys.isAltPressed &&
+                    !(composing.isValid && !composing.isCollapsed)) {
+                  unawaited(_send());
+                  return KeyEventResult.handled;
+                }
+                return KeyEventResult.ignored;
+              },
+              child: DecoratedBox(
+                key: const ValueKey('super-message-composer-surface'),
+                decoration: BoxDecoration(
+                  color: DesktopChrome.field,
+                  borderRadius: BorderRadius.circular(
+                    DesktopChrome.controlRadius,
+                  ),
+                  border: Border.all(color: DesktopChrome.rim),
+                ),
+                child: NewHarnessDropZone(
+                  attachments: _files,
+                  enabled: writable && !busy,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onTap: writable ? _focus.requestFocus : null,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          ListenableBuilder(
+                            listenable: _files,
+                            builder: (context, _) => _files.isEmpty
+                                ? const SizedBox.shrink()
+                                : Padding(
+                                    padding: const EdgeInsets.only(
+                                      bottom: 8,
+                                      right: 8,
+                                    ),
+                                    child: NewHarnessAttachmentChips(
+                                      attachments: _files,
+                                      enabled: !c.saving,
+                                      isUploading: c.isUploading,
+                                      progressOf: c.uploadProgress,
+                                    ),
                                   ),
-                                  child: NewHarnessAttachmentChips(
+                          ),
+                          ConstrainedBox(
+                            constraints: BoxConstraints(
+                              minHeight: grid.AppControl.heightFieldScaled,
+                            ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Expanded(
+                                  child: NewHarnessPasteTarget(
                                     attachments: _files,
-                                    enabled: !c.saving,
-                                    isUploading: c.isUploading,
-                                    progressOf: c.uploadProgress,
+                                    enabled: writable && !busy,
+                                    focusNode: _focus,
+                                    child: TextField(
+                                      key: const ValueKey(
+                                        'super-message-composer',
+                                      ),
+                                      controller: _composer,
+                                      focusNode: _focus,
+                                      autofocus: !_terminalsVisible,
+                                      enabled: writable,
+                                      minLines: 1,
+                                      maxLines:
+                                          MediaQuery.sizeOf(context).height <
+                                              600
+                                          ? 3
+                                          : 8,
+                                      maxLength: 32000,
+                                      keyboardType: TextInputType.multiline,
+                                      textAlignVertical:
+                                          TextAlignVertical.center,
+                                      style: DesktopChrome.text(),
+                                      decoration: InputDecoration(
+                                        // The row centers the line. Inheriting a decorated
+                                        // field's minimum height leaves slack below its text.
+                                        isCollapsed: true,
+                                        constraints: const BoxConstraints(),
+                                        visualDensity: VisualDensity.standard,
+                                        hintStyle: DesktopChrome.text(
+                                          color: DesktopChrome.muted,
+                                        ),
+                                        contentPadding: EdgeInsets.zero,
+                                        hintText: group == null
+                                            ? 'Loading conversation…'
+                                            : c.canWrite
+                                            ? c.snapshot!.isProjectLead(
+                                                    group.id,
+                                                  )
+                                                  ? 'Message Product Manager'
+                                                  : 'Message ${group.title}'
+                                            : 'Read-only conversation',
+                                        border: InputBorder.none,
+                                        enabledBorder: InputBorder.none,
+                                        focusedBorder: InputBorder.none,
+                                        disabledBorder: InputBorder.none,
+                                        filled: false,
+                                        counterText: '',
+                                      ),
+                                      onChanged: (text) {
+                                        c.setDraft(c.selectedId, text);
+                                        setState(() {
+                                          _mentionIndex = 0;
+                                          _dismissedMention = null;
+                                        });
+                                      },
+                                    ),
                                   ),
                                 ),
-                        ),
-                        ConstrainedBox(
-                          constraints: BoxConstraints(
-                            minHeight: grid.AppControl.heightFieldScaled,
-                          ),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              Expanded(
-                                child: NewHarnessPasteTarget(
+                                NewHarnessAttachButton(
                                   attachments: _files,
                                   enabled: writable && !busy,
-                                  focusNode: _focus,
-                                  child: TextField(
-                                    key: const ValueKey(
-                                      'super-message-composer',
-                                    ),
-                                    controller: _composer,
-                                    focusNode: _focus,
-                                    autofocus: !_terminalsVisible,
-                                    enabled: writable,
-                                    minLines: 1,
-                                    maxLines:
-                                        MediaQuery.sizeOf(context).height < 600
-                                        ? 3
-                                        : 8,
-                                    maxLength: 32000,
-                                    keyboardType: TextInputType.multiline,
-                                    textAlignVertical: TextAlignVertical.center,
-                                    style: DesktopChrome.text(),
-                                    decoration: InputDecoration(
-                                      // The row centers the line. Inheriting a decorated
-                                      // field's minimum height leaves slack below its text.
-                                      isCollapsed: true,
-                                      constraints: const BoxConstraints(),
-                                      visualDensity: VisualDensity.standard,
-                                      hintStyle: DesktopChrome.text(
-                                        color: DesktopChrome.muted,
-                                      ),
-                                      contentPadding: EdgeInsets.zero,
-                                      hintText: group == null
-                                          ? 'Loading conversation…'
-                                          : c.canWrite
-                                          ? 'Message ${group.title}'
-                                          : 'Read-only conversation',
-                                      border: InputBorder.none,
-                                      enabledBorder: InputBorder.none,
-                                      focusedBorder: InputBorder.none,
-                                      disabledBorder: InputBorder.none,
-                                      filled: false,
-                                      counterText: '',
-                                    ),
-                                    onChanged: (text) {
-                                      c.setDraft(c.selectedId, text);
-                                      setState(() {
-                                        _mentionIndex = 0;
-                                        _dismissedMention = null;
-                                      });
-                                    },
+                                ),
+                                ListenableBuilder(
+                                  listenable: Listenable.merge([
+                                    _composer,
+                                    _files,
+                                  ]),
+                                  builder: (context, _) => AppIconButton(
+                                    icon: AppIcons.arrowUp,
+                                    tooltip: 'Send message',
+                                    color: DesktopChrome.accent,
+                                    onPressed:
+                                        writable &&
+                                            !busy &&
+                                            !c.hasPendingAction &&
+                                            (_composer.text.trim().isNotEmpty ||
+                                                !_files.isEmpty)
+                                        ? () => unawaited(_send())
+                                        : null,
                                   ),
                                 ),
-                              ),
-                              NewHarnessAttachButton(
-                                attachments: _files,
-                                enabled: writable && !busy,
-                              ),
-                              ListenableBuilder(
-                                listenable: Listenable.merge([
-                                  _composer,
-                                  _files,
-                                ]),
-                                builder: (context, _) => AppIconButton(
-                                  icon: AppIcons.arrowUp,
-                                  tooltip: 'Send message',
-                                  color: DesktopChrome.accent,
-                                  onPressed:
-                                      writable &&
-                                          !busy &&
-                                          !c.hasPendingAction &&
-                                          (_composer.text.trim().isNotEmpty ||
-                                              !_files.isEmpty)
-                                      ? () => unawaited(_send())
-                                      : null,
-                                ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
           ),
-        ),
       ],
     );
   }
@@ -1476,6 +1544,14 @@ class _SuperTabViewState extends State<SuperTabView> {
           constraints.maxWidth < MediaQuery.textScalerOf(context).scale(720);
       final showRoster =
           constraints.maxWidth >= MediaQuery.textScalerOf(context).scale(1080);
+      final chatCovered =
+          (narrow && _sidebarOpen) || (!showRoster && _rosterOpen);
+      if (_chatCovered && !chatCovered) {
+        // Both dismissing a drawer and widening the window reveal the cached
+        // transcript without loading another message.
+        _readVisibleTailAfterFrame();
+      }
+      _chatCovered = chatCovered;
       final roster = SuperTabRoster(
         controller: c,
         app: widget.app,
@@ -1495,46 +1571,39 @@ class _SuperTabViewState extends State<SuperTabView> {
       return Stack(
         children: [
           ExcludeFocus(
-            excluding: (narrow && _sidebarOpen) || (!showRoster && _rosterOpen),
-            child: Row(
-              children: [
-                if (!narrow) ...[
-                  SizedBox(width: 220, child: _sidebar()),
-                  VerticalDivider(width: 1, color: DesktopChrome.rim),
-                ],
-                Expanded(
-                  child: Column(
-                    children: [
-                      _header(c.selected, narrow, showRoster),
-                      Expanded(
-                        child: IndexedStack(
-                          index: c.snapshot?.projects.isEmpty == true
-                              ? 0
-                              : _terminalsVisible
-                              ? 1
-                              : _showPullRequests
-                              ? 2
-                              : 0,
-                          children: [
-                            _conversation(narrow),
-                            terminal ?? const SizedBox.shrink(),
-                            _showPullRequests
-                                ? SuperTabPullRequests(
-                                    controller: c,
-                                    app: widget.app,
-                                  )
-                                : const SizedBox.shrink(),
-                          ],
-                        ),
-                      ),
-                    ],
+            excluding: chatCovered,
+            child: SuperTabPaneLayout(
+              storage: widget.app?.localStore,
+              onLeave: _leaveResize,
+              left: narrow ? null : _sidebar(),
+              right: showRoster ? roster : null,
+              center: Column(
+                children: [
+                  _header(c.selected, narrow, showRoster),
+                  Expanded(
+                    child: IndexedStack(
+                      index: c.snapshot?.projects.isEmpty == true
+                          ? 0
+                          : _terminalsVisible
+                          ? 1
+                          : _showPullRequests
+                          ? 2
+                          : 0,
+                      children: [
+                        _conversation(narrow),
+                        terminal ?? const SizedBox.shrink(),
+                        _showPullRequests
+                            ? SuperTabPullRequests(
+                                controller: c,
+                                app: widget.app,
+                                visible: !_terminalsVisible,
+                              )
+                            : const SizedBox.shrink(),
+                      ],
+                    ),
                   ),
-                ),
-                if (showRoster) ...[
-                  VerticalDivider(width: 1, color: DesktopChrome.rim),
-                  SizedBox(width: 288, child: roster),
                 ],
-              ],
+              ),
             ),
           ),
           if (!showRoster && _rosterOpen)
@@ -1556,7 +1625,12 @@ class _SuperTabViewState extends State<SuperTabView> {
                       color: grid.AppDesktop.veil(Theme.of(context).brightness),
                       child: Align(
                         alignment: Alignment.centerRight,
-                        child: SizedBox(width: 288, child: roster),
+                        child: SizedBox(
+                          width: constraints.maxWidth
+                              .clamp(0, SuperTabPaneLayout.rightWidth)
+                              .toDouble(),
+                          child: roster,
+                        ),
                       ),
                     ),
                   ),

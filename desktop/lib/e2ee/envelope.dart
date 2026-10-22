@@ -73,7 +73,7 @@ const Set<String> encryptedDownTypes = {
   'git_project_info',
   // The harness's branch and pull-request history is a machine RPC too (applicationFrames.ts
   // `MACHINE_REQUESTS`): unsealed, the machine answers E2EE_REQUIRED.
-  'git_pull_request',
+  'git_pull_request', 'git_pull_requests_status',
   // Memories across machines (CLI services/memory.ts).
   'memory_snapshot',
   'memory_about_put',

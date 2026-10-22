@@ -671,6 +671,8 @@ class WsConn {
     'window_name_result',
     'git_project_info',
     'git_project_info_result',
+    'git_pull_requests_status',
+    'git_pull_requests_status_result',
     'terminal_output',
     'terminal_input',
     'terminal_resize',

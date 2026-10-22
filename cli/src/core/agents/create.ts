@@ -1,3 +1,4 @@
+import { prepareSwarmSkill } from '../../lib/swarmSkills.js'
 import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../../engines/nativeLaunch.js'
 /**
  * Creating an agent (`agent_create`): open a fresh pane running the chosen engine in the chosen
@@ -63,6 +64,8 @@ export interface CreateAgentDeps {
   native?: (engine: AgentEngine, source: NativeLaunchSource, authority: LaunchAuthority) => Promise<NativeLaunchResult>
   /** The backend new panes are made on; null where none is configured or could be readied. */
   createBackend: TerminalBackend | null
+  /** Recheck a backend missing at boot after its runtime has been installed. Healthy launches never call it. */
+  recoverBackend?: () => Promise<TerminalBackend | null>
   /** What a launch answers when [createBackend] is null: the configured backend's own code (terminalBackend.ts
    *  `noBackendCode`); `TMUX_UNAVAILABLE`, as before, by default. */
   noBackendCode?: string
@@ -95,7 +98,7 @@ export interface CreateAgentDeps {
 }
 
 export function createAgentCreator({
-  native: inspectNative, publishConfig, createBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, externalResume, watchNewPane, announceSession, attachDsh,
+  native: inspectNative, publishConfig, createBackend: initialBackend, recoverBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, externalResume, watchNewPane, announceSession, attachDsh,
   prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
   gridSetup, privateGridName, dshLaunch,
 }: CreateAgentDeps) {
@@ -104,6 +107,11 @@ export function createAgentCreator({
     const stale = () => ({ ok: false as const, error: 'LAUNCH_AUTHORITY_CHANGED', unavailable: 'launch', detail: 'Waiting for the original launch request’s authority.' })
     if (!authority.current()) return stale()
     let { engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, scmLaunchRecord, startedBy, parentAgentId, launchModel } = input
+    let createBackend = initialBackend
+    if (!createBackend && recoverBackend) {
+      createBackend = await recoverBackend()
+      if (!authority.current()) return stale()
+    }
     if (!createBackend) return { ok: false, error: noBackendCode }
     if (blocksFolder(cwd)) return { ok: false, error: 'WORKTREE_BUSY' }
     const workspaceIdentity = () => { const info = statSync(cwd); return `${info.dev}:${info.ino}:${realpathSync(cwd)}` }
@@ -329,7 +337,13 @@ export function createAgentCreator({
     // A harness another agent started says so in the pull requests it opens (lib/agentAttribution.ts), last, as every
     // relaunch appends it (`buildLaunchOverrides`), and read from the person's settings where this launch reads them.
     // What Harness tells the agent (its instructions, and the pull request line for one another agent started), last.
-    const told = agentLaunchArgs(engine, startedBy, { cwd, profile: codexHome, environment: native?.environment })
+    const swarmSkill = input.swarmRole ? { role: input.swarmRole, key: label } : undefined
+    let swarmInstructions: string | undefined
+    if (swarmSkill) {
+      try { swarmInstructions = prepareSwarmSkill(cwd, swarmSkill).instructions }
+      catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
+    }
+    const told = agentLaunchArgs(engine, startedBy, { cwd, profile: codexHome, environment: native?.environment, ...(swarmInstructions ? { swarmInstructions } : {}) })
     const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...told])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
@@ -378,6 +392,7 @@ export function createAgentCreator({
       codexHome,
       dsh,
       dshRuntime: dsh ? label : null,
+      ...(swarmSkill ? { swarmSkill } : {}),
       agent,
       bypassPermission,
       permissionMode,

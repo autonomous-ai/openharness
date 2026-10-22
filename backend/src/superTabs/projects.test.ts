@@ -164,6 +164,21 @@ describe('projects inside an invite-only swarm', () => {
     expect(f.state.name).toBe('Lead renamed')
   })
 
+  it('invites to a remaining public project once the original Lead group is deleted, and keeps pending invitations', () => {
+    const f = setup(), hidden = f.project('private'), open = f.project('public')
+    f.run({ type: 'invite.create', email: 'pending@example.com', role: 'viewer', conversationId: 'lead' })
+    f.run({ type: 'project.delete', projectId: 'lead' })
+    // Desktop still asks for the original 'lead' group; on 2026-10-22 that refused every invitation.
+    f.run({ type: 'invite.create', email: 'new@example.com', role: 'collaborator', conversationId: 'lead' })
+    expect(f.state.invitations.map(i => [i.email, i.conversationId])).toEqual([
+      ['pending@example.com', open.conversationId], ['new@example.com', open.conversationId]])
+    f.run({ type: 'project.delete', projectId: open.projectId })
+    expect(f.state.invitations.map(i => i.conversationId)).toEqual([hidden.conversationId, hidden.conversationId])
+    f.run({ type: 'project.delete', projectId: hidden.projectId })
+    expect(f.state.invitations).toEqual([])
+    expect(() => f.run({ type: 'invite.create', email: 'late@example.com', role: 'viewer', conversationId: 'lead' })).toThrow('Create a project')
+  })
+
   it('removes only its own agents, even one that left every workgroup', () => {
     const f = setup(), p = f.project(), agentId = f.add(p.conversationId, 'idle'), otherId = f.add('lead', 'other')
     f.run({ type: 'conversation.agent', conversationId: p.conversationId, agentId, present: false, lead: false })

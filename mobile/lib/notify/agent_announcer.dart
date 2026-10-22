@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import 'package:harness_mobile/core/last_opened_agent.dart';
+import 'package:harness_mobile/logging/app_log.dart';
 
 import 'agent_notice.dart';
 import 'agent_unread.dart';
@@ -69,7 +70,8 @@ class AgentAnnouncer {
   /// Whether the app is on screen. ⚠️ Tolerant of there being NO binding, as
   /// the desktop's `lifecycle` is: plain `test()`s drive the notifier without
   /// one, and `WidgetsBinding.instance` throws rather than answering null.
-  /// Unknown counts as in front, which errs toward a mark over a notice.
+  /// Unknown counts as in front, which errs toward the agent on screen being
+  /// seen there rather than told about again.
   static bool _appInFront() {
     try {
       final state = WidgetsBinding.instance.lifecycleState;
@@ -105,7 +107,10 @@ class AgentAnnouncer {
   }) {
     questionClosed(agent.ref);
     _awaitingTier.remove(agent.ref)?.timer.cancel();
-    if (!isNewsEnd(end)) return;
+    if (!isNewsEnd(end)) {
+      appLog.debug('notify', 'turn end · ${_short(agent.ref)} · not news');
+      return;
+    }
     _awaitingTier[agent.ref] = (
       agent: agent,
       end: end,
@@ -121,6 +126,7 @@ class AgentAnnouncer {
     final waiting = _awaitingTier.remove(ref);
     if (waiting == null) return null;
     waiting.timer.cancel();
+    appLog.debug('notify', 'tier · ${_short(ref)} · ${tier?.name ?? 'none'}');
     // A question asked since — Command Code asks AFTER its turn — is what the
     // person has to act on, and the daemon says no "done" over one either
     // (cli `lib/agentNotifications.ts`).
@@ -141,14 +147,15 @@ class AgentAnnouncer {
     required bool Function() watching,
   }) {
     final front = inFront;
-    final notice = decideDoneNotice(
-      end,
-      inFront: front,
-      watching: front && watching(),
-    );
+    final seen = front && watching();
+    final notice = decideDoneNotice(end, inFront: front, watching: seen);
+    // Ids and decisions only: what the turn said stays out of the log.
+    appLog.debug('notify', 'done · ${_short(agent.ref)} · ${front ? 'front' : 'away'}${seen ? ' · watching' : ''} · ${notice.name}');
     _deliver(agent, notice, NoticeKind.done, () => noticeBody(end.reply!));
     return notice;
   }
+
+  static String _short(AgentRef ref) => ref.agentId.length > 8 ? ref.agentId.substring(0, 8) : ref.agentId;
 
   /// The agent stopped to ask the person [prompt]. [requestId] is the
   /// daemon's id for it, which a re-announce repeats.
@@ -159,11 +166,13 @@ class AgentAnnouncer {
     required bool Function() watching,
   }) {
     final front = inFront;
+    final seen = front && watching();
     final notice = decideQuestionNotice(
       isNew: _asked.hear(agent.ref, requestId),
       inFront: front,
-      watching: front && watching(),
+      watching: seen,
     );
+    appLog.debug('notify', 'question · ${_short(agent.ref)} · ${front ? 'front' : 'away'}${seen ? ' · watching' : ''} · ${notice.name}');
     _deliver(agent, notice, NoticeKind.question, () => noticeBody(prompt));
     return notice;
   }

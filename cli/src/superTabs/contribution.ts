@@ -1,13 +1,12 @@
 import type { CoreApi } from '../core/api.js'
 import { openDaemon } from '../agentClient/daemon.js'
 import { parseProjectFolder, prepareProjectFolder } from '../lib/projectFolder.js'
-import { readCapabilities } from './capacity.js'
+import { readCapabilities, START_REQUIREMENTS } from './capacity.js'
 import { backend, identifier, object } from './host.js'
 import { mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { repairSwarmCloneTrust, swarmCloneRoot, swarmCloneRoots } from './cloneTrust.js'
 
 type Json = Record<string, unknown>
-const GiB = 1024 ** 3
 
 /** Owner-only setup. Reuses the regular checkout preparation and engine probe;
  * it neither launches an agent nor grants the team access to the computer. */
@@ -20,8 +19,11 @@ export async function prepareContribution(core: CoreApi, input: Json, deps = {
   const machineId = core.daemon.machineId()
   const existing = (Array.isArray(state.machines) ? state.machines.map(object) : []).find(m => m.machineId === machineId)
   const swarm = input.scope === 'swarm' || Array.isArray(state.projects)
-  let cwd = swarm ? join(core.dataDir, 'swarm-projects', input.tabId) : existing?.cwd
-  if (swarm) await mkdir(cwd as string, { recursive: true })
+  let cwd = swarm ? swarmCloneRoot(core.dataDir, input.tabId, existing?.cwd) ?? swarmCloneRoots(core.dataDir, input.tabId)[0] : existing?.cwd
+  if (swarm) {
+    await mkdir(cwd as string, { recursive: true })
+    await repairSwarmCloneTrust(core, { tabId: input.tabId, machine: { scope: 'swarm', cwd } })
+  }
   if (typeof cwd !== 'string') {
     if (project.machineId === machineId && typeof project.cwd === 'string') cwd = project.cwd
     else {
@@ -45,9 +47,9 @@ export async function prepareContribution(core: CoreApi, input: Json, deps = {
     if (capability.ok !== true || typeof resources.projectDiskFreeBytes !== 'number') throw new Error('The project folder is unavailable on this machine.')
     const available = typeof resources.memoryTotalBytes === 'number' && typeof resources.memoryUsedBytes === 'number'
       ? Math.max(0, resources.memoryTotalBytes - resources.memoryUsedBytes) : 0
-    // A conservative ceiling; each actual start still reserves measured memory
-    // and disk and rechecks the engine's current subscription allowance.
-    const maxAgents = Math.max(1, Math.min(8, Math.floor(available / (4 * GiB))))
+    // A ceiling, not a promise: each actual start still needs 2 GiB free at that moment (START_REQUIREMENTS), so it
+    // matches that. At 4 GiB a 32 GiB Mac with 5 GiB free offered one slot while it could run two.
+    const maxAgents = Math.max(1, Math.min(8, Math.floor(available / START_REQUIREMENTS.memoryBytes)))
     return { ok: true, state: 'ready', cwd, engines: [...new Set(engines)], maxAgents, ...(swarm ? { scope: 'swarm' } : {}) }
   } finally { connection.close() }
 }

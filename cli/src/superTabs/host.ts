@@ -11,13 +11,16 @@ import type { CoreApi, TurnDelivery } from '../core/api.js'
 import { shellQuote } from '../orchestrator/prompts.js'
 import { noticeReason, WithheldDeliveries } from './withheld.js'
 import { attentionOf } from './attention.js'
+import { prepareContribution } from './contribution.js'
+import { hostname } from 'node:os'
 
 type Json = Record<string, unknown>
 export class SuperTabHostError extends Error {
   constructor(readonly code: string, message: string, readonly status = 503) { super(message) }
 }
 export { identifier, object } from './wire.js'
-import { identifier, object } from './wire.js'
+import { ENDED_WORK, identifier, object } from './wire.js'
+import type { SwarmRole } from '../lib/swarmSkills.js'
 
 /** The core signs each request. Neither the service nor its journal holds an account credential. */
 export async function backend(core: CoreApi, method: string, path: string, body?: unknown): Promise<unknown> {
@@ -30,6 +33,32 @@ export async function backend(core: CoreApi, method: string, path: string, body?
   return reply.body.data
 }
 
+/** Restart/resume can include stopped harnesses, so the live process list is not membership proof.
+ * Re-read the exact machine roster and its groups; a removed contribution must never adopt a skill. */
+export async function swarmRoleFor(core: CoreApi, machineId: string, harnessId: string): Promise<SwarmRole | null> {
+  if (!identifier(machineId) || !identifier(harnessId)) return null
+  const rows = await backend(core, 'GET', `/api/super-tabs/hosts/${machineId}`)
+  if (!Array.isArray(rows)) return null
+  const roles = await Promise.all(rows.map(object).filter(row => {
+    const agent = object(row.agent)
+    return identifier(row.tabId) && identifier(agent.id) && agent.machineId === machineId
+      && agent.harnessId === harnessId && row.stopRequested !== true
+  }).map(async row => {
+    const target = object(row.agent)
+    const answer = object(await backend(core, 'GET', `/api/super-tabs/${row.tabId}?asAgentId=${target.id}`))
+    const state = object(answer.state)
+    const agent = Array.isArray(state.agents) && state.agents.map(object).find(agent => agent.id === target.id
+      && agent.harnessId === harnessId && agent.machineId === machineId && agent.workDecision !== 'stop')
+    if (!agent) return null
+    const groups = (Array.isArray(state.conversations) ? state.conversations.map(object) : []).filter(group => group.archived !== true)
+    if (groups.some(group => group.leadId === target.id)) return 'lead'
+    return groups.some(group => Array.isArray(group.agentIds) && group.agentIds.includes(target.id)
+      || object(group.assignment).agentId === target.id && object(object(group.assignment).execution).machineId === machineId)
+      ? agent.role === 'reviewer' ? 'review' : 'dev' : null
+  }))
+  return (['lead', 'dev', 'review'] as const).find(role => roles.includes(role)) ?? null
+}
+
 interface Entry {
   tabId: string
   agentId: string
@@ -40,16 +69,26 @@ interface Entry {
   receipt?: string
 }
 interface Journal { version: 1; machineId: string; entries: Record<string, Entry> }
-interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string } }
+interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string } }
 export interface SuperTabHostOptions {
   now?: () => number
   write?: (file: string, journal: Journal) => void
   log?: (message: string) => void
   observers?: typeof publishObservers
   attachedFiles?: typeof attachedFiles
+  prepareContribution?: typeof prepareContribution
 }
 
 export const hostJournalFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `host-${machineId}.json`)
+/** How long after an add the roster may ask for another (a roster read may predate the add), and the first wait after a
+ *  failed one. Each try probes every engine's account (about 14 login shells), so the wait doubles up to half an hour:
+ *  a refusal such as a dispatched start that never reports, or no signed-in engine, can last for days. */
+const JOIN_RETRY_MS = 60_000
+const JOIN_RETRY_MAX_MS = 30 * 60_000
+/** Refusals no retry can change while this host runs: the Swarm has all its machines, or this account does not own it. */
+const JOIN_FINAL = new Set(['MACHINES_FULL', 'OWNER_REQUIRED'])
+/** How long after a pre-#1527 Swarm launch its engine may first bind a session and still be the Swarm's own. */
+const LEGACY_FIRST_BIND_MS = 120_000
 const typedId = (entry: Entry) => `team:service:superTabs:${entry.deliveryId}`
 const writeJournal = (file: string, journal: Journal) => {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
@@ -65,7 +104,8 @@ const SUPER_TAB_REPLY_STYLE = 'Write to the people in this tab like a helpful co
   + 'Do not show commands, message or sequence ids, field names or error codes. '
   + 'Do not describe your own tools or permission prompts unless that blocks what they asked. '
   + 'Answer each message once: post with --reply-to MESSAGE_ID. If you have already answered a message, do not post again. '
-  + 'When you hand over finished work, give the result with the revision and links they need.'
+  + 'When you hand over finished work, give the result with the revision and links they need. '
+  + 'Lead: when a Builder finishes, decide reuse, keep or stop; prefer stop unless more work is coming soon.'
 
 /** Owns only the handoff between a durable backend claim and the core's native input.
  * A process restart never interprets a lost acknowledgement as permission to type twice. */
@@ -78,6 +118,9 @@ export class SuperTabHost {
   private retentionError: string | null = null
   private readonly observers: typeof publishObservers
   private readonly attachedFiles: typeof attachedFiles
+  private readonly prepareContribution: typeof prepareContribution
+  /** Per tab the roster marks, the add in progress or when the next may run. */
+  private readonly joins = new Map<string, { running: boolean; failures: number; retryAt: number }>()
   /** Each delivery's downloaded files, so input held by a busy terminal is not downloaded again on every retry. Only a
    * complete download is kept: a failed one is tried again before the next delivery of the same message. */
   private readonly files = new Map<string, string>()
@@ -88,6 +131,9 @@ export class SuperTabHost {
   private stopped = false
   private running: Promise<void> | null = null
   private stopsRunning: Promise<void> | null = null
+  private readonly releases = new Set<string>()
+  /** Eligibility and failures belong to this stop and native runtime; a new runtime or stop gets a fresh decision. */
+  private readonly releaseAttempts = new Map<string, { signature: string; failures: number; retryAt: number; closed?: true }>()
   private nextStopsAt = 0
   private receiptsRunning: Promise<void> | null = null
   private nextReceiptsAt = 0
@@ -109,6 +155,7 @@ export class SuperTabHost {
     this.file = hostJournalFile(core.dataDir, machineId)
     this.observers = options.observers ?? publishObservers
     this.attachedFiles = options.attachedFiles ?? attachedFiles
+    this.prepareContribution = options.prepareContribution ?? prepareContribution
     this.now = options.now ?? Date.now
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
@@ -216,6 +263,116 @@ export class SuperTabHost {
     }
   }
 
+  /** Re-read stop intent and native launch authority; require core evidence before confirming removal. */
+  private async releaseWorker(target: HostAgent): Promise<void> {
+    const { tabId, agent } = target
+    const key = `${tabId}:${agent.id}`
+    if (this.releases.has(key) || !this.core.agents.closeSwarm) return
+    const native = this.core.agents.byAgent(agent.harnessId)
+    const signature = JSON.stringify([agent.releaseId, object(agent).startedSession, native
+      ? [native.sessionId, native.registeredAt, native.startedBy, native.resumeOnly, native.processIdentity] : null])
+    const previous = this.releaseAttempts.get(key)
+    const attempt = previous?.signature === signature ? previous : { signature, failures: 0, retryAt: 0, closed: undefined }
+    if (this.now() < attempt.retryAt) return
+    this.releaseAttempts.set(key, attempt)
+    this.releases.add(key)
+    try {
+      const current = object(object(await backend(this.core, 'GET', `/api/super-tabs/${tabId}?asAgentId=${agent.id}`)).state)
+      const member = Array.isArray(current.agents) ? current.agents.map(object).find(a => a.id === agent.id) : undefined
+      if (this.stopped || member?.workDecision !== 'stop' || member.harnessId !== agent.harnessId || member.machineId !== this.machineId || member.releaseId !== agent.releaseId) return
+      if (!Array.isArray(current.conversations) || current.conversations.map(object).some(c => {
+        if (c.leadId === agent.id) return true
+        const work = object(c.assignment)
+        return work.agentId === agent.id && !ENDED_WORK.includes(String(work.status))
+      })) return
+      // A refusal no retry can change is told to the Lead once: until 2026-10-22 it went only to this machine's log,
+      // and a stopped worker stayed open with no one told why.
+      const refuse = (error: unknown) => {
+        attempt.retryAt = Infinity
+        const why = error === 'AGENT_CHANGED' ? 'it now runs a different session than the one the Swarm started' : 'it was not started by the Swarm'
+        this.log(`This session is not the original Swarm launch (${String(error)}). Remove its stuck contribution.`)
+        const group = (current.conversations as unknown[]).map(object).find(c => identifier(c.leadId) && c.leadId !== agent.id
+          && c.archived !== true && Array.isArray(c.agentIds) && c.agentIds.includes(agent.id) && c.agentIds.includes(c.leadId))
+        if (!group) return
+        // The operation id makes a restarted host's repeat of the same refusal one message, not two.
+        void backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, {
+          operationId: `stop-refused-${agent.releaseId ?? agent.id}`, asAgentId: agent.id,
+          command: { type: 'message.send', conversationId: group.id, replyTo: null, recipientIds: [group.leadId],
+            text: `Could not stop ${String(member.displayName ?? member.name ?? 'this worker')} on ${this.core.machine.name()}: ${why}. Close it on that machine.` },
+        }).catch(failure => this.log(failure instanceof Error ? failure.message : String(failure)))
+      }
+      if (attempt.closed) {
+        // A failed acknowledgement can outlive the native stop; a fresh core read must still rule out personal resume.
+        const confirmed = await this.core.agents.closeSwarm({ agentId: agent.harnessId })
+        if (!confirmed.closed) {
+          // It closed once; a session there now was resumed or replaced after that close.
+          if (['NOT_SWARM_STARTED', 'AGENT_CHANGED'].includes(String(confirmed.error))) refuse('AGENT_CHANGED')
+          throw new Error(confirmed.detail ?? confirmed.error ?? 'The stopped session could not be confirmed.')
+        }
+      } else {
+        let identity = object(member.startedSession)
+        if (!identity.creationId && native?.startedBy === 'agent' && !native.resumeOnly && native.sessionId) {
+          // Swarm starts before #1527 recorded no session identity, so their workers were never closed. The start record
+          // names the native creation receipt it dispatched (super-<startId>) and the harness that joined from it; the
+          // receipt is read below and again by the core. A name or folder alone is never proof.
+          const start = Array.isArray(current.starts) ? current.starts.map(object).find(s => s.harnessId === agent.harnessId
+            && object(s.request).machineId === this.machineId && !s.error && s.creationId === `super-${String(s.id)}`) : undefined
+          // Nor is the live session: the registry keeps `startedBy: agent` across /clear, /new and /resume, so a person who
+          // took over an old worker would be closed mid-turn. Only the first bind, which lands seconds after launch, is
+          // the Swarm's session; any later one leaves no identity, and the stop is refused as changed.
+          // ponytail: launch-to-first-bind window; a launch slower than this is refused and closed by hand.
+          const firstBind = native.boundAt !== null && native.boundAt >= native.registeredAt && native.boundAt - native.registeredAt <= LEGACY_FIRST_BIND_MS
+          if (start && identifier(start.creationId)) identity = { creationId: start.creationId,
+            ...(firstBind ? { sessionId: native.sessionId, createdAt: new Date(native.registeredAt).toISOString() } : {}) }
+        }
+        let result
+        if (!native) {
+          // The process snapshot can lag. Only the authoritative core may confirm absence; no lease can close a live row.
+          result = await this.core.agents.closeSwarm({ agentId: agent.harnessId })
+        } else {
+          if (native.startedBy !== 'agent' || native.resumeOnly || !identifier(identity.creationId)
+            || typeof identity.sessionId !== 'string' || !identity.sessionId || typeof identity.createdAt !== 'string'
+            || native.sessionId !== identity.sessionId || native.registeredAt !== Date.parse(identity.createdAt)) {
+            refuse(native.startedBy === 'agent' && !native.resumeOnly && identifier(identity.creationId) ? 'AGENT_CHANGED' : 'NOT_SWARM_STARTED')
+            return
+          }
+          const creation = await this.core.agents.creationStatus?.(identity.creationId)
+          if (creation?.state === 'created' && creation.agentId !== agent.harnessId) {
+            refuse('NOT_SWARM_STARTED')
+            return
+          }
+          if (creation?.state !== 'created') throw new Error('The original Swarm launch could not be confirmed. Stop will retry with backoff.')
+          if (this.stopped) return
+          // Start locally before asking: server clock skew cannot extend authority, and network delay consumes it.
+          const leaseRequestedAt = Date.now()
+          const leased = object(object(await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, {
+            operationId: `close-lease-${randomUUID()}`, asAgentId: agent.id,
+            command: { type: 'agent.stopLease', agentId: agent.id, releaseId: agent.releaseId },
+          })).result)
+          if (typeof leased.durationMs !== 'number' || !Number.isFinite(leased.durationMs) || leased.durationMs <= 0 || leased.durationMs > 120_000) throw new Error('The host could not reserve this native close. Remove a stuck contribution or update its backend.')
+          result = await this.core.agents.closeSwarm({ agentId: agent.harnessId, expiresAt: leaseRequestedAt + leased.durationMs,
+            creationId: identity.creationId, sessionId: identity.sessionId, createdAt: identity.createdAt })
+        }
+        if (!result.closed) {
+          if (['NOT_SWARM_STARTED', 'AGENT_CHANGED'].includes(String(result.error))) refuse(result.error)
+          throw new Error(result.detail ?? result.error ?? 'Could not stop this Swarm worker.')
+        }
+        attempt.closed = true
+      }
+      if (this.stopped) return
+      await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, {
+        operationId: `release-${agent.releaseId ?? agent.id}`, asAgentId: agent.id, command: { type: 'agent.remove', agentId: agent.id, releaseId: agent.releaseId },
+      })
+      attempt.retryAt = Infinity
+    } catch (error) {
+      attempt.failures++
+      // Five attempts total; permanent ownership/identity refusals never acquire another lease for this runtime.
+      if (attempt.retryAt !== Infinity) attempt.retryAt = attempt.failures >= 5 ? Infinity
+        : this.now() + [5_000, 15_000, 60_000, 120_000][attempt.failures - 1]!
+      this.log(error instanceof Error ? error.message : String(error))
+    } finally { this.releases.delete(key) }
+  }
+
   /** Retire local intent only after an authoritative terminal delivery state.
    * This runs independently so a slow receipt lookup cannot stall live leases. */
   reconcileReceipts(): Promise<void> {
@@ -266,6 +423,7 @@ export class SuperTabHost {
     }
     this.observers(this.core.dataDir, this.machineId, data, requestedAt + 2500)
     this.publishAttention(data)
+    this.joinSwarms(data)
     // Runtime observations cannot delay the live input leases. A stale host
     // observation is fenced by the backend's per-agent configuration version.
     if (!this.configurationsRunning && this.now() >= this.nextConfigurationsAt) {
@@ -274,11 +432,18 @@ export class SuperTabHost {
         this.nextConfigurationsAt = this.now() + 5_000
       })
     }
+    const stopKeys = new Set(data.filter(item => object(item).stopRequested === true).map(item => { const row = object(item); return `${row.tabId}:${object(row.agent).id}` }))
+    for (const key of this.releaseAttempts.keys()) if (!stopKeys.has(key)) this.releaseAttempts.delete(key)
     const seen = new Set<string>()
     for (const item of data) {
       const row = object(item), agent = object(row.agent)
       if (!identifier(row.tabId) || !identifier(agent.id) || !identifier(agent.harnessId) || agent.machineId !== this.machineId) continue
       const target = row as unknown as HostAgent
+      if (row.stopRequested === true) {
+        // Native close may wait on disk or the engine; it must not delay other workers' input leases.
+        void this.releaseWorker(target)
+        continue
+      }
       // Never adopt another live session as a replacement for the recorded harness.
       if (!this.core.agents.byAgent(target.agent.harnessId) || !this.core.agents.terminalAvailable(target.agent.harnessId)) continue
       const path = `/api/super-tabs/${target.tabId}/agents/${target.agent.id}/deliveries`
@@ -317,6 +482,31 @@ export class SuperTabHost {
       }
     }
     await this.leases()
+  }
+
+  /** The roster marks a Swarm whose Lead runs on this machine of its owner while the machine is not one of the Swarm's
+   *  (Swarm creation never added it; on 2026-10-22 Ken's Mac ran a Lead outside its own Swarm's machines). The host
+   *  adds it as the + dialog does (desktop/lib/super_tabs/machines.dart), only if it is still missing, so a person's
+   *  own contribution is never changed. A slow engine probe never delays deliveries. */
+  private joinSwarms(rows: unknown[]): void {
+    const marked = new Set(rows.map(object).filter(row => row.joinSwarm === true && identifier(row.tabId)).map(row => row.tabId as string))
+    for (const [tabId, join] of this.joins) if (!marked.has(tabId) && !join.running) this.joins.delete(tabId)
+    for (const tabId of marked) {
+      const join = this.joins.get(tabId) ?? { running: false, failures: 0, retryAt: 0 }
+      if (join.running || join.retryAt > this.now()) continue
+      join.running = true
+      this.joins.set(tabId, join)
+      void (async () => {
+        const prepared = await this.prepareContribution(this.core, { tabId, scope: 'swarm' })
+        await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: randomUUID(), command: {
+          type: 'machine.contribute', machineId: this.machineId, name: this.core.account.machineName() ?? hostname(),
+          cwd: prepared.cwd, scope: 'swarm', engines: prepared.engines, maxAgents: prepared.maxAgents, ifMissing: true } })
+      })().then(() => { join.failures = 0; join.retryAt = this.now() + JOIN_RETRY_MS }, error => {
+        join.retryAt = error instanceof SuperTabHostError && JOIN_FINAL.has(error.code) ? Infinity
+          : this.now() + Math.min(JOIN_RETRY_MAX_MS, JOIN_RETRY_MS * 2 ** join.failures++)
+        this.log(`Could not add this machine to its Swarm: ${error instanceof Error ? error.message : String(error)}`)
+      }).finally(() => { join.running = false })
+    }
   }
 
   /** Hands the core this roster's waits when they changed (or on the first roster). A failed roster read changes
@@ -437,7 +627,7 @@ export class SuperTabHost {
     return `You are participating in a shared Super Tab conversation (${group}). Other humans and agents see messages posted there.\n`
       + `Read its state: ${command} status\nRead this conversation: ${command} messages ${shellQuote(group)}\n`
       + `Reply there: ${command} post ${shellQuote(group)} 'your message' UNIQUE_OPERATION_ID --reply-to ${shellQuote(String(message.id))}\n`
-      + `Manage agreed work and delegation: ${command} help. Leads: route before starting or assigning: ${command} route GROUP JSON. Use independently verifiable outcomes; local helper subagents need no separate group.\n`
+      + `Manage agreed work and delegation: ${command} help. Leads: route only when starting an agent or assigning work to another agent (not work you do yourself): ${command} route GROUP JSON. Each task needs goal, changes, constraints, owned code and acceptance checks. On Claude Code or Codex, Leads use swarm-lead, Builders swarm-dev and Reviewers swarm-review. Leads coordinate: assign multi-part or 15+ minute work to Swarm agent groups; do only answers, lookups and work under 15 minutes yourself; your subagents only read/look up.\n`
       + `Ask questions and post results in this conversation. ${SUPER_TAB_REPLY_STYLE} Replies to these delivered instructions must be posted here explicitly.\n\n`
       + native + reply + `Message ${String(message.id)} from ${String(object(message.author).name ?? 'a collaborator')}:\n${message.text}`
       + (files ? `${message.text ? '\n\n' : ''}${files}` : '')

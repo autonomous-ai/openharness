@@ -44,11 +44,12 @@ void main() {
     expect(notice.alerts, isFalse);
   });
 
-  test('in front on another agent: a mark, never a notice', () {
+  test('in front on another agent: marked and noticed, the banner over the app', () {
     final notice = decide(end());
-    expect(notice, AgentNotice.mark);
+    expect(notice, AgentNotice.alert);
     expect(notice.chimes, isTrue);
-    expect(notice.alerts, isFalse);
+    expect(notice.marks, isTrue);
+    expect(notice.alerts, isTrue);
   });
 
   test('away: marked and noticed, whatever was on screen', () {
@@ -172,7 +173,7 @@ void main() {
     });
 
     test('alert: as far as the phone\'s place allows', () {
-      expect(decide(end(tier: NoticeTier.alert)), AgentNotice.mark);
+      expect(decide(end(tier: NoticeTier.alert)), AgentNotice.alert);
       expect(
         decide(end(tier: NoticeTier.alert), inFront: false),
         AgentNotice.alert,

@@ -18,6 +18,7 @@ import type { ResumeAgent } from './launches.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
 export interface LifecycleDeps {
+  adoptSwarmSkill?: ResumeAgentServiceDeps['adoptSwarmSkill']
   settlePane?: StopAgentServiceDeps['settlePane']
   cancelExternal?: StopAgentServiceDeps['cancelExternal']
   registry: typeof registry
@@ -33,6 +34,10 @@ export interface LifecycleDeps {
   agentReconciler: StopAgentServiceDeps['agentReconciler']
   forgetSession: StopAgentServiceDeps['forgetSession']
   stopNative: StopAgentServiceDeps['stopNative']
+  /** Whether a fresh read of the agent's pane shows its engine waiting at the folder-trust question (main.ts reads the screen). */
+  atFolderTrust?: (session: RegisteredSession) => Promise<boolean>
+  /** The same, for an idle pane with an empty composer (a restored agent that never started a conversation). */
+  atEmptyComposer?: (session: RegisteredSession) => Promise<boolean>
   markDeleted: typeof markDeletedFn
   clearDeleted: typeof clearDeletedFn
   sessionCheckpoints: SessionCheckpointStore
@@ -60,7 +65,7 @@ export interface LifecycleDeps {
 export function createAgentLifecycle({
   registry, stoppedAgents, restartJobs, createBackend, noBackendCode, backendFor, agentReconciler, forgetSession, markDeleted, clearDeleted, stopNative, settlePane, cancelExternal,
   sessionCheckpoints, mirror, sessionSearch, send, pinnedControls, retainExitedSession, announceSession,
-  relaunchOverrides, prepareSessionResume, refreshGridWebSearch, attachDsh, attachSession, relaunchMarks, stopped, moveHeld,
+  relaunchOverrides, prepareSessionResume, refreshGridWebSearch, adoptSwarmSkill, attachDsh, attachSession, relaunchMarks, stopped, atFolderTrust, atEmptyComposer, moveHeld,
 }: LifecycleDeps) {
   /**
    * Stop Harness (`agent_delete`) archives its conversation and launch settings, removes the live
@@ -85,6 +90,8 @@ export function createAgentLifecycle({
     live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stoppedAgents.list()],
     stopped: stoppedAgents, checkpoints: sessionCheckpoints, stop: stopAgent,
     restarting: id => restartJobs.busy(id) || stopJobs.has(id),
+    atFolderTrust,
+    atEmptyComposer,
     deleted: s => {
       if (s.sessionId) { mirror.deleteHistory(s.sessionId); sessionSearch?.deleteHistory(s.sessionId) }
       registry.deleteSavedNames([s.agentId, s.sessionId].filter(Boolean))
@@ -94,7 +101,7 @@ export function createAgentLifecycle({
 
   const resume = createResumeAgentService({
     registry, stoppedAgents, createBackend, noBackendCode, backendFor, restartJobs, stopJobs, pinnedControls,
-    retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume,
+    retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume, adoptSwarmSkill,
     refreshGridWebSearch, clearDeleted, attachDsh, attachSession, relaunchMarks,
   })
   const resumeAgent: ResumeAgent = (id, permissionMode) => {

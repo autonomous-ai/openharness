@@ -291,6 +291,10 @@ describe('USB dial fleet', () => {
       expect(f.host.onDialAttached).toHaveBeenCalledTimes(1)
       await f.fleet.turnStarted('a', 'Working')
       for (const port of f.ports) expect(port.sent).toContainEqual({ t: 'turn.started', agentId: 'a', text: 'Working' })
+      // The Swarm cards reach every session; a dial that did not name them is sent nothing.
+      await f.fleet.syncSwarmCards(true)
+      await f.fleet.swarmCardRecap({ tabId: 'st1', leadId: 'l1', text: 'x', at: 1, none: false })
+      for (const port of f.ports) expect(port.sent.some(m => String(m.t).startsWith('supertab'))).toBe(false)
       f.setPorts([device('/dev/tux', 'BB:02')]); await f.fleet['scan']()
       expect(f.ports[0].isOpen).toBe(false)
       expect(f.ports[1].isOpen).toBe(true)

@@ -34,15 +34,31 @@ class SuperTabPerson {
 class SuperTabAgent {
   SuperTabAgent.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
+      hasProjectId = row['projectId'] != null,
       projectId = row['projectId'] as String? ?? 'lead',
       name = _text(row, 'name'),
+      displayName = row['displayName'] as String?,
       machineId = _text(row, 'machineId'),
       harnessId = _text(row, 'harnessId'),
       contributorId = _text(row, 'contributorId'),
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
+  // Keep the legacy default for callers while allowing group-based roster ownership.
+  final bool hasProjectId;
+  final String? displayName;
   final Map<String, dynamic> configuration;
   String get engine => configuration['engine'] as String? ?? '';
+}
+
+class SuperTabTask {
+  SuperTabTask.fromJson(Map<String, dynamic> row)
+    : goal = _text(row, 'goal'),
+      changes = _text(row, 'changes'),
+      constraints = _text(row, 'constraints'),
+      owns = List.unmodifiable((row['owns'] as List).cast<String>());
+
+  final String goal, changes, constraints;
+  final List<String> owns;
 }
 
 class SuperTabConversation {
@@ -59,11 +75,15 @@ class SuperTabConversation {
         (check) => Map<String, dynamic>.unmodifiable(check),
       ),
       brief = _text(row, 'brief'),
+      task = row['task'] is Map
+          ? SuperTabTask.fromJson(superTabMap(row['task']))
+          : null,
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       assignment = row['assignment'] == null
           ? null
           : Map.unmodifiable(superTabMap(row['assignment']));
   final String id, projectId, title, brief;
+  final SuperTabTask? task;
   final int? number;
   String get label => number == null ? title : '#$number $title';
   final String? leadId;
@@ -166,11 +186,12 @@ class SuperTabSnapshot {
   );
 
   String agentName(String id, {String fallback = 'Agent'}) =>
-      isLead(id) ? 'Lead' : agent(id)?.name ?? fallback;
+      agent(id)?.displayName ?? agent(id)?.name ?? fallback;
 
-  String authorName(SuperTabMessage message) =>
-      message.fromAgent && isLead(message.authorId)
-      ? 'Lead'
+  // Resolve the person shown in chat from the same identity as the roster.
+  // Recorded labels remain the fallback for agents no longer in the Swarm.
+  String authorName(SuperTabMessage message) => message.fromAgent
+      ? agentName(message.authorId, fallback: message.authorName)
       : message.authorName;
 }
 
@@ -267,6 +288,36 @@ SuperTabAttachment? _tryAttachment(Object? row) {
   }
 }
 
+/// Optional timing/hold fields keep messages from older backends readable.
+class SuperTabDelivery {
+  SuperTabDelivery.fromJson(Map<String, dynamic> row)
+    : id = row['id'] as String?,
+      agentId = row['agentId'] as String? ?? '',
+      status = row['status'] as String? ?? '',
+      holdReason = row['holdReason'] as String?,
+      holdSince = _date(row['holdSince']),
+      deliveredAt = _date(row['deliveredAt']),
+      answeredAt = _date(row['answeredAt']),
+      updatedAt = _date(row['updatedAt']);
+  final String? id, holdReason;
+  final String agentId, status;
+  final DateTime? holdSince, deliveredAt, answeredAt, updatedAt;
+  static DateTime? _date(Object? value) =>
+      value is String ? DateTime.tryParse(value) : null;
+  bool get pending => status == 'queued' || status == 'claimed';
+  bool get delivered => status == 'delivered' || status == 'confirmed';
+
+  // One line cannot promise arrival while another recipient still waits.
+  int get receiptOrder => switch (status) {
+    'uncertain' => 0,
+    'queued' || 'claimed' => 1,
+    'cancelled' => 2,
+    'delivered' || 'confirmed' => 3,
+    'answered' => 4,
+    _ => 5,
+  };
+}
+
 class SuperTabMessage {
   SuperTabMessage.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -290,7 +341,12 @@ class SuperTabMessage {
   final DateTime? createdAt;
   final List<SuperTabAttachment> attachments;
   final List<Map<String, dynamic>> deliveries;
-  String get authorName => author['name'] as String? ?? 'Unknown';
+  // Preserve the recorded identity for history and for removed agents. Views
+  // with a current roster resolve the visible name through Snapshot.authorName.
+  String get authorName =>
+      (fromAgent ? author['displayName'] as String? : null) ??
+      author['name'] as String? ??
+      'Unknown';
   String get authorId => author['id'] as String? ?? '';
   bool get fromAgent => author['kind'] == 'agent';
   bool get fromTerminal => source['kind'] == 'native';
@@ -307,10 +363,11 @@ class SuperTabMessage {
         : 'Terminal answer';
   }
 
-  bool get queued => deliveries.any(
-    (d) => d['status'] == 'queued' || d['status'] == 'claimed',
-  );
-  bool get uncertain => deliveries.any((d) => d['status'] == 'uncertain');
+  SuperTabDelivery? get receiptDelivery {
+    final rows = deliveries.map(SuperTabDelivery.fromJson).toList();
+    rows.sort((a, b) => a.receiptOrder.compareTo(b.receiptOrder));
+    return rows.firstOrNull;
+  }
 }
 
 /// The `remote` a daemon reports for a project: `host/owner/repo`, already

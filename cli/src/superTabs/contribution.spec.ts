@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import { ContributionPreparations, prepareContribution } from './contribution.js'
 import { mkdtemp, rm, stat } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const GiB = 1024 ** 3
@@ -33,19 +33,33 @@ describe('one-field machine preparation', () => {
       delete f.state.project
       const core = fakeCore({ dataDir })
       const result = await prepareContribution(core, { tabId: 'tab', scope: 'swarm' }, f.deps as never)
-      const cwd = join(dataDir, 'swarm-projects', 'tab')
+      const cwd = join(homedir(), 'harnesses', 'swarms', 'tab')
       expect(result).toMatchObject({ scope: 'swarm', cwd, engines: ['claude', 'pi'] })
       expect((await stat(cwd)).isDirectory()).toBe(true)
       expect(f.deps.prepare).not.toHaveBeenCalled()
       expect(f.deps.capacity).toHaveBeenCalledWith({ cwd, tools: ['git'], devices: [] })
-    } finally { await rm(dataDir, { recursive: true, force: true }) }
+    } finally {
+      await rm(join(homedir(), 'harnesses', 'swarms', 'tab'), { recursive: true, force: true })
+      await rm(dataDir, { recursive: true, force: true })
+    }
   })
   it('uses the lead project on its host and probes all engines without inventing authentication', async () => {
     const f = fixture()
-    expect(await f.run()).toEqual({ ok: true, state: 'ready', cwd: '/repo', engines: ['claude', 'pi'], maxAgents: 4 })
+    expect(await f.run()).toEqual({ ok: true, state: 'ready', cwd: '/repo', engines: ['claude', 'pi'], maxAgents: 8 })
     expect(f.request).toHaveBeenCalledWith('engines_probe', { accounts: true }, 20000)
     expect(f.deps.prepare).not.toHaveBeenCalled()
     expect(f.close).toHaveBeenCalledOnce()
+  })
+  it('offers one slot per 2 GiB free, the memory each start needs, between one and eight', async () => {
+    const f = fixture()
+    const slots = async (freeBytes: number) => {
+      f.deps.capacity.mockResolvedValueOnce({ ok: true, resources: { memoryTotalBytes: 32 * GiB, memoryUsedBytes: 32 * GiB - freeBytes, projectDiskFreeBytes: 100 * GiB } })
+      return (await f.run() as { maxAgents?: number }).maxAgents
+    }
+    // Diego's Mac on 2026-10-21: 32 GiB, about 5.3 GiB free.
+    expect(await slots(5.3 * GiB)).toBe(2)
+    expect(await slots(GiB)).toBe(1)
+    expect(await slots(30 * GiB)).toBe(8)
   })
   it('prepares the repository on another machine and reuses an existing contribution', async () => {
     const f = fixture(); (f.state.project as Record<string, unknown>).machineId = 'another'

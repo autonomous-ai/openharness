@@ -6,6 +6,71 @@ import { FAIL, readFallback } from './serviceHost.js'
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
 describe('the core API services stand on', () => {
+  it('allows a bounded batch of GitHub reads to finish outside the core', () => {
+    expect(LONG_ANSWERS.projects).toEqual({ git_pull_requests_status: 120_000 })
+  })
+  it('closes only the original Swarm-started native session and treats an absent session as gone', async () => {
+    const request = { agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', expiresAt: Date.now() + 120_000, createdAt: new Date(1000).toISOString() }
+    const session = { ...row('worker'), sessionId: 'native', registeredAt: 1000, startedBy: 'agent' as const }
+    const deps = coreDeps(), byAgent = vi.fn(() => session as RegisteredSession | undefined)
+    const closeAgent = vi.fn(async () => ({ closed: true as const }))
+    const creationStatus = vi.fn(async () => ({ creationId: request.creationId, state: 'created' as const, agentId: 'worker' }))
+    const core = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent } as CoreApiDeps['registry'], closeAgent, creationStatus })
+    expect(await core.agents.closeSwarm!(request)).toEqual({ closed: true })
+    expect(closeAgent).toHaveBeenCalledWith({ agentId: 'worker', sessionId: 'native', createdAt: request.createdAt, mode: 'now', onlyIfOriginalLaunch: true, expiresAt: request.expiresAt })
+    closeAgent.mockClear()
+    byAgent.mockReturnValue({ ...session, startedBy: undefined })
+    expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: 'NOT_SWARM_STARTED' })
+    byAgent.mockReturnValue({ ...session, registeredAt: 2000 })
+    expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: 'AGENT_CHANGED' })
+    byAgent.mockReturnValue({ ...session, sessionId: 'replacement' })
+    expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: 'AGENT_CHANGED' })
+    byAgent.mockReturnValue(session)
+    creationStatus.mockResolvedValueOnce({ creationId: request.creationId, state: 'created', agentId: 'other' })
+    expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: 'NOT_SWARM_STARTED' })
+    expect(closeAgent).not.toHaveBeenCalled()
+    const withoutCreation = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent } as CoreApiDeps['registry'], closeAgent })
+    expect(await withoutCreation.agents.closeSwarm!(request)).toEqual({ error: 'NOT_SWARM_STARTED' })
+    const noLifecycle = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent } as CoreApiDeps['registry'], creationStatus })
+    expect(await noLifecycle.agents.closeSwarm!(request)).toEqual({ error: 'UNSUPPORTED' })
+    for (const partial of [{ agentId: 'worker' }, { ...request, creationId: '' }, { ...request, sessionId: undefined }, { ...request, createdAt: undefined }]) {
+      expect(await core.agents.closeSwarm!(partial)).toEqual({ error: 'NOT_SWARM_STARTED' })
+    }
+    byAgent.mockReturnValue(undefined)
+    expect(await core.agents.closeSwarm!({ agentId: 'worker' })).toEqual({ closed: true })
+  })
+
+  it('refuses a personal resume before or during the original creation lookup', async () => {
+    const request = { agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', expiresAt: Date.now() + 120_000, createdAt: new Date(1000).toISOString() }
+    const session = { ...row('worker'), sessionId: 'native', registeredAt: 1000, startedBy: 'agent' as const, resumeOnly: true }
+    const deps = coreDeps(), closeAgent = vi.fn(async () => ({ closed: true as const }))
+    const creationStatus = vi.fn(async () => {
+      session.resumeOnly = true
+      return { creationId: request.creationId, state: 'created' as const, agentId: 'worker' }
+    })
+    const core = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent: () => session } as CoreApiDeps['registry'], closeAgent, creationStatus })
+    expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: expect.any(String) })
+    expect(creationStatus).not.toHaveBeenCalled()
+    session.resumeOnly = false
+    expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: expect.any(String) })
+    expect(closeAgent).not.toHaveBeenCalled()
+  })
+
+  it('refuses missing or expired close leases, including expiry during the creation lookup', async () => {
+    let now = 1000
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      const request = { agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(1000).toISOString(), expiresAt: 1100 }
+      const deps = coreDeps(), closeAgent = vi.fn(async () => ({ closed: true as const }))
+      const session = { ...row('worker'), sessionId: 'native', registeredAt: 1000, startedBy: 'agent' as const }
+      const creationStatus = vi.fn(async () => { now = 1200; return { creationId: request.creationId, state: 'created' as const, agentId: 'worker' } })
+      const core = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent: () => session } as CoreApiDeps['registry'], closeAgent, creationStatus })
+      for (const expiresAt of [undefined, NaN, 999]) expect(await core.agents.closeSwarm!({ ...request, expiresAt })).toEqual({ error: 'STOP_LEASE_EXPIRED' })
+      expect(await core.agents.closeSwarm!(request)).toEqual({ error: 'STOP_LEASE_EXPIRED' })
+      expect(closeAgent).not.toHaveBeenCalled()
+    } finally { clock.mockRestore() }
+  })
+
   it('exposes an optional native-turn observer without importing feature state', () => {
     const nativeTurns = vi.fn(async () => null)
     expect(createCoreApi({ ...coreDeps(), nativeTurns }).transcripts.nativeTurns).toBe(nativeTurns)
@@ -72,7 +137,7 @@ describe('the core API services stand on', () => {
         advertised: vi.fn(() => [row('live')]),
         terminalAvailable: vi.fn((agentId: string) => agentId === 'live'),
       } as unknown as CoreApiDeps['registry'],
-      stoppedAgents: { list: vi.fn(() => [row('stopped')]) } as unknown as CoreApiDeps['stoppedAgents'],
+      stoppedAgents: { list: vi.fn(() => [row('stopped')]), ids: vi.fn(() => ['stopped']) } as unknown as CoreApiDeps['stoppedAgents'],
       databaseHistory: vi.fn(),
       syncSession: vi.fn(),
       runtimeModels: vi.fn(async () => []),
@@ -131,8 +196,12 @@ describe('the core API services stand on', () => {
     expect(createCoreApi({ ...deps, cloud }).cloud).toBe(cloud)
     // The Super Tab service's door, the same way.
     expect(core.superTabs).toBeUndefined()
-    const superTabs = { attention: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn() }
     expect(createCoreApi({ ...deps, superTabs }).superTabs).toBe(superTabs)
+    // The devices' way to its card requests, the same way.
+    expect(core.superTabRequest).toBeUndefined()
+    const superTabRequest = vi.fn()
+    expect(createCoreApi({ ...deps, superTabRequest }).superTabRequest).toBe(superTabRequest)
     expect(core.agents.cloud).toBeUndefined()
     const rows = [{ agentId: 'cloud_1' }] as RegisteredSession[]
     expect(createCoreApi({ ...deps, cloudRows: () => rows }).agents.cloud!()).toBe(rows)
@@ -144,6 +213,10 @@ describe('the core API services stand on', () => {
     expect(await core.agents.stopped!('live')).toBe(false)
     expect(await core.agents.stopped!('unknown')).toBe(false)
     expect(await core.agents.stopped!('stopped')).toBe(true)
+    // Gone is neither live nor kept: an agent closed by hand, never a live or stopped one.
+    expect(await core.agents.gone!('live')).toBe(false)
+    expect(await core.agents.gone!('stopped')).toBe(false)
+    expect(await core.agents.gone!('closed-by-hand')).toBe(true)
     expect(core.agents.live().map((s) => s.agentId)).toEqual(['live'])
     expect(core.agents.displayName).toBe(projectDisplayName)
     expect(core.transcripts.databaseHistory).toBe(deps.databaseHistory)
@@ -296,7 +369,7 @@ describe('the core API services stand on', () => {
     expect(readFallback(DEVICES_FALLBACKS.routeSend)).toEqual({ deferred: true, value: { ok: false, machine: '', reason } })
     // The Wi-Fi device finds no desk to walk; the dial and the window bridges hear nothing.
     expect(readFallback(DEVICES_FALLBACKS.stepFocus).value).toBe('no_agents')
-    for (const member of ['card', 'desk', 'swarms', 'unread', 'appFocus', 'seen', 'settings', 'windowFocus', 'windowReply', 'voiceReply', 'windowGone', 'scroll', 'engines', 'commanders'] as const) {
+    for (const member of ['card', 'desk', 'swarms', 'swarmCards', 'swarmCardRecap', 'unread', 'appFocus', 'seen', 'settings', 'windowFocus', 'windowReply', 'voiceReply', 'windowGone', 'scroll', 'engines', 'commanders'] as const) {
       expect(DEVICES_FALLBACKS[member], member).toBeUndefined()
     }
     expect(readFallback(DEVICES_FALLBACKS.stop)).toEqual({ deferred: true, value: undefined })

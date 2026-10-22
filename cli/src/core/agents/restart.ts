@@ -3,6 +3,7 @@
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
+import type { AdoptSwarmSkill } from './swarmSkills.js'
 import { homedir } from 'node:os'
 import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
@@ -79,6 +80,7 @@ export async function commitRelaunchedEngine(
 }
 
 export interface RestartDeps {
+  adoptSwarmSkill?: AdoptSwarmSkill
   native?: LaunchOverridesDeps['native']
   restartJobs: PaneSwap['restartJobs']
   registry: typeof registry
@@ -108,7 +110,7 @@ export interface RestartDeps {
 }
 
 export function createAgentRestarter({
-  native: inspectNative,
+  native: inspectNative, adoptSwarmSkill,
   restartJobs, registry, purgeBusy, stopJobs, pinnedControls, terminals, sameRestartTarget, agentReconciler,
   terminalHintMachineName, announceSession, refreshGridAssignment, relaunchOverrides, downgradedPermission, refreshGridWebSearch,
   liveBypassPermission, paneSwapDeps, restartHeld, moveHeld,
@@ -141,7 +143,7 @@ export function createAgentRestarter({
       console.warn(moveHeldLine(heldId))
       return { ok: false, error: 'AGENT_BUSY', detail: 'This harness is held until the daemon restarts.' }
     }
-    const session = registry.resolve(agentId)
+    let session = registry.resolve(agentId)
     if (!session) return { ok: false, error: 'AGENT_NOT_FOUND' }
     if (session.guest) return GUEST_HARNESS_REFUSAL
     if (!session.sessionId && (session.launch?.state === 'held' || session.launch?.state === 'starting') && session.launch.nativeToken) {
@@ -195,6 +197,12 @@ export function createAgentRestarter({
     }
     if (!session.processIdentity) return { ok: false, error: 'NO_ACTIVE_PROCESS' }
 
+    // Fill a missing Swarm role before native inspection and launch preparation.
+    if (adoptSwarmSkill) {
+      const adopted = await adoptSwarmSkill(session, current)
+      if (!adopted || !current()) return changed
+      session = adopted
+    }
     // The relaunch runs the engine's command again, so an engine uninstalled since the agent started
     // cannot come back. Asked anyway, the swap killed the working agent and gave up twenty seconds
     // later with "did not come back up" (updates.e2e.ts, round 24). Asked here, before anything is

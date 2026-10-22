@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { encryptDownFrame, encryptRpcResult } from '../lib/e2ee/applicationFrames.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import {
-  activeSsid, execBounded, joinRequest, LIVE_UPDATE, MAX_OUTPUT, nmcliFields, OS_DEVICE_REQUESTS, SETUP, SETUP_RESULT, spawnDetached,
+  activeSsid, CMDLINE, execBounded, joinRequest, LIVE_UPDATE, MAX_OUTPUT, nmcliFields, OS_DEVICE_REQUESTS, SETUP, SETUP_RESULT, spawnDetached,
   startOsDevice, UPDATE_BUSY_MS, updateOf, wifiNetworks, type OsDeviceDeps,
 } from './osDevice.js'
 
@@ -19,13 +19,14 @@ const STATUS = JSON.stringify({
 
 function service(over: OsDeviceDeps = {}) {
   const exec = vi.fn(async (file: string, args: readonly string[]) => {
-    if (file === '/usr/bin/python3') return STATUS
+    if (file === '/usr/bin/python3') return args[0] === SETUP ? 'Harness-BD19\n' : STATUS
     if (args.includes('ACTIVE,SSID')) return 'no:Other\nyes:Home\\: 5G\n'
     return 'Home\\: 5G:70:WPA2:*\nCafe:80:--:\n'
   })
   const spawnDetached = vi.fn()
   let clock = 1_000
-  const deps: OsDeviceDeps = { env: {}, exists: () => true, exec, spawnDetached, now: () => clock, readFile: async () => '{"ok":true,"ssid":"Cafe"}', ...over }
+  const readFile = async (path: string) => path === CMDLINE ? 'BOOT_IMAGE=/vmlinuz rd.luks.name=abc=cryptroot quiet\n' : '{"ok":true,"ssid":"Cafe"}'
+  const deps: OsDeviceDeps = { env: {}, exists: () => true, exec, spawnDetached, now: () => clock, readFile, ...over }
   const ask = startOsDevice(fakeCore(), deps).os_device!
   return { ask: (payload: Record<string, unknown>, asker = OWNER) => ask(payload, asker), exec, spawnDetached, tick: (ms: number) => { clock += ms } }
 }
@@ -64,30 +65,110 @@ describe('the Harness OS computer, managed from the phone', () => {
     expect(exists).toHaveBeenCalledWith(LIVE_UPDATE)
   })
 
-  it('reads the update and the network the computer is on, bounded', async () => {
+  it('reads the update, the network the computer is on, its hotspot and whether it is encrypted, bounded', async () => {
     const { ask, exec } = service()
-    expect(await ask({ action: 'status' })).toEqual({ harnessOs: true, update: { available: true, runtime: '0.9.1', version: 'bbb' }, wifi: { ssid: 'Home: 5G' } })
+    expect(await ask({ action: 'status' })).toEqual({
+      harnessOs: true,
+      update: {
+        available: true, runtime: '0.9.1', version: 'bbb',
+        parts: {
+          os: { running: null, available: false, next: null },
+          hn: { running: '1.2.3', available: true, next: null },
+          cli: { running: '0.9.1', available: true, next: null },
+        },
+      },
+      wifi: { ssid: 'Home: 5G' }, hotspot: 'Harness-BD19', encrypted: true, features: ['sign_out', 'password', 'ssh'],
+    })
     expect(exec).toHaveBeenCalledWith('/usr/bin/python3', [LIVE_UPDATE, 'status'], { timeout: 15_000 })
+    expect(exec).toHaveBeenCalledWith('/usr/bin/python3', [SETUP, 'name'], { timeout: 10_000 })
     expect(exec).toHaveBeenCalledWith('nmcli', ['-t', '-e', 'yes', '-f', 'ACTIVE,SSID', 'device', 'wifi'], { timeout: 10_000 })
+    const plain = service({ readFile: async (path: string) => path === CMDLINE ? 'BOOT_IMAGE=/vmlinuz root=UUID=x quiet\n' : '{}' })
+    expect(await plain.ask({ action: 'status' })).toMatchObject({ encrypted: false })
   })
 
   it('still answers on Harness OS when its update tool or nmcli fails', async () => {
     const failing = (reason: unknown) => service({ exec: vi.fn(async () => { throw reason }) }).ask({ action: 'status' })
-    expect(await failing(new Error('Command failed: python3\nTraceback ...'))).toEqual({ harnessOs: true, update: { available: false, error: 'Command failed: python3' }, wifi: { ssid: null } })
-    expect(await failing('killed')).toEqual({ harnessOs: true, update: { available: false, error: 'killed' }, wifi: { ssid: null } })
+    expect(await failing(new Error('Command failed: python3\nTraceback ...'))).toEqual({ harnessOs: true, update: { available: false, error: 'Command failed: python3' }, wifi: { ssid: null }, hotspot: null, encrypted: true, features: ['sign_out', 'password', 'ssh'] })
+    expect(await failing('killed')).toEqual({ harnessOs: true, update: { available: false, error: 'killed' }, wifi: { ssid: null }, hotspot: null, encrypted: true, features: ['sign_out', 'password', 'ssh'] })
     const notJson = service({ exec: vi.fn(async () => 'not json') })
     expect(await notJson.ask({ action: 'status' })).toMatchObject({ update: { available: false, error: expect.stringContaining('JSON') } })
     const notObject = service({ exec: vi.fn(async () => '[1]') })
     expect(await notObject.ask({ action: 'status' })).toMatchObject({ update: { available: false, error: 'live_update.py status did not answer an object' } })
   })
 
+  it('still reports status when the boot command line is unreadable and no hotspot is named', async () => {
+    const { ask } = service({
+      readFile: async () => { throw new Error('boot command line unavailable') },
+      exec: async (file, args) => args[0] === SETUP ? '  \n' : file === '/usr/bin/python3' ? STATUS : '',
+    })
+    expect(await ask({ action: 'status' })).toMatchObject({ harnessOs: true, encrypted: false, hotspot: null, update: { available: true } })
+  })
+
   it('reads an update as available from the system channel or a runtime build ready', () => {
     expect(updateOf({ runtime: '/b/aaa', ready: null, system: { available: true, version: '2026.10.14' }, versions: {} }))
-      .toEqual({ available: true, runtime: 'aaa', version: '2026.10.14' })
+      .toMatchObject({ available: true, runtime: 'aaa', version: '2026.10.14' })
     expect(updateOf({ runtime: '/b/aaa', ready: '/b/aaa', system: { supported: false, available: false }, restart_required: true }))
-      .toEqual({ available: false, runtime: 'aaa', restartRequired: true })
-    expect(updateOf({ runtime: '/b/aaa', ready: '/b/ccc', system: { available: true } })).toEqual({ available: true, runtime: 'aaa', version: 'ccc' })
-    expect(updateOf({ system: [], versions: [] })).toEqual({ available: false, runtime: null })
+      .toMatchObject({ available: false, runtime: 'aaa', restartRequired: true })
+    expect(updateOf({ runtime: '/b/aaa', ready: '/b/ccc', system: { available: true } })).toMatchObject({ available: true, runtime: 'aaa', version: 'ccc' })
+    expect(updateOf({ system: [], versions: [] })).toMatchObject({ available: false, runtime: null })
+  })
+
+  it('names each part, what runs and what waits: the OS alone, hn and the CLI as one runtime', () => {
+    expect(updateOf({
+      runtime: '/b/aaa', ready: '/b/ccc', os: '0.1.7.r1-1', versions: { hn: '0.1.38', cli: '0.4.29' },
+      ready_versions: { hn: '0.1.39', cli: '0.4.30' }, system: { available: true, version: '0.1.8.r2-1' },
+    }).parts).toEqual({
+      os: { running: '0.1.7.r1-1', available: true, next: '0.1.8.r2-1' },
+      hn: { running: '0.1.38', available: true, next: '0.1.39' },
+      cli: { running: '0.4.29', available: true, next: '0.4.30' },
+    })
+    expect(updateOf({ runtime: '/b/aaa', ready: '/b/aaa', os: '0.1.7.r1-1', versions: { hn: '0.1.38', cli: '0.4.29' }, system: {} }).parts).toEqual({
+      os: { running: '0.1.7.r1-1', available: false, next: null },
+      hn: { running: '0.1.38', available: false, next: null },
+      cli: { running: '0.4.29', available: false, next: null },
+    })
+  })
+
+  it('starts a phone\'s update with the restart it agreed to', async () => {
+    const { ask, spawnDetached } = service()
+    expect(await ask({ action: 'update', reboot: true })).toEqual({ started: true })
+    expect(spawnDetached).toHaveBeenCalledWith('/usr/bin/harness', ['update', '--reboot'])
+  })
+
+  it('signs the computer out for another account, detached', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { ask, spawnDetached } = service()
+    expect(await ask({ action: 'sign_out' })).toEqual({ started: true })
+    expect(spawnDetached).toHaveBeenCalledWith('sudo', ['-n', '/usr/bin/python3', SETUP, 'sign-out'])
+  })
+
+  it('changes the password with both only on the helper\'s stdin', async () => {
+    const exec = vi.fn(async () => '{"ok": true, "disk": true}')
+    const { ask } = service({ exec })
+    expect(await ask({ action: 'password', current: '1234', next: 'abcd' })).toEqual({ ok: true, disk: true })
+    expect(exec).toHaveBeenCalledWith('sudo', ['-n', '/usr/bin/python3', SETUP, 'password'],
+      { timeout: 90_000, input: JSON.stringify({ current: '1234', new: 'abcd' }) })
+    expect(await ask({ action: 'password', current: '1234' })).toMatchObject({ error: 'BAD_REQUEST' })
+    exec.mockResolvedValueOnce('{"error": "WRONG_PASSWORD", "message": "That is not the computer\'s password."}')
+    expect(await ask({ action: 'password', current: 'x', next: 'abcd' })).toMatchObject({ error: 'WRONG_PASSWORD' })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    exec.mockResolvedValueOnce('["ok"]')
+    expect(await ask({ action: 'password', current: '1234', next: 'abcd' }))
+      .toEqual({ error: 'FAILED', message: 'setup.py password did not answer an object' })
+  })
+
+  it('turns SSH on or off, or says how it is', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const answer = { enabled: true, active: true, user: 'me', addresses: [{ interface: 'wlo1', address: '172.168.21.13' }] }
+    const exec = vi.fn(async () => JSON.stringify(answer))
+    const { ask } = service({ exec })
+    expect(await ask({ action: 'ssh', state: 'on' })).toEqual(answer)
+    expect(exec).toHaveBeenLastCalledWith('sudo', ['-n', '/usr/bin/python3', SETUP, 'ssh', 'on'], { timeout: 30_000 })
+    await ask({ action: 'ssh', state: 'rm -rf' })
+    expect(exec).toHaveBeenLastCalledWith('sudo', ['-n', '/usr/bin/python3', SETUP, 'ssh', 'status'], { timeout: 30_000 })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    exec.mockResolvedValueOnce('null')
+    expect(await ask({ action: 'ssh', state: 'status' })).toEqual({ error: 'FAILED', message: 'setup.py ssh did not answer an object' })
   })
 
   it('starts the update detached, once in ten minutes', async () => {

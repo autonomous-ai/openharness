@@ -513,6 +513,33 @@ void pod_grad_aa_dither(ht_scene_t *s, int x, int y, int w, int h, int radius, u
     grad_params_t p = {top, bottom, 3};
     memcpy(r->text, &p, sizeof p);
 }
+typedef struct { uint16_t top, bottom, bg; int16_t edge, gy0, gh; uint8_t k, inside_left; } veil_params_t;
+_Static_assert(sizeof(veil_params_t) <= HT_TEXT_BYTES, "veil parameters fit run->text");
+void pod_veil(ht_scene_t *s, int x, int y, int w, int h, int edge, bool inside_left, int gy0, int gh, uint16_t top, uint16_t bottom, uint16_t bg, unsigned k)
+{
+    if (w <= 0 || h <= 0) return;
+    ht_run_t *r = new_run(s, POD_VEIL, x, y, w, h);
+    if (!r) return;
+    veil_params_t p = {top, bottom, bg, (int16_t)edge, (int16_t)gy0, (int16_t)gh, (uint8_t)imin(255, (int)k), inside_left};
+    memcpy(r->text, &p, sizeof p);
+}
+static void veil_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
+{
+    veil_params_t p;
+    memcpy(&p, r->text, sizeof p);
+    int x0 = imax(clip.x, r->x), x1 = imin(clip.x + clip.w, r->x + r->w);
+    int y0 = imax(clip.y, r->y), y1 = imin(clip.y + clip.h, r->y + r->pro_height);
+    const int last = p.gh > 1 ? p.gh - 1 : 1;
+    for (int y = y0; y < y1; y++) {
+        const int row = imin(imax(y - p.gy0, 0), last);
+        const uint16_t ink = mix565(p.bottom, p.top, (unsigned)row, (unsigned)last);
+        uint16_t *d = out + (y - clip.y) * clip.w - clip.x;
+        for (int x = x0; x < x1; x++) {
+            const bool in = p.inside_left ? x < p.edge : x >= p.edge;
+            d[x] = in ? mix565(ink, d[x], p.k, 255) : p.bg;
+        }
+    }
+}
 static void grad_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
 {
     grad_params_t p;
@@ -653,6 +680,7 @@ void pod_draw_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
     case POD_ARC: arc_raster(r, clip, out); break;
     case POD_GRAD: grad_raster(r, clip, out); break;
     case POD_TRI: tri_raster(r, clip, out); break;
+    case POD_VEIL: veil_raster(r, clip, out); break;
     default: break;
     }
 }
