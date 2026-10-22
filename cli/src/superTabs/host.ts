@@ -105,7 +105,7 @@ const SUPER_TAB_REPLY_STYLE = 'Write to the people in this tab like a helpful co
   + 'Do not describe your own tools or permission prompts unless that blocks what they asked. '
   + 'Answer each message once: post with --reply-to MESSAGE_ID. If you have already answered a message, do not post again. '
   + 'When you hand over finished work, give the result with the revision and links they need. '
-  + 'Lead: when a worker finishes, decide reuse, keep or stop; prefer stop unless more work is coming soon.'
+  + 'Lead: when a Builder finishes, decide reuse, keep or stop; prefer stop unless more work is coming soon.'
 
 /** Owns only the handoff between a durable backend claim and the core's native input.
  * A process restart never interprets a lost acknowledgement as permission to type twice. */
@@ -627,7 +627,7 @@ export class SuperTabHost {
     return `You are participating in a shared Super Tab conversation (${group}). Other humans and agents see messages posted there.\n`
       + `Read its state: ${command} status\nRead this conversation: ${command} messages ${shellQuote(group)}\n`
       + `Reply there: ${command} post ${shellQuote(group)} 'your message' UNIQUE_OPERATION_ID --reply-to ${shellQuote(String(message.id))}\n`
-      + `Manage agreed work and delegation: ${command} help. Leads: route before starting or assigning: ${command} route GROUP JSON. Each task needs goal, changes, constraints, owned code and acceptance checks. On Claude Code or Codex, Leads use swarm-lead, workers swarm-dev and Reviewers swarm-review. Leads coordinate: assign multi-part or 15+ minute work to Swarm agent groups; do only answers, lookups and small fixes yourself; your subagents only read/look up.\n`
+      + `Manage agreed work and delegation: ${command} help. Leads: route only when starting an agent or assigning work to another agent (not work you do yourself): ${command} route GROUP JSON. Each task needs goal, changes, constraints, owned code and acceptance checks. On Claude Code or Codex, Leads use swarm-lead, Builders swarm-dev and Reviewers swarm-review. Leads coordinate: assign multi-part or 15+ minute work to Swarm agent groups; do only answers, lookups and work under 15 minutes yourself; your subagents only read/look up.\n`
       + `Ask questions and post results in this conversation. ${SUPER_TAB_REPLY_STYLE} Replies to these delivered instructions must be posted here explicitly.\n\n`
       + native + reply + `Message ${String(message.id)} from ${String(object(message.author).name ?? 'a collaborator')}:\n${message.text}`
       + (files ? `${message.text ? '\n\n' : ''}${files}` : '')

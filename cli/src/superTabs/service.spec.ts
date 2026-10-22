@@ -544,7 +544,7 @@ it('documents finished worker decisions and explains an older backend without re
     ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'Invalid request' } } } as never
     : { status: 200, body: { success: true, data: { state: { agents: [t.agent] } } } })
   const reply = await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'release', command: { type: 'agent.release', agentId: 'worker', decision: 'stop' } }, owner)
-  expect(reply).toMatchObject({ detail: 'This backend does not support releasing workers yet. Update the backend and try again.' })
+  expect(reply).toMatchObject({ detail: 'This backend does not support releasing Builders yet. Update the backend and try again.' })
 })
 
 describe('the Swarm cards the devices ask for', () => {

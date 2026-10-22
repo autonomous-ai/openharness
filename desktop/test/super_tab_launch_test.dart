@@ -873,6 +873,10 @@ void main() {
                 .firstWhere((c) => c.$1 == 'agent_create')
                 .$2['prompt']
             as String;
+    expect(
+      prompt,
+      contains('Route only to start an agent or assign work, never your own'),
+    );
     expect(prompt, contains('route GROUP'));
     expect(prompt, contains('size (small, medium or large)'));
     expect(prompt, contains('routeDecisionId'));

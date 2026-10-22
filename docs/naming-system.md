@@ -55,8 +55,9 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **Tab** | A workspace group of harnesses. | Frontend and Backend tabs. |
 | **Swarm** | A collaborative tab containing projects, people, agents and contributed machines. Invite-only by default; its owner can enable joining by email domain or a shared link. | Open your company Swarm beside your regular tabs. |
 | **Project in a Swarm** | An initiative with its own product manager, repository, sharing and workgroups. | Discuss Lamp OS with its product manager; expand it to follow a workgroup. |
-| **Product Manager** | The agent coordinating a Swarm project. Use **PM** in a compact role badge. | Message Product Manager. |
-| **Engineer** | An agent carrying out project work. Use **Dev** in a compact role badge. | Atlas is an engineer on Lamp OS. |
+| **Product Manager** | The agent coordinating a Swarm project. Use **PM** in a compact role badge. System name: lead. | Message Product Manager. |
+| **Engineer** | An agent carrying out project work. Use **Dev** in a compact role badge. System name: builder. | Atlas is an engineer on Lamp OS. |
+| **Reviewer** | An agent that reviews project work. Use **Rev** in a compact role badge. System name: reviewer. | Atlas is a reviewer on Lamp OS. |
 | **Workgroup** | A numbered conversation for an independently assignable outcome within a project. | Follow #12 Offline editing. |
 | **Pane** | A visible view of a harness, terminal, or viewer. | Split right; close pane. |
 | **Terminal** | A shell for entering commands. | New terminal. |
@@ -70,6 +71,18 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **Store** | The catalog of reusable harnesses and viewers. | Install a harness from the Store. |
 | **Conversation** | An agent's conversation history, including histories started outside Harness. | Provider usage counts native conversations. |
 | **Recorded run** | A saved demonstration of a harness doing work. | Watch the recorded run in the Store. |
+
+The three Swarm roles, on screen and inside the system:
+
+| Role | On screen | Short label | System name | Skill |
+| --- | --- | --- | --- | --- |
+| Coordinates | Product Manager | PM | lead | swarm-lead |
+| Builds | Engineer | Dev | builder | swarm-dev |
+| Reviews | Reviewer | Rev | reviewer | swarm-review |
+
+People see the on-screen name and short label. Agent-facing text (prompts, skills,
+CLI help) may use the system names Lead, Builder and Reviewer. The Lead does only
+answers, lookups and work under 15 minutes itself, and routes the rest.
 
 Use lowercase *harness* and *tab* in ordinary sentences. The action and context
 distinguish the two uses of *harness*: install or update a package in the Store;
