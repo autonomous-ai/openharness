@@ -51,7 +51,22 @@ void main() {
         lessThanOrEqualTo(kFirstTaskMaxLength),
         reason: '${lead ? 'Lead' : 'Worker'} bootstrap must fit native creation',
       );
-      expect(prompt, contains(lead ? 'swarm-lead' : 'swarm-dev'));
+      expect(
+        prompt,
+        contains(
+          lead
+              ? 'On Claude Code or Codex, use swarm-lead.'
+              : 'On Claude Code or Codex, use swarm-dev.',
+        ),
+      );
+      if (lead) {
+        expect(
+          prompt,
+          contains(
+            'Coordinate: assign multi-part or 15+ minute work to Swarm agents; your subagents only read/look up.',
+          ),
+        );
+      }
     }
   });
 

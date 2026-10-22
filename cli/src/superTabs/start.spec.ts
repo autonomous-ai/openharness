@@ -201,6 +201,20 @@ const expectSwitchTo = (f: Parameters<typeof switchCall>[0], selectedModel: stri
   expect(call[2]).toBeGreaterThan(50_000)
   expect(call[2]).toBeLessThanOrEqual(60_000)
 }
+it.each(['claude', 'codex', 'opencode'])('only tells supported %s workers to use their built-in skill', async engine => {
+  const f = fixture()
+  f.start.request.engine = engine
+  await startAgent({ action: 'start', tabId: 'tab', operationId: 'role-prompt', request: f.start.request }, f.scoped, where, f.open)
+  const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+  if (engine === 'claude' || engine === 'codex') {
+    expect(payload.prompt).toContain('swarm-dev')
+    expect(payload.swarmRole).toBe('dev')
+  } else {
+    expect(payload.prompt).not.toContain('swarm-dev')
+    expect(payload.swarmRole).toBeUndefined()
+  }
+})
+
 it('asks for an owner contribution instead of widening a guest machine connection', async () => {
   const f = fixture({ guest: true })
   expect(await startAgent({ action: 'start', tabId: 'tab', operationId: 'guest-start', request: f.start.request }, f.scoped, where, f.open))

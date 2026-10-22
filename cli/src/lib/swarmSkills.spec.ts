@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -21,6 +22,11 @@ describe('built-in Swarm skills', () => {
       expect(prepared.file.startsWith(join(realpathSync(workspace), '.harness', 'runtime'))).toBe(true)
       const text = readFileSync(prepared.file, 'utf8')
       expect(text).toContain(`name: swarm-${role}`)
+      if (role === 'lead') expect(text).toContain('goal, changes, constraints, owned code and acceptance checks')
+      else {
+        expect(text).toContain('Needs:')
+        expect(text).toContain("Do not touch other groups' code.")
+      }
       expect(text).not.toContain(`name: swarm-${role === 'lead' ? 'dev' : 'lead'}`)
       expect(readdirSync(dirname(dirname(prepared.file)))).toEqual([`swarm-${role}`])
       const args = agentLaunchArgs(engine, null, { cwd: workspace, read: () => null, swarmInstructions: prepared.instructions }, data)
@@ -30,6 +36,36 @@ describe('built-in Swarm skills', () => {
     expect(readFileSync(join(workspace, 'AGENTS.md'), 'utf8')).toBe('Project rules\n')
     expect(readdirSync(workspace).sort()).toEqual(['.harness', 'AGENTS.md'])
     expect(readdirSync(data)).toEqual([])
+  })
+
+  it('keeps standalone session skills out of Git, including git add -A', () => {
+    const workspace = fixture()
+    execFileSync('git', ['init', '-q', workspace])
+    prepareSwarmSkill(workspace, { role: 'dev', key: 'standalone' })
+    execFileSync('git', ['add', '-A'], { cwd: workspace })
+    const staged = execFileSync('git', ['ls-files'], { cwd: workspace, encoding: 'utf8' })
+    expect(staged).not.toContain('SKILL.md')
+    expect(staged.trim()).toBe('.harness/.gitignore')
+  })
+
+  it('preserves custom ignore rules and adds the Store runtime rules only once', () => {
+    const workspace = fixture(), saved = { role: 'lead' as const, key: 'one' }
+    mkdirSync(join(workspace, '.harness'))
+    const file = join(workspace, '.harness', '.gitignore')
+    writeFileSync(file, '# Mine\nprivate-data')
+    prepareSwarmSkill(workspace, saved)
+    expect(readFileSync(file, 'utf8')).toBe('# Mine\nprivate-data\nruntime/\nlegacy-AGENTS.md\n')
+    prepareSwarmSkill(workspace, saved)
+    expect(readFileSync(file, 'utf8')).toBe('# Mine\nprivate-data\nruntime/\nlegacy-AGENTS.md\n')
+  })
+
+  it('refuses a redirected runtime ignore file without modifying its target', () => {
+    const workspace = fixture(), target = join(fixture(), 'rules')
+    mkdirSync(join(workspace, '.harness'))
+    writeFileSync(target, 'Keep these rules')
+    symlinkSync(target, join(workspace, '.harness', '.gitignore'))
+    expect(() => prepareSwarmSkill(workspace, { role: 'dev', key: 'one' })).toThrow(/symlink|plain/i)
+    expect(readFileSync(target, 'utf8')).toBe('Keep these rules')
   })
 
   it('keeps the session skill bytes on retry and isolates a different session', () => {

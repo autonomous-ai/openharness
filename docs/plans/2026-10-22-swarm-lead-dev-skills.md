@@ -14,17 +14,17 @@ Lead skill, in short plain English:
 - Restate the request and mark guesses. Ask one question at a time in project chat, prioritizing goal, scope, constraints and done criteria. State small/medium/large; large work needs a written description.
 - Split only after the task giver or owner clearly approves that description. Others' opinions and vague acknowledgements do not replace approval. Small clear requests can be done immediately; “just do it” skips questions but records important choices.
 - Ask with numbered options, a default and deadline. At the deadline record and use the default for choices already authorized; elapsed time does not grant required approval.
-- Route multi-part or roughly 15+ minute work into groups with goal, scope, constraints and acceptance checks. Coordinate Swarm agents; private subagents only read/look up.
+- Route multi-part or roughly 15+ minute work into groups with goal, changes, constraints, owned code and acceptance checks. Coordinate Swarm agents; private subagents only read/look up.
 - Decide reuse/keep/stop after completion; check silent workers and reassign stalled work. Report on-screen trust, sign-in or permission blocks immediately, naming the machine owner.
 - Summarize long threads and record important decisions once.
 
 DEV skill:
 - Acknowledge the group and the work in chat.
 - Test first, debug systematically, follow the plan in order, verify before done, and check review findings before changing code.
-- Report a blocker in one line, then continue independent parts. Interpret ambiguous answers narrowly and record that interpretation.
+- Report a blocker with a “Needs:” line, then continue independent parts. Interpret ambiguous answers narrowly and record that interpretation.
 - Finish all testable work and package a needed person/device action into one clear step.
 - Every handoff says “Ready: yes/no”, with evidence and unverified items; distinguish local checks from real-environment runs.
-- Ask the Lead to route instead of splitting into private subagents; respect ownership; merge/push/open a PR only when told. Print little.
+- Ask the Lead to route instead of splitting into private subagents; do not touch other groups' code; merge/push/open a PR only when told. Print little.
 
 ## Constraints and ownership
 
@@ -91,3 +91,10 @@ Review: author inspected the complete diff and exercised the native bundle; inde
 Timing (UTC, overlapping implementation and validation): assignment go 04:35:54; implementation/first focused green checks by 04:43; validation 04:40–05:01; final rebase/publication recorded in the PR handoff. Merge and release are not authorized. Ready for merge: no, pending independent review and the documented baseline gates.
 
 Final integration: rebased on #1517 after it merged. The shared host header and Desktop prompt had text conflicts; the resolution preserves its five-part task template alongside the role skill pointers, removing only the duplicated coordination prose. Revalidated the host/service tests, routing coverage gate, CLI typecheck, Flutter launch/startup suites and bundle integration on the combined source. Other deterministic evidence covers unchanged inputs; the broad suite is not repeated.
+
+## Review fixes (2026-10-22)
+
+- Aligned the Lead task template with #1517: goal, changes, constraints, owned code and acceptance checks. DEV wording now explicitly requires a “Needs:” line and forbids touching other groups' code.
+- Extracted `lib/harnessRuntimeIgnore.ts` from the Store ignore handling and reused it in both launch paths. It preserves custom rules, adds runtime/legacy rules once, atomically publishes the ignore file, and refuses a redirected file. A fresh-repository test actually runs `git add -A` and checks that SKILL.md is never staged.
+- Restored a compact inline coordination clause in both Lead-facing prompts for older sessions/CLIs. Desktop and delivery-header skill guidance is explicitly conditional on Claude Code or Codex; worker starts omit the skill instruction for other engines.
+- RED: five CLI regressions and the Flutter bootstrap regression failed on the pre-fix source. GREEN: 174 affected CLI tests, 50 Flutter launch/startup tests, typecheck, the 111-test routing coverage gate (100%), and the bundled private-engine integration passed. No core launch code changed in this review fix; prior core evidence is retained. The Lead accepted the previously documented OS-device and reproduced broad-suite failures as baseline.

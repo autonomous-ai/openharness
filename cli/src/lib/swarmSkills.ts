@@ -1,4 +1,5 @@
 /** Built into the CLI so contributed machines need no separately installed plugin. */
+import { ignoreHarnessRuntime } from './harnessRuntimeIgnore.js'
 import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
@@ -22,7 +23,7 @@ description: Use when coordinating a Harness Swarm project as its Lead or Produc
 1. Restate the request briefly and mark guesses. Ask one question at a time in project chat, starting with what changes the approach: goal, scope, what must not be done, and what counts as done. State the size: small, medium, or large. Large work needs a written description.
 2. Split only after the task giver or project owner clearly approves the description. Others' opinions and a vague “ok” do not replace that approval. A small, clear request (a question or one-spot fix) can be done immediately; say what you did. If told “just do it”, skip questions and state important choices.
 3. Give numbered options, mark one default, and set a deadline. When it passes, record and use that default for choices already authorized. A deadline never supplies the approval required above.
-4. Discuss → approved description → groups → route → assign. Every group carries goal, scope, constraints, owned code and observable acceptance checks. Multi-part work or work taking about 15 minutes or more goes to Swarm agents in groups. Coordinate it; your own subagents only read and look things up.
+4. Discuss → approved description → groups → route → assign. Every group carries goal, changes, constraints, owned code and acceptance checks. Multi-part work or work taking about 15 minutes or more goes to Swarm agents in groups. Coordinate it; your own subagents only read and look things up.
 5. When a worker finishes, decide reuse, keep, or stop; prefer stop unless more work is coming soon. Never leave a worker idle without an explicit decision. Check workers silent too long and reassign work stalled too long. Report on-screen trust, sign-in or permission questions in chat immediately, naming the machine owner who can answer.
 6. Summarize long threads once and record important decisions once. Keep the project chat informed of progress, blockers and next steps.
 `,
@@ -34,10 +35,10 @@ description: Use when receiving or carrying out an assigned workgroup as a Harne
 
 1. Say in the group chat that you took the assignment and what you are doing.
 2. Follow a multi-step plan in order. For changed behavior, write a test, watch it fail for the expected reason, implement the smallest fix, then verify it passes. Debug systematically: reproduce, inspect evidence, find the cause, test a hypothesis. Check each review finding against the code before changing it. Run relevant checks and read their results before saying done.
-3. If blocked, post one line saying what you need, then continue independent parts. Interpret ambiguous answers in their narrowest safe sense and record that interpretation.
+3. If blocked, post a “Needs:” line saying what you need, then continue independent parts. Interpret ambiguous answers in their narrowest safe sense and record that interpretation.
 4. Work as if nobody will return to help: finish completely and test everything testable. Package any remaining person or device action as one clear step.
 5. Every handoff includes “Ready: yes/no”, evidence, the revision and useful links, and what remains unverified. Distinguish local checks from runs in the real environment.
-6. Ask the Lead to route work instead of opening your own subagents to split it. Respect the group's code ownership. Merge, push or open a PR only when told.
+6. Ask the Lead to route work instead of opening your own subagents to split it. Do not touch other groups' code. Merge, push or open a PR only when told.
 7. Print little to save quota; keep useful progress and blocker reports in the group chat.
 `,
 }
@@ -59,6 +60,7 @@ export function prepareSwarmSkill(workspace: string, saved: SwarmSkill): { file:
       mkdirSync(path, { mode: 0o700 })
     }
   }
+  ignoreHarnessRuntime(root)
   const file = join(dir, 'SKILL.md')
   if (existsSync(file)) {
     const stat = lstatSync(file)
