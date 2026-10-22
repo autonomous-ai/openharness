@@ -327,6 +327,9 @@ void main() {
     await tester.tap(find.byType(VoiceMicButton));
     await wait(600);
     expect(spoken.voice.status, VoiceInputStatus.listening);
+    // The take is on: the suggestion and its line wait, nothing is left standing over an empty row.
+    expect(send, findsNothing);
+    expect(find.text(OnboardingCopy.micSayWhat), findsNothing);
     await shot('voice-listening-app-page');
     await tester.tap(find.byType(VoiceMicButton));
     await wait(1500);

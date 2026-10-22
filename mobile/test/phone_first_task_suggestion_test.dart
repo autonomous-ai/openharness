@@ -340,22 +340,32 @@ void main() {
       },
     );
 
-    testWidgets(
-      'while a take is on, the suggestion steps aside, and is back when the take is dropped',
-      (tester) async {
-        await open(tester, line: OnboardingCopy.micSayWhat);
+    for (final starter in [false, true]) {
+      testWidgets('while a take is on, the suggestion and its line step aside, and are back when the take is dropped'
+          '${starter ? ' (a starter Desktop typed)' : ''}', (tester) async {
+        final line = starter
+            ? OnboardingCopy.micSendIt
+            : OnboardingCopy.micSayWhat;
+        if (starter) typeStarter();
+        await open(tester, line: line);
+        expect(find.text(line), findsOneWidget);
+        expect(sendButton, findsOneWidget);
         await tester.tap(find.byType(VoiceMicButton));
         await settleSend(tester);
         expect(voice.status, VoiceInputStatus.listening);
+        // The line is not left standing over an empty row.
         expect(sendButton, findsNothing);
-        // The take is thrown away, nothing was said: the suggestion is still the way to start.
+        expect(find.text(line), findsNothing);
+        expect(find.byKey(const ValueKey('first-session-line')), findsNothing);
+        // The take is thrown away, nothing was said: both are the way to start again.
         voice.clear();
         await tester.pump(const Duration(seconds: 3));
         await settleSend(tester);
         expect(sendButton, findsOneWidget);
+        expect(find.text(line), findsOneWidget);
         expect(app.firstSessionLine, isNotNull);
         await tester.pumpWidget(const SizedBox());
-      },
-    );
+      });
+    }
   });
 }

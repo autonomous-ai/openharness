@@ -1111,8 +1111,10 @@ class _TerminalPageState extends State<TerminalPage>
       final typed = _preTypedStarter(session);
       if ((fresh || typed != null) &&
           session != null &&
-          const ['claude', 'codex', 'opencode'].contains(session.engineId) &&
-          !VoiceLine.shows(widget.voice)) {
+          const ['claude', 'codex', 'opencode'].contains(session.engineId)) {
+        // A take is on: the mic's own face speaks, and the suggestion waits with its line — a line
+        // left over an empty row would point at nothing. Both are back if the take is dropped.
+        if (VoiceLine.shows(widget.voice)) return null;
         final suggestion = typed ?? firstTaskIdeas.first;
         return _FirstSessionSuggestion(
           line: line,
