@@ -9,8 +9,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, join } from 'node:path'
 import type { CoreApi, TurnDelivery } from '../core/api.js'
 import { shellQuote } from '../orchestrator/prompts.js'
-import { agentCommandPrefix } from './shortCommand.js'
-import { env } from '../config/env.js'
+import { agentCommandPrefix, fullCommandPrefix } from './shortCommand.js'
 import { readAuthSession } from '../lib/authSession.js'
 import { computerId } from '../lib/daemonState.js'
 import { noticeReason, WithheldDeliveries } from './withheld.js'
@@ -85,8 +84,8 @@ export interface SuperTabHostOptions {
   agentCommand?: (core: CoreApi, machineId: string) => Promise<string>
 }
 
-const defaultAgentCommand = (core: CoreApi, machineId: string) => agentCommandPrefix(core.daemon, core.dataDir, machineId,
-  { port: env.PORT, dataDir: env.ADAPTER_DATA_DIR, machineId: () => readAuthSession()?.machineId || computerId() })
+const defaultAgentCommand = (core: CoreApi, machineId: string) => agentCommandPrefix(core.daemon, machineId,
+  () => readAuthSession()?.machineId || computerId())
 export const hostJournalFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `host-${machineId}.json`)
 /** How long after an add the roster may ask for another (a roster read may predate the add), and the first wait after a
  *  failed one. Each try probes every engine's account (about 14 login shells), so the wait doubles up to half an hour:
@@ -602,7 +601,7 @@ export class SuperTabHost {
       files = downloaded.text
       if (downloaded.complete) this.files.set(deliveryId, files)
     }
-    this.prefix ??= this.agentCommand(this.core, this.machineId)
+    this.prefix ??= this.agentCommand(this.core, this.machineId).catch(() => fullCommandPrefix(this.core.daemon, this.machineId))
     const command = await this.prefix
     if (this.stopped || this.journal.entries[deliveryId] !== entry) return
     this.authorized.set(id, this.now() + 2_500)

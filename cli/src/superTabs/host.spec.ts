@@ -448,6 +448,17 @@ describe('the super-tab command in delivered input', () => {
     expect(agentCommand).toHaveBeenCalledTimes(1)
     expect(agentCommand).toHaveBeenCalledWith(t.core, 'machine-1')
   })
+  it('falls back to the full command when the lookup fails, and does not ask again', async () => {
+    const t = setup()
+    const agentCommand = vi.fn(async () => { throw new Error('no shell') })
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), agentCommand }); hosts.push(host)
+    await host.tick()
+    expect(String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]))
+      .toContain(`Read its state: ${t.core.daemon.command} super-tab --port ${t.core.daemon.port} --machine 'machine-1' --tab 'tab' --agent 'agent' status`)
+    t.event('rejected', 'team_waiting_busy')
+    await host.tick()
+    expect(agentCommand).toHaveBeenCalledTimes(1)
+  })
   it('keeps the daemon\'s full command when nothing proves a shorter one works (no launcher is looked up in a spec)', async () => {
     const t = setup()
     const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn() }); hosts.push(host)
