@@ -16,9 +16,11 @@ import 'package:harness_mobile/phone/new_agent_draft.dart';
 import 'package:harness_mobile/phone/new_agent_page.dart';
 import 'package:harness_mobile/phone/phone_shell.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
+import 'package:harness_mobile/phone/first_task_suggestion.dart';
 import 'package:harness_mobile/phone/terminal_page.dart';
 import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/phone/voice_input_controller.dart';
+import 'package:harness_mobile/phone/voice_mic_button.dart';
 import 'package:harness_mobile/phone/welcome/onboarding_copy.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/state/app_state.dart';
@@ -174,99 +176,164 @@ void main() {
     );
     await openAgent(agentId);
     await waitFor(find.text(OnboardingCopy.micSayWhat));
-    for (final idea in firstTaskIdeas) {
-      expect(find.text(idea, findRichText: true), findsOneWidget);
+    expect(find.text(firstTaskIdeas.first, findRichText: true), findsOneWidget);
+    for (final other in firstTaskIdeas.skip(1)) {
+      expect(find.text(other, findRichText: true), findsNothing);
     }
-    await shot('first-session-chips');
+    await shot('first-session-suggestion');
 
-    // A chip sends its text at once, and the computer gets it. (The sample never spends the line:
-    // a sample's sends do not answer the onboarding — `_onLineSent` — so its chips stay; the real
-    // page below shows them go.)
-    await tester.tap(find.text(firstTaskIdeas.last, findRichText: true));
+    // Send sends the suggestion at once, and the computer gets it. (The sample never spends the
+    // line: a sample's sends do not answer the onboarding — `_onLineSent` — so its suggestion stays;
+    // the real page below shows it go.)
+    await tester.tap(find.byKey(FirstSessionSuggestion.sendKey));
     await wait(200);
-    await shot('chip-tapped-sent');
+    await shot('send-tapped');
     await wait(2500);
-    expect(screenOf(agentId), contains('> ${firstTaskIdeas.last}'));
+    expect(screenOf(agentId), contains('> ${firstTaskIdeas.first}'));
     await shot('task-on-the-computer');
 
-    // The production page over a fake transport: the chips go once a tap has been sent.
-    final sent = <(String, Object)>[];
-    late TerminalSession session;
-    final app = AppNotifier(
-      config: AppConfig.dev,
-      authSession: AuthSession(),
-      configStore: null,
-    );
-    session =
-        TerminalSession(
+    // The production page over a fake transport, and the production voice controller over a fake
+    // recorder and recognizer: no microphone, no network. A page is opened for each run.
+    final language = ValueNotifier('en');
+    addTearDown(language.dispose);
+    Future<
+      ({
+        AppNotifier app,
+        TerminalSession session,
+        VoiceInputController voice,
+        FakeTranscriber transcriber,
+        List<(String, Object)> sent,
+      })
+    >
+    openRealPage({
+      TerminalSessionStatus status = TerminalSessionStatus.controlling,
+    }) async {
+      final sent = <(String, Object)>[];
+      late TerminalSession session;
+      final app = AppNotifier(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+      );
+      session =
+          TerminalSession(
+              machineId: 'm',
+              agentId: 'a',
+              agentName: 'Agent',
+              engineId: 'claude',
+              send: (type, payload) async {
+                sent.add((type, payload));
+                if (type == 'message') {
+                  session.terminal.write(
+                    '\r\n> ${(payload as Map)['content']}\r\n⏺ On it.\r\n',
+                  );
+                }
+                return true;
+              },
+              sendBinary: (frame) async => true,
+            )
+            ..status = status
+            ..streamId = 'stream';
+      app.adoptSessionForTest(session);
+      // What the agent had drawn before the first message: its welcome and an empty prompt.
+      session.seedScreen(
+        Terminal(maxLines: 500)..write(
+          '\u2554 Welcome to Claude Code!\r\n  cwd: ~/code/web\r\n\r\n> ',
+        ),
+      );
+      final transcriber = FakeTranscriber();
+      final voice = VoiceInputController(
+        transcriber: transcriber.call,
+        recorder: FakeVoiceRecorder(),
+        language: language,
+      );
+      app.firstSessionLine = (
+        machineId: 'm',
+        agentId: 'a',
+        text: OnboardingCopy.micSayWhat,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: TerminalPage(
+            notifier: app,
             machineId: 'm',
             agentId: 'a',
-            agentName: 'Agent',
-            engineId: 'claude',
-            send: (type, payload) async {
-              sent.add((type, payload));
-              if (type == 'message') {
-                session.terminal.write(
-                  '\r\n> ${(payload as Map)['content']}\r\n⏺ On it.\r\n',
-                );
-              }
-              return true;
-            },
-            sendBinary: (frame) async => true,
-          )
-          ..status = TerminalSessionStatus.controlling
-          ..streamId = 'stream';
-    app.adoptSessionForTest(session);
-    // What the agent had drawn before the first message: its welcome and an empty prompt.
-    session.seedScreen(
-      Terminal(
-        maxLines: 500,
-      )..write('\u2554 Welcome to Claude Code!\r\n  cwd: ~/code/web\r\n\r\n> '),
-    );
-    final language = ValueNotifier('en');
-    final voice = VoiceInputController(
-      transcriber: FakeTranscriber().call,
-      recorder: FakeVoiceRecorder(),
-      language: language,
-    );
-    app.firstSessionLine = (
-      machineId: 'm',
-      agentId: 'a',
-      text: OnboardingCopy.micSayWhat,
-    );
-    await tester.pumpWidget(
-      MaterialApp(
-        debugShowCheckedModeBanner: false,
-        theme: grid.buildAppTheme(brightness: Brightness.dark),
-        home: TerminalPage(
-          notifier: app,
-          machineId: 'm',
-          agentId: 'a',
-          voice: voice,
+            voice: voice,
+          ),
         ),
-      ),
-    );
-    await waitFor(find.text(OnboardingCopy.micSayWhat));
-    await shot('first-session-chips-app-page');
-    await tester.tap(find.text(firstTaskIdeas.first));
-    await wait(300);
-    await shot('chip-tapped-sent-app-page');
-    await wait(1500);
-    expect(
-      [
-        for (final m in sent)
-          if (m.$1 == 'message') (m.$2 as Map)['content'],
-      ],
-      [firstTaskIdeas.first],
-    );
-    expect(app.firstSessionLine, isNull);
-    for (final idea in firstTaskIdeas) {
-      expect(find.text(idea), findsNothing);
+      );
+      await waitFor(find.text(OnboardingCopy.micSayWhat));
+      return (
+        app: app,
+        session: session,
+        voice: voice,
+        transcriber: transcriber,
+        sent: sent,
+      );
     }
-    await shot('chips-gone-app-page');
-    await tester.pumpWidget(const SizedBox());
-    voice.dispose();
-    language.dispose();
-    app.dispose();
+
+    Future<void> closeRealPage(
+      VoiceInputController voice,
+      AppNotifier app,
+    ) async {
+      await tester.pumpWidget(const SizedBox());
+      voice.dispose();
+      app.dispose();
+    }
+
+    List<Object?> messages(List<(String, Object)> sent) => [
+      for (final m in sent)
+        if (m.$1 == 'message') (m.$2 as Map)['content'],
+    ];
+    final send = find.byKey(FirstSessionSuggestion.sendKey);
+    bool sendEnabled() =>
+        tester
+            .widget<FirstSessionSuggestion>(find.byType(FirstSessionSuggestion))
+            .onSend !=
+        null;
+
+    // Send is disabled while the session does not take input (here resyncing), and wakes with it.
+    final waiting = await openRealPage(status: TerminalSessionStatus.resyncing);
+    expect(sendEnabled(), isFalse);
+    await shot('send-disabled-app-page');
+    await tester.tap(send, warnIfMissed: false);
+    await wait(300);
+    expect(messages(waiting.sent), isEmpty);
+    waiting.session.status = TerminalSessionStatus.controlling;
+    waiting.session.notifyListeners();
+    await wait(300);
+    expect(sendEnabled(), isTrue);
+    await shot('send-enabled-app-page');
+
+    // One tap sends exactly the suggestion once, and the suggestion goes with the line.
+    await tester.tap(send);
+    await tester.tap(send, warnIfMissed: false);
+    await wait(300);
+    await shot('send-tapped-app-page');
+    await wait(1500);
+    expect(messages(waiting.sent), [firstTaskIdeas.first]);
+    expect(waiting.app.firstSessionLine, isNull);
+    expect(send, findsNothing);
+    expect(find.text(firstTaskIdeas.first), findsNothing);
+    await shot('suggestion-gone-app-page');
+    await closeRealPage(waiting.voice, waiting.app);
+
+    // The mic is the other way in: the real controller and mic button, an injected transcript.
+    final spoken = await openRealPage();
+    await shot('voice-suggestion-app-page');
+    spoken.transcriber.replies.add('add a login page');
+    await tester.tap(find.byType(VoiceMicButton));
+    await wait(600);
+    expect(spoken.voice.status, VoiceInputStatus.listening);
+    await shot('voice-listening-app-page');
+    await tester.tap(find.byType(VoiceMicButton));
+    await wait(1500);
+    expect(messages(spoken.sent), ['add a login page']);
+    expect(spoken.app.firstSessionLine, isNull);
+    expect(send, findsNothing);
+    await shot('voice-sent-suggestion-gone-app-page');
+    await closeRealPage(spoken.voice, spoken.app);
   });
 }
