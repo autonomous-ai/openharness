@@ -344,13 +344,12 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
       final running = shortVersion(runningFull);
       // hn and the CLI come as one runtime: one of them new marks both waiting, so a part whose
       // waiting version is the one it runs has nothing new.
-      final waiting =
-          part?['available'] == true &&
-          (nextFull == null || nextFull != runningFull);
-      // The same release, a later build of it (a package built from a later commit).
-      final next = nextFull != null && shortVersion(nextFull) == running
-          ? '$running (newer build)'
-          : shortVersion(nextFull);
+      // The OS only for a newer release, never a later build of the one it runs.
+      final waiting = key == 'os'
+          ? _app.osNewRelease(_id)
+          : part?['available'] == true &&
+                (nextFull == null || nextFull != runningFull);
+      final next = shortVersion(nextFull);
       return SettingsRow(
         key: ValueKey('version-$key'),
         title: title,
