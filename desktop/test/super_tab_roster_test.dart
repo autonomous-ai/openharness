@@ -6,6 +6,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/core/relative_time.dart';
 import 'package:harness/notify/alert_sounds.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/harness_activity.dart';
@@ -158,6 +159,384 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  String rowTooltip(WidgetTester tester, RosterFixture f, int agent) => tester
+      .widgetList<Tooltip>(
+        find.ancestor(of: f.row(agent), matching: find.byType(Tooltip)),
+      )
+      .single
+      .message!;
+
+  testWidgets(
+    'agent tooltip combines known model, machine, task and activity',
+    (tester) async {
+      final f = await fixture(tester);
+      final lastActive = DateTime.now().subtract(const Duration(hours: 2));
+      (f.server.state['agents'] as List)[1]['configuration'] = {
+        'engine': 'claude',
+        'model': 'opus',
+      };
+      (f.server.state['conversations'] as List)[1]['assignment'] = {
+        'agentId': 'agent-1',
+        'status': 'working',
+      };
+      f.app.stateOf('m')!.agents = [
+        Agent(
+          id: 'a1',
+          name: 'Multiply',
+          engine: 'claude',
+          lastActivityAt: lastActive,
+        ),
+      ];
+      await f.controller.refresh();
+      await f.show(tester);
+      expect(
+        rowTooltip(tester, f, 1),
+        'Claude opus · Test host · Working on "Offline editing" · Last active 2 hours ago',
+      );
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: Offset.zero);
+      await mouse.moveTo(tester.getCenter(f.row(1)));
+      await tester.pumpAndSettle(const Duration(milliseconds: 800));
+      expect(find.text(rowTooltip(tester, f, 1)), findsOneWidget);
+      await mouse.removePointer();
+      await f.close(tester);
+    },
+  );
+
+  testWidgets('agent tooltip omits data that neither state nor host knows', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    await f.show(tester, nativeState: false);
+    expect(rowTooltip(tester, f, 0), 'Codex');
+    await tester.tap(f.row(0));
+    await tester.pumpAndSettle();
+    for (final absent in [
+      'Model',
+      'Task',
+      'Latest PR',
+      'Machine',
+      'Working folder',
+      'Permission mode',
+      'Started',
+      'Who can answer',
+    ]) {
+      expect(find.text(absent), findsNothing);
+    }
+    await f.close(tester);
+  });
+
+  testWidgets('agent tooltip keeps native input need above active work', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    (f.server.state['conversations'] as List)[1]['assignment'] = {
+      'agentId': 'agent-1',
+      'status': 'working',
+    };
+    f.app.stateOf('m')!.agents = const [
+      Agent(
+        id: 'a1',
+        name: 'Multiply',
+        engine: 'claude',
+        launchState: 'failed',
+        launchError: 'RESUME_UNCONFIRMED',
+      ),
+    ];
+    await f.controller.refresh();
+    await f.show(tester);
+    expect(f.activity(tester, 1), HarnessActivity.needsInput);
+    expect(rowTooltip(tester, f, 1), contains('Needs input'));
+    expect(rowTooltip(tester, f, 1), isNot(contains('Working on')));
+    await f.close(tester);
+  });
+
+  testWidgets('agent tooltip shortens a long task title to one line', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    await tester.binding.setSurfaceSize(const Size(1000, 700));
+    final title = 'A long task title ' * 12;
+    (f.server.state['conversations'] as List)[1]
+      ..['title'] = title
+      ..['assignment'] = {'agentId': 'agent-1', 'status': 'working'};
+    await f.controller.refresh();
+    await f.show(tester);
+    final tooltip = rowTooltip(tester, f, 1);
+    expect(tooltip, contains('…'));
+    expect(tooltip, isNot(contains(title)));
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(f.row(1)));
+    await tester.pumpAndSettle(const Duration(milliseconds: 800));
+    final text = find.text(tooltip);
+    expect(text, findsOneWidget);
+    expect(tester.getSize(text).height, lessThan(30));
+    await mouse.removePointer();
+    await f.close(tester);
+  });
+
+  testWidgets('agent details link the held task and latest group PR', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    final started = DateTime.utc(2026, 10, 21, 9, 15);
+    (f.server.state['conversations'] as List)[1]['assignment'] = {
+      'agentId': 'agent-1',
+      'status': 'working',
+    };
+    f.server.append(
+      'Earlier PR https://github.com/acme/project/pull/41',
+      conversationId: 'offline',
+    );
+    f.server.messages.last['author'] = {
+      'kind': 'agent',
+      'id': 'agent-1',
+      'name': 'Multiply',
+    };
+    f.server.append(
+      'Current PR https://github.com/acme/project/pull/42',
+      conversationId: 'offline',
+    );
+    f.server.messages.last['author'] = {
+      'kind': 'agent',
+      'id': 'agent-1',
+      'name': 'Multiply',
+    };
+    f.app.stateOf('m')!.agents = [
+      Agent(
+        id: 'a1',
+        name: 'Multiply',
+        engine: 'claude',
+        project: const AgentProject(name: 'project', cwd: '/work/project'),
+        permissionMode: 'auto',
+        createdAt: started,
+      ),
+    ];
+    await f.controller.refresh();
+    await f.show(tester);
+    await tester.tap(f.row(1));
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Offline editing'), findsOneWidget);
+    expect(
+      find.byTooltip('https://github.com/acme/project/pull/42'),
+      findsOneWidget,
+    );
+    expect(
+      find.byTooltip('https://github.com/acme/project/pull/41'),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('Test host'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('/work/project'), findsOneWidget);
+    expect(find.text('Auto-approve'), findsOneWidget);
+    expect(find.text(fullDateTime(started)), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Offline editing'));
+    await tester.pumpAndSettle();
+    expect(f.controller.selectedId, 'offline');
+    expect(find.byType(AlertDialog), findsNothing);
+    await f.close(tester);
+  });
+
+  testWidgets('current task result PR beats older group messages', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    (f.server.state['conversations'] as List)[1]['assignment'] = {
+      'agentId': 'agent-1',
+      'status': 'working',
+      'result': 'https://github.com/acme/project/pull/42',
+    };
+    f.server.append(
+      'Old PR https://github.com/acme/project/pull/41',
+      conversationId: 'offline',
+    );
+    await f.controller.refresh();
+    await f.show(tester);
+    await tester.tap(f.row(1));
+    await tester.pumpAndSettle();
+    expect(
+      find.byTooltip('https://github.com/acme/project/pull/42'),
+      findsOneWidget,
+    );
+    expect(
+      find.byTooltip('https://github.com/acme/project/pull/41'),
+      findsNothing,
+    );
+    await f.close(tester);
+  });
+
+  testWidgets('details find a PR in older group message pages', (tester) async {
+    final f = await fixture(tester);
+    (f.server.state['conversations'] as List)[1]['assignment'] = {
+      'agentId': 'agent-1',
+      'status': 'working',
+    };
+    f.server.append(
+      'PR https://github.com/acme/project/pull/42',
+      conversationId: 'offline',
+    );
+    f.server.messages.last['author'] = {
+      'kind': 'agent',
+      'id': 'agent-1',
+      'name': 'Multiply',
+    };
+    for (var i = 0; i < 105; i++) {
+      f.server.append('Update $i', conversationId: 'offline');
+    }
+    await f.controller.refresh();
+    await f.show(tester);
+    await tester.tap(f.row(1));
+    await tester.pumpAndSettle();
+    expect(
+      find.byTooltip('https://github.com/acme/project/pull/42'),
+      findsOneWidget,
+    );
+    await f.close(tester);
+  });
+
+  testWidgets('details ignore another agent’s later PR in the same group', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    (f.server.state['conversations'] as List)[1]['assignment'] = {
+      'agentId': 'agent-1',
+      'status': 'working',
+    };
+    f.server.append(
+      'My PR https://github.com/acme/project/pull/42',
+      conversationId: 'offline',
+    );
+    f.server.messages.last['author'] = {
+      'kind': 'agent',
+      'id': 'agent-1',
+      'name': 'Multiply',
+    };
+    f.server.append(
+      'Other PR https://github.com/acme/project/pull/43',
+      conversationId: 'offline',
+    );
+    f.server.messages.last['author'] = {
+      'kind': 'agent',
+      'id': 'agent-3',
+      'name': 'Divide',
+    };
+    await f.controller.refresh();
+    await f.show(tester);
+    await tester.tap(f.row(1));
+    await tester.pumpAndSettle();
+    expect(
+      find.byTooltip('https://github.com/acme/project/pull/42'),
+      findsOneWidget,
+    );
+    expect(
+      find.byTooltip('https://github.com/acme/project/pull/43'),
+      findsNothing,
+    );
+    await f.close(tester);
+  });
+
+  testWidgets('details stop paging when no PR belongs to this agent', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    (f.server.state['conversations'] as List)[1]['assignment'] = {
+      'agentId': 'agent-1',
+      'status': 'working',
+    };
+    f.server.append(
+      'Other PR https://github.com/acme/project/pull/43',
+      conversationId: 'offline',
+    );
+    f.server.messages.last['author'] = {
+      'kind': 'agent',
+      'id': 'agent-3',
+      'name': 'Divide',
+    };
+    for (var i = 0; i < 350; i++) {
+      f.server.append('Update $i', conversationId: 'offline');
+    }
+    await f.controller.refresh();
+    await f.show(tester);
+    await tester.tap(f.row(1));
+    await tester.pumpAndSettle();
+    expect(find.text('Latest PR'), findsNothing);
+    expect(f.controller.messages('offline').length, 300);
+    expect(f.controller.hasOlder('offline'), isTrue);
+    await f.close(tester);
+  });
+
+  testWidgets('unknown permission mode gets plain wording', (tester) async {
+    final f = await fixture(tester);
+    f.app.stateOf('m')!.agents = const [
+      Agent(
+        id: 'a1',
+        name: 'Multiply',
+        engine: 'claude',
+        permissionMode: 'unmapped-mode-id',
+      ),
+    ];
+    (f.server.state['agents'] as List)[1]['configuration'] = {
+      'engine': 'claude',
+      'contextWindow': 200000,
+      'engineVersion': '1.0',
+    };
+    await f.controller.refresh();
+    await f.show(tester);
+    await tester.tap(f.row(1));
+    await tester.pumpAndSettle();
+    expect(find.text('Unrecognized setting'), findsOneWidget);
+    expect(find.text('unmapped-mode-id'), findsNothing);
+    expect(find.text('Agent name'), findsOneWidget);
+    expect(find.text('Harness'), findsNothing);
+    expect(find.text('Context'), findsNothing);
+    expect(find.text('Version'), findsNothing);
+    await f.close(tester);
+  });
+
+  testWidgets(
+    'question details name the machine owner only for an on-screen question',
+    (tester) async {
+      final f = await fixture(tester);
+      (f.server.state['conversations'] as List)[1]['assignment'] = {
+        'agentId': 'agent-1',
+        'status': 'needs_human',
+        'execution': {'machineOwnerId': 'owner'},
+      };
+      f.app.stateOf('m')!.blockedAgents['a1'] = activityQuestion('a1');
+      await f.controller.refresh();
+      await f.show(tester);
+      expect(
+        rowTooltip(tester, f, 1),
+        contains('Waiting for a person to answer'),
+      );
+      await tester.tap(f.row(1));
+      await tester.pumpAndSettle();
+      expect(find.text('Who can answer'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.text('owner'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.widgetWithText(TextButton, 'Close'));
+      await tester.pumpAndSettle();
+      f.app.stateOf('m')!.blockedAgents.clear();
+      await f.show(tester);
+      await tester.tap(f.row(1));
+      await tester.pumpAndSettle();
+      expect(find.text('Who can answer'), findsNothing);
+      await f.close(tester);
+    },
+  );
+
   testWidgets(
     'owner confirms Remove from Swarm without stopping the native session',
     (tester) async {
@@ -298,7 +677,15 @@ void main() {
     await f.controller.refresh();
     await f.show(tester);
     expect(f.inRow(1, find.text('Rev')), findsOneWidget);
-    expect(f.inRow(1, find.byTooltip('Reviewer')), findsOneWidget);
+    expect(
+      f.inRow(
+        1,
+        find.byWidgetPredicate(
+          (w) => w is Semantics && w.properties.label == 'Reviewer',
+        ),
+      ),
+      findsOneWidget,
+    );
     expect(f.inRow(1, find.text('Dev')), findsNothing);
     expect(f.inRow(3, find.text('Dev')), findsOneWidget);
     expect(f.inRow(0, find.text('PM')), findsOneWidget);
@@ -358,6 +745,10 @@ void main() {
       lessThan(tester.getTopLeft(f.row(3)).dy),
     );
     await tester.tap(f.row(1));
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Open terminal'));
+    await tester.pumpAndSettle();
     expect(f.opened?.harnessId, 'a1');
     expect(f.controller.selectedId, 'offline');
     expect(f.server.posts, isEmpty);
@@ -449,10 +840,8 @@ void main() {
     });
     await tester.pump();
     expect(f.activity(tester, 0), HarnessActivity.done);
-    expect(
-      f.inRow(0, find.byTooltip(HarnessActivity.done.label)),
-      findsOneWidget,
-    );
+    expect(rowTooltip(tester, f, 0), contains('Finished'));
+    expect(f.inRow(0, find.byType(Tooltip)), findsNothing);
     f.app.markAgentSeen('m', 'a0');
     await tester.pump();
     expect(f.activity(tester, 0), HarnessActivity.idle);

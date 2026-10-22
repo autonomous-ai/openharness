@@ -10,8 +10,8 @@ import '../state/harness_activity.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
-import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
+import 'agent_details.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
@@ -49,12 +49,6 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             )
             .firstOrNull
             ?.projectId;
-
-  String _role(SuperTabAgent agent) => c.snapshot!.isLead(agent.id)
-      ? 'Product Manager'
-      : agent.isReviewer
-      ? 'Reviewer'
-      : 'Engineer';
 
   bool _canRemove(SuperTabAgent agent) =>
       c.canWrite && (c.isOwner || agent.contributorId == c.accountId);
@@ -188,62 +182,17 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     return native ?? HarnessActivity.unknown;
   }
 
-  Future<void> _details(SuperTabAgent agent) => showAppDialog<void>(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: Text(c.snapshot!.agentName(agent.id)),
-      content: SizedBox(
-        width: 320,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(_role(agent)),
-            Text(engineIdentity(agent.engine).label),
-            if (agent.name != c.snapshot!.agentName(agent.id))
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text('Harness: ${agent.name}'),
-              ),
-            for (final field in [
-              ('Model', 'model'),
-              ('Effort', 'effort'),
-              ('Context', 'contextWindow'),
-              ('Version', 'engineVersion'),
-            ])
-              if (agent.configuration[field.$2] case final value?)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text('${field.$1}: $value'),
-                ),
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(
-                widget.app?.stateOf(agent.machineId)?.machine.displayName ??
-                    'Machine unavailable',
-              ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Close'),
-        ),
-        FilledButton(
-          onPressed: () {
-            Navigator.pop(context);
-            widget.onOpenAgent(agent);
-          },
-          child: const Text('Open terminal'),
-        ),
-      ],
-    ),
+  Future<void> _details(SuperTabAgent agent) => showSuperTabAgentDetails(
+    context,
+    c,
+    widget.app,
+    agent,
+    widget.onOpenAgent,
   );
 
   Widget _agent(SuperTabAgent agent) {
     final name = c.snapshot!.agentName(agent.id), activity = _activity(agent);
+    final info = SuperTabAgentInfo(c, widget.app, agent, activity: activity);
     final project = c.snapshot!.projects
         .where((p) => p.id == _agentProjectId(agent))
         .firstOrNull;
@@ -251,54 +200,52 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
       grid.AppTheme.surfacePalette,
       terminalThemeStore.value,
     );
-    return GestureDetector(
-      onSecondaryTapUp: (event) async {
-        final choice = await showMenu<String>(
-          context: context,
-          position: RelativeRect.fromLTRB(
-            event.globalPosition.dx,
-            event.globalPosition.dy,
-            event.globalPosition.dx,
-            event.globalPosition.dy,
-          ),
-          items: [
-            const PopupMenuItem(value: 'details', child: Text('Details')),
-            if (_canRemove(c.snapshot?.agent(agent.id) ?? agent))
-              const PopupMenuItem(
-                value: 'remove',
-                child: Text('Remove from Swarm'),
-              ),
-          ],
-        );
-        if (choice == 'details' && mounted) await _details(agent);
-        if (choice == 'remove' && mounted) {
-          final current = c.snapshot?.agent(agent.id);
-          if (current != null && _canRemove(current)) await _remove(current);
-        }
-      },
-      child: ListTile(
-        key: ValueKey('super-member-${agent.id}'),
-        dense: true,
-        minTileHeight: 48,
-        minVerticalPadding: 6,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-        title: Row(
-          children: [
-            Tooltip(
-              message: engineIdentity(agent.engine).label,
-              child: SuperTabAvatar(
+    return Tooltip(
+      message: info.tooltip,
+      constraints: const BoxConstraints(maxWidth: 820),
+      child: GestureDetector(
+        onSecondaryTapUp: (event) async {
+          final choice = await showMenu<String>(
+            context: context,
+            position: RelativeRect.fromLTRB(
+              event.globalPosition.dx,
+              event.globalPosition.dy,
+              event.globalPosition.dx,
+              event.globalPosition.dy,
+            ),
+            items: [
+              const PopupMenuItem(value: 'details', child: Text('Details')),
+              if (_canRemove(c.snapshot?.agent(agent.id) ?? agent))
+                const PopupMenuItem(
+                  value: 'remove',
+                  child: Text('Remove from Swarm'),
+                ),
+            ],
+          );
+          if (choice == 'details' && mounted) await _details(agent);
+          if (choice == 'remove' && mounted) {
+            final current = c.snapshot?.agent(agent.id);
+            if (current != null && _canRemove(current)) await _remove(current);
+          }
+        },
+        child: ListTile(
+          key: ValueKey('super-member-${agent.id}'),
+          dense: true,
+          minTileHeight: 48,
+          minVerticalPadding: 6,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+          title: Row(
+            children: [
+              SuperTabAvatar(
                 identity: 'agent:${agent.id}',
                 name: name,
                 size: 24,
               ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Row(
-                children: [
-                  Flexible(
-                    child: Tooltip(
-                      message: name,
+              const SizedBox(width: 8),
+              Expanded(
+                child: Row(
+                  children: [
+                    Flexible(
                       child: Text(
                         name,
                         maxLines: 1,
@@ -306,12 +253,13 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
                         style: DesktopChrome.control(),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 6),
-                  Tooltip(
-                    message: _role(agent),
-                    child: Semantics(
-                      label: _role(agent),
+                    const SizedBox(width: 6),
+                    Semantics(
+                      label: c.snapshot!.isLead(agent.id)
+                          ? 'Product Manager'
+                          : agent.isReviewer
+                          ? 'Reviewer'
+                          : 'Engineer',
                       excludeSemantics: true,
                       child: Container(
                         padding: const EdgeInsets.symmetric(
@@ -332,27 +280,25 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
                         ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            ActivityMark(
-              activity: activity,
-              color: activityColor(
-                activity,
-                theme,
-                color: appearancePrefsStore.value.prompt.color,
+              const SizedBox(width: 8),
+              ActivityMark(
+                activity: activity,
+                tooltip: false,
+                color: activityColor(
+                  activity,
+                  theme,
+                  color: appearancePrefsStore.value.prompt.color,
+                ),
               ),
-            ),
-          ],
-        ),
-        subtitle: project == null
-            ? null
-            : Padding(
-                padding: const EdgeInsets.only(left: 32),
-                child: Tooltip(
-                  message: project.name,
+            ],
+          ),
+          subtitle: project == null
+              ? null
+              : Padding(
+                  padding: const EdgeInsets.only(left: 32),
                   child: Text(
                     project.name,
                     maxLines: 1,
@@ -360,9 +306,9 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
                     style: DesktopChrome.metadata(),
                   ),
                 ),
-              ),
-        onTap: () => widget.onOpenAgent(agent),
-        onLongPress: () => unawaited(_details(agent)),
+          onTap: () => unawaited(_details(agent)),
+          onLongPress: () => unawaited(_details(agent)),
+        ),
       ),
     );
   }
