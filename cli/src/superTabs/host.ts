@@ -242,15 +242,39 @@ export class SuperTabHost {
         const work = object(c.assignment)
         return work.agentId === agent.id && !['done', 'stopped'].includes(String(work.status))
       })) return
+      // A refusal no retry can change is told to the Lead once: until 2026-10-22 it went only to this machine's log,
+      // and a stopped worker stayed open with no one told why.
+      const refuse = (error: unknown) => {
+        attempt.retryAt = Infinity
+        const why = error === 'AGENT_CHANGED' ? 'it now runs a different session than the one the Swarm started' : 'it was not started by the Swarm'
+        this.log(`This session is not the original Swarm launch (${String(error)}). Remove its stuck contribution.`)
+        const group = (current.conversations as unknown[]).map(object).find(c => identifier(c.leadId) && c.leadId !== agent.id
+          && Array.isArray(c.agentIds) && c.agentIds.includes(agent.id) && c.agentIds.includes(c.leadId))
+        if (!group) return
+        // The operation id makes a restarted host's repeat of the same refusal one message, not two.
+        void backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, {
+          operationId: `stop-refused-${agent.releaseId ?? agent.id}`, asAgentId: agent.id,
+          command: { type: 'message.send', conversationId: group.id, replyTo: null, recipientIds: [group.leadId],
+            text: `Could not stop ${String(member.displayName ?? member.name ?? 'this worker')} on ${this.core.machine.name()}: ${why}. Close it on that machine.` },
+        }).catch(failure => this.log(failure instanceof Error ? failure.message : String(failure)))
+      }
       if (attempt.closed) {
         // A failed acknowledgement can outlive the native stop; a fresh core read must still rule out personal resume.
         const confirmed = await this.core.agents.closeSwarm({ agentId: agent.harnessId })
         if (!confirmed.closed) {
-          if (['NOT_SWARM_STARTED', 'AGENT_CHANGED'].includes(String(confirmed.error))) attempt.retryAt = Infinity
+          if (['NOT_SWARM_STARTED', 'AGENT_CHANGED'].includes(String(confirmed.error))) refuse(confirmed.error)
           throw new Error(confirmed.detail ?? confirmed.error ?? 'The stopped session could not be confirmed.')
         }
       } else {
-        const identity = object(member.startedSession)
+        let identity = object(member.startedSession)
+        if (!identity.creationId && native?.startedBy === 'agent' && !native.resumeOnly && native.sessionId) {
+          // Swarm starts before #1527 recorded no session identity, so their workers were never closed. The start record
+          // names the native creation receipt it dispatched (super-<startId>) and the harness that joined from it; the
+          // receipt is read below and again by the core. A name or folder alone is never proof.
+          const start = Array.isArray(current.starts) ? current.starts.map(object).find(s => s.harnessId === agent.harnessId
+            && object(s.request).machineId === this.machineId && !s.error && s.creationId === `super-${String(s.id)}`) : undefined
+          if (start && identifier(start.creationId)) identity = { creationId: start.creationId, sessionId: native.sessionId, createdAt: new Date(native.registeredAt).toISOString() }
+        }
         let result
         if (!native) {
           // The process snapshot can lag. Only the authoritative core may confirm absence; no lease can close a live row.
@@ -259,14 +283,12 @@ export class SuperTabHost {
           if (native.startedBy !== 'agent' || native.resumeOnly || !identifier(identity.creationId)
             || typeof identity.sessionId !== 'string' || !identity.sessionId || typeof identity.createdAt !== 'string'
             || native.sessionId !== identity.sessionId || native.registeredAt !== Date.parse(identity.createdAt)) {
-            attempt.retryAt = Infinity
-            this.log('This session is not the original Swarm launch. Remove its stuck contribution.')
+            refuse(native.startedBy === 'agent' && !native.resumeOnly && identifier(identity.creationId) ? 'AGENT_CHANGED' : 'NOT_SWARM_STARTED')
             return
           }
           const creation = await this.core.agents.creationStatus?.(identity.creationId)
           if (creation?.state === 'created' && creation.agentId !== agent.harnessId) {
-            attempt.retryAt = Infinity
-            this.log('This session is not the original Swarm launch. Remove its stuck contribution.')
+            refuse('NOT_SWARM_STARTED')
             return
           }
           if (creation?.state !== 'created') throw new Error('The original Swarm launch could not be confirmed. Stop will retry with backoff.')
@@ -282,7 +304,7 @@ export class SuperTabHost {
             creationId: identity.creationId, sessionId: identity.sessionId, createdAt: identity.createdAt })
         }
         if (!result.closed) {
-          if (['NOT_SWARM_STARTED', 'AGENT_CHANGED'].includes(String(result.error))) attempt.retryAt = Infinity
+          if (['NOT_SWARM_STARTED', 'AGENT_CHANGED'].includes(String(result.error))) refuse(result.error)
           throw new Error(result.detail ?? result.error ?? 'Could not stop this Swarm worker.')
         }
         attempt.closed = true
