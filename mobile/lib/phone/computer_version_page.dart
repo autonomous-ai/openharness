@@ -13,6 +13,13 @@ import 'tty.dart';
 import 'tty_controls.dart';
 import 'unlock_computer_page.dart';
 
+/// A version as a person reads it: the release, without the build pacman names a package by
+/// (`0.1.8.r1792577066.g8df82cc2bc-1` is `0.1.8`). Anything else as it is.
+String? shortVersion(String? version) {
+  if (version == null) return null;
+  return RegExp(r'^\d+\.\d+\.\d+').firstMatch(version)?.group(0) ?? version;
+}
+
 /// Computers ▸ a Harness OS computer ▸ Version: what it runs, part by part — its OS, hn and the CLI
 /// (CLI osDevice.ts `update.parts`) — with a dot where a new one waits, and its Update.
 ///
@@ -161,7 +168,7 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
 
   String _versionsNow() {
     final parts = _app.osParts(_id);
-    String? of(String key) => parts[key]?['running'] as String?;
+    String? of(String key) => shortVersion(parts[key]?['running'] as String?);
     // A daemon that does not name its parts (released before them) still says which CLI it runs.
     final update = _app.osStatus[_id]?['update'];
     final cli =
@@ -332,8 +339,8 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
 
     SettingsRow row(String key, String title) {
       final part = parts[key];
-      final running = part?['running'] as String?;
-      final next = part?['next'] as String?;
+      final running = shortVersion(part?['running'] as String?);
+      final next = shortVersion(part?['next'] as String?);
       final waiting = part?['available'] == true;
       return SettingsRow(
         key: ValueKey('version-$key'),
