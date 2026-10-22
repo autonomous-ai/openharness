@@ -65,7 +65,7 @@ export class ContributedMachines {
         for (const id of ids) if (await this.core.agents.stopped?.(id)) stopped.push(id)
         const running = ids.filter(id => !!this.core.agents.byAgent(id) && !stopped.includes(id))
         const pending = list(row.starts)
-        const signature = JSON.stringify([pool.generation, [...running].sort(), [...stopped].sort(), row.paused === true || pool.paused === true,
+        const signature = JSON.stringify([row.reservations, pool.generation, [...running].sort(), [...stopped].sort(), row.paused === true || pool.paused === true,
           pending.map(start => start.id).sort()])
         const last = this.published.get(String(row.tabId))
         if (!last || last.signature !== signature || began - last.at >= MACHINE_HEARTBEAT_MS) {
@@ -86,7 +86,9 @@ export class ContributedMachines {
           quotas: (Array.isArray(pool.engines) ? pool.engines : []).filter((e): e is string => typeof e === 'string').map(engine => {
             const q = quotaOf(readings, engine, false)
             return { engine, known: q.known, windows: q.windows }
-          }), runningHarnessIds: running, stoppedHarnessIds: stopped }
+          }), runningHarnessIds: running, stoppedHarnessIds: stopped,
+          ...(Array.isArray(row.reservations) ? { stoppedReservations: list(row.reservations).filter(r => stopped.includes(String(r.harnessId))
+            && identifier(r.harnessId) && identifier(r.generation)).map(r => ({ harnessId: r.harnessId, generation: r.generation })) } : {}) }
         try {
           await this.deps.backend(this.core, 'POST', `/api/super-tabs/${row.tabId}/machines/${this.machineId}`, observation)
           this.published.set(String(row.tabId), { at: began, signature })

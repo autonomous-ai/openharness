@@ -60,6 +60,14 @@ describe('contributed machine executor', () => {
     expect(f.open).toHaveBeenCalledOnce()
   })
 
+  it('binds stopped native proof to the current slot reservation generation', async () => {
+    const f = fixture()
+    Object.assign(f.pool, { reservations: [{ harnessId: 'stopped', generation: 'new-contribution' }] })
+    await f.machine.tick()
+    const body = f.backend.mock.calls.find(c => c[1] === 'POST')![3]
+    expect(body).toMatchObject({ stoppedReservations: [{ harnessId: 'stopped', generation: 'new-contribution' }] })
+  })
+
   it('does not connect to a daemon without an explicit contribution', async () => {
     const f = fixture()
     f.backend.mockResolvedValue([{ tabId: 'tab', agent: { id: 'existing-agent' } }])

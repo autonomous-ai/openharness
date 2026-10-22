@@ -40,7 +40,7 @@ interface Entry {
   receipt?: string
 }
 interface Journal { version: 1; machineId: string; entries: Record<string, Entry> }
-interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string } }
+interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string } }
 export interface SuperTabHostOptions {
   now?: () => number
   write?: (file: string, journal: Journal) => void
@@ -65,7 +65,8 @@ const SUPER_TAB_REPLY_STYLE = 'Write to the people in this tab like a helpful co
   + 'Do not show commands, message or sequence ids, field names or error codes. '
   + 'Do not describe your own tools or permission prompts unless that blocks what they asked. '
   + 'Answer each message once: post with --reply-to MESSAGE_ID. If you have already answered a message, do not post again. '
-  + 'When you hand over finished work, give the result with the revision and links they need.'
+  + 'When you hand over finished work, give the result with the revision and links they need. '
+  + 'Lead: when a worker finishes, decide reuse, keep or stop; prefer stop unless more work is coming soon.'
 
 /** Owns only the handoff between a durable backend claim and the core's native input.
  * A process restart never interprets a lost acknowledgement as permission to type twice. */
@@ -88,6 +89,9 @@ export class SuperTabHost {
   private stopped = false
   private running: Promise<void> | null = null
   private stopsRunning: Promise<void> | null = null
+  private readonly releases = new Set<string>()
+  /** Eligibility and failures belong to this stop and native runtime; a new runtime or stop gets a fresh decision. */
+  private readonly releaseAttempts = new Map<string, { signature: string; failures: number; retryAt: number; closed?: true }>()
   private nextStopsAt = 0
   private receiptsRunning: Promise<void> | null = null
   private nextReceiptsAt = 0
@@ -216,6 +220,87 @@ export class SuperTabHost {
     }
   }
 
+  /** Re-read stop intent and native launch authority; require core evidence before confirming removal. */
+  private async releaseWorker(target: HostAgent): Promise<void> {
+    const { tabId, agent } = target
+    const key = `${tabId}:${agent.id}`
+    if (this.releases.has(key) || !this.core.agents.closeSwarm) return
+    const native = this.core.agents.byAgent(agent.harnessId)
+    const signature = JSON.stringify([agent.releaseId, object(agent).startedSession, native
+      ? [native.sessionId, native.registeredAt, native.startedBy, native.resumeOnly, native.processIdentity] : null])
+    const previous = this.releaseAttempts.get(key)
+    const attempt = previous?.signature === signature ? previous : { signature, failures: 0, retryAt: 0, closed: undefined }
+    if (this.now() < attempt.retryAt) return
+    this.releaseAttempts.set(key, attempt)
+    this.releases.add(key)
+    try {
+      const current = object(object(await backend(this.core, 'GET', `/api/super-tabs/${tabId}?asAgentId=${agent.id}`)).state)
+      const member = Array.isArray(current.agents) ? current.agents.map(object).find(a => a.id === agent.id) : undefined
+      if (this.stopped || member?.workDecision !== 'stop' || member.harnessId !== agent.harnessId || member.machineId !== this.machineId || member.releaseId !== agent.releaseId) return
+      if (!Array.isArray(current.conversations) || current.conversations.map(object).some(c => {
+        if (c.leadId === agent.id) return true
+        const work = object(c.assignment)
+        return work.agentId === agent.id && !['done', 'stopped'].includes(String(work.status))
+      })) return
+      if (attempt.closed) {
+        // A failed acknowledgement can outlive the native stop; a fresh core read must still rule out personal resume.
+        const confirmed = await this.core.agents.closeSwarm({ agentId: agent.harnessId })
+        if (!confirmed.closed) {
+          if (['NOT_SWARM_STARTED', 'AGENT_CHANGED'].includes(String(confirmed.error))) attempt.retryAt = Infinity
+          throw new Error(confirmed.detail ?? confirmed.error ?? 'The stopped session could not be confirmed.')
+        }
+      } else {
+        const identity = object(member.startedSession)
+        let result
+        if (!native) {
+          // The process snapshot can lag. Only the authoritative core may confirm absence; no lease can close a live row.
+          result = await this.core.agents.closeSwarm({ agentId: agent.harnessId })
+        } else {
+          if (native.startedBy !== 'agent' || native.resumeOnly || !identifier(identity.creationId)
+            || typeof identity.sessionId !== 'string' || !identity.sessionId || typeof identity.createdAt !== 'string'
+            || native.sessionId !== identity.sessionId || native.registeredAt !== Date.parse(identity.createdAt)) {
+            attempt.retryAt = Infinity
+            this.log('This session is not the original Swarm launch. Remove its stuck contribution.')
+            return
+          }
+          const creation = await this.core.agents.creationStatus?.(identity.creationId)
+          if (creation?.state === 'created' && creation.agentId !== agent.harnessId) {
+            attempt.retryAt = Infinity
+            this.log('This session is not the original Swarm launch. Remove its stuck contribution.')
+            return
+          }
+          if (creation?.state !== 'created') throw new Error('The original Swarm launch could not be confirmed. Stop will retry with backoff.')
+          if (this.stopped) return
+          // Start locally before asking: server clock skew cannot extend authority, and network delay consumes it.
+          const leaseRequestedAt = Date.now()
+          const leased = object(object(await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, {
+            operationId: `close-lease-${randomUUID()}`, asAgentId: agent.id,
+            command: { type: 'agent.stopLease', agentId: agent.id, releaseId: agent.releaseId },
+          })).result)
+          if (typeof leased.durationMs !== 'number' || !Number.isFinite(leased.durationMs) || leased.durationMs <= 0 || leased.durationMs > 120_000) throw new Error('The host could not reserve this native close. Remove a stuck contribution or update its backend.')
+          result = await this.core.agents.closeSwarm({ agentId: agent.harnessId, expiresAt: leaseRequestedAt + leased.durationMs,
+            creationId: identity.creationId, sessionId: identity.sessionId, createdAt: identity.createdAt })
+        }
+        if (!result.closed) {
+          if (['NOT_SWARM_STARTED', 'AGENT_CHANGED'].includes(String(result.error))) attempt.retryAt = Infinity
+          throw new Error(result.detail ?? result.error ?? 'Could not stop this Swarm worker.')
+        }
+        attempt.closed = true
+      }
+      if (this.stopped) return
+      await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, {
+        operationId: `release-${agent.releaseId ?? agent.id}`, asAgentId: agent.id, command: { type: 'agent.remove', agentId: agent.id, releaseId: agent.releaseId },
+      })
+      attempt.retryAt = Infinity
+    } catch (error) {
+      attempt.failures++
+      // Five attempts total; permanent ownership/identity refusals never acquire another lease for this runtime.
+      if (attempt.retryAt !== Infinity) attempt.retryAt = attempt.failures >= 5 ? Infinity
+        : this.now() + [5_000, 15_000, 60_000, 120_000][attempt.failures - 1]!
+      this.log(error instanceof Error ? error.message : String(error))
+    } finally { this.releases.delete(key) }
+  }
+
   /** Retire local intent only after an authoritative terminal delivery state.
    * This runs independently so a slow receipt lookup cannot stall live leases. */
   reconcileReceipts(): Promise<void> {
@@ -274,11 +359,18 @@ export class SuperTabHost {
         this.nextConfigurationsAt = this.now() + 5_000
       })
     }
+    const stopKeys = new Set(data.filter(item => object(item).stopRequested === true).map(item => { const row = object(item); return `${row.tabId}:${object(row.agent).id}` }))
+    for (const key of this.releaseAttempts.keys()) if (!stopKeys.has(key)) this.releaseAttempts.delete(key)
     const seen = new Set<string>()
     for (const item of data) {
       const row = object(item), agent = object(row.agent)
       if (!identifier(row.tabId) || !identifier(agent.id) || !identifier(agent.harnessId) || agent.machineId !== this.machineId) continue
       const target = row as unknown as HostAgent
+      if (row.stopRequested === true) {
+        // Native close may wait on disk or the engine; it must not delay other workers' input leases.
+        void this.releaseWorker(target)
+        continue
+      }
       // Never adopt another live session as a replacement for the recorded harness.
       if (!this.core.agents.byAgent(target.agent.harnessId) || !this.core.agents.terminalAvailable(target.agent.harnessId)) continue
       const path = `/api/super-tabs/${target.tabId}/agents/${target.agent.id}/deliveries`

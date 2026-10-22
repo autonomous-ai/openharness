@@ -16,7 +16,7 @@ export type AgentClosePlan = {
   state: 'waiting' | 'failed'
   detail?: string
 }
-export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean }
+export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean; onlyIfOriginalLaunch?: boolean; expiresAt?: number }
 /** `withoutConversation`: closed while still starting, before Harness could read its conversation, so none is kept. */
 export type AgentCloseResult = { closed?: true; withoutConversation?: true; deferred?: true; cancelled?: true; error?: string; detail?: string; activity?: CloseActivity }
 
@@ -90,10 +90,10 @@ function stillStarting(s: RegisteredSession, at: number): boolean {
 /** What makes two requests the same one: the agent, the mode, and whether it holds only while no tab
  *  shows the agent. A cleanup that finds the agent on screen again must not answer the person's own close. */
 function jobKey(request: AgentCloseRequest): string {
-  return JSON.stringify([request.agentId, request.mode, request.onlyIfHidden === true])
+  return JSON.stringify([request.agentId, request.mode, request.onlyIfHidden === true, request.onlyIfOriginalLaunch === true, request.expiresAt])
 }
 function matches(s: RegisteredSession | undefined, request: AgentCloseRequest, at: number): s is RegisteredSession {
-  if (!s || new Date(s.registeredAt).toISOString() !== request.createdAt) return false
+  if (!s || (request.expiresAt !== undefined && request.expiresAt <= at) || (request.onlyIfOriginalLaunch && (s.startedBy !== 'agent' || s.resumeOnly)) || new Date(s.registeredAt).toISOString() !== request.createdAt) return false
   // Asked of a harness still starting, which has bound its first conversation since the list the request was made
   // from: the same harness, and the close keeps that conversation. Refused as changed, a close sent in the seconds a
   // Codex binds was answered "changed while closing".
@@ -211,7 +211,9 @@ export class CloseAgentService {
     first: AgentCloseResult): Promise<AgentCloseResult> {
     const same = () => {
       const s = this.deps.registry.byAgent(request.agentId)
-      return !this.disposed && (this.revisions.get(request.agentId) ?? 0) === revision && s && harnessIdentity(s) === harness ? s : undefined
+      return !this.disposed && (this.revisions.get(request.agentId) ?? 0) === revision && s && harnessIdentity(s) === harness
+        && (request.expiresAt === undefined || request.expiresAt > this.now())
+        && (!request.onlyIfOriginalLaunch || (s.startedBy === 'agent' && !s.resumeOnly)) ? s : undefined
     }
     let tried = target, result = first, waiting = false
     for (;;) {
@@ -245,6 +247,8 @@ export class CloseAgentService {
       const s = this.deps.registry.byAgent(request.agentId)
       return !this.disposed && (this.revisions.get(request.agentId) ?? 0) === revision
         && s && identity(s) === target
+        && (request.expiresAt === undefined || request.expiresAt > this.now())
+        && (!request.onlyIfOriginalLaunch || (s.startedBy === 'agent' && !s.resumeOnly))
         && (!request.onlyIfHidden || this.deps.openTabs?.isHidden(s)) ? s : undefined
     }
     try {

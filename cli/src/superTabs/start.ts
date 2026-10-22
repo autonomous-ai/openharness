@@ -208,8 +208,21 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
     const matched = profile && profile.sessionId === nativeId && profile.engine === frame.engine ? profile : null
     const configuration = { engine: text(frame.engine) ?? String(request.engine), model: matched?.model ?? null, effort: matched?.effort ?? null,
       contextWindow: number(frame.contextWindow), engineVersion: text(frame.engineVersion) }
-    const joined = start.harnessId ? { result: {} } : requireSuccess(await scoped({ action: 'command', operationId: `joined-${startId}`,
-      command: { type: 'agent.started', startId, harnessId: nativeId, configuration } }))
+    const startedSession = typeof frame.sessionId === 'string' && frame.sessionId && typeof frame.createdAt === 'string' && Number.isFinite(Date.parse(frame.createdAt))
+      ? { sessionId: frame.sessionId, createdAt: frame.createdAt } : undefined
+    // New native frames have their creation time before the engine binds. Wait for its original session identity.
+    if (typeof frame.createdAt === 'string' && !startedSession) return { error: 'START_PENDING', startId, creationId,
+      detail: 'Waiting for the launched engine to record its session identity. Resume this same start request.' }
+    const join = { type: 'agent.started', startId, harnessId: nativeId, configuration }
+    let joined: Json = { result: {} }
+    if (!start.harnessId) {
+      let reply = await scoped({ action: 'command', operationId: `joined-${startId}`, command: { ...join, ...(startedSession ? { startedSession } : {}) } })
+      if (startedSession && ['VALIDATION_ERROR', 'INVALID_REQUEST'].includes(String(reply.error))) {
+        // Older backends retain the launch, but cannot attest its native identity for automatic stopping.
+        reply = await scoped({ action: 'command', operationId: `joined-legacy-${startId}`, command: join })
+      }
+      joined = requireSuccess(reply)
+    }
     await target.request('super_tabs', { action: 'wake' }).catch(() => {})
     await target.request('harness_share_rosters', {}).catch(() => {})
     // A launched agent already runs the routed model. Any other (Codex, a grid model, a machine that does not list the

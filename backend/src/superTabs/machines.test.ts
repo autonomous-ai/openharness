@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createSuperTab, SuperTabError, type AgentStart, type AgentStartRequest, type SuperTabState } from './model.js'
-import { admitMachineStart, type ContributedMachine } from './machines.js'
+import { admitMachineStart, machineSlots, type ContributedMachine } from './machines.js'
 
 const NOW = 1_000_000
 const requirements = { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 50, tools: ['git'], devices: [], quotaRequired: false }
@@ -111,4 +111,17 @@ describe('a start on a contributed machine', () => {
     expect(refusal(f.state, f.request({ permissionMode: 'bypass' }), start)!.message).toContain('Refused: permissionMode')
     expect(refusal(f.state, f.request(), start)).toBeNull()
   })
+})
+
+
+it('keeps durable release receipts authoritative over stale observations and retained starts', () => {
+  const f = setup(), pool = f.state.machines![0]!
+  pool.observation = { ...observation, runningHarnessIds: ['finished'] }
+  f.state.starts = [{ request: { machineId: 'host' }, harnessId: 'finished' } as AgentStart]
+  f.state.releasedHarnesses = [{ machineId: 'host', harnessId: 'finished' }]
+  expect(machineSlots(f.state, pool)).toBe(0)
+  f.state.agents.push({ machineId: 'host', harnessId: 'finished' } as never)
+  expect(machineSlots(f.state, pool)).toBe(0)
+  f.state.harnessReservations = [{ machineId: 'host', harnessId: 'finished', generation: 'new-runtime', renewed: true }]
+  expect(machineSlots(f.state, pool)).toBe(1)
 })

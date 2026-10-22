@@ -34,7 +34,7 @@ import { nativeTurnCursorIn } from '../lib/nativeTurnObservations.js'
 type Payload = Record<string, unknown>
 type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud' | 'superTabs' | 'transcripts'>
 
-const QUERIES: ReadonlySet<string> = new Set(['shown', 'stopped', 'creation_status', 'native_turns', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention'])
+const QUERIES: ReadonlySet<string> = new Set(['shown', 'close_swarm', 'stopped', 'creation_status', 'native_turns', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention'])
 const METHODS: ReadonlySet<string> = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
@@ -68,6 +68,18 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
   switch (query) {
     case 'shown':
       return shownAgents(core)
+    case 'close_swarm': {
+      if (service !== 'superTabs') return { error: 'NOT_SUPER_TABS' }
+      const { agentId, creationId, sessionId, createdAt, expiresAt } = payload
+      if (!/^[A-Za-z0-9_-]{1,160}$/.test(text(agentId)) ||
+          creationId !== undefined && (typeof creationId !== 'string' || !/^[A-Za-z0-9_-]{16,96}$/.test(creationId)) ||
+          sessionId !== undefined && typeof sessionId !== 'string' ||
+          createdAt !== undefined && (typeof createdAt !== 'string' || !Number.isFinite(Date.parse(createdAt))) ||
+          expiresAt !== undefined && (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt))) return { error: 'INVALID_REQUEST' }
+      return { ...await (core.agents.closeSwarm?.({ agentId: agentId as string,
+        ...(typeof creationId === 'string' ? { creationId } : {}), ...(typeof sessionId === 'string' ? { sessionId } : {}),
+        ...(typeof createdAt === 'string' ? { createdAt } : {}), ...(typeof expiresAt === 'number' ? { expiresAt } : {}) }) ?? { error: 'UNSUPPORTED' }) }
+    }
     case 'stopped':
       return { stopped: !!text(payload.agentId) && await core.agents.stopped?.(text(payload.agentId)) === true }
     case 'creation_status':

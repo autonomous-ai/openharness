@@ -702,6 +702,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
 
   let turn = 0
   let open = null
+  let interruptSlow = null
   // The tool `!holdtool` left running: an interrupt flushes its output, marked aborted, before the turn ends.
   let runningTool = null
   // The question dialog `!ask` draws, as the real CLIs draw theirs (the parser's fixtures,
@@ -1549,7 +1550,14 @@ export async function run(engine, config = {}, { native = false } = {}) {
         await new Promise((resolve) => setTimeout(resolve, 1000))
       }
     }
-    if (directive?.[1] === 'slow') await new Promise((resolve) => setTimeout(resolve, Number(directive[2]) || 1000))
+    if (directive?.[1] === 'slow') {
+      await new Promise((resolve) => {
+        const done = () => { clearTimeout(timer); interruptSlow = null; resolve() }
+        const timer = setTimeout(done, Number(directive[2]) || 1000)
+        interruptSlow = done
+      })
+      if (!open) return
+    }
     await finish(`answer ${turn}: ${prompt}`)
   }
 
@@ -1699,6 +1707,15 @@ export async function run(engine, config = {}, { native = false } = {}) {
         continue
       }
       if (pasting) { pasted += part === '\r' ? '\n' : part; continue }
+      if (engine === 'claude' && part === '\x1b' && open && !suggestions(buffer)) {
+        // Observed on real Claude Code 2.1.307: Esc interrupts the response,
+        // then runs a queued follow-up; it does not restore it as an unsent draft.
+        claude({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } })
+        open = null
+        say('(interrupted)\r\n')
+        interruptSlow?.()
+        continue
+      }
       if (part.startsWith('\x1b')) {
         // Esc puts the suggestions away, the draft kept; other keys move nothing here.
         const popup = suggestions(buffer)
@@ -1739,6 +1756,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
           else codex('event_msg', { type: 'turn_aborted', turn_id: open })
           open = null
           say('(interrupted)\r\n')
+          interruptSlow?.()
         } else draw()
       } else if (part === '\r' || part === '\n') {
         const line = expand(buffer)

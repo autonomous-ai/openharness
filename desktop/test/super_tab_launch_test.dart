@@ -853,6 +853,9 @@ void main() {
     expect(prompt, contains('routeDecisionId'));
     expect(prompt, contains('overrideReason'));
     expect(prompt, contains('NO_CANDIDATE'));
+    expect(prompt, contains('reuse, keep or stop'));
+    expect(prompt, contains('prefer stop'));
+    expect(prompt.length, lessThanOrEqualTo(2000));
   });
 
   test('a new Lead starts Claude Code or Codex; other agents stay open to the rest', () async {
