@@ -57,6 +57,7 @@ class SuperTabLaunch {
         saved['phase'] == 'starting' || saved['phase'] == 'joining';
     late final HarnessLaunchIntegration integration;
     integration = HarnessLaunchIntegration(
+      forcedPermissionMode: 'full',
       creationId: saved['creationId'] as String? ?? superTabOperationId(),
       initialTask: saved['initialMessage'] as String?,
       actionLabel: saved['newProject'] == true

@@ -542,6 +542,12 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Add machine'));
       await tester.pumpAndSettle();
+      expect(
+        find.text(
+          'Agents the Swarm starts on this machine run without asking for permission.',
+        ),
+        findsOneWidget,
+      );
       expect(_picker, findsOneWidget);
       expect(
         find.text('This Mac (${f.app.stateOf('m')!.machine.displayName})'),

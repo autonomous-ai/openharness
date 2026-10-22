@@ -76,10 +76,13 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   const refused: string[] = []
   if (request.cwd !== cwd) refused.push(`cwd (this project uses ${cwd} on it)`)
   if (!pool.engines.includes(request.engine)) refused.push(`engine (it contributes ${pool.engines.join(', ') || 'no engines'})`)
-  const settings = (['codexHome', 'gridModel', 'gridName', 'permissionMode'] as const).filter(key => request[key])
+  const settings = (['codexHome', 'gridModel', 'gridName'] as const).filter(key => request[key])
   if (settings.length) refused.push(`${settings.join(', ')} (it runs with its own default account settings, so leave ${settings.length > 1 ? 'them' : 'it'} out)`)
+  if (request.permissionMode !== undefined && request.permissionMode !== 'full') {
+    refused.push('permissionMode (only full is accepted; leave it out to use the machine’s default)')
+  }
   if (refused.length) {
-    fail('OUTSIDE_CONTRIBUTION', `${pool.name} accepts only its contributed project folder, engines and default account settings. Refused: ${refused.join('; ')}.`, 403)
+    fail('OUTSIDE_CONTRIBUTION', `${pool.name} accepts only its contributed project folder, engines and default account settings, with full permissions for Swarm agents. Refused: ${refused.join('; ')}.`, 403)
   }
   if (!pool.observation || now - pool.observation.receivedAt > 45_000) {
     fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')

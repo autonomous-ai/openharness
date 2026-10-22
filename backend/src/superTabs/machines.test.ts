@@ -25,6 +25,19 @@ function refusal(state: SuperTabState, request: AgentStartRequest, start?: Agent
 const refused = (error: SuperTabError) => error.message.split('Refused: ')[1] ?? ''
 
 describe('a start on a contributed machine', () => {
+  it.each(['claude', 'codex'])('admits full permissions for %s, including dispatch rechecks', engine => {
+    const f = setup()
+    expect(refusal(f.state, f.request({ engine, permissionMode: 'full' }))).toBeNull()
+    expect(refusal(f.state, f.request({ engine, permissionMode: 'full' }), { poolGeneration: 'g1' } as AgentStart)).toBeNull()
+  })
+
+  it.each(['ask', 'auto', 'readOnly', 'bypass'])('refuses permission mode %s with an accurate explanation', permissionMode => {
+    const f = setup()
+    const error = refusal(f.state, f.request({ permissionMode }))!
+    expect(error).toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
+    expect(error.message).toContain('permissionMode (only full is accepted; leave it out to use the machine’s default)')
+  })
+
   it('is admitted inside the contribution: its project folder, one of its engines, no account settings', () => {
     const f = setup()
     expect(refusal(f.state, f.request())).toBeNull()
@@ -59,7 +72,7 @@ describe('a start on a contributed machine', () => {
     expect(refusal(f.state, f.request())!.message).toContain('it contributes no engines')
   })
 
-  it.each(['codexHome', 'gridModel', 'gridName', 'permissionMode'] as const)('names %s as the refused account setting, and not its value', field => {
+  it.each(['codexHome', 'gridModel', 'gridName'] as const)('names %s as the refused account setting, and not its value', field => {
     const f = setup()
     const error = refusal(f.state, f.request({ [field]: '/Users/lead/.secret-profile' }))!
     expect(error).toMatchObject({ code: 'OUTSIDE_CONTRIBUTION', status: 403 })
@@ -75,7 +88,7 @@ describe('a start on a contributed machine', () => {
     const error = refusal(f.state, f.request({ cwd: '/elsewhere', engine: 'opencode', codexHome: '/h', permissionMode: 'bypass' }))!
     expect(error.message).toContain('cwd (this project uses /data/swarm-projects/tab/lead on it)')
     expect(error.message).toContain('engine (it contributes claude, codex)')
-    expect(error.message).toContain('codexHome, permissionMode (it runs with its own default account settings, so leave them out)')
+    expect(error.message).toContain('codexHome (it runs with its own default account settings, so leave it out); permissionMode (only full is accepted')
   })
 
   it('says nothing of other projects or machines', () => {

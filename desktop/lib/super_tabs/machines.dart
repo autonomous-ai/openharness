@@ -520,8 +520,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                         Text(
                           'Let the product manager run agents here using this machine’s signed-in accounts.',
                           style: DesktopChrome.text(),
-                        )
-                      else ...[
+                        ),
+                      if (own.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          'Agents the Swarm starts on this machine run without asking for permission.',
+                          style: DesktopChrome.text(),
+                        ),
+                      ] else ...[
                         Text(
                           'To add another computer, install Harness on it and sign in with '
                           'this account, or approve a device with no screen from Machines.',

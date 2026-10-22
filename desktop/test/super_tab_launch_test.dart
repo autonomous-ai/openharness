@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/first_task.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/core/launch_setup.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/harness_attachments.dart';
@@ -35,6 +36,7 @@ class SuperTabFixtureConnection extends WsConn {
   final MemoryStore store;
   final server = ConversationServer();
   final calls = <(String, Map<String, dynamic>)>[];
+  final extraEngines = <String>[];
   final joins = <Map<String, dynamic>>[];
   bool loseCreate = false, loseJoin = false;
   bool failNative = false;
@@ -307,6 +309,8 @@ class SuperTabFixtureConnection extends WsConn {
         'engines': [
           {'engine': 'codex', 'installed': true, 'supportsCodexHome': true},
           {'engine': 'claude', 'installed': true},
+          for (final engine in extraEngines)
+            {'engine': engine, 'installed': true},
         ],
       },
       'codex_profiles_list' => {'profiles': <dynamic>[]},
@@ -377,6 +381,86 @@ class SuperTabLaunchFixture {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test(
+    'Swarm members with no full mode retain their supported launch behavior',
+    () async {
+      for (final engine in ['opencode', 'hermes']) {
+        final f = SuperTabLaunchFixture();
+        f.connection.extraEngines.add(engine);
+        f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+        final box = await f.box(engine: engine);
+        expect(
+          await box.create(),
+          NewHarnessOutcome.created,
+          reason: box.error,
+        );
+        final request = f.connection.calls
+            .firstWhere((c) => c.$1 == 'agent_create')
+            .$2;
+        expect(request['permissionMode'], isNull);
+        expect(request['bypassPermission'], isTrue);
+        expect(
+          box.agentSettingsFor(engine).map((o) => o.id),
+          isNot(contains(NewHarnessController.permissionsId)),
+        );
+      }
+    },
+  );
+
+  for (final engine in ['claude', 'codex']) {
+    for (final kind in ['new Swarm', 'new project', 'member']) {
+      test(
+        '$kind launches $engine in full mode without permission choices',
+        () async {
+          final f = SuperTabLaunchFixture();
+          await f.app.agentPreference.selectPermissionMode(engine, 'ask');
+          await f.app.agentPreference.remember(
+            engine,
+            setup: LaunchSetup(engine: engine, permissionMode: 'ask'),
+          );
+          if (kind != 'new Swarm') {
+            f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+          }
+          final box = await f.box(
+            engine: engine,
+            newProject: kind == 'new project',
+          );
+          expect(
+            box.agentSettingsFor(engine).map((o) => o.id),
+            isNot(contains(NewHarnessController.permissionsId)),
+          );
+          box.advancedOpen = true;
+          expect(box.fields, isNot(contains(NewHarnessField.mode)));
+          box.openLaunchSetting(NewHarnessField.mode);
+          expect(box.field, isNot(NewHarnessField.mode));
+          expect(
+            await box.create(),
+            NewHarnessOutcome.created,
+            reason: box.error,
+          );
+          final request = f.connection.calls
+              .firstWhere((c) => c.$1 == 'agent_create')
+              .$2;
+          expect(request['permissionMode'], 'full');
+          await Future<void>.delayed(Duration.zero);
+          final ordinary = NewHarnessController(
+            f.app,
+            machineId: 'm',
+            engine: engine,
+            folder: '/work/project',
+          );
+          addTearDown(ordinary.dispose);
+          await Future<void>.delayed(Duration.zero);
+          expect(
+            ordinary.agentSettingsFor(engine).map((o) => o.id),
+            contains(NewHarnessController.permissionsId),
+          );
+          expect(ordinary.mode, 'ask');
+        },
+      );
+    }
+  }
+
   test(
     'guest machine access cannot create a Swarm lead under the owner account',
     () async {

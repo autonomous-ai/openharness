@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import { startAgent } from './start.js'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createLaunchRequests } from '../core/agents/launches.js'
+import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
+import type { RegisteredSession } from '../lib/registry.js'
+import type { AgentFrame } from '../lib/agentFrame.js'
+import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
 function fixture(options: { refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; refuseModel?: string; frame?: string; guest?: boolean } = {}) {
   const start = { creationId: 'super-native-receipt', error: null as string | null, request: { machineId: 'target', conversationId: 'group', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
@@ -44,6 +52,135 @@ function fixture(options: { refuse?: string; loseCancel?: boolean; loseFailure?:
   return { scoped, start, request, open, close, loseJoin: () => { lostJoin = true }, forget: () => { nativeState = 'missing' } }
 }
 const switchCall = (f: { request: { mock: { calls: unknown[][] } } }) => f.request.mock.calls.find(c => c[0] === 'agent_update')
+
+describe('Swarm permission mode', () => {
+  it.each(['claude', 'codex'] as const)('starts %s in full mode on direct and contributed hosts', async engine => {
+    for (const hostDispatch of [false, true]) {
+      const f = fixture()
+      Object.assign(f.start.request, { engine, permissionMode: 'ask' })
+      if (hostDispatch) Object.assign(f.start, { poolGeneration: 'pool' })
+      const result = await startAgent({ action: 'resume', tabId: 'tab', startId: 'start', hostDispatch }, f.scoped, where, f.open)
+      expect(result).toMatchObject({ ok: true })
+      const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
+      expect(payload.permissionMode).toBe('full')
+      const argv = buildEngineCommandArgv(engine, { permissionMode: String(payload.permissionMode) })
+      expect(argv).toContain(engine === 'claude' ? '--dangerously-skip-permissions' : '--dangerously-bypass-approvals-and-sandbox')
+    }
+  })
+
+  it.each(['opencode', 'hermes'])('keeps %s launchable through the real native permission validator', async engine => {
+    const f = fixture(), request = f.request.getMockImplementation()!
+    Object.assign(f.start.request, { engine, worktree: false })
+    const folder = mkdtempSync(join(tmpdir(), 'swarm-native-'))
+    const created: Array<Record<string, unknown>> = []
+    const native = createLaunchRequests({
+      receipts: new AgentCreationReceipts(folder),
+      createAgent: () => async input => {
+        created.push(input)
+        return { ok: true, session: { agentId: 'native', engine } as RegisteredSession }
+      },
+      forkAgent: () => null, resumeAgent: () => null, restartAgent: () => null,
+      byAgent: () => undefined, toProject: async () => ({ id: 'native', engine }) as AgentFrame,
+      modelTarget: async () => null,
+    })
+    f.request.mockImplementation(async (type, payload) => {
+      if (type === 'agent_create') {
+        let reply: Record<string, unknown> = {}
+        await native.create({ ...payload, creationId: undefined }, { local: true }, value => { reply = value })
+        if (reply.error) return reply
+      }
+      return request(type, payload)
+    })
+    try {
+      expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+      expect(created).toHaveLength(1)
+      expect(created[0]).toMatchObject({ permissionMode: null, bypassPermission: true })
+    } finally { native.stop(); rmSync(folder, { recursive: true, force: true }) }
+  })
+
+  it('recovers the same legacy start after its accepted reply is lost', async () => {
+    const f = fixture(), scoped = f.scoped.getMockImplementation()!
+    Object.assign(f.start, { poolGeneration: 'pool' })
+    let recorded: string | undefined, accepted = 0
+    f.scoped.mockImplementation(async payload => {
+      const command = payload.command as Record<string, any> | undefined
+      if (command?.type !== 'agent.start') return scoped(payload)
+      const hash = JSON.stringify(command)
+      if (recorded) return recorded === hash ? scoped(payload) : { error: 'OPERATION_REUSED', detail: 'Use a new operation ID for a different request.' }
+      if (command.request.permissionMode) return { error: 'OUTSIDE_CONTRIBUTION', detail: 'Refused: permissionMode (it runs with its own default account settings, so leave it out).' }
+      recorded = hash; accepted++
+      throw new Error('Accepted reply lost')
+    })
+    const input = { action: 'start', tabId: 'tab', operationId: 'same-op', request: f.start.request }
+    await expect(startAgent(input, f.scoped, where, f.open)).rejects.toThrow('Accepted reply lost')
+    expect(await startAgent(input, f.scoped, where, f.open)).toMatchObject({ ok: true, queued: true, startId: 'start' })
+    expect(accepted).toBe(1)
+    expect(f.open).not.toHaveBeenCalled()
+  })
+
+  it('asks the backend for full mode even when the caller asks for another mode', async () => {
+    const f = fixture()
+    await startAgent({ action: 'start', tabId: 'tab', operationId: 'op', request: { ...f.start.request, permissionMode: 'ask' } }, f.scoped, where, f.open)
+    const command = f.scoped.mock.calls[0]![0].command as Record<string, any>
+    expect(command.request.permissionMode).toBe('full')
+  })
+
+  it.each([false, true])('retries an older backend permission refusal once and warns (settled=%s)', async settled => {
+    const f = fixture(), scoped = f.scoped.getMockImplementation()!
+    Object.assign(f.start, { poolGeneration: 'pool', ...(settled ? { harnessId: 'existing', poolSettled: true } : {}) })
+    f.scoped.mockImplementation(async payload => {
+      const command = payload.command as Record<string, any> | undefined
+      if (command?.type === 'agent.start' && command.request.permissionMode) return {
+        error: 'OUTSIDE_CONTRIBUTION', detail: 'Studio Mac accepts only its contributed project folder, engines and default account settings. Refused: permissionMode (it runs with its own default account settings, so leave it out).',
+      }
+      return scoped(payload)
+    })
+    const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'same-op', request: f.start.request }, f.scoped, where, f.open)
+    expect(result).toMatchObject({ ok: true, ...(settled ? { harnessId: 'existing' } : { queued: true }), permissionWarning: expect.stringContaining("machine's default") })
+    const attempts = f.scoped.mock.calls.map(c => c[0]).filter(c => (c.command as any)?.type === 'agent.start')
+    expect(attempts).toHaveLength(2)
+    expect(attempts.map(a => a.operationId)).toEqual(['same-op', 'same-op'])
+    expect((attempts[0]!.command as any).request.permissionMode).toBe('full')
+    expect((attempts[1]!.command as any).request).not.toHaveProperty('permissionMode')
+    expect(f.open).not.toHaveBeenCalled()
+  })
+
+  it('does not retry an uncertain backend reply', async () => {
+    const f = fixture(); f.scoped.mockRejectedValue(new Error('Reply lost'))
+    await expect(startAgent({ action: 'start', tabId: 'tab', operationId: 'op', request: f.start.request }, f.scoped, where, f.open)).rejects.toThrow('Reply lost')
+    expect(f.scoped).toHaveBeenCalledOnce()
+    expect(f.open).not.toHaveBeenCalled()
+  })
+
+  it('ends after the single legacy retry fails', async () => {
+    const f = fixture()
+    f.scoped.mockResolvedValueOnce({ error: 'OUTSIDE_CONTRIBUTION', detail: 'Refused: permissionMode (it runs with its own default account settings, so leave it out).' })
+      .mockResolvedValueOnce({ error: 'MACHINE_OFFLINE', detail: 'Wait for the machine.' })
+    await expect(startAgent({ action: 'start', tabId: 'tab', operationId: 'op', request: f.start.request }, f.scoped, where, f.open)).rejects.toThrow('Wait for the machine.')
+    expect(f.scoped).toHaveBeenCalledTimes(2)
+    expect(f.open).not.toHaveBeenCalled()
+  })
+
+  it('reads an existing native receipt without updating its permission mode', async () => {
+    const f = fixture(), request = f.request.getMockImplementation()!
+    f.request.mockImplementation(async (type, payload) => type === 'agent_create_status'
+      ? { creationId: f.start.creationId, state: 'created', agent: { id: 'native', engine: 'claude', permissionMode: 'ask' } }
+      : request(type, payload))
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+    expect(f.request.mock.calls.some(c => c[0] === 'agent_create' || c[0] === 'agent_update')).toBe(false)
+  })
+
+  it.each([
+    { error: 'OUTSIDE_CONTRIBUTION', detail: 'Refused: codexHome, permissionMode (leave them out).' },
+    { error: 'OUTSIDE_CONTRIBUTION', detail: 'Refused: cwd (wrong folder); permissionMode (leave it out).' },
+    { error: 'FORBIDDEN', detail: 'permissionMode is forbidden' },
+  ])('does not retry an unrelated refusal: $detail', async refusal => {
+    const f = fixture(); f.scoped.mockResolvedValue(refusal)
+    await expect(startAgent({ action: 'start', tabId: 'tab', operationId: 'op', request: f.start.request }, f.scoped, where, f.open)).rejects.toThrow(refusal.detail)
+    expect(f.scoped).toHaveBeenCalledOnce()
+    expect(f.open).not.toHaveBeenCalled()
+  })
+})
 const expectSwitchTo = (f: Parameters<typeof switchCall>[0], selectedModel: string) => {
   const call = switchCall(f)!
   expect(call[1]).toEqual({ agentId: 'native', selectedModel })
