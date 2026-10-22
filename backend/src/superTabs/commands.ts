@@ -8,7 +8,7 @@ import {
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSchema } from './routingPolicy.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
-import { agentProjectId, deleteProject, groupProject, manageProject, mutableProjects, projectMembers, projectOf, readAgent, readConversation, readProject, sameProject } from './projects.js'
+import { agentProjectId, deleteProject, groupProject, inviteLanding, manageProject, mutableProjects, projectMembers, projectOf, readAgent, readConversation, readProject, sameProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -120,7 +120,8 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if (command.type === 'invite.accept') return
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   author(state, actor, !leaving)
-  if ('conversationId' in command) readConversation(state, actor, command.conversationId)
+  // An invitation's group is only where the person lands, and invite.create replaces a deleted one (inviteLanding).
+  if ('conversationId' in command && command.type !== 'invite.create') readConversation(state, actor, command.conversationId)
   if ('projectId' in command && command.projectId) readProject(state, actor, command.projectId)
   if ('agentId' in command) readAgent(state, actor, command.agentId)
   if (command.type === 'agent.start') readConversation(state, actor, command.request.conversationId)
@@ -527,11 +528,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     case 'invite.create': {
       owner(state, actor)
-      conversation(state, command.conversationId)
+      const landing = inviteLanding(state, command.conversationId) ?? fail('NO_PROJECT', 'Create a project before inviting people.')
       const email = command.email.trim().toLowerCase()
       if (state.people.some(p => p.email === email)) fail('ALREADY_MEMBER', 'This person is already in the Super Tab.')
       state.invitations = state.invitations.filter(i => i.email !== email)
-      state.invitations.push({ id: operationId, email, role: command.role, conversationId: command.conversationId,
+      state.invitations.push({ id: operationId, email, role: command.role, conversationId: landing,
         expiresAt: context.now + 7 * 86_400_000 })
       result.inviteId = operationId
       break

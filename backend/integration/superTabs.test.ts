@@ -113,7 +113,8 @@ describe('deleting abandoned swarm projects', () => {
     const state = (await store.read(owner, tab)).state
     expect(state.projects!.map(p => p.id)).toEqual(['lead'])
     expect(state.conversations.map(c => c.id)).toEqual(['lead'])
-    expect(state.invitations).toEqual([])
+    // An invitation is to the Swarm: it moves to the project that is left rather than disappearing.
+    expect(state.invitations.map(i => [i.email, i.conversationId])).toEqual([['abandoned@example.com', 'lead']])
     for (const id of [conversationId, group]) {
       await expect(store.messages(owner, tab, id, {})).rejects.toMatchObject({ code: 'NOT_FOUND' })
       await expect(store.attempts(owner, tab, id)).rejects.toMatchObject({ code: 'NOT_FOUND' })
