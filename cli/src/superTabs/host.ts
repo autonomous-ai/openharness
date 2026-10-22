@@ -3,12 +3,14 @@ import { ContributedMachines } from './machines.js'
 import { retainContributions } from './retention.js'
 import { configurationObservation } from './configuration.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
+import { attachedFiles } from './attachments.js'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { CoreApi, TurnDelivery } from '../core/api.js'
 import { shellQuote } from '../orchestrator/prompts.js'
 import { noticeReason, WithheldDeliveries } from './withheld.js'
+import { attentionOf } from './attention.js'
 
 type Json = Record<string, unknown>
 export class SuperTabHostError extends Error {
@@ -44,6 +46,7 @@ export interface SuperTabHostOptions {
   write?: (file: string, journal: Journal) => void
   log?: (message: string) => void
   observers?: typeof publishObservers
+  attachedFiles?: typeof attachedFiles
 }
 
 export const hostJournalFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `host-${machineId}.json`)
@@ -74,6 +77,10 @@ export class SuperTabHost {
   private readonly log: (message: string) => void
   private retentionError: string | null = null
   private readonly observers: typeof publishObservers
+  private readonly attachedFiles: typeof attachedFiles
+  /** Each delivery's downloaded files, so input held by a busy terminal is not downloaded again on every retry. Only a
+   * complete download is kept: a failed one is tried again before the next delivery of the same message. */
+  private readonly files = new Map<string, string>()
   private readonly active = new Set<string>()
   private readonly authorized = new Map<string, number>()
   private readonly withheld = new WithheldDeliveries()
@@ -90,11 +97,18 @@ export class SuperTabHost {
   private timer: ReturnType<typeof setTimeout> | null = null
   private native: NativeRecorder | null = null
   private machines: ContributedMachines | null = null
+  /** The waits last handed to the core (superTabs/attention.ts); null until the first roster, which is always handed
+   *  over whole, so a restarted service closes what its predecessor raised and no longer holds. */
+  private attention: string | null = null
+  /** The harnesses last handed over waiting, and since when each has been missing from the core's live agents. */
+  private waiting = new Set<string>()
+  private missing = new Map<string, number>()
 
   constructor(private readonly core: CoreApi, readonly machineId: string, options: SuperTabHostOptions = {}) {
     if (!identifier(machineId)) throw new SuperTabHostError('MACHINE_UNAVAILABLE', 'This machine is not signed in.')
     this.file = hostJournalFile(core.dataDir, machineId)
     this.observers = options.observers ?? publishObservers
+    this.attachedFiles = options.attachedFiles ?? attachedFiles
     this.now = options.now ?? Date.now
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
@@ -146,6 +160,14 @@ export class SuperTabHost {
     this.machines?.stop()
     this.authorized.clear()
     try { this.observers(this.core.dataDir, this.machineId, [], 0) } catch { /* The old snapshot expires. */ }
+    // Signed out or another machine: this host's alerts are no longer anyone's. A core that is gone heard nothing, and
+    // the next host's first roster replaces them anyway.
+    if (this.attention !== null && this.attention !== '[]') {
+      try { this.core.superTabs?.attention([]) } catch { /* The next host's first roster replaces them. */ }
+    }
+    this.attention = null
+    this.waiting.clear()
+    this.missing.clear()
     void this.core.turns.leaseDeliveries('superTabs', {})
     for (const id of this.active) this.core.turns.cancelDelivery(id)
     this.active.clear()
@@ -243,6 +265,7 @@ export class SuperTabHost {
       this.retentionError = message
     }
     this.observers(this.core.dataDir, this.machineId, data, requestedAt + 2500)
+    this.publishAttention(data)
     // Runtime observations cannot delay the live input leases. A stale host
     // observation is fenced by the backend's per-agent configuration version.
     if (!this.configurationsRunning && this.now() >= this.nextConfigurationsAt) {
@@ -280,6 +303,7 @@ export class SuperTabHost {
       }
     }
     if (this.stopped) return
+    for (const deliveryId of this.files.keys()) if (!this.journal.entries[deliveryId]) this.files.delete(deliveryId)
     for (const entry of Object.values(this.journal.entries)) {
       const id = typedId(entry)
       if (!seen.has(entry.deliveryId)) {
@@ -293,6 +317,27 @@ export class SuperTabHost {
       }
     }
     await this.leases()
+  }
+
+  /** Hands the core this roster's waits when they changed (or on the first roster). A failed roster read changes
+   *  nothing: a network blip does not close an alert. */
+  private publishAttention(rows: unknown[]): void {
+    // A harness the core's live list misses for a moment (a process-side snapshot between reads, a restart of its
+    // terminal) keeps its wait for 3 s: closing and raising it again would alert twice for the same wait.
+    const now = this.now(), missing = new Map<string, number>()
+    const live = (harnessId: string) => {
+      if (this.core.agents.byAgent(harnessId)) return true
+      const since = this.missing.get(harnessId) ?? now
+      missing.set(harnessId, since)
+      return this.waiting.has(harnessId) && now - since < 3_000
+    }
+    const items = attentionOf(rows, this.machineId, live)
+    this.missing = missing
+    const key = JSON.stringify(items)
+    if (key === this.attention) return
+    this.attention = key
+    this.waiting = new Set(items.map(item => item.agentId))
+    this.core.superTabs?.attention(items)
   }
 
   private retire(deliveryId: string): void {
@@ -348,6 +393,14 @@ export class SuperTabHost {
     if (this.stopped || this.journal.entries[deliveryId] !== entry) return
     const message = object(result.message)
     if (typeof message.text !== 'string' || !identifier(message.conversationId)) throw new Error('The delivery has no message.')
+    // Downloaded before the lease: a large file must not use up the 2.5 s the core gives a write.
+    let files = this.files.get(deliveryId)
+    if (files === undefined) {
+      const downloaded = await this.attachedFiles(message)
+      files = downloaded.text
+      if (downloaded.complete) this.files.set(deliveryId, files)
+    }
+    if (this.stopped || this.journal.entries[deliveryId] !== entry) return
     this.authorized.set(id, this.now() + 2_500)
     if (!(await this.leases()) || this.stopped) { this.authorized.delete(id); return }
     if (this.active.has(id)) return
@@ -356,7 +409,7 @@ export class SuperTabHost {
     entry.stage = 'submitting'
     this.persist()
     this.active.add(id)
-    this.core.turns.deliver(entry.harnessId, this.prompt(entry, message), id)
+    this.core.turns.deliver(entry.harnessId, this.prompt(entry, message, files), id)
   }
 
   private async recordConfigurations(rows: unknown[]): Promise<void> {
@@ -371,7 +424,7 @@ export class SuperTabHost {
     }
   }
 
-  private prompt(entry: Entry, message: Json): string {
+  private prompt(entry: Entry, message: Json, files: string): string {
     const command = `${this.core.daemon.command} super-tab --port ${this.core.daemon.port} --machine ${shellQuote(this.machineId)} --tab ${shellQuote(entry.tabId)} --agent ${shellQuote(entry.agentId)}`
     const group = message.conversationId as string
     const reply = identifier(message.replyTo)
@@ -384,9 +437,10 @@ export class SuperTabHost {
     return `You are participating in a shared Super Tab conversation (${group}). Other humans and agents see messages posted there.\n`
       + `Read its state: ${command} status\nRead this conversation: ${command} messages ${shellQuote(group)}\n`
       + `Reply there: ${command} post ${shellQuote(group)} 'your message' UNIQUE_OPERATION_ID --reply-to ${shellQuote(String(message.id))}\n`
-      + `Manage agreed work and delegation: ${command} help. Leads: route before starting or assigning: ${command} route GROUP JSON. Use independently verifiable outcomes; local helper subagents need no separate group.\n`
+      + `Manage agreed work and delegation: ${command} help. Leads: route before starting or assigning: ${command} route GROUP JSON. Use independently verifiable outcomes. Leads coordinate: multi-part work or work over about 15 minutes goes to Swarm agents in groups; a Lead does only small work itself and uses its own subagents only to read and look things up.\n`
       + `Ask questions and post results in this conversation. ${SUPER_TAB_REPLY_STYLE} Replies to these delivered instructions must be posted here explicitly.\n\n`
       + native + reply + `Message ${String(message.id)} from ${String(object(message.author).name ?? 'a collaborator')}:\n${message.text}`
+      + (files ? `${message.text ? '\n\n' : ''}${files}` : '')
   }
 
   /** Says why the core keeps holding this delivery: once in the log per change of reason, and once to the conversation after 30 s. */

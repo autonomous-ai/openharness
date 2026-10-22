@@ -501,6 +501,46 @@ int main(void) {
         snprintf(M.agents[0].name, sizeof M.agents[0].name, "%s", "an-agent-name-that-is-far-too-long-for-the-toast-to-hold-on-one-line");
         fresh(); ph_toast(&F, &M, pod_model_unread_find(&M, "b"), t0, t0 + 1000);
         for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_TEXT) CHECK(S.runs[i].x + S.runs[i].w <= 640 + 40 - 26 + 2);
+
+        // A Super Tab's question: "name · Super Tab", the question, a still full bar (amber decision, red stuck), its own edge; no timer
+        snprintf(M.agents[0].name, sizeof M.agents[0].name, "%s", "api");
+        pod_model_question_tab(&M, "b", "Staging first, or straight to prod?", "Launch v2", POD_ATTN_DECISION);
+        pod_model_unread_ask(&M, "b", "api", "Staging first, or straight to prod?", t0);
+        u = pod_model_unread_find(&M, "b");
+        for (uint32_t age = POD_TOAST_SLIDE_MS; age <= 60000; age += 4950) {
+            fresh(); ph_toast(&F, &M, u, t0, t0 + age);
+            CHECK(S.count <= 9 && S.runs[0].fg == ht_rgb(0x6A4A1C) && S.runs[0].y == 24);
+            int bars = 0;
+            for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_RECT && S.runs[i].pro_height == 7) {
+                bars++;
+                CHECK(S.runs[i].w == 588 && S.runs[i].x == 66 && S.runs[i].fg == ht_rgb(0xFFB340));   // full, whatever the time
+            }
+            CHECK(bars == 1);
+            const ht_run_t *nm = text_run("api"), *tag = text_run("\xc2\xb7 Launch v2"), *msg = text_run("Staging first, or straight to prod?");
+            CHECK(nm && nm->fg == ht_rgb(PH_TOAST_NAME) && nm->pro_font == &ph_sb_26 && nm->x == 140);
+            CHECK(tag && tag->fg == ht_rgb(0x8EA3BD) && tag->pro_font == &ph_sb_22 && tag->x == nm->x + ht_pro_width(&ph_sb_26, "api") + 7);
+            CHECK(msg && msg->fg == ht_rgb(PH_TOAST_INK) && msg->x == nm->x);
+            CHECK(hits_of(POD_A_BANNER) == 1);
+        }
+        pod_model_question_tab(&M, "b", "Stuck: e2e failed 3 times", "Launch v2", POD_ATTN_STUCK);
+        pod_model_unread_ask(&M, "b", "api", "Stuck: e2e failed 3 times", t0);
+        u = pod_model_unread_find(&M, "b");
+        fresh(); ph_toast(&F, &M, u, t0, t0 + 20000);
+        CHECK(S.runs[0].fg == ht_rgb(0x6A2626) && text_run("api") && text_run("api")->fg == ht_rgb(0xFF8F8F) && text_run("Stuck: e2e failed 3 times"));
+        { int red = 0; for (int i = 0; i < S.count; i++) red += S.runs[i].pro_kind == K_RECT && S.runs[i].w == 588 && S.runs[i].fg == ht_rgb(0xFF5C5C); CHECK(red == 1); }
+        // a long name and Super Tab stay inside the card, the name keeping at least half the line
+        snprintf(M.agents[0].name, sizeof M.agents[0].name, "%s", "an-agent-name-that-is-far-too-long-for-the-toast-to-hold-on-one-line");
+        pod_model_question_tab(&M, "b", "Which?", "A Super Tab whose name is as long as it may be", POD_ATTN_DECISION);
+        fresh(); ph_toast(&F, &M, u, t0, t0 + 1000);
+        for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_TEXT) CHECK(S.runs[i].x + S.runs[i].w <= 640 + 40 - 26 + 2);
+        CHECK(text_prefix("an-agent") && text_prefix("\xc2\xb7 A Super") && text_prefix("\xc2\xb7 A Super")->x - text_prefix("an-agent")->x >= (640 - 2 * 26 - 56 - 18) / 2);
+        // the question answered (or a plain question): back to the timed toast with its default edge
+        pod_model_question_tab(&M, "b", "Which?", NULL, POD_ATTN_STUCK);
+        fresh(); ph_toast(&F, &M, u, t0, t0 + 2500);
+        CHECK(S.runs[0].fg == ht_rgb(PH_TOAST_EDGE) && !text_prefix("\xc2\xb7"));
+        { int half = 0; for (int i = 0; i < S.count; i++) half += S.runs[i].pro_kind == K_RECT && S.runs[i].fg == ht_rgb(PH_TOAST_BAR) && S.runs[i].w == 294; CHECK(half == 1); }
+        pod_model_question_close(&M, "b");
+        CHECK(pod_model_attention(&M, pod_model_find(&M, "b")) == POD_ATTN_NONE && !pod_model_find(&M, "b")->super_tab[0]);
     }
 
     // ---- Agent, Recap, Talk, Inbox, Toast, Update (Task 10) ----
@@ -966,6 +1006,50 @@ int main(void) {
             ph_view_inbox(&F, &N, &M, now);
             CHECK(hits_of(POD_A_FOLLOW) == 0 && hits_of(POD_A_OPEN_NOTIF) == 3 && ph_runs(&F) <= HT_RUNS);
             N.stack[1].scroll = 0;
+        }
+        // Notices: a Super Tab's asking rows (decision, stuck) above a plain entry: "name · Super Tab", "needs you" / "stuck", the edge, the badge
+        {
+            pod_model_unread_clear(&M);
+            pod_model_question_tab(&M, "q", "Staging first, or straight to prod?", "Launch v2", POD_ATTN_DECISION);
+            pod_model_question_tab(&M, "d", "e2e failed 3 times, no write access to staging", "Launch v2", POD_ATTN_STUCK);
+            pod_model_unread_add(&M, "f", "api-retry", "Picked the blue hero image.", 40, now - 300000u);
+            pod_model_clock(&M, now);
+            pod_nav_init(&N);
+            N.depth = 2; N.stack[0].view = POD_V_TABS; N.stack[1].view = POD_V_INBOX;
+            fresh();
+            ph_view_inbox(&F, &N, &M, now);
+            const ht_run_t *nd = text_run("needs you"), *ns = text_run("stuck"), *rq = text_prefix("Staging first"), *rd = text_prefix("e2e failed"), *rf = text_prefix("Picked the blue");
+            CHECK(nd && ns && rq && rd && rf && rq->y < rd->y && rd->y < rf->y && !text_run("asks") && text_run("5m"));
+            CHECK(nd->y < rq->y && ns->y < rd->y && ns->y > rq->y);
+            int tags = 0, badges = 0, rings = 0, amber = 0, red = 0, letters = 0;
+            for (int i = 0; i < S.count; i++) {
+                const ht_run_t *r = &S.runs[i];
+                if (r->pro_kind == K_TEXT && !strcmp(r->text, "\xc2\xb7 Launch v2")) { tags++; CHECK(r->fg == ht_rgb(0x6B4FA3) && r->pro_font == &ph_sb_22); }
+                badges += r->pro_kind == K_RECT_AA && r->w == 34 && r->fg == ht_rgb(0x3B2E55) && r->x == 60 + 110 + 8 - 40 + 3;
+                rings += r->pro_kind == K_RECT_AA && r->w == 40 && r->fg == ht_rgb(PH_ROOM_BG);
+                amber += r->pro_kind == K_RECT_AA && r->w == 470 && r->x == 190 && r->fg == ht_rgb(0xFFB340);
+                red += r->pro_kind == K_RECT_AA && r->w == 470 && r->x == 190 && r->fg == ht_rgb(0xFF5C5C);
+                letters += r->pro_kind == K_RECT_AA && r->fg == ht_rgb(PH_LETTER) && ((r->w == 464 && r->x == 196) || (r->w == 470 && r->x == 190));
+            }
+            CHECK(tags == 2 && badges == 2 && rings == 2 && amber == 1 && red == 1 && letters == 3 && ph_runs(&F) <= HT_RUNS);
+            {   // the tag follows the name on its line
+                const ht_run_t *nm = NULL;
+                for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_TEXT && S.runs[i].y == nd->y && S.runs[i].x == 216) nm = &S.runs[i];
+                CHECK(nm && nm->fg == ht_rgb(PH_LETTER_WHO));
+                int beside = 0;
+                for (int i = 0; i < S.count; i++) if (S.runs[i].pro_kind == K_TEXT && S.runs[i].fg == ht_rgb(0x6B4FA3) && S.runs[i].y == nd->y) beside += S.runs[i].x > nm->x + nm->w - 2;
+                CHECK(beside == 1);
+            }
+            CHECK(hits_of(POD_A_FOLLOW) == 2 && hits_of(POD_A_OPEN_NOTIF) == 1);
+            // closed: a plain row again
+            pod_model_question_close(&M, "q");
+            pod_model_question_close(&M, "d");
+            pod_model_question(&M, "q", "Delete 14 old files?");
+            fresh();
+            ph_view_inbox(&F, &N, &M, now);
+            CHECK(text_run("asks") && !text_run("needs you") && !text_prefix("\xc2\xb7"));
+            pod_model_question_close(&M, "q");
+            pod_model_unread_clear(&M);
         }
         // Notices wakes only when a visible age text turns over ("now", minutes, hours, days), not on a beat: a quiet list is neither redrawn nor rebuilt
         {

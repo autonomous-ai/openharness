@@ -50,7 +50,12 @@ class FakeStream implements TerminalStreamHandle {
     if (!this.holdWrites) return TERMINAL_ACTION_SUCCEEDED
     return new Promise((resolve) => { this.pendingWrites.push(resolve) })
   }
-  async pasteRaw(text: string) { this.pastes.push(text); return TERMINAL_ACTION_SUCCEEDED }
+  /** When set, a paste waits on it, with the check the manager asked to be made as it lands. */
+  pasteLands: ((allowed: (() => boolean) | undefined) => Promise<TerminalActionResult>) | null = null
+  async pasteRaw(text: string, allowed?: () => boolean) {
+    this.pastes.push(text)
+    return this.pasteLands ? this.pasteLands(allowed) : TERMINAL_ACTION_SUCCEEDED
+  }
   async resize(size: { cols: number; rows: number }) { this.sizes.push(size); return TERMINAL_ACTION_SUCCEEDED }
   async scroll(direction: 'up' | 'down', lines: number) { this.scrolls.push({ direction, lines }); return TERMINAL_ACTION_SUCCEEDED }
   async pauseOutput() { this.pauses++; return TERMINAL_ACTION_SUCCEEDED }
@@ -325,28 +330,33 @@ describe('TerminalStreamManager', () => {
       kind: TerminalBinaryKind.input, streamId, seq: 0, compressed: false, bytes: Buffer.from('abc'),
     })
     expect(Buffer.from(stream.writes[0]).toString()).toBe('abc')
+    // Ahead of seq 1, which may still be on its way over the slower wire: it waits for it, and nothing is said.
     await manager.handleBinary('web-1', {
       kind: TerminalBinaryKind.input, streamId, seq: 2, compressed: false, bytes: Buffer.from('out-of-order'),
     })
     expect(stream.writes).toHaveLength(1)
-    expect(sent.at(-1)?.payload.code).toBe('TERMINAL_INPUT_INVALID')
-    // …and says which seq it is still waiting for, so a client that skipped a number can realign
-    // instead of having every later keystroke refused.
-    expect(sent.at(-1)?.payload).toMatchObject({ reason: 'seq', expectedSeq: 1, streamId })
+    expect(sent.map((frame) => frame.payload.code)).not.toContain('TERMINAL_INPUT_INVALID')
 
-    // An oversized frame is refused the same way, with the counter untouched: the next accepted
-    // seq is still 1.
+    // An oversized frame is refused at once, with the counter untouched: the next accepted seq is still 1. The client
+    // numbers its next keys from there, so the one waiting under its old numbering goes: released after them, it
+    // would land after keys typed later than it.
     await manager.handleBinary('web-1', {
       kind: TerminalBinaryKind.input, streamId, seq: 1, compressed: false, bytes: Buffer.alloc(64 * 1024 + 1, 0x61),
     })
     expect(stream.writes).toHaveLength(1)
     expect(sent.at(-1)?.payload).toMatchObject({ code: 'TERMINAL_INPUT_INVALID', reason: 'size', expectedSeq: 1 })
 
+    // The realigned keys: seq 1, then 2, each written in turn.
     const mouse = Buffer.from('\u001b[<0;12;8M')
     await manager.handleBinary('web-1', {
       kind: TerminalBinaryKind.input, streamId, seq: 1, compressed: false, bytes: mouse,
     })
-    expect(Buffer.from(stream.writes.at(-1)!).equals(mouse)).toBe(true)
+    await manager.handleBinary('web-1', {
+      kind: TerminalBinaryKind.input, streamId, seq: 2, compressed: false, bytes: Buffer.from('typed after'),
+    })
+    expect(stream.writes.map((bytes) => Buffer.from(bytes).toString())).toEqual(['abc', mouse.toString(), 'typed after'])
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(sent.filter((frame) => frame.payload.code === 'TERMINAL_INPUT_INVALID')).toHaveLength(1)
 
     await manager.handleFrame('web-1', 'terminal_resize', {
       streamId, resizeSeq: 0, cols: 140, rows: 50,
@@ -491,6 +501,186 @@ describe('TerminalStreamManager', () => {
     expect(remote.kind).toBe(TerminalBinaryKind.output)
     expect(remote.compressed).toBe(true)
     expect(remote.bytes.length).toBeLessThan(big.length)
+  })
+
+  describe('keystrokes that come ahead of a missing one', () => {
+    // A client moving a stream from the relay onto its P2P channel sends key N over the relay and N+1 over the
+    // faster channel: N+1 came first, was refused, and the client's realignment lost two keys (2026-10-15).
+    const open = async () => {
+      await manager.handleFrame('web-1', 'terminal_open', { requestId: 'open-order', protocolVersion: 3, agentId: 'agent-1', cols: 120, rows: 40 })
+      const streamId = sent[0].payload.streamId as string
+      const key = (seq: number, text: string | Buffer = `k${seq}`) => manager.handleBinary('web-1', {
+        kind: TerminalBinaryKind.input, streamId, seq, compressed: false, bytes: typeof text === 'string' ? Buffer.from(text) : text,
+      })
+      const written = () => stream.writes.map((bytes) => Buffer.from(bytes).toString())
+      const refusals = () => sent.filter((frame) => frame.payload.code === 'TERMINAL_INPUT_INVALID').map((frame) => frame.payload)
+      return { streamId, key, written, refusals }
+    }
+
+    it('are written, in their order, as soon as the missing one arrives', async () => {
+      const { key, written, refusals } = await open()
+      await key(1)
+      await key(2)
+      expect(written()).toEqual([])
+      await key(0)
+      expect(written()).toEqual(['k0', 'k1', 'k2'])
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(refusals()).toEqual([])
+    })
+
+    it('go when the missing one does not come in time, and the client is told once what is expected', async () => {
+      const { streamId, key, written, refusals } = await open()
+      await key(0)
+      await key(2)
+      await key(3)
+      await vi.advanceTimersByTimeAsync(399)
+      expect(refusals()).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+      expect(written()).toEqual(['k0'])
+      expect(refusals()).toEqual([expect.objectContaining({ streamId, reason: 'seq', expectedSeq: 1 })])
+    })
+
+    it('are refused at once after a wait was given up, until the expected one arrives', async () => {
+      // The client realigns on the refusal and numbers its next keys from there: a frame it numbered under the
+      // old count must not wait to land among them.
+      const { key, written, refusals } = await open()
+      await key(0)
+      await key(2)
+      await vi.advanceTimersByTimeAsync(400)
+      await key(5)
+      expect(refusals()).toHaveLength(2)
+      expect(refusals()[1]).toMatchObject({ expectedSeq: 1 })
+      await key(1, 'realigned')
+      await key(3)
+      expect(refusals()).toHaveLength(2)
+      await key(2, 'next')
+      expect(written()).toEqual(['k0', 'realigned', 'next', 'k3'])
+    })
+
+    it('give each gap a full wait of its own', async () => {
+      const { key, written, refusals } = await open()
+      await key(0)
+      await key(2)
+      await key(4)
+      await vi.advanceTimersByTimeAsync(300)
+      await key(1)
+      expect(written()).toEqual(['k0', 'k1', 'k2'])
+      await vi.advanceTimersByTimeAsync(399)
+      expect(refusals()).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+      expect(refusals()).toEqual([expect.objectContaining({ expectedSeq: 3 })])
+      expect(written()).toEqual(['k0', 'k1', 'k2'])
+    })
+
+    it('are given up at once when more bytes wait than may be held', async () => {
+      const { key, written, refusals } = await open()
+      for (let seq = 1; seq <= 4; seq++) await key(seq, Buffer.alloc(64 * 1024, 0x61))
+      expect(refusals()).toEqual([])
+      await key(5, Buffer.alloc(1, 0x61))
+      expect(refusals()).toEqual([expect.objectContaining({ expectedSeq: 0 })])
+      await key(0)
+      expect(written()).toEqual(['k0'])
+    })
+
+    it('are given up at once when more frames wait than may be held', async () => {
+      const { key, written, refusals } = await open()
+      for (let seq = 1; seq <= 64; seq++) await key(seq)
+      expect(refusals()).toEqual([])
+      await key(65)
+      expect(refusals()).toEqual([expect.objectContaining({ expectedSeq: 0 })])
+      await key(0)
+      expect(written()).toEqual(['k0'])
+    })
+
+    it('go with any refusal, since the client numbers its next keys from what it is told', async () => {
+      // A number already written comes while one waits: the refusal realigns the client, and the key held under
+      // its old numbering would land among the new ones.
+      const { key, written, refusals } = await open()
+      await key(0)
+      await key(2)
+      await key(0, 'again')
+      expect(refusals()).toEqual([expect.objectContaining({ expectedSeq: 1 })])
+      await key(1, 'realigned')
+      await key(2, 'next')
+      expect(written()).toEqual(['k0', 'realigned', 'next'])
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(refusals()).toHaveLength(1)
+    })
+
+    it('keep the first of two frames under one number', async () => {
+      const { key, written, refusals } = await open()
+      await key(1, 'first')
+      await key(1, 'second')
+      await key(0)
+      expect(written()).toEqual(['k0', 'first'])
+      expect(refusals()).toEqual([])
+    })
+
+    it('are never written into a pane whose stream closed while they waited', async () => {
+      const { streamId, key, written, refusals } = await open()
+      await key(1)
+      await manager.handleFrame('web-1', 'terminal_close', { streamId })
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(written()).toEqual([])
+      expect(refusals()).toEqual([])
+    })
+
+    it('are traced, while tracing is on, by number and time and never by what was typed', async () => {
+      const lines: string[] = []
+      await manager.stop()
+      manager = newManager({ typingTrace: (line) => lines.push(line) })
+      const { streamId, key } = await open()
+      const short = streamId.slice(0, 8)
+      await key(1, 'secret-1')
+      await vi.advanceTimersByTimeAsync(30)
+      await key(0, 'secret-0')
+      sink!.onData(Buffer.from('echo'))
+      expect(lines).toEqual([
+        `stream=${short} seq=1 held: 0 has not come (1 waiting)`,
+        `stream=${short} seq=1..1 released after 30ms`,
+        `stream=${short} seq=1 first output out +0ms after it was written`,
+      ])
+      // A keystroke whose next screen goes out as a keyframe is said so.
+      await key(2, 'secret-2')
+      await manager.handleFrame('web-1', 'terminal_resize', { streamId, resizeSeq: 0, cols: 100, rows: 30 })
+      expect(lines.at(-1)).toBe(`stream=${short} seq=2 keyframe (resize) out +0ms after it was written`)
+      expect(lines.join('\n')).not.toContain('secret')
+    })
+
+    it('are given up before a paste, which never goes ahead of keys typed before it', async () => {
+      const { streamId, key, written, refusals } = await open()
+      await key(1)
+      await manager.handleBinary('web-1', { kind: TerminalBinaryKind.paste, streamId, seq: 0, compressed: false, bytes: Buffer.from('pasted') })
+      expect(refusals()).toEqual([expect.objectContaining({ expectedSeq: 0 })])
+      expect(stream.pastes).toEqual(['pasted'])
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(written()).toEqual([])
+    })
+  })
+
+  it('keeps a paste out of a pane whose stream closed while the paste was on its way, and says nothing', async () => {
+    // A stream's close no longer waits in line behind its paste (backendSocket.ts `enqueueTerminalBinary`):
+    // the paste must ask again as it lands, or it lands in a pane its client has let go.
+    await manager.handleFrame('web-1', 'terminal_open', {
+      requestId: 'open-paste-close', protocolVersion: 3, agentId: 'agent-1', cols: 120, rows: 40,
+    })
+    const streamId = sent[0].payload.streamId as string
+    let land!: () => void
+    let askedAsItLanded: boolean | undefined
+    stream.pasteLands = (allowed) => new Promise((resolve) => {
+      land = () => {
+        askedAsItLanded = allowed?.()
+        resolve(askedAsItLanded ? TERMINAL_ACTION_SUCCEEDED : { state: 'failed', dispatch: 'not_started', reason: 'tmux paste-buffer could not be sent' })
+      }
+    })
+    const pasting = manager.handleBinary('web-1', { kind: TerminalBinaryKind.paste, streamId, seq: 0, compressed: false, bytes: new TextEncoder().encode('rm -rf build') })
+    await vi.waitFor(() => expect(stream.pastes).toEqual(['rm -rf build']))
+    await manager.handleFrame('web-1', 'terminal_close', { streamId })
+    const before = sent.length
+    land()
+    await pasting
+    expect(askedAsItLanded).toBe(false)
+    expect(sent.slice(before).map((frame) => frame.payload.code)).not.toContain('TERMINAL_PASTE_FAILED')
   })
 
   it('routes a binary paste kind to pasteRaw as one unit, never through writeRaw', async () => {

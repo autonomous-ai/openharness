@@ -41,8 +41,13 @@ export function createHandoffRequest({ prepare }: { prepare: ((req: HandoffReque
         // slice of the transcript it choked on.
         if (!known) console.error(`[handoff] prepare failed: ${e instanceof Error ? e.name : typeof e}${typeof code === 'string' && /^[A-Z0-9_]{1,40}$/.test(code) ? ` ${code}` : ''}`)
         const held = known && ['IDENTITY_UNAVAILABLE', 'HANDOFF_UNAVAILABLE', 'TIMEOUT', 'BUSY'].includes(code)
+        // Only a hold the clients know goes on the wire, as a code: a program replaced while it ran needs a restart.
+        const hold = known && (e as { hold?: unknown }).hold === 'PROGRAM_REPLACED' ? 'PROGRAM_REPLACED' : undefined
+        // A refusal left no line before, so a switch that would not go through could only be guessed at (2026-10-21).
+        if (known) console.log(`[handoff] ${agentId.slice(0, 8).replace(/[^A-Za-z0-9_-]/g, '_')} refused · ${code}${hold ? ` (${hold})` : ''}`)
         reply({ error: known ? code : 'INTERNAL', ...(held ? { held: true, retryable: true,
-          reason: code === 'IDENTITY_UNAVAILABLE' ? 'Waiting for verified conversation history.' : 'Waiting for the handoff to become available.' } : {}) })
+          reason: code === 'IDENTITY_UNAVAILABLE' ? 'Waiting for verified conversation history.' : 'Waiting for the handoff to become available.' } : {}),
+        ...(hold ? { hold } : {}) })
       })
   }
 }

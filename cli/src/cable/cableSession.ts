@@ -33,6 +33,7 @@ import { SerialLink, findDialPort } from './serial.js'
 import { PLAYER_PAGE_SIZE, playerPage, type PlayerSession } from './playerLibrary.js'
 import { PassageCarry, withCarriedPassage, type CarryRead } from './passageCarry.js'
 import { VoiceDraft, type DraftPin } from './voiceDraft.js'
+import { SUPER_TAB_REQUEST_PREFIX } from '../core/api.js'
 import { QuestionInbox, type ReviewedAnswer, type AnswerReceipt, type QuestionSpeech } from './questionInbox.js'
 import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
 
@@ -257,6 +258,13 @@ export interface AppSwarms {
 
 /** Why the list is as short as it is. The dial renders this, instead of drawing an empty wheel. */
 export type CableMachineSource = 'backend' | 'local' | 'signed-out'
+/**
+ * What a Super Tab member's wait adds to its `question` (core/superTabAttention.ts): the tab's name and whether it needs a
+ * decision or is stuck. The Harness Pro makes it an alert whose toast stays; firmware without it, and the round dial,
+ * read the words alone. Nobody answers it on a device.
+ */
+export interface SuperTabAsk { superTab: string; attention: 'decision' | 'stuck' }
+
 /** Why the dial sent an `agent.open`: a tap (absent) or a question screen that came up on its own. */
 export type OpenReason = 'question'
 
@@ -601,6 +609,10 @@ export class CableSession {
   private statsTurn = false
   /** `player: 'library-v1'`: the paged `player.library`. */
   private playerCapable = false
+  /** `superTab: 'wait-v1'`: a `question` with `superTab` and `attention` is shown as a Super Tab wait, which nobody
+   *  answers on the device. Any other device is not sent one: the round dial would open a question screen for it that
+   *  cannot load. */
+  private superTabWaits = false
   private playerOffset = 0
   private playerRequest = 0
   private playerLibraryKey = ''
@@ -614,13 +626,13 @@ export class CableSession {
 
   /** For the greeting's log line: which capabilities this hello named, or nothing. */
   private capabilitiesNamed(): string {
-    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player']
+    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.superTabWaits && 'superTab']
       .filter(Boolean)
     return named.length ? ` caps ${named.join(',')}` : ''
   }
 
   private resetCapabilities(): void {
-    this.swarmMembers = this.longRecap = this.stepsActivity = this.statsTurn = this.playerCapable = false
+    this.swarmMembers = this.longRecap = this.stepsActivity = this.statsTurn = this.playerCapable = this.superTabWaits = false
     this.seqOn = false
     this.seq = 0
     this.resyncAt = 0
@@ -1179,6 +1191,7 @@ export class CableSession {
         this.stepsActivity = str('activity') === 'steps-v1'
         this.statsTurn = str('stats') === 'turn-v1'
         this.playerCapable = str('player') === 'library-v1'
+        this.superTabWaits = str('superTab') === 'wait-v1'
         this.seqOn = str('board') === 'pro'
         this.seq = 0
         const mac = str('mac') ?? ''
@@ -1262,6 +1275,9 @@ export class CableSession {
         return
       case 'agents.list':
         await this.pushAgents()
+        // A Pro asks for this as its session comes back, having dropped every question with the link (pro_app_link):
+        // the Super Tab waits still open are asked again. The same alert, so it does not beep twice.
+        await this.resendSuperTabAsks()
         return
       case 'agents.refresh':
         // A workspace receipt needs the roster, not machines, notices and history.
@@ -2497,6 +2513,7 @@ export class CableSession {
     for (const { agentId, id, questions } of this.questionInbox.open()) {
       if (this.liveTurns.get(agentId) === 'question') await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
     }
+    await this.resendSuperTabAsks()
   }
 
   // ── swarms ────────────────────────────────────────────────────────────────────────────────────────
@@ -2745,6 +2762,8 @@ export class CableSession {
    */
   private readonly liveTurns = new Map<string, 'working' | 'question'>()
   private markLive(agentId: string): void {
+    this.turnOpen.add(agentId)
+    if (this.turnOpen.size > 256) this.turnOpen.delete(this.turnOpen.values().next().value!)
     if (this.liveTurns.get(agentId) === 'question') return
     if (!this.liveTurns.has(agentId) && this.liveTurns.size >= 256) this.liveTurns.delete(this.liveTurns.keys().next().value!)
     this.liveTurns.set(agentId, 'working')
@@ -2809,7 +2828,7 @@ export class CableSession {
     await this.send({ t: 'turn.stats', agentId, ...stats })
   }
   async turnDone(agentId: string): Promise<void> {
-    this.liveTurns.delete(agentId)
+    this.endLive(agentId)
     this.activityReads.delete(agentId)
     this.activityEndedAt.set(agentId, Date.now())
     await this.send({ t: 'turn.done', agentId })
@@ -2822,7 +2841,7 @@ export class CableSession {
    * `tier`, so firmware that predates `tier` still behaves. `subagent`: a sub-agent's end is not its main agent's.
    */
   async summary(agentId: string, recap: string, text: string, tier: Tier = 'alert', fullText?: string, subagent = false): Promise<void> {
-    if (!subagent) this.liveTurns.delete(agentId)   // a sub-agent's end is not its main agent's
+    if (!subagent) this.endLive(agentId)   // a sub-agent's end is not its main agent's
     this.activityReads.delete(agentId)
     this.activityEndedAt.set(agentId, Date.now())
     recap = extendShortRecap(recap, text)
@@ -2921,7 +2940,7 @@ export class CableSession {
     await this.send({ t: 'notif.seen', agentId, ...(readToken ? { readToken } : {}) })
   }
   async turnError(agentId: string, message: string): Promise<void> {
-    this.liveTurns.delete(agentId)
+    this.endLive(agentId)
     this.activityReads.delete(agentId)
     this.activityEndedAt.set(agentId, Date.now())
     await this.send({ t: 'turn.error', agentId, message })
@@ -2938,10 +2957,34 @@ export class CableSession {
    * forward, so by the time anyone could answer "is it on screen" the answer was yes — every question
    * came through quiet, no row was ever recorded, and looking away later left nothing behind.
    */
-  async question(agentId: string, id: string, questions: unknown): Promise<void> {
+  async question(agentId: string, id: string, questions: unknown, superTab?: SuperTabAsk): Promise<void> {
+    if (superTab && !this.superTabWaits) return
     this.questionInbox.set(agentId, id, questions)
     this.liveTurns.set(agentId, 'question')
-    await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
+    // The inbox keeps only questions a device can answer, so a Super Tab wait is kept here for a resync.
+    if (superTab) this.superTabAsks.set(agentId, { id, questions, superTab })
+    else this.superTabAsks.delete(agentId)
+    await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions, ...(superTab ? { superTab: superTab.superTab, attention: superTab.attention } : {}) })
+  }
+  /** Asks a Pro again for every Super Tab wait still open (a resync, a relink). */
+  private async resendSuperTabAsks(): Promise<void> {
+    if (!this.superTabWaits) return
+    for (const [agentId, { id, questions, superTab }] of this.superTabAsks) {
+      await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions, ...superTab })
+    }
+  }
+  /** The agents whose turn this session saw start and not end, whatever their question says. */
+  private readonly turnOpen = new Set<string>()
+  /** The Super Tab waits the device was last shown, by agent (`question`), for `resync`. */
+  private readonly superTabAsks = new Map<string, { id: string; questions: unknown; superTab: SuperTabAsk }>()
+  /**
+   * A turn ended. A Super Tab wait outlives the agent's turns (the Pro keeps it through them, pod_model `set_state`), so
+   * its agent stays `question` in the library page; any other is no longer live.
+   */
+  private endLive(agentId: string): void {
+    this.turnOpen.delete(agentId)
+    if (this.superTabAsks.has(agentId)) this.liveTurns.set(agentId, 'question')
+    else this.liveTurns.delete(agentId)
   }
 
   /**
@@ -2952,9 +2995,16 @@ export class CableSession {
    * halfway through giving.
    */
   async questionClose(agentId: string, id: string): Promise<void> {
+    const wait = this.superTabAsks.get(agentId)
+    // A wait this device was never sent (it cannot show one) has nothing to close.
+    if (id.startsWith(SUPER_TAB_REQUEST_PREFIX) && wait?.id !== id) return
     if (!this.questionInbox.close(agentId, id)) return
-    // Answered: the turn goes on (its end clears it).
-    if (this.liveTurns.get(agentId) === 'question') this.liveTurns.set(agentId, 'working')
+    this.superTabAsks.delete(agentId)
+    // Answered: the turn goes on (its end clears it). A Super Tab wait outlived its turns: working only if one is open.
+    if (this.liveTurns.get(agentId) === 'question') {
+      if (!wait || this.turnOpen.has(agentId)) this.liveTurns.set(agentId, 'working')
+      else this.liveTurns.delete(agentId)
+    }
     await this.send({ t: 'question.close', agentId, id })
   }
 

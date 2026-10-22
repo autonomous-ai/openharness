@@ -11,7 +11,14 @@ void main() {
     bool replay = false,
     bool subagent = false,
     String? reply = 'Fixed the login screen.',
-  }) => (aborted: aborted, replay: replay, subagent: subagent, reply: reply);
+    NoticeTier? tier,
+  }) => (
+    aborted: aborted,
+    replay: replay,
+    subagent: subagent,
+    reply: reply,
+    tier: tier,
+  );
 
   AgentNotice decide(TurnEnd e, {bool inFront = true, bool watching = false}) =>
       decideDoneNotice(e, inFront: inFront, watching: watching);
@@ -37,11 +44,12 @@ void main() {
     expect(notice.alerts, isFalse);
   });
 
-  test('in front on another agent: a mark, never a notice', () {
+  test('in front on another agent: marked and noticed, the banner over the app', () {
     final notice = decide(end());
-    expect(notice, AgentNotice.mark);
+    expect(notice, AgentNotice.alert);
     expect(notice.chimes, isTrue);
-    expect(notice.alerts, isFalse);
+    expect(notice.marks, isTrue);
+    expect(notice.alerts, isTrue);
   });
 
   test('away: marked and noticed, whatever was on screen', () {
@@ -58,7 +66,13 @@ void main() {
       <String, dynamic>{},
       reply: 'done',
     );
-    expect(e, (aborted: false, replay: false, subagent: false, reply: 'done'));
+    expect(e, (
+      aborted: false,
+      replay: false,
+      subagent: false,
+      reply: 'done',
+      tier: null,
+    ));
   });
 
   test('the flags are read where the daemon puts them', () {
@@ -67,6 +81,124 @@ void main() {
       {'aborted': true},
       reply: null,
     );
-    expect(e, (aborted: true, replay: true, subagent: true, reply: null));
+    expect(e, (
+      aborted: true,
+      replay: true,
+      subagent: true,
+      reply: null,
+      tier: null,
+    ));
+  });
+
+  group('the daemon\'s tier', () {
+    test('is never read off turn_ended: the turn_summary after it says it', () {
+      final e = turnEndFrom(
+        {'type': 'turn_ended', 'agentId': 'a', 'tier': 'alert'},
+        {'tier': 'alert'},
+        reply: 'done',
+      );
+      expect(e.tier, isNull);
+    });
+
+    test('reads the wire\'s three words', () {
+      expect(noticeTierFrom('alert'), NoticeTier.alert);
+      expect(noticeTierFrom('list'), NoticeTier.list);
+      expect(noticeTierFrom('silent'), NoticeTier.silent);
+    });
+
+    test('a word this build does not know reads as no tier at all', () {
+      for (final raw in [null, '', 'loud', 'ALERT', 2, true]) {
+        expect(noticeTierFrom(raw), isNull, reason: '$raw');
+      }
+    });
+
+    test('news is what no tier can change: alive, live, the main agent\'s, said something', () {
+      expect(isNewsEnd(end()), isTrue);
+      for (final e in [
+        end(aborted: true),
+        end(replay: true),
+        end(subagent: true),
+        end(reply: null),
+        end(reply: ' \n'),
+      ]) {
+        expect(isNewsEnd(e), isFalse, reason: '$e');
+      }
+    });
+
+    test('never makes news of a turn the flags say is not news', () {
+      for (final tier in NoticeTier.values) {
+        for (final e in [
+          end(aborted: true, tier: tier),
+          end(replay: true, tier: tier),
+          end(subagent: true, tier: tier),
+          end(reply: null, tier: tier),
+          end(reply: '  ', tier: tier),
+        ]) {
+          for (final inFront in [true, false]) {
+            expect(
+              decide(e, inFront: inFront),
+              AgentNotice.none,
+              reason: '$e',
+            );
+          }
+        }
+      }
+    });
+
+    test('silent: nothing, wherever the phone is', () {
+      for (final (inFront, watching) in [
+        (true, true),
+        (true, false),
+        (false, false),
+      ]) {
+        expect(
+          decide(
+            end(tier: NoticeTier.silent),
+            inFront: inFront,
+            watching: watching,
+          ),
+          AgentNotice.none,
+        );
+      }
+    });
+
+    test('list: a mark with no tap and no notice, even away', () {
+      for (final inFront in [true, false]) {
+        final notice = decide(end(tier: NoticeTier.list), inFront: inFront);
+        expect(notice, AgentNotice.filed);
+        expect(notice.marks, isTrue);
+        expect(notice.chimes, isFalse);
+        expect(notice.alerts, isFalse);
+      }
+    });
+
+    test('alert: as far as the phone\'s place allows', () {
+      expect(decide(end(tier: NoticeTier.alert)), AgentNotice.alert);
+      expect(
+        decide(end(tier: NoticeTier.alert), inFront: false),
+        AgentNotice.alert,
+      );
+    });
+
+    test('the agent on screen gets nothing — not even the tap', () {
+      for (final tier in NoticeTier.values) {
+        expect(
+          decide(end(tier: tier), watching: true),
+          AgentNotice.none,
+          reason: '$tier',
+        );
+      }
+    });
+
+    test('watching only counts in front', () {
+      expect(
+        decide(end(tier: NoticeTier.alert), inFront: false, watching: true),
+        AgentNotice.alert,
+      );
+      expect(
+        decide(end(tier: NoticeTier.list), inFront: false, watching: true),
+        AgentNotice.filed,
+      );
+    });
   });
 }

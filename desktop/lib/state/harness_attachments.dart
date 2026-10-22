@@ -15,10 +15,21 @@ class HarnessAttachment {
 /// The files a New Harness box carries into its harness. Held in memory
 /// until the harness's terminal is open to take them ([deliverAttachedTask]).
 class HarnessAttachments extends ChangeNotifier {
-  HarnessAttachments({this.onDeliveryProblem});
+  HarnessAttachments({
+    this.onDeliveryProblem,
+    this.limitBytes = maxBytes,
+    this.limitFiles,
+  });
 
   /// What one file may weigh: the daemon's own ceiling for a pasted file.
   static const maxBytes = terminalLocalPasteFileMaxPayloadBytes;
+
+  /// What one file may weigh in this box; a box whose files go somewhere with
+  /// a lower ceiling than the daemon's passes it.
+  final int limitBytes;
+
+  /// How many files this box holds, or null for any number.
+  final int? limitFiles;
 
   /// Told when files could not reach a created harness — after its box has
   /// closed, so the workspace says it rather than the box.
@@ -38,19 +49,24 @@ class HarnessAttachments extends ChangeNotifier {
     Iterable<String> oversized = const [],
   }) {
     final tooLarge = [...oversized];
+    var surplus = 0;
     for (final file in files) {
       if (file.bytes.isEmpty) continue;
-      if (file.bytes.length > maxBytes) {
+      if (file.bytes.length > limitBytes) {
         tooLarge.add(file.name);
         continue;
       }
-      _files
-        ..removeWhere((kept) => kept.name == file.name)
-        ..add(file);
+      _files.removeWhere((kept) => kept.name == file.name);
+      if (limitFiles != null && _files.length >= limitFiles!) {
+        surplus++;
+        continue;
+      }
+      _files.add(file);
     }
     notifyListeners();
+    if (surplus > 0) return 'Attach at most $limitFiles files.';
     if (tooLarge.isEmpty) return null;
-    final limit = '${maxBytes ~/ (1024 * 1024)} MB';
+    final limit = '${limitBytes ~/ (1024 * 1024)} MB';
     return tooLarge.length == 1
         ? '${tooLarge.single} is over $limit.'
         : '${tooLarge.length} files are over $limit.';

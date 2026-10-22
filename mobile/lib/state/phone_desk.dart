@@ -23,8 +23,8 @@ import 'desk_sync.dart';
 /// phone happened to be in, on every computer the person owns. So nothing here
 /// is derived from `swarms`: the tabs are read, and every write is one a person
 /// made by hand on the phone — [adopt] for an agent created here, [drop] for one
-/// deleted here, and [createTabFor]/[addToTab] for the two `+`s on the tabs
-/// panel.
+/// deleted here, [createTabFor]/[addToTab] for the two `+`s on the tabs
+/// panel, and [renameTab]/[closeTab] for holding a tab's chip in Find.
 ///
 /// What is NOT on the desk stays per device, as it does on a window: which tab
 /// is open ([activeTabId]) is this phone's own, and so is the agent within it.
@@ -59,6 +59,10 @@ class PhoneDesk {
 
   /// The app has tabs it did not have a moment ago: rebuild.
   final VoidCallback onChanged;
+
+  /// The longest tab name the desk takes — backend `DESK_NAME_MAX`, in UTF-16
+  /// units like [String.length].
+  static const int nameMaxLength = 80;
 
   final DeskSyncState _state = DeskSyncState();
   Timer? _retry;
@@ -327,11 +331,33 @@ class PhoneDesk {
   void renameTab(String tabId, String name) {
     if (!_state.enabled) return;
     final trimmed = name.trim();
-    if (trimmed.isEmpty) return;
+    // A name the backend refuses would fail the whole batch, and a refused
+    // write stops this phone writing to the desk at all.
+    if (trimmed.isEmpty || trimmed.length > nameMaxLength) return;
     final tab = _state.synced.where((t) => t.id == tabId).firstOrNull;
     if (tab == null || (tab.name == trimmed && tab.nameIsCustom)) return;
     _queue([
       {'op': 'tab.rename', 'id': tabId, 'name': trimmed, 'nameIsCustom': true},
+    ]);
+  }
+
+  /// A tab closed by hand on this phone: it leaves the desk, and so every
+  /// computer's tab row.
+  ///
+  /// ⚠️ **The tab, not its harnesses.** A window that hears the desk closed a
+  /// tab releases its views and stops nothing (desktop `_deskReconcile`); the
+  /// agents keep running and stay under All and in search. Stopping one is the
+  /// harness's own Stop, which says what it ends.
+  ///
+  /// The phone was in it: from here it is in no tab, and the agent on screen
+  /// decides again which one it is in (`activeDeskGroup`).
+  void closeTab(String tabId) {
+    if (!_state.enabled) return;
+    if (!_state.synced.any((t) => t.id == tabId)) return;
+    // Before the write, so the notice it makes already has the phone out of it.
+    if (_activeTabId == tabId) _activeTabId = null;
+    _queue([
+      {'op': 'tab.close', 'id': tabId},
     ]);
   }
 

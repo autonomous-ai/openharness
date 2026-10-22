@@ -3,7 +3,8 @@
 //   screens: tabs[:<tab>[+<more tabs>] | :mock | :9 | :seven | :single | :long | :notices | :linkdown | :banner] (Home),
 //   agent:<id>, recap:<id>, talk:<id> (ids: fw ota be cli web desk docs vault site cur notes2 kilo; suffixes :long :offline :unread :viet ...),
 //   talk:listen|send, inbox[:viet|:quiet|:failed], ota:<pct>|ota:restart (the update screen), notice:updated|notice:failed (the Home screen with that pill),
-//   <room>:toast[@<ms after it showed>] (the notice toast), and ":bell" / ":banner" on a screen (unread entries; banner adds the toast). The demo is the
+//   <room>:toast[@<ms after it showed>] (the notice toast; <room>:toast:decision / :stuck: a Super Tab question's staying toast, backend deciding or
+//   desktop stuck), inbox:supertab (Notices with those two asking rows above a plain entry), and ":bell" / ":banner" on a screen (unread entries; banner adds the toast). The demo is the
 //   HTML mockup's: the same agents, tabs and times. `--skin pets` is accepted and ignored (Pets is the only interface).
 #include <stdio.h>
 #include <stdlib.h>
@@ -283,12 +284,20 @@ static void write_spec(const char *path, const char *screen)
 }
 
 // What the glue adds after pod_render, once the entry is still unread: the toast over a room (not Home or Notices) of another agent.
+static const char *s_toast_agent = "be";   // the entry the toast shows: "be", or "desk" for the stuck Super Tab toast
 static void overlay(bool banner, bool toast, uint32_t now)
 {
-    const pod_unread_t *bn = pod_model_unread_find(&M, "be");   // "be" is the entry the toast shows
+    const pod_unread_t *bn = pod_model_unread_find(&M, s_toast_agent);
     if (!bn) return;
     const pod_frame_t *top = N.depth ? &N.stack[N.depth - 1] : NULL;
-    if ((banner || toast) && top && (top->view == POD_V_AGENT || top->view == POD_V_RECAP) && strcmp(top->agent, "be")) ph_toast(&F, &M, bn, T0, now);
+    if ((banner || toast) && top && (top->view == POD_V_AGENT || top->view == POD_V_RECAP) && strcmp(top->agent, s_toast_agent)) ph_toast(&F, &M, bn, T0, now);
+}
+
+// A Super Tab ("Launch v2") question: the agent asks with that attention and the question's entry is filed, as pro_app does.
+static void supertab_ask(const char *id, const char *name, const char *q, pod_attention_t attn)
+{
+    pod_model_question_tab(&M, id, q, "Launch v2", attn);
+    pod_model_unread_ask(&M, id, name, q, T0);
 }
 
 int main(int argc, char **argv)
@@ -323,6 +332,17 @@ int main(int argc, char **argv)
     if (inbox && strstr(screen, "viet")) {   // Vietnamese texts on the rows
         snprintf(((pod_unread_t *)pod_model_unread_find(&M, "be"))->text, POD_UNREAD_TEXT, "Đã sửa lỗi đồng bộ cáp. Mọi bài kiểm thử đều xanh trên máy chủ và thiết bị.");
         snprintf(((pod_unread_t *)pod_model_unread_find(&M, "ota"))->text, POD_UNREAD_TEXT, "Đã nạp mặt mới cho núm xoay, kênh cập nhật không đổi và mọi thứ vẫn chạy ổn định như trước đó.");
+    }
+    if (toast && strstr(screen, ":decision")) supertab_ask("be", "backend", "Run the migration on staging first, or straight to prod?", POD_ATTN_DECISION);
+    if (toast && strstr(screen, ":stuck")) {
+        s_toast_agent = "desk";
+        supertab_ask("desk", "desktop", "Stuck: e2e failed 3 times, no write access to staging", POD_ATTN_STUCK);
+    }
+    if (inbox && strstr(screen, "supertab")) {   // the mockup's A3: a decision, a stuck agent, then the newest plain entry (ota's is read)
+        pod_model_question_close(&M, "cli");
+        pod_model_unread_seen(&M, "ota", NULL);
+        supertab_ask("be", "backend", "Run the migration on staging first, or straight to prod?", POD_ATTN_DECISION);
+        supertab_ask("desk", "desktop", "e2e failed 3 times, no write access to staging", POD_ATTN_STUCK);
     }
     if (inbox) pod_nav_act(&N, &M, POD_A_INBOX, 0, T0);
     else if (!strcmp(screen, "tabs:notices")) {   // Home on the Notices card (the entries are added above; the asking agent counts too)

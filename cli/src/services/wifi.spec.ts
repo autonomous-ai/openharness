@@ -184,6 +184,25 @@ describe('the Wi-Fi device, with the dials', () => {
     expect(core.wifi.joined).not.toHaveBeenCalled()
   })
 
+  it('carries device add-ons end to end: what the device publishes, an agent\'s proposal sealed to it, and its decision', async () => {
+    const { core, port, hello, ask } = started()
+    expect(await port.addon('propose', { addon: 'glow', idempotencyKey: 'k', act: 'light', holdsMs: 5000 }))
+      .toEqual({ error: { code: 'MISSING_TARGET', message: 'No connected device offers add-ons' } })
+    await hello()
+    expect(await ask({ type: 'addon.publish', values: [{ topic: 'room/presence', value: { someone: true } }] })).toMatchObject({ type: 'addon.publish_result', topics: 1 })
+    expect(await port.addon('state', {})).toMatchObject({ result: { devices: [{ deviceId: 'device-1', online: true, topics: { 'room/presence': { value: { someone: true } } } }] } })
+    vi.mocked(core.wifi.send).mockClear()
+    const proposed = await port.addon('propose', { addon: 'glow', idempotencyKey: 'k', act: 'light', holdsMs: 5000, params: { colour: 'warm' } })
+    const proposalId = ('result' in proposed ? (proposed.result.proposal as { proposalId: string }) : { proposalId: '' }).proposalId
+    expect(sent(core)).toEqual([expect.objectContaining({ connId: 'c1', identity: 'device-1', frame: 'autonomous_device_event', kind: 'addon.proposal',
+      payload: expect.objectContaining({ proposalId, addon: 'glow', act: 'light', params: { colour: 'warm' } }) })])
+    expect(await ask({ type: 'addon.decision', proposalId, decision: 'dropped', reason: 'someone is talking' })).toMatchObject({ state: 'dropped' })
+    expect(await port.addon('proposal', { proposalId })).toMatchObject({ result: { proposal: { proposalId, state: 'dropped', reason: 'someone is talking' } } })
+    port.revoked('device-1')
+    expect(await port.addon('state', {})).toEqual({ result: { devices: [] } })
+    await port.stop()
+  })
+
   it('forgets a closed connection and an unpaired device, and answers a receipt', async () => {
     const { core, port, hello, ask } = started()
     await hello()
@@ -269,6 +288,21 @@ describe('the Wi-Fi device, with the dials', () => {
     expect(ports.wifi).toBeNull()
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('the Wi-Fi device service could not be started'))
     warn.mockRestore()
+  })
+
+  it('reads add-on state for one device, a proposal by a malformed id as none, and lets an unexpected failure through', async () => {
+    const { port, hello, ask } = started()
+    await hello()
+    await ask({ type: 'addon.publish', values: [{ topic: 'mood/state', value: { energy: 0.5 } }] })
+    expect(await port.addon('state', { deviceId: 'device-1' })).toMatchObject({ result: { devices: [{ deviceId: 'device-1' }] } })
+    expect(await port.addon('state', { deviceId: 'nobody' })).toEqual({ result: { devices: [] } })
+    expect(await port.addon('proposal', { proposalId: 42 })).toMatchObject({ error: { code: 'PROPOSAL_UNKNOWN' } })
+    await port.stop()
+    const ports = emptyPorts()
+    startWifi(fakeCore({ dataDir }), ports, {
+      service: () => ({ addons: { state: () => { throw new Error('broken') } } }) as unknown as AutonomousDeviceService,
+    })
+    await expect((ports.wifi as WifiPort).addon('state', {})).rejects.toThrow('broken')
   })
 
   it('says a focus change that carries no revision to nobody', () => {

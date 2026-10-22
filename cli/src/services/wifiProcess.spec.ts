@@ -24,6 +24,7 @@ function wifiPort(machineId: string, log: string[]) {
     appFocus: vi.fn(async (...args: unknown[]) => { record('appFocus')(...args) }),
     resume: vi.fn(async (...args: unknown[]) => { record('resume')(...args) }),
     receipt: vi.fn(async () => ({ receipt: null })),
+    addon: vi.fn(async (...args: unknown[]) => { record('addon')(...args); return { result: { devices: [] } } }),
     stop: vi.fn(async () => { log.push(`${machineId} stop`) }),
   }
   return port
@@ -240,6 +241,20 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.event({ kind: 'resume' })
     expect(await receipt({ deviceId: 'd', idempotencyKey: 'k' }, { local: false, owner: false })).toEqual({ receipt: null })
     expect(f.ports[0].receipt).toHaveBeenCalledWith('d', 'k')
+  })
+
+  it('answers the core\'s add-on questions once it is built, and refuses an operation it does not know', async () => {
+    const f = setup()
+    const addon = f.options().requests!.addon
+    expect(await addon({ op: 'state', input: {} }, { local: false, owner: false })).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+    f.connect()
+    f.event({ kind: 'resume' })
+    expect(await addon({ op: 'state', input: { deviceId: 'lamp' } }, { local: false, owner: false })).toEqual({ result: { devices: [] } })
+    expect(f.ports[0].addon).toHaveBeenCalledWith('state', { deviceId: 'lamp' })
+    expect(await addon({ op: 'delete', input: {} }, { local: false, owner: false })).toEqual({ error: { code: 'INVALID_REQUEST', message: 'Unknown add-on operation' } })
+    // What is not an object reaches the port as no input at all.
+    await addon({ op: 'proposal', input: ['p'] }, { local: false, owner: false })
+    expect(f.ports[0].addon).toHaveBeenLastCalledWith('proposal', {})
   })
 
   it('leaves the Wi-Fi device off when its service does not start, and says why', async () => {

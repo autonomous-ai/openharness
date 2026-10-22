@@ -1,9 +1,18 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/message_row.dart';
+import 'package:harness/super_tabs/message_text.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/route_row.dart';
 
-import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
+import 'support/capture.dart';
+import 'support/super_tab_fixture.dart';
 
 Map<String, dynamic> routeRow({
   String via = 'jev',
@@ -62,17 +71,66 @@ Map<String, dynamic> decision({String? overrideTo}) => {
   'override': overrideTo == null ? null : {'candidateId': overrideTo},
 };
 
-Widget rowOf(SuperTabMessage message, controller) => MaterialApp(
+Widget rowOf(
+  SuperTabMessage message,
+  SuperTabController controller, {
+  Brightness brightness = Brightness.dark,
+  double scale = 1,
+  bool withMessage = false,
+}) => MaterialApp(
+  debugShowCheckedModeBanner: false,
+  theme: grid.buildAppTheme(brightness: brightness),
+  builder: (context, child) => MediaQuery(
+    data: MediaQuery.of(
+      context,
+    ).copyWith(textScaler: TextScaler.linear(scale), highContrast: scale > 1),
+    child: child!,
+  ),
   home: Scaffold(
-    body: SuperTabRouteRow(
-      message: message,
-      route: message.route!,
-      controller: controller,
+    body: ListView(
+      children: [
+        if (withMessage)
+          SuperTabMessageRow(
+            message: SuperTabMessage.fromJson({
+              ...routeRow(),
+              'source': <String, dynamic>{},
+              'text': 'I’ll ask Multiply to review the schema change.',
+            }),
+            author: 'Lead',
+            agent: SuperTabAgent.fromJson({
+              'id': 'lead',
+              'name': 'Lead',
+              'machineId': 'm',
+              'harnessId': 'h',
+              'contributorId': 'owner',
+              'configuration': {'engine': 'codex'},
+            }),
+            onReturnToComposer: () {},
+            receipts: const [],
+          ),
+        SuperTabRouteRow(
+          message: message,
+          route: message.route!,
+          controller: controller,
+        ),
+      ],
     ),
   ),
 );
 
 void main() {
+  final captureDir = Platform.environment['HARNESS_ROUTE_CAPTURE_DIR'];
+  setUpAll(() => loadCaptureFonts(captureDir));
+  final originalBrightness = grid.AppTheme.brightness.value;
+  setUp(() => grid.AppTheme.brightness.value = Brightness.dark);
+  tearDown(() => grid.AppTheme.brightness.value = originalBrightness);
+
+  SuperTabController controller(ConversationServer server) {
+    final c = server.controller();
+    addTearDown(c.dispose);
+    return c;
+  }
+
   test('parses route sources', () {
     final message = SuperTabMessage.fromJson(routeRow());
     expect(message.route!.decisionId, 'd1');
@@ -116,270 +174,179 @@ void main() {
   });
 
   for (final c in [
-    (via: 'jev', p: 0.82, below: false, fallback: null, text: 'Jev 82%'),
+    (via: 'jev', fallback: null, text: 'Jev 82%'),
+    (via: 'order', fallback: null, text: 'Policy order'),
+    (via: 'order', fallback: 'unsure', text: 'Policy order (Jev unsure)'),
     (
       via: 'order',
-      p: null,
-      below: false,
-      fallback: null,
-      text: 'by policy order ·',
-    ),
-    (
-      via: 'order',
-      p: null,
-      below: false,
-      fallback: 'unsure',
-      text: 'by policy order (Jev unsure)',
-    ),
-    (
-      via: 'order',
-      p: null,
-      below: false,
       fallback: 'unavailable',
-      text: 'by policy order (Jev unavailable)',
+      text: 'Policy order (Jev unavailable)',
     ),
-    (
-      via: 'only',
-      p: null,
-      below: true,
-      fallback: null,
-      text: 'Below quality floor',
-    ),
+    (via: 'only', fallback: null, text: 'Only available candidate'),
   ]) {
-    testWidgets('renders ${c.via} ${c.fallback ?? ''}', (tester) async {
-      final f = SuperTabLaunchFixture();
-      final controller = await f.app.superTabs.open(tabId);
+    testWidgets('keeps ${c.via} ${c.fallback ?? ''} explanation in Details', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      server.routeDecisions['d1'] = decision();
       final message = SuperTabMessage.fromJson(
-        routeRow(via: c.via, p: c.p, belowFloor: c.below, fallback: c.fallback),
+        routeRow(via: c.via, fallback: c.fallback),
       );
-      await tester.pumpWidget(rowOf(message, controller));
-      expect(
-        find.textContaining('Routed to Multiply · Claude opus high · remote-1'),
-        findsOneWidget,
-      );
-      expect(find.textContaining(c.text), findsOneWidget);
-      // The row quotes the Lead's reason, never the verdict's own text.
-      expect(find.textContaining('"schema change, high risk"'), findsOneWidget);
-      f.app.superTabs.dispose();
+      await tester.pumpWidget(rowOf(message, controller(server)));
+      expect(find.text('Routed to Multiply'), findsOneWidget);
+      expect(find.textContaining('schema change'), findsNothing);
+      expect(find.textContaining('Claude opus'), findsNothing);
+      expect(find.textContaining('Selection:'), findsNothing);
+      expect(find.text('Change'), findsNothing);
+      expect(find.text('Reassign'), findsNothing);
+      await tester.tap(find.text('Details'));
+      await tester.pumpAndSettle();
+      expect(find.text('Selection: ${c.text}'), findsOneWidget);
+      expect(find.text('schema change, high risk'), findsOneWidget);
+      expect(find.text('Quality floor 3'), findsOneWidget);
+      expect(find.textContaining('Opus, deepest review'), findsOneWidget);
+      await tester.tap(find.text('Hide details'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('schema change'), findsNothing);
+      expect(server.posts, isEmpty);
     });
   }
 
-  testWidgets('a second Change does not offer the choice just made', (
+  testWidgets('quality warning stays visible without opening Details', (
     tester,
   ) async {
-    final f = SuperTabLaunchFixture();
-    f.connection.server.routeDecisions['d1'] = decision();
-    final controller = await f.app.superTabs.open(tabId);
-    await controller.refresh();
-    final message = SuperTabMessage.fromJson(routeRow());
-    await tester.pumpWidget(rowOf(message, controller));
-    await tester.tap(find.text('Change'));
-    await tester.pumpAndSettle();
-    expect(find.text('Sonnet, fastest turnaround'), findsOneWidget);
-    await tester.tap(find.textContaining('New agent · Claude sonnet medium'));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField), 'Because.');
-    await tester.pump();
-    // The backend now names the choice as the decision's override.
-    f.connection.server.routeDecisions['d1'] = decision(overrideTo: 'c1');
-    await tester.tap(find.widgetWithText(FilledButton, 'Change'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Change'));
-    await tester.pumpAndSettle();
-    expect(find.text('Sonnet, fastest turnaround'), findsNothing);
-    expect(find.text('Codex, cheapest'), findsOneWidget);
-    f.app.superTabs.dispose();
+    final message = SuperTabMessage.fromJson(routeRow(belowFloor: true));
+    await tester.pumpWidget(rowOf(message, controller(ConversationServer())));
+    expect(find.text('Below quality floor'), findsOneWidget);
+    expect(find.text('schema change, high risk'), findsNothing);
   });
 
-  testWidgets('an open details view is read again after a Change', (
-    tester,
-  ) async {
-    final f = SuperTabLaunchFixture();
-    f.connection.server.routeDecisions['d1'] = decision();
-    final controller = await f.app.superTabs.open(tabId);
-    await controller.refresh();
-    final message = SuperTabMessage.fromJson(routeRow());
-    await tester.pumpWidget(rowOf(message, controller));
-    await tester.tap(find.textContaining('Routed to'));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('Quality floor 3'), findsOneWidget);
-    f.connection.server.routeDecisions['d1'] = {
-      ...decision(overrideTo: 'c1'),
-      'record': {...(decision()['record'] as Map), 'floor': 2},
-    };
-    await tester.tap(find.text('Change'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.textContaining('New agent · Claude sonnet medium'));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField), 'Because.');
-    await tester.pump();
-    await tester.tap(find.widgetWithText(FilledButton, 'Change'));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('Quality floor 2'), findsOneWidget);
-    f.app.superTabs.dispose();
-  });
-
-  testWidgets(
-    'Change needs write access and a reason, then sends route.override',
-    (tester) async {
-      final f = SuperTabLaunchFixture();
-      f.connection.server.routeDecisions['d1'] = decision();
-      final controller = await f.app.superTabs.open(tabId);
-      await controller.refresh();
-      final message = SuperTabMessage.fromJson(routeRow());
-      await tester.pumpWidget(rowOf(message, controller));
-      await tester.tap(find.text('Change'));
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.textContaining('New agent · Claude sonnet medium · mac'),
+  for (final c in [
+    ('New agent · Codex default default · Studio Mac', 'new Codex agent'),
+    ('Builder · UI · Claude opus high · Studio Mac', 'Builder · UI'),
+    ('Custom route title', 'Custom route title'),
+  ]) {
+    testWidgets('keeps target identity for ${c.$1}', (tester) async {
+      final json = routeRow();
+      (json['source'] as Map)['pick'] = {'id': 'c0', 'title': c.$1};
+      await tester.pumpWidget(
+        rowOf(SuperTabMessage.fromJson(json), controller(ConversationServer())),
       );
-      await tester.pumpAndSettle();
-      final confirm = find.widgetWithText(FilledButton, 'Change');
-      expect(tester.widget<FilledButton>(confirm).onPressed, isNull);
-      await tester.enterText(
-        find.byType(TextField),
-        'Opus quota is needed elsewhere.',
-      );
-      await tester.pump();
-      await tester.tap(confirm);
-      await tester.pumpAndSettle();
-      final sent =
-          f.connection.calls
-                  .where(
-                    (call) =>
-                        (call.$2['path'] as String?)?.endsWith('/commands') ==
-                        true,
-                  )
-                  .last
-                  .$2['body']
-              as Map;
-      expect(sent['command'], {
-        'type': 'route.override',
-        'decisionId': 'd1',
-        'candidateId': 'c1',
-        'reason': 'Opus quota is needed elsewhere.',
-      });
-      f.app.superTabs.dispose();
-    },
-  );
+      expect(find.text('Routed to ${c.$2}'), findsOneWidget);
+    });
+  }
 
-  testWidgets('a viewer sees no Change', (tester) async {
-    final f = SuperTabLaunchFixture();
-    (f.connection.server.state['people'] as List)[0]['role'] = 'viewer';
-    final controller = await f.app.superTabs.open(tabId);
-    await controller.refresh();
-    final message = SuperTabMessage.fromJson(routeRow());
-    await tester.pumpWidget(rowOf(message, controller));
-    expect(find.text('Change'), findsNothing);
-    f.app.superTabs.dispose();
+  testWidgets('Details opens and closes from the keyboard', (tester) async {
+    final server = ConversationServer();
+    server.routeDecisions['d1'] = decision();
+    await tester.pumpWidget(
+      rowOf(SuperTabMessage.fromJson(routeRow()), controller(server)),
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(find.text('Hide details'), findsOneWidget);
+    expect(find.text('schema change, high risk'), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(find.text('Details'), findsOneWidget);
+    expect(server.posts, isEmpty);
   });
 
-  testWidgets('Change shows the refusal', (tester) async {
-    final f = SuperTabLaunchFixture();
-    f.connection.server.routeDecisions['d1'] = decision();
-    f.connection.server.refuse = {
-      'code': 'ROUTE_CLOSED',
-      'message':
-          'This routing decision is no longer open. Route the task again.',
-    };
-    final controller = await f.app.superTabs.open(tabId);
-    await controller.refresh();
-    final message = SuperTabMessage.fromJson(routeRow());
-    await tester.pumpWidget(rowOf(message, controller));
-    await tester.tap(find.text('Change'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.textContaining('New agent · Claude sonnet'));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField), 'Because.');
-    await tester.pump();
-    await tester.tap(find.widgetWithText(FilledButton, 'Change'));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('no longer open'), findsOneWidget);
-    f.app.superTabs.dispose();
-  });
-
-  testWidgets(
-    'Change lists alternatives with criterion lines, minus the current choice',
-    (tester) async {
-      final f = SuperTabLaunchFixture();
-      f.connection.server.routeDecisions['d1'] = decision();
-      final controller = await f.app.superTabs.open(tabId);
-      await controller.refresh();
-      final message = SuperTabMessage.fromJson(routeRow());
-      await tester.pumpWidget(rowOf(message, controller));
-      await tester.tap(find.text('Change'));
-      await tester.pumpAndSettle();
-      expect(find.text('Sonnet, fastest turnaround'), findsOneWidget);
-      expect(find.text('Codex, cheapest'), findsOneWidget);
-      expect(find.text('Opus, deepest review'), findsNothing);
-      final order = [
-        tester.getTopLeft(find.text('Sonnet, fastest turnaround')).dy,
-        tester.getTopLeft(find.text('Codex, cheapest')).dy,
-      ];
-      expect(order[0], lessThan(order[1]));
-      f.app.superTabs.dispose();
-    },
-  );
-
-  testWidgets('Change excludes an earlier override target', (tester) async {
-    final f = SuperTabLaunchFixture();
-    f.connection.server.routeDecisions['d1'] = decision(overrideTo: 'c1');
-    final controller = await f.app.superTabs.open(tabId);
-    await controller.refresh();
-    final message = SuperTabMessage.fromJson(routeRow());
-    await tester.pumpWidget(rowOf(message, controller));
-    await tester.tap(find.text('Change'));
-    await tester.pumpAndSettle();
-    expect(find.text('Sonnet, fastest turnaround'), findsNothing);
-    expect(find.text('Codex, cheapest'), findsOneWidget);
-    f.app.superTabs.dispose();
-  });
-
-  testWidgets('Change says so when the decision cannot be loaded', (
+  testWidgets('failed details preserve the reason and can retry', (
     tester,
   ) async {
-    final f = SuperTabLaunchFixture();
-    final controller = await f.app.superTabs.open(tabId);
-    await controller.refresh();
-    final message = SuperTabMessage.fromJson(routeRow());
-    await tester.pumpWidget(rowOf(message, controller));
-    await tester.tap(find.text('Change'));
+    final server = ConversationServer();
+    await tester.pumpWidget(
+      rowOf(SuperTabMessage.fromJson(routeRow()), controller(server)),
+    );
+    await tester.tap(find.text('Details'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('Could not load this decision'), findsOneWidget);
-    expect(find.byType(RadioListTile<String>), findsNothing);
-    f.app.superTabs.dispose();
+    expect(find.text('Could not load this decision.'), findsOneWidget);
+    expect(find.text('schema change, high risk'), findsOneWidget);
+    server.routeDecisions['d1'] = decision();
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    expect(find.text('Could not load this decision.'), findsNothing);
+    expect(find.text('Quality floor 3'), findsOneWidget);
+    expect(server.posts, isEmpty);
   });
 
-  testWidgets(
-    'Change while another action is pending is not reported as a refusal',
-    (tester) async {
-      final f = SuperTabLaunchFixture();
-      f.connection.server.routeDecisions['d1'] = decision();
-      final controller = await f.app.superTabs.open(tabId);
-      await controller.refresh();
-      f.connection.server.loseReply = true;
-      await controller.command({
-        'type': 'conversation.create',
-        'title': 'Other',
-        'brief': '',
-        'checks': <dynamic>[],
+  testWidgets('a late details response does not reopen a collapsed row', (
+    tester,
+  ) async {
+    final response = Completer<Map<String, dynamic>>();
+    var reads = 0;
+    final c = SuperTabController(
+      tabId: 'tab',
+      accountId: 'owner',
+      save: (_) async {},
+      request: (method, path, {body}) {
+        reads++;
+        return response.future;
+      },
+    );
+    addTearDown(c.dispose);
+    await tester.pumpWidget(rowOf(SuperTabMessage.fromJson(routeRow()), c));
+    expect(reads, 0);
+    await tester.tap(find.text('Details'));
+    await tester.pump();
+    expect(find.text('Loading details…'), findsOneWidget);
+    await tester.tap(find.text('Hide details'));
+    await tester.pump();
+    response.complete(decision());
+    await tester.pumpAndSettle();
+    expect(find.text('Details'), findsOneWidget);
+    expect(find.text('Quality floor 3'), findsNothing);
+    await tester.tap(find.text('Details'));
+    await tester.pumpAndSettle();
+    expect(reads, 1);
+    expect(find.text('Quality floor 3'), findsOneWidget);
+  });
+
+  for (final brightness in Brightness.values) {
+    for (final scale in [1.0, 2.0]) {
+      testWidgets('routing aligns with chat at ${brightness.name} ${scale}x', (
+        tester,
+      ) async {
+        grid.AppTheme.brightness.value = brightness;
+        await tester.binding.setSurfaceSize(Size(scale == 1 ? 800 : 400, 900));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final server = ConversationServer();
+        server.routeDecisions['d1'] = decision();
+        await tester.pumpWidget(
+          rowOf(
+            SuperTabMessage.fromJson(routeRow()),
+            controller(server),
+            brightness: brightness,
+            scale: scale,
+            withMessage: true,
+          ),
+        );
+        await tester.pumpAndSettle();
+        final messageX = tester.getTopLeft(find.byType(SuperTabMessageText)).dx;
+        final routeX = tester.getTopLeft(find.text('Routed to Multiply')).dx;
+        expect(routeX, messageX);
+        expect(tester.takeException(), isNull);
+        await captureWindow(
+          tester,
+          captureDir,
+          'route-${brightness.name}-${scale}x',
+        );
+        await tester.tap(find.text('Details'));
+        await tester.pumpAndSettle();
+        expect(
+          tester.getTopLeft(find.text('schema change, high risk')).dx,
+          messageX,
+        );
+        expect(tester.takeException(), isNull);
+        await captureWindow(
+          tester,
+          captureDir,
+          'details-${brightness.name}-${scale}x',
+        );
+        expect(server.posts, isEmpty);
       });
-      expect(controller.hasPendingAction, isTrue);
-      final before = f.connection.server.posts.length;
-      final message = SuperTabMessage.fromJson(routeRow());
-      await tester.pumpWidget(rowOf(message, controller));
-      await tester.tap(find.text('Change'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.textContaining('New agent · Claude sonnet'));
-      await tester.pumpAndSettle();
-      await tester.enterText(find.byType(TextField), 'Because.');
-      await tester.pump();
-      await tester.tap(find.widgetWithText(FilledButton, 'Change'));
-      await tester.pumpAndSettle();
-      expect(find.text('Finish the pending action first.'), findsOneWidget);
-      expect(find.textContaining('not confirmed'), findsNothing);
-      expect(f.connection.server.posts.length, before);
-      f.app.superTabs.dispose();
-    },
-  );
+    }
+  }
 }

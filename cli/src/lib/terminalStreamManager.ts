@@ -92,6 +92,16 @@ const OUTPUT_FLUSH_MS = 8
 const LOOPBACK_OUTPUT_FLUSH_MS = 2
 const OUTPUT_CHUNK_BYTES = 32 * 1024
 const INPUT_MAX_BYTES = 64 * 1024
+/**
+ * How long a keystroke that came ahead of the one before it waits for that one (`input`). A client moving a stream
+ * from the relay onto its P2P channel sends key N over the relay and key N+1 over the channel, the faster wire by
+ * ~150–250ms: N+1 came first and was refused, and the client's realignment lost N+1 and the key after it too
+ * (2026-10-15). Within a single wire nothing comes out of order; this only bridges the switch.
+ */
+const INPUT_REORDER_WAIT_MS = 400
+/** What may wait for the missing keystroke at most; past it the wait is given up at once. */
+const INPUT_REORDER_MAX_FRAMES = 64
+const INPUT_REORDER_MAX_BYTES = 256 * 1024
 const PAUSE_HIGH_WATERMARK_BYTES = 384 * 1024
 const RESUME_LOW_WATERMARK_BYTES = 128 * 1024
 const RENDER_STALL_TIMEOUT_MS = 10_000
@@ -138,6 +148,17 @@ interface ActiveStream {
   lastSyncAt: number
   nextSeq: number
   lastInputSeq: number
+  /** Keystrokes that came ahead of one still on its way, by their seq — see `input`. */
+  heldInput: Map<number, Uint8Array>
+  heldInputBytes: number
+  heldInputTimer: ReturnType<typeof setTimeout> | null
+  /** When the oldest keystroke still waiting began to wait (traced only). */
+  heldSince: number
+  /** The last keystroke written, until the first output after it goes out (traced only). */
+  echoProbe: { seq: number; at: number } | null
+  /** A wait was given up and the client told what was expected: nothing waits again until exactly that
+   *  keystroke arrives, so a frame the client numbered under its old count never lands among its new ones. */
+  inputHoldOff: boolean
   lastResizeSeq: number
   pending: PendingOutput[]
   pendingBytes: number
@@ -195,6 +216,9 @@ export interface TerminalStreamManagerDeps {
    * pane opens can go to the phone the person is typing on (core/terminals/browser.ts).
    */
   onInput?: (agentId: string, typed: boolean, from: { connId: string, kind: string | null; inputContext?: string; submitted?: boolean }) => void
+  /** Set only while keystrokes are traced (`TYPING_TRACE`): one line per keystroke held, released, and echoed.
+   *  Numbers and timings only, never the bytes. */
+  typingTrace?: (line: string) => void
 }
 
 function sizeFrom(payload: FramePayload): TerminalStreamSize | null {
@@ -353,6 +377,9 @@ export class TerminalStreamManager {
       return
     }
     if (frame.kind === TerminalBinaryKind.paste) {
+      // A paste carries no number to wait in line by: it must not go ahead of keystrokes typed before it, so
+      // any still waiting for a missing one are given up first, as they were before anything waited.
+      if (state.heldInput.size > 0) this.giveUpHeldInput(state)
       await this.paste(state, frame.bytes)
       return
     }
@@ -580,6 +607,12 @@ export class TerminalStreamManager {
         lastSyncAt: this.now(),
         nextSeq: 0,
         lastInputSeq: -1,
+        heldInput: new Map(),
+        heldInputBytes: 0,
+        heldInputTimer: null,
+        heldSince: 0,
+        echoProbe: null,
+        inputHoldOff: false,
         lastResizeSeq: -1,
         pending: [],
         pendingBytes: 0,
@@ -674,26 +707,102 @@ export class TerminalStreamManager {
     else if (state.outputPaused) this.armStallTimer(state)
   }
 
+  /**
+   * One keystroke frame, written in its client's order. The next one expected is written at once, and with it any
+   * that came ahead of it and waited. One that comes ahead waits for the missing one (INPUT_REORDER_WAIT_MS), bounded
+   * by INPUT_REORDER_MAX_FRAMES/BYTES; when it does not come, everything waiting goes and the client is told, once,
+   * what was expected. Anything else — a number already used, a frame that is malformed — is refused at once, and
+   * what waited goes with it ([refuseInput]).
+   */
   private async input(state: ActiveStream, inputSeq: number, bytes: Uint8Array): Promise<void> {
-    if (!Number.isSafeInteger(inputSeq) || inputSeq !== state.lastInputSeq + 1 || bytes.length === 0 || bytes.length > INPUT_MAX_BYTES) {
-      // Nothing here reached the pty, and `lastInputSeq` is deliberately left where it was. Say what
-      // WOULD have been accepted: a client whose counter has drifted (a frame it dropped on its own
-      // side while resyncing, say) can realign on `expectedSeq` and carry on, instead of having every
-      // later keystroke refused too and treating a fine stream as a dead one.
-      const expectedSeq = state.lastInputSeq + 1
-      // A seq that is not a safe integer at all is an ordering fault too, as far as the client is concerned.
-      const reason = bytes.length === 0 ? 'empty' : bytes.length > INPUT_MAX_BYTES ? 'size' : 'seq'
-      this.sendError(state.connId, 'TERMINAL_INPUT_INVALID', {
-        streamId: state.streamId,
-        reason,
-        expectedSeq,
-        message: reason === 'seq'
-          ? `input seq ${inputSeq} arrived, ${expectedSeq} expected`
-          : reason === 'size' ? `input frame of ${bytes.length} bytes exceeds ${INPUT_MAX_BYTES}` : 'empty input frame',
-      })
+    // A seq that is not a safe integer at all is an ordering fault too, as far as the client is concerned.
+    const malformed = !Number.isSafeInteger(inputSeq) ? 'seq' : bytes.length === 0 ? 'empty' : bytes.length > INPUT_MAX_BYTES ? 'size' : null
+    if (malformed) { this.refuseInput(state, malformed, inputSeq, bytes.length); return }
+    const expectedSeq = state.lastInputSeq + 1
+    if (inputSeq === expectedSeq) {
+      state.inputHoldOff = false
+      this.writeInput(state, inputSeq, bytes)
+      this.releaseHeldInput(state)
       return
     }
+    // A second frame under a number already waiting: the first one stands, and nothing is said about it.
+    if (inputSeq > expectedSeq && state.heldInput.has(inputSeq)) return
+    if (inputSeq > expectedSeq && !state.inputHoldOff) {
+      if (state.heldInput.size < INPUT_REORDER_MAX_FRAMES && state.heldInputBytes + bytes.length <= INPUT_REORDER_MAX_BYTES) {
+        if (state.heldInput.size === 0) state.heldSince = this.now()
+        this.deps.typingTrace?.(`stream=${state.streamId.slice(0, 8)} seq=${inputSeq} held: ${expectedSeq} has not come (${state.heldInput.size + 1} waiting)`)
+        state.heldInput.set(inputSeq, bytes)
+        state.heldInputBytes += bytes.length
+        state.heldInputTimer ??= setTimeout(() => this.giveUpHeldInput(state), INPUT_REORDER_WAIT_MS)
+        return
+      }
+      this.giveUpHeldInput(state)
+      return
+    }
+    this.refuseInput(state, 'seq', inputSeq, bytes.length)
+  }
+
+  /**
+   * Nothing here reached the pty, and `lastInputSeq` is deliberately left where it was. Say what WOULD have been
+   * accepted: a client whose counter has drifted (a frame it dropped on its own side while resyncing, say) can
+   * realign on `expectedSeq` and carry on, instead of having every later keystroke refused too and treating a fine
+   * stream as a dead one.
+   */
+  private refuseInput(state: ActiveStream, reason: 'seq' | 'empty' | 'size', inputSeq: number, size: number): void {
+    // The client numbers what it types next from `expectedSeq`, so keystrokes still held under its old numbering
+    // would land among the new ones: they go, and until the expected one arrives nothing more waits. An oversized
+    // frame refused with a later one held used to release that one after the client's realigned keys (review,
+    // 2026-10-19).
+    this.dropHeldInput(state)
+    state.inputHoldOff = true
+    const expectedSeq = state.lastInputSeq + 1
+    this.sendError(state.connId, 'TERMINAL_INPUT_INVALID', {
+      streamId: state.streamId,
+      reason,
+      expectedSeq,
+      message: reason === 'seq'
+        ? `input seq ${inputSeq} arrived, ${expectedSeq} expected`
+        : reason === 'size' ? `input frame of ${size} bytes exceeds ${INPUT_MAX_BYTES}` : 'empty input frame',
+    })
+  }
+
+  /** The keystrokes that waited for the one just written, as far as they now run on unbroken. */
+  private releaseHeldInput(state: ActiveStream): void {
+    if (state.heldInput.size === 0) return
+    const from = state.lastInputSeq + 1
+    for (let next = from, bytes = state.heldInput.get(next); bytes; next++, bytes = state.heldInput.get(next)) {
+      state.heldInput.delete(next)
+      state.heldInputBytes -= bytes.length
+      this.writeInput(state, next, bytes)
+    }
+    if (state.lastInputSeq >= from) {
+      this.deps.typingTrace?.(`stream=${state.streamId.slice(0, 8)} seq=${from}..${state.lastInputSeq} released after ${Math.round(this.now() - state.heldSince)}ms`)
+      state.heldSince = this.now()
+    }
+    if (state.heldInputTimer) clearTimeout(state.heldInputTimer)
+    // Another gap behind this one gets a full wait of its own.
+    state.heldInputTimer = state.heldInput.size > 0 ? setTimeout(() => this.giveUpHeldInput(state), INPUT_REORDER_WAIT_MS) : null
+  }
+
+  /** The missing keystroke did not come: what waited for it goes, and the client hears once what is expected. */
+  private giveUpHeldInput(state: ActiveStream): void {
+    const waited = [...state.heldInput.keys()]
+    this.dropHeldInput(state)
+    if (state.closing || this.streams.get(state.streamId) !== state) return
+    this.diagnostic(state, 'input_gap_given_up', { expectedSeq: state.lastInputSeq + 1, dropped: waited.length })
+    this.refuseInput(state, 'seq', waited.length > 0 ? Math.min(...waited) : state.lastInputSeq + 1, 0)
+  }
+
+  private dropHeldInput(state: ActiveStream): void {
+    if (state.heldInputTimer) clearTimeout(state.heldInputTimer)
+    state.heldInputTimer = null
+    state.heldInput.clear()
+    state.heldInputBytes = 0
+  }
+
+  private writeInput(state: ActiveStream, inputSeq: number, bytes: Uint8Array): void {
     state.lastInputSeq = inputSeq
+    if (this.deps.typingTrace) state.echoProbe = { seq: inputSeq, at: this.now() }
     state.expiresAt = this.now() + HEARTBEAT_TIMEOUT_MS
     this.tookInput(state, typedByPerson(bytes), nativeSubmitKey(bytes))
     // Not awaited. `writeRaw` hands its `send-keys` to the control client's FIFO synchronously, so
@@ -771,7 +880,10 @@ export class TerminalStreamManager {
     }
     state.expiresAt = this.now() + HEARTBEAT_TIMEOUT_MS
     this.tookInput(state, true)
-    const result = await state.handle.pasteRaw(text)
+    // Asked again as it lands: a paste takes two tmux processes, and its stream may be closed or taken over
+    // meanwhile (its close does not wait in the input lane the paste holds). Gone, it has nobody to tell.
+    const result = await state.handle.pasteRaw(text, () => !state.closing)
+    if (state.closing) return
     if (result.state !== 'succeeded') {
       this.sendError(state.connId, 'TERMINAL_PASTE_FAILED', { streamId: state.streamId, message: result.reason })
       if (result.dispatch === 'possibly_executed') await this.sendKeyframe(state, 'input')
@@ -829,7 +941,10 @@ export class TerminalStreamManager {
     // still needs the image. Hard-failing here used to freeze the whole session over what is, from
     // the engine's perspective, just a degraded paste. Fall back to the file's path as ordinary
     // text, and keep the file: it has to keep resolving after this call returns.
-    const result = await state.handle.pasteRaw(path)
+    // Asked again as it lands: a paste takes two tmux processes, and its stream may be closed or taken over
+    // meanwhile (its close does not wait in the input lane the paste holds). Gone, it has nobody to tell.
+    const result = await state.handle.pasteRaw(path, () => !state.closing)
+    if (state.closing) return
     if (result.state !== 'succeeded') {
       this.sendError(state.connId, 'TERMINAL_PASTE_IMAGE_FAILED', { streamId: state.streamId, message: result.reason })
       if (result.dispatch === 'possibly_executed') await this.sendKeyframe(state, 'input')
@@ -863,7 +978,10 @@ export class TerminalStreamManager {
       })
       return
     }
-    const result = await state.handle.pasteRaw(path)
+    // Asked again as it lands: a paste takes two tmux processes, and its stream may be closed or taken over
+    // meanwhile (its close does not wait in the input lane the paste holds). Gone, it has nobody to tell.
+    const result = await state.handle.pasteRaw(path, () => !state.closing)
+    if (state.closing) return
     if (result.state !== 'succeeded') {
       this.sendError(state.connId, 'TERMINAL_PASTE_FILE_FAILED', { streamId: state.streamId, message: result.reason })
       if (result.dispatch === 'possibly_executed') await this.sendKeyframe(state, 'input')
@@ -1113,6 +1231,11 @@ export class TerminalStreamManager {
       state.pending.push({ seq, bytes: body.plainBytes })
       state.pendingBytes += body.plainBytes
       state.outputFrames++
+      const probe = state.echoProbe
+      if (probe) {
+        state.echoProbe = null
+        this.deps.typingTrace?.(`stream=${state.streamId.slice(0, 8)} seq=${probe.seq} first output out +${Math.round(this.now() - probe.at)}ms after it was written`)
+      }
       state.outputPlainBytes += body.plainBytes
     }
     if (state.pendingBytes > PAUSE_HIGH_WATERMARK_BYTES && !state.outputPaused) void this.pauseOutput(state)
@@ -1276,6 +1399,12 @@ export class TerminalStreamManager {
       compressedBytes: body.bytes.length,
       snapshotMs: Math.max(0, this.now() - startedAt),
     })
+    const probe = state.echoProbe
+    if (probe) {
+      this.deps.typingTrace?.(`stream=${state.streamId.slice(0, 8)} seq=${probe.seq} keyframe (${reason}) out +${Math.round(this.now() - probe.at)}ms after it was written`)
+      // Written before the keyframe began, its echo is in it, or in what the keyframe releases next.
+      if (probe.at <= startedAt) state.echoProbe = null
+    }
     // The output held behind the keyframe is released as live output, read for an engine's print as it is
     // (`repaintBegan`): Codex's clear came in it, after a keyframe taken before its print began, and went straight to
     // the viewer while the keyframe was still marked as being taken. The print's keyframe can begin from it here.
@@ -1405,8 +1534,13 @@ export class TerminalStreamManager {
     })
     if (state.flushTimer) clearTimeout(state.flushTimer)
     if (state.stallTimer) clearTimeout(state.stallTimer)
+    if (state.heldInputTimer) clearTimeout(state.heldInputTimer)
     state.flushTimer = null
     state.stallTimer = null
+    state.heldInputTimer = null
+    // Keystrokes still waiting for a missing one go with the stream: nothing is written to a pane let go.
+    state.heldInput.clear()
+    state.heldInputBytes = 0
     this.streams.delete(state.streamId)
     const controlled = this.controllerByPlacement.get(state.placementKey) === state.ownerId
     if (this.controllerByAgent.get(state.agentId) === state.ownerId) this.controllerByAgent.delete(state.agentId)

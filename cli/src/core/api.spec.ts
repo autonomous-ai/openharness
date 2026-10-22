@@ -129,6 +129,10 @@ describe('the core API services stand on', () => {
     expect(core.cloud).toBeUndefined()
     const cloud = { publish: vi.fn(), ask: vi.fn(), unask: vi.fn() }
     expect(createCoreApi({ ...deps, cloud }).cloud).toBe(cloud)
+    // The Super Tab service's door, the same way.
+    expect(core.superTabs).toBeUndefined()
+    const superTabs = { attention: vi.fn() }
+    expect(createCoreApi({ ...deps, superTabs }).superTabs).toBe(superTabs)
     expect(core.agents.cloud).toBeUndefined()
     const rows = [{ agentId: 'cloud_1' }] as RegisteredSession[]
     expect(createCoreApi({ ...deps, cloudRows: () => rows }).agents.cloud!()).toBe(rows)

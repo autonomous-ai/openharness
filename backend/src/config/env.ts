@@ -225,6 +225,17 @@ const envSchema = z.object({
   // key's OpenRouter credit limit stays the hard cap. Past it ⌘B says Harness's Jev budget has run out until the next UTC day.
   JEV_DAILY_DECISIONS: z.coerce.number().int().positive().default(200_000),
 
+  // Super Tab chat attachments (superTabs/attachments.ts). Clients upload through POST /api/super-tabs/:tabId/attachments,
+  // which streams each file into this GCS bucket (10 MB at most); everyone reads it through the public CDN. No bucket:
+  // uploads answer ATTACHMENTS_UNAVAILABLE and chat stays text only.
+  SUPER_TAB_ATTACHMENTS_BUCKET: z.string().default(''),
+  // The base64 of the service account JSON key that writes to the bucket. Empty: application default credentials (Workload Identity, or GOOGLE_APPLICATION_CREDENTIALS). A value that
+  // is not base64 of such a key stops the backend at startup, with a message that never shows the value.
+  SUPER_TAB_ATTACHMENTS_CREDENTIALS: z.string().default(''),
+  SUPER_TAB_ATTACHMENTS_PREFIX: z.string().default('super-tabs'),
+  // Where clients read the files. https:// in production (superTabs/attachments.ts refuses anything else at startup).
+  SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: z.string().url().default('https://cdn.harness.autonomous.ai'),
+
   // TTL for the in-memory subdomain→machineId cache on the public app-proxy hot path
   // (avoids a Mongo lookup per request). Bounds staleness after a cross-instance app teardown.
   // 60 min default (mapping is stable; a same-instance delete evicts immediately).

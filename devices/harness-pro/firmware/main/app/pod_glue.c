@@ -34,7 +34,9 @@ void pod_ui_render(pod_ui_t *u, ht_scene_t *scene, uint32_t now_ms)
     pod_nav_flip_recaps(&u->nav, &u->model);   // the clock alone can end a stale Working: show the recap it opens on
     // The banner shows while its entry is still unread, the time has not run out, the cable is up and nobody is recording.
     const pod_unread_t *ban = NULL;
-    if (u->ban_on && (int32_t)(now_ms - u->ban_until) >= 0) u->ban_on = false;
+    // A Super Tab question's toast does not run out; Notices lists it, so once Notices is on screen it has been seen.
+    if (u->ban_on && !u->ban_stay && (int32_t)(now_ms - u->ban_until) >= 0) u->ban_on = false;
+    if (u->ban_on && u->ban_stay && top(u) && top(u)->view == POD_V_INBOX) u->ban_on = false;
     if (u->ban_on && !(ban = pod_model_unread_find(&u->model, u->ban_agent))) u->ban_on = false;
     u->frame.banner = ban && u->model.linked && !pod_ui_talking(u) && toast_fits(u);   // the toast, only over a room
     pod_render(&u->frame, &u->nav, &u->model, now_ms);
@@ -168,9 +170,9 @@ pod_out_t pod_ui_sent(pod_ui_t *u, const char *id, uint32_t now_ms)
     return synced(u);
 }
 
-pod_out_t pod_ui_question(pod_ui_t *u, const char *id, const char *text)
+pod_out_t pod_ui_question(pod_ui_t *u, const char *id, const char *text, const char *super_tab, pod_attention_t attention)
 {
-    pod_model_question(&u->model, id, text);
+    pod_model_question_tab(&u->model, id, text, super_tab, attention);
     return synced(u);
 }
 
@@ -235,6 +237,13 @@ static bool swipes(const pod_ui_t *u)
 // Tap to talk: only on the agent's own screens (Agent, Recap). Not in the top band, not on the back crumb or the
 // Notices hit, not on an agent that asks (voice stays refused there, so the tap does not arm and no notice fires).
 // Returns the agent id the tap would talk to, or NULL.
+// An agent with a question to answer here, which talking must not go around. A Super Tab wait is not one: nobody answers
+// it on the Pro, and talking to the agent is how a person unblocks it.
+static bool asks_here(const pod_model_t *m, const pod_agent_t *a)
+{
+    return pod_model_eff(m, a) == POD_ASKING && pod_model_attention(m, a) == POD_ATTN_NONE;
+}
+
 static const char *talk_target(const pod_ui_t *u)
 {
     const pod_frame_t *f = top(u);
@@ -243,7 +252,7 @@ static const char *talk_target(const pod_ui_t *u)
     if (u->hit_valid && (u->hit.action == POD_A_BACK || u->hit.action == POD_A_INBOX)) return NULL;
     const char *id = f->view == POD_V_AGENT || f->view == POD_V_RECAP ? f->agent : NULL;
     const pod_agent_t *a = id ? pod_model_find(&u->model, id) : NULL;
-    return a && pod_model_eff(&u->model, a) != POD_ASKING ? id : NULL;
+    return a && !asks_here(&u->model, a) ? id : NULL;
 }
 static bool wide(int dx, int dy) { return iabs(dx) * 2 > iabs(dy) * 3; }
 static bool inside(const pod_hit_t *h, int x, int y)
@@ -293,7 +302,7 @@ static pod_out_t talk_fire(pod_ui_t *u, uint32_t now_ms)
     char id[ID_MAX];
     pod_copy_str(id, sizeof id, u->talk_agent);
     const pod_agent_t *ag = pod_model_find(&u->model, id);
-    if (!ag || pod_model_eff(&u->model, ag) == POD_ASKING) return none;
+    if (!ag || asks_here(&u->model, ag)) return none;
     if (ag->state == POD_OFFLINE) {
         pod_ui_notice(u, "That machine is offline", now_ms);
         return none;
@@ -585,13 +594,16 @@ static uint32_t edge_ms(const pod_ui_t *u, uint32_t now_ms)
         if (left < 1) left = 1;
         if ((uint32_t)left < edge) edge = (uint32_t)left;
     }
-    if (u->ban_on) {   // so does the banner
+    if (u->ban_on && !u->ban_stay) {   // so does the banner
         int32_t left = (int32_t)(u->ban_until - now_ms);
         if (left < 1) left = 1;
         if ((uint32_t)left < edge) edge = (uint32_t)left;
         if (u->model.linked && !pod_ui_talking(u) && !u->ota && toast_fits(u)) {   // the timer line shrinks (only while the toast is drawn): 66 ms (Home, Notices and Talk keep their own beat)
             if (edge > 66) edge = 66;
         }
+    } else if (u->ban_on && u->model.linked && !pod_ui_talking(u) && !u->ota && toast_fits(u) &&
+               (int32_t)(now_ms - pod_ui_banner_shown_ms(u)) < POD_TOAST_SLIDE_MS) {   // a toast that stays: its bar is still, only the slide-in moves
+        if (edge > 66) edge = 66;
     }
     return edge;
 }
@@ -770,6 +782,10 @@ bool pod_ui_notify_text(pod_ui_t *u, const char *agent_id, pod_tier_t tier, cons
     pod_model_clock(&u->model, now_ms);
     const pod_agent_t *a = pod_model_find(&u->model, agent_id);
     if (!a || tier == POD_TIER_SILENT) return false;
+    // A Super Tab's question is the agent's notice until it closes: what its turns say meanwhile is on its card, and
+    // replaces neither the wait's entry nor its toast. The wait alerted once.
+    // A failed turn still alerts: a crash while it waits is news.
+    if (!question && !a->failed && pod_model_attention(&u->model, a) != POD_ATTN_NONE) return false;
     const pod_frame_t *t = top(u);
     const bool looking = awake && t && (t->view == POD_V_AGENT || t->view == POD_V_RECAP) && !strcmp(t->agent, a->id);
     char joined[POD_UNREAD_TEXT];
@@ -801,6 +817,7 @@ bool pod_ui_notify_text(pod_ui_t *u, const char *agent_id, pod_tier_t tier, cons
             pod_copy_str(u->ban_agent, sizeof u->ban_agent, a->id);
             u->ban_until = now_ms + POD_TOAST_MS;
             u->ban_on = true;
+            u->ban_stay = question && pod_model_attention(&u->model, a) != POD_ATTN_NONE;   // a Super Tab's question waits for you
         }
     }
     return tier == POD_TIER_ALERT;

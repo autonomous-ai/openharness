@@ -379,3 +379,115 @@ it('confirms a stopped assignment only with fresh native evidence, including aft
   await host.reconcileStops()
   expect(proof).toHaveLength(1)
 })
+
+describe('Super Tab attachments in delivered input', () => {
+  it('lists the downloaded files after the text and downloads them once while the terminal holds the input', async () => {
+    const file = { id: 'a1', name: 'screen.png', mime: 'image/png', size: 5, url: 'https://cdn.example.test/x/screen.png' }
+    const t = setup({ text: 'See the screenshot.', attachments: [file] })
+    const attachedFiles = vi.fn(async () => ({ text: 'Attached files:\n- /drops/1-screen.png (screen.png, 5 B)', complete: true }))
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), attachedFiles }); hosts.push(host)
+    await host.tick()
+    expect(attachedFiles).toHaveBeenCalledWith(expect.objectContaining({ attachments: [file] }))
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1])
+      .toMatch(/:\nSee the screenshot\.\n\nAttached files:\n- \/drops\/1-screen\.png \(screen\.png, 5 B\)$/)
+    t.event('rejected', 'team_waiting_busy')
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[1]?.[1]).toContain('/drops/1-screen.png')
+    expect(attachedFiles).toHaveBeenCalledTimes(1)
+  })
+  it('downloads a failed file again before the next delivery of the held input', async () => {
+    const t = setup({ text: 'Logs.', attachments: [{ id: 'a1', name: 'a.log', mime: 'text/plain', size: 1, url: 'https://cdn.example.test/a.log' }] })
+    const attachedFiles = vi.fn()
+      .mockResolvedValueOnce({ text: 'Attached files:\n- Could not download https://cdn.example.test/a.log (a.log, 1 B): HTTP 503', complete: false })
+      .mockResolvedValue({ text: 'Attached files:\n- /drops/a.log (a.log, 1 B)', complete: true })
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), attachedFiles }); hosts.push(host)
+    await host.tick()
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Could not download')
+    t.event('rejected', 'team_waiting_busy')
+    await host.tick()
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[1]?.[1]).toContain('/drops/a.log')
+    t.event('rejected', 'team_waiting_busy')
+    await host.tick()
+    expect(attachedFiles).toHaveBeenCalledTimes(2)
+  })
+  it('delivers a message of files alone', async () => {
+    const t = setup({ text: '', attachments: [{ id: 'a1', name: 'a.log', mime: 'text/plain', size: 1, url: 'https://cdn.example.test/a.log' }] })
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), attachedFiles: async () => ({ text: 'Attached files:\n- /drops/a.log (a.log, 1 B)', complete: true }) }); hosts.push(host)
+    await host.tick()
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toMatch(/from Collaborator:\nAttached files:\n/)
+  })
+})
+
+describe('Super Tab waits for the Harness Pro', () => {
+  it('hands the core the roster\'s waits on the first roster and on each change, and takes them back on stop', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
+    const waiting = { tabId: 'tab', tabName: 'Pilot', attention: { assignmentId: 'as-1', status: 'blocked', result: 'No key' },
+      agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }
+    let rows: unknown[] = [waiting], offline = false
+    const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) => {
+      if (offline) throw new Error('Host offline')
+      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }
+    })
+    const superTabs = { attention: vi.fn() }
+    const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
+      agents: { byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
+    const open = () => { const host = new SuperTabHost(core, 'machine-1', { log: vi.fn() }); hosts.push(host); return host }
+    const first = open()
+    await first.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(1)
+    expect(superTabs.attention).toHaveBeenLastCalledWith([{ agentId: 'harness', requestId: 'supertab:as-1:blocked', superTab: 'Pilot', attention: 'stuck', text: 'Stuck: No key' }])
+    await first.tick()
+    // A failed roster read closes nothing.
+    offline = true
+    await first.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(1)
+    offline = false
+    rows = [{ ...waiting, attention: null }]
+    await first.tick()
+    expect(superTabs.attention).toHaveBeenLastCalledWith([])
+    first.stop()
+    expect(superTabs.attention).toHaveBeenCalledTimes(2)
+    // A new host always hands over its first roster, so it closes what an earlier one raised; stopping takes its own back.
+    const next = open()
+    await next.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(3)
+    rows = [waiting]
+    await next.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(4)
+    superTabs.attention.mockImplementationOnce(() => { throw new Error('Core gone') })
+    next.stop()
+    expect(superTabs.attention).toHaveBeenLastCalledWith([])
+  })
+
+  it('keeps a wait through a moment its harness is missing from the live agents, and closes it after 3 s', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
+    const rows = [{ tabId: 'tab', tabName: 'Pilot', attention: { assignmentId: 'as-1', status: 'needs_human', result: 'Ship it?' },
+      agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }]
+    const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }))
+    let here = true, clock = 0
+    const superTabs = { attention: vi.fn() }
+    const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
+      agents: { byAgent: vi.fn(() => (here ? { agentId: 'harness' } : undefined) as never), terminalAvailable: vi.fn(() => true) } })
+    const host = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(host)
+    await host.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(1)
+    here = false
+    await host.tick()
+    clock += 2_000
+    await host.tick()
+    here = true
+    await host.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(1)   // back within 3 s: the same wait, never closed
+    here = false
+    await host.tick()
+    clock += 3_000
+    await host.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(2)
+    expect(superTabs.attention).toHaveBeenLastCalledWith([])
+    // Never raised while missing: a harness the core does not have is not waited on.
+    clock += 10_000
+    await host.tick()
+    expect(superTabs.attention).toHaveBeenCalledTimes(2)
+  })
+})

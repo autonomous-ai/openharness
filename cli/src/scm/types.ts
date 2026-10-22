@@ -67,6 +67,9 @@ export interface PrepareOptions {
   /** What the workspace's work starts from — git: a `refs/heads/…` or `refs/remotes/…` ref.
    *  Absent: the SCM's own default (git: `HEAD`). */
   base?: string
+  /** No `base` was named: start from the remote's default branch, brought up to date first, instead of from where
+   *  the source checkout is (git: `origin`'s default branch, fetched). Absent: the SCM's own default. */
+  fromDefaultBranch?: boolean
   /** The name the workspace's line of work takes — git: its branch. Absent: made up. */
   name?: string
   /** `name` exists already and is taken as it is, rather than created from `base`. */

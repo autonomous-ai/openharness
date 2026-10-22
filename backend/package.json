@@ -30,6 +30,7 @@
   "dependencies": {
     "@fastify/cors": "^10.1.0",
     "@fastify/multipart": "^9.4.0",
+    "@google-cloud/storage": "8.2.0",
     "@noble/curves": "^2.4.0",
     "@noble/hashes": "^2.4.0",
     "@prisma/client": "^5.22.0",

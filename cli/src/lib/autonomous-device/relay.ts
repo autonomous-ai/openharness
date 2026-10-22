@@ -36,6 +36,8 @@ export class AutonomousDeviceRelay {
       if (req.proto !== 1 || typeof req.requestId !== 'string') { reply({ type: 'hello_result', requestId: req.requestId, error: { code: 'PROTO_UNSUPPORTED', message: 'Protocol 1 required' } }); return }
       const current = this.clients.get(connId)
       this.clients.set(connId, current?.identity === identity ? current : { identity, tokens: 20, at: Date.now(), active: 0 })
+      // What it published before is cleared: it publishes its whole set again after a hello (addons.ts).
+      this.service.addons.hello(identity)
       this.onClient?.(connId, identity)
       const resume = req.resume as { serverInstanceId?: unknown; cursor?: unknown } | undefined
       reply({ type: 'hello_result', requestId: req.requestId, proto: 1, machineId: this.machineId, serverInstanceId: this.service.serverInstanceId, capabilities: this.service.capabilities, ...this.service.resume(resume) })
@@ -95,6 +97,8 @@ export class AutonomousDeviceRelay {
     this.clients.set(connId, { identity, tokens: 20, at: Date.now(), active: 0 })
     this.onClient?.(connId, identity)
     this.service.replay(undefined, event => this.sendEvent(connId, identity, event))
+    // No hello comes after a restart, and this run holds nothing it published: it is asked again.
+    this.service.addons.republish(identity)
   }
   drop(connId: string): void {
     const client = this.clients.get(connId)

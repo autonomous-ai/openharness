@@ -94,6 +94,7 @@ import '../settings/config_store.dart';
 import '../settings/experimental_features.dart';
 import '../core/local_key_value_store.dart';
 import '../core/harness_file_store.dart';
+import '../super_tabs/attachment_upload.dart';
 import '../super_tabs/client.dart';
 import '../super_tabs/controller.dart';
 import '../measurement/setup_preference_store.dart';
@@ -1703,6 +1704,7 @@ class AppNotifier extends ChangeNotifier {
 
   late final superTabs = SuperTabClient(
     storage: localStore ?? HarnessFileStore.shared,
+    upload: uploadWith(() => api),
     discoveryInterval: kUnderTest ? Duration.zero : const Duration(seconds: 15),
     onTabs: (tabs, hidden) {
       // The browser can learn its account before the saved layout finishes
@@ -15682,7 +15684,11 @@ class AppNotifier extends ChangeNotifier {
         return 'The conversation changed. Choose the agent again to start a new switch.';
       }
       if (reply['error'] != 'UNSUPPORTED') {
-        return 'Waiting for the conversation handoff. Try switching again.';
+        return agentHandoffHeldMessage(
+          reply['error'],
+          reply['hold'],
+          engineIdentity(source.engine).label,
+        );
       }
     } catch (_) {
       return 'Waiting for the conversation handoff. Try switching again.';

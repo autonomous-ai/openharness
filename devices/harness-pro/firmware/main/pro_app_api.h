@@ -76,8 +76,10 @@ void pro_app_notif_replace(const pro_notif_row_t *rows, int n);
 // notif.seen: read elsewhere. token is NULL without one.
 void pro_app_notif_seen(const char *id, const char *token);
 
-// request is the question's request id: with the prompt it tells a re-sent question from a new one.
-void pro_app_question(const char *id, const char *request, const char *text);
+// request is the question's request id: with the prompt it tells a re-sent question from a new one. super_tab is the Super Tab
+// the asking agent works in (NULL for a plain question; never "", at most SUPER_TAB_MAX - 1 bytes) and attention what it needs
+// (POD_ATTN_DECISION or POD_ATTN_STUCK with a super_tab, POD_ATTN_NONE without).
+void pro_app_question(const char *id, const char *request, const char *text, const char *super_tab, pod_attention_t attention);
 void pro_app_question_close(const char *id);
 
 // The daemon's surface moved to this agent.

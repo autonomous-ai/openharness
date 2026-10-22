@@ -32,10 +32,11 @@ cc -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -O1 -g -DHT_FACE_PX=720 -I"$
 
 screens=(tabs tabs:bell tabs:mock tabs:0+2 tabs:2+2 tabs:long tabs:9 tabs:linkdown tabs:1 tabs:3 tabs:5 tabs:seven tabs:single tabs:notices tabs:working tabs:none
     agent:fw agent:cli agent:be agent:desk agent:kilo agent:fw:long agent:cli:long agent:be:offline agent:fw:banner agent:cli:banner tabs:banner agent:fw:toast@0 agent:fw:toast@200 agent:fw:toast@2500 agent:fw:toast@4900
+    agent:fw:toast:decision@2500 agent:fw:toast:stuck@9000
     recap:desk:toast@200 recap:desk:toast@2500 recap:docs:toast@4900
     recap:desk recap:desk:unread recap:desk:long recap:desk:viet recap:desk:short recap:desk:medium recap:docs:long recap:docs:unreadfail agent:fw:unread recap:docs recap:kilo recap:desk:testfail recap:desk:extreme recap:desk:banner
     talk:fw talk:fw:quiet talk:fw:send talk:cur talk:cur:send talk:be talk:be:send
-    inbox inbox:viet inbox:quiet inbox:failed ota:0 ota:62 ota:100 ota:restart)
+    inbox inbox:viet inbox:quiet inbox:failed inbox:supertab ota:0 ota:62 ota:100 ota:restart)
 for s in "${screens[@]}"; do
     for now in 0 600 1234 2500 5000; do
         "$out/pod_render" "$s" "$out/r.ppm" "$now" >/dev/null
