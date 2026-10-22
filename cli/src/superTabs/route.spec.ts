@@ -406,7 +406,10 @@ describe('the owner\'s rules', () => {
     // A full model id is caught too, a rule for another engine is not, and `default` is never matched.
     expect(breaks([rule({ kind: 'forbidModel', model: 'haiku' })], { machineId: 'm', engine: 'claude', model: 'claude-haiku-4-5', effort: 'high' })).toContain('Rule.')
     expect(breaks([rule({ kind: 'forbidModel', engine: 'codex', model: 'haiku' })], { machineId: 'm', engine: 'claude', model: 'haiku', effort: 'high' })).toBeNull()
-    expect(breaks([rule({ kind: 'forbidModel', model: 'def' })], { machineId: 'm', engine: 'codex', model: 'default', effort: 'high' })).toContain('Rule.')
+    // `default` is not known, so nothing matches it; a rule naming a full id matches the alias a start asks for.
+    expect(breaks([rule({ kind: 'forbidModel', model: 'def' })], { machineId: 'm', engine: 'codex', model: 'default', effort: 'high' })).toBeNull()
+    expect(breaks([rule({ kind: 'forbidModel', model: 'claude-haiku-4-5' })], { machineId: 'm', engine: 'claude', model: 'haiku', effort: 'high' })).toContain('Rule.')
+    expect(breaks([rule({ kind: 'forbidModel', model: 'claude-haiku-4-5' })], { machineId: 'm', engine: 'claude', model: 'sonnet', effort: 'high' })).toBeNull()
   })
   it('keeps agents to the owner\'s machines', () => {
     const r = choose([sonnet, probe({ machineId: 'm2', machineName: 'other' })], policy, a(), NOW, [], [rule({ kind: 'machines', machineIds: ['m2'] })])
@@ -425,6 +428,11 @@ describe('the owner\'s rules', () => {
     // The highest minimum that applies to the engine wins; one for another engine is ignored.
     const two = ok(choose([codex], policy, a(), NOW, [], [rule({ kind: 'minEffort', effort: 'medium' }), rule({ kind: 'minEffort', engine: 'codex', effort: 'xhigh' }), rule({ kind: 'minEffort', engine: 'claude', effort: 'max' })]))
     expect(two.shown[0].effort).toBe('xhigh')
+    // A lifted row that equals another on the same machine is shown once.
+    const high = probe({ machineName: 'box', engine: 'codex', model: 'default', effort: 'high', quality: 3, cost: 2 })
+    expect(ok(choose([codex, high], policy, a(), NOW, [], [rule({ kind: 'minEffort', effort: 'high' })])).shown.map(s => s.title)).toEqual(['New agent · Codex default high · box'])
+    const auto = probe({ machineName: 'box', engine: 'codex', model: 'default', effort: 'auto', quality: 3, cost: 2 })
+    expect(ok(choose([codex, auto], policy, a(), NOW, [], [rule({ kind: 'minEffort', effort: 'high' })])).shown).toHaveLength(1)
     // Without a minimum, nothing is lifted.
     expect(ok(choose([codex], policy, a(), NOW, [], [rule({ kind: 'minEffort', engine: 'claude', effort: 'high' })])).shown[0].effort).toBe('default')
   })

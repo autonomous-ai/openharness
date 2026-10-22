@@ -788,6 +788,10 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await run(tab, rule(said), host, lead)
     const state = (await store.read(owner, tab)).state
     expect(state.rules).toEqual([expect.objectContaining({ text: 'Never use Haiku.', askedBy: owner.sub, askedIn: { conversationId: 'lead', messageId: said } })])
+    // The same message cannot back a second change, and the owner's "Rule added" row is not the owner asking.
+    await expect(run(tab, rule(said), host, lead)).rejects.toMatchObject({ code: 'OWNER_MESSAGE_REQUIRED' })
+    const ownRow = await run(tab, { type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Reuse idle agents.' })
+    await expect(run(tab, rule(ownRow.result.messageId as string), host, lead)).rejects.toMatchObject({ code: 'OWNER_MESSAGE_REQUIRED' })
   })
   it('closes the replying agent\'s own deliveries of a message as answered, and nobody else\'s', async () => {
     const { tab, lead } = await fixture()

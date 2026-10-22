@@ -253,6 +253,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             if (command.type === 'agent.release' && error instanceof SuperTabHostError && error.status === 400 && ['VALIDATION_ERROR', 'INVALID_REQUEST'].includes(error.code)) {
               return { error: 'RELEASE_UNSUPPORTED', detail: 'This backend does not support releasing Builders yet. Update the backend and try again.' }
             }
+            // A backend from before rules does not know the command type at all; a malformed rule is the Lead's to fix.
+            if (['rule.set', 'rule.remove'].includes(String(command.type)) && error instanceof SuperTabHostError && error.status === 400 && /discriminator/i.test(error.message)) {
+              return { error: 'RULES_UNSUPPORTED', detail: 'This Swarm\'s server does not support rules yet.' }
+            }
             if (!['conversation.create', 'work.define'].includes(String(command.type)) || !command.task || !(error instanceof SuperTabHostError)) throw error
             const oldSchema = error.status === 400 && error.code === 'VALIDATION_ERROR'
               && /^(?:command: )?Unrecognized (?:key: "task"|key\(s\) in object: 'task')$/.test(error.message)

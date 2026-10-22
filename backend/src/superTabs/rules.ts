@@ -18,6 +18,8 @@ export const ruleSchema = z.discriminatedUnion('kind', [
 export const ruleTextSchema = z.string().trim().min(1).max(200)
 export const askedInSchema = z.object({ conversationId: id, messageId: id }).strict()
 export const MAX_RULES = 50
+/** How long an owner's message can back a rule change the Lead passes on; each message backs one change only. */
+export const RULE_MESSAGE_MS = 24 * 3_600_000
 
 export interface SwarmRule {
   id: string
@@ -36,13 +38,20 @@ export interface RunTarget { machineId: string; engine: string; model: string | 
 const ENGINE: Record<string, string> = { claude: 'Claude', codex: 'Codex' }
 /** `default` and `auto` say nothing about the effort, so they never meet a minimum. */
 const rank = (effort: string | null) => EFFORTS.indexOf((effort ?? '') as typeof EFFORTS[number])
+const FAMILY = /haiku|sonnet|opus|fable/
+/** A rule names a model as the owner said it: `haiku` matches every Haiku id, and `claude-haiku-4-5` also matches a start
+ * that asks for the `haiku` alias. `default` is not known, so nothing matches it. */
+export function modelMatches(ruleModel: string, model: string | null): boolean {
+  const rule = ruleModel.toLowerCase(), target = (model ?? 'default').toLowerCase()
+  return target !== 'default' && (target.includes(rule) || (FAMILY.exec(target)?.[0] === target && FAMILY.exec(rule)?.[0] === target))
+}
 
-/** Why a hard rule rules the target out, or null when none does. A `default` model is not known, so no model rule matches it. */
+/** Why a hard rule rules the target out, or null when none does. */
 export function broken(rules: SwarmRule[] | undefined, target: RunTarget): string | null {
   for (const { rule, text } of rules ?? []) {
     const engineName = ENGINE[target.engine] ?? target.engine
     const out = rule.kind === 'forbidModel' ? (!rule.engine || rule.engine === target.engine)
-        && !!target.model && target.model.toLowerCase().includes(rule.model.toLowerCase()) && `${engineName} ${target.model}`
+        && modelMatches(rule.model, target.model) && `${engineName} ${target.model}`
       : rule.kind === 'machines' ? !rule.machineIds.includes(target.machineId) && 'this machine'
       : rule.kind === 'minEffort' ? (!rule.engine || rule.engine === target.engine) && rank(target.effort) < rank(rule.effort)
         && `${engineName} at ${target.effort && rank(target.effort) >= 0 ? `${target.effort} effort` : 'an unnamed effort'}`
@@ -51,6 +60,9 @@ export function broken(rules: SwarmRule[] | undefined, target: RunTarget): strin
   }
   return null
 }
+
+export const startTarget = (request: { machineId: string; engine: string; model?: string; effort?: string }): RunTarget =>
+  ({ machineId: request.machineId, engine: request.engine, model: request.model ?? null, effort: request.effort ?? null })
 
 /** A started agent was launched with `--effort`, which Claude never reports back, so its configuration may say `auto`; its
  * start record still holds what it was launched with (manual run 2026-10-19). */

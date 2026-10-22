@@ -455,6 +455,19 @@ it('teaches agents to say when their work needs a person or is stuck', async () 
   expect(help.help.command).toContain('needs_human')
 })
 
+it('says a server from before rules does not support them, and passes a malformed rule\'s refusal through', async () => {
+  const t = setup()
+  const refuse = (message: string) => t.call.mockImplementation(async (...args: unknown[]) => args[0] === 'POST'
+    ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message } } } as never
+    : { status: 200, body: { success: true, data: { state: { agents: [t.agent] } } } })
+  const send = (command: object) => t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'rule', command }, owner)
+  refuse("command.type: Invalid discriminator value. Expected 'machine.contribute'")
+  expect(await send({ type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Idle first.' })).toEqual({ error: 'RULES_UNSUPPORTED', detail: 'This Swarm\'s server does not support rules yet.' })
+  expect(await send({ type: 'rule.remove', ruleId: 'r' })).toMatchObject({ error: 'RULES_UNSUPPORTED' })
+  refuse('command.rule.effort: Invalid option')
+  expect(await send({ type: 'rule.set', rule: { kind: 'minEffort', effort: 'huge' }, text: 'x' })).not.toMatchObject({ error: 'RULES_UNSUPPORTED' })
+})
+
 it('documents finished worker decisions and explains an older backend without release support', async () => {
   const t = setup()
   const help = (await t.ask({ action: 'help' }, owner)).help as { commands: unknown[]; release: string }

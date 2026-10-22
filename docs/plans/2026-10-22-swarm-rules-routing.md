@@ -34,8 +34,9 @@ type Effort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 The meaning of each rule:
 
 - **forbidModel** (hard): no agent may run a model whose id contains `model`, compared case-insensitively.
-  This catches the short name and the full id (`haiku` matches `haiku` and `claude-haiku-4-5`). A model
-  of `default` matches nothing, because the actual model is not known.
+  This catches the short name and the full id (`haiku` matches `haiku` and `claude-haiku-4-5`). A rule
+  naming a full id also matches a start that asks for that family's alias (`claude-haiku-4-5` matches
+  `haiku`). A model of `default` matches nothing, because the actual model is not known.
 - **machines** (hard): agents run only on the listed machines. There is at most one such rule; adding
   another replaces it.
 - **minEffort** (hard): the effort is at least `effort`, in the order
@@ -64,8 +65,16 @@ Two new commands go through the existing `command` path:
 - A person may change rules only if they are the Swarm owner, and they omit `askedIn`.
 - An agent may change rules only if it is the tab's Lead (the `controls(state, actor)` check that
   `tab.rename` uses), and it must pass `askedIn`. The backend reads that message, the way it reads
-  `replyTo` for `message.send`. The message's author must be the owner, as a person. Any other author
-  is refused with: "Only the Swarm owner sets rules; quote the owner's message that asked for this."
+  `replyTo` for `message.send`. The message must meet four conditions:
+  - its author is the owner, as a person;
+  - it is a plain chat message: no system row, such as the owner's own "Rule added" row or a warning;
+  - it is at most a day old;
+  - no other rule change used it. The Swarm keeps the last 200 such message ids.
+
+  Otherwise the change is refused with "Only the Swarm owner sets rules; quote a chat message the owner
+  wrote in the last day for this change, one no other rule change used." This was added in the review of
+  #1586. An owner message that asks for two rules backs only one of them, so the owner states the other
+  in its own message.
 - Everyone else is refused with `OWNER_REQUIRED`: "Only the Swarm owner, or the Lead passing on the
   owner's request, changes rules."
 - Each change posts one row in the lead group ("Rule added: No Haiku."), so the change can be seen
@@ -82,6 +91,9 @@ has the same check (`breaks` in `route.ts`), so a pick it offers is never refuse
 - **agent.start**, with the request's machine, engine, model and effort;
 - **work.assign**, with the worker's machine and configuration (effort resolved from its start record
   when it reports `auto`);
+- **conversation.agent** when an agent joins or leads a group (leaving is never checked);
+- **agent.startDispatch**, so a start recorded before a rule was added is not launched past it. An agent's
+  dispatch is refused, and the start stays unlaunched;
 - **route.record**, with the pick (a new-agent candidate's fields, or the member's current
   configuration). Other candidates in the record are not checked, so an older CLI that lists a
   forbidden candidate can still record a decision when its pick is allowed.
@@ -91,8 +103,13 @@ An **agent** that breaks a rule is refused with `RULE_BROKEN` and one plain sent
 past a hard rule.
 
 A **person** is not blocked. The command goes through, its result carries `warnings`, and the group gets
-one row: `Ken started Builder on Claude haiku, which breaks the owner's rule "No Haiku."` A person's
-`route.override` to a candidate that breaks a rule works the same way.
+one row (a rule row, with a name rather than an email): `ken started Builder anyway. The owner's rule
+"No Haiku." rules out Claude haiku.` A person's `route.override` to a candidate that breaks a rule works
+the same way.
+
+The person's choice carries through. When the Lead then starts or assigns exactly the candidate the person
+chose, it is let through with the same warning; anything else the Lead does is still refused. The same
+applies to dispatching such a start.
 
 Agents that were already running when a rule was added keep running. Routing just stops offering them,
 and new assignments to them are refused.
@@ -148,7 +165,7 @@ CLI help (`HELP` in `service.ts`):
 | | Old backend (no rules) | New backend |
 |---|---|---|
 | **Old CLI** | today | It still asks Jev. The record is refused only when the pick breaks a hard rule, with a sentence asking the Lead to update or route again. Start and assign are enforced. |
-| **New CLI** | No rules in the state, so routing is today's minus Jev. `rule.set` is refused by the strict schema, and the CLI reports "This Swarm's server does not support rules yet." | full |
+| **New CLI** | No rules in the state, so routing is today's minus Jev. `rule.set` and `rule.remove` are refused by the strict schema, and the CLI reports "This Swarm's server does not support rules yet." | full |
 
 The record keeps today's schema. `via: 'jev'` stays valid in it for old CLIs, and nothing new is added to
 it, so the CLI's existing v1 retry is unchanged. A new CLI with a daemon that has not restarted still

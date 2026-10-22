@@ -69,11 +69,18 @@ const EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 /** `default` and `auto` say nothing about the effort, so they never meet a minimum. */
 const rank = (effort: string) => EFFORTS.indexOf(effort)
 const applies = (rule: { engine?: string }, engine: string) => !rule.engine || rule.engine === engine
+const FAMILY = /haiku|sonnet|opus|fable/
+/** The backend's `modelMatches`: `haiku` matches every Haiku id, `claude-haiku-4-5` also the `haiku` alias, and nothing
+ * matches `default`, which is not known. */
+function modelMatches(ruleModel: string, model: string): boolean {
+  const rule = ruleModel.toLowerCase(), target = model.toLowerCase()
+  return target !== 'default' && (target.includes(rule) || (FAMILY.exec(target)?.[0] === target && FAMILY.exec(rule)?.[0] === target))
+}
 
 /** The backend's check (backend/src/superTabs/rules.ts `broken`), so a pick shown here is never refused when it is
- * started, assigned or recorded. A `default` model is not known, so no model rule matches it. */
+ * started, assigned or recorded. */
 export function breaks(rules: SwarmRule[], p: { machineId: string; engine: string; model: string; effort: string }): string | null {
-  const out = rules.find(({ rule }) => rule.kind === 'forbidModel' ? applies(rule, p.engine) && p.model.toLowerCase().includes(rule.model.toLowerCase())
+  const out = rules.find(({ rule }) => rule.kind === 'forbidModel' ? applies(rule, p.engine) && modelMatches(rule.model, p.model)
     : rule.kind === 'machines' ? !rule.machineIds.includes(p.machineId)
     : rule.kind === 'minEffort' && applies(rule, p.engine) && rank(p.effort) < rank(rule.effort))
   return out ? `Breaks the owner's rule: ${out.text}` : null
@@ -254,7 +261,10 @@ function compare(x: Probe & Sized, y: Probe & Sized, soft: Soft): number {
 }
 
 export function choose(probes: Probe[], policy: Policy, a: Assessment, now: number = Date.now(), open: Commitment[] = [], rules: SwarmRule[] = []): Choice | { error: 'NO_CANDIDATE'; excluded: Array<{ title: string; reason: string }> } {
-  const ruled = probes.map(p => lifted(rules, p)).map(p => { const why = breaks(rules, p); return why ? { ...p, refusals: [...p.refusals, why] } : p })
+  // A lifted row can equal another row on the same machine (Codex `default` lifted to high beside Codex high); one is kept.
+  const raised = probes.map(p => lifted(rules, p)), key = (p: Probe) => `${p.kind}\0${p.machineId}\0${p.engine}\0${p.model}\0${p.effort}`
+  const ruled = raised.filter((p, i) => p === probes[i] || !raised.some((q, j) => j !== i && key(q) === key(p) && (q === probes[j] || j < i)))
+    .map(p => { const why = breaks(rules, p); return why ? { ...p, refusals: [...p.refusals, why] } : p })
   const excluded = ruled.filter(p => p.refusals.length).map(p => ({ title: titleOf(p), reason: p.refusals.join(' ') }))
   const viable = ruled.filter(p => !p.refusals.length)
   if (!viable.length) return { error: 'NO_CANDIDATE', excluded }
