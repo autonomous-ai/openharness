@@ -24,7 +24,15 @@ through the project lead.
 The center toolbar switches between chat, terminals and pull requests. The
 project's vertical menu contains rename, details, sharing, update cadence and
 Swarm routing. A workgroup keeps its own details, rename and archive actions.
-Pull requests in a project lead view include that project's workgroups.
+Pull requests in a project lead view include that project's workgroups. Linked
+GitHub pull requests are read by your computer with its own `gh` login, even after
+an agent stops or changes branches. The pane groups PRs under Needs you, Open,
+Merged, Closed and Status unknown. It refreshes open PRs every minute while
+visible, keeps the last answer when GitHub is unavailable, and shows a single
+banner if `gh` needs installing or signing in. Merged shows the five newest PRs
+with an option to show more; Closed starts collapsed. Clicking a row opens GitHub.
+An older CLI keeps the previous branch-based status display; update the CLI before
+Desktop to enable direct lookups.
 
 ## People, agents and machines
 

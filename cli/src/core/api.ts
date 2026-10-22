@@ -650,7 +650,7 @@ export const SUPER_TAB_REQUESTS = ['super_tabs'] as const
 export interface SuperTabsPort { connected(): void; disconnected(): void; stop(): void; swarmRole(harnessId: string): Promise<'lead' | 'dev' | null | undefined> }
 export const SUPER_TAB_FALLBACKS: PortFallbacks<SuperTabsPort> = { connected: undefined, disconnected: undefined, stop: undefined, swarmRole: later(undefined) }
 /** The project and folder readers (services/projects.ts). */
-export const PROJECTS_REQUESTS = ['git_pull_request', 'git_project_info', 'scm_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file'] as const
+export const PROJECTS_REQUESTS = ['git_pull_request', 'git_pull_requests_status', 'git_project_info', 'scm_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file'] as const
 /** A window's name for its repo and its work, by a small model in the background (services/windowNames.ts). */
 export const WINDOW_NAMES_REQUESTS = ['window_name'] as const
 /** Change agent's handoff file, prepared in the edge host (services/handoff.ts). */
@@ -732,6 +732,8 @@ const MINUTE = 60_000
  * how long a launch on one can wait. A launch on the engine's own login asks models nothing.
  */
 export const LONG_ANSWERS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
+  // Fifty GitHub reads, four at a time, each with an eight-second subprocess deadline.
+  projects: { git_pull_requests_status: 120_000 },
   models: {
     grid_fleet_run: GRID_FLEET_MAX_TIMEOUT_MS + MINUTE,
     grid_fleet_models_list: 15 * MINUTE, grid_fleet_model_download: 15 * MINUTE, grid_fleet_model_start: 15 * MINUTE,

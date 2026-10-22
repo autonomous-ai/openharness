@@ -1568,6 +1568,7 @@ class _SuperTabViewState extends State<SuperTabView>
                             ? SuperTabPullRequests(
                                 controller: c,
                                 app: widget.app,
+                                visible: !_terminalsVisible,
                               )
                             : const SizedBox.shrink(),
                       ],

@@ -13450,6 +13450,31 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// Linked Swarm PRs are read by this window's own computer, using its GitHub login.
+  /// An agent changing branch or stopping must not change whose account reads a link.
+  Future<Map<String, dynamic>> readPullRequestsStatus(List<String> urls) async {
+    final machine = localMachineState, revision = _authRevision;
+    if (machine == null) return {'error': 'LOCAL_GITHUB_UNAVAILABLE'};
+    try {
+      final result = await _conn(machine.machine.machineId).request(
+        'git_pull_requests_status',
+        payload: {'urls': urls},
+        timeout: const Duration(seconds: 120),
+      );
+      if (!_machineWorkCurrent(machine, revision)) {
+        return {'error': 'UNAVAILABLE'};
+      }
+      return result;
+    } on WsRequestFailure catch (error) {
+      if (!_machineWorkCurrent(machine, revision)) {
+        return {'error': 'UNAVAILABLE'};
+      }
+      return {...error.payload, 'error': error.code};
+    } catch (_) {
+      return {'error': 'UNAVAILABLE'};
+    }
+  }
+
   /// PR lookup runs on the agent's machine using that machine's GitHub access.
   Future<Map<String, dynamic>> readAgentPullRequest(
     String machineId,

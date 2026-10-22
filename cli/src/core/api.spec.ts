@@ -6,6 +6,9 @@ import { FAIL, readFallback } from './serviceHost.js'
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
 describe('the core API services stand on', () => {
+  it('allows a bounded batch of GitHub reads to finish outside the core', () => {
+    expect(LONG_ANSWERS.projects).toEqual({ git_pull_requests_status: 120_000 })
+  })
   it('closes only the original Swarm-started native session and treats an absent session as gone', async () => {
     const request = { agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', expiresAt: Date.now() + 120_000, createdAt: new Date(1000).toISOString() }
     const session = { ...row('worker'), sessionId: 'native', registeredAt: 1000, startedBy: 'agent' as const }
