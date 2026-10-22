@@ -47,3 +47,17 @@ CLI source/toolchain: changed Super Tab modules and transitive engine trust, Git
 - Only the correct clone's Swarm worktrees inherit; unrelated linked worktrees remain unchanged.
 - Missing/unreadable/malformed configs retain existing safe writer behavior; repeated repairs can retry.
 - Windows mixed separators and old clone locations remain compatible.
+
+## Review follow-ups
+
+- Publish each machine observation before trust repair. Cache clone/worktree discovery, captured native
+  locations and successful trust records in the host process for each contribution generation. A second
+  successful tick must perform no Git discovery, login-shell capture or trust-config work. Failed settings
+  retry against the retained paths/environment; a new generation or service process starts a fresh repair.
+- Cache successful discovery separately from failed discovery so a temporary Git/filesystem failure
+  retries without rescanning successful clones. Before retrying a failed settings write, verify the
+  original physical directory and Git metadata identities; a replaced path must not inherit consent.
+- Explicit contribution/project preparation still scans freshly so a new clone is trusted before launch.
+- A backend-selected Codex home may select a config only when a locally registered Codex agent already
+  uses that normalized path. Use the local row's path; an arbitrary backend path must never select a file
+  such as the owner's Cargo config. Preserve known local profile support and automatic worktree repair.

@@ -1,19 +1,30 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import { folderTrust } from '../engines/launchPrep.js'
 import { launchEnvironment } from '../engines/kit/launchExecutable.js'
+import { readGitProject } from '../lib/gitProject.js'
+import { recordTrustIn } from '../engines/kit/folderTrust.js'
 import { prepareContribution } from './contribution.js'
 import { prepareSwarmProject } from './projectFolder.js'
 import { ContributedMachines } from './machines.js'
 
 // Never read the person's login profile: the fixture owns the engine locations.
 vi.mock('../engines/kit/launchExecutable.js', () => ({ launchEnvironment: vi.fn(async () => ({ ...process.env })) }))
+vi.mock('../lib/gitProject.js', async original => {
+  const real = await original<typeof import('../lib/gitProject.js')>()
+  return { ...real, readGitProject: vi.fn(real.readGitProject) }
+})
+vi.mock('../engines/kit/folderTrust.js', async original => {
+  const real = await original<typeof import('../engines/kit/folderTrust.js')>()
+  return { ...real, recordTrustIn: vi.fn(real.recordTrustIn) }
+})
 let home = ''
 beforeEach(() => {
+  vi.clearAllMocks()
   home = mkdtempSync(join(tmpdir(), 'swarm-clone-trust-'))
   vi.stubEnv('HOME', home); vi.stubEnv('USERPROFILE', home)
   vi.stubEnv('CLAUDE_CONFIG_DIR', join(home, 'claude')); vi.stubEnv('CODEX_HOME', join(home, 'codex'))
@@ -95,7 +106,7 @@ describe('consented Swarm clones', () => {
     const profile = join(home, 'profile')
     mkdirSync(profile); writeFileSync(join(profile, 'config.toml'), '')
     Object.assign(f.row, { harnessIds: ['worker'] })
-    vi.mocked(f.core.agents.all).mockReturnValue([{ agentId: 'worker', cwd: tree, codexHome: profile }] as never)
+    vi.mocked(f.core.agents.all).mockReturnValue([{ agentId: 'worker', engine: 'codex', cwd: tree, codexHome: profile }] as never)
     const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
     const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
       open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => 1 } as never)
@@ -143,5 +154,100 @@ describe('consented Swarm clones', () => {
     await prepareSwarmProject(f.core, f.row, { request: { conversationId: 'work', cwd: source }, dispatched: false }, async () => source)
     expect(folderTrust('codex', codexHome)!.trusts(source)).toBe(true)
     expect(folderTrust('codex')!.trusts(source)).toBe(false)
+  })
+  it('publishes observations before repair and does no trust work on a second successful tick', async () => {
+    const f = fixture(true), source = clone(join(f.oldRoot, 'project'))
+    let now = 1
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
+      open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => now } as never)
+    await machine.tick()
+    expectTrusted(source)
+    const work = () => [vi.mocked(readGitProject).mock.calls.length, vi.mocked(launchEnvironment).mock.calls.length, vi.mocked(recordTrustIn).mock.calls.length]
+    const before = work()
+    const observation = backend.mock.calls.findIndex(call => call[1] === 'POST')
+    expect(backend.mock.invocationCallOrder[observation]).toBeLessThan(vi.mocked(readGitProject).mock.invocationCallOrder[0]!)
+    now += 16_000
+    await machine.tick()
+    expect(work()).toEqual(before)
+    expect(f.deps.capacity).toHaveBeenCalledTimes(2)
+    f.row.machine.generation = 'new-grant'
+    const added = clone(join(f.root, 'another-project'))
+    now += 16_000
+    await machine.tick()
+    expectTrusted(added)
+    expect(vi.mocked(readGitProject).mock.calls.length).toBeGreaterThan(before[0]!)
+    machine.stop()
+  })
+  it('retries only failed settings after migration without rediscovering clones or a shell', async () => {
+    const f = fixture(true), source = clone(join(f.oldRoot, 'project')), file = join(process.env.CODEX_HOME!, 'config.toml')
+    rmSync(file); mkdirSync(file)
+    let now = 1
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
+      open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => now } as never)
+    await machine.tick()
+    const reads = vi.mocked(readGitProject).mock.calls.length, shells = vi.mocked(launchEnvironment).mock.calls.length
+    const claudeWrites = () => vi.mocked(recordTrustIn).mock.calls.filter(call => call[0].format === 'json').length
+    const before = claudeWrites()
+    rmSync(file, { recursive: true }); writeFileSync(file, '')
+    now += 16_000
+    await machine.tick()
+    expectTrusted(source)
+    expect(vi.mocked(readGitProject)).toHaveBeenCalledTimes(reads)
+    expect(vi.mocked(launchEnvironment)).toHaveBeenCalledTimes(shells)
+    expect(claudeWrites()).toBe(before)
+    machine.stop()
+  })
+  it('does not write a backend-selected Codex home that no local agent uses', async () => {
+    const f = fixture(true), source = clone(join(f.oldRoot, 'project')), home = join(process.env.HOME!, '.cargo')
+    mkdirSync(home)
+    const file = join(home, 'config.toml'), original = '[build]\ntarget = "unchanged"\n'
+    writeFileSync(file, original)
+    await prepareSwarmProject(f.core, f.row, { request: { conversationId: 'work', cwd: source, codexHome: home }, dispatched: false }, async () => source)
+    expect(readFileSync(file, 'utf8')).toBe(original)
+    expectTrusted(source)
+  })
+  it('accepts a selected Codex profile already used by a local Codex agent', async () => {
+    const f = fixture(true), source = clone(join(f.oldRoot, 'project')), profile = join(home, 'local-codex-profile')
+    mkdirSync(profile); writeFileSync(join(profile, 'config.toml'), '')
+    vi.mocked(f.core.agents.all).mockReturnValue([{ agentId: 'local', engine: 'codex', codexHome: profile }] as never)
+    await prepareSwarmProject(f.core, f.row, { request: { conversationId: 'work', cwd: source, codexHome: profile }, dispatched: false }, async () => source)
+    expect(folderTrust('codex', profile)!.trusts(source)).toBe(true)
+  })
+  it('retries failed discovery without rescanning another successfully discovered clone', async () => {
+    const f = fixture(true), failed = clone(join(f.oldRoot, 'project')), ready = clone(join(f.root, 'ready'))
+    const actual = await vi.importActual<typeof import('../lib/gitProject.js')>('../lib/gitProject.js')
+    let unavailable = true, now = 1
+    vi.mocked(readGitProject).mockImplementation(async (path, options) => path === failed && unavailable ? { error: 'GIT_UNAVAILABLE' } : actual.readGitProject(path, options))
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
+      open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => now } as never)
+    try {
+      await machine.tick()
+      expectTrusted(ready); expectTrusted(failed, false)
+      const readyReads = vi.mocked(readGitProject).mock.calls.filter(call => call[0] === ready).length
+      unavailable = false; now += 16_000
+      await machine.tick()
+      expectTrusted(failed)
+      expect(vi.mocked(readGitProject).mock.calls.filter(call => call[0] === ready)).toHaveLength(readyReads)
+    } finally { vi.mocked(readGitProject).mockImplementation(actual.readGitProject); machine.stop() }
+  })
+  it('does not reuse a pending write authorization after the clone becomes an escaping symlink', async () => {
+    const f = fixture(true), source = clone(join(f.oldRoot, 'project')), personal = clone(join(home, 'personal'))
+    const claude = join(process.env.CLAUDE_CONFIG_DIR!, '.claude.json'), codex = join(process.env.CODEX_HOME!, 'config.toml')
+    writeFileSync(claude, 'invalid JSON'); rmSync(codex); mkdirSync(codex)
+    let now = 1
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
+      open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => now } as never)
+    await machine.tick()
+    expect(folderTrust('claude')!.trusts(source)).toBe(false)
+    renameSync(source, join(home, 'old-clone')); symlinkSync(personal, source, 'dir')
+    writeFileSync(claude, '{}'); rmSync(codex, { recursive: true }); writeFileSync(codex, '')
+    now += 16_000
+    await machine.tick()
+    expectTrusted(source, false); expectTrusted(personal, false)
+    machine.stop()
   })
 })
