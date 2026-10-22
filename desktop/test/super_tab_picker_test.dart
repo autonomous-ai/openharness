@@ -73,6 +73,8 @@ void main() {
     final c = await f.app.superTabs.open(tabId);
     await c.refresh();
     c.select('offline');
+    // The teammate's machine has no reading, so it sits under the closed "Offline" disclosure.
+    c.offlineMachinesOpen = true;
     await f.app.agentPreference.remember('codex');
     await f.app.projectHistory.select('m', '/work/project');
     final map = MemoryKeymap();
