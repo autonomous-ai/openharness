@@ -14,22 +14,16 @@ import { tmuxFeatures, type TmuxFeatures } from './tmuxVersion.js'
 import { processIdentityOf } from './terminalRuntime.js'
 import type { TerminalPaneInfo, TerminalPaneRead, TerminalPaneState } from './terminalTypes.js'
 import { processRows, type ProcessRow } from './processTable.js'
+import { isKittyGraphicsCommand } from './terminalTitle.js'
 export { captureTmuxPane, tmuxCaptureArgs } from './tmuxCapture.js'
 
 // Every tmux and `ps` call here: a held event loop must not turn a timeout into an empty answer
 // (patientExec.ts).
 const run = patientExec(execFile)
 
-/**
- * A kitty graphics command: `G`, then comma-separated one-letter keys with values, then `;` and its payload. tmux
- * takes any APC string (ESC _ … ESC \) as the pane's title, and Claude Code sends this query when it thinks it is not
- * inside tmux, as a guest's harness does: the guest helper starts the engine with `env -i`, so it has no TMUX. That
- * harness was named "Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA" (seen on a shared Mac, tmux 3.7c, 2026-10-22).
- */
-const KITTY_GRAPHICS = /^G[a-zA-Z]=[^,;\s]*(?:,[a-zA-Z]=[^,;\s]*)*(?:;[A-Za-z0-9+/=]*)?$/
-
+/** A pane's title as a harness name, or none: a kitty graphics query tmux took as a title is none (terminalTitle.ts). */
 export function cleanPaneTitle(title: string): string | null {
-  if (KITTY_GRAPHICS.test(title.trim())) return null
+  if (isKittyGraphicsCommand(title)) return null
   const cleaned = title
     .trim()
     .replace(/^[\s"'`*✳✱✲✴✶✷✸✹✺✻✼✽✾✿❃❉❋•·.-]+/, '')

@@ -59,6 +59,7 @@ import { mergeTerminalRuntimes, primaryRuntime, processIdentityKey, sameProcessI
 import type { HookTerminalHint, ProcessIdentity, TerminalRuntimeRef } from './terminalTypes.js'
 import { externalReservations, externalResumePending, externalResumeIds, parseExternalResume, type ExternalResumeIntent } from './externalResume.js'
 import type { StartedBy } from './agentAttribution.js'
+import { isKittyGraphicsCommand } from './terminalTitle.js'
 
 export type { ProcessIdentity } from './terminalTypes.js'
 
@@ -2989,6 +2990,8 @@ function defaultProjectDisplayName(s: RegisteredSession): string {
  * its network, and a pane keeps the name it was made under.
  */
 export function titleDisplayName(title: string | null | undefined): string | null {
+  // (A graphics query tmux took as a pane title, one a registry stored before tmux.ts stopped reading it included.)
+  if (title && isKittyGraphicsCommand(title)) return null
   const cleaned = title
     ?.trim()
     .replace(/^[\s\p{Mark}\p{Punctuation}\p{Symbol}]+/u, '')
