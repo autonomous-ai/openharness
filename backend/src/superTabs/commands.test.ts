@@ -850,10 +850,21 @@ describe('cancelling work', () => {
     const text = f.run({ ...cancel, reason: 'Obsolete.' } as Command).messages[0]!.text
     expect(text).toBe('The tab owner cancelled this task: Obsolete. Stop working on it.')
   })
-  it('refuses cancelling work whose worker already left', () => {
-    const { f, worker, cancel } = active()
+  it('closes a task whose worker was removed, tells nobody, and ignores a retry', () => {
+    const { f, group, worker, leadActor, cancel } = active()
     f.run({ type: 'agent.remove', agentId: worker })
-    expect(() => f.run(cancel)).toThrow('left the Super Tab')
+    expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('reconciling')
+    const effects = f.run(cancel, leadActor)
+    expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ status: 'cancelled', result: 'Duplicate of another task' })
+    expect(effects.messages).toHaveLength(1)
+    expect(effects.messages[0]).toMatchObject({ recipients: [], text: 'The Lead cancelled this task: Duplicate of another task.' })
+    expect(f.run(cancel, leadActor).messages).toHaveLength(0)
+  })
+  it('still refuses a worker or collaborator cancelling a removed worker’s task', () => {
+    const { f, worker, workerActor, cancel } = active()
+    f.run({ type: 'agent.remove', agentId: worker })
+    expect(() => f.run(cancel, workerActor)).toThrow()
+    expect(() => f.run(cancel, peer)).toThrow('Lead')
   })
   it('refuses work that already finished', () => {
     const { f, group, leadActor, assignmentId, cancel } = active()

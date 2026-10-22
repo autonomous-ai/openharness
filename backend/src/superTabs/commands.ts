@@ -819,11 +819,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // A retry after the cancel keeps the first reason and tells the worker once.
       if (assignment.status === 'cancelled') break
       if (!activeWork(group)) fail('ATTEMPT_CLOSED', 'This attempt has already ended.')
-      if (assignment.status === 'reconciling') fail('RECONCILING', 'This worker left the Super Tab. Reconcile the assignment instead of cancelling it.')
+      // A removed worker (reconciling) can never confirm a stop, so this is the only way to close its task; nobody is left to tell.
+      const gone = assignment.status === 'reconciling'
       assignment.status = 'cancelled'
       assignment.result = command.reason
       finishWorker(state, assignment.agentId)
-      message(group.id, `${isLead ? 'The Lead' : 'The tab owner'} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}. Stop working on it.`, [assignment.agentId])
+      message(group.id, `${isLead ? 'The Lead' : 'The tab owner'} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.${gone ? '' : ' Stop working on it.'}`,
+        gone ? [] : [assignment.agentId])
       break
     }
     case 'work.check': {
