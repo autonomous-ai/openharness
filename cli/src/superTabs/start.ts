@@ -75,8 +75,10 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
     if (reply.error === 'OPERATION_REUSED' || (reply.error === 'OUTSIDE_CONTRIBUTION' && typeof reply.detail === 'string' &&
       reply.detail.endsWith('Refused: permissionMode (it runs with its own default account settings, so leave it out).'))) {
       const { permissionMode: _mode, ...legacyRequest } = request
+      if (reply.error === 'OUTSIDE_CONTRIBUTION') {
+        permissionWarning = "This backend cannot request full permissions. Older machine hosts run the agent with the machine's default. Update Harness on the backend and machine."
+      }
       reply = await submit(legacyRequest)
-      permissionWarning = "This backend cannot request full permissions. Older machine hosts run the agent with the machine's default. Update Harness on the backend and machine."
     }
     const result = requireSuccess(reply)
     startId = object(result.result).startId

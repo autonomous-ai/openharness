@@ -125,6 +125,19 @@ describe('Swarm permission mode', () => {
     expect(command.request.permissionMode).toBe('full')
   })
 
+  it.each([false, true])('recovers an older CLI start without warning that the backend is old (settled=%s)', async settled => {
+    const f = fixture()
+    Object.assign(f.start, { poolGeneration: 'pool', ...(settled ? { harnessId: 'existing', poolSettled: true } : {}) })
+    f.scoped.mockResolvedValueOnce({ error: 'OPERATION_REUSED', detail: 'Use a new operation ID for a different request.' })
+    const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'same-op', request: f.start.request }, f.scoped, where, f.open)
+    expect(result).toMatchObject({ ok: true, ...(settled ? { harnessId: 'existing' } : { queued: true }) })
+    expect(result).not.toHaveProperty('permissionWarning')
+    const attempts = f.scoped.mock.calls.map(c => c[0]).filter(c => (c.command as any)?.type === 'agent.start')
+    expect(attempts).toHaveLength(2)
+    expect(attempts.map(a => a.operationId)).toEqual(['same-op', 'same-op'])
+    expect(f.open).not.toHaveBeenCalled()
+  })
+
   it.each([false, true])('retries an older backend permission refusal once and warns (settled=%s)', async settled => {
     const f = fixture(), scoped = f.scoped.getMockImplementation()!
     Object.assign(f.start, { poolGeneration: 'pool', ...(settled ? { harnessId: 'existing', poolSettled: true } : {}) })
