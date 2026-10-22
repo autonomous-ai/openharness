@@ -568,6 +568,30 @@ pub(super) fn launch(app: &mut App, request: Request) {
     } else {
         path
     };
+    // A computer shared with this account (guest sharing): its owner's daemon answers a guest only what
+    // cli core/guestPolicy.ts lists, which is not fs_list_dir, shell_capabilities or the terminal that runs
+    // shell-launch, so a composed command there was refused GUEST_NOT_ALLOWED. Start it as New Harness does there,
+    // and Desktop: Claude Code or Codex in that folder, on the owner's plans (a model route stays behind).
+    if app.fleet.shares.contains_key(&machine) {
+        let mode = app.options.get("@hn-permission-mode", "", None).filter(|m| !m.is_empty()).unwrap_or_else(|| "auto".into());
+        let payload = match guest_launch(&launch.engine, &path, &args, &mode) {
+            Ok(p) => p,
+            Err(e) => return reply(app, &request, 1, &e),
+        };
+        app.shell_context.pending = Some(request.clone());
+        let epoch = app.account_epoch;
+        let source_cwd = Some(launch.cwd.clone());
+        app.spawn(async move { link.rpc("agent_create", payload, Duration::from_secs(180)).await }, move |app, result| {
+            if app.account_epoch != epoch { return }
+            // A refusal recorded on the receipt is `failure`, as New Harness reads it.
+            let result = result.and_then(|v| match v["failure"]["code"].as_str() {
+                Some(code) => Err(crate::daemon::RpcError::new(code, v["failure"]["detail"].as_str().unwrap_or(""))),
+                None => Ok(v),
+            });
+            started(app, request, machine, source, source_cwd, result);
+        });
+        return;
+    }
     app.shell_context.pending = Some(request.clone());
     let epoch = app.account_epoch;
     let local = machine == source.0;
@@ -600,23 +624,44 @@ pub(super) fn launch(app: &mut App, request: Request) {
             open_shell(&link2, payload).await
         },move |app,result| {
             if app.account_epoch!=epoch {return}
-            let current=app.shell_context.pending.as_ref().is_some_and(|r|r.id==request.id);
-            match result {
-                Ok(v)=>if let Some(id)=v.pointer("/agent/id").and_then(Value::as_str) {
-                    app.fleet.agents.insert((machine.clone(),id.into()),crate::fleet::agent_from(&machine,&v["agent"],None));
-                    if !current {if let Some(link)=app.link(&machine){link.send("agent_delete",json!({"agentId":id}));}return}
-                    app.shell_context.pending=None;
-                    if app.focused()!=Some(request.pane) {
-                        reply_data(app,&request,0,"",Some(json!({"attached":true,"message":"Agent started. Open it with Ctrl+B s."})));return
-                    }
-                    reply_data(app,&request,0,"",Some(json!({"attached":true})));
-                    let shell=app.shells.remove(&source);app.open_agent(&machine,id,Placement::Replace);if shell{app.shells.insert(source.clone());}
-                    visiting_shell_launch(app,&source,source_cwd,&machine,id);app.save_sessions();
-                }else{finish(app,1,"The computer did not create the agent.")},
-                Err(e)=>finish(app,1,&format!("Could not start: {e}")),
-            }
+            started(app, request, machine, source, source_cwd, result);
         });
     });
+}
+
+/// A composed command's agent, created on [machine]: it replaces the shell's view, which it returns to on exit.
+fn started(app: &mut App, request: Request, machine: String, source: (String, String), source_cwd: Option<String>,
+    result: Result<Value, crate::daemon::RpcError>) {
+    let current=app.shell_context.pending.as_ref().is_some_and(|r|r.id==request.id);
+    match result {
+        Ok(v)=>if let Some(id)=v.pointer("/agent/id").and_then(Value::as_str) {
+            app.fleet.agents.insert((machine.clone(),id.into()),crate::fleet::agent_from(&machine,&v["agent"],None));
+            if !current {if let Some(link)=app.link(&machine){link.send("agent_delete",json!({"agentId":id}));}return}
+            app.shell_context.pending=None;
+            if app.focused()!=Some(request.pane) {
+                reply_data(app,&request,0,"",Some(json!({"attached":true,"message":"Agent started. Open it with Ctrl+B s."})));return
+            }
+            reply_data(app,&request,0,"",Some(json!({"attached":true})));
+            let shell=app.shells.remove(&source);app.open_agent(&machine,id,Placement::Replace);if shell{app.shells.insert(source.clone());}
+            visiting_shell_launch(app,&source,source_cwd,&machine,id);app.save_sessions();
+        }else{finish(app,1,"The computer did not create the agent.")},
+        Err(e)=>finish(app,1,&format!("Could not start: {e}")),
+    }
+}
+
+/// What a composed command starts on a computer shared with this account: Claude Code or Codex in [cwd], on its
+/// owner's plans, as New Harness starts it there. A task typed after the command is its first message; the
+/// engine's own options are not for a guest's harness (cli core/agents/guestCreate.ts builds its command).
+fn guest_launch(engine: &str, cwd: &str, args: &[String], permission_mode: &str) -> Result<Value, String> {
+    if !["claude", "codex"].contains(&engine) { return Err("On a computer shared with you, start Claude Code or Codex.".into()) }
+    if args.iter().any(|a| a.starts_with('-')) {
+        return Err("On a computer shared with you, start it without options: it runs on its owner's plans.".into())
+    }
+    let mut payload = json!({ "engine": engine, "cwd": cwd, "creationId": uuid::Uuid::new_v4().to_string(),
+        "bypassPermission": true, "permissionMode": permission_mode });
+    let task = args.join(" ");
+    if !task.trim().is_empty() { payload["prompt"] = json!(task.trim()) }
+    Ok(payload)
 }
 
 /// The composer's `@ computer` rows.
@@ -655,6 +700,22 @@ fn host_rows(app: &App) -> Vec<Row> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_composed_command_on_a_computer_shared_with_you_starts_claude_code_or_codex_as_new_harness_does() {
+        // `claude @<shared computer> :<shared folder>`: one agent_create a guest may send, never shell-launch.
+        let p = guest_launch("claude", "/Users/dee/projects/app", &[], "auto").unwrap();
+        assert_eq!(p["engine"], "claude");
+        assert_eq!(p["cwd"], "/Users/dee/projects/app");
+        assert_eq!(p["permissionMode"], "auto");
+        assert!(uuid::Uuid::parse_str(p["creationId"].as_str().unwrap()).is_ok());
+        for key in ["argv", "grid", "model", "apiConnection", "dsh", "agent"] { assert!(p.get(key).is_none(), "{key} is not for a guest") }
+        // A task typed after it is its first message.
+        assert_eq!(guest_launch("codex", "/w", &["fix the login test".into()], "auto").unwrap()["prompt"], "fix the login test");
+        // Its own options, and other agents, are refused with why.
+        assert!(guest_launch("claude", "/w", &["--model".into(), "opus".into()], "auto").unwrap_err().contains("without options"));
+        assert!(guest_launch("gemini", "/w", &[], "auto").unwrap_err().contains("Claude Code or Codex"));
+    }
 
     #[test]
     fn offline_computers_are_listed_dim_after_the_connected_ones_never_disabled() {
