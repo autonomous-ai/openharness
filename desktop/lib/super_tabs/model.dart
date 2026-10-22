@@ -34,6 +34,7 @@ class SuperTabPerson {
 class SuperTabAgent {
   SuperTabAgent.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
+      hasProjectId = row['projectId'] != null,
       projectId = row['projectId'] as String? ?? 'lead',
       name = _text(row, 'name'),
       displayName = row['displayName'] as String?,
@@ -42,6 +43,8 @@ class SuperTabAgent {
       contributorId = _text(row, 'contributorId'),
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
+  // Keep the legacy default for callers while allowing group-based roster ownership.
+  final bool hasProjectId;
   final String? displayName;
   final Map<String, dynamic> configuration;
   String get engine => configuration['engine'] as String? ?? '';
