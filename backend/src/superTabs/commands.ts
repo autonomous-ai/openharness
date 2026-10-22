@@ -401,7 +401,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       const leadId = conversation(state, project.leadConversationId).leadId
       if (command.reviewOf) {
-        const reviewed = conversation(state, command.reviewOf)
+        const reviewed = open(state, command.reviewOf)
         if (reviewed.id === project.leadConversationId || reviewed.reviewOf || groupProject(state, reviewed).id !== project.id) {
           fail('REVIEW_TARGET', 'A review group reviews one build group of the same project.', 400)
         }

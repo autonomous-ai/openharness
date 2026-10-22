@@ -1055,6 +1055,9 @@ describe('Reviewer role', () => {
     const checks = [{ description: 'Verdict on the revision', independent: false }]
     const create = (reviewOf: string) => f.run({ type: 'conversation.create', title: 'Review: Offline editing', brief: 'Review head abc.', reviewOf, checks }, leadActor)
     expect(() => create('lead')).toThrow('one build group')
+    const archived = f.group()
+    f.run({ type: 'conversation.archive', conversationId: archived, archived: true })
+    expect(() => create(archived)).toThrow('Reopen this conversation')
     const review = create(group).result.conversationId as string
     expect(() => create(review)).toThrow('one build group')
     expect(f.state.conversations.find(c => c.id === review)).toHaveProperty('reviewOf', group)
