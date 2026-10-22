@@ -40,8 +40,10 @@ and typechecks, required CLI coverage gates, isolated Swarm end-to-end tests,
 and the available real multiplexer checks. Automatic PR CI supplies the full
 affected component suites. Keep independent checks concurrent within capacity.
 Use a draft PR while work changes, mark ready once final, and do not merge.
-Coordinate the owner's Launch Builder recovery and one disposable worker switch
-with the Lead; distinguish isolated tests from those live checks.
+Prove a disposable switch and one delivery with the isolated daemon and local
+backend fixtures before marking the PR ready. Per the Lead's clarification,
+the owner's Launch Builder recovery and assignability check are post-release;
+record them as unverified here until the Lead runs them with the Builder.
 
 Release backend first, then CLI; Desktop and TUI ship caller reporting changes
 after the CLI supports them. Older clients recover through verified handoffs.

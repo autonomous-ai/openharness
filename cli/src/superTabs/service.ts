@@ -190,7 +190,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         const answer = object(await backend(core, 'GET', `${path}?${identity}`))
         const state = object(answer.state)
         const agent = Array.isArray(state.agents) ? state.agents.map(object).find(a => a.id === agentId) : undefined
-        if (!agent || agent.machineId !== core.daemon.machineId() || typeof agent.harnessId !== 'string' || !core.agents.byAgent(agent.harnessId)) {
+        if (!agent || agent.machineId !== core.daemon.machineId() || typeof agent.harnessId !== 'string'
+          || identifier(payload.harnessId) && agent.harnessId !== payload.harnessId || !core.agents.byAgent(agent.harnessId)) {
           return { error: 'AGENT_UNAVAILABLE', detail: 'This agent is not a running contribution on this machine.' }
         }
         wake()

@@ -44,6 +44,7 @@ class SwitchConnection extends MonitorConnection {
   final handoffTimeouts = <Duration>[];
   final eventsAtHandoff = <List<String>>[];
   final completedHandoffs = <Map<String, dynamic>>[];
+  String? completionError;
 
   @override
   Future<Map<String, dynamic>> request(
@@ -53,7 +54,7 @@ class SwitchConnection extends MonitorConnection {
   }) async {
     if (type == 'agent_handoff_complete') {
       completedHandoffs.add(Map.of(payload));
-      return {'ok': true};
+      return completionError == null ? {'ok': true} : {'error': completionError};
     }
     if (type == 'agent_handoff_prepare') {
       handoffCalls.add(Map.of(payload));
@@ -181,6 +182,32 @@ class SwitchDeskApi extends ApiClient {
 }
 
 void main() {
+  test('a lost completion report retries the same replacement without another launch', () async {
+    final connection = SwitchConnection()..completionError = 'SERVICE_UNAVAILABLE';
+    final app = fixture(connection);
+    addTearDown(app.dispose);
+    await app.addAgentToSwarm('m', 'a0');
+    expect(await app.changeAgent('m', 'a0', 'claude'), contains('new agent started'));
+    expect(app.panes.single.agentId, 'a0');
+    expect(connection.creations, hasLength(1));
+    connection.completionError = null;
+    expect(await app.changeAgent('m', 'a0', 'claude'), isNull);
+    expect(connection.creations, hasLength(1));
+    expect(connection.completedHandoffs, hasLength(2));
+    expect(connection.completedHandoffs.first, connection.completedHandoffs.last);
+    expect(connection.events, ['save/stop', 'start']);
+  });
+
+  test('an older daemon can finish Change agent without the new completion request', () async {
+    final connection = SwitchConnection()..completionError = 'UNSUPPORTED';
+    final app = fixture(connection);
+    addTearDown(app.dispose);
+    await app.addAgentToSwarm('m', 'a0');
+    expect(await app.changeAgent('m', 'a0', 'claude'), isNull);
+    expect(connection.completedHandoffs, hasLength(1));
+    expect(app.panes.single.agentId, isNot('a0'));
+  });
+
   test('Devices offers every agent while absent from the public catalog', () {
     final connection = SwitchConnection();
     final app = fixture(connection, harnessId: devicesHarnessId);

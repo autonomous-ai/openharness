@@ -635,13 +635,18 @@ export class SuperTabHost {
       if (delivery.claimId) this.core.turns.cancelDelivery(typedId(entry))
     }
     const id = typedId(entry)
-    if (entry.stage === 'prepared' && entry.harnessId !== target.agent.harnessId) {
+    if (entry.harnessId !== target.agent.harnessId) {
       // Only an explicit withheld native write proves input was never submitted. Ambiguous and
       // delivered receipts keep their original terminal and are never replayed on replacement.
       this.authorized.delete(id)
-      if (this.active.delete(id)) this.core.turns.cancelDelivery(id)
-      entry.harnessId = target.agent.harnessId
+      const active = this.active.delete(id)
+      if (entry.stage === 'prepared') entry.harnessId = target.agent.harnessId
+      else if (entry.stage === 'submitting') {
+        entry.stage = 'uncertain'
+        entry.receipt = 'The member changed terminals before native submission was confirmed. Inspect the earlier session before retrying.'
+      }
       this.persist()
+      if (active) this.core.turns.cancelDelivery(id)
     }
     if (entry.stage === 'submitting' && !this.active.has(id)) {
       entry.stage = 'uncertain'

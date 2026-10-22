@@ -93,6 +93,16 @@ describe('current Swarm role lookup', () => {
 })
 
 describe('Super Tab native delivery handoff', () => {
+  it('revokes an in-flight old-terminal lease when the member is rebound, preserving uncertainty', async () => {
+    const t = setup(), host = t.open()
+    await host.tick()
+    t.row.agent.harnessId = 'new-harness'
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.core.turns.cancelDelivery).toHaveBeenCalledWith('team:service:superTabs:delivery')
+    expect(t.saved().entries.delivery.stage).toBe('uncertain')
+    expect(t.receipts.at(-1)).toMatchObject({ uncertain: true })
+  })
   it('retargets held input after Change agent without retargeting uncertain input', async () => {
     const t = setup(), host = t.open()
     await host.tick(); t.event('rejected', 'team_waiting_busy')

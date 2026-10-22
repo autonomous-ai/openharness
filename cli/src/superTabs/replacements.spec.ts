@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { handoffIntentHash, type PreparedHandoff } from '../lib/handoffAuthority.js'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -51,4 +52,39 @@ it('refuses to record unrelated or incomplete native facts', async () => {
   f.next.cwd = '/repo'; f.old.active = true
   await expect(recordReplacement(f.core, f.payload)).rejects.toThrow()
   await expect(recordReplacement(f.core, { ...f.payload, changeId: '../bad' })).rejects.toThrow()
+})
+
+function legacy(core: ReturnType<typeof fakeCore>, changeId = 'a'.repeat(32), invalid = '') {
+  const route = [{ path: '/repo', identity: 'fixture-native-key' }]
+  const prepared: PreparedHandoff = { request: { agentId: 'old', changeId, targetEngine: 'claude' },
+    sessions: [{ agentId: 'old', fingerprint: 'f'.repeat(64) }], reads: [],
+    project: { cwd: '/repo', path: '/repo', fileKey: 'fixture', route },
+    result: { cwd: '/repo', file: null, gitRepo: false, degraded: [] }, documents: null, exclude: null,
+    git: { exclude: null, route, files: [] } }
+  const dir = join(core.dataDir, 'handoff-receipts'); mkdirSync(dir, { mode: 0o700 })
+  writeFileSync(join(dir, `${'b'.repeat(64)}.json`), JSON.stringify({ version: 1,
+    committed: invalid !== 'uncommitted', prepared,
+    fingerprint: invalid === 'checksum' ? 'incorrect' : handoffIntentHash(prepared) }), { mode: 0o600 })
+}
+
+it('recovers an earlier switch from a committed private handoff and its exact launch receipt', async () => {
+  const f = fixture(); legacy(f.core)
+  expect(await replacementObservations(f.core, 'machine', [f.row])).toMatchObject([{ body: { command: {
+    previousHarnessId: 'old', harnessId: 'new', configuration: { engine: 'claude' } } } }])
+  vi.mocked(f.core.agents.creationStatus!).mockResolvedValue(null)
+  expect(await replacementObservations(f.core, 'machine', [f.row])).toEqual([])
+})
+
+it.each(['uncommitted', 'checksum'])('does not recover a %s handoff', async invalid => {
+  const f = fixture(); legacy(f.core, 'a'.repeat(32), invalid)
+  expect(await replacementObservations(f.core, 'machine', [f.row])).toEqual([])
+})
+
+it('does no history scan for a member whose current terminal is live', async () => {
+  const f = fixture()
+  // This invalid folder would throw if recovery tried to inspect it.
+  mkdirSync(join(f.core.dataDir, 'handoff-receipts'), { mode: 0o777 })
+  vi.mocked(f.core.agents.byAgent).mockReturnValue(f.old as never)
+  expect(await replacementObservations(f.core, 'machine', [f.row])).toEqual([])
+  expect(f.core.agents.creationStatus).not.toHaveBeenCalled()
 })

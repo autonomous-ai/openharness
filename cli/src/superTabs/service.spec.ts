@@ -204,6 +204,7 @@ it('resolves a replacement terminal to the original stable member', async () => 
     ? [{ tabId: 'tab', agent: t.agent }] : { state: { agents: [t.agent] } } } }))
   expect(await t.ask({ action: 'status', tabId: 'tab', harnessId: 'replacement' }, owner)).toMatchObject({ ok: true })
   expect(t.call).toHaveBeenLastCalledWith('GET', `/api/super-tabs/tab?asAgentId=${t.agentId}`, undefined)
+  expect(await t.ask({ action: 'status', tabId: 'tab', harnessId: 'native' }, owner)).toMatchObject({ error: 'AGENT_UNAVAILABLE' })
 })
 
 it('tells the Lead which branch a started agent works from, and how to choose another', async () => {

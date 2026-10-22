@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema } from './commands.js'
-import { createSuperTab, type Actor } from './model.js'
+import { createSuperTab, SuperTabError, type Actor } from './model.js'
+import { projectsOf } from './projects.js'
 
 const config = { engine: 'codex', model: 'old', effort: 'high', contextWindow: null, engineVersion: null }
 const next = { ...config, engine: 'claude', model: 'sonnet' }
@@ -40,12 +41,20 @@ describe('Change agent keeps the Swarm member', () => {
     if (kind === 'person') who = person
     if (kind === 'account') who = { ...f.actor, machineOwnerId: 'other' } as Actor
     if (kind === 'machine') command.machineId = 'other'
-    if (kind === 'project') command.projectId = 'other'
+    if (kind === 'project') {
+      f.state.projects = [...projectsOf(f.state), { ...projectsOf(f.state)[0]!, id: 'other', leadConversationId: 'other-lead' }]
+      command.projectId = 'other'
+    }
     if (kind === 'old') command.previousHarnessId = 'other'
     if (kind === 'self') command.harnessId = 'old'
     if (kind === 'stopping') f.member.workDecision = 'stop'
     if (kind === 'occupied') f.state.agents.push({ ...f.member, id: 'another', harnessId: 'new' })
-    expect(() => f.run(command, who)).toThrow()
+    const code = kind === 'account' ? 'FORBIDDEN' : kind === 'project' ? 'NOT_FOUND' : kind === 'occupied' ? 'SESSION_CONTRIBUTED'
+      : kind === 'old' || kind === 'self' ? 'AGENT_CHANGED' : kind === 'stopping' ? 'STOP_REQUESTED' : 'HOST_REQUIRED'
+    try { f.run(command, who); expect.fail('A mismatched replacement must be refused') } catch (error) {
+      expect(error).toBeInstanceOf(SuperTabError)
+      expect(error).toMatchObject({ code })
+    }
     expect(f.state.agents[0]!.harnessId).toBe(before.agents[0]!.harnessId)
   })
 })
