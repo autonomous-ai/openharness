@@ -727,14 +727,41 @@ mod tests {
 
     fn sent(app: &App, ty: &str) -> Vec<Value> { app.agent_switch.sent.iter().filter(|(_, t, _)| t == ty).map(|(_, _, p)| p.clone()).collect() }
 
+    // Existing view/layout fixtures acknowledge the newly added report just as their daemon
+    // acknowledges creation. The report-specific fixtures below control that reply explicitly.
+    fn acknowledge_reports(app: &mut App) {
+        let ids: Vec<_> = app.agent_switch.changes.iter().filter(|(_, c)| c.stage == Stage::Report).map(|(id, _)| id.clone()).collect();
+        for id in ids { reported(app, &id, Ok(json!({"ok":true}))); }
+    }
+    fn created(app: &mut App, id: &str, reply: Reply) { super::created(app, id, reply); acknowledge_reports(app); }
+    fn checked(app: &mut App, id: &str, reply: Reply) { super::checked(app, id, reply); acknowledge_reports(app); }
+    fn tick(app: &mut App) { super::tick(app); acknowledge_reports(app); }
+
     #[tokio::test]
     async fn completed_change_reports_the_native_replacement_before_moving_views() {
         let mut app = app();
         let id = start(&mut app, "claude"); handoff(&mut app, &id);
         stopped(&mut app, &id, Ok(json!({"closed":true})));
-        created(&mut app, &id, Ok(ready(&id, true)));
+        super::created(&mut app, &id, Ok(ready(&id, true)));
         assert_eq!(sent(&app, "agent_handoff_complete"), vec![json!({"agentId":"a1", "replacementId":"replacement", "changeId":id, "targetEngine":"claude"})]);
         assert_eq!(app.panes[&1].agent_id, "a1");
+        reported(&mut app, &id, Ok(json!({"ok":true})));
+        assert_eq!(app.panes[&1].agent_id, "replacement");
+    }
+
+    #[tokio::test]
+    async fn a_lost_replacement_report_retries_the_same_launch_without_another_stop() {
+        let mut app = app(); let id = start(&mut app, "claude"); handoff(&mut app, &id);
+        stopped(&mut app, &id, Ok(json!({"closed":true})));
+        super::created(&mut app, &id, Ok(ready(&id, true)));
+        reported(&mut app, &id, Err(RpcError::new("TIMEOUT", "")));
+        assert_eq!(app.panes[&1].agent_id, "a1");
+        select(&mut app, "claude");
+        checked(&mut app, &id, Ok(ready(&id, true)));
+        assert_eq!(app.panes[&1].agent_id, "replacement");
+        assert_eq!(sent(&app, "agent_create").len(), 1);
+        assert_eq!(sent(&app, "agent_close").len(), 1);
+        assert_eq!(sent(&app, "agent_handoff_complete").len(), 2);
     }
 
     #[tokio::test]

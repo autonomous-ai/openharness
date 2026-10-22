@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyCommand, commandSchema, type Command } from './commands.js'
+import { applyCommand, commandSchema } from './commands.js'
 import { createSuperTab, type Actor } from './model.js'
 
 const config = { engine: 'codex', model: 'old', effort: 'high', contextWindow: null, engineVersion: null }
@@ -15,7 +15,7 @@ function fixture() {
     execution: { machineId: 'machine', machineOwnerId: 'owner', harnessId: 'old' }, result: null }
   const actor: Actor = { kind: 'agent', agentId: member.id, machineOwnerId: 'owner' }
   const command = { type: 'agent.rebind', agentId: member.id, machineId: 'machine', projectId: 'lead', previousHarnessId: 'old', harnessId: 'new', configuration: next }
-  const run = (input = command, who = actor) => applyCommand(state, who, commandSchema.parse(input), { now: 2, operationId: 'replace' })
+  const run = (input = command, who: Actor = actor) => applyCommand(state, who, commandSchema.parse(input), { now: 2, operationId: 'replace' })
   return { state, member, actor, command, run }
 }
 
@@ -35,7 +35,7 @@ describe('Change agent keeps the Swarm member', () => {
   })
   it.each(['person', 'account', 'machine', 'project', 'old', 'occupied', 'self', 'stopping'])('refuses %s without changing state', kind => {
     const f = fixture(), before = structuredClone(f.state)
-    let who = f.actor
+    let who: Actor = f.actor
     const command = { ...f.command }
     if (kind === 'person') who = person
     if (kind === 'account') who = { ...f.actor, machineOwnerId: 'other' } as Actor

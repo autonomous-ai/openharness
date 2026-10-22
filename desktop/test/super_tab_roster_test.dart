@@ -550,7 +550,12 @@ void main() {
       expect(f.controller.snapshot!.agents.first.id, 'agent-0');
       expect(f.controller.snapshot!.agents.first.harnessId, 'replacement');
       expect(f.controller.snapshot!.agents.first.engine, 'claude');
-      expect(tester.widget<Tooltip>(f.inRow(0, find.byType(Tooltip)).first).message, 'Claude Code');
+      await tester.tap(f.row(0));
+      await tester.pumpAndSettle();
+      expect(find.text('Claude'), findsOneWidget);
+      expect(find.text('sonnet'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, 'Close'));
+      await tester.pumpAndSettle();
       await f.close(tester);
     },
   );

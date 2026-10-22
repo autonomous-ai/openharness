@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { existsSync, linkSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CoreApi } from '../core/api.js'
 import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from '../lib/secureState.js'
@@ -31,11 +31,17 @@ export async function recordReplacement(core: CoreApi, payload: Record<string, u
   const file = join(dir, `${digest([row.machineId, row.changeId])}.json`)
   if (existsSync(file)) {
     if (readPrivateStateFile(file, 16_384) !== JSON.stringify(row)) throw new Error('This replacement intent already names another terminal.')
+    syncStateDirectory(dir)
     return
   }
-  const temporary = `${file}.next`
-  writeFileSync(temporary, JSON.stringify(row), { mode: 0o600, flush: true, flag: 'wx' })
-  renameSync(temporary, file); syncStateDirectory(dir)
+  const temporary = `${file}.${randomUUID()}.next`
+  try {
+    writeFileSync(temporary, JSON.stringify(row), { mode: 0o600, flush: true, flag: 'wx' })
+    try { linkSync(temporary, file) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || readPrivateStateFile(file, 16_384) !== JSON.stringify(row)) throw error
+    }
+    syncStateDirectory(dir)
+  } finally { if (existsSync(temporary)) unlinkSync(temporary) }
 }
 
 /** Read only private daemon receipts, never a project's editable handoff markdown. The exact
@@ -69,6 +75,14 @@ async function candidates(core: CoreApi, machineId: string): Promise<Replacement
 }
 
 export async function replacementObservations(core: CoreApi, machineId: string, rows: unknown[]) {
+  // Healthy members need no recovery or disk scan. In particular, do not reread every historical
+  // handoff and its transcript on a machine with live Swarm members every five seconds.
+  rows = rows.filter(value => {
+    const row = object(value), agent = object(row.agent)
+    return identifier(row.tabId) && identifier(agent.id) && identifier(agent.harnessId) && agent.machineId === machineId
+      && row.stopRequested !== true && agent.workDecision !== 'stop' && !core.agents.byAgent(String(agent.harnessId))
+  })
+  if (!rows.length) return []
   const reports = await candidates(core, machineId)
   const observations: Array<{ path: string; body: Record<string, unknown> }> = []
   for (const value of rows) {

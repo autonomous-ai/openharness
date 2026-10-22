@@ -418,7 +418,10 @@ it.each(['reported', 'legacy'] as const)('Change agent keeps its member and deli
   await until('source conversation to finish', () => client.frames.some(frame => frame.type === 'turn_ended' && frame.agentId === source.agent.id && !frame.replay) || null, 30_000, 100)
   agents.push({ id: 'stable-member', harnessId: source.agent.id, machineId: ME.machineId, projectId: 'project', name: 'Lead', configuration: { engine: 'codex' } })
   expect(await client.request('super_tabs', { action: 'wake' })).toMatchObject({ ok: true })
-  const changeId = randomUUID()
+  const hostPid = Number([...d.log().matchAll(/service superTabs started \(pid (\d+)\)/g)].at(-1)?.[1])
+  expect(hostPid).toBeGreaterThan(0)
+  if (mode === 'legacy') process.kill(hostPid, 'SIGSTOP')
+  const changeId = randomUUID().replaceAll('-', '')
   const handoff = await client.request('agent_handoff_prepare', { agentId: source.agent.id, changeId, targetEngine: 'claude' }, 10_000)
   expect(handoff.error, JSON.stringify(handoff)).toBeUndefined()
   const current = (await client.request('agents_list')).agents.find((a: Record<string, any>) => a.id === source.agent.id)
@@ -428,7 +431,13 @@ it.each(['reported', 'legacy'] as const)('Change agent keeps its member and deli
   if (mode === 'reported') expect(await client.request('agent_handoff_complete', { agentId: source.agent.id, replacementId: target.agent.id, changeId, targetEngine: 'claude' })).toMatchObject({ ok: true })
   // Restart just the Swarm service: its own saved host receipt wakes it, and legacy recovery has no
   // completion report. Both paths must bind the exact creation receipt rather than guess by folder.
-  if (mode === 'legacy') await d.restart()
+  if (mode === 'legacy') {
+    process.kill(hostPid, 'SIGKILL')
+    await until('a new Swarm host after the earlier Change agent', () => {
+      const current = Number([...d.log().matchAll(/service superTabs started \(pid (\d+)\)/g)].at(-1)?.[1])
+      return current > 0 && current !== hostPid || null
+    }, 15_000, 100)
+  }
   await until('member to follow the replacement terminal', () => agents[0].harnessId === target.agent.id || null, 30_000, 100)
   await until('one native input receipt on the replacement', () => delivery.status === 'delivered' || null, 30_000, 100)
   await until('one execution of the delivered input', () => {
