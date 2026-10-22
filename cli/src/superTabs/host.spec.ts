@@ -54,7 +54,7 @@ describe('current Swarm role lookup', () => {
     let groups = [{ leadId: 'other', agentIds: ['agent'] }]
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
       path.includes('/hosts/') ? [{ tabId: 'tab', agent }] : { state: { agents: [agent], conversations: groups } } } }))
-    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBe('reviewer')
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBe('review')
     groups = []
     expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBeNull()
   })

@@ -21,7 +21,7 @@ function setup(saved = row(), live: RegisteredSession | null = saved) {
 
 describe('old Swarm role adoption', () => {
   it.each(['claude', 'codex'] as const)('adopts each role for old %s sessions and persists it before launch', async engine => {
-    for (const role of ['lead', 'dev', 'reviewer'] as const) {
+    for (const role of ['lead', 'dev', 'review'] as const) {
       const t = setup(row({ engine })); t.role.mockResolvedValue(role)
       expect(await t.adopt(t.saved, t.current)).toMatchObject({ swarmSkill: { role, key: 'old-session' } })
       expect(t.saved.swarmSkill).toEqual({ role, key: 'old-session' })

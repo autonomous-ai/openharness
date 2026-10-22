@@ -395,7 +395,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     const swarmRole = payload.swarmRole
     if (swarmRole !== undefined && swarmRole !== null &&
       (!isSwarmRole(swarmRole) || (engine !== 'claude' && engine !== 'codex'))) {
-      reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm role is lead, dev or reviewer, for Claude Code or Codex.' }); return
+      reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm role is lead, dev or review, for Claude Code or Codex.' }); return
     }
     // Blank is "number it", the same as absent — a client that sends an empty field is not
     // asking for an agent with no name.

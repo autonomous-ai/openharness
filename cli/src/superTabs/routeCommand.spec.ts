@@ -84,13 +84,21 @@ describe('routeTask', () => {
     expect(offered.length).toBeGreaterThan(0)
     expect(offered.some(c => /^(Lead|Multiply) ·/.test(c))).toBe(false)
   })
-  it('never offers an idle Reviewer as a build candidate', async () => {
-    const reviewed = tab(); reviewed.state.agents = agents.map(a => a.id === 'a1' ? { ...a, role: 'reviewer' } : a)
-    const s = scoped({ tab: reviewed })
-    await routeTask(input, s, where as never, opener(), () => 'op')
-    const offered = (recorded(s).command.decision.candidates as Array<{ title: string; kind: string }>)
-    expect(offered.length).toBeGreaterThan(0)
-    expect(offered.some(c => c.title.startsWith('Multiply'))).toBe(false)
+  it('offers a Reviewer only for a review group, and starts a new one as a Reviewer', async () => {
+    const offered = async (reviewer: boolean, reviewGroup: boolean) => {
+      const t = tab(); t.state.agents = agents.map(a => a.id === 'a1' && reviewer ? { ...a, role: 'reviewer' } : a)
+      if (reviewGroup) (t.state.conversations[1] as Record<string, unknown>).reviewOf = 'g0'
+      const s = scoped({ tab: t, jev: { ok: true, value: { unavailable: 'BUSY' } } })
+      const result = await routeTask(input, s, where as never, opener(), () => 'op')
+      const titles = (recorded(s).command.decision.candidates as Array<{ title: string }>).map(c => c.title)
+      return { member: titles.some(c => c.startsWith('Multiply')), next: String(result.next) }
+    }
+    expect((await offered(true, false)).member).toBe(false)
+    expect((await offered(false, true)).member).toBe(false)
+    expect((await offered(true, true)).member).toBe(true)
+    const fresh = await offered(false, true)
+    expect(fresh.next).toContain('"name":"Reviewer","role":"reviewer"')
+    expect((await offered(false, false)).next).not.toContain('"role"')
   })
   it('tells the Lead how to assign a member or start a new agent with the decision', async () => {
     const member = await routeTask(input, scoped({ jev: { ok: true, value: { unavailable: 'BUSY' } } }), where as never, opener(), () => 'op')

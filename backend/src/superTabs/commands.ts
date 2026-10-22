@@ -4,7 +4,7 @@ import { z } from 'zod'
 import {
   activeWork, actorKey, agent, agentRole, author, conversation, fail, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
   finishWorker, requireWorkerDecisions, reviewing,
-  type Actor, type Agent, type Author, type CommandEffects, type SuperTabState,
+  type Actor, type Agent, type Author, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSchema } from './routingPolicy.js'
@@ -65,7 +65,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.cadence'), projectId: id, minutes: z.union([z.literal(1), z.literal(5), z.literal(15), z.literal(30)]) }).strict(),
   z.object({ type: z.literal('project.report'), projectId: id, throughRevision: z.number().int().nonnegative().safe(), text: text.nullable() }).strict(),
   z.object({ type: z.literal('project.repository'), projectId: id, repositoryUrl }).strict(),
-  z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000).optional(), task: task.optional(), checks: z.array(check).max(40) }).strict()
+  z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000).optional(), task: task.optional(), reviewOf: id.optional(), checks: z.array(check).max(40) }).strict()
     .refine(c => c.task !== undefined || c.brief !== undefined, 'Provide a task or brief.')
     .refine(c => !c.task || renderWorkTask(c.task).length <= 8000, 'Keep the rendered task within 8,000 characters.'),
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
@@ -142,6 +142,13 @@ function leadWorkerBounced(recent: CommandContext['recent'] = [], leadId: string
     && (m.author.id === leadId ? m.recipients.includes(workerId) : m.author.id === workerId && m.recipients.includes(leadId))
   const run = recent.findIndex(m => !sentToPartner(m))
   return (run < 0 ? recent.length : run) >= PAIR_CHAIN_LIMIT
+}
+
+/** A Reviewer is assigned only review groups, and a review group only a Reviewer. */
+function assignable(group: Conversation, worker: Agent): void {
+  const reviewer = agentRole(worker) === 'reviewer'
+  if (reviewer && !group.reviewOf) fail('REVIEWER_NOT_ASSIGNABLE', 'A Reviewer is assigned only review groups. Assign a Builder.')
+  if (!reviewer && group.reviewOf) fail('REVIEW_GROUP', 'A review group is assigned only to a Reviewer.')
 }
 
 function controls(state: SuperTabState, actor: Actor, conversationId = 'lead'): void {
@@ -393,10 +400,17 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('BRIEF_REQUIRED', 'Delegated work needs a brief and acceptance checks.', 400)
       }
       const leadId = conversation(state, project.leadConversationId).leadId
+      if (command.reviewOf) {
+        const reviewed = conversation(state, command.reviewOf)
+        if (reviewed.id === project.leadConversationId || reviewed.reviewOf || groupProject(state, reviewed).id !== project.id) {
+          fail('REVIEW_TARGET', 'A review group reviews one build group of the same project.', 400)
+        }
+      }
       const number = nextConversationNumber(state)
       state.conversations.push({ id: operationId, ...(state.projects ? { projectId: project.id } : {}),
         number, title: command.title, leadId, agentIds: leadId ? [leadId] : [],
-        archived: false, brief, ...(command.task ? { task: command.task } : {}), assignment: null, lastMessageSequence: 0,
+        archived: false, brief, ...(command.task ? { task: command.task } : {}), ...(command.reviewOf ? { reviewOf: command.reviewOf } : {}),
+        assignment: null, lastMessageSequence: 0,
         checks: command.checks.map((c, i) => ({ ...c, id: stableId(operationId, String(i)), evidence: null, passedBy: null })),
       })
       result.conversationId = operationId
@@ -746,9 +760,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'route.record': {
       controls(state, actor, command.conversationId)
       const chosen = command.decision.candidates.find(c => c.id === command.decision.pick)!
-      if (chosen.kind === 'member' && state.agents.some(a => a.id === chosen.agentId && agentRole(a) === 'reviewer')) {
-        fail('REVIEWER_NOT_ASSIGNABLE', 'A Reviewer reviews work and is never assigned it. Route to a Builder.')
-      }
+      const member = chosen.kind === 'member' ? state.agents.find(a => a.id === chosen.agentId) : undefined
+      if (member) assignable(conversation(state, command.conversationId), member)
       requireWorkerDecisions(state, actor, open(state, command.conversationId), chosen.kind === 'member' ? chosen.agentId : undefined)
       if ((context.recentRoutes ?? 0) >= 30) fail('RATE_LIMITED', 'This Super Tab routed 30 tasks in the last hour. Wait before routing again.', 429)
       const decision = command.decision
@@ -822,7 +835,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (activeWork(group)) fail('WORK_ACTIVE', 'The current assignment must finish or be reconciled before reassignment.')
       if (!group.brief || !group.checks.length) fail('BRIEF_REQUIRED', 'Record the brief and acceptance checks before assigning work.', 400)
       const worker = agent(state, command.agentId)
-      if (agentRole(worker) === 'reviewer') fail('REVIEWER_NOT_ASSIGNABLE', 'A Reviewer reviews work and is never assigned it. Assign a Builder.')
+      assignable(group, worker)
       sameProject(state, group, worker)
       requireWorkerDecisions(state, actor, group, worker.id)
       if (worker.workDecision === 'stop') fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')

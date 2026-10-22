@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -22,7 +23,7 @@ describe('built-in Swarm skills', () => {
       expect(prepared.file.startsWith(join(realpathSync(workspace), '.harness', 'runtime'))).toBe(true)
       const text = readFileSync(prepared.file, 'utf8')
       expect(text).toContain(`name: swarm-${role}`)
-      if (role === 'lead') expect(text).toContain('goal, changes, constraints, owned code and acceptance checks')
+      if (role === 'lead') expect(text).toContain('Route every new agent and every assignment')
       else {
         expect(text).toContain('Needs:')
         expect(text).toContain("Do not touch other groups' code.")
@@ -38,24 +39,19 @@ describe('built-in Swarm skills', () => {
     expect(readdirSync(data)).toEqual([])
   })
 
-  it('gives a Reviewer the owner\'s review skill, verbatim', () => {
-    expect(parseSwarmSkill({ role: 'reviewer', key: 'session' })).toEqual({ role: 'reviewer', key: 'session' })
-    const prepared = prepareSwarmSkill(fixture(), { role: 'reviewer', key: 'session' })
-    expect(prepared.instructions).toContain('swarm-reviewer')
-    expect(readFileSync(prepared.file, 'utf8')).toBe(`---
-name: swarm-reviewer
-description: Use when reviewing a Harness Swarm group's work as its Reviewer, before judging a revision.
----
-# Review a group's work
-
-1. Read only; no subagents. Read fully before judging; run the important checks yourself.
-2. Check plan alignment first: everything planned is present; flag each deviation so the builder can say if it was intended; if the plan itself is wrong, say so.
-3. Review against the group's description; where it is silent, judge by what an ordinary user would expect.
-4. Look at tests (real behavior, not mocks), edge cases, security, backward compatibility and data migration, docs.
-5. Say what was done well first.
-6. Findings graded Critical / Important / Minor with a location each; grade by real severity, never mark a nitpick Critical; say how to fix when it is not obvious.
-7. List what you set aside. Tie the verdict ("Ready: yes/no/with fixes") to one revision; never re-review a revision already reviewed. Push risky calls to the Lead.
-`)
+  // The owner's approved text (2026-10-22), verbatim but for "(shown as Lead)" and "(shown as Builder)" in the descriptions.
+  it.each([
+    ['lead', 'cc2ccd208c8b72665b97c0344b28e7b4773f8a2e7b1a1847e91ec5b696da60bd'],
+    ['dev', '672c0478bcb3a7b01da56f64478974cc24a1904295edc1852093f05f64bc2c52'],
+    ['review', 'f831c3dc5d9bf0a3cfe3b8abea8b7faabddd0d9264b1f474d5dc72f66bcae4d7'],
+  ] as const)('writes the owner\'s %s skill byte for byte', (role, sha256) => {
+    expect(parseSwarmSkill({ role, key: 'session' })).toEqual({ role, key: 'session' })
+    const prepared = prepareSwarmSkill(fixture(), { role, key: 'session' })
+    expect(prepared.instructions).toContain(`swarm-${role} skill`)
+    const text = readFileSync(prepared.file, 'utf8')
+    expect(text.startsWith(`---\nname: swarm-${role}\n`)).toBe(true)
+    expect(text).not.toMatch(/Product Manager|Engineer/)
+    expect(createHash('sha256').update(text).digest('hex')).toBe(sha256)
   })
 
   it('keeps standalone session skills out of Git, including git add -A', () => {

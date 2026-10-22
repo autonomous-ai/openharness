@@ -110,6 +110,8 @@ export interface Conversation {
   archived: boolean
   brief: string
   task?: WorkTask
+  /** A review group names the group whose work it reviews; only a Reviewer is assigned it, and a Reviewer nothing else. */
+  reviewOf?: string
   checks: Check[]
   assignment: Assignment | null
   lastMessageSequence: number

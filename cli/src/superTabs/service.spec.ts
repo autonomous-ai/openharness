@@ -209,6 +209,7 @@ it('tells the Lead which branch a started agent works from, and how to choose an
   expect(help.start).toContain('branchRef')
   expect(help.startRequest).toMatchObject({ worktree: true, branchRef: 'refs/remotes/origin/BASE_BRANCH' })
   expect(help.start).toContain('role "reviewer"')
+  expect(help.start).toContain('reviewOf')
 })
 
 it('keeps host capacity separate from account authority and closes it on disconnect or identity change', async () => {

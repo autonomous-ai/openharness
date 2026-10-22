@@ -1047,7 +1047,34 @@ describe('Reviewer role', () => {
       owner, { contribution: { machineOwnerId: 'target-owner', contributorId: 'owner' } })).toThrow('cannot lead')
     expect(f.state.conversations.find(c => c.id === group)!.leadId).toBe(leadActor.agentId)
     const pick = record({ candidates: [candidate('c0', { kind: 'member', agentId: reviewer, machineId: 'host' })], pick: 'c0' })
-    expect(() => f.run({ type: 'route.record', conversationId: group, decision: pick } as Command, leadActor)).toThrow('Route to a Builder')
+    expect(() => f.run({ type: 'route.record', conversationId: group, decision: pick } as Command, leadActor)).toThrow('only review groups')
+  })
+
+  it('assigns a review group only to a Reviewer, which passes the reviewed group\'s independent check', () => {
+    const { f, leadActor, group, reviewer, builder } = reviewed()
+    const checks = [{ description: 'Verdict on the revision', independent: false }]
+    const create = (reviewOf: string) => f.run({ type: 'conversation.create', title: 'Review: Offline editing', brief: 'Review head abc.', reviewOf, checks }, leadActor)
+    expect(() => create('lead')).toThrow('one build group')
+    const review = create(group).result.conversationId as string
+    expect(() => create(review)).toThrow('one build group')
+    expect(f.state.conversations.find(c => c.id === review)).toHaveProperty('reviewOf', group)
+    expect(f.state.conversations.find(c => c.id === group)).not.toHaveProperty('reviewOf')
+    const pick = (agentId: string) => record({ candidates: [candidate('c0', { kind: 'member', agentId, machineId: 'host' })], pick: 'c0' })
+    expect(() => f.run({ type: 'route.record', conversationId: review, decision: pick(builder) } as Command, leadActor)).toThrow('only to a Reviewer')
+    f.run({ type: 'route.record', conversationId: review, decision: pick(reviewer) } as Command, leadActor)
+    expect(() => f.run({ type: 'work.assign', conversationId: review, agentId: builder })).toThrow('only to a Reviewer')
+    const built = f.run({ type: 'work.assign', conversationId: group, agentId: builder }).result.assignmentId as string
+    const assignmentId = f.run({ type: 'work.assign', conversationId: review, agentId: reviewer }).result.assignmentId as string
+    const reviewerActor: Actor = { kind: 'agent', agentId: reviewer, machineOwnerId: 'target-owner' }
+    const checkId = f.state.conversations.find(c => c.id === group)!.checks[0]!.id
+    f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId, passed: true, evidence: 'Ready: yes — revision abc' }, reviewerActor)
+    expect(f.state.conversations.find(c => c.id === group)!.checks[0]!.passedBy).toBe(`agent:${reviewer}`)
+    // While its review is active it is busy; when it is done, the Lead decides its fate like a Builder's.
+    expect(() => f.run({ type: 'agent.release', agentId: reviewer, decision: 'stop' }, leadActor)).toThrow('active work')
+    f.run({ type: 'work.status', conversationId: review, assignmentId, status: 'stopped', result: null }, owner, { confirmedStopped: true })
+    f.run({ type: 'work.cancel', conversationId: group, assignmentId: built, reason: 'Obsolete' }, leadActor)
+    expect(f.state.agents.find(a => a.id === reviewer)).toHaveProperty('workDecision', 'awaiting')
+    f.run({ type: 'agent.release', agentId: reviewer, decision: 'stop' }, leadActor)
   })
 
   it('tells the Lead and the group\'s Reviewers when work is ready for review', () => {

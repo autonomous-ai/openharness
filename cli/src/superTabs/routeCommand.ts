@@ -118,8 +118,9 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // The group's Lead and the tab Lead coordinate; neither is a worker candidate even when idle.
   const busy = new Set([String(group.leadId), String(conversations.find(c => c.id === 'lead')?.leadId),
     ...conversations.filter(c => active(c.assignment)).map(c => String(object(c.assignment).agentId))])
-  // A Reviewer is never assigned work, so it is never a build candidate either.
-  const members = agents.filter(a => !busy.has(String(a.id)) && a.role !== 'reviewer' && ENGINES.includes(String(object(a.configuration).engine))).map(a => withLaunchEffort(a, list(state.starts)))
+  // A review group is assigned only to a Reviewer, and a Reviewer nothing else.
+  const review = typeof group.reviewOf === 'string'
+  const members = agents.filter(a => !busy.has(String(a.id)) && (a.role === 'reviewer') === review && ENGINES.includes(String(object(a.configuration).engine))).map(a => withLaunchEffort(a, list(state.starts)))
   // A new agent starts only on a machine in the Swarm's Machines list (the backend refuses any other): a contributed machine, or
   // one an agent of the Swarm runs on. The Lead runs here, so its own machine is always listed. Of the account's machines
   // only those count; the rest were never prepared with the project and would only be excluded for a missing folder
@@ -203,7 +204,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     warnings: [...(Array.isArray(effective.warnings) ? effective.warnings : []), ...(value.machinesUnreadable === true ? [MACHINES_UNREADABLE] : []), ...(choice.short ? [choice.short] : [])],
     next: verdict.pick.kind === 'member'
       ? `Assign with: command OPERATION_ID {"type":"work.assign","conversationId":"${input.conversationId}","agentId":"${verdict.pick.agentId}"${decision}}`
-      : `Start with: start OPERATION_ID ${JSON.stringify({ conversationId: input.conversationId, name: 'Builder', cwd: text(machines.get(verdict.pick.machineId)?.pool?.cwd) ?? assessment.needs.cwd ?? '/absolute/repo/on/that/machine',
+      : `Start with: start OPERATION_ID ${JSON.stringify({ conversationId: input.conversationId, name: review ? 'Reviewer' : 'Builder', ...(review ? { role: 'reviewer' } : {}), cwd: text(machines.get(verdict.pick.machineId)?.pool?.cwd) ?? assessment.needs.cwd ?? '/absolute/repo/on/that/machine',
         worktree: true, requirements: startRequirements(assessment.needs), machineId: verdict.pick.machineId, engine: verdict.pick.engine, model: verdict.pick.model,
         effort: verdict.pick.effort, ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : {}) })}, then assign the started agent${decision ? ' with the same routeDecisionId' : ''}. It starts from the repository's default branch, fetched first; add "branchRef":"refs/remotes/origin/BRANCH" to start from another branch.`,
   }
