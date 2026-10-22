@@ -259,7 +259,9 @@ class _SuperTabViewState extends State<SuperTabView>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && !_jumpingToEnd) _readToEnd(id, sequence);
     });
-    WidgetsBinding.instance.scheduleFrame();
+    // Widget updates already have a frame in progress. Reuse it so routine
+    // polling does not request an otherwise unnecessary frame after each build.
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   void _readToEnd(String id, int sequence) {

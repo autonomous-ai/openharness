@@ -83,6 +83,53 @@ void main() {
     await c.flush();
   }
 
+  testWidgets('polling a displayed transcript does not keep requesting frames', (
+    tester,
+  ) async {
+    final server = ConversationServer()..append('Already read');
+    final c = SuperTabController(
+      tabId: 'tab',
+      accountId: 'owner',
+      request: server.request,
+      save: server.save,
+    );
+    try {
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: c,
+              builder: (context, _) => SuperTabView(
+                controller: c,
+                onInvite: () {},
+                onAddAgent: (_) {},
+                onOpenTerminal: (_) {},
+                machineName: (_) => 'Team Mac',
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      c.start();
+      server.append('New polled update');
+      // Polling rebuilds the view during each frame. Reading its already-laid-out
+      // tail must reuse that frame, rather than perpetually requesting another.
+      await tester.pumpAndSettle(
+        const Duration(seconds: 10),
+        EnginePhase.sendSemanticsUpdate,
+        const Duration(minutes: 1),
+      );
+      expect(find.text('New polled update'), findsOneWidget);
+      expect(c.unread(c.selected!), isFalse);
+    } finally {
+      await closeReadView(tester, c);
+      c.dispose();
+    }
+  });
+
   testWidgets('returning from terminals reads the already loaded transcript', (
     tester,
   ) async {

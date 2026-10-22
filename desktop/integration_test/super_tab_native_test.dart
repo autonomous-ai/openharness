@@ -225,9 +225,9 @@ void main() {
       final swarmId = f.app.activeSwarmId;
       debugPrint('Swarm fixture: open Devices');
       await tester.tap(find.byKey(const ValueKey('super-your-devices')));
-      // This fixture deliberately has no device discovery transport. Assert
-      // navigation while the Devices viewer is loading instead of waiting for
-      // its indeterminate progress animation to settle.
+      // This fixture reserves the utility's conversation pane without a machine.
+      // Assert navigation while that pane waits for a connection instead of
+      // waiting for its indeterminate progress animation to settle.
       await tester
           .pump(const Duration(milliseconds: 100))
           .timeout(const Duration(seconds: 10));
