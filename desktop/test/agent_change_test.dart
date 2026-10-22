@@ -43,6 +43,7 @@ class SwitchConnection extends MonitorConnection {
   final handoffCalls = <Map<String, dynamic>>[];
   final handoffTimeouts = <Duration>[];
   final eventsAtHandoff = <List<String>>[];
+  final completedHandoffs = <Map<String, dynamic>>[];
 
   @override
   Future<Map<String, dynamic>> request(
@@ -50,6 +51,10 @@ class SwitchConnection extends MonitorConnection {
     Map<String, dynamic> payload = const {},
     Duration timeout = const Duration(seconds: 20),
   }) async {
+    if (type == 'agent_handoff_complete') {
+      completedHandoffs.add(Map.of(payload));
+      return {'ok': true};
+    }
     if (type == 'agent_handoff_prepare') {
       handoffCalls.add(Map.of(payload));
       handoffTimeouts.add(timeout);
@@ -256,6 +261,12 @@ void main() {
 
         expect(await app.changeAgent('m', 'a0', engine.id), isNull);
         expect(connection.events, ['save/stop', 'start']);
+        expect(connection.completedHandoffs.single, {
+          'agentId': 'a0',
+          'replacementId': 'manager',
+          'changeId': connection.creations.single['creationId'],
+          'targetEngine': engine.id,
+        });
         expect(connection.creations.single, containsPair('engine', engine.id));
         expect(
           connection.creations.single,

@@ -81,6 +81,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('agent.remove'), agentId: id, releaseId: id.optional() }).strict(),
   z.object({ type: z.literal('agent.release'), agentId: id, decision: z.enum(['keep', 'stop']) }).strict(),
   z.object({ type: z.literal('agent.configuration'), previousVersion: id.nullable(), configuration }).strict(),
+  z.object({ type: z.literal('agent.rebind'), agentId: id, machineId: id, projectId: id,
+    previousHarnessId: id, harnessId: id, configuration,
+    startedSession: z.object({ creationId: id, sessionId: id, createdAt: z.iso.datetime() }).strict().optional() }).strict(),
   z.object({ type: z.literal('conversation.agent'), conversationId: id, agentId: id, present: z.boolean(), lead: z.boolean() }).strict(),
   z.object({ type: z.literal('invite.create'), email: z.email().max(320), role: z.enum(['collaborator', 'viewer']), conversationId: id }).strict(),
   z.object({ type: z.literal('invite.revoke'), inviteId: id }).strict(),
@@ -559,6 +562,34 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         target.configuration = command.configuration
         target.configurationVersion = operationId
       }
+      break
+    }
+    case 'agent.rebind': {
+      const target = agent(state, command.agentId)
+      if (actor.kind !== 'agent' || actor.agentId !== target.id || actor.machineOwnerId !== target.machineOwnerId
+        || command.machineId !== target.machineId || command.projectId !== agentProjectId(state, target)) {
+        fail('HOST_REQUIRED', 'Only this project’s execution host can report a replacement.', 403)
+      }
+      if (target.workDecision === 'stop') fail('STOP_REQUESTED', 'This member is stopping; reconcile its stop first.')
+      if (state.agents.some(a => a.id !== target.id && a.machineId === target.machineId && a.harnessId === command.harnessId)) {
+        fail('SESSION_CONTRIBUTED', 'The replacement terminal already belongs to another member.')
+      }
+      if (target.harnessId === command.harnessId && target.replacement?.previousHarnessId === command.previousHarnessId) break
+      if (target.harnessId !== command.previousHarnessId || command.harnessId === command.previousHarnessId) {
+        fail('AGENT_CHANGED', 'The member’s terminal changed. Read its current binding before replacing it.')
+      }
+      target.harnessId = command.harnessId
+      target.replacement = { previousHarnessId: command.previousHarnessId, harnessId: command.harnessId }
+      target.configuration = command.configuration
+      target.configurationVersion = operationId
+      if (command.startedSession) target.startedSession = command.startedSession
+      else delete target.startedSession
+      for (const group of state.conversations) {
+        if (!activeWork(group) || group.assignment?.agentId !== target.id) continue
+        group.assignment.execution.harnessId = target.harnessId
+        group.assignment.configuration = command.configuration
+      }
+      result.agentId = target.id
       break
     }
     case 'agent.release': {

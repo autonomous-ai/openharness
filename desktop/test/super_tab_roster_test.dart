@@ -159,6 +159,24 @@ void main() {
   }
 
   testWidgets(
+    'a replaced member keeps its identity and shows its new engine',
+    (tester) async {
+      final f = await fixture(tester);
+      await f.show(tester);
+      final agents = f.server.state['agents'] as List;
+      agents[0]['harnessId'] = 'replacement';
+      agents[0]['configuration'] = {'engine': 'claude', 'model': 'sonnet'};
+      await f.controller.refresh();
+      await tester.pumpAndSettle();
+      expect(f.controller.snapshot!.agents.first.id, 'agent-0');
+      expect(f.controller.snapshot!.agents.first.harnessId, 'replacement');
+      expect(f.controller.snapshot!.agents.first.engine, 'claude');
+      expect(tester.widget<Tooltip>(f.inRow(0, find.byType(Tooltip)).first).message, 'Claude Code');
+      await f.close(tester);
+    },
+  );
+
+  testWidgets(
     'owner confirms Remove from Swarm without stopping the native session',
     (tester) async {
       final f = await fixture(tester);

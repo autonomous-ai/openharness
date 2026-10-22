@@ -13,6 +13,7 @@ import { noticeReason, WithheldDeliveries } from './withheld.js'
 import { attentionOf } from './attention.js'
 import { prepareContribution } from './contribution.js'
 import { hostname } from 'node:os'
+import { replacementObservations } from './replacements.js'
 
 type Json = Record<string, unknown>
 export class SuperTabHostError extends Error {
@@ -139,6 +140,8 @@ export class SuperTabHost {
   private receiptCursor = 0
   private configurationsRunning: Promise<void> | null = null
   private nextConfigurationsAt = 0
+  private replacementsRunning: Promise<void> | null = null
+  private nextReplacementsAt = 0
   private timer: ReturnType<typeof setTimeout> | null = null
   private native: NativeRecorder | null = null
   private machines: ContributedMachines | null = null
@@ -423,6 +426,14 @@ export class SuperTabHost {
     this.observers(this.core.dataDir, this.machineId, data, requestedAt + 2500)
     this.publishAttention(data)
     this.joinSwarms(data)
+    // Recovery can wait on a native receipt. Run it beside leases, so another worker's input
+    // never expires while an old Change agent is being reconciled.
+    if (!this.replacementsRunning && this.now() >= this.nextReplacementsAt) {
+      this.replacementsRunning = this.recordReplacements(data).finally(() => {
+        this.replacementsRunning = null
+        this.nextReplacementsAt = this.now() + 5_000
+      })
+    }
     // Runtime observations cannot delay the live input leases. A stale host
     // observation is fenced by the backend's per-agent configuration version.
     if (!this.configurationsRunning && this.now() >= this.nextConfigurationsAt) {
@@ -560,6 +571,14 @@ export class SuperTabHost {
       if (delivery.claimId) this.core.turns.cancelDelivery(typedId(entry))
     }
     const id = typedId(entry)
+    if (entry.stage === 'prepared' && entry.harnessId !== target.agent.harnessId) {
+      // Only an explicit withheld native write proves input was never submitted. Ambiguous and
+      // delivered receipts keep their original terminal and are never replayed on replacement.
+      this.authorized.delete(id)
+      if (this.active.delete(id)) this.core.turns.cancelDelivery(id)
+      entry.harnessId = target.agent.harnessId
+      this.persist()
+    }
     if (entry.stage === 'submitting' && !this.active.has(id)) {
       entry.stage = 'uncertain'
       entry.receipt = 'Native submission was interrupted. Inspect the session before retrying.'
@@ -611,6 +630,15 @@ export class SuperTabHost {
         this.log(error instanceof Error ? error.message : String(error))
       }
     }
+  }
+
+  private async recordReplacements(rows: unknown[]): Promise<void> {
+    try {
+      for (const observation of await replacementObservations(this.core, this.machineId, rows)) {
+        if (this.stopped) return
+        await backend(this.core, 'POST', observation.path, observation.body)
+      }
+    } catch (error) { this.log(error instanceof Error ? error.message : String(error)) }
   }
 
   private prompt(entry: Entry, message: Json, files: string): string {

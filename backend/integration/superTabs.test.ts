@@ -71,6 +71,48 @@ afterAll(async () => {
   await replica?.stop()
 })
 
+describe('Change agent on a Swarm member', () => {
+  it('moves active execution and keeps queued, held, answered and uncertain receipts; Send again uses the current member', async () => {
+    const { tab, lead } = await fixture()
+    const before = (await store.read(owner, tab)).state.agents.find(a => a.id === lead)!
+    const group = (await run(tab, { type: 'conversation.create', title: 'Replacement', brief: 'Continue work',
+      checks: [{ description: 'Receives messages', independent: false }] })).result.conversationId as string
+    await run(tab, { type: 'conversation.agent', conversationId: group, agentId: lead, present: true, lead: false })
+    await run(tab, { type: 'work.assign', conversationId: group, agentId: lead })
+    const receiptIds: string[] = []
+    for (const status of ['queued', 'claimed', 'uncertain', 'answered']) {
+      const sent = await run(tab, { ...message(`Before ${status}`), recipientIds: [lead] } as Command)
+      const delivery = (await store.deliveries(host, tab, lead)).find(d => d.messageId === sent.result.messageId)!
+      await db.superTabDelivery.update({ where: { id: delivery.id }, data: { status, ...(status !== 'queued' ? { claimId: `claim-${status}`, receipt: `receipt-${status}` } : {}),
+        ...(status === 'claimed' ? { holdReason: 'team_busy', holdSince: new Date() } : {}) } })
+      receiptIds.push(delivery.id)
+    }
+    const receipts = await db.superTabDelivery.findMany({ where: { id: { in: receiptIds } }, orderBy: { id: 'asc' } })
+    const command: Command = { type: 'agent.rebind', agentId: lead, machineId: 'test-host', projectId: 'lead',
+      previousHarnessId: before.harnessId, harnessId: randomUUID(), configuration: { ...config, engine: 'claude', model: 'sonnet' } }
+    const operation = randomUUID()
+    const changed = await run(tab, command, host, lead, operation)
+    const after = (await store.read(owner, tab)).state
+    expect(after.agents.find(a => a.id === lead)).toMatchObject({ ...before, harnessId: command.harnessId,
+      configuration: command.configuration, configurationVersion: expect.any(String) })
+    expect(after.conversations[0]!.leadId).toBe(lead)
+    expect(await db.superTabRun.findUnique({ where: { id: lead } })).toMatchObject({ harnessId: command.harnessId })
+    expect(await db.superTabDelivery.findMany({ where: { id: { in: receiptIds } }, orderBy: { id: 'asc' } })).toEqual(receipts)
+    expect(await run(tab, command, host, lead, operation)).toEqual(changed)
+    const uncertain = receipts.find(d => d.status === 'uncertain')!
+    await run(tab, { type: 'delivery.resolve', deliveryId: uncertain.id, resolution: 'resend' })
+    const resent = (await store.deliveries(host, tab, lead)).find(d => d.id !== uncertain.id && !receiptIds.includes(d.id) && d.status === 'queued')!
+    expect(resent).toMatchObject({ agentId: lead, status: 'queued' })
+  })
+  it('refuses a replacement already contributed in another tab', async () => {
+    const first = await fixture(), second = await fixture()
+    const previous = (await store.read(owner, first.tab)).state.agents[0]!
+    const occupied = (await store.read(owner, second.tab)).state.agents[0]!
+    await expect(run(first.tab, { type: 'agent.rebind', agentId: first.lead, machineId: 'test-host', projectId: 'lead',
+      previousHarnessId: previous.harnessId, harnessId: occupied.harnessId, configuration: config }, host, first.lead)).rejects.toMatchObject({ code: 'SESSION_CONTRIBUTED' })
+  })
+})
+
 describe('five-part task persistence', () => {
   it('stores structured tasks through the API and delivers all parts to the worker', async () => {
     const { tab, lead } = await fixture()
