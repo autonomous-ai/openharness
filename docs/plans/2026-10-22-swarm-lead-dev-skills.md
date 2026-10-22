@@ -102,3 +102,22 @@ Final integration: rebased on #1517 after it merged. The shared host header and 
 Final compatibility review: restored the unconditional “Discuss first; build when authorized.” sentence for Leads, alongside skill-qualified guidance and the inline coordination fallback. The startup recovery assertion failed without it, then passed with it. Claude/Codex worker starts on an older contributed CLI may still be told to use swarm-dev even though that CLI cannot attach it; this accepted limitation is documented in the PR. Native role attachment requires an updated execution CLI.
 
 Final prompt-only verification: both Flutter launch/startup suites pass (50 tests), analysis of the changed prompt/test reports no issues, and maximum-ID Lead prompt length is 1,977/2,000 UTF-16 units. CLI inputs are unchanged from the prior reviewed receipt; no CLI or broad-suite checks were repeated.
+
+## Full-permission integration (2026-10-22)
+
+Rebased the reviewed branch onto `9142773b0` (#1532, after #1528). The two textual conflicts were in CLI worker dispatch and Desktop launch integration. Both resolutions retain full permission mode and role metadata; the core launch changes applied without textual conflicts. Added combined assertions for direct/contributed CLI worker starts, Desktop Lead/member launches, and both roles on both engines in the bundled private-daemon integration. The latter checks the actual full-mode argv and saved permission mode alongside the role skill.
+
+Fresh validation on the integrated tree uses Node 24.3.0 and Flutter 3.47.5/Dart 3.13.4 on macOS arm64, with isolated fixture homes and engines:
+
+- CLI typecheck passed.
+- Ten affected CLI specs passed all 427 tests (skill runtime, Store runtime, registry/pane, relaunch, attribution, usage classification, host/start and architecture).
+- Routing coverage passed all 111 tests with 100% in every gated file.
+- Bundled native integration passed for both engines and roles, including restart and native-home isolation.
+- Flutter launch/startup recovery passed all 57 tests. Maximum-ID Lead prompt remains 1,977/2,000 UTF-16 units.
+- Analysis of seven changed Dart files passed with no errors/warnings; the same 12 existing informational style notices remain in app_state.dart.
+
+The initial concurrent core/routing coverage runs collided because routing cleaned the parent coverage directory. That core attempt was interrupted, not passing evidence; core was rerun with its own reports directory.
+
+Core rerun: `npm run test:core -- --maxWorkers=3 --coverage.reportsDirectory=/private/tmp/swarm-rebase-core-coverage` passed 199 files / 2,947 tests. All four changed core agent files have 100% statements, branches, functions and lines. The command exits nonzero only for the unchanged, Lead-accepted `services/osDevice.ts:181` coverage gap (same missing line/function/branch); that file has no diff from main. The broad CLI suite was not repeated; its previously accepted baseline evidence remains above.
+
+Range review confirmed the rebase changes only the two shared launch boundaries, retaining #1532's permission retry/recovery behavior and this branch's role isolation, fallback guidance and discuss-first sentence. No merge or release was performed. Rebase, integration assertions and validation took about five minutes; push and CI waiting are tracked separately in the handoff.

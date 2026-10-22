@@ -442,6 +442,7 @@ void main() {
               .firstWhere((c) => c.$1 == 'agent_create')
               .$2;
           expect(request['permissionMode'], 'full');
+          expect(request['swarmRole'], kind == 'member' ? 'dev' : 'lead');
           await Future<void>.delayed(Duration.zero);
           final ordinary = NewHarnessController(
             f.app,

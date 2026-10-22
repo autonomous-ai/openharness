@@ -24,14 +24,16 @@ it('attaches and restores only the selected Swarm skill for both engines, withou
   const originals: Array<{ id: string; engine: string; role: string; pointer: string }> = []
   for (const engine of ['claude', 'codex']) for (const role of ['lead', 'dev']) {
     const before = launches().length
-    const created = await c.request('agent_create', { engine, cwd, swarmRole: role, bypassPermission: true, prompt: 'hello' }, 90_000)
+    const created = await c.request('agent_create', { engine, cwd, swarmRole: role, permissionMode: 'full', bypassPermission: true, prompt: 'hello' }, 90_000)
     expect(created.error, JSON.stringify(created)).toBeUndefined()
     const row = await until('engine to receive its skill pointer', () => launches().slice(before).find(row => row.engine === engine) ?? null, 30_000)
     const args = row.args.join(' ')
+    expect(row.args).toContain(engine === 'claude' ? '--dangerously-skip-permissions' : '--dangerously-bypass-approvals-and-sandbox')
     expect(args).toContain(`swarm-${role}/SKILL.md`)
     expect(args).not.toContain(`swarm-${role === 'lead' ? 'dev' : 'lead'}/SKILL.md`)
     const registry = JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')) as Array<Record<string, any>>
     const saved = registry.find(row => row.agentId === created.agent.id)!
+    expect(saved.permissionMode).toBe('full')
     expect(saved.swarmSkill).toMatchObject({ role, key: expect.any(String) })
     originals.push({ id: created.agent.id, engine, role, pointer: saved.swarmSkill.key })
     await until('engine to bind its conversation', async () => {

@@ -62,7 +62,7 @@ describe('Swarm permission mode', () => {
       const result = await startAgent({ action: 'resume', tabId: 'tab', startId: 'start', hostDispatch }, f.scoped, where, f.open)
       expect(result).toMatchObject({ ok: true })
       const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
-      expect(payload.permissionMode).toBe('full')
+      expect(payload).toMatchObject({ permissionMode: 'full', bypassPermission: true, swarmRole: 'dev' })
       const argv = buildEngineCommandArgv(engine, { permissionMode: String(payload.permissionMode) })
       expect(argv).toContain(engine === 'claude' ? '--dangerously-skip-permissions' : '--dangerously-bypass-approvals-and-sandbox')
     }
