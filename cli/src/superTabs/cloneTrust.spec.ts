@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { lstat } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -21,6 +22,10 @@ vi.mock('../lib/gitProject.js', async original => {
 vi.mock('../engines/kit/folderTrust.js', async original => {
   const real = await original<typeof import('../engines/kit/folderTrust.js')>()
   return { ...real, recordTrustIn: vi.fn(real.recordTrustIn) }
+})
+vi.mock('node:fs/promises', async original => {
+  const real = await original<typeof import('node:fs/promises')>()
+  return { ...real, lstat: vi.fn(real.lstat) }
 })
 let home = ''
 beforeEach(() => {
@@ -245,9 +250,75 @@ describe('consented Swarm clones', () => {
     expect(folderTrust('claude')!.trusts(source)).toBe(false)
     renameSync(source, join(home, 'old-clone')); symlinkSync(personal, source, 'dir')
     writeFileSync(claude, '{}'); rmSync(codex, { recursive: true }); writeFileSync(codex, '')
-    now += 16_000
+    now += 300_000
     await machine.tick()
     expectTrusted(source, false); expectTrusted(personal, false)
     machine.stop()
+  })
+  it('backs off unavailable login shells while five-second polls still dispatch starts', async () => {
+    const f = fixture(true), source = clone(join(f.oldRoot, 'project'))
+    Object.assign(f.row, { starts: [{ id: 'start', dispatched: true }] })
+    let now = 1
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const start = vi.fn(async () => ({ ok: false }))
+    const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
+      open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start, now: () => now } as never)
+    vi.mocked(launchEnvironment).mockResolvedValue(null)
+    try {
+      await machine.tick()
+      expect(start).toHaveBeenCalledTimes(1)
+      expect(launchEnvironment).toHaveBeenCalledTimes(1)
+      now = 5_001; await machine.tick()
+      expect(start).toHaveBeenCalledTimes(2)
+      expect(launchEnvironment).toHaveBeenCalledTimes(1)
+      // Failures wait 15, 30, 60, 120, 240 seconds, then at most five minutes.
+      for (const [at, calls] of [[15_001, 2], [40_001, 2], [45_001, 3], [100_001, 3],
+        [105_001, 4], [225_001, 5], [465_001, 6], [760_001, 6], [765_001, 7]]) {
+        now = at!; await machine.tick()
+        expect(launchEnvironment).toHaveBeenCalledTimes(calls!)
+      }
+      vi.mocked(launchEnvironment).mockResolvedValue({ ...process.env })
+      now = 1_065_001; await machine.tick()
+      expectTrusted(source)
+    } finally { vi.mocked(launchEnvironment).mockImplementation(async () => ({ ...process.env })); machine.stop() }
+  })
+  it('defers skipped configs without filesystem work and repairs them on the slow recheck', async () => {
+    const f = fixture(true), source = clone(join(f.oldRoot, 'project')), codex = join(process.env.CODEX_HOME!, 'config.toml')
+    rmSync(codex)
+    let now = 1
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
+      open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => now } as never)
+    try {
+      await machine.tick()
+      expect(existsSync(codex)).toBe(false)
+      const stats = vi.mocked(lstat).mock.calls.length, records = vi.mocked(recordTrustIn).mock.calls.length
+      now = 5_001; await machine.tick()
+      expect(lstat).toHaveBeenCalledTimes(stats)
+      expect(recordTrustIn).toHaveBeenCalledTimes(records)
+      expect(backend.mock.calls.filter(call => call[1] === 'POST')).toHaveLength(1)
+      writeFileSync(codex, '')
+      now = 300_001; await machine.tick()
+      expectTrusted(source)
+    } finally { machine.stop() }
+  })
+  it('repairs a newly registered Codex profile and worktree before the next observation is due', async () => {
+    const f = fixture(true), source = clone(join(f.oldRoot, 'project'))
+    let now = 1
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
+      open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => now } as never)
+    try {
+      await machine.tick()
+      const profile = join(home, 'later-profile'), tree = join(home, 'harnesses', 'worktrees', 'project', 'worker')
+      mkdirSync(profile); writeFileSync(join(profile, 'config.toml'), '')
+      git(source, 'worktree', 'add', '-qb', 'super-tab/later', tree)
+      Object.assign(f.row, { harnessIds: ['worker'] })
+      vi.mocked(f.core.agents.all).mockReturnValue([{ agentId: 'worker', engine: 'codex', cwd: tree, codexHome: profile }] as never)
+      now = 5_001; await machine.tick()
+      expect(folderTrust('codex', profile)!.trusts(source)).toBe(true)
+      expect(folderTrust('codex', profile)!.trusts(tree)).toBe(true)
+      expect(f.deps.capacity).toHaveBeenCalledTimes(1)
+    } finally { machine.stop() }
   })
 })

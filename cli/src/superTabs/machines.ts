@@ -27,10 +27,10 @@ export class ContributedMachines {
   /** A pass or one of its publishes failed: the next one waits a whole beat, as every pass once did. */
   private failed = false
   private readonly cursors = new Map<string, number>()
+  private repairTrust?: ReturnType<typeof createSwarmCloneTrustRepair>
   /** Per tab, when its observation was last sent and what it said that matters to a reader: the harnesses
    *  running and stopped, whether new work is paused, and which starts are waiting. A change in any of them is
    *  sent at once; otherwise the heartbeat keeps the reading fresh. */
-  private repairTrust?: ReturnType<typeof createSwarmCloneTrustRepair>
   private readonly published = new Map<string, { at: number; signature: string }>()
   constructor(private readonly core: CoreApi, private readonly machineId: string,
     private readonly deps: { backend: typeof backend; open: typeof openDaemon; capabilities: typeof readCapabilities;
@@ -96,7 +96,7 @@ export class ContributedMachines {
           this.published.set(String(row.tabId), { at: began, signature })
         } catch (error) { this.failed = true; throw error }
         }
-        this.repairTrust ??= createSwarmCloneTrustRepair(this.core)
+        this.repairTrust ??= createSwarmCloneTrustRepair(this.core, this.deps.now)
         await this.repairTrust(row)
         // Two launches per pass bounds expensive native work. Pending starts
         // keep their original receipt across network failures and host restarts.

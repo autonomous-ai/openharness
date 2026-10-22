@@ -61,3 +61,16 @@ CLI source/toolchain: changed Super Tab modules and transitive engine trust, Git
 - A backend-selected Codex home may select a config only when a locally registered Codex agent already
   uses that normalized path. Use the local row's path; an arbitrary backend path must never select a file
   such as the owner's Cargo config. Preserve known local profile support and automatic worktree repair.
+
+### Machines freshness rebase and failure scheduling
+
+- Rebase onto current main preserves the five-second start pickup and publishes readings only on
+  change or each 15-second heartbeat. Trust repair stays after the publish block, outside its condition.
+- Per-tab failed repairs wait 15, 30, 60, 120 and 240 seconds, capped at five minutes. Unavailable
+  native login-shell capture therefore cannot delay pending starts on every five-second pass.
+- Skipped engine configs (including a machine where the engine has never run) are checked every five
+  minutes without creating a config. Successful engine/path records remain cached.
+- A changed set of local Codex homes restarts discovery and scheduling, including any new worktree,
+  while retaining completed trust records. An arbitrary backend-selected config remains refused.
+- RED first: shell capture repeats at five seconds; missing config repeats lstat; a later local
+  profile misses source/worktree trust. All three new regressions failed before these fixes.

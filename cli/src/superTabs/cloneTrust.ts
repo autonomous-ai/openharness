@@ -135,20 +135,38 @@ interface RepairSnapshot {
   environment?: NodeJS.ProcessEnv
   recorded: Set<string>
   complete?: boolean
+  slowRetry?: boolean
 }
 
 /** The host owns this cache. A steady pool does no shell/Git/config work after successful repair. */
-export function createSwarmCloneTrustRepair(core: CoreApi): (row: Json) => Promise<void> {
-  const repairs = new Map<string, { generation: unknown; snapshot: RepairSnapshot }>()
+export function createSwarmCloneTrustRepair(core: CoreApi, now: () => number = Date.now): (row: Json) => Promise<void> {
+  const repairs = new Map<string, { generation: unknown; homes: string; snapshot: RepairSnapshot; failures: number; next: number }>()
   return async row => {
     if (!identifier(row.tabId)) return
     const generation = object(row.machine).generation
+    const homes = JSON.stringify([...new Set(core.agents.all().filter(agent => agent.engine === 'codex' && agent.codexHome)
+      .map(agent => resolve(agent.codexHome!)))].sort())
     let repair = repairs.get(row.tabId)
     if (!repair || repair.generation !== generation) {
-      repair = { generation, snapshot: { recorded: new Set() } }
+      repair = { generation, homes, snapshot: { recorded: new Set() }, failures: 0, next: 0 }
       repairs.set(row.tabId, repair)
+    } else if (repair.homes !== homes) {
+      // A newly registered profile may already have a worktree. Discover it even without a new grant.
+      repair.homes = homes
+      repair.snapshot.discovery = undefined
+      repair.snapshot.complete = false
+      repair.failures = 0
+      repair.next = 0
     }
+    if (repair.snapshot.complete || now() < repair.next) return
     await repairSwarmCloneTrust(core, row, undefined, repair.snapshot)
+    if (!repair.snapshot.complete) {
+      // Five-second start pickup must not run a broken login shell or unavailable config each pass.
+      // Engines that have never run have no config yet; look again slowly without creating one.
+      const delay = repair.snapshot.slowRetry ? 300_000 : Math.min(15_000 * 2 ** repair.failures, 300_000)
+      repair.failures = Math.min(repair.failures + 1, 5)
+      repair.next = now() + delay
+    }
   }
 }
 
@@ -158,6 +176,7 @@ export async function repairSwarmCloneTrust(core: CoreApi, row: Json, profile?: 
   snapshot: RepairSnapshot = { recorded: new Set() }): Promise<void> {
   const pool = object(row.machine)
   if (pool.scope !== 'swarm' || !identifier(row.tabId) || !swarmCloneRoot(core.dataDir, row.tabId, pool.cwd) || snapshot.complete) return
+  snapshot.slowRetry = false
   const discovery = snapshot.discovery ??= { roots: new Map(), clones: new Map() }
   const { clones, complete: discovered } = await discoverClones(core, row, row.tabId, discovery)
   if (!clones.length) { snapshot.complete = discovered; return }
@@ -188,6 +207,7 @@ export async function repairSwarmCloneTrust(core: CoreApi, row: Json, profile?: 
       }
       try {
         const result = trust?.record(cwd)
+        if (result === 'skipped') snapshot.slowRetry = true
         if ((result === 'trusted' || result === 'already') && trust?.trusts(cwd)) snapshot.recorded.add(key)
         else complete = false
       } catch { complete = false /* Retry only this setting; another engine and the pool still proceed. */ }
