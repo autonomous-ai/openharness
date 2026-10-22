@@ -22,6 +22,8 @@ import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/logging/typing_trace.dart';
 import 'package:harness_mobile/core/models.dart'
     show Agent, AgentProject, ConnectionStatus;
+import 'package:harness_mobile/core/first_task.dart';
+import 'package:harness_mobile/terminal/terminal_prompt_zone.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/state/app_state.dart';
@@ -44,6 +46,8 @@ import 'package:harness_mobile/widgets/rename_agent_dialog.dart';
 import 'package:harness_mobile/widgets/terminal_panel.dart';
 
 import 'agent_model_sections.dart';
+import 'first_task_suggestion.dart';
+import 'welcome/onboarding_copy.dart';
 import 'agent_model_sheet.dart';
 import 'daemon_chip.dart';
 import 'daemon_scope.dart';
@@ -1102,6 +1106,26 @@ class _TerminalPageState extends State<TerminalPage>
     }
     // The onboarding's one line, until the first send — see [AppNotifier.firstSessionLine].
     if (_firstSessionLine() case final line?) {
+      final session = _facts?.session;
+      final fresh = line == OnboardingCopy.micSayWhat;
+      final preTyped = line == OnboardingCopy.micSendIt;
+      final typed = preTyped && session?.engineId == 'opencode'
+          ? openCodePromptText(session!.terminal.buffer)
+          : null;
+      if ((fresh || typed != null) &&
+          session != null &&
+          const ['claude', 'codex', 'opencode'].contains(session.engineId) &&
+          !VoiceLine.shows(widget.voice)) {
+        return _FirstSessionChips(
+          line: line,
+          ideas: <String>{?typed, ...firstTaskIdeas}.toList(),
+          onTap: session.acceptsInput
+              ? (idea) => unawaited(
+                  widget.voice.submitText(idea, session.sendFirstTask),
+                )
+              : null,
+        );
+      }
       return _StatusLine(key: const ValueKey('first-session-line'), text: line);
     }
     return null;
@@ -2692,16 +2716,22 @@ class _TerminalPageState extends State<TerminalPage>
                         left: 0,
                         right: 0,
                         bottom: _statusBottom - _StatusLine.below,
-                        child: IgnorePointer(
-                          child: ListenableBuilder(
-                            listenable: Listenable.merge([
-                              widget.voice,
-                              _barMessage,
-                              _scrollback,
-                            ]),
-                            builder: (context, _) =>
-                                _statusLine() ?? const SizedBox.shrink(),
-                          ),
+                        child: ListenableBuilder(
+                          listenable: Listenable.merge([
+                            widget.voice,
+                            _barMessage,
+                            _scrollback,
+                            ?session,
+                          ]),
+                          builder: (context, _) {
+                            final line = _statusLine();
+                            if (line == null) return const SizedBox.shrink();
+                            // Only the first session's chips take taps; every other line
+                            // lies over the terminal and lets them through.
+                            return line is _FirstSessionChips
+                                ? line
+                                : IgnorePointer(child: line);
+                          },
                         ),
                       ),
                     // How loud the take is: a glow behind the mic that swells with the voice.
@@ -4485,6 +4515,54 @@ class _AnchoredTerminalState extends State<_AnchoredTerminal> {
       );
     },
   );
+}
+
+/// The first session's line with the first tasks to tap under it (owner, 2026-10-22). The only
+/// status line that takes taps: [TerminalPage] lets the others through to the terminal.
+class _FirstSessionChips extends StatelessWidget {
+  const _FirstSessionChips({
+    required this.line,
+    required this.ideas,
+    required this.onTap,
+  });
+
+  final String line;
+  final List<String> ideas;
+
+  /// Null while the terminal is not taking input: the chips show, and wait.
+  final void Function(String idea)? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return ColoredBox(
+      color: tty.ground,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: _StatusLine.below),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _StatusLine(key: const ValueKey('first-session-line'), text: line),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.center,
+                children: [
+                  for (final idea in ideas)
+                    FirstTaskSuggestion(
+                      text: idea,
+                      onTap: onTap == null ? null : () => onTap!(idea),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 /// The line above the mic, centred over it with an opaque ground.

@@ -321,6 +321,11 @@ class SampleRuntime implements SampleHarnessHost {
               {
                 'engine': engine,
                 'installed': engine == 'claude' || engine == 'codex',
+                // Both signed in, Claude Code used last: New Harness opens on it, as the sample's
+                // harnesses show.
+                if (engine == 'claude' || engine == 'codex') 'signedIn': true,
+                if (engine == 'claude') 'lastUsedAt': 2,
+                if (engine == 'codex') 'lastUsedAt': 1,
                 'installable': true,
                 'command': engine,
                 if (engine == 'codex') 'supportsCodexHome': true,

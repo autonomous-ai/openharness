@@ -1602,6 +1602,22 @@ class TerminalSession extends ChangeNotifier {
     return sent;
   }
 
+  /// First-task suggestions replace the prompt rather than appending to it.
+  /// Wait for the clear's ordered input queue before the separate message frame:
+  /// otherwise a fast message could arrive before its clear. These are the
+  /// engines whose clear-prompt keys we support; never guess for another TUI.
+  Future<bool> sendFirstTask(String text) async {
+    if (!acceptsInput ||
+        !const ['claude', 'codex', 'opencode'].contains(engineId)) {
+      return false;
+    }
+    clearPrompt();
+    await _flushInput();
+    await _inputSendTail;
+    if (!acceptsInput) return false;
+    return sendComposerText(text);
+  }
+
   /// A clipboard paste made directly into this pane, delivered as one atomic unit instead of going
   /// through the same chunked pipeline as ordinary typing ([_onTerminalOutput]/[_flushInput]).
   ///
