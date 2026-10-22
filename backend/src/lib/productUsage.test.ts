@@ -238,6 +238,19 @@ it('the legacy relay respects off and writes only an aggregate counter when on',
   expect(JSON.stringify(db.productUsageTotal.upsert.mock.calls)).not.toContain('private-account')
 })
 
+it('one relay event adds to each total it names under a single preference read', async () => {
+  db.productUsagePreference.findUnique.mockResolvedValue({ enabled: true, revision: 2 })
+  await recordRelayUsage('private-account', now, 'relay_mobile_opens', ['breakdown:release:phone:1.0.8:relay_mobile_opens'])
+  expect(db.productUsagePreference.findUnique).toHaveBeenCalledOnce()
+  expect(db.productUsageTotal.upsert.mock.calls.map(([call]) => [call.where.dayUtc_metric.metric, call.create.value, call.update.value])).toEqual([
+    ['relay_mobile_opens', 1, { increment: 1 }], ['breakdown:release:phone:1.0.8:relay_mobile_opens', 1, { increment: 1 }]])
+  expect(JSON.stringify(db.productUsageTotal.upsert.mock.calls)).not.toContain('private-account')
+  db.productUsageTotal.upsert.mockClear()
+  db.productUsagePreference.findUnique.mockResolvedValue({ enabled: false, revision: 3 })
+  await recordRelayUsage('private-account', now, 'relay_mobile_opens', ['relay_mobile_debug_opens'])
+  expect(db.productUsageTotal.upsert).not.toHaveBeenCalled()
+})
+
 it('a relay metrics failure cannot interrupt work or log an identity or database error', async () => {
   const log = vi.spyOn(console, 'warn').mockImplementation(() => {})
   db.productUsagePreference.findUnique.mockRejectedValue(new Error('PRIVATE_DATABASE_CANARY'))
