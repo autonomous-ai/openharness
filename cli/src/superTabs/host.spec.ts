@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { prepareSwarmSkill } from '../lib/swarmSkills.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
@@ -946,5 +947,77 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
     t.rows[0]!.joinSwarm = true
     await t.pass(24 * 60 * 60_000 + 2)
     expect(t.prepare).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('built-in skill text after a CLI update', () => {
+  const older = '---\nname: swarm-dev\n---\nAn older release of this skill.\n'
+  function syncFixture(stale = true) {
+    const t = setup(), workspace = mkdtempSync(join(tmpdir(), 'super-tab-skills-')); roots.push(workspace)
+    const roles = { lead: 'lead', builder: 'dev', reviewer: 'review' } as const
+    const sessions = Object.fromEntries([...Object.entries(roles).map(([name, role]) => [`h-${name}`,
+      { agentId: `h-${name}`, cwd: workspace, swarmSkill: { role, key: `key-${name}` } }]),
+      ['h-personal', { agentId: 'h-personal', cwd: workspace }]])
+    const files = Object.fromEntries(Object.entries(roles).map(([name, role]) => {
+      const { file } = prepareSwarmSkill(workspace, { role, key: `key-${name}` })
+      // What an older CLI left: its own text and no record of which text it was.
+      if (stale) { writeFileSync(file, older); rmSync(join(dirname(file), 'version.json')) }
+      return [name, file]
+    }))
+    const agents = [...Object.keys(roles), 'personal'].map(name => ({ id: `a-${name}`, harnessId: `h-${name}`, machineId: 'machine-1' }))
+    let groups: Array<Record<string, unknown>> = [
+      { id: 'lead-group', leadId: 'a-lead', agentIds: ['a-lead', 'a-builder', 'a-reviewer'] },
+      { id: 'work', leadId: 'a-lead', agentIds: ['a-lead', 'a-builder'], assignment: { agentId: 'a-builder', status: 'working' } },
+    ]
+    const sent: Array<{ operationId: string; asAgentId: string; command: Record<string, any> }> = []
+    const receipts = new Set<string>()
+    t.core.agents.byAgent = vi.fn(id => sessions[id] as never)
+    t.core.agents.terminalAvailable = vi.fn(() => true)
+    t.core.account.backend = vi.fn(async (method, path, body) => {
+      const request = body as any
+      if (path.includes('/hosts/')) return { status: 200, body: { data: agents.map(agent => ({ tabId: 'tab', agent })) } }
+      if (path.endsWith('/deliveries')) return { status: 200, body: { data: [] } }
+      if (request?.command?.type === 'message.send') {
+        // The backend answers a repeated operation with its first receipt and records nothing new.
+        if (!receipts.has(request.operationId)) { receipts.add(request.operationId); sent.push(request) }
+        return { status: 200, body: { data: {} } }
+      }
+      return { status: 200, body: { data: { state: { agents, conversations: groups } } } }
+    })
+    const pass = async (host = t.open(), advance = 0) => { t.wait(advance); await host.tick(); return host }
+    return { t, files, sent, pass, setGroups: (next: typeof groups) => { groups = next } }
+  }
+
+  it('rewrites each running Lead, Builder and Reviewer skill once and tells each agent once, never a personal session', async () => {
+    const f = syncFixture()
+    const host = await f.pass()
+    for (const file of Object.values(f.files)) expect(readFileSync(file, 'utf8')).not.toBe(older)
+    expect(f.sent.map(s => [s.asAgentId, s.command.recipientIds, s.command.conversationId]).sort()).toEqual([
+      ['a-builder', ['a-builder'], 'work'], ['a-lead', ['a-lead'], 'lead-group'], ['a-reviewer', ['a-reviewer'], 'lead-group']])
+    for (const s of f.sent) expect(s.command.text).toContain(f.files[s.asAgentId.slice(2)]!)
+    expect(f.sent.find(s => s.asAgentId === 'a-reviewer')!.command.text).toContain('swarm-review skill')
+    // A second pass and a restarted host find the files current and say nothing more.
+    await f.pass(host, 5_000)
+    await f.pass()
+    expect(f.sent).toHaveLength(3)
+  })
+
+  it('says nothing when the skill files already hold the built-in text', async () => {
+    const f = syncFixture(false)
+    await f.pass()
+    expect(f.sent).toEqual([])
+  })
+
+  it('rewrites the file of a session in no open group at once and tells it once it joins one', async () => {
+    const f = syncFixture()
+    f.setGroups([{ id: 'old', archived: true, leadId: 'a-lead', agentIds: ['a-lead', 'a-builder', 'a-reviewer'] }])
+    const host = await f.pass()
+    for (const file of Object.values(f.files)) expect(readFileSync(file, 'utf8')).not.toBe(older)
+    expect(f.sent).toEqual([])
+    f.setGroups([{ id: 'next', leadId: 'a-lead', agentIds: ['a-lead', 'a-builder', 'a-reviewer'] }])
+    await f.pass(host, 60_000)
+    expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-builder', 'a-lead', 'a-reviewer'])
+    await f.pass(host, 60_000)
+    expect(f.sent).toHaveLength(3)
   })
 })

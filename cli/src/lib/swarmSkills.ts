@@ -1,7 +1,7 @@
 /** Built into the CLI so contributed machines need no separately installed plugin. */
 import { ignoreHarnessRuntime } from './harnessRuntimeIgnore.js'
 import { createHash } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 
 export type SwarmRole = 'lead' | 'dev' | 'review'
@@ -335,11 +335,65 @@ Mark your review assignment done with the verdict and revision. Print little.
 `,
 }
 
-/** A session owns these bytes; retries and CLI upgrades cannot change a running session's skill.
+/** Launch and relaunch keep a session's saved bytes; only refreshSwarmSkill moves a running session to new built-in text.
  * No project-wide native skill links: two roles may share a workspace. */
 export function prepareSwarmSkill(workspace: string, saved: SwarmSkill): { file: string; instructions: string } {
   if (!parseSwarmSkill(saved)) throw new Error('A Swarm skill needs a role and session key')
   const root = realpathSync(workspace)
+  const dir = skillDirectory(root, saved, true)!
+  ignoreHarnessRuntime(root)
+  const file = join(dir, 'SKILL.md')
+  if (existsSync(file)) {
+    plainFile(file)
+    // Read now so an unreadable saved skill refuses launch, rather than silently dropping the role.
+    readFileSync(file, 'utf8')
+  } else {
+    writeFileSync(file, skills[saved.role], { flag: 'wx', mode: 0o600 })
+    const version = textVersion(skills[saved.role])
+    writeRecord(dir, { text: version, notified: version })
+  }
+  return { file, instructions: `Use the built-in swarm-${saved.role} skill for this session. Before working, read ${JSON.stringify(file)} with your file or shell tool.` }
+}
+
+/** Which built-in text a session's skill file holds, and which text its agent was last told to re-read. A file from before
+ * this record counts as holding its own content, already told. */
+interface SkillRecord { text: string; notified: string }
+export interface SkillRefresh { file: string; version: string; owed: boolean }
+
+/** A CLI update ships new skill text while Swarm sessions run (owner, 2026-10-22). Rewrite a session's file to the
+ * built-in text and say whether its agent still owes a re-read notice for it; recordSwarmSkillNotice clears that once
+ * the notice is sent. The record is written before the file, so an interrupted pass repeats the rewrite and keeps the
+ * notice owed instead of losing it. Null when this workspace never prepared the session's skill. */
+export function refreshSwarmSkill(workspace: string, saved: SwarmSkill): SkillRefresh | null {
+  if (!parseSwarmSkill(saved)) throw new Error('A Swarm skill needs a role and session key')
+  const dir = skillDirectory(realpathSync(workspace), saved, false)
+  const file = dir && join(dir, 'SKILL.md')
+  if (!dir || !file || !existsSync(file)) return null
+  plainFile(file)
+  const text = skills[saved.role], version = textVersion(text)
+  let record = readRecord(dir)
+  if (!record) {
+    const held = textVersion(readFileSync(file, 'utf8'))
+    record = { text: held, notified: held }
+    if (held !== version) writeRecord(dir, record)
+  }
+  if (record.text !== version) {
+    writeFileSync(`${file}.next`, text, { mode: 0o600, flush: true })
+    renameSync(`${file}.next`, file)
+    record = { ...record, text: version }
+    writeRecord(dir, record)
+  }
+  return { file, version, owed: record.notified !== version }
+}
+export function recordSwarmSkillNotice(workspace: string, saved: SwarmSkill, version: string): void {
+  const dir = skillDirectory(realpathSync(workspace), saved, false)
+  const record = dir && readRecord(dir)
+  if (dir && record) writeRecord(dir, { ...record, notified: version })
+}
+
+const textVersion = (text: string) => createHash('sha256').update(text).digest('hex')
+/** Every part under the workspace is a plain directory; `create` makes missing ones, otherwise a missing one is null. */
+function skillDirectory(root: string, saved: SwarmSkill, create: boolean): string | null {
   const dir = join(root, '.harness', 'runtime', createHash('sha256').update(saved.key).digest('hex'), 'swarm', 'skills', `swarm-${saved.role}`)
   let path = root
   for (const part of relative(root, dir).split(sep)) {
@@ -349,16 +403,25 @@ export function prepareSwarmSkill(workspace: string, saved: SwarmSkill): { file:
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`Swarm skill directory is not a plain directory: ${path}`)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      if (!create) return null
       mkdirSync(path, { mode: 0o700 })
     }
   }
-  ignoreHarnessRuntime(root)
-  const file = join(dir, 'SKILL.md')
-  if (existsSync(file)) {
-    const stat = lstatSync(file)
-    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Swarm skill is not a plain file: ${file}`)
-    // Read now so an unreadable saved skill refuses launch, rather than silently dropping the role.
-    readFileSync(file, 'utf8')
-  } else writeFileSync(file, skills[saved.role], { flag: 'wx', mode: 0o600 })
-  return { file, instructions: `Use the built-in swarm-${saved.role} skill for this session. Before working, read ${JSON.stringify(file)} with your file or shell tool.` }
+  return dir
+}
+function plainFile(file: string): void {
+  const stat = lstatSync(file)
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Swarm skill is not a plain file: ${file}`)
+}
+function readRecord(dir: string): SkillRecord | null {
+  const file = join(dir, 'version.json')
+  if (!existsSync(file)) return null
+  plainFile(file)
+  const record = JSON.parse(readFileSync(file, 'utf8')) as Partial<SkillRecord>
+  return typeof record.text === 'string' && typeof record.notified === 'string' ? { text: record.text, notified: record.notified } : null
+}
+function writeRecord(dir: string, record: SkillRecord): void {
+  const file = join(dir, 'version.json')
+  writeFileSync(`${file}.next`, JSON.stringify(record), { mode: 0o600, flush: true })
+  renameSync(`${file}.next`, file)
 }

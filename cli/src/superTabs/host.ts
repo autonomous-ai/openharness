@@ -23,7 +23,7 @@ export class SuperTabHostError extends Error {
 }
 export { identifier, object } from './wire.js'
 import { ENDED_WORK, identifier, object } from './wire.js'
-import type { SwarmRole } from '../lib/swarmSkills.js'
+import { recordSwarmSkillNotice, refreshSwarmSkill, type SwarmRole, type SwarmSkill } from '../lib/swarmSkills.js'
 
 /** The core signs each request. Neither the service nor its journal holds an account credential. */
 export async function backend(core: CoreApi, method: string, path: string, body?: unknown): Promise<unknown> {
@@ -91,6 +91,8 @@ export const hostJournalFile = (dataDir: string, machineId: string) => join(data
  *  failed one. Each try probes every engine's account (about 14 login shells), so the wait doubles up to half an hour:
  *  a refusal such as a dispatched start that never reports, or no signed-in engine, can last for days. */
 const JOIN_RETRY_MS = 60_000
+/** How long a skill re-read notice that could not be sent (no open group yet, or the backend failed) waits to retry. */
+const SKILL_RETRY_MS = 60_000
 const JOIN_RETRY_MAX_MS = 30 * 60_000
 /** Refusals no retry can change while this host runs: the Swarm has all its machines, or this account does not own it. */
 const JOIN_FINAL = new Set(['MACHINES_FULL', 'OWNER_REQUIRED'])
@@ -158,6 +160,9 @@ export class SuperTabHost {
   private attention: string | null = null
   /** The harnesses last handed over waiting, and since when each has been missing from the core's live agents. */
   private waiting = new Set<string>()
+  /** When each running Swarm session's skill is next compared with the built-in text: once per host, and again while
+   *  its re-read notice is still owed. */
+  private readonly skillChecks = new Map<string, number>()
   private missing = new Map<string, number>()
 
   constructor(private readonly core: CoreApi, readonly machineId: string, options: SuperTabHostOptions = {}) {
@@ -446,6 +451,7 @@ export class SuperTabHost {
     const stopKeys = new Set(data.filter(item => object(item).stopRequested === true).map(item => { const row = object(item); return `${row.tabId}:${object(row.agent).id}` }))
     for (const key of this.releaseAttempts.keys()) if (!stopKeys.has(key)) this.releaseAttempts.delete(key)
     const seen = new Set<string>()
+    const running: HostAgent[] = []
     for (const item of data) {
       const row = object(item), agent = object(row.agent)
       if (!identifier(row.tabId) || !identifier(agent.id) || !identifier(agent.harnessId) || agent.machineId !== this.machineId) continue
@@ -457,6 +463,7 @@ export class SuperTabHost {
       }
       // Never adopt another live session as a replacement for the recorded harness.
       if (!this.core.agents.byAgent(target.agent.harnessId) || !this.core.agents.terminalAvailable(target.agent.harnessId)) continue
+      running.push(target)
       const path = `/api/super-tabs/${target.tabId}/agents/${target.agent.id}/deliveries`
       try {
         const deliveries = await backend(this.core, 'GET', path)
@@ -493,6 +500,43 @@ export class SuperTabHost {
       }
     }
     await this.leases()
+    // After the leases, so a skill notice never holds up input. It is owed at most once per text release.
+    for (const target of running) await this.refreshSkill(target)
+  }
+
+  /** A CLI update can ship new built-in skill text while Swarm sessions run; until now a running agent kept the text it
+   *  read at start, so a skill release reached nobody until each agent restarted (owner, 2026-10-22). Rewrite a role
+   *  session's file at once; tell its agent through the Swarm, as any delivery, once it is in an open group. The
+   *  operation id names the agent and the text, so a retry, a restart or a second daemon never sends it twice. */
+  private async refreshSkill(target: HostAgent): Promise<void> {
+    const session = this.core.agents.byAgent(target.agent.harnessId)
+    const skill = session?.swarmSkill
+    const due = this.skillChecks.get(target.agent.harnessId) ?? 0
+    if (!skill || !session.cwd || this.now() < due) return
+    this.skillChecks.set(target.agent.harnessId, Infinity)
+    try {
+      const refresh = refreshSwarmSkill(session.cwd, skill)
+      if (!refresh?.owed) return
+      if (await this.tellSkill(target, skill, refresh)) recordSwarmSkillNotice(session.cwd, skill, refresh.version)
+      else this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
+    } catch (error) {
+      this.log(error instanceof Error ? error.message : String(error))
+      this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
+    }
+  }
+  private async tellSkill(target: HostAgent, skill: SwarmSkill, refresh: { file: string; version: string }): Promise<boolean> {
+    const id = target.agent.id
+    const answer = object(await backend(this.core, 'GET', `/api/super-tabs/${target.tabId}?asAgentId=${id}`))
+    const groups = (Array.isArray(object(answer.state).conversations) ? object(answer.state).conversations as unknown[] : []).map(object)
+      .filter(group => group.archived !== true && identifier(group.id) && Array.isArray(group.agentIds) && group.agentIds.includes(id))
+    const group = groups.find(g => g.leadId === id) ?? groups.find(g => object(g.assignment).agentId === id) ?? groups[0]
+    if (!group) return false
+    await backend(this.core, 'POST', `/api/super-tabs/${target.tabId}/commands`, {
+      operationId: `skill-${id}-${refresh.version.slice(0, 32)}`, asAgentId: id,
+      command: { type: 'message.send', conversationId: group.id, replyTo: null, recipientIds: [id],
+        text: `Harness updated your built-in swarm-${skill.role} skill. Before your next step, read ${JSON.stringify(refresh.file)} again with your file or shell tool and follow the new version.` },
+    })
+    return true
   }
 
   /** The roster marks a Swarm whose Lead runs on this machine of its owner while the machine is not one of the Swarm's
