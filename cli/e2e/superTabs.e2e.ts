@@ -51,9 +51,10 @@ it('starts either engine once, posts to its captured group and delivers shared i
   const idFor = (harnessId: string) => createHash('sha256').update(JSON.stringify([ME.machineId, harnessId])).digest('hex').slice(0, 24)
   relay.superTabs = async (method, raw, body) => {
     const url = new URL(raw, relay.httpUrl), path = url.pathname
+    if (path === `/api/super-tabs/hosts/${ME.machineId}/pools`) return { data: [] }
     if (path === `/api/super-tabs/hosts/${ME.machineId}/assignments`) return { data: assignments }
     if (path.endsWith('/stopped')) { stopReceipts.push(body); assignments.length = 0; return { data: { confirmed: true } } }
-    if (path === `/api/super-tabs/hosts/${ME.machineId}`) return { data: allowed ? agents.map(agent => ({ tabId: TAB, agent, observers: [] })) : [] }
+    if (path === `/api/super-tabs/hosts/${ME.machineId}`) return { data: allowed ? agents.map(agent => ({ tabId: TAB, agent, stopRequested: agent.workDecision === 'stop', observers: [] })) : [] }
     if (!allowed) return { status: 403, error: { code: 'FORBIDDEN', message: 'The contribution was withdrawn.' } }
     if (path === `/api/super-tabs/${TAB}/native` && method === 'POST') {
       const agent = agents.find(a => a.id === body.agentId)!
@@ -75,7 +76,7 @@ it('starts either engine once, posts to its captured group and delivers shared i
       if (loseNativeReply) { loseNativeReply = false; return { status: 503, error: { code: 'BACKEND_UNAVAILABLE', message: 'Lost fixture reply' } } }
       return { data: { eventId } }
     }
-    if (path === `/api/super-tabs/${TAB}`) return { data: { revision, state: { id: TAB, agents } } }
+    if (path === `/api/super-tabs/${TAB}`) return { data: { revision, state: { id: TAB, agents, conversations: [] } } }
     if (path === `/api/super-tabs/${TAB}/conversations/feature/messages`) {
       expect(agents.some(agent => agent.id === url.searchParams.get('asAgentId'))).toBe(true)
       return { data: { messages: [{ id: url.searchParams.get('messageId'), text: 'Should the offline queue survive restart?' }] } }
@@ -106,6 +107,12 @@ it('starts either engine once, posts to its captured group and delivers shared i
         if ((agent.configurationVersion ?? null) !== command.previousVersion) throw new Error('Stale configuration')
         agent.configuration = command.configuration
         agent.configurationVersion = body.operationId
+      }
+      else if (command.type === 'agent.remove') {
+        const index = agents.findIndex(a => a.id === command.agentId)
+        expect(index).toBeGreaterThanOrEqual(0)
+        expect(agents[index]).toMatchObject({ workDecision: 'stop', releaseId: command.releaseId })
+        agents.splice(index, 1)
       }
       else if (command.type === 'agent.startFailed') start!.error = command.error
       else throw new Error(`Unexpected command ${command.type}`)
@@ -337,6 +344,15 @@ it('starts either engine once, posts to its captured group and delivers shared i
   const reserved = reservations.find(r => r.ok)!.reservationId
   expect(await client.request('agent_create_cancel', { creationId: reserved })).toMatchObject({ state: 'cancelled' })
   expect(await client.request('super_tabs', { action: 'observeCapacity', creationId: reserved })).toMatchObject({ released: true })
+  // A person-contributed worker uses the same host process and identity-bound native close as a Lead-created worker.
+  const contributed = await client.request('agent_create', { engine: 'claude', cwd, bypassPermission: true, prompt: 'Report that this contributed worker is ready.' }, 90_000)
+  expect(contributed.error, JSON.stringify(contributed)).toBeUndefined()
+  const contributedId = idFor(contributed.agent.id)
+  agents.push({ id: contributedId, harnessId: contributed.agent.id, machineId: ME.machineId, workDecision: 'stop', releaseId: 'finished-worker-release' })
+  await until('the host process to close and remove the finished contributed worker', () => !agents.some(a => a.id === contributedId) || null, 60_000, 250)
+  expect((await client.request('agents_list')).agents.some((a: Record<string, any>) => a.id === contributed.agent.id)).toBe(false)
+  await until('removed worker retention to be released', () => !retainedHarnesses(d.dataDir).has(contributed.agent.id) || null, 10_000, 100)
+  expect((await client.request('agents_list')).agents.some((a: Record<string, any>) => a.id === lead.agent.id)).toBe(true)
   allowed = false
   const denied = await run(['post', 'feature', 'not allowed', 'after-removal'])
   expect(denied.code).toBe(1)

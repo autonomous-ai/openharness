@@ -520,8 +520,9 @@ describe('decisions linked to work', () => {
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     expect(() => f.run({ type: 'agent.start', request, routeDecisionId: 'd1' }, f.leadActor, { routeDecision: open({ assignmentId }), contribution: f.contribution }))
       .toThrow('already has running work')
-    // Once that work ended, the decision may be linked again.
+    // Once that work ended and the worker is kept, the decision may be linked again.
     f.state.conversations.find(c => c.id === 'lead')!.assignment!.status = 'stopped'
+    f.run({ type: 'agent.release', agentId: f.worker, decision: 'keep' }, f.leadActor)
     expect(f.run({ type: 'agent.start', request, routeDecisionId: 'd1' }, f.leadActor, { routeDecision: open({ assignmentId }), contribution: f.contribution }).routeDecisions).toHaveLength(1)
   })
 
@@ -642,4 +643,89 @@ describe('message attachments', () => {
       { delivery: { id: 'd', conversationId: 'lead', agentId: lead, messageId: 'm', text: '', attachments: [file] } })
     expect(resent.messages[0]).toMatchObject({ recipients: [lead], attachments: [file] })
   })
+})
+
+ describe('finished worker decisions', () => {
+  function finished() {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+    const worker = f.add('worker', 'owner', group), other = f.add('other', 'owner', group)
+    const leadActor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    const workerActor: Actor = { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }
+    const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
+    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'stopped', result: null }, owner, { confirmedStopped: true })
+    return { f, group, worker, other, leadActor, workerActor }
+  }
+  it('requires a decision after completion, preserves it across a new brief, and clears it on reuse', () => {
+    const { f, group, worker, other, leadActor } = finished()
+    expect(visibleState(f.state, owner).agents.find(a => a.id === worker)).toHaveProperty('workDecision', 'awaiting')
+    f.run({ type: 'work.define', conversationId: group, brief: 'Next task', checks: [{ description: 'Done', independent: false }] })
+    expect(() => f.run({ type: 'work.assign', conversationId: group, agentId: other }, leadActor)).toThrow('reuse, keep or stop')
+    f.run({ type: 'work.assign', conversationId: group, agentId: worker }, leadActor)
+    expect(f.state.agents.find(a => a.id === worker)).not.toHaveProperty('workDecision')
+    expect(() => f.run({ type: 'agent.release', agentId: worker, decision: 'stop' } as Command, leadActor)).toThrow('active work')
+  })
+  it('permits the Lead or owner to keep or stop, refuses workers, and fences reuse after stop', () => {
+    const { f, group, worker, other, leadActor, workerActor } = finished()
+    const release = { type: 'agent.release', agentId: worker, decision: 'keep' } as Command
+    expect(() => f.run(release, workerActor)).toThrow('Lead')
+    f.run(release, leadActor)
+    expect(f.state.agents.find(a => a.id === worker)).toHaveProperty('workDecision', 'keep')
+    f.run({ ...release, decision: 'stop' } as Command)
+    expect(() => f.run({ type: 'work.assign', conversationId: group, agentId: worker }, leadActor)).toThrow('stopping')
+    expect(() => f.run(release, leadActor)).toThrow('stopping')
+    f.run({ type: 'work.assign', conversationId: group, agentId: other }, leadActor)
+  })
+  it('allows only the execution host of a requested stop to acknowledge removal', () => {
+    const { f, worker, other, leadActor, workerActor } = finished()
+    expect(() => f.run({ type: 'agent.remove', agentId: worker }, workerActor)).toThrow()
+    f.run({ type: 'agent.release', agentId: worker, decision: 'stop' } as Command, leadActor)
+    expect(() => f.run({ type: 'agent.remove', agentId: worker }, { ...workerActor, agentId: other })).toThrow()
+    const releaseId = f.state.agents.find(a => a.id === worker)!.releaseId!
+    const removed = f.run({ type: 'agent.remove', agentId: worker, releaseId }, workerActor)
+    expect(removed.cancelledAgents).toContain(worker)
+    expect(f.state.agents.some(a => a.id === worker)).toBe(false)
+  })
+ })
+
+it('blocks routing and starts until a finished worker is kept or stopped', () => {
+  const f = routed(), group = f.group()
+  f.run({ type: 'work.assign', conversationId: group, agentId: f.worker })
+  const assignmentId = f.state.conversations.find(c => c.id === group)!.assignment!.id
+  f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'stopped', result: null }, owner, { confirmedStopped: true })
+  const route = { type: 'route.record', conversationId: group, decision: record() } as Command
+  const request = { conversationId: group, machineId: 'machine', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: false,
+    requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+  expect(() => f.run(route, f.leadActor)).toThrow('reuse, keep or stop')
+  expect(() => f.run({ type: 'agent.start', request }, f.leadActor, { contribution: f.contribution })).toThrow('reuse, keep or stop')
+  f.run({ type: 'agent.release', agentId: f.worker, decision: 'keep' }, f.leadActor)
+  expect(f.run(route, f.leadActor).routeDecisions).toHaveLength(1)
+  expect(f.run({ type: 'agent.start', request }, f.leadActor, { contribution: f.contribution }).result.startId).toBeTruthy()
+})
+
+it('requires the exact stop request for host acknowledgement and prevents promotion while stopping', () => {
+  const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group(), worker = f.add('worker', 'owner', group)
+  const leadActor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+  const workerActor: Actor = { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }
+  const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
+  f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'stopped', result: null }, owner, { confirmedStopped: true })
+  f.run({ type: 'agent.release', agentId: worker, decision: 'stop' }, leadActor)
+  expect(() => f.run({ type: 'agent.remove', agentId: worker, releaseId: 'old-release' } as Command, workerActor)).toThrow('stop request')
+  expect(() => f.run({ type: 'conversation.agent', conversationId: group, agentId: worker, present: true, lead: true })).toThrow('stopping')
+  expect(() => f.add('worker', 'owner', group, true)).toThrow('stopping')
+})
+
+it('allows the contributor to keep a completed worker and refuses another project’s Lead', () => {
+  const f = fixture(); f.invite()
+  f.add('lead', 'owner', 'lead', true)
+  const group = f.group(), worker = f.add('worker', 'peer', group)
+  const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
+  const checkId = f.state.conversations.find(c => c.id === group)!.checks[0]!.id
+  f.run({ type: 'work.check', conversationId: group, assignmentId, checkId, passed: true, evidence: 'Verified' })
+  f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Delivered' })
+  expect(f.state.agents.find(a => a.id === worker)!.workDecision).toBe('awaiting')
+  f.run({ type: 'agent.release', agentId: worker, decision: 'keep' }, peer)
+  expect(f.state.agents.find(a => a.id === worker)!.workDecision).toBe('keep')
+  const project = f.run({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' }).result
+  const otherLead = f.add('other-lead', 'owner', project.conversationId as string, true)
+  expect(() => f.run({ type: 'agent.release', agentId: worker, decision: 'stop' }, { kind: 'agent', agentId: otherLead, machineOwnerId: 'host-owner' })).toThrow()
 })

@@ -497,3 +497,15 @@ it('teaches agents to say when their work needs a person or is stuck', async () 
   expect(help.help.commands.filter(c => c.type === 'work.status').map(c => c.status)).toEqual(['working', 'needs_human', 'blocked', 'done'])
   expect(help.help.command).toContain('needs_human')
 })
+
+it('documents finished worker decisions and explains an older backend without release support', async () => {
+  const t = setup()
+  const help = (await t.ask({ action: 'help' }, owner)).help as { commands: unknown[]; release: string }
+  expect(help.commands).toContainEqual({ type: 'agent.release', agentId: 'AGENT', decision: 'keep|stop' })
+  expect(help.release).toContain('prefer stop')
+  t.call.mockImplementation(async (...args: unknown[]) => args[0] === 'POST'
+    ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'Invalid request' } } } as never
+    : { status: 200, body: { success: true, data: { state: { agents: [t.agent] } } } })
+  const reply = await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'release', command: { type: 'agent.release', agentId: 'worker', decision: 'stop' } }, owner)
+  expect(reply).toMatchObject({ detail: 'This backend does not support releasing workers yet. Update the backend and try again.' })
+})

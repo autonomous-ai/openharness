@@ -17,6 +17,7 @@ const HELP = {
   message: 'message GROUP MESSAGE_ID: read one exact message, including an earlier question or result referenced by a reply.',
   post: 'post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]...: reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID. --attach sends a file (a screenshot, a log; up to 10 files of 10 MB each), and TEXT may then be empty.',
   start: 'start OPERATION_ID JSON: create one agent in a conversation on a machine in this Swarm\'s Machines list; to use another machine, a person adds it to the Swarm first. Repeat exactly after an interruption; it follows the same native creation receipt. It does not assign work. With worktree true, the agent starts from the repository\'s default branch, fetched first, unless you set branchRef (refs/heads/BRANCH, or refs/remotes/origin/BRANCH to fetch it first) to start from another branch, such as the one this work builds on.',
+  release: 'When a worker finishes, decide reuse, keep or stop; prefer stop unless more work is coming soon. Reuse assigns new work; agent.release records keep or requests stop. Wait for the execution host to confirm a stop.',
   resume: 'resume START_ID: finish a pending start without creating another agent.',
   route: 'route GROUP JSON: before starting or assigning work, choose who does it. JSON: {"difficulty":"low|medium|high","risk":"low|medium|high","size":"small|medium|large","why":"one sentence","needs":{"tools":[],"devices":[],"cwd":"/absolute/repo"}}. size is how long the work runs: small about 20 minutes, medium about an hour, large about three hours. Start or assign the pick with its routeDecisionId; to choose otherwise, pass overrideReason.',
   capacity: 'capacity MACHINE_ID JSON: inspect machine, engine and quota headroom. JSON uses the start request fields below. Unknown allowances are not reported as free tokens.',
@@ -30,6 +31,7 @@ const HELP = {
     { type: 'conversation.create', title: 'Outcome', task: { goal: 'An independently assignable result', changes: 'What changes', constraints: 'What must stay true', owns: ['Paths or code areas'] }, checks: [{ description: 'Observable acceptance evidence', independent: false }] },
     { type: 'conversation.agent', conversationId: 'GROUP', agentId: 'AGENT', present: true, lead: false },
     { type: 'work.define', conversationId: 'GROUP', task: { goal: 'What to deliver', changes: 'What changes', constraints: 'What must stay true', owns: ['Paths or code areas'] }, checks: [{ description: 'Observable acceptance evidence', independent: false }] },
+    { type: 'agent.release', agentId: 'AGENT', decision: 'keep|stop' },
     { type: 'work.assign', conversationId: 'GROUP', agentId: 'AGENT', routeDecisionId: 'DECISION' },
     { type: 'work.status', conversationId: 'GROUP', assignmentId: 'ATTEMPT', status: 'working', result: null },
     // Both reach the Lead and alert the Harness Pro on the machine running the agent until the status moves on.
@@ -251,6 +253,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             value = await send(legacy)
           }
           return { ok: true, operationId: payload.operationId, value }
+    { type: 'agent.release', agentId: 'AGENT', decision: 'keep|stop' },
         }
         // `post --attach` asks first whether this post already went out with its files.
         if (payload.action === 'attachment' && identifier(payload.conversationId) && payload.step === 'sent' && identifier(payload.operationId)) {

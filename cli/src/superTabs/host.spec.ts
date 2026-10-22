@@ -496,3 +496,70 @@ describe('Super Tab waits for the Harness Pro', () => {
     expect(superTabs.attention).toHaveBeenCalledTimes(2)
   })
 })
+
+it('stops a requested worker once, confirms removal, and releases retention on the next roster', async () => {
+  const t = setup(), host = t.open()
+  vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0 } as never)
+  let closed = false, removed = false, acknowledgements = 0
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop' }
+  t.core.agents.stopped = async () => closed
+  t.core.agents.close = async request => { expect(request.agentId).toBe('harness'); closed = true; return { closed: true } }
+  t.core.account.backend = async (method, path) => {
+    if (path.includes('/hosts/')) return { status: 200, body: { data: removed ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }] } }
+    if (method === 'GET') return { status: 200, body: { data: { state: { agents: [target], conversations: [] } } } }
+    acknowledgements++; removed = true
+    return { status: 200, body: { data: {} } }
+  }
+  await host.tick()
+  await vi.waitFor(() => expect(acknowledgements).toBe(1))
+  expect(closed).toBe(true)
+  expect(t.core.turns.deliver).not.toHaveBeenCalled()
+  await host.tick()
+  expect(retainedHarnesses(t.dir).size).toBe(0)
+  expect(acknowledgements).toBe(1)
+})
+
+it.each(['active', 'foreign', 'changed', 'missing', 'refused', 'unconfirmed', 'unsupported'])('withholds closure or acknowledgement when stop safety is %s', async kind => {
+  const t = setup(), host = t.open()
+  vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0 } as never)
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', releaseId: 'release-1' }
+  const close = vi.fn(async () => kind === 'refused' ? { error: 'NOT_AGENT_STARTED' } : { closed: true as const })
+  const acknowledge = vi.fn()
+  t.core.agents.close = kind === 'unsupported' ? undefined : close
+  t.core.agents.stopped = async () => false
+  t.core.account.backend = async (method, path) => {
+    if (path.includes('/hosts/')) return { status: 200, body: { data: [{ tabId: 'tab', agent: target, stopRequested: true }] } }
+    if (method === 'GET') return { status: 200, body: { data: { state: {
+      agents: kind === 'missing' ? [] : [{ ...target, machineId: kind === 'foreign' ? 'foreign' : target.machineId, releaseId: kind === 'changed' ? 'release-2' : 'release-1' }],
+      conversations: [{ assignment: { agentId: 'agent', status: kind === 'active' ? 'working' : 'done' } }],
+    } } } }
+    acknowledge(); return { status: 200, body: { data: {} } }
+  }
+  await host.tick()
+  // Finish the asynchronous lifecycle pickup without relying on the delivery poll to wait on it.
+  await new Promise(resolve => setTimeout(resolve, 20))
+  expect(acknowledge).not.toHaveBeenCalled()
+  if (['active', 'foreign', 'changed', 'missing', 'unsupported'].includes(kind)) expect(close).not.toHaveBeenCalled()
+  else expect(close).toHaveBeenCalledOnce()
+  expect(t.core.turns.deliver).not.toHaveBeenCalled()
+})
+
+it('retries a lost removal acknowledgement from native stopped evidence without closing twice', async () => {
+  const t = setup(), host = t.open()
+  vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0 } as never)
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop' }
+  let stopped = false, attempts = 0
+  const close = vi.fn(async () => { stopped = true; return { closed: true as const } })
+  t.core.agents.close = close
+  t.core.agents.stopped = async () => stopped
+  t.core.account.backend = async (method, path) => {
+    if (path.includes('/hosts/')) return { status: 200, body: { data: [{ tabId: 'tab', agent: target, stopRequested: true }] } }
+    if (method === 'GET') return { status: 200, body: { data: { state: { agents: [target], conversations: [] } } } }
+    attempts++
+    if (attempts === 1) throw new Error('Lost acknowledgement')
+    return { status: 200, body: { data: {} } }
+  }
+  await host.tick(); await vi.waitFor(() => expect(attempts).toBe(1))
+  await host.tick(); await vi.waitFor(() => expect(attempts).toBe(2))
+  expect(close).toHaveBeenCalledOnce()
+})

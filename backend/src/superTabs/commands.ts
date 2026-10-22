@@ -3,6 +3,7 @@ import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
   activeWork, actorKey, agent, author, conversation, fail, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
+  finishWorker, requireWorkerDecisions,
   type Actor, type Agent, type Author, type CommandEffects, type SuperTabState,
 } from './model.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
@@ -71,7 +72,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('agent.started'), startId: id, harnessId: id, configuration }).strict(),
   z.object({ type: z.literal('agent.startSettled'), startId: id, warning: z.string().max(2000).nullable() }).strict(),
   z.object({ type: z.literal('agent.startFailed'), startId: id, error: text }).strict(),
-  z.object({ type: z.literal('agent.remove'), agentId: id }).strict(),
+  z.object({ type: z.literal('agent.remove'), agentId: id, releaseId: id.optional() }).strict(),
+  z.object({ type: z.literal('agent.release'), agentId: id, decision: z.enum(['keep', 'stop']) }).strict(),
   z.object({ type: z.literal('agent.configuration'), previousVersion: id.nullable(), configuration }).strict(),
   z.object({ type: z.literal('conversation.agent'), conversationId: id, agentId: id, present: z.boolean(), lead: z.boolean() }).strict(),
   z.object({ type: z.literal('invite.create'), email: z.email().max(320), role: z.enum(['collaborator', 'viewer']), conversationId: id }).strict(),
@@ -384,6 +386,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const agentId = stableId(command.machineId, command.harnessId)
       const existing = state.agents.find(a => a.id === agentId)
       if (existing) sameProject(state, group, existing)
+      if (existing?.workDecision === 'stop' && command.lead) fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
       if (!existing) state.agents.push({ id: agentId, machineId: command.machineId, harnessId: command.harnessId,
         ...(state.projects ? { projectId: project.id } : {}),
         machineOwnerId: grant.machineOwnerId, contributorId: grant.contributorId, membershipGeneration: contributor.generation,
@@ -412,7 +415,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     case 'agent.start': {
       controls(state, actor, command.request.conversationId)
-      open(state, command.request.conversationId)
+      requireWorkerDecisions(state, actor, open(state, command.request.conversationId))
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
       // The Lead's account has machines the Swarm never prepared (no clone of the project), so a Lead may start only where the
       // Swarm already lists a machine: a contributed one, or one an agent of the Swarm runs on. A person's start may name any
@@ -452,7 +455,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       controls(state, actor, start.request.conversationId)
       if (command.type === 'agent.startDispatch') {
         if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
-        open(state, start.request.conversationId)
+        requireWorkerDecisions(state, actor, open(state, start.request.conversationId))
         const grant = context.contribution ?? fail('HOST_REQUIRED', 'The original machine grant is unavailable.', 403)
         if (grant.machineOwnerId !== start.machineOwnerId || (grant.hostGrant ?? null) !== start.hostGrant) {
           fail('CONTRIBUTION_REVOKED', 'The original machine grant was revoked.', 403)
@@ -508,9 +511,40 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       break
     }
+    case 'agent.release': {
+      const target = agent(state, command.agentId)
+      const project = projectOf(state, agentProjectId(state, target))
+      const isLead = actor.kind === 'agent' && conversation(state, project.leadConversationId).leadId === actor.agentId
+      const isOwner = actor.kind === 'person' && [state.ownerId, target.contributorId].includes(actor.userId)
+      if (!isLead && !isOwner) fail('FORBIDDEN', 'Only this project’s Lead, the contributor or tab owner can release a worker.', 403)
+      if (state.conversations.some(c => c.leadId === target.id)) fail('LEAD_REQUIRED', 'Release workers only; keep the Lead running.')
+      if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id)) fail('WORK_ACTIVE', 'Finish active work before releasing this worker.')
+      if (!target.workDecision && !state.conversations.some(c => c.assignment?.agentId === target.id)) fail('WORK_REQUIRED', 'This worker has no finished assignment to release.')
+      if (target.workDecision === 'stop' && command.decision !== 'stop') fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
+      if (command.decision === 'stop' && target.workDecision !== 'stop') target.releaseId = operationId
+      target.workDecision = command.decision
+      break
+    }
     case 'agent.remove': {
       const target = agent(state, command.agentId)
-      if (actor.kind !== 'person' || (actor.userId !== state.ownerId && actor.userId !== target.contributorId)) {
+      const hostStop = actor.kind === 'agent' && actor.agentId === target.id && target.workDecision === 'stop'
+      if (hostStop) {
+        if (command.releaseId !== target.releaseId || !target.releaseId) fail('STALE_RELEASE', 'Read the current stop request before confirming removal.')
+        if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id)) fail('WORK_ACTIVE', 'Finish active work before stopping this worker.')
+        // This is the execution host's durable lifecycle receipt, not a stale observation or a person withdrawing a contribution.
+        state.releasedHarnesses ??= []
+        if (!state.releasedHarnesses.some(r => r.machineId === target.machineId && r.harnessId === target.harnessId)) {
+          state.releasedHarnesses.push({ machineId: target.machineId, harnessId: target.harnessId })
+        }
+        const observation = state.machines?.find(m => m.machineId === target.machineId)?.observation
+        if (observation) {
+          observation.runningHarnessIds = observation.runningHarnessIds.filter(id => id !== target.harnessId)
+          if (!observation.stoppedHarnessIds.includes(target.harnessId)) observation.stoppedHarnessIds.push(target.harnessId)
+        }
+        result.releasedBy = actor.machineOwnerId
+      } else if (target.workDecision === 'stop') {
+        fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
+      } else if (actor.kind !== 'person' || (actor.userId !== state.ownerId && actor.userId !== target.contributorId)) {
         fail('FORBIDDEN', 'Only the contributor or tab owner can withdraw this agent.', 403)
       }
       removeAgent(target)
@@ -519,7 +553,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'conversation.agent': {
       controls(state, actor, command.conversationId)
       const group = open(state, command.conversationId)
-      sameProject(state, group, agent(state, command.agentId))
+      const member = agent(state, command.agentId)
+      sameProject(state, group, member)
+      if (member.workDecision === 'stop' && command.lead) fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
       if (!command.present) {
         if (activeWork(group) && (group.assignment?.agentId === command.agentId || group.leadId === command.agentId)) {
           fail('WORK_ACTIVE', 'Reconcile this agent’s assignment before removing it from the conversation.')
@@ -608,7 +644,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     case 'route.record': {
       controls(state, actor, command.conversationId)
-      open(state, command.conversationId)
+      requireWorkerDecisions(state, actor, open(state, command.conversationId))
       if ((context.recentRoutes ?? 0) >= 30) fail('RATE_LIMITED', 'This Super Tab routed 30 tasks in the last hour. Wait before routing again.', 429)
       const decision = command.decision
       const pick = decision.candidates.find(c => c.id === decision.pick)!
@@ -656,6 +692,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       controls(state, actor, command.conversationId)
       const group = open(state, command.conversationId)
       if (activeWork(group)) fail('WORK_ACTIVE', 'Finish or stop the current assignment before changing its acceptance checks.')
+      if (group.assignment) {
+        const worker = state.agents.find(a => a.id === group.assignment!.agentId)
+        if (worker && !worker.workDecision) finishWorker(state, worker.id)
+      }
       rememberAttempt(group)
       group.assignment = null
       group.brief = command.task ? renderWorkTask(command.task) : command.brief!
@@ -677,7 +717,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (!group.brief || !group.checks.length) fail('BRIEF_REQUIRED', 'Record the brief and acceptance checks before assigning work.', 400)
       const worker = agent(state, command.agentId)
       sameProject(state, group, worker)
+      requireWorkerDecisions(state, actor, group, worker.id)
+      if (worker.workDecision === 'stop') fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
       if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === worker.id)) fail('AGENT_BUSY', 'This agent already owns an active assignment.')
+      delete worker.workDecision
+      delete worker.releaseId
       if (!group.agentIds.includes(worker.id)) group.agentIds.push(worker.id)
       rememberAttempt(group)
       group.assignment = { id: operationId, agentId: worker.id, status: 'working', configuration: structuredClone(worker.configuration),
@@ -714,6 +758,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const changed = assignment.status !== command.status || assignment.result !== command.result
       assignment.status = command.status
       assignment.result = command.result
+      if (['done', 'stopped'].includes(command.status)) finishWorker(state, assignment.agentId)
       if (changed) {
         const label = { working: 'Working', needs_human: 'Needs a human', blocked: 'Stuck', review: 'Ready for review', done: 'Done', stopped: 'Stopped' }[command.status]
         const lead = group.leadId
@@ -736,6 +781,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       check.passedBy = command.passed ? actorKey(actor) : null
       break
     }
+  }
+  for (const target of original.agents.filter(a => a.workDecision === 'stop')) {
+    const acknowledged = command.type === 'agent.remove' && command.agentId === target.id && actor.kind === 'agent' && actor.agentId === target.id
+    if (!acknowledged && !state.agents.some(a => a.id === target.id)) fail('STOP_REQUESTED', 'Wait for the execution host to finish stopping its workers before withdrawing them.')
   }
   // MongoDB limits a document to 16 MiB. Leave room for indexes and metadata, and refuse before losing state.
   assignAgentDisplayNames(state.agents)

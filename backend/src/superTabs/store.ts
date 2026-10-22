@@ -15,7 +15,7 @@ import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import {
-  activeWork, actorKey, agent, author, conversation, createSuperTab, fail, person, stableId, visibleState,
+  activeWork, actorKey, agent, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
   SuperTabError, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
 } from './model.js'
 import { holdNoticeText, type HoldReason } from './holdNotice.js'
@@ -301,6 +301,14 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       const row = await this.row(tx, user, tabId)
       const original = stateOf(row)
+      // Removal retries can arrive after the actor itself left. Return only this host's exact prior receipt.
+      if (command.type === 'agent.remove' && asAgentId === command.agentId && !original.agents.some(a => a.id === asAgentId)) {
+        const prior = await tx.superTabOperation.findUnique({ where: { id: stableId(tabId, `agent:${asAgentId}`, operationId) } })
+        if (prior && prior.requestHash === hash(command) && (prior.result as Record<string, unknown>).releasedBy === user.sub) {
+          return { revision: prior.revision, result: prior.result }
+        }
+        fail('FORBIDDEN', 'Only the execution host can confirm this removal.', 403)
+      }
       if (hostMachineId && !['agent.startDispatch', 'agent.started', 'agent.startFailed', 'agent.startSettled', 'route.modelResult'].includes(command.type)) fail('FORBIDDEN', 'A host can only settle its queued starts.', 403)
       const actor = hostMachineId && 'startId' in command
         ? await this.poolHostActor(tx, user, original, hostMachineId, command.startId)
@@ -417,6 +425,17 @@ export class SuperTabStore {
       }
       for (const message of effects.messages) conversation(effects.state, message.conversationId).lastMessageSequence = revision
       noteProjectReports(effects.state, effects.messages, revision, context.now)
+      if (command.type === 'agent.release' && command.decision === 'stop') {
+        const target = agent(effects.state, command.agentId)
+        const assignmentId = `release-${target.releaseId}`
+        const running = await tx.superTabRun.findUnique({ where: { id: target.id } })
+        if (running && (running.tabId !== tabId || running.assignmentId !== assignmentId)) fail('AGENT_BUSY', 'This agent already owns active work in a Swarm or is stopping elsewhere.')
+        // The same global uniqueness fence as work.assign: another public Swarm cannot assign this native session during close.
+        if (!running) await tx.superTabRun.create({ data: { id: target.id, tabId, assignmentId, machineId: target.machineId, harnessId: target.harnessId } })
+      }
+      if (command.type === 'agent.remove' && actor.kind === 'agent') {
+        await tx.superTabRun.deleteMany({ where: { id: command.agentId, tabId, assignmentId: `release-${command.releaseId}` } })
+      }
       if (command.type === 'work.assign') {
         const assigned = conversation(effects.state, command.conversationId).assignment!
         const running = await tx.superTabRun.findUnique({ where: { id: assigned.agentId } })
@@ -690,6 +709,7 @@ export class SuperTabStore {
             c.assignment!.execution.machineId === machineId && ['needs_human', 'blocked'].includes(c.assignment!.status))?.assignment
           const attention = waiting ? { assignmentId: waiting.id, status: waiting.status, result: waiting.result?.slice(0, 500) ?? null } : null
           result.push({ tabId: row.id, tabName: state.name, revision: row.revision, paused: state.paused, active, attention, agent: target,
+            stopRequested: target.workDecision === 'stop' && !state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id),
             observers: people.filter(p => p.id !== user.sub &&
               canReadAgent(state, { kind: 'person', userId: p.id, email: p.email }, target))
               .map(p => ({ email: p.email, userId: p.id })) })
@@ -865,6 +885,7 @@ export class SuperTabStore {
       const notices: MessageDraft[] = []
       if (group && activeWork(group)) {
         assignment.status = 'stopped'
+        finishWorker(state, assignment.agentId)
         assignment.result = 'The execution host confirmed that this harness stopped.'
         await tx.superTabRun.deleteMany({ where: { tabId, assignmentId } })
         await tx.superTabDelivery.updateMany({ where: { tabId, assignmentId,
