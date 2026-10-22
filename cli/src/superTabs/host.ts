@@ -9,6 +9,10 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, join } from 'node:path'
 import type { CoreApi, TurnDelivery } from '../core/api.js'
 import { shellQuote } from '../orchestrator/prompts.js'
+import { agentCommandPrefix } from './shortCommand.js'
+import { env } from '../config/env.js'
+import { readAuthSession } from '../lib/authSession.js'
+import { computerId } from '../lib/daemonState.js'
 import { noticeReason, WithheldDeliveries } from './withheld.js'
 import { attentionOf } from './attention.js'
 import { prepareContribution } from './contribution.js'
@@ -77,8 +81,12 @@ export interface SuperTabHostOptions {
   observers?: typeof publishObservers
   attachedFiles?: typeof attachedFiles
   prepareContribution?: typeof prepareContribution
+  /** The `… super-tab` prefix agents are told to run (superTabs/shortCommand.ts), for a spec. */
+  agentCommand?: (core: CoreApi, machineId: string) => Promise<string>
 }
 
+const defaultAgentCommand = (core: CoreApi, machineId: string) => agentCommandPrefix(core.daemon, core.dataDir, machineId,
+  { port: env.PORT, dataDir: env.ADAPTER_DATA_DIR, machineId: () => readAuthSession()?.machineId || computerId() })
 export const hostJournalFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `host-${machineId}.json`)
 /** How long after an add the roster may ask for another (a roster read may predate the add), and the first wait after a
  *  failed one. Each try probes every engine's account (about 14 login shells), so the wait doubles up to half an hour:
@@ -138,6 +146,9 @@ export class SuperTabHost {
   private receiptsRunning: Promise<void> | null = null
   private nextReceiptsAt = 0
   private receiptCursor = 0
+  private readonly agentCommand: (core: CoreApi, machineId: string) => Promise<string>
+  /** Asked once, on the first delivery: the answer cannot change while this daemon runs (superTabs/shortCommand.ts). */
+  private prefix: Promise<string> | null = null
   private configurationsRunning: Promise<void> | null = null
   private nextConfigurationsAt = 0
   private timer: ReturnType<typeof setTimeout> | null = null
@@ -156,6 +167,7 @@ export class SuperTabHost {
     this.observers = options.observers ?? publishObservers
     this.attachedFiles = options.attachedFiles ?? attachedFiles
     this.prepareContribution = options.prepareContribution ?? prepareContribution
+    this.agentCommand = options.agentCommand ?? defaultAgentCommand
     this.now = options.now ?? Date.now
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
@@ -590,6 +602,8 @@ export class SuperTabHost {
       files = downloaded.text
       if (downloaded.complete) this.files.set(deliveryId, files)
     }
+    this.prefix ??= this.agentCommand(this.core, this.machineId)
+    const command = await this.prefix
     if (this.stopped || this.journal.entries[deliveryId] !== entry) return
     this.authorized.set(id, this.now() + 2_500)
     if (!(await this.leases()) || this.stopped) { this.authorized.delete(id); return }
@@ -599,7 +613,7 @@ export class SuperTabHost {
     entry.stage = 'submitting'
     this.persist()
     this.active.add(id)
-    this.core.turns.deliver(entry.harnessId, this.prompt(entry, message, files), id)
+    this.core.turns.deliver(entry.harnessId, this.prompt(entry, message, files, command), id)
   }
 
   private async recordConfigurations(rows: unknown[]): Promise<void> {
@@ -614,8 +628,8 @@ export class SuperTabHost {
     }
   }
 
-  private prompt(entry: Entry, message: Json, files: string): string {
-    const command = `${this.core.daemon.command} super-tab --port ${this.core.daemon.port} --machine ${shellQuote(this.machineId)} --tab ${shellQuote(entry.tabId)} --agent ${shellQuote(entry.agentId)}`
+  private prompt(entry: Entry, message: Json, files: string, prefix: string): string {
+    const command = `${prefix} --tab ${shellQuote(entry.tabId)} --agent ${shellQuote(entry.agentId)}`
     const group = message.conversationId as string
     const reply = identifier(message.replyTo)
       ? `In reply to message ${message.replyTo}. Read it before interpreting the answer: ${command} message ${shellQuote(group)} ${shellQuote(message.replyTo)}\n\n`

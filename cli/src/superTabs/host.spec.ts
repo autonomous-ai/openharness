@@ -431,6 +431,32 @@ it('confirms a stopped assignment only with fresh native evidence, including aft
   expect(proof).toHaveLength(1)
 })
 
+describe('the super-tab command in delivered input', () => {
+  it('names the short command in every line that names a command, and asks for it once while the input is held', async () => {
+    const t = setup({ replyTo: 'earlier' })
+    const agentCommand = vi.fn(async () => 'harness super-tab')
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), agentCommand }); hosts.push(host)
+    await host.tick()
+    const text = String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1])
+    expect(text).toContain(`Read its state: harness super-tab --tab 'tab' --agent 'agent' status`)
+    expect(text).toContain(`harness super-tab --tab 'tab' --agent 'agent' message 'lead' 'earlier'`)
+    expect(text).toContain(`harness super-tab --tab 'tab' --agent 'agent' route GROUP JSON`)
+    expect(text).not.toContain('--port')
+    t.event('rejected', 'team_waiting_busy')
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+    expect(agentCommand).toHaveBeenCalledTimes(1)
+    expect(agentCommand).toHaveBeenCalledWith(t.core, 'machine-1')
+  })
+  it('keeps the daemon\'s full command when nothing proves a shorter one works (no launcher is looked up in a spec)', async () => {
+    const t = setup()
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn() }); hosts.push(host)
+    await host.tick()
+    expect(String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]))
+      .toContain(`Read its state: ${t.core.daemon.command} super-tab --port ${t.core.daemon.port} --machine 'machine-1' --tab 'tab' --agent 'agent' status`)
+  })
+})
+
 describe('Super Tab attachments in delivered input', () => {
   it('lists the downloaded files after the text and downloads them once while the terminal holds the input', async () => {
     const file = { id: 'a1', name: 'screen.png', mime: 'image/png', size: 5, url: 'https://cdn.example.test/x/screen.png' }
