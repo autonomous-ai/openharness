@@ -125,3 +125,20 @@ Range review confirmed the rebase changes only the two shared launch boundaries,
 ## Desktop CI fixture correction (2026-10-22)
 
 The automatic ready-PR run exposed 18 Desktop test subclasses overriding AppNotifier.createAgent without its new optional swarmRole argument. This is a branch regression, not an accepted baseline. Reproduced the compile failure locally in new_agent_permission_mode_test.dart before adding the optional parameter to every override. Production inputs are unchanged. All 18 affected files then passed together: 236 tests passed, one skipped; analysis of those 18 files found no issues. CLI/core/native and the 57 launch/startup receipts cover unchanged production inputs and are retained. The corrected push will run automatic CI once; no manual workflow or rerun was started.
+
+## Worker-release integration (2026-10-22)
+
+Started from the Lead's pushed clean rebase `40adc5099` on #1525, then rebased onto `591b056a3` (#1527). CLI host/start sources and tests applied cleanly, retaining full-mode starts, role metadata, original-native-launch protection, agent.release and host close/retry behavior. Resolved the Desktop prompt and startup recovery conflicts by retaining every rule from both sides: discuss first, supported-engine role skills, routing, group coordination, small self-work/read-only subagents, five-part tasks, worker reuse/keep/stop with stop preferred, reply-once, scheduled report reading and project scope.
+
+The combined prompt is 1,990/2,000 UTF-16 units with both IDs at 160 characters. Compact wording preserves the rules, and startup recovery pins the coordination and worker-release clauses. The extra fallback assertions failed before the wording fix; the length test also caught the first oversized combined draft.
+
+Fresh checks on Node 24.3.0 and Flutter 3.47.5/Dart 3.13.4, macOS arm64:
+
+- `cd cli && node_modules/.bin/vitest run src/superTabs --maxWorkers=3`: 20 files / 386 tests passed, including worker release, host close, dispatch and skill instructions.
+- `cd cli && npm run test:super-tabs -- --coverage.reportsDirectory=/private/tmp/swarm-release-routing-coverage`: 111 tests passed, 100% statements/branches/functions/lines.
+- `cd cli && npm run typecheck`: passed.
+- `cd desktop && flutter test --no-pub test/super_tab_launch_test.dart test/super_tab_startup_recovery_test.dart`: 58 tests passed.
+- `cd desktop && flutter analyze --no-pub lib/super_tabs/launch_prompt.dart test/super_tab_launch_test.dart test/super_tab_startup_recovery_test.dart`: no issues.
+- `git diff --check`: clean.
+
+The branch's native/core role attachment and 18 Desktop fixture signatures are unchanged; earlier scoped evidence remains recorded above. The merge and release remain the Lead's; the separate old-session bridge is still waiting for this PR to merge. Integration and requested validation took about five minutes; publication and CI waiting are separate.

@@ -918,8 +918,8 @@ void main() {
                 .firstWhere((c) => c.$1 == 'agent_create')
                 .$2['prompt']
             as String;
-    expect(prompt, contains('like a helpful colleague'));
-    expect(prompt, contains('under about 150 words'));
+    expect(prompt, contains('helpful colleague'));
+    expect(prompt, contains('under 150 words'));
     expect(prompt, contains('UNIQUE_OPERATION_ID [--reply-to MESSAGE_ID]`'));
     expect(prompt, contains('answer each message once'));
     expect(prompt, contains('do not post again'));

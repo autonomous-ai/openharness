@@ -84,7 +84,7 @@ describe('Super Tab native delivery handoff', () => {
     ), 'team:service:superTabs:delivery')
     expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Message message from Collaborator:\nYes, keep them.')
     expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('On Claude Code or Codex, Leads use swarm-lead and workers use swarm-dev.')
-    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Leads coordinate: assign multi-part or 15+ minute work to Swarm agents; your subagents only read/look up.')
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Leads coordinate: assign multi-part or 15+ minute work to Swarm agent groups; do only answers, lookups and small fixes yourself; your subagents only read/look up.')
   })
 
   it('keeps a slow configuration observation out of the native delivery and lease path', async () => {

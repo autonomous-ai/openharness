@@ -49,7 +49,8 @@ void main() {
       expect(
         prompt.length,
         lessThanOrEqualTo(kFirstTaskMaxLength),
-        reason: '${lead ? 'Lead' : 'Worker'} bootstrap must fit native creation',
+        reason:
+            '${lead ? 'Lead' : 'Worker'} bootstrap must fit native creation',
       );
       expect(
         prompt,
@@ -61,10 +62,16 @@ void main() {
       );
       if (lead) {
         expect(prompt, contains('Discuss first; build when authorized.'));
+        expect(prompt, contains('Swarm agent groups'));
+        expect(
+          prompt,
+          contains('do only answers, lookups and small fixes yourself'),
+        );
+        expect(prompt, contains('your subagents only read/look up'));
         expect(
           prompt,
           contains(
-            'Coordinate: assign multi-part or 15+ minute work to Swarm agents; your subagents only read/look up.',
+            'Coordinate: assign multi-part or 15+ minute work to Swarm agent groups;',
           ),
         );
       }
@@ -79,7 +86,10 @@ void main() {
     );
     expect(prompt, contains('read new reports'));
     expect(prompt, contains('No per-turn summarizer'));
-    expect(prompt, contains('When a worker finishes, decide reuse, keep or stop'));
+    expect(
+      prompt,
+      contains('When a worker finishes, decide reuse, keep or stop'),
+    );
     expect(prompt, contains('prefer stop unless more work is coming soon'));
     expect(prompt, contains('On scheduled requests use project.report'));
     expect(prompt, contains('text:null when nothing changed'));
