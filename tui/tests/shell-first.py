@@ -560,7 +560,7 @@ try:
             finally:
                 run([HN,'-L',peer_name,'--port',PORT,'-f',CONF,'kill-server'],check=False)
             hn('close-harness')
-            wait(lambda:'Stop? Saved history will remain.' in screen() or prompt_ready(),'stop activity check',35)
+            wait(lambda:'History will be saved.' in screen() or prompt_ready(),'stop activity check',35)
             if not prompt_ready(): keys('s')
             wait(lambda:prompt_ready() and 'SOURCE_PID='+source_pid in hn('capture-pane','-p','-S','-') and not any(r.get('agentId')==target['agentId'] for r in shared_rows()),'explicit stop confirmed and original shell restored',35)
             assert 'changed while pausing' not in screen(),screen()

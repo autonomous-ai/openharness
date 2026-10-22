@@ -1029,6 +1029,8 @@ mod tests {
             let chosen = app.fleet.agents.get_mut(&("local".into(), "chosen".into())).unwrap();
             chosen.close_supported = true;
             chosen.created_at_wire = "2026-10-05T00:00:00.123Z".into();
+            // A running harness's row always says its terminal is there (cli agentFrame `terminal.available`).
+            chosen.terminal_available = true;
             app.session_close.replies.extend([
                 Ok(json!({"activity":"idle"})), Ok(json!({"closed":true,"activity":"idle"}))
             ]);
