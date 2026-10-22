@@ -7,6 +7,31 @@ import 'support/super_tab_fixture.dart';
 
 void main() {
   test(
+    'receipt refreshes the latest own message when a new reply arrives',
+    () async {
+      final server = ConversationServer()..append('Please start.');
+      server.messages.first['deliveries'] = [
+        {'id': 'delivery', 'agentId': 'lead-agent', 'status': 'claimed'},
+      ];
+      final c = server.controller();
+      await c.refresh();
+      server.messages.first['deliveries'] = [
+        {'id': 'delivery', 'agentId': 'lead-agent', 'status': 'answered'},
+      ];
+      server.append('Done.');
+      server.messages.last['author'] = {
+        'kind': 'agent',
+        'id': 'lead-agent',
+        'name': 'Lead',
+      };
+      server.messages.last['replyTo'] = server.messages.first['id'];
+      await c.refresh();
+      expect(c.messages('lead').first.deliveries.single['status'], 'answered');
+      c.dispose();
+    },
+  );
+
+  test(
     'group terminals keep every member when selecting one and after reopening',
     () async {
       final server = ConversationServer();

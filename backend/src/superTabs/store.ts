@@ -359,6 +359,8 @@ export class SuperTabStore {
         context.delivery = { ...delivery, text: message.text, ...(message.attachments ? { attachments: message.attachments as unknown as Attachment[] } : {}) }
         await tx.superTabDelivery.update({ where: { id: delivery.id }, data: {
           status: command.resolution === 'received' ? 'confirmed' : command.resolution === 'resend' ? 'superseded' : 'cancelled',
+          holdReason: null, holdSince: null,
+          ...(command.resolution === 'received' ? { deliveredAt: delivery.deliveredAt ?? new Date(context.now) } : {}),
           // The native receipt remains intact; the operation records the person's resolution.
         } })
       }
@@ -399,7 +401,7 @@ export class SuperTabStore {
         // Keep immutable history and operation receipts for audit/replay; all
         // reads require a live conversation. No removed group can deliver work.
         await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: { in: removedGroups.map(c => c.id) },
-          status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled' } })
+          status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled', holdReason: null, holdSince: null } })
       }
       const revision = row.revision + 1
       if (command.type === 'agent.add' || command.type === 'agent.started' || command.type === 'agent.configuration') {
@@ -429,7 +431,7 @@ export class SuperTabStore {
         if (activeWork(changed)) continue
         await tx.superTabRun.deleteMany({ where: { tabId, assignmentId: group.assignment!.id } })
         await tx.superTabDelivery.updateMany({ where: { tabId, assignmentId: group.assignment!.id,
-          status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled' } })
+          status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled', holdReason: null, holdSince: null } })
       }
       await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: {
         revision, state: json(effects.state), ...indexes(effects.state),
@@ -449,13 +451,15 @@ export class SuperTabStore {
       // delivery was finally typed. An agent's reply settles that agent's own deliveries of the message.
       if (command.type === 'message.send' && command.replyTo && actor.kind === 'agent') {
         await tx.superTabDelivery.updateMany({ where: { tabId, messageId: command.replyTo, agentId: actor.agentId,
-          status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'answered' } })
+          status: { in: ['queued', 'claimed', 'uncertain', 'delivered', 'confirmed'] } },
+          data: { status: 'answered', answeredAt: new Date(context.now), holdReason: null, holdSince: null } })
       }
       if (command.type === 'project.report' && actor.kind === 'agent') {
         const progress = projectsOf(original).find(p => p.id === command.projectId)?.progress
         if (progress?.requestMessageId && command.throughRevision >= progress.requestedRevision) {
           await tx.superTabDelivery.updateMany({ where: { tabId, agentId: actor.agentId, messageId: progress.requestMessageId,
-            status: { in: ['queued', 'claimed', 'uncertain', 'delivered'] } }, data: { status: 'answered' } })
+            status: { in: ['queued', 'claimed', 'uncertain', 'delivered', 'confirmed'] } },
+            data: { status: 'answered', answeredAt: new Date(context.now), holdReason: null, holdSince: null } })
         }
       }
       const revoked = [
@@ -468,7 +472,7 @@ export class SuperTabStore {
         ...revoked, ...(effects.cancelledAgents.length ? [{ agentId: { in: effects.cancelledAgents } }] : []),
       ]
       if (cancelled.length) await tx.superTabDelivery.updateMany({ where: { tabId,
-        status: { in: ['queued', 'claimed', 'uncertain'] }, OR: cancelled }, data: { status: 'cancelled' } })
+        status: { in: ['queued', 'claimed', 'uncertain'] }, OR: cancelled }, data: { status: 'cancelled', holdReason: null, holdSince: null } })
       for (const attempt of effects.previousAttempts) {
         await tx.superTabAttempt.create({ data: { id: attempt.assignment.id, tabId, conversationId: attempt.conversationId, snapshot: json(attempt) } })
       }
@@ -568,7 +572,8 @@ export class SuperTabStore {
       const next = rows.length > 100 ? page.at(-1)!.sequence : null
       if (!forward) page.reverse()
       const deliveries = page.length ? await tx.superTabDelivery.findMany({ where: { tabId, messageId: { in: page.map(m => m.id) } },
-        select: { id: true, messageId: true, agentId: true, status: true, receipt: true } }) : []
+        select: { id: true, messageId: true, agentId: true, status: true, receipt: true,
+          holdReason: true, holdSince: true, deliveredAt: true, answeredAt: true, createdAt: true, updatedAt: true } }) : []
       return { messages: page.map(m => ({ ...m, deliveries: deliveries.filter(d => d.messageId === m.id) })), next, revision: row.revision }
     })
   }
@@ -827,7 +832,8 @@ export class SuperTabStore {
       // This write conflicts with concurrent revocation, even when only the delivery record changed.
       await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: { revision: { increment: 1 } } })
       const updated = await tx.superTabDelivery.update({ where: { id: delivery.id }, data: { status, claimId: action.claimId,
-        ...(action.type === 'ack' ? { receipt: action.receipt } : {}) } })
+        ...(action.type === 'ack' ? { receipt: action.receipt, holdReason: null, holdSince: null,
+          ...(!action.uncertain ? { deliveredAt: delivery.deliveredAt ?? new Date(this.now()) } : {}) } : {}) } })
       const message = await tx.superTabMessage.findUnique({ where: { id: delivery.messageId } })
       return { delivery: updated, message }
     })
@@ -836,15 +842,22 @@ export class SuperTabStore {
   /** The host cannot type a claimed instruction yet. Say so once in the group, as the waiting agent; nobody is asked to act on it. */
   private async holdNotice(tx: Transaction, row: SuperTab, state: SuperTabState, delivery: SuperTabDelivery, reason: HoldReason) {
     const id = stableId('hold-notice', delivery.tabId, delivery.id)
-    if (delivery.status !== 'claimed' || await tx.superTabMessage.findUnique({ where: { id } })) return { noticed: false }
+    if (delivery.status !== 'claimed') return { noticed: false }
+    const notice = await tx.superTabMessage.findUnique({ where: { id } })
+    if (notice && delivery.holdReason === reason && delivery.holdSince) return { noticed: false }
+    // The notice is only sent once for older Desktops; the inline receipt keeps the current reason.
+    await tx.superTabDelivery.update({ where: { id: delivery.id }, data: {
+      holdReason: reason, holdSince: delivery.holdSince ?? new Date(this.now()),
+    } })
     const group = conversation(state, delivery.conversationId), waiting = agent(state, delivery.agentId)
     const sender = author(state, { kind: 'agent', agentId: waiting.id, machineOwnerId: waiting.machineOwnerId })
     const revision = row.revision + 1
-    group.lastMessageSequence = revision
+    if (!notice) group.lastMessageSequence = revision
     await tx.superTab.update({ where: { id: row.id, revision: row.revision }, data: { revision, state: json(state) } })
-    await this.writeMessages(tx, row.id, state, [{ id, conversationId: group.id, replyTo: null, recipients: [],
+    if (!notice) await this.writeMessages(tx, row.id, state, [{ id, conversationId: group.id, replyTo: null, recipients: [],
+      source: { kind: 'delivery-hold', messageId: delivery.messageId, deliveryId: delivery.id, agentId: delivery.agentId },
       text: holdNoticeText(sender.displayName ?? sender.name, reason), author: sender }], revision)
-    return { noticed: true }
+    return { noticed: !notice }
   }
 
   /** Only the recorded execution host may attest that the actual session/attempt has stopped. */
@@ -868,7 +881,7 @@ export class SuperTabStore {
         assignment.result = 'The execution host confirmed that this harness stopped.'
         await tx.superTabRun.deleteMany({ where: { tabId, assignmentId } })
         await tx.superTabDelivery.updateMany({ where: { tabId, assignmentId,
-          status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled' } })
+          status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled', holdReason: null, holdSince: null } })
         await closeAssignment(tx, tabId, assignmentId, 'stopped', this.now())
         // No agent command closes this attempt, so nobody was told: in the two-account E2E of 2026-10-19
         // the Lead learned of a stopped worker only by re-reading status. Say it in the group, as the

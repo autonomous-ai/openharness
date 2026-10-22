@@ -19,6 +19,7 @@ import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
 import 'message_row.dart';
+import 'message_receipt.dart';
 import 'route_row.dart';
 import 'work_details.dart';
 import 'project_sidebar.dart';
@@ -893,89 +894,15 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  Future<void> _reviewDelivery(
+  Future<void> _resolveDelivery(
     SuperTabMessage message,
-    Map<String, dynamic> delivery,
+    SuperTabDelivery delivery,
+    String resolution,
   ) async {
     final c = this.c;
-    final agent = c.snapshot?.agent(delivery['agentId'] as String);
-    final resolution = await showAppDialog<String>(
-      context: context,
-      builder: (context) => ListenableBuilder(
-        listenable: c,
-        builder: (context, _) => !c.canWrite
-            ? AlertDialog(
-                content: const Text(
-                  'This delivery is no longer available to change.',
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Close'),
-                  ),
-                ],
-              )
-            : AlertDialog(
-                title: DesktopDialogHeader(
-                  title:
-                      'Check delivery to ${agent == null ? 'agent' : _agentName(agent)}',
-                  padding: EdgeInsets.zero,
-                  onClose: () => Navigator.pop(context),
-                ),
-                content: SizedBox(
-                  width: 440,
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (agent != null) ...[
-                          TextButton(
-                            onPressed: () => Navigator.pop(context, 'open'),
-                            child: const Text('Open terminal'),
-                          ),
-                          const SizedBox(height: 16),
-                        ],
-                        const Text(
-                          'This instruction may already have reached the terminal. Inspect it before sending again.',
-                        ),
-                        const SizedBox(height: 16),
-                        SelectableText(message.text),
-                      ],
-                    ),
-                  ),
-                ),
-                actions: [
-                  Wrap(
-                    spacing: DesktopChrome.controlGap,
-                    runSpacing: DesktopChrome.controlGap,
-                    alignment: WrapAlignment.end,
-                    children: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, 'cancel'),
-                        child: const Text('Dismiss warning'),
-                      ),
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, 'received'),
-                        child: const Text('Already received'),
-                      ),
-                      FilledButton(
-                        onPressed: () => Navigator.pop(context, 'resend'),
-                        child: const Text('Send again'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-      ),
-    );
-    if (!mounted ||
-        widget.controller != c ||
-        resolution == null ||
-        !c.canWrite) {
-      return;
-    }
+    if (!c.canWrite || c.saving || delivery.id == null) return;
     if (resolution == 'open') {
+      final agent = c.snapshot?.agent(delivery.agentId);
       if (agent != null) {
         c.select(message.conversationId);
         widget.onOpenTerminal(agent);
@@ -984,7 +911,7 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     await c.command({
       'type': 'delivery.resolve',
-      'deliveryId': delivery['id'],
+      'deliveryId': delivery.id,
       'resolution': resolution,
     });
   }
@@ -992,8 +919,9 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget _message(
     SuperTabMessage message,
     bool grouped,
-    Map<String, SuperTabMessage> byId,
-  ) {
+    Map<String, SuperTabMessage> byId, {
+    bool showReceipt = false,
+  }) {
     final route = message.route;
     if (route != null) {
       return SuperTabRouteRow(
@@ -1045,21 +973,18 @@ class _SuperTabViewState extends State<SuperTabView>
               style: DesktopChrome.metadata(),
             ),
           ),
-        if (message.queued)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Text('Queued', style: DesktopChrome.metadata()),
-          ),
-        for (final delivery in message.deliveries.where(
-          (d) => d['status'] == 'uncertain',
-        ))
-          TextButton(
-            onPressed: c.canWrite && delivery['id'] is String
-                ? () => _reviewDelivery(message, delivery)
-                : null,
-            child: Text(
-              'Check delivery to ${c.snapshot?.agentName(delivery['agentId'] as String, fallback: 'agent') ?? 'agent'}',
-            ),
+        if (showReceipt)
+          SuperTabMessageReceipt(
+            key: ValueKey('super-message-receipt-${message.id}'),
+            message: message,
+            controller: c,
+            app: widget.app,
+            machineName: widget.machineName,
+            onResolve: (delivery, resolution) =>
+                unawaited(_resolveDelivery(message, delivery, resolution)),
+            onAddLead: () {
+              if (c.selected case final group?) widget.onAddAgent(group);
+            },
           ),
       ],
     );
@@ -1111,7 +1036,22 @@ class _SuperTabViewState extends State<SuperTabView>
     final group = c.selected;
     final writable = c.canWrite && group != null && !group.archived;
     final busy = c.saving || c.uploading;
-    final messages = c.messages(c.selectedId);
+    final allMessages = c.messages(c.selectedId);
+    final latestOwn = allMessages.reversed
+        .where(
+          (m) => !m.fromAgent && !m.fromTerminal && m.authorId == c.accountId,
+        )
+        .firstOrNull;
+    // Older Desktops still show this plain notice. The inline receipt owns the
+    // same explanation here, including after delivery settles, so it never resurfaces stale.
+    final messages = allMessages
+        .where(
+          (m) =>
+              !(m.source['kind'] == 'delivery-hold' &&
+                  m.source['messageId'] == latestOwn?.id &&
+                  m.source['deliveryId'] == latestOwn?.receiptDelivery?.id),
+        )
+        .toList();
     final entries = superTabTranscriptEntries(messages);
     final byId = {for (final message in messages) message.id: message};
     final grouped = SuperTabMessageRow.consecutiveUpdates(messages);
@@ -1230,6 +1170,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                     message,
                                     grouped.contains(message.id),
                                     byId,
+                                    showReceipt: message.id == latestOwn?.id,
                                   ),
                               ],
                             );

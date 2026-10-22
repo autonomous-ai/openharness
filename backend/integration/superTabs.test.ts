@@ -564,6 +564,59 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await store.messages(owner, tab, 'lead', {})).messages[1]!.author).toMatchObject({ displayName })
   })
 
+  it('stores the current delivery hold and its first time even after the compatibility notice exists', async () => {
+    const { tab, lead } = await fixture()
+    let now = Date.now()
+    const timed = new SuperTabStore(db, () => now)
+    await run(tab, message('Keep the reason beside this instruction.'))
+    const delivery = (await store.deliveries(host, tab, lead))[0]!
+    await timed.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: 'claim' })
+    const since = new Date(now)
+    for (const reason of ['team_waiting_idle', 'team_waiting_user', 'team_waiting_draft', 'team_waiting_control', 'team_waiting_unavailable'] as const) {
+      await timed.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason })
+      expect(await db.superTabDelivery.findUnique({ where: { id: delivery.id } })).toMatchObject({ holdReason: reason, holdSince: since })
+      const rows = (await timed.messages(owner, tab, 'lead', {})).messages
+      expect(rows).toHaveLength(2)
+      expect(rows[0]!.deliveries[0]).toMatchObject({ holdReason: reason, holdSince: since })
+      expect(rows[1]).toMatchObject({ source: { kind: 'delivery-hold', messageId: delivery.messageId, deliveryId: delivery.id, agentId: lead },
+        text: expect.stringContaining('It stays queued and goes in by itself') })
+      now += 5000
+    }
+  })
+
+  it.each(['delivered', 'answered', 'cancelled'] as const)('clears a delivery hold when it becomes %s', async status => {
+    const { tab, lead } = await fixture()
+    await run(tab, message('Finish this held instruction.'))
+    const delivery = (await store.deliveries(host, tab, lead))[0]!
+    await store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: 'claim' })
+    await store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })
+    if (status === 'delivered') await store.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'typed', uncertain: false })
+    else if (status === 'answered') await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Finished.', replyTo: delivery.messageId, recipientIds: [] }, host, lead)
+    else await run(tab, { type: 'agent.remove', agentId: lead })
+    const saved = await db.superTabDelivery.findUnique({ where: { id: delivery.id } })
+    expect(saved).toMatchObject({ status, holdReason: null, holdSince: null })
+    const row = (await store.messages(owner, tab, 'lead', { messageId: delivery.messageId })).messages[0]!
+    expect(row.deliveries[0]).toMatchObject({ status, holdReason: null, holdSince: null })
+  })
+
+  it('keeps delivery and answer times stable, including an answer after the terminal acknowledged delivery', async () => {
+    const { tab, lead } = await fixture()
+    let now = Date.now()
+    const timed = new SuperTabStore(db, () => now)
+    await run(tab, message('Record this reply duration.'))
+    const delivery = (await store.deliveries(host, tab, lead))[0]!
+    await timed.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: 'claim' })
+    await timed.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'typed', uncertain: false })
+    const deliveredAt = new Date(now)
+    now += 72000
+    await timed.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'typed', uncertain: false })
+    await timed.execute(host, tab, { operationId: randomUUID(), command: {
+      type: 'message.send', conversationId: 'lead', text: 'Done.', replyTo: delivery.messageId, recipientIds: [],
+    } }, lead)
+    const row = (await timed.messages(owner, tab, 'lead', { messageId: delivery.messageId })).messages[0]!
+    expect(row.deliveries[0]).toMatchObject({ status: 'answered', deliveredAt, answeredAt: new Date(now) })
+  })
+
   it('a withdrawn host can retire its receipt without regaining conversation access', async () => {
     const { tab, lead } = await fixture()
     await run(tab, message('Keep the execution receipt after removal.'))

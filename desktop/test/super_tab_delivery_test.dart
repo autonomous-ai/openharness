@@ -173,17 +173,13 @@ void main() {
           await tester.sendKeyEvent(LogicalKeyboardKey.escape);
           await tester.pumpAndSettle();
         }
-        await tester.tap(find.text('Check delivery to Lead'));
-        await tester.pumpAndSettle();
         await shot('delivery');
         expect(server.posts, isEmpty);
         await tester.tap(find.text('Open terminal'));
         await tester.pumpAndSettle();
         expect(opened, 'lead-agent');
         expect(server.posts, isEmpty);
-        await tester.tap(find.text('Check delivery to Lead'));
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('Already received'));
+        await tester.tap(find.text('It arrived'));
         await tester.pumpAndSettle();
         expect((server.posts.single['command'] as Map), {
           'type': 'delivery.resolve',
@@ -196,8 +192,6 @@ void main() {
           reason:
               'Confirmation does not submit the original instruction again.',
         );
-        await tester.tap(find.text('Check delivery to Lead'));
-        await tester.pumpAndSettle();
         controller.revokeAccess('Access removed.');
         await tester.pumpAndSettle();
         expect(find.byType(SelectableText), findsNothing);

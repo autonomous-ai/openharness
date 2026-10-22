@@ -157,8 +157,23 @@ void main() {
       server.append(
         'Keep changes on the device and sync when the connection returns.',
       );
+      final instruction = server.messages.last;
+      final deliveredAt = DateTime.now().subtract(const Duration(seconds: 42));
+      instruction['deliveries'] = [
+        {
+          'id': 'native-receipt',
+          'agentId': 'lead-agent',
+          'status': 'delivered',
+          'deliveredAt': deliveredAt.toIso8601String(),
+        },
+      ];
       server.append('Routed to Multiply');
       server.messages.last['source'] = routeRow()['source'];
+      server.messages.last['author'] = {
+        'kind': 'agent',
+        'id': 'lead-agent',
+        'name': 'Lead',
+      };
       server.routeDecisions['d1'] = decision();
       debugPrint('Swarm fixture: load conversation controller');
       final c = await tester.runAsync(() async {
@@ -254,6 +269,45 @@ void main() {
       }
 
       await shot('conversation');
+      expect(find.textContaining('Delivered '), findsOneWidget);
+      expect(find.text('Queued'), findsNothing);
+      final receipt = (instruction['deliveries'] as List).single as Map;
+      receipt.addAll({
+        'status': 'claimed',
+        'holdReason': 'team_waiting_idle',
+        'holdSince': DateTime.now()
+            .subtract(const Duration(seconds: 34))
+            .toIso8601String(),
+      });
+      await c.refresh();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.textContaining('Atlas is busy · waiting'), findsOneWidget);
+      expect(
+        find.text(
+          "Atlas is finishing another task. Your message goes in by itself when it's done.",
+        ),
+        findsOneWidget,
+      );
+      await shot('receipt-held');
+      receipt['status'] = 'uncertain';
+      await c.refresh();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text("Couldn't confirm delivery"), findsOneWidget);
+      for (final label in ['Open terminal', 'Send again', 'It arrived']) {
+        expect(find.text(label), findsOneWidget);
+      }
+      await shot('receipt-uncertain');
+      receipt.addAll({
+        'status': 'answered',
+        'deliveredAt': deliveredAt.toIso8601String(),
+        'answeredAt': deliveredAt
+            .add(const Duration(seconds: 72))
+            .toIso8601String(),
+      });
+      await c.refresh();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('Replied · 1m 12s'), findsOneWidget);
+      await shot('receipt-replied');
       expect(find.text('Lead'), findsNothing);
       expect(find.text('Atlas'), findsNWidgets(2));
       expect(find.text('Available capacity'), findsNothing);

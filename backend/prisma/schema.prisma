@@ -1088,6 +1088,11 @@ model SuperTabDelivery {
   status                String   @default("queued")
   claimId               String?
   receipt               String?
+  // Optional on older records: backend first, then Desktop's inline receipt.
+  holdReason            String?
+  holdSince             DateTime?
+  deliveredAt           DateTime?
+  answeredAt            DateTime?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 

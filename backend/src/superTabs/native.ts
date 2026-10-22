@@ -181,6 +181,7 @@ export async function revokeNativeContexts(tx: Transaction, before: SuperTabStat
     const revoked = await tx.superTabNativeContext.findMany({ where, select: { id: true } })
     await tx.superTabNativeContext.updateMany({ where, data: { revoked: true } })
     if (revoked.length) await tx.superTabDelivery.updateMany({ where: { tabId: before.id,
-      nativeContextId: { in: revoked.map(r => r.id) }, status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled' } })
+      nativeContextId: { in: revoked.map(r => r.id) }, status: { in: ['queued', 'claimed', 'uncertain'] } },
+      data: { status: 'cancelled', holdReason: null, holdSince: null } })
   }
 }

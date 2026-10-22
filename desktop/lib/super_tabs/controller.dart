@@ -501,6 +501,48 @@ class SuperTabController extends ChangeNotifier {
         for (final m in _messages[id] ?? <SuperTabMessage>[]) m.id: m,
         for (final m in incoming) m.id: m,
       };
+      final own = combined.values
+          .where(
+            (m) => !m.fromAgent && !m.fromTerminal && m.authorId == accountId,
+          )
+          .fold<SuperTabMessage?>(
+            null,
+            (latest, m) =>
+                latest == null || m.sequence > latest.sequence ? m : latest,
+          );
+      if (!older &&
+          own != null &&
+          own.deliveries.isNotEmpty &&
+          own.deliveries.any(
+            (d) => !const {
+              'answered',
+              'cancelled',
+              'superseded',
+            }.contains(d['status']),
+          ) &&
+          !incoming.any((m) => m.id == own.id)) {
+        // New replies (or a long stream of agent updates) otherwise leave the
+        // original row outside this page and its inline receipt stuck at Sent.
+        final receipt = await request(
+          'GET',
+          '$_path/conversations/${Uri.encodeComponent(id)}/messages?messageId=${Uri.encodeComponent(own.id)}',
+        );
+        if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+          return;
+        }
+        final rows = (receipt['messages'] as List)
+            .map((m) => SuperTabMessage.fromJson(superTabMap(m)))
+            .toList();
+        if (rows.length > 1 ||
+            rows.any((m) => m.id != own.id || m.conversationId != id)) {
+          throw const FormatException(
+            'A different message receipt was returned.',
+          );
+        }
+        for (final row in rows) {
+          combined[row.id] = row;
+        }
+      }
       _messages[id] = combined.values.toList()
         ..sort((a, b) => a.sequence.compareTo(b.sequence));
       if (older || !_before.containsKey(id)) {
