@@ -339,9 +339,18 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
 
     SettingsRow row(String key, String title) {
       final part = parts[key];
-      final running = shortVersion(part?['running'] as String?);
-      final next = shortVersion(part?['next'] as String?);
-      final waiting = part?['available'] == true;
+      final runningFull = part?['running'] as String?;
+      final nextFull = part?['next'] as String?;
+      final running = shortVersion(runningFull);
+      // hn and the CLI come as one runtime: one of them new marks both waiting, so a part whose
+      // waiting version is the one it runs has nothing new.
+      final waiting =
+          part?['available'] == true &&
+          (nextFull == null || nextFull != runningFull);
+      // The same release, a later build of it (a package built from a later commit).
+      final next = nextFull != null && shortVersion(nextFull) == running
+          ? '$running (newer build)'
+          : shortVersion(nextFull);
       return SettingsRow(
         key: ValueKey('version-$key'),
         title: title,
