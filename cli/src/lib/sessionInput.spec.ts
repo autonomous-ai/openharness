@@ -36,7 +36,7 @@ describe('SessionInputController', () => {
 
   it.each(['claude', 'codex'] as const)('delivers ordered Swarm follow-ups during a busy %s turn without waiting for another start', async engine => {
     vi.useFakeTimers()
-    const inject = vi.fn(async () => true), onDelivery = vi.fn(), sendKey = vi.fn(async () => true), onError = vi.fn()
+    const inject = vi.fn(async (_id: string, _text: string) => true), onDelivery = vi.fn(), sendKey = vi.fn(async () => true), onError = vi.fn()
     const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session(engine), validateRuntime: async () => true, inject, sendKey, onDelivery, onError,
       beforeTeamWrite: async () => null,
@@ -141,7 +141,7 @@ describe('SessionInputController', () => {
     const onDelivery = vi.fn(), sendKey = vi.fn(async () => true)
     const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
       getSession: () => session(), validateRuntime: async () => true,
-      inject: async () => evidence === 'ambiguous' ? { state: 'failed', dispatch: 'possibly_executed', reason: 'lost reply' } : true,
+      inject: async () => evidence === 'ambiguous' ? { state: 'unknown', dispatch: 'possibly_executed', reason: 'lost reply' } : true,
       sendKey, onError: vi.fn(), onDelivery, beforeTeamWrite: async () => null,
       capture: async () => evidence === 'unreadable' ? null : evidence === 'no composer' ? 'Working…' : codexComposer(evidence === 'draft' ? 'follow-up' : ''),
     })

@@ -96,6 +96,14 @@ describe('the Harness OS computer, managed from the phone', () => {
     expect(await notObject.ask({ action: 'status' })).toMatchObject({ update: { available: false, error: 'live_update.py status did not answer an object' } })
   })
 
+  it('still reports status when the boot command line is unreadable and no hotspot is named', async () => {
+    const { ask } = service({
+      readFile: async () => { throw new Error('boot command line unavailable') },
+      exec: async (file, args) => args[0] === SETUP ? '  \n' : file === '/usr/bin/python3' ? STATUS : '',
+    })
+    expect(await ask({ action: 'status' })).toMatchObject({ harnessOs: true, encrypted: false, hotspot: null, update: { available: true } })
+  })
+
   it('reads an update as available from the system channel or a runtime build ready', () => {
     expect(updateOf({ runtime: '/b/aaa', ready: null, system: { available: true, version: '2026.10.14' }, versions: {} }))
       .toMatchObject({ available: true, runtime: 'aaa', version: '2026.10.14' })
