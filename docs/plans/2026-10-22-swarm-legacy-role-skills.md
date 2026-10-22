@@ -1,0 +1,23 @@
+# Adopt role skills when old Swarm sessions restart
+
+Approved by the project Lead after #1533 merged. The owner reversed the earlier fresh-launch-only scope.
+
+Goal: an existing Claude Code or Codex Swarm session without stored role metadata gains the correct built-in skill when restarted or resumed on its own machine. Current group Leads receive Lead; assigned/member workers receive DEV. A personal session, missing roster entry or unsupported engine receives nothing. Existing role metadata stays unchanged.
+
+Implementation decisions: confirm the exact harness in a fresh machine-scoped host roster, then read its current tab state to derive the group role. Both reads use the existing account backend and a bounded Super Tab service lookup; no backend changes or stale roster cache. A removed entry in either read cannot be adopted. Lead takes precedence if the same session leads one group and works in another. Archived groups do not grant a role. Adopt metadata before native preparation while checking cancellation/binding authority; live rows persist it, and stopped rows carry it into their resumed registry entry. Reuse prepareSwarmSkill through the existing relaunch path so generated files remain session-workspace-only and git-ignored.
+
+1. Add failing roster/service tests for Lead, member/assigned worker, personal/removed/foreign sessions, stopped service and unavailable backend. Add lifecycle regressions for adoption before restart/resume and persistence.
+2. Implement a guarded, bounded service lookup, core wiring and role fill-in; reuse fresh-launch materialization. Preserve launch authority, permission modes, Store harnesses and native launch recovery.
+3. Verify affected CLI tests, typecheck, Super Tab routing coverage and full core coverage. Exercise old Lead/worker restarts and personal-session exclusion through the real daemon with fake engines, loopback backend, throwaway homes and private tmux. No tests use the live daemon, personal engine homes or real tmux.
+4. Review the final diff, push one branch and open a draft PR with exact evidence and unverified limits. Do not mark ready, merge or release.
+
+Owned code: CLI Super Tab host/service and process adapter, core agent restart/lifecycle and their wiring, registry fill-in, isolated tests and this plan. No Desktop or backend behavior changes.
+
+Validation record (2026-10-22, macOS arm64, Node 24.3.0):
+- New lifecycle regression tests failed before implementation: four adoption, cancellation and persistence checks. A separate regression showed that waking the host for a personal restart would start its delivery loop; the final lookup is a one-shot roster and tab-state read with no host wake.
+- `npm run typecheck` passed.
+- Affected CLI unit tests passed: 26 files, 669 tests.
+- `npm run test:super-tabs` passed: 111 tests and 100% statement, branch, function and line coverage.
+- `npm run test:core -- --maxWorkers=3` passed: 201 files, 2,976 tests and 100% coverage in all four measures.
+- The bundled isolated daemon acceptance test passed. It restarted old Claude Code Lead and Codex worker sessions, resumed a stopped Claude Code worker, excluded a personal session and a removed roster entry, and verified stored roles, actual skill launch arguments, unchanged permission modes and workspace-only generated files. It used fake engines, a loopback backend, throwaway homes and private tmux; real engine execution and a physical second machine were not exercised.
+- `git diff --check` passed. No Desktop or backend files changed; their tests are outside the changed input scope.

@@ -20,6 +20,40 @@ function setup(options: { jev?: () => JevDecide; prepareContribution?: typeof im
   const service = superTabService(core, { host: () => ({ machineId: 'machine-1', start, stop }) as unknown as SuperTabHost, ...options })
   return { ...service, call, core, agent, agentId, start, stop, ask: service.requests.super_tabs }
 }
+describe('restart role lookup through the service', () => {
+  it('does not start the delivery loop when a personal session restarts', async () => {
+    const host = vi.fn(() => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn(), swarmRole: async () => null }) as never)
+    const core = fakeCore({ account: { backend: vi.fn(async () => ({ status: 200, body: { data: [] } })) } })
+    const service = superTabService(core, { host })
+    expect(await service.port.swarmRole('personal')).toBeNull()
+    expect(host).not.toHaveBeenCalled()
+    service.port.stop()
+  })
+  it('answers the same current role in inline and process requests, for the owner only', async () => {
+    const agent = { id: 'agent', machineId: 'machine-1', harnessId: 'old-native' }
+    const call = vi.fn<CoreApi['account']['backend']>(async (_method, path) => ({ status: 200, body: { data:
+      path.includes('/hosts/') ? [{ tabId: 'tab', agent }] : { state: { agents: [agent], conversations: [{ leadId: 'agent' }] } } } }))
+    const service = superTabService(fakeCore({ account: { backend: call } }))
+    expect(await service.port.swarmRole('old-native')).toBe('lead')
+    expect(await service.requests.super_tabs({ action: 'swarmRole', harnessId: 'old-native' }, owner)).toEqual({ ok: true, role: 'lead' })
+    expect(await service.requests.super_tabs({ action: 'swarmRole', harnessId: 'old-native' }, visitor)).toMatchObject({ error: 'OWNER_REQUIRED' })
+    call.mockRejectedValueOnce(new Error('Offline'))
+    expect(await service.port.swarmRole('old-native')).toBeNull()
+    service.port.stop()
+  })
+  it('bounds an unavailable backend lookup without delaying restart indefinitely', async () => {
+    vi.useFakeTimers()
+    try {
+      const core = fakeCore({ account: { backend: () => new Promise(() => {}) } })
+      const service = superTabService(core)
+      const read = service.port.swarmRole('old-native')
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(await read).toBeNull()
+      service.port.stop()
+    } finally { vi.useRealTimers() }
+  })
+})
+
 describe('five-part task commands', () => {
   const task = { goal: 'Save edits', changes: 'Persist drafts', constraints: 'No dependencies', owns: ['cli/src/superTabs'] }
   const brief = 'Goal:\nSave edits\n\nChanges:\nPersist drafts\n\nConstraints:\nNo dependencies\n\nOwns:\n- cli/src/superTabs'

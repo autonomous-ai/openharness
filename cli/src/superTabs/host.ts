@@ -18,6 +18,7 @@ export class SuperTabHostError extends Error {
 }
 export { identifier, object } from './wire.js'
 import { ENDED_WORK, identifier, object } from './wire.js'
+import type { SwarmRole } from '../lib/swarmSkills.js'
 
 /** The core signs each request. Neither the service nor its journal holds an account credential. */
 export async function backend(core: CoreApi, method: string, path: string, body?: unknown): Promise<unknown> {
@@ -28,6 +29,31 @@ export async function backend(core: CoreApi, method: string, path: string, body?
       String(error.message ?? reply.body.message ?? 'Could not reach this Super Tab.'), reply.status)
   }
   return reply.body.data
+}
+
+/** Restart/resume can include stopped harnesses, so the live process list is not membership proof.
+ * Re-read the exact machine roster and its groups; a removed contribution must never adopt a skill. */
+export async function swarmRoleFor(core: CoreApi, machineId: string, harnessId: string): Promise<SwarmRole | null> {
+  if (!identifier(machineId) || !identifier(harnessId)) return null
+  const rows = await backend(core, 'GET', `/api/super-tabs/hosts/${machineId}`)
+  if (!Array.isArray(rows)) return null
+  const roles = await Promise.all(rows.map(object).filter(row => {
+    const agent = object(row.agent)
+    return identifier(row.tabId) && identifier(agent.id) && agent.machineId === machineId
+      && agent.harnessId === harnessId && row.stopRequested !== true
+  }).map(async row => {
+    const target = object(row.agent)
+    const answer = object(await backend(core, 'GET', `/api/super-tabs/${row.tabId}?asAgentId=${target.id}`))
+    const state = object(answer.state)
+    const agent = Array.isArray(state.agents) && state.agents.map(object).find(agent => agent.id === target.id
+      && agent.harnessId === harnessId && agent.machineId === machineId && agent.workDecision !== 'stop')
+    if (!agent) return null
+    const groups = (Array.isArray(state.conversations) ? state.conversations.map(object) : []).filter(group => group.archived !== true)
+    if (groups.some(group => group.leadId === target.id)) return 'lead'
+    return groups.some(group => Array.isArray(group.agentIds) && group.agentIds.includes(target.id)
+      || object(group.assignment).agentId === target.id && object(object(group.assignment).execution).machineId === machineId) ? 'dev' : null
+  }))
+  return roles.includes('lead') ? 'lead' : roles.includes('dev') ? 'dev' : null
 }
 
 interface Entry {

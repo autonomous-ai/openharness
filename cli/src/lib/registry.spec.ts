@@ -1835,6 +1835,19 @@ describe('registry across a reboot and pane loss', () => {
     expect(bound?.entry.subscriptionModel).toBe('opus')
   })
 
+  it('fills an old supported session role once and persists it through reload', async () => {
+    const { registry } = await loadRegistryModule(); registry.load()
+    const pending = registry.openPendingAgent({ engine: 'claude', cwd: dataDir, runtimes: [{ backend: 'tmux', paneId: '%21' }] })!
+    const skill = { role: 'lead' as const, key: pending.agentId }
+    expect(registry.setSwarmSkill('missing', skill)).toBe(false)
+    expect(registry.setSwarmSkill(pending.agentId, skill)).toBe(true)
+    expect(registry.setSwarmSkill(pending.agentId, { role: 'dev', key: 'replacement' })).toBe(false)
+    const { registry: reloaded } = await loadRegistryModule(); reloaded.load()
+    expect(reloaded.byAgent(pending.agentId)?.swarmSkill).toEqual(skill)
+    const other = reloaded.openPendingAgent({ engine: 'opencode', cwd: dataDir, runtimes: [{ backend: 'tmux', paneId: '%22' }] })!
+    expect(reloaded.setSwarmSkill(other.agentId, skill)).toBe(false)
+  })
+
   it('preserves Swarm role and runtime key across hooks and reload', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { backend, hostJournalFile, SuperTabHost } from './host.js'
+import { backend, swarmRoleFor, hostJournalFile, SuperTabHost } from './host.js'
 import { retainedHarnesses, retentionFile } from './retention.js'
 
 const roots: string[] = []
@@ -46,6 +46,40 @@ function setup(messageFields: Record<string, unknown> = {}) {
   const saved = () => JSON.parse(readFileSync(hostJournalFile(dir, 'machine-1'), 'utf8'))
   return { core, call, open, event, receipts, holds, log, wait: (ms: number) => { clock += ms }, saved, dir, remove: () => { removed = true }, revoke: (value = true) => { revoked = value }, foreignClaim: () => { claimId = 'another-process' } }
 }
+
+describe('current Swarm role lookup', () => {
+  it.each(['lead', 'member', 'assigned'] as const)('derives an old %s from current groups on its machine', async kind => {
+    const t = setup()
+    const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }
+    const group = { leadId: kind === 'lead' ? 'agent' : 'other', agentIds: kind === 'member' ? ['agent'] : [],
+      assignment: kind === 'assigned' ? { agentId: 'agent', execution: { machineId: 'machine-1' } } : null }
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
+      path.includes('/hosts/') ? [{ tabId: 'tab', agent }] : { state: { agents: [agent], conversations: [group] } } } }))
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBe(kind === 'lead' ? 'lead' : 'dev')
+    expect(await swarmRoleFor(t.core, 'machine-1', 'personal')).toBeNull()
+  })
+  it.each(['removed-roster', 'foreign', 'removed-state', 'archived', 'released', 'none', 'malformed'] as const)
+    ('never adopts a session whose membership is %s', async kind => {
+      const t = setup()
+      const agent = { id: 'agent', harnessId: 'harness', machineId: kind === 'foreign' ? 'other' : 'machine-1' }
+      vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/')
+        ? kind === 'malformed' ? {} : kind === 'removed-roster' ? [] : [{ tabId: 'tab', agent, stopRequested: kind === 'released' }]
+        : { state: { agents: kind === 'removed-state' ? [] : [agent], conversations:
+          kind === 'none' ? [] : [{ leadId: 'agent', agentIds: ['agent'], archived: kind === 'archived' }] } } } }))
+      expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBeNull()
+    })
+  it('prefers Lead when a session also works in another group and never reuses a stale roster', async () => {
+    const t = setup(), agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }
+    let present = true
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/')
+      ? present ? [{ tabId: 'tab', agent }] : []
+      : { state: { agents: [agent], conversations: [{ agentIds: ['agent'] }, { leadId: 'agent' }] } } } }))
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBe('lead')
+    present = false
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBeNull()
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBeNull()
+  })
+})
 
 describe('Super Tab native delivery handoff', () => {
   it('names all five task parts in the worker delivery header', async () => {

@@ -1,3 +1,4 @@
+import type { AdoptSwarmSkill } from './swarmSkills.js'
 /**
  * Restarting an agent in its own pane (`agent_restart`): same agentId, same session, same launch.
  *
@@ -48,6 +49,7 @@ async function engineInstalled(engine: AgentEngine): Promise<boolean | null> {
 type RestartAgentHandler = RestartAgent
 
 export interface RestartDeps {
+  adoptSwarmSkill?: AdoptSwarmSkill
   native?: LaunchOverridesDeps['native']
   restartJobs: PaneSwap['restartJobs']
   registry: typeof registry
@@ -75,7 +77,7 @@ export interface RestartDeps {
 }
 
 export function createAgentRestarter({
-  native: inspectNative,
+  native: inspectNative, adoptSwarmSkill,
   restartJobs, registry, purgeBusy, stopJobs, pinnedControls, terminals, sameRestartTarget, agentReconciler,
   terminalHintMachineName, announceSession, refreshGridAssignment, relaunchOverrides, downgradedPermission, refreshGridWebSearch,
   liveBypassPermission, paneSwapDeps, restartHeld,
@@ -101,7 +103,7 @@ export function createAgentRestarter({
    */
   const restartAgentHandler: RestartAgentHandler = (agentId) => restartJobs.run(registry.resolve(agentId)?.agentId ?? agentId, async (operationCurrent) => {
     if (purgeBusy(agentId) || stopJobs.has(agentId) || pinnedControls.has(agentId)) return { ok: false, error: 'AGENT_BUSY' }
-    const session = registry.resolve(agentId)
+    let session = registry.resolve(agentId)
     if (!session) return { ok: false, error: 'AGENT_NOT_FOUND' }
     if (session.guest) return GUEST_HARNESS_REFUSAL
     if (!session.sessionId && (session.launch?.state === 'held' || session.launch?.state === 'starting') && session.launch.nativeToken) {
@@ -159,6 +161,11 @@ export function createAgentRestarter({
     // cannot come back. Asked anyway, the swap killed the working agent and gave up twenty seconds
     // later with "did not come back up" (updates.e2e.ts, round 24). Asked here, before anything is
     // touched, the agent goes on running and the person is told why.
+    if (adoptSwarmSkill) {
+      const adopted = await adoptSwarmSkill(session, current)
+      if (!adopted || !current()) return changed
+      session = adopted
+    }
     const inspected = await inspectNative?.(engine, session, { id: session.agentId, current })
     if (!current()) return changed
     if (inspected && !inspected.ok) return inspected

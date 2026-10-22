@@ -2462,6 +2462,16 @@ class Registry {
     return true
   }
 
+  /** Older Swarm members adopt a role at restart, once; later roster reads cannot replace a saved role. */
+  setSwarmSkill(agentId: string, skill: SwarmSkill): boolean {
+    const session = this.agents.get(agentId)
+    if (!session || session.swarmSkill || (session.engine !== 'claude' && session.engine !== 'codex')) return false
+    session.swarmSkill = { ...skill }
+    session.touchedAt = Date.now()
+    this.save()
+    return true
+  }
+
   /** Fill in the DSH a row did not know (discovery read `HARNESS_DSH` off the live process). Never
    *  replaces one it already has — the harness is chosen once, at creation. */
   setDsh(agentId: string, dsh: string): boolean {

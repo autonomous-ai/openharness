@@ -1,3 +1,5 @@
+import { createSwarmSkillAdoption } from './agents/swarmSkills.js'
+import { swarmRoleThrough } from './superTabSkills.js'
 import { createGridAssignments } from './agents/gridAssignments.js'
 import { createQuestionControls } from './engines/questionControls.js'
 import { masterRunsEngineQuestionControl } from '../harnessd/services.js'
@@ -2292,6 +2294,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // What a relaunch needs to bring a pane back (core/agents/launch.ts). Declared before the restore
   // pass below, which calls these for every pane it rebuilds.
   const launchAuthority = createLaunchAuthority({ byAgent: id => registry.byAgent(id), revision: restoreRevision, cancelled: id => launchCancelled(id) })
+  const adoptSwarmSkill = createSwarmSkillAdoption({
+    authority: launchAuthority,
+    role: outOfProcess.has('superTabs')
+      ? swarmRoleThrough((type, payload) => serviceLinks.call('superTabs', type, payload, 3500))
+      : id => ports.superTabs?.swarmRole(id) ?? Promise.resolve(null),
+    save: (id, skill) => registry.setSwarmSkill(id, skill),
+  })
   const launchHelpers = createLaunchHelpers({
     authority: launchAuthority,
     prepareApiTools,
@@ -2657,6 +2666,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Stopping, purging and resuming an agent (core/agents/lifecycle.ts).
   const lifecycle = createAgentLifecycle({
+    adoptSwarmSkill,
     settlePane: restorePanes.settle,
     cancelExternal: externalResumes.cancel,
     registry,
@@ -2725,6 +2735,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Restarting an agent in its own pane (core/agents/restart.ts).
   const restartAgent = createAgentRestarter({
+    adoptSwarmSkill,
     native: prepareNativeLaunch,
     restartJobs,
     registry,

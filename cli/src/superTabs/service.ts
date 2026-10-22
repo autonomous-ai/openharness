@@ -2,7 +2,7 @@ import { readCapabilities } from './capacity.js'
 import { existsSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import type { CoreApi, ServiceRequests, SuperTabsPort } from '../core/api.js'
-import { backend, hostJournalFile, identifier, object, SuperTabHost, SuperTabHostError } from './host.js'
+import { backend, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHost, SuperTabHostError } from './host.js'
 import { within } from './wire.js'
 import { createJevDecide, type JevDecide } from '../lib/jev/jevClient.js'
 import { machineChoices } from '../lib/newCommand.js'
@@ -109,6 +109,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     },
     disconnected: disconnect,
     stop: disconnect,
+    swarmRole: (harnessId: string) => within(swarmRoleFor(core, core.daemon.machineId(), harnessId)),
   }
   const requests: ServiceRequests = {
     super_tabs: async (payload, asker, closed) => {
@@ -127,6 +128,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           return await wake().prepareNative(payload.tabId, payload.contextId, payload.action === 'renewNative', closed)
         }
         if (!asker.owner || (!asker.local && asker.accountOwner !== true)) return { error: 'OWNER_REQUIRED' }
+        if (payload.action === 'swarmRole') return { ok: true, role: await port.swarmRole(String(payload.harnessId ?? '')) }
         if (payload.action === 'prepareContribution') return preparations.read(payload)
         if (payload.action === 'backend') {
           const { method, path } = payload

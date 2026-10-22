@@ -79,6 +79,21 @@ describe('restarting an agent', () => {
   beforeEach(() => { vi.spyOn(console, 'log').mockImplementation(() => {}) })
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 
+  it('adopts an old role before native inspection and relaunch', async () => {
+    const skill = { role: 'lead' as const, key: 'a1' }
+    const run = setup(agent(), { adoptSwarmSkill: async row => ({ ...row, swarmSkill: skill }) })
+    expect(await run.restart('a1')).toMatchObject({ ok: true })
+    expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.objectContaining({ swarmSkill: skill }),
+      expect.objectContaining({ swarmSkill: skill }), expect.any(Function), undefined)
+  })
+
+  it('does not restart if role adoption loses the session binding', async () => {
+    const run = setup(agent(), { adoptSwarmSkill: async () => null })
+    expect(await run.restart('a1')).toMatchObject({ error: 'AGENT_CHANGED' })
+    expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
+    expect(restartAgent).not.toHaveBeenCalled()
+  })
+
   it.each(['starting', 'held'] as const)('does not replace an unbound native %s launch with a generic fresh restart', async state => {
     const run = setup(agent({ sessionId: '', launch: state === 'starting' ? { state, nativeToken: 'original' }
       : { state, nativeToken: 'original', service: 'native', detail: 'Original request held' } }))
