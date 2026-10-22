@@ -17,7 +17,7 @@ export function parseSwarmSkill(value: unknown): SwarmSkill | undefined {
 const skills: Record<SwarmRole, string> = {
   lead: `---
 name: swarm-lead
-description: Use when coordinating a Harness Swarm project as its Lead (shown as Lead), before discussing, specifying, splitting, routing, assigning, reviewing or closing work.
+description: Use when coordinating a Harness Swarm project as its Lead (shown as Product Manager), before discussing, specifying, splitting, routing, assigning, reviewing or closing work.
 ---
 # Lead a Swarm project
 
@@ -133,7 +133,7 @@ Run groups in parallel only when they own different code and need nothing from e
 `,
   dev: `---
 name: swarm-dev
-description: Use when you are a Harness Swarm Builder (shown as Builder) taking, planning, carrying out or handing off an assigned group, including handling review findings.
+description: Use when you are a Harness Swarm Builder (shown as Engineer) taking, planning, carrying out or handing off an assigned group, including handling review findings.
 ---
 # Build an assigned group
 

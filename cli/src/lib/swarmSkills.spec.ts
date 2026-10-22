@@ -39,10 +39,10 @@ describe('built-in Swarm skills', () => {
     expect(readdirSync(data)).toEqual([])
   })
 
-  // The owner's approved text (2026-10-22), verbatim but for "(shown as Lead)" and "(shown as Builder)" in the descriptions.
+  // The owner's approved text (2026-10-22), byte for byte.
   it.each([
-    ['lead', 'cc2ccd208c8b72665b97c0344b28e7b4773f8a2e7b1a1847e91ec5b696da60bd'],
-    ['dev', '672c0478bcb3a7b01da56f64478974cc24a1904295edc1852093f05f64bc2c52'],
+    ['lead', '4458031d09d4a38507455a666f56e6de6a515e6bcc8f32f4c50257edfd8cf16a'],
+    ['dev', '6ba487d83fd8a2396318bfb27696ccb68df4203660ff1477b460f39c43fc5909'],
     ['review', 'f831c3dc5d9bf0a3cfe3b8abea8b7faabddd0d9264b1f474d5dc72f66bcae4d7'],
   ] as const)('writes the owner\'s %s skill byte for byte', (role, sha256) => {
     expect(parseSwarmSkill({ role, key: 'session' })).toEqual({ role, key: 'session' })
@@ -50,7 +50,6 @@ describe('built-in Swarm skills', () => {
     expect(prepared.instructions).toContain(`swarm-${role} skill`)
     const text = readFileSync(prepared.file, 'utf8')
     expect(text.startsWith(`---\nname: swarm-${role}\n`)).toBe(true)
-    expect(text).not.toMatch(/Product Manager|Engineer/)
     expect(createHash('sha256').update(text).digest('hex')).toBe(sha256)
   })
 
