@@ -108,6 +108,9 @@ export interface Conversation {
   checks: Check[]
   assignment: Assignment | null
   lastMessageSequence: number
+  /** When this group last had a message or its assignment last changed (ms since the epoch). Absent on a group no
+   *  command has touched since this field was added; readers show no age rather than guess one. */
+  lastActivityAt?: number
 }
 export interface Invitation {
   id: string
@@ -232,6 +235,19 @@ export function author(state: SuperTabState, actor: Actor, write = false): Autho
   if (member.machineOwnerId !== actor.machineOwnerId) fail('FORBIDDEN', 'Only the execution host can speak as this agent.', 403)
   if (write && person(state, member.contributorId).role === 'viewer') fail('READ_ONLY', 'This contribution is read-only.', 403)
   return { kind: 'agent', id: member.id, name: member.name, displayName: agentDisplayName(state.agents, member.id), membershipGeneration: member.membershipGeneration }
+}
+
+/** Marks as active, at [now], each group that got a message in a command, that the command created, or whose
+ *  assignment (who, status or result) it changed — the time the sidebar reads as "updated N min ago". Pure over the
+ *  state before and after, so every path that moves an assignment is counted without each naming the field. */
+export function touchActivity(before: SuperTabState, after: SuperTabState, messages: ReadonlyArray<{ conversationId: string }>, now: number): void {
+  const posted = new Set(messages.map(message => message.conversationId))
+  for (const group of after.conversations) {
+    const prior = before.conversations.find(c => c.id === group.id)
+    const moved = !prior || prior.assignment?.id !== group.assignment?.id || prior.assignment?.agentId !== group.assignment?.agentId
+      || prior.assignment?.status !== group.assignment?.status || prior.assignment?.result !== group.assignment?.result
+    if (posted.has(group.id) || moved) group.lastActivityAt = now
+  }
 }
 
 export function createSuperTab(id: string, name: string, owner: { id: string; email: string }, environment: string, visibility?: ProjectVisibility): SuperTabState {

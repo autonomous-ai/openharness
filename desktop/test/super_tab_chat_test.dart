@@ -18,7 +18,7 @@ void main() {
     expect(superTabWorkWaits('blocked'), isTrue);
     expect(superTabWorkWaits('working'), isFalse);
     expect(superTabWorkWaits(null), isFalse);
-    expect(superTabWorkStatusLabel('blocked'), 'stuck');
+    expect(superTabWorkStatusLabel('blocked'), 'blocked');
     expect(superTabWorkStatusLabel('needs_human'), 'needs human');
     expect(superTabWorkStatusLabel('reconciling'), 'reconciling');
     expect(superTabWorkStatusLabel('cancelled'), 'cancelled');

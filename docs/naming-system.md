@@ -58,6 +58,8 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **Product Manager** | The agent coordinating a Swarm project. Use **PM** in a compact role badge. | Message Product Manager. |
 | **Engineer** | An agent carrying out project work. Use **Dev** in a compact role badge. | Atlas is an engineer on Lamp OS. |
 | **Workgroup** | A numbered conversation for an independently assignable outcome within a project. | Follow #12 Offline editing. |
+| **Task status** | Where a workgroup's task stands, as a chip on its row in the Swarm sidebar: **Working**, **Needs you** (the agent asks for a decision), **Blocked** (it cannot go on without help), **Review**, **Done**, **Stopped** and **Cancelled**. A task not begun reads **Not started**. | Filter the sidebar to Needs you. |
+| **Finished** | The row under a project that gathers the workgroups whose task is done, stopped or cancelled. | Open Finished (3). |
 | **Pane** | A visible view of a harness, terminal, or viewer. | Split right; close pane. |
 | **Terminal** | A shell for entering commands. | New terminal. |
 | **Project** | The files and working context for the work, on a particular computer. | Choose the website project. |

@@ -16,7 +16,7 @@ import { noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import {
   activeWork, actorKey, agent, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
-  SuperTabError, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
+  SuperTabError, touchActivity, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
 } from './model.js'
 import { holdNoticeText, type HoldReason } from './holdNotice.js'
 import { closeAssignment, readDecision, recentRoutes, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
@@ -446,6 +446,7 @@ export class SuperTabStore {
         }
       }
       for (const message of effects.messages) conversation(effects.state, message.conversationId).lastMessageSequence = revision
+      touchActivity(original, effects.state, effects.messages, context.now)
       noteProjectReports(effects.state, effects.messages, revision, context.now)
       if (command.type === 'agent.release' && command.decision === 'stop') {
         const target = agent(effects.state, command.agentId)
@@ -936,7 +937,7 @@ export class SuperTabStore {
     const group = conversation(state, delivery.conversationId), waiting = agent(state, delivery.agentId)
     const sender = author(state, { kind: 'agent', agentId: waiting.id, machineOwnerId: waiting.machineOwnerId })
     const revision = row.revision + 1
-    if (!notice) group.lastMessageSequence = revision
+    if (!notice) { group.lastMessageSequence = revision; group.lastActivityAt = this.now() }
     // The Lead gets it too, like a host-stop notice; a waiting Lead has no one above it to tell.
     const lead = group.leadId && group.leadId !== waiting.id && group.agentIds.includes(group.leadId) ? group.leadId : null
     const host = !notice && reason === 'team_waiting_user' ? await this.holdHost(tx, state, waiting) : undefined
@@ -991,6 +992,7 @@ export class SuperTabStore {
             author: author(state, { kind: 'agent', agentId: worker.id, machineOwnerId: worker.machineOwnerId }),
             text: `Stopped\n\n${assignment.result} If this work should continue, assign a new attempt.`, replyTo: null, recipients: lead ? [lead] : [] })
           group.lastMessageSequence = revision
+          group.lastActivityAt = this.now()
         }
       }
       await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: {

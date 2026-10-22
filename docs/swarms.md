@@ -34,6 +34,34 @@ with an option to show more; Closed starts collapsed. Clicking a row opens GitHu
 An older CLI keeps the previous branch-based status display; update the CLI before
 Desktop to enable direct lookups.
 
+## The task board
+
+Each workgroup in the sidebar says what its task is doing, without asking the Lead. Its row has two
+lines: the title, and one line with a status chip, the avatar of the agent on it, how long since it was
+last active ("12 min ago") and, at the end, its pull request ("#1557 Draft"), shortened with an ellipsis
+when the sidebar is narrow.
+
+| Chip | The task |
+| --- | --- |
+| Needs you | the agent asked for a decision (`needs_human`) |
+| Blocked | the agent cannot go on without help (`blocked`) |
+| Review | the agent finished its part and it is being checked |
+| Working | an agent is on it (also a worker the Swarm is still reconciling) |
+| Not started | no assignment yet, or one planned and not begun |
+| Done, Stopped, Cancelled | finished: gathered under the project's **Finished (N)** row, collapsed |
+
+Within a project, rows go in that order, most recently active first in each; finished work is last,
+under Finished. A compact filter above the projects offers each status some workgroup has, with
+its count; choosing one narrows the list, choosing it again (or All) shows everything. The
+pull request is read once for all the rows on screen, by this computer's own GitHub login (the
+reader the Pull requests pane uses), and again every minute while one can still change. A row names
+the last pull request link in its task's result, a check's evidence or its loaded messages; with a CLI that
+has no pull request reader, or GitHub unreadable, the rows simply have no pull request state.
+
+The time of last activity is the Swarm's own (`lastActivityAt` on a workgroup: its newest message, or
+its assignment's last change). A Swarm service that does not send it leaves the age out. Roll the backend
+out before the Desktop.
+
 ## People, agents and machines
 
 The right roster belongs to the Swarm, with Humans, Agents and Machines sections.
@@ -188,7 +216,9 @@ Use the matching backend, CLI and Desktop versions together for this feature:
    project checkout preparation. A host on an older CLI ignores the request for
    the default branch and starts Builders from its checkout's current commit. A host older than
    the immediate reports still reports, and picks up a waiting start, only every 15 seconds.
-3. Install the Desktop build with the project sidebar and Cmd-S entry point.
+3. Install the Desktop build with the project sidebar and Cmd-S entry point. The task board's ages need the
+   backend that sends `lastActivityAt` (additive, nothing to migrate); a Desktop that runs before it shows
+   no ages, and a backend that runs before the Desktop is ignored by it.
 
 A signed internal Desktop artifact alone does not update the backend or host
 CLI. Validate the coordinated versions in an internal environment before a

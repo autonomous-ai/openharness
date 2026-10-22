@@ -127,6 +127,7 @@ export class SuperTabNativeStore {
       }
       const revision = row.revision + 1
       group.lastMessageSequence = revision
+      group.lastActivityAt = Date.now()
       const observedBy = author(state, { kind: 'agent', agentId: target.id, machineOwnerId: user.sub }, true)
       const text = event.kind === 'gap' ? 'Some terminal activity could not be recorded. Check the native session for the full conversation.' : event.text
       // Inform the coordinating lead without replaying this input into the agent

@@ -8,6 +8,7 @@ import '../logging/app_log.dart';
 import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
 import 'model.dart';
+import 'task_status.dart';
 
 typedef SuperTabRequest = Future<Map<String, dynamic>> Function(
   String method,
@@ -156,6 +157,26 @@ class SuperTabController extends ChangeNotifier {
   void toggleProject(String id) {
     if (!expandedProjects.remove(id)) expandedProjects.add(id);
     _saveSoon();
+    _changed();
+  }
+
+  /// Projects whose "Finished (N)" row is open (done, stopped and cancelled workgroups); every one starts collapsed
+  /// and the choice is not saved.
+  final finishedOpenProjects = <String>{};
+
+  void toggleFinished(String projectId) {
+    if (!finishedOpenProjects.remove(projectId)) {
+      finishedOpenProjects.add(projectId);
+    }
+    _changed();
+  }
+
+  /// The one status the workgroup list is narrowed to, or null for all of them. Not saved.
+  SuperTabTaskStatus? statusFilter;
+
+  void filterByStatus(SuperTabTaskStatus? status) {
+    if (statusFilter == status) return;
+    statusFilter = status;
     _changed();
   }
 
@@ -366,7 +387,12 @@ class SuperTabController extends ChangeNotifier {
   void select(String id) {
     if (snapshot?.conversation(id) == null || id == selectedId) return;
     if (!snapshot!.isProjectLead(id)) {
-      expandedProjects.add(snapshot!.conversation(id)!.projectId);
+      final group = snapshot!.conversation(id)!;
+      expandedProjects.add(group.projectId);
+      // A finished workgroup that is chosen (a link, a notification) is shown, not left under a collapsed row.
+      if (SuperTabTaskStatus.of(group)?.finished == true) {
+        finishedOpenProjects.add(group.projectId);
+      }
     }
     selectedId = id;
     _saveSoon();
