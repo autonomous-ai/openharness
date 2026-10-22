@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
+import type { CoreApi } from '../core/api.js'
 import { superTabService } from './service.js'
 import type { SuperTabHost } from './host.js'
 import { createJevDecide, type JevDecide } from '../lib/jev/jevClient.js'
@@ -13,12 +14,102 @@ const owner = { local: true, owner: true }, visitor = { local: false, owner: fal
 function setup(options: { jev?: () => JevDecide; prepareContribution?: typeof import('./contribution.js').prepareContribution } = {}) {
   const agentId = createHash('sha256').update(JSON.stringify(['machine-1', 'native'])).digest('hex').slice(0, 24)
   const agent = { id: agentId, machineId: 'machine-1', harnessId: 'native' }
-  const call = vi.fn(async () => ({ status: 200, body: { success: true, data: { state: { agents: [agent] } } } }))
+  const call = vi.fn<CoreApi['account']['backend']>(async () => ({ status: 200, body: { success: true, data: { state: { agents: [agent] } } } }))
   const core = fakeCore({ account: { backend: call }, agents: { byAgent: vi.fn(() => ({ agentId: 'native' }) as never) } })
   const start = vi.fn(), stop = vi.fn()
   const service = superTabService(core, { host: () => ({ machineId: 'machine-1', start, stop }) as unknown as SuperTabHost, ...options })
   return { ...service, call, core, agent, agentId, start, stop, ask: service.requests.super_tabs }
 }
+describe('five-part task commands', () => {
+  const task = { goal: 'Save edits', changes: 'Persist drafts', constraints: 'No dependencies', owns: ['cli/src/superTabs'] }
+  const brief = 'Goal:\nSave edits\n\nChanges:\nPersist drafts\n\nConstraints:\nNo dependencies\n\nOwns:\n- cli/src/superTabs'
+  const checks = [{ description: 'Draft survives reconnect', independent: false }]
+  const send = (t: ReturnType<typeof setup>, command: Record<string, unknown>) => t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'task-op', command }, owner)
+
+  for (const type of ['conversation.create', 'work.define']) {
+    const base = { type, ...(type === 'conversation.create' ? { title: 'Drafts' } : { conversationId: 'group' }) }
+    it(`${type} requires each task part and a nonempty acceptance check`, async () => {
+      for (const [field, invalid] of [
+        ['goal', { task: { ...task, goal: ' ' } }], ['changes', { task: { ...task, changes: '' } }],
+        ['constraints', { task: { ...task, constraints: null } }], ['owns', { task: { ...task, owns: [] } }],
+        ['owns', { task: { ...task, owns: [' '] } }], ['goal', { task: undefined }],
+        ['acceptance checks', { checks: [] }], ['acceptance checks', { checks: [{ description: ' ' }] }],
+      ] as const) {
+        const t = setup()
+        expect(await send(t, Object.assign({ ...base, task, checks }, invalid))).toMatchObject({ error: 'TASK_REQUIRED', detail: expect.stringContaining(field) })
+        expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(0)
+      }
+    })
+    it(`${type} sends the complete template and renders its compatibility brief`, async () => {
+      const t = setup()
+      expect(await send(t, { ...base, brief: 'ignored', task: { ...task, goal: ' Save edits ', owns: [' cli/src/superTabs '] }, checks })).toMatchObject({ ok: true })
+      expect(t.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'task-op', asAgentId: t.agentId, command: { ...base, task, brief, checks } })
+    })
+    it(`${type} retries an old backend's task refusal once using the same operation`, async () => {
+      const t = setup(), original = t.call.getMockImplementation()!
+      t.call.mockImplementation(async (...args) => args[0] === 'POST' && (args[2] as { command: { task?: unknown } }).command.task
+        ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "task"' } } } as never
+        : original(...args))
+      expect(await send(t, { ...base, task, checks })).toMatchObject({ ok: true })
+      expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(2)
+      expect(t.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'task-op', asAgentId: t.agentId, command: { ...base, brief, checks } })
+    })
+  }
+  it('preserves other errors and never repeats a failed compatibility retry', async () => {
+    for (const [status, code, message, count] of [
+      [403, 'FORBIDDEN', 'Unrecognized key: "task"', 1], [400, 'VALIDATION_ERROR', 'Invalid title', 1],
+      [503, 'BACKEND_UNAVAILABLE', 'Offline', 1], [400, 'VALIDATION_ERROR', 'Unrecognized key: "task"', 2],
+    ] as const) {
+      const t = setup(), original = t.call.getMockImplementation()!
+      t.call.mockImplementation(async (...args) => args[0] === 'POST'
+        ? { status, body: { success: false, error: { code, message } } } as never : original(...args))
+      expect(await send(t, { type: 'work.define', conversationId: 'group', task, checks })).toMatchObject({ error: code, detail: message })
+      expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(count)
+    }
+  })
+  it('recovers a committed legacy receipt after a lost reply and backend upgrade', async () => {
+    const t = setup(), original = t.call.getMockImplementation()!
+    let upgraded = false, recorded: string | null = null
+    t.call.mockImplementation(async (...args) => {
+      if (args[0] !== 'POST') return original(...args)
+      const body = args[2] as { command: Record<string, unknown> }
+      if (!upgraded && body.command.task) return { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "task"' } } }
+      if (!recorded) { recorded = JSON.stringify(body); upgraded = true; throw new Error('Reply lost after commit') }
+      return JSON.stringify(body) === recorded
+        ? { status: 200, body: { success: true, data: { result: { conversationId: 'only-group' } } } }
+        : { status: 409, body: { success: false, error: { code: 'OPERATION_REUSED', message: 'Choose a new operation ID for different content.' } } }
+    })
+    const command = { type: 'conversation.create', title: 'Drafts', task, checks }
+    expect(await send(t, command)).toMatchObject({ error: 'SUPER_TAB_UNAVAILABLE' })
+    expect(await send(t, command)).toMatchObject({ ok: true, value: { result: { conversationId: 'only-group' } } })
+    expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(4)
+    // A real content change must still fail even when its receipt is checked in legacy form.
+    expect(await send(t, { ...command, title: 'Different work' })).toMatchObject({ error: 'OPERATION_REUSED' })
+  })
+  it('does not strip task fields from unrelated commands', async () => {
+    const t = setup(), original = t.call.getMockImplementation()!
+    t.call.mockImplementation(async (...args) => args[0] === 'POST'
+      ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "task"' } } }
+      : original(...args))
+    expect(await send(t, { type: 'message.send', task })).toMatchObject({ error: 'VALIDATION_ERROR' })
+    expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(1)
+  })
+  it('documents all five parts in both command examples', async () => {
+    const t = setup(), answer = await t.ask({ action: 'help' }, owner) as { help: { commands: Array<Record<string, unknown>> } }
+    for (const type of ['conversation.create', 'work.define']) {
+      expect(answer.help.commands.find(c => c.type === type)).toMatchObject({ task: { goal: expect.any(String), changes: expect.any(String), constraints: expect.any(String), owns: expect.any(Array) }, checks: [expect.objectContaining({ description: expect.any(String) })] })
+    }
+  })
+  it('rejects oversized task sections, ownership and compatibility briefs before sending', async () => {
+    for (const invalid of [{ ...task, goal: 'x'.repeat(8001) }, { ...task, owns: Array(41).fill('path') },
+      { ...task, owns: ['x'.repeat(4097)] }, { ...task, owns: Array(40).fill('x'.repeat(200)) }]) {
+      const t = setup()
+      expect(await send(t, { type: 'conversation.create', title: 'Drafts', task: invalid, checks })).toMatchObject({ error: 'INVALID_TASK' })
+      expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(0)
+    }
+  })
+})
+
 it('keeps a shared machine controller out of the host account while accepting its own paired apps', async () => {
   const t = setup()
   for (const accountOwner of [undefined, false]) {

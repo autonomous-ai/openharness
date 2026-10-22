@@ -27,9 +27,9 @@ const HELP = {
     { type: 'project.report', projectId: 'PROJECT', throughRevision: 123, text: 'What changed, what is blocked, and what comes next. Use null when nothing merits repeating.' },
     { type: 'project.repository', projectId: 'PROJECT', repositoryUrl: 'https://github.com/OWNER/REPOSITORY' },
     { type: 'message.send', conversationId: 'GROUP', text: 'A message addressed to an agent', replyTo: null, recipientIds: ['AGENT'] },
-    { type: 'conversation.create', title: 'Outcome', brief: 'An independently assignable result', checks: [{ description: 'Observable acceptance evidence', independent: false }] },
+    { type: 'conversation.create', title: 'Outcome', task: { goal: 'An independently assignable result', changes: 'What changes', constraints: 'What must stay true', owns: ['Paths or code areas'] }, checks: [{ description: 'Observable acceptance evidence', independent: false }] },
     { type: 'conversation.agent', conversationId: 'GROUP', agentId: 'AGENT', present: true, lead: false },
-    { type: 'work.define', conversationId: 'GROUP', brief: 'What to deliver', checks: [{ description: 'Observable acceptance evidence', independent: false }] },
+    { type: 'work.define', conversationId: 'GROUP', task: { goal: 'What to deliver', changes: 'What changes', constraints: 'What must stay true', owns: ['Paths or code areas'] }, checks: [{ description: 'Observable acceptance evidence', independent: false }] },
     { type: 'work.assign', conversationId: 'GROUP', agentId: 'AGENT', routeDecisionId: 'DECISION' },
     { type: 'work.status', conversationId: 'GROUP', assignmentId: 'ATTEMPT', status: 'working', result: null },
     // Both reach the Lead and alert the Harness Pro on the machine running the agent until the status moves on.
@@ -41,6 +41,26 @@ const HELP = {
 }
 
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
+
+function taskCommand(command: Record<string, unknown>): Record<string, unknown> {
+  if (command.type !== 'conversation.create' && command.type !== 'work.define') return command
+  const task = object(command.task), missing: string[] = []
+  for (const part of ['goal', 'changes', 'constraints']) {
+    if (typeof task[part] !== 'string' || !task[part].trim()) missing.push(part)
+  }
+  if (!Array.isArray(task.owns) || !task.owns.length || task.owns.some(area => typeof area !== 'string' || !area.trim())) missing.push('owns')
+  if (!Array.isArray(command.checks) || !command.checks.length || command.checks.some(check => typeof object(check).description !== 'string' || !String(object(check).description).trim())) missing.push('acceptance checks')
+  if (missing.length) throw new SuperTabHostError('TASK_REQUIRED', `Complete the task: ${missing.join(', ')}.`, 400)
+  const trimmed = { ...task, goal: (task.goal as string).trim(), changes: (task.changes as string).trim(),
+    constraints: (task.constraints as string).trim(), owns: (task.owns as string[]).map(area => area.trim()) }
+  if ([trimmed.goal, trimmed.changes, trimmed.constraints].some(part => part.length > 8000) || trimmed.owns.length > 40 || trimmed.owns.some(area => area.length > 4096)) {
+    throw new SuperTabHostError('INVALID_TASK', 'Task sections may have up to 8,000 characters; owns needs 1–40 paths or areas of up to 4,096 characters each.', 400)
+  }
+  const brief = `Goal:\n${trimmed.goal}\n\nChanges:\n${trimmed.changes}\n\nConstraints:\n${trimmed.constraints}\n\nOwns:\n${trimmed.owns.map(area => `- ${area}`).join('\n')}`
+  const limit = command.type === 'conversation.create' ? 8000 : 32_000
+  if (brief.length > limit) throw new SuperTabHostError('INVALID_TASK', `Keep the rendered task within ${limit.toLocaleString('en-US')} characters.`, 400)
+  return { ...command, task: trimmed, brief }
+}
 
 /** Tell the agent which messages sent to it it has already answered, so it posts once (a Lead answered one question twice on
  * 2026-10-20). A message is answered when a later message of the agent's own replies to it. */
@@ -215,8 +235,22 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           } catch { return { ok: true, value: page } }
         }
         if (payload.action === 'command' && identifier(payload.operationId) && payload.command && typeof payload.command === 'object' && !Array.isArray(payload.command)) {
-          return { ok: true, operationId: payload.operationId, value: await backend(core, 'POST', `${path}/commands`,
-            { operationId: payload.operationId, command: payload.command, asAgentId: agentId }) }
+          const command = taskCommand(object(payload.command))
+          const send = (command: Record<string, unknown>) => backend(core, 'POST', `${path}/commands`,
+            { operationId: payload.operationId, command, asAgentId: agentId })
+          let value: unknown
+          try { value = await send(command) } catch (error) {
+            if (!['conversation.create', 'work.define'].includes(String(command.type)) || !command.task || !(error instanceof SuperTabHostError)) throw error
+            const oldSchema = error.status === 400 && error.code === 'VALIDATION_ERROR'
+              && /^(?:command: )?Unrecognized (?:key: "task"|key\(s\) in object: 'task')$/.test(error.message)
+            // A legacy write may commit before its reply is lost and the backend upgrades. Its receipt checks the exact
+            // legacy content before returning success, so checking that form cannot create a second operation.
+            const legacyReceipt = error.status === 409 && error.code === 'OPERATION_REUSED'
+            if (!oldSchema && !legacyReceipt) throw error
+            const { task: _task, ...legacy } = command
+            value = await send(legacy)
+          }
+          return { ok: true, operationId: payload.operationId, value }
         }
         // `post --attach` asks first whether this post already went out with its files.
         if (payload.action === 'attachment' && identifier(payload.conversationId) && payload.step === 'sent' && identifier(payload.operationId)) {

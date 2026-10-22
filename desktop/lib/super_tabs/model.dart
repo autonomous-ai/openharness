@@ -47,6 +47,17 @@ class SuperTabAgent {
   String get engine => configuration['engine'] as String? ?? '';
 }
 
+class SuperTabTask {
+  SuperTabTask.fromJson(Map<String, dynamic> row)
+    : goal = _text(row, 'goal'),
+      changes = _text(row, 'changes'),
+      constraints = _text(row, 'constraints'),
+      owns = List.unmodifiable((row['owns'] as List).cast<String>());
+
+  final String goal, changes, constraints;
+  final List<String> owns;
+}
+
 class SuperTabConversation {
   SuperTabConversation.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -61,11 +72,15 @@ class SuperTabConversation {
         (check) => Map<String, dynamic>.unmodifiable(check),
       ),
       brief = _text(row, 'brief'),
+      task = row['task'] is Map
+          ? SuperTabTask.fromJson(superTabMap(row['task']))
+          : null,
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       assignment = row['assignment'] == null
           ? null
           : Map.unmodifiable(superTabMap(row['assignment']));
   final String id, projectId, title, brief;
+  final SuperTabTask? task;
   final int? number;
   String get label => number == null ? title : '#$number $title';
   final String? leadId;

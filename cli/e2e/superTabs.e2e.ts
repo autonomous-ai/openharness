@@ -38,6 +38,7 @@ it('starts either engine once, posts to its captured group and delivers shared i
   const agents: Array<Record<string, any>> = []
   const starts = new Map<string, Record<string, any>>()
   const posts: Array<Record<string, any>> = []
+  const tasks: Array<Record<string, any>> = []
   const pending = new Map<string, Record<string, any>>()
   const assignments: Array<Record<string, string>> = []
   const stopReceipts: Array<Record<string, any>> = []
@@ -95,6 +96,9 @@ it('starts either engine once, posts to its captured group and delivers shared i
         const id = idFor(String(command.harnessId))
         if (!agents.some(a => a.id === id)) agents.push({ id, harnessId: command.harnessId, machineId: ME.machineId, configuration: command.configuration })
         return { data: { result: { agentId: id } } }
+      } else if (command.type === 'conversation.create') {
+        tasks.push(body)
+        if (command.task) return { status: 400, error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "task"' } }
       } else if (command.type === 'message.send') posts.push(command)
       else if (command.type === 'agent.configuration') {
         const agent = agents.find(a => a.id === body.asAgentId)!
@@ -140,6 +144,17 @@ it('starts either engine once, posts to its captured group and delivers shared i
       print: text => { answer = JSON.parse(text) } })
     return { code, answer }
   }
+  const task = { goal: 'Keep drafts', changes: 'Persist edits', constraints: 'No dependencies', owns: ['cli/src/superTabs'] }
+  const taskCommand = { type: 'conversation.create', title: 'Drafts', task, checks: [{ description: 'Draft survives restart', independent: false }] }
+  expect((await run(['command', 'missing-task', JSON.stringify({ ...taskCommand, task: undefined })])).answer).toMatchObject({ error: 'TASK_REQUIRED' })
+  expect(tasks).toHaveLength(0)
+  const defined = await run(['command', 'define-task', JSON.stringify(taskCommand)])
+  expect(defined.code, JSON.stringify(defined.answer)).toBe(0)
+  expect(tasks).toHaveLength(2)
+  expect(tasks[0]).toMatchObject({ operationId: 'define-task', command: { task } })
+  expect(tasks[1].operationId).toBe('define-task')
+  expect(tasks[1].command).not.toHaveProperty('task')
+  for (const part of ['Goal:', 'Changes:', 'Constraints:', 'Owns:', 'Keep drafts', 'cli/src/superTabs']) expect(tasks[1].command.brief).toContain(part)
   for (const engine of ['claude', 'codex']) {
     const request = { conversationId: 'feature', machineId: ME.machineId, engine, name: `Builder ${engine}`,
       cwd, worktree: false, permissionMode: 'auto', requirements: { memoryBytes: 0, diskBytes: 1,

@@ -29,6 +29,54 @@ function fixture() {
   return { run, invite, add, group, get state() { return state } }
 }
 
+describe('five-part tasks', () => {
+  const task = { goal: 'Save edits', changes: 'Persist the draft', constraints: 'No dependencies', owns: ['backend/src/superTabs'] }
+  const brief = 'Goal:\nSave edits\n\nChanges:\nPersist the draft\n\nConstraints:\nNo dependencies\n\nOwns:\n- backend/src/superTabs'
+  const checks = [{ description: 'Reconnect preserves edits', independent: false }]
+
+  it('creates and defines a structured task with a trimmed compatibility brief', () => {
+    const f = fixture()
+    const create = commandSchema.parse({ type: 'conversation.create', title: 'Drafts', task: { ...task, goal: ' Save edits ', owns: [' backend/src/superTabs '] }, checks })
+    const group = f.run(create).result.conversationId as string
+    expect(f.state.conversations[1]).toMatchObject({ task, brief })
+    const define = commandSchema.parse({ type: 'work.define', conversationId: group, brief: 'ignored', task, checks })
+    expect(f.run(define).messages[0]!.text).toBe(brief)
+    expect(f.state.conversations[1]).toMatchObject({ task, brief })
+  })
+
+  it('delivers all five parts from the stored rendered brief', () => {
+    const f = fixture(), group = f.group(), worker = f.add('worker', 'owner', group)
+    f.run(commandSchema.parse({ type: 'work.define', conversationId: group, task, checks }))
+    const delivery = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).messages[0]!
+    expect(delivery.text).toBe(`${brief}\n\nAcceptance checks:\n- Reconnect preserves edits`)
+    expect(delivery.recipients).toEqual([worker])
+  })
+
+  it('keeps legacy briefs working and clears a previous structured task', () => {
+    const f = fixture(), group = f.group()
+    f.run(commandSchema.parse({ type: 'work.define', conversationId: group, task, checks }))
+    f.run({ type: 'work.define', conversationId: group, brief: 'Legacy update', checks })
+    expect(f.state.conversations[1]).not.toHaveProperty('task')
+    expect(f.state.conversations[1]!.brief).toBe('Legacy update')
+    expect(commandSchema.safeParse({ type: 'work.define', conversationId: group, checks }).success).toBe(false)
+    expect(commandSchema.safeParse({ type: 'conversation.create', title: 'Drafts', checks }).success).toBe(false)
+  })
+
+  it('bounds task strings and requires every part', () => {
+    for (const type of ['conversation.create', 'work.define']) {
+      const base = type === 'conversation.create' ? { type, title: 'Drafts' } : { type, conversationId: 'group' }
+      for (const invalid of [null, {}, { ...task, goal: ' ' }, { ...task, changes: '' }, { ...task, constraints: '' },
+        { ...task, goal: 'x'.repeat(8001) }, { ...task, changes: 'x'.repeat(8001) }, { ...task, constraints: 'x'.repeat(8001) },
+        { ...task, owns: [] }, { ...task, owns: [' '] }, { ...task, owns: Array(41).fill('path') }, { ...task, owns: ['x'.repeat(4097)] },
+        { ...task, extra: 'unexpected' }]) {
+        expect(commandSchema.safeParse({ ...base, brief: 'legacy', task: invalid, checks }).success).toBe(false)
+      }
+      expect(commandSchema.safeParse({ ...base, task: { ...task, owns: Array(40).fill('path') }, checks }).success).toBe(true)
+      expect(commandSchema.safeParse({ ...base, task: { ...task, owns: Array(40).fill('x'.repeat(4096)) }, checks }).success).toBe(false)
+    }
+  })
+})
+
 describe('Super Tab collaboration policy', () => {
   it('records host-observed runtime changes without rewriting an assignment\'s starting configuration', () => {
     const f = fixture(), group = f.group(), worker = f.add('worker', 'owner', group)

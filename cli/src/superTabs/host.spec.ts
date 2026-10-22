@@ -48,6 +48,11 @@ function setup(messageFields: Record<string, unknown> = {}) {
 }
 
 describe('Super Tab native delivery handoff', () => {
+  it('names all five task parts in the worker delivery header', async () => {
+    const t = setup()
+    await t.open().tick()
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('goal, changes, constraints, owned code and acceptance checks')
+  })
   it('keeps roster members through host failure and restart, releasing only a confirmed removal', async () => {
     const t = setup(), first = t.open()
     await first.tick()

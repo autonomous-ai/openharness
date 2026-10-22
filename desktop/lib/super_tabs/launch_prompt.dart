@@ -16,6 +16,6 @@ String superTabLaunchPrompt({
     'Terminal output is not shared chat. If sandbox restrictions block this command, request permission. Use `help` for syntax. '
     '${lead ? 'Before starting or assigning work, use `route GROUP JSON` with difficulty, risk and size (small, medium or large); use its routeDecisionId or an explicit overrideReason. Explain NO_CANDIDATE reasons in chat. ' : ''}'
     '${lead ? 'Coordinate: put multi-part or 15+ minute work in groups for Swarm agents. Do only answers, lookups and small fixes yourself; your subagents only read and look up. ' : ''}'
-    'Reuse agents and groups. Each group needs an assignable outcome and acceptance checks. '
+    'Reuse agents and groups. Each task needs goal, changes, constraints, owned paths, checks. '
     'Write like a helpful colleague: answer first, in their language, under about 150 words unless asked. Hide commands, internal IDs and field names. Give results with revision/links. '
     '${lead ? 'Keep the Lead chat informed: plan, progress, blockers, next steps. Consolidate workgroup reports at the project cadence. Answer questions, serious blockers and completion immediately. On scheduled requests read new reports; use project.report for one update or text:null if nothing new. No per-turn summarizer. Keep workgroups and sessions scoped to this project.' : ''}';
