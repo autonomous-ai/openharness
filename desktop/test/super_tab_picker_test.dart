@@ -120,6 +120,13 @@ void main() {
       await tester.tap(find.byTooltip('Conversations'));
       await tester.pumpAndSettle();
     }
+    // The teammate's machine is not online here, so it sits under the closed "Offline" disclosure.
+    final offline = find.byKey(const ValueKey('super-machines-offline'));
+    if (machine.evaluate().isEmpty && offline.evaluate().isNotEmpty) {
+      await tester.ensureVisible(offline);
+      await tester.tap(offline);
+      await tester.pumpAndSettle();
+    }
     await tester.ensureVisible(machine);
     await tester.pumpAndSettle();
     await tester.tap(machine);
