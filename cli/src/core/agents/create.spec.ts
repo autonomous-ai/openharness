@@ -374,6 +374,27 @@ describe('creating an agent', () => {
   })
 
   describe('refusals before any pane opens', () => {
+    it('recovers a backend missing at boot, and rechecks launch authority after recovery', async () => {
+      const ready = setup().deps.createBackend!
+      const recoverBackend = vi.fn().mockResolvedValueOnce(null).mockResolvedValue(ready)
+      const run = setup({ createBackend: null, recoverBackend })
+      expect(await run.create(request())).toEqual({ ok: false, error: 'TMUX_UNAVAILABLE' })
+      expect(await run.create(request())).toEqual({ ok: true, session: pending })
+      expect(createAndRegisterPane).toHaveBeenCalledWith(expect.objectContaining({ tmuxBackend: ready }))
+      vi.mocked(createAndRegisterPane).mockClear()
+      let current = true
+      const stale = setup({ createBackend: null, recoverBackend: async () => { current = false; return ready } })
+      expect(await stale.create.prepare(request(), { id: 'recovery', label: 'recovery', current: () => current, hold: () => {} }))
+        .toMatchObject({ ok: false, error: 'LAUNCH_AUTHORITY_CHANGED' })
+      expect(createAndRegisterPane).not.toHaveBeenCalled()
+    })
+
+    it('does not ask for backend recovery on a healthy launch', async () => {
+      const recoverBackend = vi.fn()
+      expect(await setup({ recoverBackend }).create(request())).toEqual({ ok: true, session: pending })
+      expect(recoverBackend).not.toHaveBeenCalled()
+    })
+
     it('a batch-file engine on Windows whose first message cmd.exe would read, by name; other errors are not refusals', async () => {
       vi.mocked(buildEngineLaunchArgv).mockImplementationOnce(() => { throw new WindowsBatchLaunchRefused('claude', 'C:\\tools\\claude.cmd') })
       expect(await setup().create(request({ prompt: 'fix&calc' }))).toEqual({

@@ -87,6 +87,16 @@ export function tmuxInstallDirectories(
   return [userBin, ...brew].filter(isAbsolute)
 }
 
+/** A launch-time hint after tmux was absent at boot: filesystem reads only, no shell or subprocess.
+ * The full preparation still verifies/adopts the discovered route before a pane is made. */
+export function tmuxAvailableNow(
+  environment: NodeJS.ProcessEnv = process.env,
+  runtimeDir: string = appEnv.ADAPTER_RUNTIME_DIR,
+): boolean {
+  return binaryOnPath('tmux', environment) || managedTmuxPath(runtimeDir) !== null
+    || tmuxInstallDirectories(environment).some(dir => binaryOnPath(join(dir, 'tmux'), environment))
+}
+
 /** A known location is only a fallback when its tmux actually runs on this computer. */
 function tmuxRuns(binary: string, env: NodeJS.ProcessEnv): Promise<boolean> {
   return new Promise(resolve => {

@@ -73,6 +73,8 @@ import { findLiveSession, findResumedTranscript } from '../lib/sessionRepair.js'
 import { processSessionOf } from '../engines/sessionStores.js'
 import { createHandoffDependencies } from './handoffDependencies.js'
 import { TmuxBackend } from '../lib/tmuxBackend.js'
+import { tmuxAvailableNow } from '../lib/tmuxOnPath.js'
+import { createTerminalBackendRecovery } from '../lib/terminalBackendRecovery.js'
 import { isDrainBackend, ptyHostBackends, PtyHostDrain, rowsOnInstance } from '../lib/ptyHost/drain.js'
 import { removeUnusedPtyVersions } from '../lib/ptyHost/launch.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from '../lib/hostTheme.js'
@@ -570,7 +572,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // STATE the daemon runs on without, never a reason to refuse to start: it still serves its status, the
   // local socket and the backend link, leaves for an update, and says what is missing.
   const candidates: TerminalBackend[] = []
-  if (terminalConfig.backends.includes('tmux')) candidates.push(new TmuxBackend(() => hostTheme))
+  const configuredTmux = terminalConfig.backends.includes('tmux') ? new TmuxBackend(() => hostTheme) : null
+  if (configuredTmux) candidates.push(configuredTmux)
   // The Harness PTY host (pty/): reached, or started detached so its panes outlive this daemon. A host of the
   // protocol before, still running from before an update, is a drain backend beside it (lib/ptyHost/drain.ts).
   const ptyHosts = terminalConfig.backends.includes('ptyhost')
@@ -589,21 +592,33 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const prepared = await preparing
   const terminalBackends = prepared.filter((p) => p.result.state === 'ready').map((p) => p.backend)
   // The first backend that could not be readied, and why, for the status's `discoveryError`.
-  const terminalUnavailable = prepared.flatMap(({ backend, result }) => result.state === 'unavailable'
+  let terminalUnavailable: { backend: TerminalBackend['name']; reason: string; code: string } | null = prepared.flatMap(({ backend, result }) => result.state === 'unavailable'
     ? [{ backend: backend.name, reason: result.reason, code: result.code }] : [])[0] ?? null
   // The backend new panes are made on. Every other pane operation reaches the pane's own backend
   // through the coordinator (`terminals.backendFor`).
-  const createBackend: TerminalBackend | null = terminalBackends.find((backend) => !isDrainBackend(backend)) ?? null
+  let createBackend: TerminalBackend | null = terminalBackends.find((backend) => !isDrainBackend(backend)) ?? null
   // What a create, fork or resume answers while there is none: the configured backend's code, not always tmux's.
   const createUnavailable = noBackendCode(terminalConfig.backends)
   // A hook's tmux runtime hint is taken only while tmux is the backend new panes are made on
   // (core/engines/hooks.ts). Restart, retarget, restore and adoption reach each pane's own backend
   // through the coordinator, gated on what it can do (`canRestart`, `isHeld`, `killHeld`).
-  const tmuxBackend = createBackend instanceof TmuxBackend ? createBackend : null
+  let tmuxBackend = createBackend instanceof TmuxBackend ? createBackend : null
   const terminals = new TerminalBackendCoordinator(
     terminalBackends,
     terminalConfig.backends,
   )
+  const recoverBackend = createTerminalBackendRecovery({
+    backend: configuredTmux,
+    available: tmuxAvailableNow,
+    ownedPanes: () => ownedPanesOf(registry.list(), 'tmux'),
+    recovered: (backend) => {
+      terminalBackends.push(backend)
+      terminals.replaceBackends(terminalBackends)
+      createBackend = tmuxBackend = backend
+      if (terminalUnavailable?.backend === 'tmux') terminalUnavailable = null
+      console.log('[terminal] tmux recovered')
+    },
+  })
   // Shut down a drained host once it has no pane, and take its backend out of `terminalBackends` (stepped after
   // each reconcile pass, below).
   const ptyDrain = ptyHosts?.drain.length
@@ -1949,7 +1964,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     dataDir: env.ADAPTER_DATA_DIR,
   })
   // Which agent a hook belongs to, and what a SessionEnd means (core/engines/hooks.ts).
-  const engineHooks = createEngineHooks({ tmuxBackend, ptyHostBackend, agentReconciler, registry, panePending: restorePanes.pending, syncSession })
+  const engineHooks = createEngineHooks({ get tmuxBackend() { return tmuxBackend }, ptyHostBackend, agentReconciler, registry, panePending: restorePanes.pending, syncSession })
   // What agents may do: the account's experiments, kept in this daemon's data folder for its launches
   // (lib/agentSettings.ts, core/experiments.ts). Started once bound, below.
   const agentSettings = createAgentSettingsSync({ dataDir: env.ADAPTER_DATA_DIR, backend: proxyBackend, session: readAuthSession,
@@ -2562,6 +2577,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     native: prepareNativeLaunch,
     dshLaunch,
     createBackend,
+    recoverBackend,
     noBackendCode: createUnavailable,
     registry,
     externalResume: externalResumes.create,
