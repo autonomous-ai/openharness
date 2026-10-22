@@ -160,7 +160,8 @@ void main() {
       final instruction = server.messages.last;
       final deliveredAt = DateTime.now().subtract(const Duration(seconds: 42));
       instruction['deliveries'] = [
-        {
+        // Typed loosely: the test advances this row through hold, uncertain and answered below.
+        <String, Object?>{
           'id': 'native-receipt',
           'agentId': 'lead-agent',
           'status': 'delivered',
@@ -271,7 +272,8 @@ void main() {
       await shot('conversation');
       expect(find.textContaining('Delivered '), findsOneWidget);
       expect(find.text('Queued'), findsNothing);
-      final receipt = (instruction['deliveries'] as List).single as Map;
+      final receipt =
+          (instruction['deliveries'] as List).single as Map<String, Object?>;
       receipt.addAll({
         'status': 'claimed',
         'holdReason': 'team_waiting_idle',
