@@ -96,6 +96,23 @@ describe('Super Tab collaboration policy', () => {
       { reply: { id: posted.id, conversationId: 'elsewhere', author: posted.author } })).toThrow('Reply to a message in this conversation')
   })
 
+  it('delivers an assigned worker\'s own post to its Lead, and nobody else\'s', () => {
+    const f = fixture()
+    const lead = f.add('lead', 'owner', 'lead', true)
+    const group = f.group(), worker = f.add('worker', 'owner', group), other = f.add('other', 'owner', group)
+    const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+    const post = (actor: Actor, recipientIds: string[] = []) => f.run({ type: 'message.send', conversationId: group, text: 'PR is green.',
+      replyTo: null, recipientIds }, actor).messages[0]!.recipients
+    expect(post(as(worker))).toEqual([])
+    f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+    expect(post(as(worker))).toEqual([lead])
+    expect(post(as(worker), [other])).toEqual([other])
+    expect(post(as(other))).toEqual([])
+    expect(post(as(lead))).toEqual([])
+    f.run({ type: 'work.status', conversationId: group, assignmentId: f.state.conversations[1]!.assignment!.id, status: 'blocked', result: 'Stuck.' }, as(worker))
+    expect(post(as(worker))).toEqual([lead])
+  })
+
   it('lets a viewer read and leave, but not send, assign, attach or invite', () => {
     const f = fixture()
     f.invite('viewer')
