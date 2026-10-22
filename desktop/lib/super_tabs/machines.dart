@@ -28,6 +28,29 @@ import 'section_heading.dart';
 
 export 'machine_status.dart';
 
+/// The owner's agent slots run 1–8 here, though the backend itself accepts up
+/// to 16: widening the UI to the backend's ceiling would only invite a number
+/// the machine cannot run.
+const _agentSlotsMin = 1;
+const _agentSlotsMax = 8;
+
+/// What one more agent needs to start, the CLI's own figure
+/// (`START_REQUIREMENTS.memoryBytes`, `cli/src/superTabs/capacity.ts`).
+const _agentMemoryBytes = 2 * 1024 * 1024 * 1024;
+
+int _clampAgentSlots(num value) =>
+    value.toInt().clamp(_agentSlotsMin, _agentSlotsMax);
+
+/// What this machine's free memory suggests, by the CLI's own arithmetic: one
+/// agent per [_agentMemoryBytes] free. Null when the reading does not say how
+/// much memory there is.
+int? _suggestedAgentSlots(MachineResources? resources) {
+  final total = resources?.memoryTotalBytes;
+  final used = resources?.memoryUsedBytes;
+  if (total == null || used == null) return null;
+  return _clampAgentSlots(((total - used) / _agentMemoryBytes).floor());
+}
+
 class SuperTabMachines extends StatefulWidget {
   const SuperTabMachines({
     super.key,
@@ -75,6 +98,99 @@ class _MachineChoice {
 
   final String id, label;
   final ({IconData icon, String message})? unavailable;
+}
+
+/// "Agent slots" — how many agents this machine offers the Swarm — with the one
+/// thing the number is not: a promise. Its free memory is what it was suggested
+/// from, and what is free moves.
+///
+/// A stepper rather than a number field, so no keystroke can leave the dialog
+/// holding a count the backend would refuse; both buttons go dead at the bounds
+/// rather than staying lit and doing nothing.
+class _AgentSlots extends StatelessWidget {
+  const _AgentSlots({
+    required this.value,
+    required this.busy,
+    required this.onChanged,
+    this.cappedFrom,
+  });
+
+  final int value;
+  final bool busy;
+  final ValueChanged<int> onChanged;
+
+  /// The number this machine was contributed with, when it is above what this
+  /// form offers: saving would lower it, and the owner is told so.
+  final int? cappedFrom;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final value = this.value;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(child: Text('Agent slots', style: DesktopChrome.text())),
+            Container(
+              width: 96,
+              constraints: const BoxConstraints(
+                minHeight: grid.AppControl.height,
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              decoration: BoxDecoration(
+                // The same recessed well the picker's control sits in.
+                color: grid.AppSurface.recess,
+                borderRadius: BorderRadius.circular(grid.AppControl.radius),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  AppIconButton(
+                    key: const ValueKey('agent-slots-fewer'),
+                    icon: AppIcons.minus,
+                    size: 16,
+                    tooltip: 'Fewer slots',
+                    onPressed: busy || value <= _agentSlotsMin
+                        ? null
+                        : () => onChanged(value - 1),
+                  ),
+                  Text(
+                    value.toString(),
+                    key: const ValueKey('agent-slots-value'),
+                    style: DesktopChrome.control(),
+                  ),
+                  AppIconButton(
+                    key: const ValueKey('agent-slots-more'),
+                    icon: AppIcons.plus,
+                    size: 16,
+                    tooltip: 'More slots',
+                    onPressed: busy || value >= _agentSlotsMax
+                        ? null
+                        : () => onChanged(value + 1),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Each new agent still needs free memory when it starts.',
+          style: DesktopChrome.metadata(),
+        ),
+        if (cappedFrom case final from?) ...[
+          const SizedBox(height: 4),
+          Text(
+            'This machine was set to $from agent slots. This form offers up to '
+            '$_agentSlotsMax, and saving here lowers it.',
+            style: DesktopChrome.metadata(),
+          ),
+        ],
+      ],
+    );
+  }
 }
 
 /// Unlike an ordinary choice field, this inventory also explains computers
@@ -404,6 +520,81 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     String? error;
     var busy = false;
     String? setupId;
+    // The agent slots the owner is choosing. A machine already in this Swarm
+    // starts at the number it has; a new one starts at what its free memory
+    // suggests, worked out here rather than by preparation (below).
+    int? storedSlots(String? id) {
+      final row = id == null
+          ? null
+          : c.snapshot?.machines.where((m) => m['machineId'] == id).firstOrNull;
+      final current = row?['maxAgents'];
+      return current is num ? current.toInt() : null;
+    }
+
+    /// A machine contributed before this form had a range keeps its number
+    /// until the owner saves, and is told when saving would lower it.
+    int? storedOverRange(String? id) {
+      final stored = storedSlots(id);
+      return stored != null && stored > _agentSlotsMax ? stored : null;
+    }
+
+    // Readings this dialog has taken itself, keyed by machine. The panel's own
+    // samples stand in for a machine it already reads.
+    final suggestions = <String, int>{};
+
+    /// What this machine's own memory says, once a reading has answered. Null
+    /// while one is still coming, or when it failed.
+    int? memorySuggestion(String? id) => id == null
+        ? null
+        : suggestions[id] ?? _suggestedAgentSlots(_samples[id]?.$1);
+
+    int slotsFor(String? id) {
+      final stored = storedSlots(id);
+      if (stored != null) return _clampAgentSlots(stored);
+      return memorySuggestion(id) ?? _agentSlotsMin;
+    }
+
+    var slots = slotsFor(machineId);
+    var slotsEdited = false;
+    // The open dialog and its own setState, once it is built: a reading
+    // answers while the form is open, and the field has to repaint when it
+    // does. Both are read only while the dialog is still there — one that
+    // arrives after it closed has nothing to repaint.
+    BuildContext? dialog;
+    void Function(void Function())? repaint;
+    final reading = <String>{};
+
+    /// Start the field where this machine's own memory says, without asking
+    /// preparation: preparation sets the project up, probes engines and takes
+    /// one of its 32 setup slots, and opening a form the owner may cancel is
+    /// no reason to do that. A machine with a number of its own needs no
+    /// reading at all.
+    Future<void> suggestSlots() async {
+      final id = machineId;
+      if (id == null ||
+          storedSlots(id) != null ||
+          !canSelect(app.stateOf(id)) ||
+          !reading.add(id)) {
+        return;
+      }
+      MachineResources? resources;
+      try {
+        resources = await (widget.readLocal ?? app.readMachineResources)(id);
+      } catch (_) {
+        return;
+      }
+      final suggested = _suggestedAgentSlots(resources);
+      // The picker may have moved on to another machine, whose own reading is
+      // the one that belongs in the field now — or the dialog may have closed.
+      if (suggested == null || machineId != id || dialog?.mounted != true) {
+        return;
+      }
+      suggestions[id] = suggested;
+      // Never over a number the owner has set meanwhile.
+      if (slotsEdited) return;
+      repaint?.call(() => slots = suggested);
+    }
+
     await showAppDialog<void>(
       context: context,
       builder: (context) => SuperTabDialogScope(
@@ -412,6 +603,12 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           listenable: app,
           builder: (context, _) => StatefulBuilder(
             builder: (context, update) {
+              dialog = context;
+              repaint = update;
+              // Not awaited: the form is usable immediately, and the number
+              // only has to be there by the time the owner reads it. Each
+              // machine is read once, so a rebuild does not read again.
+              unawaited(suggestSlots());
               Future<void> save() async {
                 if (busy ||
                     !c.canWrite ||
@@ -458,19 +655,45 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   }
                   if (!context.mounted || !c.canWrite) return;
                   final machine = app.stateOf(selected);
-                  final result =
-                      c.pendingCommand?['type'] == 'machine.contribute'
-                      ? await c.retry()
-                      : await c.command({
-                          'type': 'machine.contribute',
-                          'machineId': selected,
-                          'name': machine!.machine.displayName,
-                          'cwd': prepared['cwd'],
-                          if (prepared['scope'] != null)
-                            'scope': prepared['scope'],
-                          'engines': prepared['engines'],
-                          'maxAgents': prepared['maxAgents'],
-                        });
+                  // A machine with no number of its own whose reading failed,
+                  // or had not answered yet, is showing the floor rather than
+                  // a suggestion. The owner never chose that, so send what
+                  // preparation offered instead — the number the field would
+                  // have shown had the reading arrived.
+                  final offered = prepared['maxAgents'];
+                  if (!slotsEdited &&
+                      storedSlots(selected) == null &&
+                      memorySuggestion(selected) == null &&
+                      offered is num) {
+                    slots = _clampAgentSlots(offered);
+                  }
+                  // An earlier lost reply leaves an uncertain attempt holding
+                  // its own receipt, and only one action may be in flight:
+                  // check that one first, then send the number the owner is
+                  // looking at — the stored attempt cannot know it was changed.
+                  if (c.pendingCommand?['type'] == 'machine.contribute') {
+                    // If that attempt cannot be confirmed, its own error is
+                    // the one worth showing: it says why it is still unclear.
+                    if (await c.retry() == null) {
+                      if (!context.mounted) return;
+                      throw SuperTabFailure(
+                        c.operationErrorCode ?? 'CONTRIBUTION_FAILED',
+                        c.operationError ??
+                            'The earlier attempt is still not confirmed. '
+                                'Try again to check it.',
+                      );
+                    }
+                    if (!context.mounted || !c.canWrite) return;
+                  }
+                  final result = await c.command({
+                    'type': 'machine.contribute',
+                    'machineId': selected,
+                    'name': machine!.machine.displayName,
+                    'cwd': prepared['cwd'],
+                    if (prepared['scope'] != null) 'scope': prepared['scope'],
+                    'engines': prepared['engines'],
+                    'maxAgents': slots,
+                  });
                   if (result == null) {
                     throw SuperTabFailure(
                       'CONTRIBUTION_FAILED',
@@ -500,76 +723,95 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 title: Text(isConfigure ? 'Configure machine' : 'Add machine'),
                 content: SizedBox(
                   width: 360,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (own.isNotEmpty)
-                        _MachinePicker(
-                          value: machineId,
-                          busy: busy,
-                          choices: [
-                            for (final m in own)
-                              _MachineChoice(
-                                id: m.machine.machineId,
-                                label: labelFor(m),
-                                unavailable: unavailable(m),
-                              ),
-                          ],
-                          onChanged: (id) {
-                            if (busy || !canSelect(app.stateOf(id))) return;
-                            update(() {
-                              machineId = id;
-                              setupId = null;
-                              error = null;
-                            });
-                          },
-                        )
-                      else
-                        Text(
-                          'No computer is connected to this account yet.',
-                          style: DesktopChrome.text(),
-                        ),
-                      const SizedBox(height: 16),
-                      if (own.isNotEmpty) ...[
-                        Text(
-                          'Let the product manager run agents here using this machine’s signed-in accounts.',
-                          style: DesktopChrome.text(),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Agents the Swarm starts on this machine run without asking for permission.',
-                          style: DesktopChrome.text(),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          'Harness clones each project into ~/harnesses/swarms and lets '
-                          "the Swarm's agents work in it.",
-                          style: DesktopChrome.text(),
-                        ),
-                      ] else ...[
-                        Text(
-                          'To add another computer, install Harness on it and sign in with '
-                          'this account, or approve a device with no screen from Machines.',
-                          style: DesktopChrome.text(),
-                        ),
-                        const SizedBox(height: 4),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton(
-                            onPressed: () {
-                              Navigator.pop(context);
-                              app.requestMachines();
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (own.isNotEmpty)
+                          _MachinePicker(
+                            value: machineId,
+                            busy: busy,
+                            choices: [
+                              for (final m in own)
+                                _MachineChoice(
+                                  id: m.machine.machineId,
+                                  label: labelFor(m),
+                                  unavailable: unavailable(m),
+                                ),
+                            ],
+                            onChanged: (id) {
+                              if (busy || !canSelect(app.stateOf(id))) return;
+                              update(() {
+                                machineId = id;
+                                setupId = null;
+                                error = null;
+                                // Another machine has its own number: the one it
+                                // already offers, or its own suggestion.
+                                slots = slotsFor(id);
+                                slotsEdited = false;
+                              });
+                              unawaited(suggestSlots());
                             },
-                            child: const Text('Open Machines'),
+                          )
+                        else
+                          Text(
+                            'No computer is connected to this account yet.',
+                            style: DesktopChrome.text(),
                           ),
-                        ),
+                        const SizedBox(height: 16),
+                        if (own.isNotEmpty) ...[
+                          Text(
+                            'Let the product manager run agents here using this machine’s signed-in accounts.',
+                            style: DesktopChrome.text(),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Agents the Swarm starts on this machine run without asking for permission.',
+                            style: DesktopChrome.text(),
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'Harness clones each project into ~/harnesses/swarms and lets '
+                            "the Swarm's agents work in it.",
+                            style: DesktopChrome.text(),
+                          ),
+                        ] else ...[
+                          Text(
+                            'To add another computer, install Harness on it and sign in with '
+                            'this account, or approve a device with no screen from Machines.',
+                            style: DesktopChrome.text(),
+                          ),
+                          const SizedBox(height: 4),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton(
+                              onPressed: () {
+                                Navigator.pop(context);
+                                app.requestMachines();
+                              },
+                              child: const Text('Open Machines'),
+                            ),
+                          ),
+                        ],
+                        if (own.isNotEmpty) ...[
+                          const SizedBox(height: 16),
+                          _AgentSlots(
+                            value: slots,
+                            busy: busy,
+                            cappedFrom: storedOverRange(machineId),
+                            onChanged: (next) => update(() {
+                              slots = next;
+                              slotsEdited = true;
+                            }),
+                          ),
+                        ],
+                        if (error != null) ...[
+                          const SizedBox(height: 12),
+                          Text(error!, style: DesktopChrome.metadata()),
+                        ],
                       ],
-                      if (error != null) ...[
-                        const SizedBox(height: 12),
-                        Text(error!, style: DesktopChrome.metadata()),
-                      ],
-                    ],
+                    ),
                   ),
                 ),
                 actions: [

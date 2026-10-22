@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/machine_resources.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/status_line_style.dart';
@@ -16,6 +17,7 @@ import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/section_heading.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/widgets/app_icon_button.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/engine_identity.dart';
 
@@ -23,12 +25,21 @@ import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
 
+/// What a machine with this much free memory is expected to offer: the same
+/// one-agent-per-2-GiB arithmetic the CLI works the suggestion out with.
+MachineResources _reading({required double freeGiB, double totalGiB = 32}) =>
+    MachineResources(
+      memoryTotalBytes: totalGiB * 1024 * 1024 * 1024,
+      memoryUsedBytes: (totalGiB - freeGiB) * 1024 * 1024 * 1024,
+    );
+
 Future<void> _openAddMachineDialog(
   WidgetTester tester,
   SuperTabLaunchFixture f,
   dynamic c, {
   Brightness brightness = Brightness.dark,
   double textScale = 1,
+  Future<MachineResources?> Function(String)? readLocal,
 }) async {
   final previousBrightness = grid.AppTheme.brightness.value;
   grid.AppTheme.brightness.value = brightness;
@@ -49,6 +60,7 @@ Future<void> _openAddMachineDialog(
             controller: c,
             app: f.app,
             onAddAgent: (_) {},
+            readLocal: readLocal,
           ),
         ),
       ),
@@ -56,6 +68,43 @@ Future<void> _openAddMachineDialog(
   );
   await tester.pumpAndSettle();
   await tester.tap(find.byTooltip('Add machine'));
+  await tester.pumpAndSettle();
+}
+
+/// The machine card's own way into the same form: open the card, then Configure.
+Future<void> _openConfigureDialog(
+  WidgetTester tester,
+  SuperTabLaunchFixture f,
+  dynamic c, {
+  Future<MachineResources?> Function(String)? readLocal,
+}) async {
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: SizedBox(
+          width: 300,
+          height: 400,
+          child: SuperTabMachines(
+            controller: c,
+            app: f.app,
+            onAddAgent: (_) {},
+            readLocal: readLocal,
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+  // A machine that has not reported reads as offline and waits under "Offline · 1",
+  // which is closed until the owner opens it.
+  final card = find.byKey(const ValueKey('super-machine-m'));
+  if (card.evaluate().isEmpty) {
+    await tester.tap(find.byKey(const ValueKey('super-machines-offline')));
+    await tester.pumpAndSettle();
+  }
+  await tester.tap(card);
+  await tester.pumpAndSettle();
+  await tester.tap(find.widgetWithText(TextButton, 'Configure'));
   await tester.pumpAndSettle();
 }
 
@@ -79,6 +128,28 @@ String _lineOf(WidgetTester tester, String id) => find
     .join();
 
 Finder _option(String id) => find.byKey(ValueKey('swarm-machine-option-$id'));
+
+/// The number the Agent slots stepper reads.
+String? _agentSlots(WidgetTester tester) =>
+    tester.widget<Text>(find.byKey(const ValueKey('agent-slots-value'))).data;
+
+Finder _slotsStep(String direction) =>
+    find.byKey(ValueKey('agent-slots-$direction'));
+
+/// Both ends of the range are the controls going dead, not a press that lands
+/// and does nothing.
+AppIconButton _slotsButton(WidgetTester tester, String direction) =>
+    tester.widget<AppIconButton>(_slotsStep(direction));
+
+/// Saving reads preparation more than once: a new operation answers `preparing`
+/// and is only ready from a later read, a second apart — what the real daemon
+/// does (`cli/src/superTabs/contribution.ts`), and the fixture with it.
+Future<void> _settleSave(WidgetTester tester) async {
+  for (var i = 0; i < 3; i++) {
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+  }
+}
 
 void main() {
   final capture = Platform.environment['HARNESS_SUPER_TAB_CAPTURE'];
@@ -1336,6 +1407,7 @@ void main() {
                 controller: c,
                 app: f.app,
                 onAddAgent: (_) {},
+                readLocal: (_) async => _reading(freeGiB: 8),
               ),
             ),
           ),
@@ -1368,7 +1440,7 @@ void main() {
         findsOneWidget,
       );
       await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
-      await tester.pumpAndSettle();
+      await _settleSave(tester);
       expect(find.byType(AlertDialog), findsNothing);
       expect(f.connection.server.posts.single['command'], {
         'type': 'machine.contribute',
@@ -1849,4 +1921,343 @@ void main() {
       await tester.pump();
     },
   );
+
+  testWidgets(
+    'Add machine starts at the suggested slots and contributes the number the owner picks',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['project'] = {
+        'machineId': 'm',
+        'cwd': '/work/project',
+        'scope': 'swarm',
+        'repositoryUrl': null,
+      };
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      // 8 GiB free: the two-gibibyte-per-agent arithmetic both this form and
+      // the CLI's own suggestion use.
+      await _openAddMachineDialog(
+        tester,
+        f,
+        c,
+        readLocal: (_) async => _reading(freeGiB: 8),
+      );
+
+      // This machine's free memory says four, so the field opens on four
+      // instead of making the owner count it out.
+      expect(_agentSlots(tester), '4');
+      expect(
+        find.text('Each new agent still needs free memory when it starts.'),
+        findsOneWidget,
+      );
+      // Opening the form sets nothing up on the machine — no project folder,
+      // no engine probe, no setup slot — until the owner saves.
+      expect(
+        f.connection.calls.where(
+          (call) =>
+              call.$1 == 'super_tabs' &&
+              call.$2['action'] == 'prepareContribution',
+        ),
+        isEmpty,
+      );
+
+      // What the owner picks is what goes out — the suggestion is only a start.
+      // Stepped off it and back, so the number that saves is the one in the
+      // field rather than the one the memory reading happened to offer.
+      await tester.tap(_slotsStep('fewer'));
+      await tester.pumpAndSettle();
+      expect(_agentSlots(tester), '3');
+      await tester.tap(_slotsStep('more'));
+      await tester.pumpAndSettle();
+      expect(_agentSlots(tester), '4');
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
+      await _settleSave(tester);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(f.connection.server.posts.single['command'], {
+        'type': 'machine.contribute',
+        'machineId': 'm',
+        'name': f.app.stateOf('m')!.machine.displayName,
+        'cwd': '/work/project',
+        'scope': 'swarm',
+        'engines': ['claude', 'codex', 'pi'],
+        'maxAgents': 4,
+      });
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'Configure starts at the machine’s own slots and saves the new number',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 2},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      // Sixteen gibibytes free would suggest 8: this machine's own 2 is what
+      // the field shows, because its own number is not a suggestion.
+      await _openConfigureDialog(
+        tester,
+        f,
+        c,
+        readLocal: (_) async => _reading(freeGiB: 16),
+      );
+
+      // The machine's own number — 2, not the 8 its memory would suggest: an
+      // owner who opens this form and saves it keeps what they had chosen.
+      expect(_agentSlots(tester), '2');
+      await tester.tap(_slotsStep('more'));
+      await tester.pumpAndSettle();
+      await tester.tap(_slotsStep('more'));
+      await tester.pumpAndSettle();
+      expect(_agentSlots(tester), '4');
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await _settleSave(tester);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(f.connection.server.posts.single['command'], {
+        'type': 'machine.contribute',
+        'machineId': 'm',
+        'name': f.app.stateOf('m')!.machine.displayName,
+        'cwd': '/work/project',
+        'scope': 'swarm',
+        'engines': ['claude', 'codex', 'pi'],
+        'maxAgents': 4,
+      });
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'an unconfirmed contribution is checked first, then the number on screen saves',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['project'] = {
+        'machineId': 'm',
+        'cwd': '/work/project',
+        'scope': 'swarm',
+        'repositoryUrl': null,
+      };
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openAddMachineDialog(
+        tester,
+        f,
+        c,
+        readLocal: (_) async => _reading(freeGiB: 8),
+      );
+      // The first attempt reaches the server and its reply is lost, which
+      // leaves that attempt holding its own receipt — the state the next press
+      // finds.
+      f.connection.server.loseReply = true;
+      await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
+      await _settleSave(tester);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(f.connection.server.posts.single['command']!['maxAgents'], 4);
+
+      // The owner changes their mind before trying again.
+      await tester.tap(_slotsStep('more'));
+      await tester.pumpAndSettle();
+      await tester.tap(_slotsStep('more'));
+      await tester.pumpAndSettle();
+      expect(_agentSlots(tester), '6');
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
+      await _settleSave(tester);
+      expect(find.byType(AlertDialog), findsNothing);
+      // The stored attempt is settled first, and then the six on screen — the
+      // four it was built with is not what the machine ends up with.
+      expect(f.connection.server.posts.last['command']!['maxAgents'], 6);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'a new machine no reading answered for contributes what was suggested',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['project'] = {
+        'machineId': 'm',
+        'cwd': '/work/project',
+        'scope': 'swarm',
+        'repositoryUrl': null,
+      };
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      // This machine's memory does not answer — a reading that failed or had
+      // not arrived — so the field has no suggestion of its own and sits at
+      // the floor of the range.
+      await _openAddMachineDialog(tester, f, c, readLocal: (_) async => null);
+      expect(_agentSlots(tester), '1');
+
+      // The owner never touched it, so the 1 is not a number they chose and
+      // must not be what the machine is contributed with: preparation's own
+      // suggestion is the number the field would have shown.
+      await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
+      await _settleSave(tester);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(f.connection.server.posts.single['command']!['maxAgents'], 4);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'a check of an earlier attempt that fails says why that attempt is unclear',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['project'] = {
+        'machineId': 'm',
+        'cwd': '/work/project',
+        'scope': 'swarm',
+        'repositoryUrl': null,
+      };
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openAddMachineDialog(
+        tester,
+        f,
+        c,
+        readLocal: (_) async => _reading(freeGiB: 8),
+      );
+      f.connection.server.loseReply = true;
+      await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
+      await _settleSave(tester);
+      expect(find.byType(AlertDialog), findsOneWidget);
+
+      // Now the earlier attempt cannot be checked either, and the reason it
+      // gives is the one worth reading.
+      f.connection.server.refuse = {
+        'code': 'MACHINE_NOT_FOUND',
+        'message': 'This machine is no longer linked to this Swarm.',
+      };
+      await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
+      await _settleSave(tester);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(
+        find.text('This machine is no longer linked to this Swarm.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Could not add this machine'), findsNothing);
+      // The check re-sent the attempt it was already holding, untouched, and
+      // no second, new one followed it out.
+      expect(f.connection.server.posts, hasLength(2));
+      expect(
+        f.connection.server.posts.last['command'],
+        f.connection.server.posts.first['command'],
+      );
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets('a machine over the range opens at 8, and 8 is what saves', (
+    tester,
+  ) async {
+    final f = SuperTabLaunchFixture();
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+    // Contributed before this form had a range: the backend accepts 16, and
+    // the dialog must not hand the owner a number it would then refuse.
+    f.connection.server.state['machines'] = [
+      {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 16},
+    ];
+    final c = await f.app.superTabs.open(tabId);
+    await c.refresh();
+    await _openConfigureDialog(tester, f, c);
+
+    expect(_agentSlots(tester), '8');
+    // The top is the top: the button is dead, so no press can make it nine.
+    expect(_slotsButton(tester, 'more').onPressed, isNull);
+    expect(_slotsButton(tester, 'fewer').onPressed, isNotNull);
+    // Saving quietly drops a number the owner chose on a machine that still
+    // has it, so the form says so instead of doing it in silence.
+    expect(
+      find.textContaining('This machine was set to 16 agent slots'),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await _settleSave(tester);
+    // The 16 the machine was stored with never leaves the dialog.
+    expect(f.connection.server.posts.single['command'], {
+      'type': 'machine.contribute',
+      'machineId': 'm',
+      'name': f.app.stateOf('m')!.machine.displayName,
+      'cwd': '/work/project',
+      'scope': 'swarm',
+      'engines': ['claude', 'codex', 'pi'],
+      'maxAgents': 8,
+    });
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+    f.app.superTabs.dispose();
+    await tester.pump();
+  });
+
+  testWidgets('Agent slots stop at 1 and stop at 8', (tester) async {
+    final f = SuperTabLaunchFixture();
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+    f.connection.server.state['machines'] = [
+      {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 3},
+    ];
+    final c = await f.app.superTabs.open(tabId);
+    await c.refresh();
+    await _openConfigureDialog(tester, f, c);
+
+    expect(_agentSlots(tester), '3');
+    for (var i = 0; i < 5; i++) {
+      await tester.tap(_slotsStep('more'));
+      await tester.pumpAndSettle();
+    }
+    expect(_agentSlots(tester), '8');
+    // Neither end is a press that lands and does nothing: the button is dead.
+    expect(_slotsButton(tester, 'more').onPressed, isNull);
+    expect(_slotsButton(tester, 'fewer').onPressed, isNotNull);
+
+    for (var i = 0; i < 7; i++) {
+      await tester.tap(_slotsStep('fewer'));
+      await tester.pumpAndSettle();
+    }
+    expect(_agentSlots(tester), '1');
+    expect(_slotsButton(tester, 'fewer').onPressed, isNull);
+    expect(_slotsButton(tester, 'more').onPressed, isNotNull);
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+    f.app.superTabs.dispose();
+    await tester.pump();
+  });
 }
