@@ -19,7 +19,7 @@ function fixture() {
   const start = vi.fn(async () => ({ ok: true }))
   const prepare = vi.fn(async () => {})
   const machine = new ContributedMachines(core, 'host', { backend, open, capabilities, start, prepare, now: () => now } as never)
-  return { machine, pool, core, backend, open, close, capabilities, start, prepare, advance: () => { now += 16000 } }
+  return { machine, pool, core, backend, open, close, capabilities, start, prepare, advance: () => { now += 16000 }, step: (ms: number) => { now += ms } }
 }
 
 describe('contributed machine executor', () => {
@@ -82,5 +82,154 @@ describe('contributed machine executor', () => {
     const reply = await startAgent({ startId: 'start' }, scoped, { port: 14001, machineId: 'lead', dataDir: '/fixture' }, open)
     expect(reply).toMatchObject({ ok: true, queued: true, startId: 'start', machineId: 'host' })
     expect(open).not.toHaveBeenCalled()
+  })
+
+  describe('how soon a change is seen', () => {
+    const posts = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/'))
+    const reads = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'GET' && String(c[2]).endsWith('/pools'))
+    const lastBody = (f: ReturnType<typeof fixture>) => posts(f).at(-1)![3] as { runningHarnessIds: string[]; stoppedHarnessIds: string[] }
+    /** The next host tick, `ms` later. */
+    const after = async (f: ReturnType<typeof fixture>, ms: number) => { f.step(ms); await f.machine.tick() }
+    const quiet = (f: ReturnType<typeof fixture>) => { f.pool.starts.length = 0 }
+
+    it('publishes at once when a harness starts or stops running', async () => {
+      const f = fixture(); quiet(f)
+      await f.machine.tick()
+      expect(posts(f)).toHaveLength(1)
+      expect(lastBody(f)).toMatchObject({ runningHarnessIds: ['running'], stoppedHarnessIds: ['stopped'] })
+
+      // A harness comes up on this machine: the next look says so, long before a beat has passed.
+      f.pool.harnessIds.push('newcomer')
+      vi.mocked(f.core.agents.byAgent).mockImplementation(id => ['running', 'newcomer'].includes(id) ? { agentId: id } as never : undefined)
+      await after(f, 5_000)
+      expect(posts(f)).toHaveLength(2)
+      expect(lastBody(f).runningHarnessIds).toEqual(['running', 'newcomer'])
+
+      // And one stops.
+      vi.mocked(f.core.agents.stopped!).mockImplementation(async id => id === 'stopped' || id === 'running')
+      await after(f, 5_000)
+      expect(posts(f)).toHaveLength(3)
+      expect(lastBody(f)).toMatchObject({ runningHarnessIds: ['newcomer'], stoppedHarnessIds: ['running', 'stopped'] })
+    })
+
+    it('publishes at once when new work is paused or allowed again', async () => {
+      const f = fixture(); quiet(f)
+      await f.machine.tick()
+      // Paused on the machine's own grant, then allowed; paused for the whole tab, then allowed.
+      for (const change of [() => { f.pool.machine.paused = true }, () => { f.pool.machine.paused = false },
+        () => { f.pool.paused = true }, () => { f.pool.paused = false }]) {
+        const before = posts(f).length
+        change()
+        await after(f, 5_000)
+        expect(posts(f)).toHaveLength(before + 1)
+      }
+    })
+
+    it('publishes at once when a start is waiting, and picks it up in the same look', async () => {
+      const f = fixture(); quiet(f)
+      await f.machine.tick()
+      expect(f.start).not.toHaveBeenCalled()
+      f.pool.starts.push({ id: 'second', dispatched: false })
+      await after(f, 5_000)
+      expect(posts(f)).toHaveLength(2)
+      expect(f.start).toHaveBeenCalledOnce()
+      expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'second', hostDispatch: true })
+      // Settled: that too is a change, and is sent.
+      f.pool.starts.length = 0
+      await after(f, 5_000)
+      expect(posts(f)).toHaveLength(3)
+    })
+
+    it('picks a waiting start up within five seconds, not fifteen', async () => {
+      const f = fixture(); quiet(f)
+      await f.machine.tick()
+      f.pool.starts.push({ id: 'late', dispatched: false })
+      await after(f, 4_000)
+      expect(f.start).not.toHaveBeenCalled()
+      await after(f, 1_000)
+      expect(f.start).toHaveBeenCalledOnce()
+    })
+
+    it('keeps the fifteen second heartbeat when nothing changes, and reads the machine only to send it', async () => {
+      const f = fixture(); quiet(f)
+      await f.machine.tick()
+      for (const ms of [5_000, 5_000]) await after(f, ms)
+      expect(reads(f)).toHaveLength(3)
+      expect(posts(f)).toHaveLength(1)
+      expect(f.capabilities).toHaveBeenCalledOnce()
+      expect(f.open).toHaveBeenCalledOnce()
+      await after(f, 5_000)
+      expect(posts(f)).toHaveLength(2)
+      expect(f.capabilities).toHaveBeenCalledTimes(2)
+      // The beat counts from the last send.
+      await after(f, 10_000)
+      expect(posts(f)).toHaveLength(2)
+      await after(f, 5_000)
+      expect(posts(f)).toHaveLength(3)
+    })
+
+    it('looks no more often than every five seconds', async () => {
+      const f = fixture(); quiet(f)
+      await f.machine.tick()
+      for (const ms of [1_000, 1_000, 1_000, 1_000]) await after(f, ms)
+      expect(reads(f)).toHaveLength(1)
+      await after(f, 1_000)
+      expect(reads(f)).toHaveLength(2)
+    })
+
+    it('never has more than one look in flight', async () => {
+      const f = fixture(); quiet(f)
+      let release!: (rows: unknown) => void
+      f.backend.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+      const first = f.machine.tick()
+      // The host ticks every second whatever is in flight; none of those starts another look.
+      for (const ms of [1_000, 5_000, 10_000, 20_000]) { f.step(ms); void f.machine.tick() }
+      await Promise.resolve()
+      expect(reads(f)).toHaveLength(1)
+      release([f.pool])
+      await first
+      expect(reads(f)).toHaveLength(1)
+      expect(posts(f)).toHaveLength(1)
+      await after(f, 5_000)
+      expect(reads(f)).toHaveLength(2)
+    })
+
+    it('waits a whole beat after a look that failed, and after a send that failed', async () => {
+      const f = fixture(); quiet(f)
+      f.backend.mockRejectedValueOnce(new Error('backend unreachable'))
+      await expect(f.machine.tick()).rejects.toThrow('backend unreachable')
+      await after(f, 5_000); await after(f, 5_000)
+      expect(reads(f)).toHaveLength(1)
+      await after(f, 5_000)
+      expect(reads(f)).toHaveLength(2)
+
+      f.backend.mockImplementation(async (_core, method, path) => path.endsWith('/pools') ? [f.pool] : method === 'POST' ? Promise.reject(new Error('refused')) : { revision: 1 })
+      await after(f, 15_000)
+      expect(posts(f)).toHaveLength(2)
+      await after(f, 5_000); await after(f, 5_000)
+      expect(posts(f)).toHaveLength(2)
+      await after(f, 5_000)
+      expect(posts(f)).toHaveLength(3)
+    })
+
+    it('does not reach the daemon in a look with nothing to send', async () => {
+      const f = fixture(); quiet(f)
+      await f.machine.tick()
+      f.open.mockClear(); f.close.mockClear()
+      await after(f, 5_000)
+      expect(f.open).not.toHaveBeenCalled()
+      expect(f.close).not.toHaveBeenCalled()
+    })
+
+    it('sends again once a contribution comes back after it was withdrawn', async () => {
+      const f = fixture(); quiet(f)
+      await f.machine.tick()
+      const pools = f.backend.getMockImplementation()!
+      f.backend.mockImplementation(async (core, method, path, body) => path.endsWith('/pools') ? [] : pools(core, method, path, body))
+      await after(f, 5_000)
+      f.backend.mockImplementation(pools)
+      await after(f, 5_000)
+      expect(posts(f)).toHaveLength(2)
+    })
   })
 })

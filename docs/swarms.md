@@ -80,6 +80,23 @@ refusal names each refused field (`cwd`, `engine`, or any of `codexHome`,
 folder this project uses there and the engines it contributes. It does not
 repeat the values the start sent.
 
+A contributing machine reports its state (processor and memory use, allowances, which
+harnesses run or have stopped) to the Swarm. It looks at what its Swarms ask of it every
+5 seconds, and sends a report at once when something it says changes: a harness starts or
+stops, new work is paused or allowed again, or a start is waiting. A start waiting on a
+machine is therefore picked up within about 5 seconds. When nothing changes it still sends
+a report every 15 seconds, so that a silent machine can be told from a quiet one; a pass
+that fails waits a whole 15 seconds before the next.
+
+Each machine in the sidebar says how old its reading is ("Updated 12 s ago"). A
+contributing machine whose last report is 35 seconds old, two missed beats and a margin,
+shows as offline. When the Swarm itself cannot be read (the backend is unreachable), the
+sidebar says so and keeps the last readings, marked stale, instead of calling every machine
+offline. A computer's own readings, taken by this Desktop every 15 seconds for machines it
+does not receive reports from, stay on screen when the app returns to the foreground, marked
+stale, until the new reading arrives. The Desktop log (`app-*.log`, category `swarm`) records
+how long each read of the Swarm's state took and when one failed, without what it said.
+
 Ordinary guest machine sharing does not authorize Swarm controls under the
 owner's account. The owner contributes the machine or an agent. The lead's
 routing policy still determines eligible engines, capacity and model choices.
@@ -133,7 +150,8 @@ Use the matching backend, CLI and Desktop versions together for this feature:
    `SuperTabSessionScope`, before serving the new project commands.
 2. Update participating hosts to the CLI with Swarm-scoped contributions and
    project checkout preparation. A host on an older CLI ignores the request for
-   the default branch and starts Builders from its checkout's current commit.
+   the default branch and starts Builders from its checkout's current commit. A host older than
+   the immediate reports still reports, and picks up a waiting start, only every 15 seconds.
 3. Install the Desktop build with the project sidebar and Cmd-S entry point.
 
 A signed internal Desktop artifact alone does not update the backend or host

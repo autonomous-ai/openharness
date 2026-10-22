@@ -22,6 +22,29 @@ import 'machine_details.dart';
 import 'model.dart';
 import 'section_heading.dart';
 
+/// How long a machine's reading may stand before the Swarm calls it offline (and a local reading is called stale).
+/// A machine that contributes reports every 15 seconds (`MACHINE_HEARTBEAT_MS`, `cli/src/superTabs/machines.ts`) and
+/// at once when something changes; two beats missed, plus a margin for the Swarm to be read in turn, is this.
+const kSuperTabMachineOfflineAfter = Duration(seconds: 35);
+
+/// "Updated 12 s ago", as the sidebar says how old a machine's reading is. [stale]: it is shown only because there
+/// is nothing newer, or it cannot be refreshed now.
+String superTabUpdatedAgo(Duration age, {bool stale = false}) {
+  final String ago;
+  if (age.inSeconds < 1) {
+    ago = 'just now';
+  } else if (age.inSeconds < 60) {
+    ago = '${age.inSeconds} s ago';
+  } else if (age.inMinutes < 60) {
+    ago = '${age.inMinutes} min ago';
+  } else if (age.inHours < 24) {
+    ago = '${age.inHours} h ago';
+  } else {
+    ago = '${age.inDays} d ago';
+  }
+  return 'Updated $ago${stale ? ' · stale' : ''}';
+}
+
 class SuperTabMachines extends StatefulWidget {
   const SuperTabMachines({
     super.key,
@@ -29,11 +52,21 @@ class SuperTabMachines extends StatefulWidget {
     required this.onAddAgent,
     this.app,
     this.embedded = false,
+    this.now = DateTime.now,
+    this.readLocal,
   });
   final SuperTabController controller;
   final AppNotifier? app;
   final bool embedded;
   final ValueChanged<SuperTabConversation> onAddAgent;
+
+  /// The clock the readings' ages are counted against.
+  final DateTime Function() now;
+
+  /// Reads this computer's own view of a machine, in place of [AppNotifier.readMachineResources]. A test gives it
+  /// to have the readings taken (they are not, under `flutter test`, unless it does).
+  @visibleForTesting
+  final Future<MachineResources?> Function(String machineId)? readLocal;
   @override
   State<SuperTabMachines> createState() => _SuperTabMachinesState();
 }
@@ -210,6 +243,10 @@ class _MachinePickerState extends State<_MachinePicker> {
 
 class _SuperTabMachinesState extends State<SuperTabMachines> {
   final _samples = <String, (MachineResources, DateTime)>{};
+
+  /// Machines whose sample in [_samples] was taken before the app last left the foreground, or whose
+  /// latest read found nothing: it is shown, marked stale, until a new one arrives.
+  final _staleSamples = <String>{};
   ModelsMenuController? _usage;
   Timer? _timer;
   bool _reading = false;
@@ -224,7 +261,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   @override
   void initState() {
     super.initState();
-    if (!kUnderTest && widget.app != null) {
+    if ((!kUnderTest || widget.readLocal != null) && widget.app != null) {
       _updateUsage();
       widget.app!.foreground.addListener(_foreground);
       unawaited(_refresh());
@@ -252,7 +289,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     _updateUsage();
     _revision++;
     _timer?.cancel();
-    _samples.clear();
+    // What was last read stays on the screen, marked stale, until the read that follows replaces it: the
+    // numbers used to vanish on every return to the app and come back a second later.
+    _staleSamples.addAll(_samples.keys);
     _changed();
     if (widget.app?.foreground.value == true) unawaited(_refresh());
   }
@@ -266,18 +305,26 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       for (var i = 0; i < ids.length; i += 2) {
         await Future.wait(
           ids.skip(i).take(2).map((id) async {
-            final value = await widget.app!.readMachineResources(id);
+            final value =
+                await (widget.readLocal ?? widget.app!.readMachineResources)(
+                  id,
+                );
             if (!mounted || revision != _revision || !_ids.contains(id)) return;
             if (value == null) {
-              _samples.remove(id);
+              // Nothing read: the last sample stands, marked stale.
+              _staleSamples.add(id);
             } else {
-              _samples[id] = (value, DateTime.now());
+              _samples[id] = (value, widget.now());
+              _staleSamples.remove(id);
             }
+            // Each machine as its read arrives, not once all of them have been read.
+            _changed();
           }),
         );
         if (!mounted || revision != _revision) return;
       }
-      _changed();
+      _samples.removeWhere((id, _) => !_ids.contains(id));
+      _staleSamples.removeWhere((id) => !_samples.containsKey(id));
     } finally {
       _reading = false;
       if (mounted && widget.app?.foreground.value == true) {
@@ -588,19 +635,26 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     final observation = superTabMap(
       shared?['observation'] ?? const <String, dynamic>{},
     );
+    final now = widget.now();
     final received = observation['receivedAt'];
+    final observedAt = received is num
+        ? DateTime.fromMillisecondsSinceEpoch(received.toInt())
+        : null;
     final fresh =
-        received is num &&
-        DateTime.now().millisecondsSinceEpoch - received < 45000;
+        observedAt != null &&
+        now.difference(observedAt) < kSuperTabMachineOfflineAfter;
+    // The Swarm itself cannot be read: what a contributing machine last reported is all there is, and it
+    // is not for the Swarm to call the machine offline for a report it could not fetch.
+    final unreachable = shared != null && c.backendUnreachable;
     final online = shared == null
         ? state?.connectionStatus == ConnectionStatus.connected &&
               state?.nodeOnline != false
-        : fresh;
+        : unreachable || fresh;
     final sample = _samples[id];
     final resource = superTabMap(
       observation['resources'] ?? const <String, dynamic>{},
     );
-    final value = fresh
+    final observed = observedAt != null && online
         ? MachineResources.fromJson({
             ...resource,
             if (resource['gpuPercent'] != null)
@@ -612,11 +666,20 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 },
               ],
           })
-        : online &&
-              sample != null &&
-              DateTime.now().difference(sample.$2) < const Duration(seconds: 45)
-        ? sample.$1
         : null;
+    // A machine this computer reads itself shows its last sample whatever its age, marked stale, as long as
+    // it is up; one that contributes shows its last report.
+    final value = shared != null
+        ? observed
+        : online
+        ? sample?.$1
+        : null;
+    final readingAt = shared != null ? observedAt : sample?.$2;
+    final stale = shared != null
+        ? unreachable
+        : sample != null &&
+              (_staleSamples.contains(id) ||
+                  now.difference(sample.$2) >= kSuperTabMachineOfflineAfter);
     final name =
         shared?['name'] as String? ??
         state?.machine.displayName ??
@@ -635,7 +698,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             )
             .toList() ??
         const <Map<String, Object?>>[];
-    if (accounts.isEmpty && fresh) {
+    if (accounts.isEmpty && (fresh || unreachable)) {
       accounts = [
         for (final raw in observation['quotas'] as List? ?? [])
           // Routing reads quota for these two only; other engines drew "—".
@@ -645,7 +708,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     }
     final usage = WorkspaceSubscriptionUsage.fromRows(online ? accounts : []);
     final paused = shared?['paused'] == true;
-    final status = !online
+    final status = unreachable
+        ? 'Backend unreachable'
+        : !online
         ? 'Offline'
         : paused
         ? 'New work paused'
@@ -694,14 +759,31 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         ],
         online: online,
         paused: paused,
+        unreachable: unreachable,
       ),
-      subtitle: metrics.isEmpty && visibleAccounts.isEmpty
+      subtitle: metrics.isEmpty && visibleAccounts.isEmpty && readingAt == null
           ? null
           : Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  if (unreachable)
+                    Text(
+                      'Backend unreachable',
+                      key: ValueKey('super-machine-unreachable-$id'),
+                      style: DesktopChrome.metadata(),
+                    ),
+                  if (readingAt != null)
+                    _UpdatedAgo(
+                      key: ValueKey('super-machine-updated-$id'),
+                      at: readingAt,
+                      now: widget.now,
+                      stale: stale,
+                    ),
+                  if ((unreachable || readingAt != null) &&
+                      (metrics.isNotEmpty || visibleAccounts.isNotEmpty))
+                    const SizedBox(height: 6),
                   if (metrics.isNotEmpty)
                     Wrap(
                       spacing: 8,
@@ -712,7 +794,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                             message: '${metric.$1} ${metric.$2} available',
                             child: Text(
                               '${metric.$1} ${metric.$2}',
-                              style: DesktopChrome.metadata(),
+                              style: stale
+                                  ? DesktopChrome.metadata().copyWith(
+                                      color: DesktopChrome.muted,
+                                    )
+                                  : DesktopChrome.metadata(),
                             ),
                           ),
                       ],
@@ -849,6 +935,52 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   }
 }
 
+/// How old a machine's reading is. It counts on by itself, once a second, so the age is right between the
+/// Swarm's own refreshes; a test pins the clock instead ([kUnderTest]).
+class _UpdatedAgo extends StatefulWidget {
+  const _UpdatedAgo({
+    super.key,
+    required this.at,
+    required this.now,
+    required this.stale,
+  });
+
+  final DateTime at;
+  final DateTime Function() now;
+  final bool stale;
+
+  @override
+  State<_UpdatedAgo> createState() => _UpdatedAgoState();
+}
+
+class _UpdatedAgoState extends State<_UpdatedAgo> {
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!kUnderTest) {
+      _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) setState(() {});
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Text(
+    superTabUpdatedAgo(widget.now().difference(widget.at), stale: widget.stale),
+    style: widget.stale
+        ? DesktopChrome.metadata().copyWith(color: DesktopChrome.muted)
+        : DesktopChrome.metadata(),
+  );
+}
+
 /// The same identities as the roster, with full names available on hover.
 /// The row stays one line; only agents that cannot fit become a compact +N.
 class _MachineHeader extends StatelessWidget {
@@ -859,12 +991,15 @@ class _MachineHeader extends StatelessWidget {
     required this.agents,
     required this.online,
     required this.paused,
+    this.unreachable = false,
   });
 
   final String name;
   final SuperTabPerson? owner;
   final List<({String id, String name, String role})> agents;
-  final bool online, paused;
+
+  /// [unreachable]: the Swarm could not be read, so [online] is not known to be true or false.
+  final bool online, paused, unreachable;
 
   Widget _avatar(String identity, String name, String label) => Tooltip(
     message: label,
@@ -907,7 +1042,7 @@ class _MachineHeader extends StatelessWidget {
           constraints.maxWidth -
           nameWidth -
           (owner == null ? 0 : 32) -
-          (!online || paused ? 24 : 0);
+          (unreachable || !online || paused ? 24 : 0);
       var count = agents.length;
       while (count > 0 &&
           count * 28 +
@@ -963,14 +1098,20 @@ class _MachineHeader extends StatelessWidget {
               ),
             ),
           ],
-          if (!online || paused) ...[
+          if (unreachable || !online || paused) ...[
             const SizedBox(width: 8),
             Tooltip(
-              message: !online
+              message: unreachable
+                  ? 'Backend unreachable'
+                  : !online
                   ? (paused ? 'Offline, new work paused' : 'Offline')
                   : 'New work paused',
               child: Icon(
-                !online ? AppIcons.monitorOff : AppIcons.pause,
+                unreachable
+                    ? AppIcons.cloudOff
+                    : !online
+                    ? AppIcons.monitorOff
+                    : AppIcons.pause,
                 size: 16,
                 color: DesktopChrome.muted,
               ),

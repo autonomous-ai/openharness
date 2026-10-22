@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:dio/dio.dart' show CancelToken, DioException, DioExceptionType;
 import 'package:flutter/foundation.dart';
 
+import '../logging/app_log.dart';
 import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
 import 'model.dart';
@@ -113,6 +114,12 @@ class SuperTabController extends ChangeNotifier {
   bool _disposed = false;
   Timer? _poll, _draftSave;
   Future<void>? _refreshing;
+
+  /// The latest read of the Swarm's state failed (and the tab is still ours). While it is, what the
+  /// machines last reported cannot be told from what they report now: a machine is neither online nor
+  /// offline, and the Swarm says its backend is unreachable instead of calling machines offline.
+  bool get backendUnreachable => _refreshFailing && !accessRevoked;
+  bool _refreshFailing = false;
   Future<void> _persisting = Future.value();
   Map<String, dynamic>? _pending;
   final _drafts = <String, String>{};
@@ -354,10 +361,18 @@ class SuperTabController extends ChangeNotifier {
   Future<void> _read() async {
     loading = snapshot == null;
     _changed();
+    final took = Stopwatch()..start();
     try {
       final answer = await request('GET', _path);
       if (_disposed || accessRevoked) return;
+      _refreshFailing = false;
       final nextRevision = (answer['revision'] as num).toInt();
+      // How long the Swarm took to answer, and nothing it said: the log shows a slow or failing
+      // backend, which the sidebar's ages and the machines' states otherwise only hint at.
+      appLog.debug(
+        'swarm',
+        'state read in ${took.elapsedMilliseconds} ms (revision $nextRevision)',
+      );
       final next = SuperTabSnapshot.fromJson(superTabMap(answer['state']));
       if (next.id != tabId) {
         throw const FormatException('A different Swarm was returned.');
@@ -400,6 +415,13 @@ class SuperTabController extends ChangeNotifier {
       await loadMessages(selectedId);
     } catch (failure) {
       _readFailure(failure);
+      if (!_disposed && !accessRevoked) _refreshFailing = true;
+      // The kind and code of the failure, never its message: a refusal can quote what was sent.
+      appLog.warn(
+        'swarm',
+        'state read failed after ${took.elapsedMilliseconds} ms: '
+            '${failure is SuperTabFailure ? '${failure.code} (status ${failure.statusCode})' : failure.runtimeType}',
+      );
     } finally {
       loading = false;
       _changed();
