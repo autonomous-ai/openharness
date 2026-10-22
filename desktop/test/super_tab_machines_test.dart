@@ -1357,6 +1357,16 @@ void main() {
       );
       expect(find.byType(Checkbox), findsNothing);
       expect(find.text('Choose project folder'), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.text(
+            'Harness clones each project into ~/harnesses/swarms and lets '
+            "the Swarm's agents work in it.",
+          ),
+        ),
+        findsOneWidget,
+      );
       await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
       await tester.pumpAndSettle();
       expect(find.byType(AlertDialog), findsNothing);

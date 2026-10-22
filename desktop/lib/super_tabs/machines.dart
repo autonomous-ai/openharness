@@ -531,15 +531,20 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                           style: DesktopChrome.text(),
                         ),
                       const SizedBox(height: 16),
-                      if (own.isNotEmpty)
+                      if (own.isNotEmpty) ...[
                         Text(
                           'Let the product manager run agents here using this machine’s signed-in accounts.',
                           style: DesktopChrome.text(),
                         ),
-                      if (own.isNotEmpty) ...[
                         const SizedBox(height: 4),
                         Text(
                           'Agents the Swarm starts on this machine run without asking for permission.',
+                          style: DesktopChrome.text(),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          'Harness clones each project into ~/harnesses/swarms and lets '
+                          "the Swarm's agents work in it.",
                           style: DesktopChrome.text(),
                         ),
                       ] else ...[

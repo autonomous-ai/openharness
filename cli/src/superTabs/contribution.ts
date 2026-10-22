@@ -4,7 +4,7 @@ import { parseProjectFolder, prepareProjectFolder } from '../lib/projectFolder.j
 import { readCapabilities, START_REQUIREMENTS } from './capacity.js'
 import { backend, identifier, object } from './host.js'
 import { mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { repairSwarmCloneTrust, swarmCloneRoot, swarmCloneRoots } from './cloneTrust.js'
 
 type Json = Record<string, unknown>
 
@@ -19,8 +19,11 @@ export async function prepareContribution(core: CoreApi, input: Json, deps = {
   const machineId = core.daemon.machineId()
   const existing = (Array.isArray(state.machines) ? state.machines.map(object) : []).find(m => m.machineId === machineId)
   const swarm = input.scope === 'swarm' || Array.isArray(state.projects)
-  let cwd = swarm ? join(core.dataDir, 'swarm-projects', input.tabId) : existing?.cwd
-  if (swarm) await mkdir(cwd as string, { recursive: true })
+  let cwd = swarm ? swarmCloneRoot(core.dataDir, input.tabId, existing?.cwd) ?? swarmCloneRoots(core.dataDir, input.tabId)[0] : existing?.cwd
+  if (swarm) {
+    await mkdir(cwd as string, { recursive: true })
+    await repairSwarmCloneTrust(core, { tabId: input.tabId, machine: { scope: 'swarm', cwd } })
+  }
   if (typeof cwd !== 'string') {
     if (project.machineId === machineId && typeof project.cwd === 'string') cwd = project.cwd
     else {

@@ -5,6 +5,7 @@ import { identifier, object } from './wire.js'
 import { readCapabilities, quotaOf } from './capacity.js'
 import { startAgent, type ScopedRequest } from './start.js'
 import { prepareSwarmProject } from './projectFolder.js'
+import { repairSwarmCloneTrust } from './cloneTrust.js'
 
 const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
@@ -94,6 +95,7 @@ export class ContributedMachines {
           this.published.set(String(row.tabId), { at: began, signature })
         } catch (error) { this.failed = true; throw error }
         }
+        await repairSwarmCloneTrust(this.core, row)
         // Two launches per pass bounds expensive native work. Pending starts
         // keep their original receipt across network failures and host restarts.
         const cursor = this.cursors.get(String(row.tabId)) ?? 0
