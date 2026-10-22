@@ -128,9 +128,11 @@ export const LAUNCH_ERROR_CODES = [
   'invalid_launch_model', 'launch_model_unsupported',
   // A new project's folder (lib/projectFolder.ts) and the launch's durable receipt (lib/agentCreationReceipt.ts).
   'project_exists', 'invalid_repository', 'clone_failed', 'clone_timeout', 'git_unavailable', 'project_preparation_failed',
+  'git_project_unavailable', 'branch_exists', 'invalid_branch', 'branch_switch_failed', 'branch_in_use', 'worktree_failed',
   'creation_conflict', 'creation_storage_failed', 'launch_authority_changed', 'internal',
   // The engine itself: preparing it (engines/nativeLaunch.ts) and its start (core/agents/newPane.ts).
   'engine_cannot_run', 'engine_install_failed', 'engine_did_not_start', 'engine_not_installed', 'start_timeout',
+  'engine_launch_refused',
   // A Store harness (core/agents/dshThrough.ts, services/storeLaunch.ts).
   'dsh_not_installed', 'dsh_unavailable', 'dsh_runtime_failed',
   // A conversation Harness did not start, opened in it (core/agents/adopt.ts, externalResume.ts, lib/registry.ts).
@@ -152,7 +154,7 @@ export const LAUNCH_ERROR_CODES = [
   'guest_engine_unsupported', 'guest_relay_failed', 'guest_folder_unavailable', 'guest_invalid', 'guest_helper_missing',
   'guest_helper_not_authorized', 'guest_helper_failed',
   // The `setup` kind's own codes, named for a delete or restart refusal (cli/src/lib/productUsageSignals.ts).
-  'tmux_unavailable', 'tmux_too_old_for_dsh', 'tmux_too_old_for_grid', 'engine_unavailable', 'native_launch_held',
+  'tmux_unavailable', 'pty_host_unavailable', 'tmux_too_old_for_dsh', 'tmux_too_old_for_grid', 'engine_unavailable', 'native_launch_held',
   'dsh_materialize_failed', 'spawn_failed', 'registration_failed', 'grid_config_failed',
   'unlisted', 'none',
 ] as const

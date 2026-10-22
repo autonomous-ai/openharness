@@ -327,6 +327,10 @@ launch refusals and its engines that did not start after a create each name thei
 codes; a large `unlisted` share means a code is missing from `LAUNCH_ERROR_CODES`. Feedback
 is one source of evidence; a missing response does not identify why a person stopped using Harness.
 
+Launch codes include Windows launch and terminal-host refusals, and Git branch/worktree preparation
+refusals. Older CLI releases reported these as `unlisted`; an old total cannot recover which code it
+contained. Naming a refusal in a later release does not establish the cause of an earlier failure.
+
 ## Rollout and privacy controls
 
 Deploy backend schema and the singleton worker first, including unique indexes and TTL indexes.

@@ -109,6 +109,15 @@ it('stores launch codes as day totals like any other counter', async () => {
     .toEqual(Object.entries(counters).map(([metric, value]) => [metric, { $inc: { value } }]))
 })
 
+it('accepts the Windows and Git helper refusals that older launch reports called unlisted', async () => {
+  const codes = ['engine_launch_refused', 'pty_host_unavailable', 'git_project_unavailable', 'branch_exists',
+    'invalid_branch', 'branch_switch_failed', 'branch_in_use', 'worktree_failed']
+  const counters = Object.fromEntries(codes.map(code => [`launch_failed_code_${code}`, 1]))
+  expect(await ingestProductUsage('private-account', { ...report, counters }, now)).toEqual({ accepted: true })
+  expect(db.$runCommandRaw.mock.calls[0][0].updates.map((u: { q: { metric: string } }) => u.q.metric))
+    .toEqual(Object.keys(counters))
+})
+
 describe('preference', () => {
   it('defaults on but preserves a prior off choice', async () => {
     expect(await productUsageChoice('private-account')).toEqual({ enabled: true, revision: 0 })
