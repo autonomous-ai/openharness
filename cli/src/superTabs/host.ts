@@ -163,6 +163,7 @@ export class SuperTabHost {
   /** When each running Swarm session's skill is next compared with the built-in text: once per host, and again while
    *  its re-read notice is still owed. */
   private readonly skillChecks = new Map<string, number>()
+  private skillsRunning: Promise<void> | null = null
   private missing = new Map<string, number>()
 
   constructor(private readonly core: CoreApi, readonly machineId: string, options: SuperTabHostOptions = {}) {
@@ -500,8 +501,9 @@ export class SuperTabHost {
       }
     }
     await this.leases()
-    // After the leases, so a skill notice never holds up input. It is owed at most once per text release.
-    for (const target of running) await this.refreshSkill(target)
+    // Off the poll, so the backend calls of a notice never delay the next lease renewal. Owed at most once per text release.
+    this.skillsRunning ??= (async () => { for (const target of running) await this.refreshSkill(target) })()
+      .finally(() => { this.skillsRunning = null })
   }
 
   /** A CLI update can ship new built-in skill text while Swarm sessions run; until now a running agent kept the text it
@@ -531,11 +533,17 @@ export class SuperTabHost {
       .filter(group => group.archived !== true && identifier(group.id) && Array.isArray(group.agentIds) && group.agentIds.includes(id))
     const group = groups.find(g => g.leadId === id) ?? groups.find(g => object(g.assignment).agentId === id) ?? groups[0]
     if (!group) return false
-    await backend(this.core, 'POST', `/api/super-tabs/${target.tabId}/commands`, {
-      operationId: `skill-${id}-${refresh.version.slice(0, 32)}`, asAgentId: id,
-      command: { type: 'message.send', conversationId: group.id, replyTo: null, recipientIds: [id],
-        text: `Harness updated your built-in swarm-${skill.role} skill. Before your next step, read ${JSON.stringify(refresh.file)} again with your file or shell tool and follow the new version.` },
-    })
+    try {
+      await backend(this.core, 'POST', `/api/super-tabs/${target.tabId}/commands`, {
+        operationId: `skill-${id}-${refresh.version.slice(0, 32)}`, asAgentId: id,
+        command: { type: 'message.send', conversationId: group.id, replyTo: null, recipientIds: [id],
+          text: `Harness updated your built-in swarm-${skill.role} skill. Before your next step, read ${JSON.stringify(refresh.file)} again with your file or shell tool and follow the new version.` },
+      })
+    } catch (error) {
+      // The notice was sent, but its record was lost (a crash, a restart, another daemon) and its group has changed since:
+      // the same operation id now names a different request. It was delivered once; record it rather than retry forever.
+      if (!(error instanceof SuperTabHostError) || error.code !== 'OPERATION_REUSED') throw error
+    }
     return true
   }
 

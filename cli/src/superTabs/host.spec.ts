@@ -970,21 +970,32 @@ describe('built-in skill text after a CLI update', () => {
       { id: 'work', leadId: 'a-lead', agentIds: ['a-lead', 'a-builder'], assignment: { agentId: 'a-builder', status: 'working' } },
     ]
     const sent: Array<{ operationId: string; asAgentId: string; command: Record<string, any> }> = []
-    const receipts = new Set<string>()
+    const receipts = new Map<string, string>()
+    let inFlight = 0
     t.core.agents.byAgent = vi.fn(id => sessions[id] as never)
     t.core.agents.terminalAvailable = vi.fn(() => true)
     t.core.account.backend = vi.fn(async (method, path, body) => {
+      inFlight++
+      await Promise.resolve()
+      inFlight--
       const request = body as any
       if (path.includes('/hosts/')) return { status: 200, body: { data: agents.map(agent => ({ tabId: 'tab', agent })) } }
       if (path.endsWith('/deliveries')) return { status: 200, body: { data: [] } }
       if (request?.command?.type === 'message.send') {
-        // The backend answers a repeated operation with its first receipt and records nothing new.
-        if (!receipts.has(request.operationId)) { receipts.add(request.operationId); sent.push(request) }
+        // As the backend does: a repeated operation gets its first receipt; the same id for a different request is refused.
+        const prior = receipts.get(request.operationId), same = JSON.stringify(request.command)
+        if (prior !== undefined && prior !== same) return { status: 409, body: { success: false, error: { code: 'OPERATION_REUSED', message: 'Use a new operation ID for a different request.' } } }
+        if (prior === undefined) { receipts.set(request.operationId, same); sent.push(request) }
         return { status: 200, body: { data: {} } }
       }
       return { status: 200, body: { data: { state: { agents, conversations: groups } } } }
     })
-    const pass = async (host = t.open(), advance = 0) => { t.wait(advance); await host.tick(); return host }
+    // The refresh runs beside the poll: wait until no backend call is in flight and the host's own work has had its turn.
+    const pass = async (host = t.open(), advance = 0) => {
+      t.wait(advance); await host.tick()
+      for (let idle = 0; idle < 3;) { await new Promise(resolve => setImmediate(resolve)); idle = inFlight ? 0 : idle + 1 }
+      return host
+    }
     return { t, files, sent, pass, setGroups: (next: typeof groups) => { groups = next } }
   }
 
@@ -999,6 +1010,22 @@ describe('built-in skill text after a CLI update', () => {
     // A second pass and a restarted host find the files current and say nothing more.
     await f.pass(host, 5_000)
     await f.pass()
+    expect(f.sent).toHaveLength(3)
+  })
+
+  it('records a notice that was sent before its record was lost, even after its group changed', async () => {
+    const f = syncFixture()
+    await f.pass()
+    const lead = join(dirname(f.files.lead!), 'version.json'), record = JSON.parse(readFileSync(lead, 'utf8'))
+    // The send succeeded, the record did not survive, and the Lead's group was archived meanwhile.
+    writeFileSync(lead, JSON.stringify({ ...record, notified: 'older' }))
+    f.setGroups([{ id: 'lead-group', archived: true, leadId: 'a-lead', agentIds: ['a-lead'] }, { id: 'next', leadId: 'a-lead', agentIds: ['a-lead'] }])
+    await f.pass()
+    expect(JSON.parse(readFileSync(lead, 'utf8')).notified).toBe(record.notified)
+    expect(f.t.log).not.toHaveBeenCalled()
+    const calls = vi.mocked(f.t.core.account.backend).mock.calls.length
+    await f.pass()
+    expect(vi.mocked(f.t.core.account.backend).mock.calls.slice(calls).some(([, , body]) => (body as any)?.command?.type === 'message.send')).toBe(false)
     expect(f.sent).toHaveLength(3)
   })
 

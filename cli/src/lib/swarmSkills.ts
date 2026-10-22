@@ -1,6 +1,6 @@
 /** Built into the CLI so contributed machines need no separately installed plugin. */
 import { ignoreHarnessRuntime } from './harnessRuntimeIgnore.js'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 
@@ -362,8 +362,9 @@ export interface SkillRefresh { file: string; version: string; owed: boolean }
 
 /** A CLI update ships new skill text while Swarm sessions run (owner, 2026-10-22). Rewrite a session's file to the
  * built-in text and say whether its agent still owes a re-read notice for it; recordSwarmSkillNotice clears that once
- * the notice is sent. The record is written before the file, so an interrupted pass repeats the rewrite and keeps the
- * notice owed instead of losing it. Null when this workspace never prepared the session's skill. */
+ * the notice is sent. A file from before records gets its record first, and the record moves to the new text only after
+ * the file is replaced, so an interrupted pass rewrites again and the notice stays owed until it is recorded. Null when
+ * this workspace never prepared the session's skill. */
 export function refreshSwarmSkill(workspace: string, saved: SwarmSkill): SkillRefresh | null {
   if (!parseSwarmSkill(saved)) throw new Error('A Swarm skill needs a role and session key')
   // A removed worktree has nothing to refresh; the host would otherwise retry and log it every minute.
@@ -380,8 +381,7 @@ export function refreshSwarmSkill(workspace: string, saved: SwarmSkill): SkillRe
     if (held !== version) writeRecord(dir, record)
   }
   if (record.text !== version) {
-    writeFileSync(`${file}.next`, text, { mode: 0o600, flush: true })
-    renameSync(`${file}.next`, file)
+    replaceFile(file, text)
     record = { ...record, text: version }
     writeRecord(dir, record)
   }
@@ -423,7 +423,11 @@ function readRecord(dir: string): SkillRecord | null {
   return typeof record.text === 'string' && typeof record.notified === 'string' ? { text: record.text, notified: record.notified } : null
 }
 function writeRecord(dir: string, record: SkillRecord): void {
-  const file = join(dir, 'version.json')
-  writeFileSync(`${file}.next`, JSON.stringify(record), { mode: 0o600, flush: true })
-  renameSync(`${file}.next`, file)
+  replaceFile(join(dir, 'version.json'), JSON.stringify(record))
+}
+/** A fresh temporary name created exclusively, so nothing planted at a fixed name is written through (as native.ts does). */
+function replaceFile(file: string, text: string): void {
+  const temporary = `${file}.${randomUUID()}.next`
+  writeFileSync(temporary, text, { mode: 0o600, flush: true, flag: 'wx' })
+  renameSync(temporary, file)
 }
