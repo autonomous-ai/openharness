@@ -116,6 +116,8 @@ class Service {
   private restartTimer: unknown = null
   private onStopped: Array<() => void> = []
   private refusedStaged = false
+  /** The core asked for this process on demand: started again with the others after a stop, not left for an ask that may never come. */
+  private asked = false
 
   constructor(
     readonly spec: ServiceSpec,
@@ -161,13 +163,20 @@ class Service {
   /** Start a process on demand the core asked for: once, while it is off. One already started is the
    *  master's to keep running, parked included. */
   want(): void {
-    if (this.state === 'off') this.start()
+    if (this.state !== 'off') return
+    this.asked = true
+    this.start()
   }
 
-  /** A process on demand stopped with the others and started again with them: off, for whoever needs it next to
-   *  ask. Left stopped, no `want` started it again for the rest of the master's life. */
+  /** A process on demand stopped with the others and started again with them: one the core asked for runs again,
+   *  and one never asked for is off, for whoever needs it next to ask. Left off, a core that asks once, as it starts
+   *  (the Swarm service, for a machine contributed to one), never asked again while a re-execution the new bundle
+   *  refused left it running, and the machine read offline for hours (remote-deepseek, 2026-10-22). Left stopped,
+   *  no `want` started it again for the rest of the master's life. */
   rest(): void {
-    if (this.state === 'stopped') this.setState('off')
+    if (this.state !== 'stopped') return
+    if (this.asked) this.start()
+    else this.setState('off')
   }
 
   /** SIGTERM, then SIGKILL after the grace; `done` once it is gone. A parked or waiting one is simply stopped. */
