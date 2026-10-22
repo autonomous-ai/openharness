@@ -575,7 +575,7 @@ function releaseFixture(nativeKind = 'swarm', result: Record<string, unknown> = 
   const identity = { creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(0).toISOString() }
   const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', releaseId: 'release-1', name: 'Permission builder',
     ...(['missing-record', 'legacy', 'legacy-personal'].includes(nativeKind) ? {} : { startedSession: identity }) }
-  const native = { agentId: 'harness', sessionId: nativeKind === 'changed' ? 'replacement' : 'native', registeredAt: 0,
+  const native = { agentId: 'harness', sessionId: nativeKind === 'changed' ? 'replacement' : 'native', registeredAt: 0, boundAt: 3_000 as number | null,
     startedBy: ['personal', 'legacy-personal'].includes(nativeKind) ? undefined : 'agent', processIdentity: { pid: 1, startMarker: 'first', executable: 'codex' } }
   const lookup = vi.fn(async () => ({ creationId: identity.creationId, state: 'created' as const, agentId: 'harness' }))
   const close = vi.fn(async () => result), lease = vi.fn(), remove = vi.fn(), sent = vi.fn()
@@ -595,6 +595,7 @@ function releaseFixture(nativeKind = 'swarm', result: Record<string, unknown> = 
 }
 
 // A Swarm start before #1527 left only its start record and the native creation receipt (super-<startId>).
+const group = { id: 'group', leadId: 'lead', agentIds: ['lead', 'agent'], assignment: { agentId: 'agent', status: 'done' } }
 const legacyStarts = { starts: [{ id: 'start-1', creationId: 'super-start-1', harnessId: 'harness', request: { machineId: 'machine-1', name: 'Permission builder' }, error: null }] }
 
 it('closes a worker a pre-#1527 Swarm start launched, proven by its start record and creation receipt', async () => {
@@ -621,6 +622,29 @@ it.each([
   expect(t.remove).not.toHaveBeenCalled()
 })
 
+it.each([['/clear', 3_600_000], ['an unknown bind', null], ['a bind before launch', -1]])('refuses, as changed, a pre-#1527 worker whose session moved on (%s)', async (_why, boundAt) => {
+  const t = releaseFixture('legacy', { closed: true }, { ...legacyStarts, conversations: [group] })
+  t.native.boundAt = boundAt
+  for (let i = 0; i < 10; i++) await t.poll(130_000)
+  expect(t.lease).not.toHaveBeenCalled()
+  expect(t.close).not.toHaveBeenCalled()
+  expect(t.sent).toHaveBeenCalledOnce()
+  expect(t.sent).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ text: expect.stringContaining('it now runs a different session than the one the Swarm started') }) }))
+})
+
+it('retries a pre-#1527 stop while its creation receipt is still pending, then closes it', async () => {
+  const t = releaseFixture('legacy', { closed: true }, { ...legacyStarts, conversations: [group] })
+  t.lookup.mockResolvedValue({ creationId: 'super-start-1', state: 'pending' } as never)
+  await t.poll()
+  expect(t.lookup).toHaveBeenCalledOnce()
+  expect(t.lease).not.toHaveBeenCalled()
+  t.lookup.mockResolvedValue({ creationId: 'super-start-1', state: 'created', agentId: 'harness' })
+  await t.poll(5_000)
+  await vi.waitFor(() => expect(t.remove).toHaveBeenCalledOnce())
+  expect(t.lease).toHaveBeenCalledOnce()
+  expect(t.sent).not.toHaveBeenCalled()
+})
+
 it('rejects a pre-#1527 start whose receipt names a different native harness', async () => {
   const t = releaseFixture('legacy', { closed: true }, legacyStarts)
   t.lookup.mockResolvedValue({ creationId: 'super-start-1', state: 'created', agentId: 'another-harness' })
@@ -629,7 +653,6 @@ it('rejects a pre-#1527 start whose receipt names a different native harness', a
   expect(t.close).not.toHaveBeenCalled()
 })
 
-const group = { id: 'group', leadId: 'lead', agentIds: ['lead', 'agent'], assignment: { agentId: 'agent', status: 'done' } }
 it.each([
   ['personal', {}, 'it was not started by the Swarm'],
   ['changed', {}, 'it now runs a different session than the one the Swarm started'],
@@ -642,6 +665,21 @@ it.each([
   expect(t.sent).toHaveBeenCalledOnce()
   expect(t.sent).toHaveBeenCalledWith({ operationId: 'stop-refused-release-1', asAgentId: 'agent', command: { type: 'message.send', conversationId: 'group', replyTo: null,
     recipientIds: ['lead'], text: `Could not stop Permission builder on MacbookPro: ${why}. Close it on that machine.` } })
+})
+
+it('tells the Lead nothing through an archived group, which would refuse the notice', async () => {
+  const t = releaseFixture('personal', {}, { conversations: [{ ...group, archived: true }] })
+  for (let i = 0; i < 3; i++) await t.poll(130_000)
+  expect(t.sent).not.toHaveBeenCalled()
+})
+
+it('says the session changed when one is back after the worker had closed', async () => {
+  const t = releaseFixture('swarm', { closed: true }, { conversations: [group] })
+  t.remove.mockImplementationOnce(() => { throw new Error('Lost acknowledgement') })
+  await t.poll()
+  t.close.mockResolvedValue({ error: 'NOT_SWARM_STARTED' })
+  await t.poll(5_000)
+  await vi.waitFor(() => expect(t.sent).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ text: expect.stringContaining('it now runs a different session') }) })))
 })
 
 it('tells no one of a transient close failure, and logs a notice that cannot be sent', async () => {

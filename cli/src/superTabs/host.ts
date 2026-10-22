@@ -50,6 +50,8 @@ export interface SuperTabHostOptions {
 }
 
 export const hostJournalFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `host-${machineId}.json`)
+/** How long after a pre-#1527 Swarm launch its engine may first bind a session and still be the Swarm's own. */
+const LEGACY_FIRST_BIND_MS = 120_000
 const typedId = (entry: Entry) => `team:service:superTabs:${entry.deliveryId}`
 const writeJournal = (file: string, journal: Journal) => {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
@@ -249,7 +251,7 @@ export class SuperTabHost {
         const why = error === 'AGENT_CHANGED' ? 'it now runs a different session than the one the Swarm started' : 'it was not started by the Swarm'
         this.log(`This session is not the original Swarm launch (${String(error)}). Remove its stuck contribution.`)
         const group = (current.conversations as unknown[]).map(object).find(c => identifier(c.leadId) && c.leadId !== agent.id
-          && Array.isArray(c.agentIds) && c.agentIds.includes(agent.id) && c.agentIds.includes(c.leadId))
+          && c.archived !== true && Array.isArray(c.agentIds) && c.agentIds.includes(agent.id) && c.agentIds.includes(c.leadId))
         if (!group) return
         // The operation id makes a restarted host's repeat of the same refusal one message, not two.
         void backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, {
@@ -262,7 +264,8 @@ export class SuperTabHost {
         // A failed acknowledgement can outlive the native stop; a fresh core read must still rule out personal resume.
         const confirmed = await this.core.agents.closeSwarm({ agentId: agent.harnessId })
         if (!confirmed.closed) {
-          if (['NOT_SWARM_STARTED', 'AGENT_CHANGED'].includes(String(confirmed.error))) refuse(confirmed.error)
+          // It closed once; a session there now was resumed or replaced after that close.
+          if (['NOT_SWARM_STARTED', 'AGENT_CHANGED'].includes(String(confirmed.error))) refuse('AGENT_CHANGED')
           throw new Error(confirmed.detail ?? confirmed.error ?? 'The stopped session could not be confirmed.')
         }
       } else {
@@ -273,7 +276,13 @@ export class SuperTabHost {
           // receipt is read below and again by the core. A name or folder alone is never proof.
           const start = Array.isArray(current.starts) ? current.starts.map(object).find(s => s.harnessId === agent.harnessId
             && object(s.request).machineId === this.machineId && !s.error && s.creationId === `super-${String(s.id)}`) : undefined
-          if (start && identifier(start.creationId)) identity = { creationId: start.creationId, sessionId: native.sessionId, createdAt: new Date(native.registeredAt).toISOString() }
+          // Nor is the live session: the registry keeps `startedBy: agent` across /clear, /new and /resume, so a person who
+          // took over an old worker would be closed mid-turn. Only the first bind, which lands seconds after launch, is
+          // the Swarm's session; any later one leaves no identity, and the stop is refused as changed.
+          // ponytail: launch-to-first-bind window; a launch slower than this is refused and closed by hand.
+          const firstBind = native.boundAt !== null && native.boundAt >= native.registeredAt && native.boundAt - native.registeredAt <= LEGACY_FIRST_BIND_MS
+          if (start && identifier(start.creationId)) identity = { creationId: start.creationId,
+            ...(firstBind ? { sessionId: native.sessionId, createdAt: new Date(native.registeredAt).toISOString() } : {}) }
         }
         let result
         if (!native) {
