@@ -95,7 +95,14 @@ Future<void> _openConfigureDialog(
     ),
   );
   await tester.pumpAndSettle();
-  await tester.tap(find.byKey(const ValueKey('super-machine-m')));
+  // A machine that has not reported reads as offline and waits under "Offline · 1",
+  // which is closed until the owner opens it.
+  final card = find.byKey(const ValueKey('super-machine-m'));
+  if (card.evaluate().isEmpty) {
+    await tester.tap(find.byKey(const ValueKey('super-machines-offline')));
+    await tester.pumpAndSettle();
+  }
+  await tester.tap(card);
   await tester.pumpAndSettle();
   await tester.tap(find.widgetWithText(TextButton, 'Configure'));
   await tester.pumpAndSettle();
