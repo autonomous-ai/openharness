@@ -1407,6 +1407,15 @@ impl App {
         for machine in self.fleet.machines.iter_mut() { if !machine.online() && machine.reach == Reach::Unknown { machine.reach = Reach::Offline } }
     }
 
+    /// Dial [machine_id] when nothing is dialling it: no link, no retry pending (its backoff decides when), and this
+    /// computer's daemon, which every link goes through, is up. For a dial asked on demand (composition `wake`),
+    /// which a waiting command asks again every 100 ms.
+    pub fn dial_if_idle(&mut self, machine_id: &str) -> bool {
+        if self.daemon_down || self.links.get(machine_id).is_some_and(|s| s.link.is_some() || s.retry_at.is_some()) { return false }
+        self.connect(machine_id);
+        true
+    }
+
     pub fn connect(&mut self, machine_id: &str) {
         if let Some(state) = self.links.get(machine_id) {
             if state.link.is_some() { return }
@@ -7551,6 +7560,28 @@ mod recovery_tests {
         app.dial_listed();
         assert!(app.links["test-peer"].link.is_some(), "the list says it is up: dial it");
         assert_eq!(app.fleet.machine("test-peer").unwrap().reach, Reach::Connecting);
+        app.links["test-peer"].link.as_ref().unwrap().close();
+    }
+
+    /// A composed command dials a computer that is up but not linked (composition `wake`), and asks again every
+    /// 100 ms while it waits up to 25 s. A dial that fails at once was redialled on each ask, past its backoff:
+    /// some 250 dials (review of #1571). It dials only a machine with no link and no retry pending, and not while
+    /// this computer's daemon, which every link goes through, is down.
+    #[tokio::test]
+    async fn dialling_on_demand_keeps_the_backoff() {
+        let mut app = fixture();
+        undialled(&mut app);
+        assert!(app.dial_if_idle("test-peer"));
+        assert!(!app.dial_if_idle("test-peer"), "dialling already");
+        fail(&mut app, "test-peer", "TIMEOUT");
+        assert!(app.links["test-peer"].retry_at.is_some(), "the backoff is on");
+        assert!(!app.dial_if_idle("test-peer"), "the backoff decides when it dials again");
+        assert!(app.links["test-peer"].link.is_none());
+        app.links.get_mut("test-peer").unwrap().retry_at = None;
+        app.daemon_down = true;
+        assert!(!app.dial_if_idle("test-peer"), "nothing reaches it while this computer's daemon is down");
+        app.daemon_down = false;
+        assert!(app.dial_if_idle("test-peer"));
         app.links["test-peer"].link.as_ref().unwrap().close();
     }
 

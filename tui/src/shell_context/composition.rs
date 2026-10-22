@@ -15,14 +15,15 @@ pub(super) struct Catalog {
 }
 /// A composed command's computer, when the list says it is up and hn has no link to it (one that dropped while it
 /// read offline, an error, or never dialled), is dialled now: `launch` then waits for it as for one still connecting.
-/// It answered "That computer is offline" while it was up (a shared Mac, 2026-10-22).
+/// It answered "That computer is offline" while it was up (a shared Mac, 2026-10-22). A dial already pending or in
+/// its backoff is left to it (`dial_if_idle`): the waiting command asks again every 100 ms.
 fn wake(app: &mut App, name: &str) {
     let mut found = app.fleet.machines.iter()
         .filter(|m| !m.shared && (m.id == name || m.name.eq_ignore_ascii_case(name)));
     let (Some(m), None) = (found.next(), found.next()) else { return };
     if m.online() && matches!(m.reach, crate::fleet::Reach::Unknown | crate::fleet::Reach::Offline | crate::fleet::Reach::Error(_)) {
         let id = m.id.clone();
-        app.connect(&id);
+        app.dial_if_idle(&id);
     }
 }
 
