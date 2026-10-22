@@ -193,7 +193,8 @@ it('starts either engine once, posts to its captured group and delivers shared i
       const pane = rows.agents.find((agent: Record<string, any>) => agent.id === started.answer.harnessId).tmuxPane
       await d.tmux.run('send-keys', '-t', pane, 'Escape')
       await until('queued Swarm input to run after Esc interrupts the preceding response', () =>
-        client.frames.slice(busyFrom).some(frame => frame.type === 'turn_started' && frame.agentId === started.answer.harnessId && !frame.replay) || null,
+        client.frames.slice(busyFrom).some(frame => frame.type === 'turn_started' && frame.agentId === started.answer.harnessId
+          && !frame.replay && String(frame.payload?.userMessage).includes(`verify-super-tab-${engine}`)) || null,
       5_000, 100)
       const afterEscape = await d.tmux.run('capture-pane', '-p', '-e', '-t', pane)
       expect(screenFor('claude').inspect(afterEscape).pane.draft, `Esc must not restore delivered Swarm input as an unsent draft:\n${afterEscape}`).toBe(false)
