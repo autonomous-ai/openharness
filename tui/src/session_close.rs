@@ -89,6 +89,8 @@ struct Operation {
     views: Vec<View>,
     /// Plain shells obey tmux's kill contract, after an explicit confirmation.
     shells: bool,
+    /// A harness whose CLI can't save and stop it: the others stop, then the close says why it could not.
+    unsupported: bool,
     return_to_shell: bool,
     stage: Stage,
     at: usize,
@@ -155,10 +157,9 @@ fn begin(app: &mut App, panes: Vec<u64>, title: &str, tab: Option<String>, retur
     }
     if views.is_empty() { return }
     let id = uuid::Uuid::new_v4().simple().to_string();
-    app.session_close.operation = Some(Operation { id: id.clone(), title: title.into(), tab, targets, views, shells, return_to_shell,
-        stage: Stage::Inspect, at: 0, force: false });
+    app.session_close.operation = Some(Operation { id: id.clone(), title: title.into(), tab, targets, views, shells, unsupported,
+        return_to_shell, stage: Stage::Inspect, at: 0, force: false });
     if !show(app, "Checking session activity…", false) { app.session_close.operation = None; return }
-    if unsupported { fail(app, "Update the Harness CLI on this machine to save and stop this harness".into()); return }
     advance(app, &id);
 }
 
@@ -282,6 +283,9 @@ fn advance(app: &mut App, id: &str) {
             op.stage = Stage::Stop;
             show(app, "Saving and stopping…", false);
             advance(app, id);
+        } else if op.unsupported {
+            // (Desktop's: the others are stopped; the one an older CLI serves keeps its view until Close pane.)
+            fail(app, "Update the Harness CLI on this machine to save and stop this harness".into());
         } else { finish(app); }
         return;
     }
@@ -412,7 +416,8 @@ fn dismiss(app: &mut App) {
     }
     let mut seen = HashSet::new();
     for view in op.views {
-        if op.return_to_shell && crate::shell_context::is_session_visit(app, view.pane) { continue }
+        // A pane showing a picked session in place of its shell returns to that shell.
+        if op.return_to_shell && crate::shell_context::is_session_visit(app, view.pane) { crate::shell_context::leave(app, view.pane); continue }
         let Some(p) = app.panes.get(&view.pane) else { continue };
         let shell = crate::local::is_local(&p.machine_id) || app.shells.contains(&(p.machine_id.clone(), p.agent_id.clone()));
         if view.owner != app.fleet.local_id || p.machine_id != view.machine || p.agent_id != view.agent || (shell && !op.force) { continue }
@@ -683,6 +688,27 @@ mod tests {
         assert!(app.session_close.sent.is_empty(), "Close pane never asks to stop");
         assert!(!app.panes.contains_key(&1)); assert!(app.panes.contains_key(&2));
         assert_eq!(app.fleet.agent("local", "a1").unwrap().status, "active");
+    }
+
+    #[tokio::test]
+    async fn a_tab_with_an_old_cli_harness_still_stops_the_others_then_says_why_one_could_not() {
+        let mut app = app();
+        app.tabs[0].root.as_mut().unwrap().split(1, 3, crate::layout::Dir::Horizontal);
+        app.panes.insert(3, crate::pane::Pane::new(3, "local", "a2", 40, 20));
+        app.fleet.agents.get_mut(&("local".into(), "a2".into())).unwrap().close_supported = false;
+        tab(&mut app, 0);
+        answer(&mut app, "inspect", json!({"activity":"idle"}));
+        answer(&mut app, "idle", json!({"closed":true}));
+        assert_eq!(modes(&app), ["inspect", "idle"], "only the harness that can be saved is asked");
+        assert!(!app.panes.contains_key(&1), "the stopped harness's view closes");
+        assert!(app.panes.contains_key(&3));
+        assert!(notes(&app).iter().any(|n| n.contains("Update the Harness CLI")), "{:?}", notes(&app));
+        assert_eq!(buttons(&app), ["Keep open", "Close Tab"]);
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(modes(&app), ["inspect", "idle"]);
+        assert!(!app.panes.contains_key(&3));
+        assert_eq!(app.fleet.agent("local", "a2").unwrap().status, "active");
     }
 
     fn notes(app: &App) -> Vec<String> {
