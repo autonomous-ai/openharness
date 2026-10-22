@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import sys
 
 
 def baselines(source):
@@ -25,5 +26,21 @@ def baselines(source):
     return result
 
 
+def cli_version(source):
+    """What the CLI built from this source calls itself: the newest published CLI it contains.
+
+    package.json keeps a development version (0.0.1) and a release takes its number from its tag,
+    so a CLI built for the OS from the same source said 0.0.1 everywhere — the phone, `harness
+    version`, the account — while it carries every release up to that one. With none published
+    yet (a fork, a test repository), the development version.
+    """
+    published = baselines(source).get('cli', {}).get('version')
+    return published or json.loads((Path(source) / 'cli/package.json').read_text())['version']
+
+
 if __name__ == '__main__':
-    print(json.dumps(baselines(Path(__file__).resolve().parents[2])))
+    root = Path(__file__).resolve().parents[2]
+    if sys.argv[1:] == ['--cli-version']:
+        print(cli_version(root))
+    else:
+        print(json.dumps(baselines(root)))
