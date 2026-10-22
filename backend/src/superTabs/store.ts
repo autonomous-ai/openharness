@@ -10,7 +10,7 @@ import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, MAX_AT
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
-import { canReadAgent, canReadProject, groupProject, projectsOf, readConversation, type ProjectVisibility } from './projects.js'
+import { canReadAgent, canReadProject, groupProject, projectsOf, agentProjectId, readConversation, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
@@ -430,11 +430,26 @@ export class SuperTabStore {
         const assignmentId = `release-${target.releaseId}`
         const running = await tx.superTabRun.findUnique({ where: { id: target.id } })
         if (running && (running.tabId !== tabId || running.assignmentId !== assignmentId)) fail('AGENT_BUSY', 'This agent already owns active work in a Swarm or is stopping elsewhere.')
+        const registrations = await tx.superTab.findMany({ where: { autonomousEnv: original.environment, machineIds: { has: target.machineId }, id: { not: tabId } } })
+        if (registrations.some(row => stateOf(row).agents.some(a => a.id === target.id && a.machineOwnerId === target.machineOwnerId))) {
+          fail('SESSION_SHARED', 'This session is still shared with another Swarm. Withdraw it there before stopping it here.')
+        }
+        // Serialize new contributions with stop intent; bindSession writes this same native-session record.
+        const scopeId = stableId('swarm-session', original.environment, target.machineOwnerId, target.id)
+        const scope = await tx.superTabSessionScope.findUnique({ where: { id: scopeId } })
+        await tx.superTabSessionScope.upsert({ where: { id: scopeId },
+          create: { id: scopeId, scopeIds: [stableId(tabId, agentProjectId(original, target))], stopReleaseId: target.releaseId },
+          update: { scopeIds: scope?.scopeIds ?? [], stopReleaseId: target.releaseId } })
         // The same global uniqueness fence as work.assign: another public Swarm cannot assign this native session during close.
         if (!running) await tx.superTabRun.create({ data: { id: target.id, tabId, assignmentId, machineId: target.machineId, harnessId: target.harnessId } })
       }
-      if (command.type === 'agent.remove' && actor.kind === 'agent') {
-        await tx.superTabRun.deleteMany({ where: { id: command.agentId, tabId, assignmentId: `release-${command.releaseId}` } })
+      if (command.type === 'agent.remove' && (actor.kind === 'agent' || effects.result.forceReleased)) {
+        const target = agent(original, command.agentId)
+        await tx.superTabRun.deleteMany({ where: { id: target.id, tabId, assignmentId: `release-${target.releaseId}` } })
+        const id = stableId('swarm-session', original.environment, target.machineOwnerId, target.id)
+        await tx.superTabSessionScope.upsert({ where: { id },
+          create: { id, scopeIds: [], ...(effects.result.forceReleased ? { released: true } : {}) },
+          update: { stopReleaseId: null, ...(effects.result.forceReleased ? { released: true } : {}) } })
       }
       if (command.type === 'work.assign') {
         const assigned = conversation(effects.state, command.conversationId).assignment!

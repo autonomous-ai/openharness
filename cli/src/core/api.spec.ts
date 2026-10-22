@@ -6,13 +6,51 @@ import { FAIL, readFallback } from './serviceHost.js'
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
 describe('the core API services stand on', () => {
-  it('offers the existing identity-bound native close lifecycle for contributed sessions', async () => {
-    const request = { agentId: 'mine', sessionId: 's-mine', createdAt: '2026-10-12T08:00:00.000Z', mode: 'now' as const }
+  it('closes only the original Swarm-started native session and treats an absent session as gone', async () => {
+    const request = { agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(1000).toISOString() }
+    const session = { ...row('worker'), sessionId: 'native', registeredAt: 1000, startedBy: 'agent' as const }
+    const deps = coreDeps(), byAgent = vi.fn(() => session as RegisteredSession | undefined)
     const closeAgent = vi.fn(async () => ({ closed: true as const }))
-    const core = createCoreApi({ ...coreDeps(), closeAgent })
-    expect(await core.agents.close!(request)).toEqual({ closed: true })
-    expect(closeAgent).toHaveBeenCalledWith(request)
-    expect(await createCoreApi(coreDeps()).agents.close!(request)).toEqual({ error: 'UNSUPPORTED' })
+    const creationStatus = vi.fn(async () => ({ creationId: request.creationId, state: 'created' as const, agentId: 'worker' }))
+    const core = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent } as CoreApiDeps['registry'], closeAgent, creationStatus })
+    expect(await core.agents.closeSwarm!(request)).toEqual({ closed: true })
+    expect(closeAgent).toHaveBeenCalledWith({ agentId: 'worker', sessionId: 'native', createdAt: request.createdAt, mode: 'now', onlyIfOriginalLaunch: true })
+    closeAgent.mockClear()
+    byAgent.mockReturnValue({ ...session, startedBy: undefined })
+    expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: 'NOT_SWARM_STARTED' })
+    byAgent.mockReturnValue({ ...session, registeredAt: 2000 })
+    expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: 'AGENT_CHANGED' })
+    byAgent.mockReturnValue({ ...session, sessionId: 'replacement' })
+    expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: 'AGENT_CHANGED' })
+    byAgent.mockReturnValue(session)
+    creationStatus.mockResolvedValueOnce({ creationId: request.creationId, state: 'created', agentId: 'other' })
+    expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: 'NOT_SWARM_STARTED' })
+    expect(closeAgent).not.toHaveBeenCalled()
+    const withoutCreation = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent } as CoreApiDeps['registry'], closeAgent })
+    expect(await withoutCreation.agents.closeSwarm!(request)).toEqual({ error: 'NOT_SWARM_STARTED' })
+    const noLifecycle = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent } as CoreApiDeps['registry'], creationStatus })
+    expect(await noLifecycle.agents.closeSwarm!(request)).toEqual({ error: 'UNSUPPORTED' })
+    for (const partial of [{ agentId: 'worker' }, { ...request, creationId: '' }, { ...request, sessionId: undefined }, { ...request, createdAt: undefined }]) {
+      expect(await core.agents.closeSwarm!(partial)).toEqual({ error: 'NOT_SWARM_STARTED' })
+    }
+    byAgent.mockReturnValue(undefined)
+    expect(await core.agents.closeSwarm!({ agentId: 'worker' })).toEqual({ closed: true })
+  })
+
+  it('refuses a personal resume before or during the original creation lookup', async () => {
+    const request = { agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(1000).toISOString() }
+    const session = { ...row('worker'), sessionId: 'native', registeredAt: 1000, startedBy: 'agent' as const, resumeOnly: true }
+    const deps = coreDeps(), closeAgent = vi.fn(async () => ({ closed: true as const }))
+    const creationStatus = vi.fn(async () => {
+      session.resumeOnly = true
+      return { creationId: request.creationId, state: 'created' as const, agentId: 'worker' }
+    })
+    const core = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent: () => session } as CoreApiDeps['registry'], closeAgent, creationStatus })
+    expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: expect.any(String) })
+    expect(creationStatus).not.toHaveBeenCalled()
+    session.resumeOnly = false
+    expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: expect.any(String) })
+    expect(closeAgent).not.toHaveBeenCalled()
   })
 
   it('exposes an optional native-turn observer without importing feature state', () => {

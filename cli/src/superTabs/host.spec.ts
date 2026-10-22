@@ -503,7 +503,7 @@ it('stops a requested worker once, confirms removal, and releases retention on t
   let closed = false, removed = false, acknowledgements = 0
   const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop' }
   t.core.agents.stopped = async () => closed
-  t.core.agents.close = async request => { expect(request.agentId).toBe('harness'); closed = true; return { closed: true } }
+  t.core.agents.closeSwarm = async request => { expect(request.agentId).toBe('harness'); closed = true; return { closed: true } }
   t.core.account.backend = async (method, path) => {
     if (path.includes('/hosts/')) return { status: 200, body: { data: removed ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }] } }
     if (method === 'GET') return { status: 200, body: { data: { state: { agents: [target], conversations: [] } } } }
@@ -523,9 +523,9 @@ it.each(['active', 'foreign', 'changed', 'missing', 'refused', 'unconfirmed', 'u
   const t = setup(), host = t.open()
   vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0 } as never)
   const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', releaseId: 'release-1' }
-  const close = vi.fn(async () => kind === 'refused' ? { error: 'NOT_AGENT_STARTED' } : { closed: true as const })
+  const close = vi.fn(async () => kind === 'refused' ? { error: 'NOT_SWARM_STARTED' } : kind === 'unconfirmed' ? { deferred: true as const } : { closed: true as const })
   const acknowledge = vi.fn()
-  t.core.agents.close = kind === 'unsupported' ? undefined : close
+  t.core.agents.closeSwarm = kind === 'unsupported' ? undefined : close
   t.core.agents.stopped = async () => false
   t.core.account.backend = async (method, path) => {
     if (path.includes('/hosts/')) return { status: 200, body: { data: [{ tabId: 'tab', agent: target, stopRequested: true }] } }
@@ -549,8 +549,8 @@ it('retries a lost removal acknowledgement from native stopped evidence without 
   vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0 } as never)
   const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop' }
   let stopped = false, attempts = 0
-  const close = vi.fn(async () => { stopped = true; return { closed: true as const } })
-  t.core.agents.close = close
+  const close = vi.fn()
+  t.core.agents.closeSwarm = async () => { if (!stopped) { close(); stopped = true }; return { closed: true } }
   t.core.agents.stopped = async () => stopped
   t.core.account.backend = async (method, path) => {
     if (path.includes('/hosts/')) return { status: 200, body: { data: [{ tabId: 'tab', agent: target, stopRequested: true }] } }

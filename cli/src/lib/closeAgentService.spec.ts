@@ -35,6 +35,16 @@ beforeEach(() => {
 })
 afterEach(() => { service.dispose(); vi.useRealTimers(); vi.restoreAllMocks(); for (const s of registry.list()) registry.removeAgent(s.agentId) })
 
+it.each(['before', 'activity', 'checkpoint'] as const)('a Swarm close preserves a personally resumed worker at %s', async phase => {
+  row.startedBy = 'agent'
+  if (phase === 'before') row.resumeOnly = true
+  if (phase === 'activity') vi.mocked(deps.activity).mockImplementation(async () => { row.resumeOnly = true; return 'idle' })
+  if (phase === 'checkpoint') vi.mocked(deps.checkpoint).mockImplementation(async () => { row.resumeOnly = true })
+  const guarded = { ...request('now'), onlyIfOriginalLaunch: true }
+  expect(await service.request(guarded)).toMatchObject({ error: expect.any(String) })
+  expect(registry.byAgent(row.agentId)).toBe(row)
+})
+
 it('backs up an idle session before stopping, without treating a tab switch as Close', async () => {
   service.start()
   expect(deps.activity).not.toHaveBeenCalled()

@@ -46,8 +46,26 @@ void main() {
         conversationId: 'b' * 160,
         lead: lead,
       );
-      expect(prompt.length, lessThanOrEqualTo(kFirstTaskMaxLength));
+      expect(
+        prompt.length,
+        lessThanOrEqualTo(kFirstTaskMaxLength),
+        reason: '${lead ? 'Lead' : 'Worker'} bootstrap must fit native creation',
+      );
     }
+  });
+
+  test('lead bootstrap retains report reading and worker release guidance', () {
+    final prompt = superTabLaunchPrompt(
+      tabId: 'a' * 160,
+      conversationId: 'b' * 160,
+      lead: true,
+    );
+    expect(prompt, contains('read new reports'));
+    expect(prompt, contains('No per-turn summarizer'));
+    expect(prompt, contains('When a worker finishes, decide reuse, keep or stop'));
+    expect(prompt, contains('prefer stop unless more work is coming soon'));
+    expect(prompt, contains('On scheduled requests use project.report'));
+    expect(prompt, contains('text:null when nothing changed'));
   });
 
   for (final engine in ['codex', 'claude']) {

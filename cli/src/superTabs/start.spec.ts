@@ -9,7 +9,7 @@ import type { RegisteredSession } from '../lib/registry.js'
 import type { AgentFrame } from '../lib/agentFrame.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
-function fixture(options: { refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; refuseModel?: string; frame?: string; guest?: boolean } = {}) {
+function fixture(options: { refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string } } = {}) {
   const start = { creationId: 'super-native-receipt', error: null as string | null, request: { machineId: 'target', conversationId: 'group', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }, dispatched: false }
   let nativeState = 'missing', lostJoin = false
@@ -25,7 +25,7 @@ function fixture(options: { refuse?: string; loseCancel?: boolean; loseFailure?:
     return { ok: true, value: { result: cmd.type === 'agent.start' ? { startId: 'start' } : { agentId: 'worker' } } }
   })
   const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}, _ms?: number): Promise<Record<string, unknown>> => {
-    if (type === 'agent_create_status') return { creationId: start.creationId, state: nativeState, ...(nativeState === 'created' ? { agent: { id: 'native', engine: 'claude', selectedModel: 'runtime-v1:native:claude:fixture-model@high' } } : {}) }
+    if (type === 'agent_create_status') return { creationId: start.creationId, state: nativeState, ...(nativeState === 'created' ? { agent: { id: 'native', engine: 'claude', selectedModel: 'runtime-v1:native:claude:fixture-model@high', ...options.identity } } : {}) }
     if (type === 'agents_list' && options.frame) return { agents: [{ id: 'native', engine: 'claude', selectedModel: options.frame }] }
     if (type === 'engines_probe') return { engines: [{ engine: (payload.engines as string[])[0], installed: true }] }
     if (type === 'usage_read') return { providers: [] }
@@ -39,7 +39,7 @@ function fixture(options: { refuse?: string; loseCancel?: boolean; loseFailure?:
     if (type === 'agent_create') {
       if (options.refuseModel && payload.model !== undefined) return { error: options.refuseModel, detail: 'This daemon cannot launch with a model.' }
       if (options.refuse) return { error: options.refuse, detail: 'This agent does not support that permission mode.' }
-      nativeState = 'created'; return { creationId: start.creationId, state: 'created', agent: { id: 'native', engine: 'claude', selectedModel: 'runtime-v1:native:claude:fixture-model@high' } }
+      nativeState = 'created'; return { creationId: start.creationId, state: 'created', agent: { id: 'native', engine: 'claude', selectedModel: 'runtime-v1:native:claude:fixture-model@high', ...options.identity } }
     }
     if (type === 'agent_create_cancel') {
       nativeState = 'cancelled'
@@ -713,4 +713,27 @@ describe('a routed Claude start launches with the model instead of switching it 
       }
     })
   })
+})
+
+
+it('records the original launch identity and retries without it only for an older backend', async () => {
+  const identity = { sessionId: 'original-session', createdAt: '2026-10-22T00:00:00.000Z' }
+  const f = fixture({ identity })
+  const input = { action: 'start', tabId: 'tab', operationId: 'identity-start', request: f.start.request }
+  expect(await startAgent(input, f.scoped, where, f.open)).toMatchObject({ ok: true })
+  const joined = f.scoped.mock.calls.map(c => c[0].command as Record<string, unknown>).find(c => c?.type === 'agent.started')!
+  expect(joined).toMatchObject({ startedSession: identity })
+  const old = fixture({ identity })
+  const scoped = async (payload: Record<string, unknown>) => {
+    const command = payload.command as Record<string, unknown> | undefined
+    return command?.startedSession ? { error: 'VALIDATION_ERROR' } : old.scoped(payload)
+  }
+  expect(await startAgent({ ...input, request: old.start.request }, scoped, where, old.open)).toMatchObject({ ok: true })
+  expect(old.scoped.mock.calls.map(c => c[0].command as Record<string, unknown>).find(c => c?.type === 'agent.started')).not.toHaveProperty('startedSession')
+})
+
+it('waits for the initial engine binding before recording a timed launch identity', async () => {
+  const f = fixture({ identity: { sessionId: '', createdAt: '2026-10-22T00:00:00.000Z' } })
+  expect(await startAgent({ action: 'start', tabId: 'tab', operationId: 'binding-start', request: f.start.request }, f.scoped, where, f.open)).toMatchObject({ error: 'START_PENDING' })
+  expect(f.scoped.mock.calls.map(c => c[0].command as Record<string, unknown>).some(c => c?.type === 'agent.started')).toBe(false)
 })

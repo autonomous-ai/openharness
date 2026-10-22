@@ -9,6 +9,10 @@ export async function bindSession(tx: Prisma.TransactionClient, state: SuperTabS
   const scope = scopeId(state, project.id)
   const id = stableId('swarm-session', state.environment, target.machineOwnerId, target.id)
   const prior = await tx.superTabSessionScope.findUnique({ where: { id } })
+  if (prior?.released) fail('SESSION_RELEASED', 'This session was force-withdrawn while stopping. Start a new Harness for Swarm work.')
+  if (prior?.stopReleaseId) fail('STOP_REQUESTED', 'This session is stopping. Wait for its host or withdraw it before contributing another session.')
+  const running = await tx.superTabRun.findUnique({ where: { id: target.id } })
+  if (running?.assignmentId.startsWith('release-')) fail('STOP_REQUESTED', 'This session is stopping. Wait for its host or force-withdraw it before contributing another session.')
   let scopes = prior?.scopeIds ?? []
   if (!prior) {
     // Sessions contributed before project privacy existed may already appear

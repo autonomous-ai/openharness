@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
+import { machineSlots } from './machines.js'
 import { activeWork, createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
 
@@ -96,6 +97,27 @@ describe('Super Tab collaboration policy', () => {
     expect(f.state.agents[0]!.configurationVersion).toBe(version)
     f.run({ ...command, configuration: config, previousVersion: version }, actor)
     expect(f.state.agents[0]!.configurationVersion).not.toBe(before)
+  })
+
+  it('counts a fresh contribution despite a stopped proof from its previous removal', () => {
+    const f = fixture(), worker = f.add('worker')
+    f.state.machines = [{ machineId: 'host', name: 'Host', contributorId: 'owner', membershipGeneration: f.state.people[0]!.generation,
+      generation: 'pool', cwd: '/work', engines: ['codex'], maxAgents: 1, paused: false,
+      observation: { generation: 'pool', receivedAt: 1000, resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null,
+        diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null, deviceType: null, chip: null, os: null, gpuPercent: null },
+        tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: ['worker'] } }]
+    f.run({ type: 'agent.remove', agentId: worker })
+    f.state.releasedHarnesses = [{ machineId: 'host', harnessId: 'worker' }]
+    f.add('worker')
+    expect(machineSlots(f.state, f.state.machines![0]!)).toBe(1)
+    // A delayed machine observation from the stopped runtime arrives after re-contribution.
+    f.state.machines![0]!.observation!.stoppedHarnessIds = ['worker']
+    expect(machineSlots(f.state, f.state.machines![0]!)).toBe(1)
+    f.run({ type: 'agent.remove', agentId: worker })
+    f.state.machines![0]!.observation!.stoppedHarnessIds = []
+    f.add('worker')
+    f.state.machines![0]!.observation!.stoppedHarnessIds = ['worker']
+    expect(machineSlots(f.state, f.state.machines![0]!)).toBe(1)
   })
 
   it('fences observations from an earlier contribution of the same native harness', () => {
@@ -728,4 +750,12 @@ it('allows the contributor to keep a completed worker and refuses another projec
   const project = f.run({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' }).result
   const otherLead = f.add('other-lead', 'owner', project.conversationId as string, true)
   expect(() => f.run({ type: 'agent.release', agentId: worker, decision: 'stop' }, { kind: 'agent', agentId: otherLead, machineOwnerId: 'host-owner' })).toThrow()
+})
+
+it('allows routing directly to the awaiting worker without first keeping it', () => {
+  const f = routed(), group = f.group()
+  const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: f.worker }).result.assignmentId as string
+  f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'stopped', result: null }, owner, { confirmedStopped: true })
+  const decision = record({ candidates: [candidate('c0', { kind: 'member', agentId: f.worker, machineId: 'host' })], pick: 'c0' })
+  expect(f.run({ type: 'route.record', conversationId: group, decision } as Command, f.leadActor).routeDecisions).toHaveLength(1)
 })

@@ -222,10 +222,9 @@ export class SuperTabHost {
   private async releaseWorker(target: HostAgent): Promise<void> {
     const { tabId, agent } = target
     const key = `${tabId}:${agent.id}`
-    if (this.releases.has(key) || !this.core.agents.stopped || !this.core.agents.close) return
+    if (this.releases.has(key) || !this.core.agents.closeSwarm) return
     this.releases.add(key)
     try {
-      const native = this.core.agents.byAgent(agent.harnessId)
       const current = object(object(await backend(this.core, 'GET', `/api/super-tabs/${tabId}?asAgentId=${agent.id}`)).state)
       const member = Array.isArray(current.agents) ? current.agents.map(object).find(a => a.id === agent.id) : undefined
       if (this.stopped || member?.workDecision !== 'stop' || member.harnessId !== agent.harnessId || member.machineId !== this.machineId || member.releaseId !== agent.releaseId) return
@@ -234,13 +233,13 @@ export class SuperTabHost {
         const work = object(c.assignment)
         return work.agentId === agent.id && !['done', 'stopped'].includes(String(work.status))
       })) return
-      if (!await this.core.agents.stopped(agent.harnessId)) {
-        if (!native || typeof native.sessionId !== 'string' || !Number.isFinite(native.registeredAt)) return
-        const result = await this.core.agents.close({ agentId: agent.harnessId, sessionId: native.sessionId,
-          createdAt: new Date(native.registeredAt).toISOString(), mode: 'now' })
-        if (!result.closed) throw new Error(result.detail ?? result.error ?? 'Could not stop this Swarm worker.')
-      }
-      if (this.stopped || !await this.core.agents.stopped(agent.harnessId)) return
+      const identity = object(member.startedSession)
+      const result = await this.core.agents.closeSwarm({ agentId: agent.harnessId,
+        ...(typeof identity.creationId === 'string' ? { creationId: identity.creationId } : {}),
+        ...(typeof identity.sessionId === 'string' ? { sessionId: identity.sessionId } : {}),
+        ...(typeof identity.createdAt === 'string' ? { createdAt: identity.createdAt } : {}) })
+      if (!result.closed) throw new Error(result.detail ?? result.error ?? 'Could not stop this Swarm worker.')
+      if (this.stopped) return
       await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, {
         operationId: `release-${agent.releaseId ?? agent.id}`, asAgentId: agent.id, command: { type: 'agent.remove', agentId: agent.id, releaseId: agent.releaseId },
       })

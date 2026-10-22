@@ -27,6 +27,10 @@ export interface Agent {
   /** A finished worker stays undecided even when its group receives a new brief. */
   workDecision?: 'awaiting' | 'keep' | 'stop'
   releaseId?: string
+  /** This membership follows a prior native stop; unversioned observations cannot free its slot. */
+  recontributed?: true
+  /** Captured from the original Swarm launch, never inferred from a later live session with the same id. */
+  startedSession?: { creationId: string; sessionId: string; createdAt: string }
   configuration: AgentConfiguration
   /** The last configuration operation fences delayed observations, including re-contribution. */
   configurationVersion?: string

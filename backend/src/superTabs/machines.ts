@@ -51,7 +51,10 @@ export function machineContribution(state: SuperTabState, machineId: string) {
 export function machineSlots(state: SuperTabState, pool: ContributedMachine) {
   const live = new Set(state.agents.filter(a => a.machineId === pool.machineId).map(a => a.harnessId))
   const released = (state.releasedHarnesses ?? []).filter(r => r.machineId === pool.machineId && !live.has(r.harnessId)).map(r => r.harnessId)
-  const stopped = new Set([...(pool.observation?.stoppedHarnessIds ?? []), ...released])
+  // Old hosts do not version native observations. A re-contribution after a stop reserves its slot until
+  // removal, even if a delayed observation still describes its previous stopped runtime.
+  const renewed = new Set(state.agents.filter(a => a.machineId === pool.machineId && a.recontributed).map(a => a.harnessId))
+  const stopped = new Set([...(pool.observation?.stoppedHarnessIds ?? []).filter(id => !renewed.has(id)), ...released])
   const running = new Set((pool.observation?.runningHarnessIds ?? []).filter(id => !stopped.has(id)))
   for (const a of state.agents) if (a.machineId === pool.machineId && !stopped.has(a.harnessId)) running.add(a.harnessId)
   let pending = 0

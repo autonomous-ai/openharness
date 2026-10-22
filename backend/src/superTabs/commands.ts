@@ -69,7 +69,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), project: project.optional(), initialMessage: text.optional() }).strict(),
   z.object({ type: z.literal('agent.start'), request: startRequestSchema, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
-  z.object({ type: z.literal('agent.started'), startId: id, harnessId: id, configuration }).strict(),
+  z.object({ type: z.literal('agent.started'), startId: id, harnessId: id, configuration,
+    startedSession: z.object({ sessionId: id, createdAt: z.iso.datetime() }).strict().optional() }).strict(),
   z.object({ type: z.literal('agent.startSettled'), startId: id, warning: z.string().max(2000).nullable() }).strict(),
   z.object({ type: z.literal('agent.startFailed'), startId: id, error: text }).strict(),
   z.object({ type: z.literal('agent.remove'), agentId: id, releaseId: id.optional() }).strict(),
@@ -387,7 +388,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const existing = state.agents.find(a => a.id === agentId)
       if (existing) sameProject(state, group, existing)
       if (existing?.workDecision === 'stop' && command.lead) fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
+      const recontributed = !existing && invalidateStoppedProof(state, command.machineId, command.harnessId)
       if (!existing) state.agents.push({ id: agentId, machineId: command.machineId, harnessId: command.harnessId,
+        ...(recontributed ? { recontributed: true } : {}),
         ...(state.projects ? { projectId: project.id } : {}),
         machineOwnerId: grant.machineOwnerId, contributorId: grant.contributorId, membershipGeneration: contributor.generation,
         hostGrant: grant.hostGrant ?? null,
@@ -487,10 +490,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const group = open(state, start.request.conversationId)
       const agentId = stableId(start.request.machineId, command.harnessId)
       if (state.agents.some(a => a.id === agentId)) fail('ALREADY_SHARED', 'This native harness is already in the tab.')
+      const recontributed = invalidateStoppedProof(state, start.request.machineId, command.harnessId)
       state.agents.push({ id: agentId, machineId: start.request.machineId, harnessId: command.harnessId,
+        ...(recontributed ? { recontributed: true } : {}),
         ...(state.projects ? { projectId: groupProject(state, group).id } : {}),
         machineOwnerId: start.machineOwnerId, contributorId: start.contributorId, membershipGeneration: start.membershipGeneration,
-        hostGrant: start.hostGrant, name: start.request.name, configuration: command.configuration, configurationVersion: operationId })
+        hostGrant: start.hostGrant, name: start.request.name, configuration: command.configuration, configurationVersion: operationId,
+        ...(command.startedSession ? { startedSession: { ...command.startedSession, creationId: start.creationId } } : {}) })
       group.agentIds.push(agentId)
       start.harnessId = command.harnessId
       result.agentId = agentId
@@ -528,10 +534,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'agent.remove': {
       const target = agent(state, command.agentId)
       const hostStop = actor.kind === 'agent' && actor.agentId === target.id && target.workDecision === 'stop'
-      if (hostStop) {
-        if (command.releaseId !== target.releaseId || !target.releaseId) fail('STALE_RELEASE', 'Read the current stop request before confirming removal.')
+      const forceStop = actor.kind === 'person' && target.workDecision === 'stop' &&
+        [state.ownerId, target.contributorId].includes(actor.userId)
+      if (hostStop || forceStop) {
+        if (hostStop && (command.releaseId !== target.releaseId || !target.releaseId)) fail('STALE_RELEASE', 'Read the current stop request before confirming removal.')
         if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id)) fail('WORK_ACTIVE', 'Finish active work before stopping this worker.')
-        // This is the execution host's durable lifecycle receipt, not a stale observation or a person withdrawing a contribution.
+        // Host confirmation or a person's explicit withdrawal retires this contribution despite late observations.
+        // The store also fences a force-withdrawn native id against future work while an earlier close may be in flight.
         state.releasedHarnesses ??= []
         if (!state.releasedHarnesses.some(r => r.machineId === target.machineId && r.harnessId === target.harnessId)) {
           state.releasedHarnesses.push({ machineId: target.machineId, harnessId: target.harnessId })
@@ -541,9 +550,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           observation.runningHarnessIds = observation.runningHarnessIds.filter(id => id !== target.harnessId)
           if (!observation.stoppedHarnessIds.includes(target.harnessId)) observation.stoppedHarnessIds.push(target.harnessId)
         }
-        result.releasedBy = actor.machineOwnerId
+        if (actor.kind === 'agent') result.releasedBy = actor.machineOwnerId
+        if (forceStop) result.forceReleased = target.id
       } else if (target.workDecision === 'stop') {
-        fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
+        fail('FORBIDDEN', 'Only its contributor or tab owner can force-withdraw a stopping worker.', 403)
       } else if (actor.kind !== 'person' || (actor.userId !== state.ownerId && actor.userId !== target.contributorId)) {
         fail('FORBIDDEN', 'Only the contributor or tab owner can withdraw this agent.', 403)
       }
@@ -644,7 +654,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     case 'route.record': {
       controls(state, actor, command.conversationId)
-      requireWorkerDecisions(state, actor, open(state, command.conversationId))
+      const chosen = command.decision.candidates.find(c => c.id === command.decision.pick)!
+      requireWorkerDecisions(state, actor, open(state, command.conversationId), chosen.kind === 'member' ? chosen.agentId : undefined)
       if ((context.recentRoutes ?? 0) >= 30) fail('RATE_LIMITED', 'This Super Tab routed 30 tasks in the last hour. Wait before routing again.', 429)
       const decision = command.decision
       const pick = decision.candidates.find(c => c.id === decision.pick)!
@@ -783,11 +794,25 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
   }
   for (const target of original.agents.filter(a => a.workDecision === 'stop')) {
-    const acknowledged = command.type === 'agent.remove' && command.agentId === target.id && actor.kind === 'agent' && actor.agentId === target.id
+    const acknowledged = command.type === 'agent.remove' && command.agentId === target.id &&
+      (actor.kind === 'agent' && actor.agentId === target.id || actor.kind === 'person' && [state.ownerId, target.contributorId].includes(actor.userId))
     if (!acknowledged && !state.agents.some(a => a.id === target.id)) fail('STOP_REQUESTED', 'Wait for the execution host to finish stopping its workers before withdrawing them.')
   }
   // MongoDB limits a document to 16 MiB. Leave room for indexes and metadata, and refuse before losing state.
   assignAgentDisplayNames(state.agents)
   if (Buffer.byteLength(JSON.stringify(state)) > 8 * 1024 * 1024) fail('TAB_TOO_LARGE', 'This Super Tab has reached its metadata limit.', 413)
   return effects
+}
+
+/** A fresh contribution is newer than the previous native stop receipt. */
+function invalidateStoppedProof(state: SuperTabState, machineId: string, harnessId: string) {
+  const observation = state.machines?.find(m => m.machineId === machineId)?.observation
+  const stopped = observation?.stoppedHarnessIds.includes(harnessId) || state.releasedHarnesses?.some(r => r.machineId === machineId && r.harnessId === harnessId)
+  if (observation) observation.stoppedHarnessIds = observation.stoppedHarnessIds.filter(id => id !== harnessId)
+  // Keep the tombstone across later withdrawals/re-contributions; old observations have no generation.
+  if (stopped && !state.releasedHarnesses?.some(r => r.machineId === machineId && r.harnessId === harnessId)) {
+    state.releasedHarnesses ??= []
+    state.releasedHarnesses.push({ machineId, harnessId })
+  }
+  return stopped
 }

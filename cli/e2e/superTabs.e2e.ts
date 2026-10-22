@@ -96,7 +96,8 @@ it('starts either engine once, posts to its captured group and delivers shared i
       } else if (command.type === 'agent.started') {
         start!.harnessId = command.harnessId
         const id = idFor(String(command.harnessId))
-        if (!agents.some(a => a.id === id)) agents.push({ id, harnessId: command.harnessId, machineId: ME.machineId, configuration: command.configuration })
+        if (!agents.some(a => a.id === id)) agents.push({ id, harnessId: command.harnessId, machineId: ME.machineId, configuration: command.configuration,
+          ...(command.startedSession ? { startedSession: { ...object(command.startedSession), creationId: start!.creationId } } : {}) })
         return { data: { result: { agentId: id } } }
       } else if (command.type === 'conversation.create') {
         tasks.push(body)
@@ -344,14 +345,25 @@ it('starts either engine once, posts to its captured group and delivers shared i
   const reserved = reservations.find(r => r.ok)!.reservationId
   expect(await client.request('agent_create_cancel', { creationId: reserved })).toMatchObject({ state: 'cancelled' })
   expect(await client.request('super_tabs', { action: 'observeCapacity', creationId: reserved })).toMatchObject({ released: true })
-  // A person-contributed worker uses the same host process and identity-bound native close as a Lead-created worker.
-  const contributed = await client.request('agent_create', { engine: 'claude', cwd, bypassPermission: true, prompt: 'Report that this contributed worker is ready.' }, 90_000)
+  // A person-created session stays open even if a stale backend asks the Swarm host to stop it.
+  const contributed = await client.request('agent_create', { engine: 'claude', cwd, bypassPermission: true, prompt: 'Report that this personal session is ready.' }, 90_000)
   expect(contributed.error, JSON.stringify(contributed)).toBeUndefined()
   const contributedId = idFor(contributed.agent.id)
-  agents.push({ id: contributedId, harnessId: contributed.agent.id, machineId: ME.machineId, workDecision: 'stop', releaseId: 'finished-worker-release' })
-  await until('the host process to close and remove the finished contributed worker', () => !agents.some(a => a.id === contributedId) || null, 60_000, 250)
-  expect((await client.request('agents_list')).agents.some((a: Record<string, any>) => a.id === contributed.agent.id)).toBe(false)
-  await until('removed worker retention to be released', () => !retainedHarnesses(d.dataDir).has(contributed.agent.id) || null, 10_000, 100)
+  agents.push({ id: contributedId, harnessId: contributed.agent.id, machineId: ME.machineId, workDecision: 'stop', releaseId: 'personal-session-stop' })
+  await until('the core to refuse closing a personal session', () => d.log().includes('NOT_SWARM_STARTED') || null, 15_000, 100)
+  expect((await client.request('agents_list')).agents.some((a: Record<string, any>) => a.id === contributed.agent.id)).toBe(true)
+  agents.splice(agents.findIndex(a => a.id === contributedId), 1)
+  // Only the recorded original Swarm launch may be closed through the service process.
+  const launchedId = String(starts.get('start-codex')!.harnessId)
+  const launched = agents.find(a => a.harnessId === launchedId)!
+  expect(launched.startedSession).toMatchObject({ creationId: starts.get('start-codex')!.creationId })
+  launched.workDecision = 'stop'; launched.releaseId = 'finished-worker-release'
+  await until('the host process to close and remove the original Swarm worker', () => !agents.some(a => a.id === launched.id) || null, 60_000, 250)
+  expect((await client.request('agents_list')).agents.some((a: Record<string, any>) => a.id === launchedId)).toBe(false)
+  await until('removed worker retention to be released', () => !retainedHarnesses(d.dataDir).has(launchedId) || null, 10_000, 100)
+  const goneId = idFor('deleted-native-worker')
+  agents.push({ id: goneId, harnessId: 'deleted-native-worker', machineId: ME.machineId, workDecision: 'stop', releaseId: 'deleted-worker-release' })
+  await until('a deleted session without a stopped record to be withdrawn', () => !agents.some(a => a.id === goneId) || null, 15_000, 100)
   expect((await client.request('agents_list')).agents.some((a: Record<string, any>) => a.id === lead.agent.id)).toBe(true)
   allowed = false
   const denied = await run(['post', 'feature', 'not allowed', 'after-removal'])
