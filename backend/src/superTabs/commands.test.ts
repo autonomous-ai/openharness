@@ -804,6 +804,13 @@ it('records the lead project once and accepts installed engines beyond Claude an
   f.run(command, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
   expect(f.state.machines![0]!.engines).toEqual(['claude', 'codex', 'pi', 'opencode'])
 })
+it('accepts POSIX, Windows drive and UNC folders and refuses relative, drive-relative and control-character ones', () => {
+  const contribute = (cwd: string) => commandSchema.safeParse({ type: 'machine.contribute', machineId: 'host', name: 'PC', cwd, engines: ['claude'], maxAgents: 1 })
+  for (const cwd of ['/repo', 'C:\\Users\\dev\\data', 'c:/Users/dev/data', 'D:\\', '\\\\server\\share\\x']) expect(contribute(cwd).success, cwd).toBe(true)
+  for (const cwd of ['repo', './repo', 'C:repo', 'C:', '\\repo', '\\\\server', '\\\\\\x', 'C:\\a\nb', '/a\u0000b']) expect(contribute(cwd).success, cwd).toBe(false)
+  const refused = contribute('relative')
+  expect(!refused.success && refused.error.issues[0]!.message).toBe('Use a full folder path, such as /home/me/work or C:\\Users\\me\\work.')
+})
 it('restricts recording a legacy project to the owner or controlling lead', () => {
   const f = fixture(); f.invite()
   const command: Command = { type: 'tab.project', machineId: 'host', project: { cwd: '/repo', repositoryUrl: null } }

@@ -20,7 +20,10 @@ const configuration = z.object({
   effort: z.string().max(80).nullable(), contextWindow: z.number().int().positive().safe().nullable(),
   engineVersion: z.string().max(160).nullable(),
 }).strict()
-const path = z.string().min(1).max(4096).regex(/^\//).refine(value => !/[\x00-\x1f\x7f]/.test(value))
+// A full path on the machine that will use it: POSIX (/x), a Windows drive (C:\x or C:/x) or UNC (\\server\share). Never relative or drive-relative (C:x).
+const path = z.string().min(1).max(4096)
+  .regex(/^(\/|[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/])/, 'Use a full folder path, such as /home/me/work or C:\\Users\\me\\work.')
+  .refine(value => !/[\x00-\x1f\x7f]/.test(value), 'A folder path cannot contain control characters.')
 const repositoryUrl = z.string().max(4096).refine(value => {
   if (/[\x00-\x20\x7f]/.test(value)) return false
   if (/^git@[^/@:]+:[^@]+$/.test(value)) return true
