@@ -49,8 +49,32 @@ void main() {
       expect(
         prompt.length,
         lessThanOrEqualTo(kFirstTaskMaxLength),
-        reason: '${lead ? 'Lead' : 'Worker'} bootstrap must fit native creation',
+        reason:
+            '${lead ? 'Lead' : 'Worker'} bootstrap must fit native creation',
       );
+      expect(
+        prompt,
+        contains(
+          lead
+              ? 'On Claude Code or Codex, use swarm-lead.'
+              : 'On Claude Code or Codex, use swarm-dev.',
+        ),
+      );
+      if (lead) {
+        expect(prompt, contains('Discuss first; build when authorized.'));
+        expect(prompt, contains('Swarm agent groups'));
+        expect(
+          prompt,
+          contains('do only answers, lookups and small fixes yourself'),
+        );
+        expect(prompt, contains('your subagents only read/look up'));
+        expect(
+          prompt,
+          contains(
+            'Coordinate: assign multi-part or 15+ minute work to Swarm agent groups;',
+          ),
+        );
+      }
     }
   });
 
@@ -62,7 +86,10 @@ void main() {
     );
     expect(prompt, contains('read new reports'));
     expect(prompt, contains('No per-turn summarizer'));
-    expect(prompt, contains('When a worker finishes, decide reuse, keep or stop'));
+    expect(
+      prompt,
+      contains('When a worker finishes, decide reuse, keep or stop'),
+    );
     expect(prompt, contains('prefer stop unless more work is coming soon'));
     expect(prompt, contains('On scheduled requests use project.report'));
     expect(prompt, contains('text:null when nothing changed'));
@@ -95,6 +122,7 @@ void main() {
               (create.$2['prompt'] as String).length,
               lessThanOrEqualTo(kFirstTaskMaxLength),
             );
+            expect(create.$2['swarmRole'], 'lead');
             final messages = f.connection.server.messages;
             expect(messages, hasLength(task.trim().isEmpty ? 0 : 1));
             if (messages.isNotEmpty) {

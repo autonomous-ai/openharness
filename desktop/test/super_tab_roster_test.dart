@@ -23,6 +23,7 @@ class RosterFixture {
   final server = ConversationServer();
   late final controller = server.controller();
   SuperTabAgent? opened;
+  SuperTabConversation? added;
   final boundary = GlobalKey();
   bool disposed = false;
 
@@ -78,7 +79,7 @@ class RosterFixture {
               controller: controller,
               app: nativeState ? app : null,
               onInvite: () {},
-              onAddAgent: (_) {},
+              onAddAgent: (group) => added = group,
               onOpenAgent: (agent) => opened = agent,
             ),
           ),
@@ -133,9 +134,7 @@ void main() {
     return f;
   }
 
-  testWidgets('agent and project keep their meaning across project selection', (
-    tester,
-  ) async {
+  testWidgets('agents follow project selection', (tester) async {
     final f = await fixture(tester);
     f.app.stateOf('m')!.agents = const [
       Agent(
@@ -146,16 +145,11 @@ void main() {
       ),
     ];
     await f.show(tester);
-    for (var i = 0; i < 4; i++) {
+    expect(f.row(2), findsNothing);
+    for (final i in [0, 1, 3]) {
       expect(f.inRow(i, find.byType(SuperTabAvatar)), findsOneWidget);
-      expect(
-        f.inRow(i, find.text(i == 0 || i == 2 ? 'PM' : 'Dev')),
-        findsOneWidget,
-      );
-      expect(
-        f.inRow(i, find.text(i == 2 ? 'autonomous-os' : 'openharness')),
-        findsOneWidget,
-      );
+      expect(f.inRow(i, find.text(i == 0 ? 'PM' : 'Dev')), findsOneWidget);
+      expect(f.inRow(i, find.text('openharness')), findsOneWidget);
     }
     expect(find.text('Join Super Tab roster'), findsNothing);
     expect(find.text('Ready'), findsNothing);
@@ -174,12 +168,90 @@ void main() {
     );
     f.controller.select('os-lead');
     await tester.pumpAndSettle();
-    expect(f.inRow(0, find.text('openharness')), findsOneWidget);
+    for (final i in [0, 1, 3]) {
+      expect(f.row(i), findsNothing);
+    }
     expect(f.inRow(2, find.text('autonomous-os')), findsOneWidget);
+    expect(find.text('owner'), findsOneWidget);
+    await tester.tap(find.byTooltip('Add agent'));
+    expect(f.added?.id, 'os-lead');
+    f.controller.select('offline');
+    await tester.pumpAndSettle();
+    expect(f.row(2), findsNothing);
+    expect(
+      tester.getTopLeft(f.row(0)).dy,
+      lessThan(tester.getTopLeft(f.row(1)).dy),
+    );
+    expect(
+      tester.getTopLeft(f.row(1)).dy,
+      lessThan(tester.getTopLeft(f.row(3)).dy),
+    );
     await tester.tap(f.row(1));
     expect(f.opened?.harnessId, 'a1');
-    expect(f.controller.selectedId, 'os-lead');
+    expect(f.controller.selectedId, 'offline');
     expect(f.server.posts, isEmpty);
+    await f.close(tester);
+  });
+
+  for (final legacyAgent in [1, 2]) {
+    testWidgets(
+      'an agent with no project uses its group project (agent $legacyAgent)',
+      (tester) async {
+        final f = await fixture(tester);
+        (f.server.state['agents'] as List)[legacyAgent].remove('projectId');
+        if (legacyAgent == 1) {
+          (f.server.state['conversations'] as List).add({
+            ...conversationFixture('os-work', 'OS work'),
+            'projectId': 'os',
+            'agentIds': ['agent-1'],
+          });
+        }
+        await f.controller.refresh();
+        // Other callers still see the legacy default even when the roster resolves the group.
+        expect(
+          f.controller.snapshot!.agent('agent-$legacyAgent')!.projectId,
+          'lead',
+        );
+        await f.show(tester);
+        expect(f.row(legacyAgent), findsNothing);
+        f.controller.select('os-lead');
+        await tester.pumpAndSettle();
+        expect(
+          f.inRow(legacyAgent, find.text('autonomous-os')),
+          findsOneWidget,
+        );
+        await f.close(tester);
+      },
+    );
+  }
+
+  testWidgets('an explicit agent project takes precedence over its group', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    (f.server.state['conversations'] as List).add({
+      ...conversationFixture('os-work', 'OS work'),
+      'projectId': 'os',
+      'agentIds': ['agent-1'],
+    });
+    await f.controller.refresh();
+    await f.show(tester);
+    expect(f.row(1), findsOneWidget);
+    f.controller.select('os-lead');
+    await tester.pumpAndSettle();
+    expect(f.row(1), findsNothing);
+    await f.close(tester);
+  });
+
+  testWidgets('no selected project shows no agent rows', (tester) async {
+    final f = await fixture(tester);
+    f.controller.selectedId = 'missing';
+    await f.show(tester);
+    for (var i = 0; i < 4; i++) {
+      expect(f.row(i), findsNothing);
+    }
+    expect(find.text('owner'), findsOneWidget);
+    expect(find.byTooltip('Add agent'), findsNothing);
     await f.close(tester);
   });
 
@@ -261,6 +333,8 @@ void main() {
         'roster marks remain legible in ${brightness.name} at ${scale}x',
         (tester) async {
           final f = await fixture(tester);
+          (f.server.state['agents'] as List)[2]['projectId'] = 'lead';
+          await f.controller.refresh();
           final previous = grid.AppTheme.brightness.value;
           grid.AppTheme.brightness.value = brightness;
           addTearDown(() => grid.AppTheme.brightness.value = previous);

@@ -62,7 +62,7 @@ describe('Swarm permission mode', () => {
       const result = await startAgent({ action: 'resume', tabId: 'tab', startId: 'start', hostDispatch }, f.scoped, where, f.open)
       expect(result).toMatchObject({ ok: true })
       const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
-      expect(payload.permissionMode).toBe('full')
+      expect(payload).toMatchObject({ permissionMode: 'full', bypassPermission: true, swarmRole: 'dev' })
       const argv = buildEngineCommandArgv(engine, { permissionMode: String(payload.permissionMode) })
       expect(argv).toContain(engine === 'claude' ? '--dangerously-skip-permissions' : '--dangerously-bypass-approvals-and-sandbox')
     }
@@ -201,6 +201,20 @@ const expectSwitchTo = (f: Parameters<typeof switchCall>[0], selectedModel: stri
   expect(call[2]).toBeGreaterThan(50_000)
   expect(call[2]).toBeLessThanOrEqual(60_000)
 }
+it.each(['claude', 'codex', 'opencode'])('only tells supported %s workers to use their built-in skill', async engine => {
+  const f = fixture()
+  f.start.request.engine = engine
+  await startAgent({ action: 'start', tabId: 'tab', operationId: 'role-prompt', request: f.start.request }, f.scoped, where, f.open)
+  const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+  if (engine === 'claude' || engine === 'codex') {
+    expect(payload.prompt).toContain('swarm-dev')
+    expect(payload.swarmRole).toBe('dev')
+  } else {
+    expect(payload.prompt).not.toContain('swarm-dev')
+    expect(payload.swarmRole).toBeUndefined()
+  }
+})
+
 it('asks for an owner contribution instead of widening a guest machine connection', async () => {
   const f = fixture({ guest: true })
   expect(await startAgent({ action: 'start', tabId: 'tab', operationId: 'guest-start', request: f.start.request }, f.scoped, where, f.open))
@@ -217,6 +231,7 @@ it('uses one native creation receipt and joins its captured group after a lost j
   expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true, harnessId: 'native', agentId: 'worker' })
   const launches = f.request.mock.calls.filter(c => c[0] === 'agent_create')
   expect(launches).toHaveLength(1)
+  expect(launches[0][1]).toMatchObject({ swarmRole: 'dev' })
   expect(f.open).toHaveBeenCalledWith(where, 'target')
   const commands = f.scoped.mock.calls.map(c => c[0].command as Record<string, unknown>).filter(Boolean)
   expect(commands.find(c => c.type === 'agent.started')).toMatchObject({ startId: 'start', harnessId: 'native', configuration: { engine: 'claude', model: 'fixture-model', effort: 'high' } })

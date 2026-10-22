@@ -86,6 +86,7 @@ class _GuestApp extends AppNotifier {
     String? permissionMode,
     String? codexHome,
     String? dsh,
+    String? swarmRole,
     GridModel? model,
     String? prompt,
     String? name,

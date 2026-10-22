@@ -442,6 +442,7 @@ void main() {
               .firstWhere((c) => c.$1 == 'agent_create')
               .$2;
           expect(request['permissionMode'], 'full');
+          expect(request['swarmRole'], kind == 'member' ? 'dev' : 'lead');
           await Future<void>.delayed(Duration.zero);
           final ordinary = NewHarnessController(
             f.app,
@@ -706,6 +707,12 @@ void main() {
         expect(
           f.connection.calls
               .firstWhere((c) => c.$1 == 'agent_create')
+              .$2['swarmRole'],
+          'lead',
+        );
+        expect(
+          f.connection.calls
+              .firstWhere((c) => c.$1 == 'agent_create')
               .$2['prompt'],
           isNull,
         );
@@ -839,6 +846,20 @@ void main() {
     },
   );
 
+  for (final engine in ['claude', 'codex']) {
+    test('a Desktop $engine Swarm worker gets the DEV role', () async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(engine: engine);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      final create = f.connection.calls
+          .firstWhere((c) => c.$1 == 'agent_create')
+          .$2;
+      expect(create['swarmRole'], 'dev');
+      expect(create['prompt'], contains('swarm-dev'));
+    });
+  }
+
   test('the lead prompt routes before starting or assigning work', () async {
     final f = SuperTabLaunchFixture()..connection.nativeName = 'hi';
     final box = await f.box(engine: 'claude');
@@ -897,8 +918,8 @@ void main() {
                 .firstWhere((c) => c.$1 == 'agent_create')
                 .$2['prompt']
             as String;
-    expect(prompt, contains('like a helpful colleague'));
-    expect(prompt, contains('under about 150 words'));
+    expect(prompt, contains('helpful colleague'));
+    expect(prompt, contains('under 150 words'));
     expect(prompt, contains('UNIQUE_OPERATION_ID [--reply-to MESSAGE_ID]`'));
     expect(prompt, contains('answer each message once'));
     expect(prompt, contains('do not post again'));

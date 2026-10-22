@@ -1835,6 +1835,21 @@ describe('registry across a reboot and pane loss', () => {
     expect(bound?.entry.subscriptionModel).toBe('opus')
   })
 
+  it('preserves Swarm role and runtime key across hooks and reload', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const swarmSkill = { role: 'dev' as const, key: 'harness-claude-worker' }
+    const pending = registry.openPendingAgent({ engine: 'claude', cwd: dataDir,
+      runtimes: [{ backend: 'tmux', paneId: '%21' }], swarmSkill })!
+    const transcriptPath = join(dataDir, 'swarm.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    expect(registry.register({ engine: 'claude', sessionId: 'swarm', transcriptPath, cwd: dataDir, tmuxPane: '%21' })?.entry.swarmSkill).toEqual(swarmSkill)
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    expect(reloaded.byAgent(pending.agentId)?.swarmSkill).toEqual(swarmSkill)
+    expect(reloaded.releaseEngine(pending.agentId, true)?.swarmSkill).toBeUndefined()
+  })
+
   it('keeps strict conversation resume after the engine binds and the daemon reloads', async () => {
     const transcriptPath = join(dataDir, 'session-resumed.jsonl')
     writeFileSync(transcriptPath, '{}\n')

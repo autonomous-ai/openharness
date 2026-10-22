@@ -18,8 +18,7 @@ import 'machines.dart';
 import 'model.dart';
 import 'section_heading.dart';
 
-/// Tab-wide membership above tab-wide execution capacity. Group selection does
-/// not change who appears here or what machines the team has contributed.
+/// Tab-wide people and capacity, with agents from the selected project.
 class SuperTabRoster extends StatefulWidget {
   const SuperTabRoster({
     super.key,
@@ -40,6 +39,16 @@ class SuperTabRoster extends StatefulWidget {
 
 class _SuperTabRosterState extends State<SuperTabRoster> {
   SuperTabController get c => widget.controller;
+
+  String? _agentProjectId(SuperTabAgent agent) => agent.hasProjectId
+      ? agent.projectId
+      : c.snapshot?.conversations
+            .where(
+              (group) =>
+                  group.agentIds.contains(agent.id) || group.leadId == agent.id,
+            )
+            .firstOrNull
+            ?.projectId;
 
   String _role(SuperTabAgent agent) =>
       c.snapshot!.isLead(agent.id) ? 'Product Manager' : 'Engineer';
@@ -127,7 +136,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
   Widget _agent(SuperTabAgent agent) {
     final name = c.snapshot!.agentName(agent.id), activity = _activity(agent);
     final project = c.snapshot!.projects
-        .where((p) => p.id == agent.projectId)
+        .where((p) => p.id == _agentProjectId(agent))
         .firstOrNull;
     final theme = terminalThemeFor(
       grid.AppTheme.surfacePalette,
@@ -238,12 +247,17 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
 
   List<Widget> _members() {
     final state = c.snapshot;
-    final leads =
-        state?.agents.where((a) => state.isLead(a.id)).toList() ??
+    final projectId = c.selected?.projectId;
+    final members =
+        state?.agents
+            .where(
+              (agent) =>
+                  projectId != null && _agentProjectId(agent) == projectId,
+            )
+            .toList() ??
         const <SuperTabAgent>[];
-    final agents =
-        state?.agents.where((a) => !state.isLead(a.id)).toList() ??
-        const <SuperTabAgent>[];
+    final leads = members.where((a) => state!.isLead(a.id)).toList();
+    final agents = members.where((a) => !state!.isLead(a.id)).toList();
     return [
       SuperTabSectionHeading(
         'Humans',

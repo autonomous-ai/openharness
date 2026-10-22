@@ -1,3 +1,4 @@
+import { prepareSwarmSkill } from '../../lib/swarmSkills.js'
 import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../../engines/nativeLaunch.js'
 /**
  * Creating an agent (`agent_create`): open a fresh pane running the chosen engine in the chosen
@@ -336,7 +337,13 @@ export function createAgentCreator({
     // A harness another agent started says so in the pull requests it opens (lib/agentAttribution.ts), last, as every
     // relaunch appends it (`buildLaunchOverrides`), and read from the person's settings where this launch reads them.
     // What Harness tells the agent (its instructions, and the pull request line for one another agent started), last.
-    const told = agentLaunchArgs(engine, startedBy, { cwd, profile: codexHome, environment: native?.environment })
+    const swarmSkill = input.swarmRole ? { role: input.swarmRole, key: label } : undefined
+    let swarmInstructions: string | undefined
+    if (swarmSkill) {
+      try { swarmInstructions = prepareSwarmSkill(cwd, swarmSkill).instructions }
+      catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
+    }
+    const told = agentLaunchArgs(engine, startedBy, { cwd, profile: codexHome, environment: native?.environment, ...(swarmInstructions ? { swarmInstructions } : {}) })
     const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...told])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
@@ -385,6 +392,7 @@ export function createAgentCreator({
       codexHome,
       dsh,
       dshRuntime: dsh ? label : null,
+      ...(swarmSkill ? { swarmSkill } : {}),
       agent,
       bypassPermission,
       permissionMode,
