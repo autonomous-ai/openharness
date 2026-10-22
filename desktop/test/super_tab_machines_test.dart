@@ -817,10 +817,27 @@ void main() {
       ];
       final c = server.controller();
       await c.refresh();
+      // The list's steps, richest first: avatars and both allowances, then a count
+      // for the agents, then without Codex, then without Claude.
+      const steps = [
+        (3, true, true),
+        (0, true, true),
+        (0, true, false),
+        (0, false, false),
+      ];
       for (final scale in [1.0, 2.0]) {
-        // What the end shows at each width, widest first: avatars, then the chips.
-        final states = <(int, bool, bool)>[];
-        for (var width = 460.0; width >= 180; width -= 10) {
+        // The name's minimum, from the constant the list uses, at this text size.
+        final minimum = superTabMachineMinName * scale;
+        // Each column's width, read off the rows as it shows; the widths are the
+        // list's, not the width's, so a richer step's columns are known once seen.
+        double? avatarsWidth, countWidth, claudeWidth, codexWidth;
+        double columns(int step) =>
+            (step == 0 ? avatarsWidth! : countWidth!) +
+            (steps[step].$2 ? claudeWidth! : 0) +
+            (steps[step].$3 ? codexWidth! : 0);
+        final seen = <int>[];
+        // Wide enough for everything, narrow enough for nothing but the count.
+        for (var width = 460.0; width >= 100; width -= 10) {
           await tester.pumpWidget(
             MaterialApp(
               builder: (context, child) => MediaQuery(
@@ -846,72 +863,76 @@ void main() {
           final reason = 'at width $width, scale $scale';
           expect(tester.takeException(), isNull, reason: reason);
           final row = find.byKey(const ValueKey('super-machine-m'));
+          Finder key(String k) => find.byKey(ValueKey(k));
+          double? widthOf(String k) =>
+              key(k).evaluate().isEmpty ? null : tester.getSize(key(k)).width;
           final avatars = find
               .descendant(of: row, matching: find.byType(SuperTabAvatar))
               .evaluate()
               .length;
-          bool shows(String engine) => find
-              .byKey(ValueKey('super-machine-allowance-m-$engine'))
-              .evaluate()
-              .isNotEmpty;
-          final state = (avatars, shows('claude'), shows('codex'));
-          states.add(state);
+          final state = (
+            avatars,
+            widthOf('super-machine-allowance-m-claude') != null,
+            widthOf('super-machine-allowance-m-codex') != null,
+          );
+          final step = steps.indexOf(state);
+          expect(step, isNot(-1), reason: '$state $reason');
+          seen.add(step);
           // The count always stays; with fewer avatars it says the rest.
           expect(
             find.descendant(of: row, matching: find.text('+${5 - avatars}')),
             avatars == 5 ? findsNothing : findsOneWidget,
             reason: reason,
           );
-          // A chip goes only once the avatars have, Codex before Claude.
-          if (!state.$3) expect(avatars, 0, reason: reason);
-          if (!state.$2) expect(state.$3, isFalse, reason: reason);
-          // The name's room, from where it starts to the first column, keeps its
-          // minimum while any column but the count remains.
+          final agents = widthOf('super-machine-agents-slot-m')!;
+          if (avatars > 0) {
+            avatarsWidth = agents;
+          } else {
+            countWidth = agents;
+          }
+          claudeWidth =
+              widthOf('super-machine-allowance-m-claude') ?? claudeWidth;
+          codexWidth = widthOf('super-machine-allowance-m-codex') ?? codexWidth;
+          // The name's room: from where it starts to the first column.
           final nameLeft = tester
               .getTopLeft(
                 find.descendant(of: row, matching: find.byType(RichText)).first,
               )
               .dx;
           final firstColumn = [
-            for (final key in [
+            for (final k in [
               'super-machine-allowance-m-claude',
               'super-machine-allowance-m-codex',
               'super-machine-agents-slot-m',
             ])
-              if (find.byKey(ValueKey(key)).evaluate().isNotEmpty)
-                tester.getTopLeft(find.byKey(ValueKey(key))).dx,
+              if (key(k).evaluate().isNotEmpty) tester.getTopLeft(key(k)).dx,
           ].reduce(math.min);
-          if (state.$2 || avatars > 0) {
+          final room = firstColumn - nameLeft;
+          // The list takes the richest step that leaves the name its minimum:
+          // this one does (unless nothing else is left to give way) …
+          if (step < steps.length - 1) {
+            expect(room, greaterThanOrEqualTo(minimum - .5), reason: reason);
+          }
+          // … and the one before it would not have.
+          if (step > 0) {
             expect(
-              firstColumn - nameLeft,
-              greaterThanOrEqualTo(48 * scale - 1),
-              reason: reason,
+              room - (columns(step - 1) - columns(step)),
+              lessThan(minimum + .5),
+              reason: 'step ${steps[step - 1]} would have fit $reason',
             );
           }
         }
-        // Widest: everything; and every step after only takes away.
-        expect(states.first, (3, true, true), reason: 'scale $scale');
-        int rank((int, bool, bool) s) =>
-            s.$1 * 4 + (s.$2 ? 2 : 0) + (s.$3 ? 1 : 0);
-        for (var i = 1; i < states.length; i++) {
+        // Widest: everything; each narrower width only takes away, in order; every
+        // step is reached on the way down, and the narrowest keeps only the count.
+        expect(seen.first, 0, reason: 'scale $scale');
+        for (var i = 1; i < seen.length; i++) {
           expect(
-            rank(states[i]),
-            lessThanOrEqualTo(rank(states[i - 1])),
-            reason: 'scale $scale, step $i',
+            seen[i],
+            greaterThanOrEqualTo(seen[i - 1]),
+            reason: 'scale $scale, width ${460 - 10 * i}',
           );
         }
-        // Each stage is reached on the way down.
-        expect(
-          states.any((s) => s == (0, true, true)),
-          isTrue,
-          reason: 'scale $scale',
-        );
-        expect(
-          states.any((s) => s == (0, true, false)),
-          isTrue,
-          reason: 'scale $scale',
-        );
-        expect(states.last, (0, false, false), reason: 'scale $scale');
+        expect(seen.toSet(), {0, 1, 2, 3}, reason: 'scale $scale');
       }
       await tester.pumpWidget(const SizedBox());
       await c.flush();

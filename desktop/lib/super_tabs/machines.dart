@@ -1276,6 +1276,10 @@ class _Allowance {
   );
 }
 
+/// What a machine's name keeps, at the default text size, before a column of the list gives way: a readable
+/// start of it, small enough that Claude's allowance still fits beside it in the default 204 px sidebar.
+const superTabMachineMinName = 48.0;
+
 /// The right side every machine row shares: which columns show, and how wide each one is.
 class _Columns {
   const _Columns({
@@ -1339,9 +1343,7 @@ class _MachineLine extends StatelessWidget {
   static const avatarsGap = 16.0;
   static const countGap = gap;
 
-  /// What the name keeps, at the default text size, before a column gives way: a readable start of it, small
-  /// enough that Claude's allowance still fits beside it in the default 204 px sidebar.
-  static const minName = 48.0;
+  static const minName = superTabMachineMinName;
 
   static double get ringed => _avatar + 2 * _ring;
 
