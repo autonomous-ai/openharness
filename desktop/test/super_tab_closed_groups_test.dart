@@ -72,7 +72,7 @@ void main() {
     controller.dispose();
   });
 
-  for (final brightness in Brightness.values)
+  for (final brightness in Brightness.values) {
     testWidgets(
       'Closed (N) starts collapsed, lists archived groups, opens one read-only and reopens it (${brightness.name})',
       (tester) async {
@@ -170,4 +170,5 @@ void main() {
         controller.dispose();
       },
     );
+  }
 }
