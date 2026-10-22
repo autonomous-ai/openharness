@@ -134,7 +134,7 @@ export interface SessionInputDeps {
    *  the paste, and a turn's prompt as recorded. Every verdict and every Enter stays here. */
   submission: SubmissionReader
   /** A team-only preflight at the actual write boundary. A reason proves no paste occurred. */
-  beforeTeamWrite?: (session: RegisteredSession) => Promise<string | null>
+  beforeTeamWrite?: (session: RegisteredSession, deliveryId?: string) => Promise<string | null>
   onDelivery?: (event: SessionInputDelivery) => void
   getSession: (sessionId: string) => RegisteredSession | undefined
   validateRuntime: (session: RegisteredSession) => Promise<boolean>
@@ -189,6 +189,10 @@ export class SessionInputController {
    */
   private typesWhileBusy(engine: string): boolean {
     return this.deps.submission.policy(engine)?.typesWhileBusy === true
+  }
+
+  private swarmTypesWhileBusy(engine: string, deliveryId?: string): boolean {
+    return !!deliveryId?.startsWith('team:service:superTabs:') && this.typesWhileBusy(engine)
   }
 
   /** Controller dependencies take the stable agent id, never a backend route. */
@@ -305,7 +309,8 @@ export class SessionInputController {
     const state = this.state(sessionId)
     this.dropExpired(sessionId, state)
     if (state.controlLocked
-      || (deliveryId && (state.deliveryId || state.dispatching || state.turnOpen || state.awaitingFingerprint || state.settling))
+      || (deliveryId && (state.deliveryId || state.dispatching || state.awaitingFingerprint
+        || (!this.swarmTypesWhileBusy(session.engine, deliveryId) && (state.turnOpen || state.settling))))
       || (!this.typesWhileBusy(session.engine) && (state.turnOpen || state.awaitingFingerprint || state.settling))) {
       console.log(`[inject] ${sid(sessionId)} queued · engine=${session.engine} · depth=${state.queue.length + 1}`)
       this.enqueue(sessionId, state, content, deliveryId, inputContext, said)
@@ -366,6 +371,20 @@ export class SessionInputController {
     // an envelope of its own), and is settled once it has; every other engine's record is compared whole.
     const observedFingerprint = fingerprint(userMessage)
     const engineReads = !!session && !!this.deps.submission.policy(session.engine)
+    if (session && this.swarmTypesWhileBusy(session.engine, state.deliveryId) && state.deliveryFingerprint
+      && state.deliveryFingerprint !== observedFingerprint && !state.writing) {
+      // The native queue can start an earlier follow-up after the next has been pasted.
+      // Only a matching echo settles this delivery; another start must leave its check armed.
+      state.turnOpen = true
+      const expected = state.deliveryFingerprint, deliveryId = state.deliveryId
+      void this.echoes(session, userMessage, expected).then(matched => {
+        if (matched && this.states.get(sessionId) === state && state.deliveryId === deliveryId
+          && state.deliveryFingerprint === expected && state.awaitingContent !== null) {
+          this.onTurnStarted(sessionId, state.awaitingContent)
+        }
+      })
+      return
+    }
     if (state.deliveryId && state.writing) state.observedStart = userMessage
     else if (state.deliveryId && state.deliveryFingerprint) {
       const expected = state.deliveryFingerprint
@@ -409,6 +428,7 @@ export class SessionInputController {
       if (state.timer) clearTimeout(state.timer)
       state.timer = null
     }
+    this.drainOne(sessionId, state)
   }
 
   /**
@@ -442,6 +462,13 @@ export class SessionInputController {
 
   onTurnEnded(sessionId: string): void {
     const state = this.state(sessionId)
+    const current = this.controlSession(sessionId)
+    if (current && this.swarmTypesWhileBusy(current.engine, state.deliveryId) && state.awaitingFingerprint) {
+      // Ending the preceding turn says nothing about a follow-up already in the native queue.
+      state.turnOpen = false
+      this.armSubmitCheck(sessionId, current, state)
+      return
+    }
     if (!state.dispatching) this.finishDelivery(sessionId, state, 'unknown', 'turn_ended_without_start')
     // Typed while a turn ran, the engine holds it as that turn's follow-up; otherwise no turn was seen for it.
     this.settle(state, state.turnOpen ? 'taken' : 'turn_ended')
@@ -616,7 +643,7 @@ export class SessionInputController {
       }
       if (state.cancelled || this.states.get(sessionId) !== state) return
       if (deliveryId.startsWith('team:')) {
-        const held = this.deps.beforeTeamWrite ? await this.deps.beforeTeamWrite(session) : 'team_waiting_unavailable'
+        const held = this.deps.beforeTeamWrite ? await this.deps.beforeTeamWrite(session, deliveryId) : 'team_waiting_unavailable'
         if (state.cancelled || this.states.get(sessionId) !== state) return
         if (held) { this.finishDelivery(sessionId, state, 'rejected', held); return }
       }
@@ -681,7 +708,7 @@ export class SessionInputController {
       state.observes = 0
       state.ambiguousDispatch = typeof delivery !== 'boolean' && delivery.dispatch === 'possibly_executed'
       state.dispatching = false
-      this.delivery(sessionId, state.deliveryId, 'delivered')
+      if (!this.swarmTypesWhileBusy(session.engine, state.deliveryId)) this.delivery(sessionId, state.deliveryId, 'delivered')
       if (state.observedStart !== undefined) {
         const observed = state.observedStart
         state.observedStart = undefined
@@ -703,7 +730,7 @@ export class SessionInputController {
     if (state.timer) clearTimeout(state.timer)
     state.timer = setTimeout(() => {
       state.timer = null
-      if (!state.awaitingFingerprint || state.turnOpen) return
+      if (!state.awaitingFingerprint || (state.turnOpen && !this.swarmTypesWhileBusy(session.engine, state.deliveryId))) return
       const retry = this.retrySubmit(sessionId, session, state)
       if (state.deliveryId) void retry.catch(() => this.failAmbiguousSubmission(sessionId, state))
       else void retry
@@ -733,6 +760,18 @@ export class SessionInputController {
   }
 
   private async retrySubmit(sessionId: string, session: RegisteredSession, state: InputState): Promise<void> {
+    if (this.swarmTypesWhileBusy(session.engine, state.deliveryId)) {
+      // Use the same native composer reading as person input. A cleared composer confirms
+      // queue acceptance without waiting for a new turn; automatic traffic never retries Enter.
+      const expected = state.awaitingFingerprint
+      const capture = await this.deps.capture?.(session.agentId)
+      const reading = capture ? await this.deps.submission.read(this.readingSession(session), capture, state.awaitingContent ?? '').catch(() => null) : null
+      if (this.states.get(sessionId) !== state || state.awaitingFingerprint !== expected) return
+      if (reading && !reading.draft) this.leftComposer(sessionId, session, state, reading.composer)
+      else if (++state.observes <= SUBMIT_MAX_OBSERVES) this.armSubmitCheck(sessionId, session, state)
+      else this.failAmbiguousSubmission(sessionId, state)
+      return
+    }
     if (state.deliveryId?.startsWith('team:')) {
       // Team traffic is automatic. A missing transcript start is not permission to press Enter
       // again: the message may already be in the engine's queue. Inbox/reply correlation can
@@ -866,6 +905,14 @@ export class SessionInputController {
    * Enter could double-submit a queued follow-up — and WITHOUT a spurious error.
    */
   private leftComposer(sessionId: string, session: RegisteredSession, state: InputState, composer: boolean): void {
+    if (this.swarmTypesWhileBusy(session.engine, state.deliveryId) && composer && !state.ambiguousDispatch) {
+      this.finishDelivery(sessionId, state, 'delivered')
+      state.awaitingFingerprint = null
+      state.awaitingContent = null
+      state.observes = 0
+      this.drainOne(sessionId, state)
+      return
+    }
     if (state.observes < SUBMIT_MAX_OBSERVES) {
       state.observes++
       console.log(`[inject] ${sid(sessionId)} accepted (queued/submitted) · engine=${session.engine} · observe=${state.observes}/${SUBMIT_MAX_OBSERVES}`)
@@ -930,7 +977,9 @@ export class SessionInputController {
 
   private drainOne(sessionId: string, state: InputState): void {
     this.dropExpired(sessionId, state)
-    if (state.controlLocked || state.turnOpen || state.awaitingFingerprint || state.settling) return
+    const current = this.controlSession(sessionId)
+    const busySwarm = !!current && this.swarmTypesWhileBusy(current.engine, state.queue[0]?.deliveryId)
+    if (state.controlLocked || (!busySwarm && (state.turnOpen || state.settling)) || state.awaitingFingerprint) return
     if (state.queue[0]?.deliveryId && (state.dispatching || state.deliveryId)) return
     const next = state.queue.shift()
     if (!next) return

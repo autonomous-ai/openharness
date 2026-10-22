@@ -34,6 +34,128 @@ const codexComposer = (draft: string, footer = '  ? for shortcuts') => `\n\u001b
 describe('SessionInputController', () => {
   afterEach(() => vi.useRealTimers())
 
+  it.each(['claude', 'codex'] as const)('delivers ordered Swarm follow-ups during a busy %s turn without waiting for another start', async engine => {
+    vi.useFakeTimers()
+    const inject = vi.fn(async () => true), onDelivery = vi.fn(), sendKey = vi.fn(async () => true), onError = vi.fn()
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session(engine), validateRuntime: async () => true, inject, sendKey, onDelivery, onError,
+      beforeTeamWrite: async () => null,
+      capture: async () => engine === 'claude' ? claudeBox('') : codexComposer(''),
+    })
+    controller.setTurnOpen('s1', true)
+    controller.submit('s1', 'first follow-up', 'team:service:superTabs:first')
+    controller.submit('s1', 'second follow-up', 'team:service:superTabs:second')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(inject).toHaveBeenCalledWith('h1', 'first follow-up')
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(inject.mock.calls.map(call => call[1])).toEqual(['first follow-up', 'second follow-up'])
+    expect(onDelivery.mock.calls.map(([event]) => event).filter(event => event.state === 'delivered'))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ deliveryId: 'team:service:superTabs:first' }),
+        expect.objectContaining({ deliveryId: 'team:service:superTabs:second' }),
+      ]))
+    controller.onTurnEnded('s1')
+    controller.forget('s1')
+    expect(onDelivery.mock.calls.map(([event]) => event).filter(event => event.state === 'unknown')).toEqual([])
+    expect(sendKey).not.toHaveBeenCalled()
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('holds Swarm input for person control, then types during the same running turn', async () => {
+    vi.useFakeTimers()
+    const inject = vi.fn(async () => true)
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session(), validateRuntime: async () => true, inject, sendKey: async () => true,
+      onError: vi.fn(), beforeTeamWrite: async () => null, capture: async () => codexComposer('') })
+    controller.setTurnOpen('s1', true)
+    const release = controller.acquireControl('s1', { forAnswer: true })!
+    controller.submit('s1', 'held chat', 'team:service:superTabs:locked')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(inject).not.toHaveBeenCalled()
+    release()
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(inject).toHaveBeenCalledWith('h1', 'held chat')
+    controller.forget('s1')
+  })
+
+  it.each(['prior queued start', 'matching start'] as const)('keeps follow-ups ordered across a %s', async scenario => {
+    vi.useFakeTimers()
+    const injected: string[] = [], onDelivery = vi.fn()
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session(), validateRuntime: async () => true,
+      inject: async (_id, content) => { injected.push(content); return true }, sendKey: async () => true,
+      onError: vi.fn(), onDelivery, beforeTeamWrite: async () => null, capture: async () => codexComposer('') })
+    controller.setTurnOpen('s1', true)
+    controller.submit('s1', 'first', 'team:service:superTabs:first')
+    controller.submit('s1', 'second', 'team:service:superTabs:second')
+    await vi.advanceTimersByTimeAsync(scenario === 'prior queued start' ? 1_501 : 1)
+    controller.onTurnStarted('s1', 'first')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(injected).toEqual(['first', 'second'])
+    controller.submit('s1', 'third', 'team:service:superTabs:third')
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(injected).toEqual(['first', 'second', 'third'])
+    controller.onTurnEnded('s1')
+    controller.forget('s1')
+    expect(onDelivery.mock.calls.map(([event]) => event).filter(event => event.state === 'unknown')).toEqual([])
+  })
+
+  it('recognizes a wrapped Swarm turn through the engine reader and drains its next follow-up', async () => {
+    vi.useFakeTimers()
+    const injected: string[] = [], onDelivery = vi.fn()
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session('claude'), validateRuntime: async () => true,
+      inject: async (_id, text) => { injected.push(text); return true }, sendKey: async () => true,
+      beforeTeamWrite: async () => null, capture: async () => claudeBox(''), onDelivery, onError: vi.fn() })
+    controller.submit('s1', 'first', 'team:service:superTabs:first')
+    controller.submit('s1', 'second', 'team:service:superTabs:second')
+    await vi.advanceTimersByTimeAsync(1)
+    controller.onTurnStarted('s1', '<pasted_content id="04e3">\nfirst\n</pasted_content id="04e3">')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'team:service:superTabs:first', state: 'started' }))
+    expect(injected).toEqual(['first', 'second'])
+    await vi.advanceTimersByTimeAsync(10_000)
+    controller.forget('s1')
+    expect(onDelivery.mock.calls.map(([event]) => event).filter(event => event.state === 'unknown')).toEqual([])
+  })
+
+  it.each(['team:peer', 'team:service:superTabs:unsupported'])('retains idle scheduling for %s', async id => {
+    vi.useFakeTimers()
+    const inject = vi.fn(async () => true)
+    const engine = id.endsWith('unsupported') ? 'commandcode' : 'codex'
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session(engine), validateRuntime: async () => true, inject, sendKey: async () => true,
+      onError: vi.fn(), beforeTeamWrite: async () => null })
+    controller.setTurnOpen('s1', true)
+    controller.submit('s1', 'held chat', id)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(inject).not.toHaveBeenCalled()
+    controller.onTurnEnded('s1')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(inject).toHaveBeenCalledOnce()
+    controller.forget('s1')
+  })
+
+  it.each(['draft', 'unreadable', 'ambiguous', 'no composer'] as const)('does not confirm Swarm queue acceptance from %s evidence', async evidence => {
+    vi.useFakeTimers()
+    const onDelivery = vi.fn(), sendKey = vi.fn(async () => true)
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session(), validateRuntime: async () => true,
+      inject: async () => evidence === 'ambiguous' ? { state: 'failed', dispatch: 'possibly_executed', reason: 'lost reply' } : true,
+      sendKey, onError: vi.fn(), onDelivery, beforeTeamWrite: async () => null,
+      capture: async () => evidence === 'unreadable' ? null : evidence === 'no composer' ? 'Working…' : codexComposer(evidence === 'draft' ? 'follow-up' : ''),
+    })
+    controller.setTurnOpen('s1', true)
+    controller.submit('s1', 'follow-up', 'team:service:superTabs:uncertain')
+    await vi.advanceTimersByTimeAsync(1)
+    controller.onTurnEnded('s1')
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ state: 'unknown' }))
+    expect(onDelivery.mock.calls.map(([event]) => event).filter(event => event.state === 'delivered')).toEqual([])
+    expect(sendKey).not.toHaveBeenCalled()
+    controller.forget('s1')
+  })
+
   it('retains each composed message context while waiting for the pane lock and the preceding turn', async () => {
     vi.useFakeTimers()
     const inject = vi.fn(async () => true)

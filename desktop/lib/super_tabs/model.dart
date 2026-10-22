@@ -330,9 +330,6 @@ class SuperTabMessage {
         : 'Terminal answer';
   }
 
-  bool get queued => deliveries.any(
-    (d) => d['status'] == 'queued' || d['status'] == 'claimed',
-  );
   bool get uncertain => deliveries.any((d) => d['status'] == 'uncertain');
 }
 

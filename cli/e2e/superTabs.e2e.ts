@@ -172,9 +172,21 @@ it('starts either engine once, posts to its captured group and delivers shared i
     const posted = await run(['post', 'feature', `${engine} ready`, `hello-${engine}`], target)
     expect(posted.code, JSON.stringify(posted.answer)).toBe(0)
     expect(posts.at(-1)).toMatchObject({ conversationId: 'feature', text: `${engine} ready` })
+    await until('worker startup prompt to finish', async () => {
+      const rows = await client.request('agents_list')
+      return client.frames.some(frame => frame.type === 'turn_ended' && frame.agentId === started.answer.harnessId && !frame.replay)
+        && rows.agents.some((a: Record<string, any>) => a.id === started.answer.harnessId && a.activity?.state === 'idle') || null
+    }, 30_000, 250)
+    const busyStart = client.next(frame => frame.type === 'turn_started' && frame.agentId === started.answer.harnessId && !frame.replay)
+    client.send('message', { agentId: started.answer.harnessId, content: '!slow 20000' })
+    await busyStart
+    const busyFrom = client.frames.length, queuedAt = performance.now()
     pending.set(target, { id: `delivery-${engine}`, status: 'queued', claimId: null,
       message: { id: `message-${engine}`, conversationId: 'feature', replyTo: `question-${engine}`, author: { name: 'Fixture human' }, text: `verify-super-tab-${engine}` } })
     await until('native input acknowledgement', () => pending.get(target)?.status === 'delivered' || null, 60_000, 250)
+    expect(client.frames.slice(busyFrom).filter(frame => frame.type === 'turn_ended' && frame.agentId === started.answer.harnessId && !frame.replay),
+      'Swarm input must be typed and acknowledged before the current turn ends').toHaveLength(0)
+    console.log(`${engine}: busy Swarm input acknowledged in ${Math.round(performance.now() - queuedAt)} ms`)
     const submitted = readFileSync(join(d.root, 'submitted-prompts'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line) as string)
     expect(submitted.filter(prompt => prompt.includes(`verify-super-tab-${engine}`))).toHaveLength(1)
     expect(submitted.find(prompt => prompt.includes(`verify-super-tab-${engine}`))).toContain(`In reply to message question-${engine}.`)

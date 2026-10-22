@@ -1045,11 +1045,6 @@ class _SuperTabViewState extends State<SuperTabView>
               style: DesktopChrome.metadata(),
             ),
           ),
-        if (message.queued)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Text('Queued', style: DesktopChrome.metadata()),
-          ),
         for (final delivery in message.deliveries.where(
           (d) => d['status'] == 'uncertain',
         ))
