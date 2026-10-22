@@ -5,109 +5,168 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/phone/new_agent_draft.dart';
 import 'package:harness_mobile/phone/new_agent_page.dart';
 import 'package:harness_mobile/phone/tty_controls.dart';
+import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/widgets/engine_identity.dart';
 
 import 'phone_edge/edge_fixture.dart';
 
+/// What a computer reports about an engine: installed, and — from a computer that says — signed in.
+Map<String, Object> _engine(
+  String id, {
+  bool installed = true,
+  bool? signedIn,
+  int? lastUsedAt,
+}) => {
+  'engine': id,
+  'installed': installed,
+  'signedIn': ?signedIn,
+  'lastUsedAt': ?lastUsedAt,
+};
+
+/// One computer's answer, the agent last started from the phone (if any), and what New Harness
+/// should open on.
+class _Case {
+  const _Case(this.name, this.engines, this.opensOn, {this.remembered});
+  final String name;
+  final List<Map<String, Object>> engines;
+  final String opensOn;
+  final String? remembered;
+}
+
 void main() {
   tearDown(() => newAgentDraft = null);
-  for (final scenario in <(String, List<Map<String, Object>>, String)>[
-    ('nothing signed in', [], 'OpenCode'),
-    (
-      'Claude only',
+
+  Future<AppNotifier> openForm(
+    WidgetTester tester,
+    List<Map<String, Object>> engines, {
+    String? remembered,
+  }) async {
+    final app = edgeApp(
+      conn: EdgeConn({
+        'engines_probe': {'engines': engines},
+      }, startsAgents),
+    );
+    addTearDown(app.dispose);
+    if (remembered != null) await app.agentPreference.select(remembered);
+    setPhone(tester, largePhone);
+    await tester.pumpWidget(
+      phoneApp(NewAgentPage(notifier: app, machineId: 'm')),
+    );
+    await frames(tester);
+    return app;
+  }
+
+  String agentRow(WidgetTester tester) => tester
+      .widget<TtyFormRow>(
+        find.byWidgetPredicate((w) => w is TtyFormRow && w.label == 'agent'),
+      )
+      .value;
+
+  Future<void> chooseAgent(WidgetTester tester, String title) async {
+    await tapInView(tester, find.text('agent'));
+    await frames(tester);
+    await tester.tap(find.text(title, findRichText: true).last);
+    await frames(tester);
+  }
+
+  for (final scenario in <_Case>[
+    const _Case('nothing signed in', [], 'OpenCode'),
+    _Case('Claude only', [_engine('claude', signedIn: true)], 'Claude Code'),
+    _Case('Codex only', [_engine('codex', signedIn: true)], 'Codex'),
+    _Case('both, Claude last', [
+      _engine('claude', signedIn: true, lastUsedAt: 200),
+      _engine('codex', signedIn: true, lastUsedAt: 100),
+    ], 'Claude Code'),
+    _Case('both, Codex last', [
+      _engine('claude', signedIn: true, lastUsedAt: 100),
+      _engine('codex', signedIn: true, lastUsedAt: 200),
+    ], 'Codex'),
+    _Case('installed but signed out', [
+      _engine('claude', signedIn: false),
+      _engine('codex', signedIn: false),
+    ], 'OpenCode'),
+    _Case('old computer does not report sign-in', [
+      _engine('claude'),
+    ], 'OpenCode'),
+    _Case('credential without installed engine', [
+      _engine('codex', installed: false, signedIn: true),
+    ], 'OpenCode'),
+    // The agent last started from this phone, as the desktop's `agentPreference`: kept while the
+    // computer can still run it, else the computer's own answer.
+    _Case(
+      'remembered Codex is usable: it wins over Claude used last',
       [
-        {'engine': 'claude', 'installed': true, 'signedIn': true},
-      ],
-      'Claude Code',
-    ),
-    (
-      'Codex only',
-      [
-        {'engine': 'codex', 'installed': true, 'signedIn': true},
+        _engine('claude', signedIn: true, lastUsedAt: 200),
+        _engine('codex', signedIn: true, lastUsedAt: 100),
       ],
       'Codex',
+      remembered: 'codex',
     ),
-    (
-      'both, Claude last',
+    _Case(
+      'remembered Codex is signed out here: the computer chooses',
+      [_engine('claude', signedIn: true), _engine('codex', signedIn: false)],
+      'Claude Code',
+      remembered: 'codex',
+    ),
+    _Case(
+      'remembered Codex is not installed here: the computer chooses',
       [
-        {
-          'engine': 'claude',
-          'installed': true,
-          'signedIn': true,
-          'lastUsedAt': 200,
-        },
-        {
-          'engine': 'codex',
-          'installed': true,
-          'signedIn': true,
-          'lastUsedAt': 100,
-        },
+        _engine('claude', signedIn: true),
+        _engine('codex', installed: false, signedIn: true),
       ],
       'Claude Code',
+      remembered: 'codex',
     ),
-    (
-      'both, Codex last',
-      [
-        {
-          'engine': 'claude',
-          'installed': true,
-          'signedIn': true,
-          'lastUsedAt': 100,
-        },
-        {
-          'engine': 'codex',
-          'installed': true,
-          'signedIn': true,
-          'lastUsedAt': 200,
-        },
-      ],
-      'Codex',
+    _Case(
+      'remembered Claude on an older computer that reports no sign-in',
+      [_engine('claude')],
+      'Claude Code',
+      remembered: 'claude',
     ),
-    (
-      'installed but signed out',
-      [
-        {'engine': 'claude', 'installed': true, 'signedIn': false},
-        {'engine': 'codex', 'installed': true, 'signedIn': false},
-      ],
+    _Case(
+      'remembered Claude that the computer says nothing about',
+      [],
       'OpenCode',
+      remembered: 'claude',
     ),
-    (
-      'old computer does not report sign-in',
-      [
-        {'engine': 'claude', 'installed': true},
-      ],
+    _Case(
+      'remembered OpenCode is kept over a signed-in Claude',
+      [_engine('claude', signedIn: true), _engine('opencode')],
       'OpenCode',
-    ),
-    (
-      'credential without installed engine',
-      [
-        {'engine': 'codex', 'installed': false, 'signedIn': true},
-      ],
-      'OpenCode',
+      remembered: 'opencode',
     ),
   ]) {
-    testWidgets('computer chooses ${scenario.$1}', (tester) async {
-      final app = edgeApp(
-        conn: EdgeConn({
-          'engines_probe': {'engines': scenario.$2},
-        }, startsAgents),
-      );
-      addTearDown(app.dispose);
-      await app.agentPreference.select(
-        scenario.$3 == 'Claude Code' ? 'codex' : 'claude',
-      );
-      setPhone(tester, largePhone);
-      await tester.pumpWidget(
-        phoneApp(NewAgentPage(notifier: app, machineId: 'm')),
-      );
-      await frames(tester);
-      final row = tester.widget<TtyFormRow>(
-        find.byWidgetPredicate((w) => w is TtyFormRow && w.label == 'agent'),
-      );
-      expect(row.value, scenario.$3);
+    testWidgets('computer chooses ${scenario.name}', (tester) async {
+      await openForm(tester, scenario.engines, remembered: scenario.remembered);
+      expect(agentRow(tester), scenario.opensOn);
       await tester.pumpWidget(const SizedBox());
     });
   }
+
+  // A pick is never undone: not by the computer's engines arriving, nor by a later probe.
+  for (final scenario in <_Case>[
+    _Case('signed out here', [
+      _engine('claude', signedIn: false),
+      _engine('codex', signedIn: true),
+    ], 'Codex'),
+    _Case('an older computer that reports no sign-in', [
+      _engine('claude'),
+    ], 'OpenCode'),
+  ]) {
+    testWidgets('a picked Claude Code is kept on ${scenario.name}', (
+      tester,
+    ) async {
+      final app = await openForm(tester, scenario.engines);
+      expect(agentRow(tester), scenario.opensOn);
+      await chooseAgent(tester, 'Claude Code');
+      expect(agentRow(tester), 'Claude Code');
+      await app.probeEngines('m', force: true);
+      await frames(tester);
+      expect(agentRow(tester), 'Claude Code');
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
+
   testWidgets(
     'agent chooser retains Desktop catalog order after the selected agent',
     (tester) async {

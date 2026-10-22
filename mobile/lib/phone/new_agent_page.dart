@@ -100,7 +100,9 @@ class _NewAgentPageState extends State<NewAgentPage> {
   /// "New project", or the repository's name.
   String? _projectLabel;
 
-  /// Safe until this computer reports which accounts are signed in there.
+  /// What the form opens on until somebody picks another: [_defaultEngine], read again whenever
+  /// this computer's engines arrive or the computer changes ([_adoptDefaultEngine]). OpenCode is the
+  /// answer before the computer has said anything.
   String? _engine = 'opencode';
 
   /// A plain shell is chosen rather than an agent — the desktop's `isTerminal`.
@@ -186,6 +188,12 @@ class _NewAgentPageState extends State<NewAgentPage> {
   void initState() {
     super.initState();
     _restoreDraft();
+    if (!_engineChosen) _engine = _defaultEngine();
+    // The last agent started from this phone, the desktop's `agentPreference`: read from disk once,
+    // and [_engine] follows it if it lands before anybody has picked.
+    unawaited(
+      widget.notifier.agentPreference.load().then((_) => _adoptDefaultEngine()),
+    );
     // After the first frame, not during it: `probeEngines` can notify synchronously, and a notify
     // while this page is still being mounted marks the listeners above it dirty mid-build — the
     // "setState() called during build" assertion.
@@ -201,8 +209,41 @@ class _NewAgentPageState extends State<NewAgentPage> {
     );
   }
 
-  /// Whether the engine was picked on this page — a remembered one arriving late must not undo it.
+  /// Whether the engine was picked on this page. A pick is never undone: not by a remembered agent
+  /// arriving late, nor by the computer's engines, nor by moving to another computer.
   bool _engineChosen = false;
+
+  /// What the desktop's New Harness opens on: the agent last started from this phone while this
+  /// computer can still run it, otherwise [firstEngine] — Claude Code or Codex when installed and
+  /// signed in there, else OpenCode.
+  String _defaultEngine() {
+    final remembered = widget.notifier.agentPreference.value;
+    if (remembered != null && _rememberedUsable(remembered)) return remembered;
+    return firstEngine(_machine?.engines);
+  }
+
+  /// Whether this computer can run [id]: installed, and signed in where it reports that. A computer
+  /// that has not answered yet, or an older one that reports no sign-in at all (null), has not said
+  /// "no" — it is not treated as signed out.
+  bool _rememberedUsable(String id) {
+    if (isTerminalEngine(id)) return true;
+    final engines = _machine?.engines;
+    if (engines == null || !engines.loaded) return true;
+    final engine = engines[id];
+    return engine != null && engine.installed && engine.signedIn != false;
+  }
+
+  /// Opens on [_defaultEngine] while nothing was picked. Run when the computer's engines or the
+  /// remembered agent arrive and when the computer changes — never from [build].
+  void _adoptDefaultEngine() {
+    if (!mounted || _engineChosen) return;
+    final next = _defaultEngine();
+    if (next == _engine) return;
+    setState(() {
+      _permissionMode = kDefaultPermissionMode;
+      _engine = next;
+    });
+  }
 
   @override
   void dispose() {
@@ -312,7 +353,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
     }
     _machineId = draft.machineId;
     _engine = draft.engine;
-    _engineChosen = true;
+    _engineChosen = draft.engineChosen;
     _permissionMode = draft.permissionMode;
     _folder = draft.folder;
     _exactFolder = draft.exactFolder;
@@ -345,6 +386,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
     newAgentDraft = NewAgentDraft(
       machineId: _machineId,
       engine: _engine,
+      engineChosen: _engineChosen,
       permissionMode: _permissionMode,
       folder: _folder,
       exactFolder: _exactFolder,
@@ -369,7 +411,9 @@ class _NewAgentPageState extends State<NewAgentPage> {
     // Which engines this machine actually has. Best effort: an unanswered probe
     // leaves the list to the engines its own agents are already running, and a
     // machine with neither still gets the browse-and-create path.
-    unawaited(widget.notifier.probeEngines(_machineId));
+    unawaited(
+      widget.notifier.probeEngines(_machineId).then((_) => _adoptDefaultEngine()),
+    );
     unawaited(_loadCodexProfiles());
   }
 
@@ -390,7 +434,6 @@ class _NewAgentPageState extends State<NewAgentPage> {
     }
     setState(() {
       _machineId = machineId;
-      _engineChosen = false;
       _folder = null;
       _project = null;
       _projectLabel = null;
@@ -407,6 +450,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
       _model = null;
       _error = null;
     });
+    _adoptDefaultEngine();
     _askMachine();
   }
 
@@ -1118,15 +1162,6 @@ class _NewAgentPageState extends State<NewAgentPage> {
     listenable: widget.notifier,
     builder: (context, _) {
       final tty = Tty.of(context);
-      if (!_engineChosen ||
-          (_machine?.engines.loaded == true &&
-              const ['claude', 'codex'].contains(_engine) &&
-              (_machine?.engines[_engine!]?.signedIn != true ||
-                  _machine?.engines[_engine!]?.installed != true))) {
-        final next = firstEngine(_machine?.engines);
-        if (next != _engine) _permissionMode = kDefaultPermissionMode;
-        _engine = next;
-      }
       _applyDefaultProject();
       final info = _repository;
       final mode = _permissionModeChoice;
