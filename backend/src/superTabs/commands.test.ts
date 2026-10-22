@@ -78,6 +78,47 @@ describe('five-part tasks', () => {
   })
 })
 
+describe('person removal notices', () => {
+  it('tells each remaining Lead who removed an agent and its open task', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group(), worker = f.add('worker', 'owner', group)
+    f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: worker, present: true, lead: false })
+    f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+    const name = f.state.agents.find(a => a.id === worker)!.displayName!
+    const effects = f.run({ type: 'agent.remove', agentId: worker })
+    expect(effects.messages).toHaveLength(2)
+    expect(new Set(effects.messages.map(m => m.id)).size).toBe(2)
+    const notice = effects.messages.find(m => m.conversationId === group)!
+    expect(notice).toMatchObject({ author: { kind: 'person', id: 'owner' }, recipients: [lead] })
+    expect(notice.text).toContain('owner removed')
+    expect(notice.text).toContain(name)
+    expect(notice.text).toContain('Offline editing')
+    expect(effects.messages.find(m => m.conversationId === 'lead')!.recipients).toEqual([lead])
+    expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('reconciling')
+  })
+
+  it('finds a held assignment even when the worker is missing from the group roster', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group(), worker = f.add('worker', 'owner', group)
+    f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+    f.state.conversations[1]!.agentIds = [lead]
+    expect(f.run({ type: 'agent.remove', agentId: worker }).messages).toEqual([
+      expect.objectContaining({ conversationId: group, recipients: [lead], text: expect.stringContaining('Offline editing') }),
+    ])
+  })
+
+  it('posts a notice without claiming inactive work stopped or delivering to the removed Lead', () => {
+    const f = fixture(), worker = f.add('lead', 'owner', 'lead', true)
+    const effects = f.run({ type: 'agent.remove', agentId: worker })
+    expect(effects.messages).toEqual([expect.objectContaining({ conversationId: 'lead', recipients: [] })])
+    expect(effects.messages[0]!.text).not.toContain('task')
+  })
+
+  it('posts nothing for an agent with no conversations', () => {
+    const f = fixture(), worker = f.add('worker')
+    f.state.conversations[0]!.agentIds = []
+    expect(f.run({ type: 'agent.remove', agentId: worker }).messages).toEqual([])
+  })
+})
+
 describe('Super Tab collaboration policy', () => {
   it('records host-observed runtime changes without rewriting an assignment\'s starting configuration', () => {
     const f = fixture(), group = f.group(), worker = f.add('worker', 'owner', group)
@@ -719,6 +760,7 @@ describe('message attachments', () => {
     expect(() => f.run({ type: 'agent.remove', agentId: worker }, { ...workerActor, agentId: other })).toThrow()
     const releaseId = f.state.agents.find(a => a.id === worker)!.releaseId!
     const removed = f.run({ type: 'agent.remove', agentId: worker, releaseId }, workerActor)
+    expect(removed.messages).toEqual([])
     expect(removed.cancelledAgents).toContain(worker)
     expect(f.state.agents.some(a => a.id === worker)).toBe(false)
   })

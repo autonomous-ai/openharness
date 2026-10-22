@@ -13,6 +13,7 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
 import 'controller.dart';
+import 'dialog_scope.dart';
 import 'identity.dart';
 import 'model.dart';
 import 'section_heading.dart';
@@ -51,6 +52,112 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
 
   String _role(SuperTabAgent agent) =>
       c.snapshot!.isLead(agent.id) ? 'Product Manager' : 'Engineer';
+
+  bool _canRemove(SuperTabAgent agent) =>
+      c.canWrite && (c.isOwner || agent.contributorId == c.accountId);
+
+  Future<void> _remove(SuperTabAgent agent) async {
+    var busy = false, attempted = false;
+    final name = c.snapshot!.agentName(agent.id);
+    final machine =
+        widget.app?.stateOf(agent.machineId)?.machine.displayName ??
+        c.snapshot?.machines
+                .where((m) => m['machineId'] == agent.machineId)
+                .firstOrNull?['name']
+            as String? ??
+        'its computer';
+    await showAppDialog<void>(
+      context: context,
+      builder: (context) => SuperTabDialogScope(
+        controller: c,
+        child: StatefulBuilder(
+          builder: (context, update) => ListenableBuilder(
+            listenable: c,
+            builder: (context, _) {
+              final current = c.snapshot?.agent(agent.id);
+              final pending = c.pendingCommand;
+              final checking =
+                  pending?['type'] == 'agent.remove' &&
+                  pending?['agentId'] == agent.id;
+              final available = current != null || checking || busy;
+              final permitted = _canRemove(current ?? agent);
+              final enabled =
+                  permitted &&
+                  !busy &&
+                  !c.saving &&
+                  (checking || !c.hasPendingAction);
+              return PopScope(
+                canPop: !busy,
+                child: AlertDialog(
+                  title: Text(
+                    available
+                        ? 'Remove $name from this Swarm?'
+                        : 'Agent unavailable',
+                  ),
+                  content: SizedBox(
+                    width: 400,
+                    child: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            available && permitted
+                                ? 'Any open task needs to be assigned again or closed. Its session on $machine is left to its owner.'
+                                : 'This action is no longer available.',
+                          ),
+                          if (attempted && c.operationError != null) ...[
+                            const SizedBox(height: 12),
+                            Text(c.operationError!),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                  actions: [
+                    TextButton(
+                      autofocus: true,
+                      onPressed: busy ? null : () => Navigator.pop(context),
+                      child: Text(
+                        checking || !available || !permitted
+                            ? 'Close'
+                            : 'Cancel',
+                      ),
+                    ),
+                    if (available && permitted)
+                      FilledButton(
+                        style: grid.dangerButtonStyle(),
+                        onPressed: !enabled
+                            ? null
+                            : () async {
+                                update(() {
+                                  busy = true;
+                                  attempted = true;
+                                });
+                                final result = checking
+                                    ? await c.retry()
+                                    : await c.command({
+                                        'type': 'agent.remove',
+                                        'agentId': agent.id,
+                                      });
+                                if (!context.mounted) return;
+                                if (result != null) {
+                                  Navigator.pop(context);
+                                } else {
+                                  update(() => busy = false);
+                                }
+                              },
+                        child: Text(checking ? 'Retry' : 'Remove from Swarm'),
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
 
   HarnessActivity _activity(SuperTabAgent agent) {
     final app = widget.app;
@@ -153,9 +260,18 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           ),
           items: [
             const PopupMenuItem(value: 'details', child: Text('Details')),
+            if (_canRemove(c.snapshot?.agent(agent.id) ?? agent))
+              const PopupMenuItem(
+                value: 'remove',
+                child: Text('Remove from Swarm'),
+              ),
           ],
         );
         if (choice == 'details' && mounted) await _details(agent);
+        if (choice == 'remove' && mounted) {
+          final current = c.snapshot?.agent(agent.id);
+          if (current != null && _canRemove(current)) await _remove(current);
+        }
       },
       child: ListTile(
         key: ValueKey('super-member-${agent.id}'),

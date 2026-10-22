@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -19,15 +20,24 @@ import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show createApp;
 
 class RosterFixture {
+  RosterFixture({this.account = 'owner'});
+  final String account;
   final app = createApp(connected: true);
   final server = ConversationServer();
-  late final controller = server.controller();
+  late final controller = server.controller(account: account);
   SuperTabAgent? opened;
   SuperTabConversation? added;
   final boundary = GlobalKey();
   bool disposed = false;
 
   Future<void> initialize() async {
+    if (account != 'owner') {
+      (server.state['people'] as List).add({
+        'id': account,
+        'email': '$account@example.com',
+        'role': 'collaborator',
+      });
+    }
     server.state['projects'] = [
       projectFixture('lead', 'openharness', 'lead'),
       projectFixture('os', 'autonomous-os', 'os-lead'),
@@ -125,14 +135,160 @@ void main() {
     }
   });
 
-  Future<RosterFixture> fixture(WidgetTester tester) async {
+  Future<RosterFixture> fixture(
+    WidgetTester tester, {
+    String account = 'owner',
+  }) async {
     await tester.binding.setSurfaceSize(const Size(280, 700));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final f = RosterFixture();
+    final f = RosterFixture(account: account);
     await f.initialize();
     addTearDown(f.dispose);
     return f;
   }
+
+  Future<void> openRemoval(
+    WidgetTester tester,
+    RosterFixture f, {
+    int agent = 1,
+  }) async {
+    await tester.tap(f.row(agent), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove from Swarm'));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets(
+    'owner confirms Remove from Swarm without stopping the native session',
+    (tester) async {
+      final f = await fixture(tester);
+      f.app.stateOf('m')!.agents = const [
+        Agent(id: 'a1', name: 'Multiply', engine: 'claude'),
+      ];
+      await f.show(tester);
+      await openRemoval(tester, f);
+      expect(find.text('Remove Sage from this Swarm?'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.textContaining('Test host'),
+        ),
+        findsOneWidget,
+      );
+      expect(f.server.posts, isEmpty);
+      expect(
+        tester
+            .widget<TextButton>(find.widgetWithText(TextButton, 'Cancel'))
+            .autofocus,
+        isTrue,
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Remove from Swarm'));
+      await tester.pumpAndSettle();
+      expect(f.server.posts.single['command'], {
+        'type': 'agent.remove',
+        'agentId': 'agent-1',
+      });
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(f.app.stateOf('m')!.agents.single.id, 'a1');
+      await f.close(tester);
+    },
+  );
+
+  testWidgets('cancelling Remove from Swarm sends nothing', (tester) async {
+    final f = await fixture(tester);
+    await f.show(tester);
+    await openRemoval(tester, f);
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+    expect(f.server.posts, isEmpty);
+    expect(find.byType(AlertDialog), findsNothing);
+    await f.close(tester);
+  });
+
+  testWidgets(
+    'Remove from Swarm is hidden from unrelated people and shown for their own contribution',
+    (tester) async {
+      final f = await fixture(tester, account: 'peer');
+      await f.show(tester);
+      await tester.tap(f.row(1), buttons: kSecondaryMouseButton);
+      await tester.pumpAndSettle();
+      expect(find.text('Remove from Swarm'), findsNothing);
+      expect(find.text('Details'), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      (f.server.state['agents'] as List)[1]['contributorId'] = 'peer';
+      await f.controller.refresh();
+      await tester.pumpAndSettle();
+      await openRemoval(tester, f);
+      await tester.tap(find.widgetWithText(FilledButton, 'Remove from Swarm'));
+      await tester.pumpAndSettle();
+      expect(f.server.posts.single['command'], {
+        'type': 'agent.remove',
+        'agentId': 'agent-1',
+      });
+      await f.close(tester);
+    },
+  );
+
+  testWidgets('Remove from Swarm keeps the server refusal visible', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    f.server.refuse = {
+      'code': 'FORBIDDEN',
+      'message': 'Only its contributor can remove this agent.',
+    };
+    await f.show(tester);
+    await openRemoval(tester, f);
+    await tester.tap(find.widgetWithText(FilledButton, 'Remove from Swarm'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Only its contributor can remove this agent.'),
+      findsOneWidget,
+    );
+    expect(find.byType(AlertDialog), findsOneWidget);
+    await f.close(tester);
+  });
+
+  testWidgets(
+    'Remove from Swarm retries a lost reply with the same operation',
+    (tester) async {
+      final f = await fixture(tester);
+      f.server.loseReply = true;
+      await f.show(tester);
+      await openRemoval(tester, f);
+      await tester.tap(find.widgetWithText(FilledButton, 'Remove from Swarm'));
+      await tester.pumpAndSettle();
+      expect(f.controller.hasPendingAction, isTrue);
+      (f.server.state['agents'] as List).removeWhere(
+        (a) => a['id'] == 'agent-1',
+      );
+      await f.controller.refresh();
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Retry'));
+      await tester.pumpAndSettle();
+      expect(f.server.posts, hasLength(2));
+      expect(f.server.posts[1], f.server.posts[0]);
+      expect(find.byType(AlertDialog), findsNothing);
+      await f.close(tester);
+    },
+  );
+
+  testWidgets('Remove from Swarm cannot submit after access is revoked', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    await f.show(tester);
+    await openRemoval(tester, f);
+    f.controller.revokeAccess('Access removed');
+    await tester.pumpAndSettle();
+    expect(
+      find.widgetWithText(FilledButton, 'Remove from Swarm'),
+      findsNothing,
+    );
+    expect(f.server.posts, isEmpty);
+    await f.close(tester);
+  });
 
   testWidgets('agents follow project selection', (tester) async {
     final f = await fixture(tester);

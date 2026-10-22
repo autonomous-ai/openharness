@@ -572,7 +572,18 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         && !state.releasedHarnesses?.some(r => r.machineId === target.machineId && r.harnessId === target.harnessId)) {
         reserveHarnessSlot(state, target.machineId, target.harnessId, operationId)
       }
+      const affected = actor.kind === 'person' ? state.conversations.filter(group => group.agentIds.includes(target.id)
+        || group.leadId === target.id || group.assignment?.agentId === target.id) : []
       removeAgent(target)
+      for (const group of affected) {
+        const task = group.assignment?.agentId === target.id && activeWork(group)
+          ? ` Its task "${group.title}" needs to be assigned again or closed.` : ''
+        const lead = group.leadId && group.agentIds.includes(group.leadId) ? group.leadId : null
+        // One person can withdraw an agent from several groups. Each notice needs its own durable message ID.
+        effects.messages.push({ id: stableId(operationId, 'agent-removed', group.id), conversationId: group.id,
+          author: sender, text: `${sender.name.split('@')[0]} removed ${target.displayName ?? target.name} from the Swarm.${task}`,
+          replyTo: null, recipients: lead ? [lead] : [] })
+      }
       break
     }
     case 'conversation.agent': {

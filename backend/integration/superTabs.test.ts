@@ -91,6 +91,29 @@ describe('five-part task persistence', () => {
   })
 })
 
+describe('person removal notices', () => {
+  it('records one Lead notice per group and replays removal without another notice or delivery', async () => {
+    const { tab, lead } = await fixture()
+    const group = (await run(tab, { type: 'conversation.create', title: 'Pending drafts', brief: 'Keep drafts offline',
+      checks: [{ description: 'Draft survives reconnect', independent: false }] })).result.conversationId as string
+    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Draft worker', configuration: config, lead: false })).result.agentId as string
+    await run(tab, { type: 'conversation.agent', conversationId: 'lead', agentId: worker, present: true, lead: false })
+    await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })
+    const operationId = randomUUID(), command: Command = { type: 'agent.remove', agentId: worker }
+    const first = await run(tab, command, owner, undefined, operationId)
+    const notices = await db.superTabMessage.findMany({ where: { tabId: tab, text: { contains: 'removed' } } })
+    expect(notices).toHaveLength(2)
+    expect(notices.find(n => n.conversationId === group)!.text).toContain('Pending drafts')
+    const deliveries = await db.superTabDelivery.findMany({ where: { tabId: tab, messageId: { in: notices.map(n => n.id) } } })
+    expect(deliveries).toHaveLength(2)
+    expect(deliveries.every(d => d.agentId === lead)).toBe(true)
+    expect(await run(tab, command, owner, undefined, operationId)).toEqual(first)
+    expect(await db.superTabMessage.count({ where: { tabId: tab, text: { contains: 'removed' } } })).toBe(2)
+    expect(await db.superTabDelivery.count({ where: { tabId: tab, messageId: { in: notices.map(n => n.id) } } })).toBe(2)
+  })
+})
+
 describe('agent member identities', () => {
   it('keeps a name through replay and removal, including the stored message author', async () => {
     const tab = (await store.create(owner, randomUUID(), 'People and agents')).id
