@@ -122,14 +122,19 @@ export interface CommandContext {
   routeDecision?: RouteDecision
 }
 
+/** Messages in a row between the Lead and its worker after which the Lead's message is no longer delivered automatically. */
+export const PAIR_CHAIN_LIMIT = 6
+
 /** A Lead's automatic delivery to the assigned worker answers the worker's post. Worker posts reach the Lead automatically, so
- * without a bound the two agents would keep answering each other. Allow one automatic round trip: the Lead's message is not
- * delivered when the last two messages between the pair are already the worker's report to the Lead, after the Lead's message to
- * the worker. The Lead still reaches the worker with explicit recipients. */
+ * without a bound the two agents would keep answering each other. Count the messages in a row between the pair, newest first,
+ * until one is anyone else's or is not addressed to the other (a person's message, a notice, a message to someone else). A normal
+ * exchange (brief, plan, approval, report) stays well under the limit; an unattended loop stops at it. Explicit recipients still
+ * deliver, so the Lead can always continue on purpose. */
 function leadWorkerBounced(recent: CommandContext['recent'] = [], leadId: string, workerId: string): boolean {
-  const [newest, before] = recent.filter(m => m.author.kind === 'agent' && (m.author.id === leadId || m.author.id === workerId))
-  return newest?.author.id === workerId && newest.recipients.includes(leadId)
-    && before?.author.id === leadId && before.recipients.includes(workerId)
+  const sentToPartner = (m: NonNullable<CommandContext['recent']>[number]) => m.author.kind === 'agent'
+    && (m.author.id === leadId ? m.recipients.includes(workerId) : m.author.id === workerId && m.recipients.includes(leadId))
+  const run = recent.findIndex(m => !sentToPartner(m))
+  return (run < 0 ? recent.length : run) >= PAIR_CHAIN_LIMIT
 }
 
 function controls(state: SuperTabState, actor: Actor, conversationId = 'lead'): void {

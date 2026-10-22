@@ -5,7 +5,7 @@ import type { AuthUser } from '../lib/ssoAuth.js'
 import { machineAlive } from '../lib/prisma.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
-import { applyCommand, authorizeCommandAccess, operationSchema, postable, type Command, type CommandContext } from './commands.js'
+import { applyCommand, authorizeCommandAccess, operationSchema, PAIR_CHAIN_LIMIT, postable, type Command, type CommandContext } from './commands.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, MAX_ATTACHMENT_BYTES, objectKeyFor, publicUrl, type Attachment, type Attachments } from './attachments.js'
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
@@ -28,8 +28,6 @@ type Transaction = Prisma.TransactionClient
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
 type SendCommand = Extract<Command, { type: 'message.send' }>
 // Prisma on MongoDB: `usedBy: null` alone misses rows that never had the field.
-/** How far back `message.send` looks for an automatic Lead/worker round trip (commands.ts leadWorkerBounced). */
-const RECENT_MESSAGES = 8
 const unused = { OR: [{ usedBy: null }, { usedBy: { isSet: false } }] }
 const hash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const stateOf = (row: SuperTab): SuperTabState => {
@@ -388,7 +386,7 @@ export class SuperTabStore {
       }
       if (command.type === 'message.send' && actor.kind === 'agent') {
         const recent = await tx.superTabMessage.findMany({ where: { tabId, conversationId: command.conversationId },
-          orderBy: { sequence: 'desc' }, take: RECENT_MESSAGES, select: { author: true, recipientIds: true } })
+          orderBy: { sequence: 'desc' }, take: PAIR_CHAIN_LIMIT, select: { author: true, recipientIds: true } })
         context.recent = recent.map(m => ({ author: m.author as unknown as Author, recipients: m.recipientIds }))
       }
       if (command.type === 'work.status' && command.status === 'stopped') {

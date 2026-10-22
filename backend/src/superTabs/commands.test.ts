@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
+import { applyCommand, commandSchema, PAIR_CHAIN_LIMIT, type Command, type CommandContext } from './commands.js'
 import { machineSlots } from './machines.js'
 import { activeWork, createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
@@ -249,13 +249,18 @@ describe('Super Tab collaboration policy', () => {
       const post = (agentId: string, recipientIds: string[] = [], replyTo: string | null = null) => {
         const reply = history.find(m => m.id === replyTo)
         const sent = f.run({ type: 'message.send', conversationId: group, text: 'Update.', replyTo, recipientIds }, as(agentId), {
-          recent: history.slice().reverse().slice(0, 8).map(m => ({ author: m.author as never, recipients: m.recipients })),
+          recent: history.slice().reverse().slice(0, PAIR_CHAIN_LIMIT).map(m => ({ author: m.author as never, recipients: m.recipients })),
           ...(reply ? { reply: { id: reply.id, conversationId: group, author: reply.author as never } } : {}),
         }).messages[0]!
         history.push({ author: { kind: 'agent', id: agentId }, recipients: sent.recipients, id: sent.id })
         return sent
       }
-      return { f, lead, group, worker, other, as, post, history }
+      const assign = (assigner: 'lead' | 'person') => {
+        const sent = f.run({ type: 'work.assign', conversationId: group, agentId: worker }, assigner === 'lead' ? as(lead) : owner).messages[0]!
+        history.push({ author: { kind: assigner === 'lead' ? 'agent' : 'person', id: assigner === 'lead' ? lead : 'owner' }, recipients: sent.recipients, id: sent.id })
+        return sent
+      }
+      return { f, lead, group, worker, other, as, post, assign, history }
     }
 
     it('reaches the assigned worker for a plain post, only while the work is active', () => {
@@ -291,21 +296,38 @@ describe('Super Tab collaboration policy', () => {
       expect(reply.recipients).toEqual([])
     })
 
-    it('delivers at most one automatic round trip between the Lead and the worker', () => {
-      const { f, lead, group, worker, post } = setup()
-      f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+    it('delivers the Lead\'s approval of the worker\'s plan after the Lead\'s own brief (#1549)', () => {
+      for (const assigner of ['lead', 'person'] as const) {
+        const { lead, worker, post, assign } = setup()
+        expect(assign(assigner).recipients).toEqual([worker])
+        const plan = post(worker)
+        expect(plan.recipients).toEqual([lead])
+        expect(post(lead).recipients).toEqual([worker])
+        expect(post(worker, [], plan.id).recipients).toEqual([lead])
+        expect(post(lead, [], plan.id).recipients).toEqual([worker])
+      }
+    })
+
+    it('stops an unattended Lead and worker loop, and a person message or explicit recipients start a new one', () => {
+      const { f, lead, group, worker, post, assign, history } = setup()
+      assign('lead')
       const hops: string[][] = []
       let speaker = worker
       // Each agent answers every message it receives, the worst case for a loop.
-      for (let turn = 0; turn < 20; turn++) {
-        const sent = post(speaker, [], null)
+      for (let turn = 0; turn < 50; turn++) {
+        const sent = post(speaker)
         hops.push(sent.recipients)
         const next = sent.recipients[0]
         if (!next) break
         speaker = next
       }
-      expect(hops).toEqual([[lead], [worker], [lead], []])
+      expect(hops.slice(0, -1).every(recipients => recipients.length === 1)).toBe(true)
+      expect(hops.at(-1)).toEqual([])
+      expect(hops).toHaveLength(PAIR_CHAIN_LIMIT)
       expect(post(lead, [worker]).recipients).toEqual([worker])
+      const person = f.run({ type: 'message.send', conversationId: group, text: 'Carry on.', replyTo: null, recipientIds: [worker] }).messages[0]!
+      history.push({ author: { kind: 'person', id: 'owner' }, recipients: person.recipients, id: person.id })
+      expect(post(lead).recipients).toEqual([worker])
     })
   })
 
