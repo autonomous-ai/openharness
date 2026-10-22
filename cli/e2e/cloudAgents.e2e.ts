@@ -33,8 +33,11 @@ class FakeDevin {
   created: Record<string, unknown>[] = []
   sent: string[] = []
   archived = 0
-  private status = 'running'
-  private detail = 'working'
+  status = 'running'
+  /** Null when Devin sent no `status_detail`, so a later read can drop one that was there. */
+  detail: string | null = 'working'
+  /** A test's status stands: the scripted question and finish do not replace it. */
+  hold = false
   private messages: Array<{ event_id: string; source: string; message: string; created_at: string }> = []
   private pulls: Array<{ pr_url: string; pr_state: string }> = []
 
@@ -52,8 +55,9 @@ class FakeDevin {
         if (url.pathname === '/v3/self') return reply({ org_id: 'org-e2e', principal_type: 'service_user' })
         if (request.method === 'POST' && url.pathname === '/v3/organizations/org-e2e/sessions') { this.created.push(body); return reply(session()) }
         if (request.method === 'GET' && url.pathname === '/v3/organizations/org-e2e/sessions/devin-e2e') {
-          // Its first look finds Devin asking.
-          if (!this.messages.length) {
+          // Its first look finds Devin asking. `running` so a session that started `new` can still be waiting.
+          if (!this.hold && !this.messages.length) {
+            this.status = 'running'
             this.detail = 'waiting_for_user'
             this.messages.push({ event_id: 'e1', source: 'devin', message: 'Which branch should I base it on?', created_at: '2026-10-11T10:01:00Z' })
           }
@@ -65,9 +69,11 @@ class FakeDevin {
         }
         if (request.method === 'POST' && url.pathname.endsWith('/messages')) {
           this.sent.push(String(body.message))
-          this.detail = 'finished'
-          this.messages.push({ event_id: `e${this.messages.length + 1}`, source: 'devin', message: 'Opened #42. Tests pass.', created_at: '2026-10-11T10:03:00Z' })
-          this.pulls = [{ pr_url: 'https://github.com/acme/api/pull/42', pr_state: 'open' }]
+          if (!this.hold) {
+            this.detail = 'finished'
+            this.messages.push({ event_id: `e${this.messages.length + 1}`, source: 'devin', message: 'Opened #42. Tests pass.', created_at: '2026-10-11T10:03:00Z' })
+            this.pulls = [{ pr_url: 'https://github.com/acme/api/pull/42', pr_state: 'open' }]
+          }
           return reply({})
         }
         if (request.method === 'POST' && url.pathname.endsWith('/archive')) { this.archived += 1; this.status = 'suspended'; this.detail = 'user_request'; return reply(session()) }
@@ -109,6 +115,8 @@ describe('cloud agents on the real daemon', () => {
     vault.save('devin', { access_token: 'cog_e2e', token_type: 'Bearer', source: 'custom', label: 'Devin', transport: 'none', api_entry: { origin: devin.base } })
     await d.start()
     const client = await LocalClient.connect(d)
+    fake.status = 'new'
+    fake.detail = null
 
     await until('the services to connect', () => d.log().includes('[services] search connected') || null, 30_000, 200)
     expect(cloudStarts(d), 'an experiment no one asked for').toBe(0)
@@ -121,6 +129,7 @@ describe('cloud agents on the real daemon', () => {
     expect(created.error, JSON.stringify(created)).toBeUndefined()
     const agent = created.agent!
     expect(agent).toMatchObject({ engine: 'devin-cloud', location: 'cloud', tmuxPane: null, terminal: { available: false }, project: { remote: 'https://github.com/acme/api' } })
+    expect(agent.cloud).toMatchObject({ state: 'starting', providerStatus: { status: 'new', detail: null } })
     expect(cloudStarts(d)).toBe(1)
     expect(devin.created).toEqual([{ prompt: 'fix the flaky login test', repos: ['acme/api'], max_acu_limit: 2, title: 'fix the flaky login test' }])
     // The key went to Devin and nowhere else: the daemon's log never has it.
@@ -130,7 +139,7 @@ describe('cloud agents on the real daemon', () => {
     const question = await asked
     expect(question).toMatchObject({ agentId: agent.id, payload: { questions: [{ q: 'Which branch should I base it on?', canText: true }] } })
     const listed = (await client.request<{ agents: Array<Record<string, any>> }>('agents_list', {})).agents.find((row) => row.id === agent.id)
-    expect(listed).toMatchObject({ location: 'cloud', cloud: { place: "Devin's cloud", state: 'needs_input' } })
+    expect(listed).toMatchObject({ location: 'cloud', cloud: { place: "Devin's cloud", state: 'needs_input', providerStatus: { status: 'running', detail: 'waiting_for_user' } } })
 
     const finished = client.next((frame: Frame) => frame.type === 'agent_synced' && frame.payload?.agent?.id === agent.id && frame.payload.agent.cloud?.state === 'idle', 60_000, 'the harness to finish')
     // Answered as the dial and the windows answer any agent's question: under the question's own id.
@@ -140,12 +149,24 @@ describe('cloud agents on the real daemon', () => {
     expect(devin.sent).toEqual(['main'])
     const done = (await finished).payload.agent
     expect(done.cloud.links).toContainEqual({ label: 'Pull request #42', url: 'https://github.com/acme/api/pull/42' })
+    expect(done.cloud).toMatchObject({ state: 'idle', providerStatus: { status: 'running', detail: 'finished' } })
 
     const transcript = await client.request<{ messages: Array<{ from: string; text: string }> }>('cloud_transcript', { agentId: agent.id })
     expect(transcript.messages.map((message) => [message.from, message.text])).toEqual([
       ['person', 'fix the flaky login test'], ['agent', 'Which branch should I base it on?'], ['person', 'main'], ['agent', 'Opened #42. Tests pass.'],
     ])
-    expect(await client.request('cloud_send', { agentId: agent.id, text: 'thanks' })).toMatchObject({ ok: true })
+    // Asleep, and a stop by request, stay stopped. A message in the transcript does not make either one finished.
+    fake.hold = true
+    fake.status = 'suspended'
+    fake.detail = 'inactivity'
+    fake.messages.push({ event_id: 'e-sleep', source: 'devin', message: 'Still working through the tests.', created_at: '2026-10-11T10:04:00Z' })
+    const slept = client.next((frame: Frame) => frame.type === 'agent_synced' && frame.payload?.agent?.id === agent.id && frame.payload.agent.cloud?.providerStatus?.detail === 'inactivity', 60_000, 'asleep after inactivity')
+    expect(await client.request('cloud_send', { agentId: agent.id, text: 'are you still there?' })).toMatchObject({ ok: true })
+    expect((await slept).payload.agent.cloud).toMatchObject({ state: 'stopped', activity: 'Devin went to sleep after inactivity.', providerStatus: { status: 'suspended', detail: 'inactivity' } })
+    fake.detail = 'user_request'
+    const halted = client.next((frame: Frame) => frame.type === 'agent_synced' && frame.payload?.agent?.id === agent.id && frame.payload.agent.cloud?.providerStatus?.detail === 'user_request', 60_000, 'stopped by request')
+    expect(await client.request('cloud_send', { agentId: agent.id, text: 'stop there' })).toMatchObject({ ok: true })
+    expect((await halted).payload.agent.cloud).toMatchObject({ state: 'stopped', activity: 'The session was stopped by request.', providerStatus: { status: 'suspended', detail: 'user_request' } })
 
     expect(await client.request('agent_delete', { agentId: agent.id })).toMatchObject({ deleted: true })
     expect(devin.archived).toBe(1)
@@ -157,6 +178,8 @@ describe('cloud agents on the real daemon', () => {
     const back = await until('the harness to be listed again', async () =>
       (await again.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true }, 30_000)).agents.find((row) => row.id === agent.id) ?? null, 60_000, 500)
     expect(back).toMatchObject({ status: 'stopped', location: 'cloud' })
+    // A local stop is not Devin's last report: the saved harness does not keep the status from before it.
+    expect(back.cloud).not.toHaveProperty('providerStatus')
     again.close()
   }, 240_000)
 

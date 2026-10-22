@@ -121,10 +121,10 @@ describe('Devin Cloud', () => {
     ])
     const devin = devinAdapter(bridge, async () => 'devin')
     const started = await devin.start({ task: 'fix it', repository: 'acme/api', options: {} })
-    expect(started).toEqual({ remote: { id: 'devin-9' }, links: [{ label: 'Session', url: 'https://app.devin.ai/s/9' }], update: { messages: [], state: 'starting' } })
+    expect(started).toEqual({ remote: { id: 'devin-9' }, links: [{ label: 'Session', url: 'https://app.devin.ai/s/9' }], update: { messages: [], state: 'starting', providerStatus: { status: 'new', detail: null } } })
     expect(calls[1]).toEqual(['POST', '/v3/organizations/org-1/sessions', { prompt: 'fix it', repos: ['acme/api'], max_acu_limit: DEFAULT_ACU_LIMIT, title: 'fix it' }])
     const update = await devin.poll({ id: 'devin-9' })
-    expect(update).toMatchObject({ messages: [{ id: 'e2', text: 'Which branch?', at: 't1' }], state: 'needs_input', question: { text: 'Which branch?', choices: [] }, remote: { cursor: 'c1' } })
+    expect(update).toMatchObject({ messages: [{ id: 'e2', text: 'Which branch?', at: 't1' }], state: 'needs_input', question: { text: 'Which branch?', choices: [] }, remote: { cursor: 'c1' }, providerStatus: { status: 'running', detail: 'waiting_for_user' } })
     expect(calls.slice(2).map(([method, path]) => `${method} ${path}`)).toEqual([
       'GET /v3/organizations/org-1/sessions/devin-9',
       'GET /v3/organizations/org-1/sessions/devin-9/messages?first=100',
@@ -142,7 +142,7 @@ describe('Devin Cloud', () => {
       { status: 401, json: {} },
     ])
     const devin = devinAdapter(bridge, async () => 'devin')
-    expect(await devin.poll({ id: 'd', cursor: 'c0' })).toMatchObject({ state: 'failed', activity: 'It reached its ACU limit.', question: null, remote: { cursor: 'c0' } })
+    expect(await devin.poll({ id: 'd', cursor: 'c0' })).toMatchObject({ state: 'failed', activity: 'It reached its ACU limit.', question: null, remote: { cursor: 'c0' }, providerStatus: { status: 'suspended', detail: 'usage_limit_exceeded' } })
     await devin.send({ id: 'd' }, 'go on')
     await devin.stop!({ id: 'd' })
     expect(calls.slice(3)).toEqual([['POST', '/v3/organizations/org-1/sessions/d/messages', { message: 'go on' }], ['POST', '/v3/organizations/org-1/sessions/d/archive', undefined]])
@@ -156,7 +156,44 @@ describe('Devin Cloud', () => {
     expect(calls[1][2]).toEqual({ prompt: 't', max_acu_limit: 2, title: 't' })
     const waiting = apiBridge([{ json: { org_id: 'o' } }, { json: { status: 'running', status_detail: 'waiting_for_approval' } }, { json: { items: [] } }])
     // Waiting with nothing new said: the question already asked stands (the service asks one if none was).
-    expect((await devinAdapter(waiting.bridge, async () => 'd').poll({ id: 'x' })).question).toBeUndefined()
+    const polled = await devinAdapter(waiting.bridge, async () => 'd').poll({ id: 'x' })
+    expect(polled.question).toBeUndefined()
+    expect(polled).toMatchObject({ state: 'needs_input', providerStatus: { status: 'running', detail: 'waiting_for_approval' } })
+  })
+
+  it('keeps Devin\'s own status beside Harness\'s, and a stop is not a finished task', async () => {
+    const steps: Array<{ status: string; detail?: string; state: string; activity: string | null }> = [
+      { status: 'running', detail: 'working', state: 'working', activity: null },
+      { status: 'running', detail: 'finished', state: 'idle', activity: null },
+      { status: 'running', detail: 'waiting_for_user', state: 'needs_input', activity: null },
+      { status: 'running', detail: 'waiting_for_approval', state: 'needs_input', activity: null },
+      { status: 'suspended', detail: 'inactivity', state: 'stopped', activity: 'Devin went to sleep after inactivity.' },
+      { status: 'suspended', detail: 'user_request', state: 'stopped', activity: 'The session was stopped by request.' },
+      { status: 'suspended', detail: 'usage_limit_exceeded', state: 'failed', activity: 'It reached its ACU limit.' },
+      { status: 'suspended', detail: 'out_of_quota', state: 'failed', activity: 'The Devin account is out of quota.' },
+      { status: 'suspended', detail: 'payment_declined', state: 'failed', activity: 'Devin declined the payment.' },
+      { status: 'error', state: 'failed', activity: null },
+      { status: 'exit', state: 'idle', activity: null },
+      { status: 'paused', detail: 'not_a_known_detail', state: 'working', activity: null },
+    ]
+    const answers: Array<{ json: Record<string, unknown> }> = [{ json: { org_id: 'org-1' } }]
+    for (const step of steps) {
+      answers.push({ json: { status: step.status, ...(step.detail ? { status_detail: step.detail } : {}) } })
+      answers.push({ json: { items: [] } })
+    }
+    // A progress message on a stop, then an empty page: neither one is a finished task.
+    answers.push({ json: { status: 'suspended', status_detail: 'user_request' } }, { json: { items: [{ event_id: 'e9', source: 'devin', message: 'I drafted a plan.', created_at: 't9' }] } })
+    answers.push({ json: { status: 'suspended', status_detail: 'inactivity' } }, { json: { items: [] } })
+    const devin = devinAdapter(apiBridge(answers).bridge, async () => 'devin')
+    for (const step of steps) {
+      expect(await devin.poll({ id: 'd' })).toMatchObject({
+        state: step.state, activity: step.activity, providerStatus: { status: step.status, detail: step.detail ?? null },
+      })
+    }
+    const said = await devin.poll({ id: 'd' })
+    expect(said).toMatchObject({ state: 'stopped', activity: 'The session was stopped by request.', messages: [{ text: 'I drafted a plan.' }], providerStatus: { status: 'suspended', detail: 'user_request' } })
+    expect(said.state).not.toBe('idle')
+    expect(await devin.poll({ id: 'd' })).toMatchObject({ state: 'stopped', messages: [], activity: 'Devin went to sleep after inactivity.', providerStatus: { status: 'suspended', detail: 'inactivity' } })
   })
 })
 

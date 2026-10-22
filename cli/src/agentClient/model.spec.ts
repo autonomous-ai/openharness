@@ -101,6 +101,18 @@ describe('a harness as the agent verbs show it', () => {
     expect(all.find((r) => r.name === 'kid')).toMatchObject({ startedBy: 'lead', yours: false })
   })
 
+  it('keeps a cloud maker\'s status beside the row, and leaves every other harness as it was', () => {
+    const asleep = frame('asleep', { engine: 'devin-cloud', location: 'cloud', status: 'stopped', activity: { state: 'idle' },
+      cloud: { state: 'stopped', activity: 'Devin went to sleep after inactivity.', providerStatus: { status: 'suspended', detail: 'inactivity' } },
+      updatedAt: new Date(NOW - 1_000).toISOString() })
+    const fo = frame('fo', { engine: 'fo', location: 'cloud', cloud: { state: 'idle', activity: 'Calling Hair Lab' } })
+    const rows = rowsOf([frame('lead'), asleep, fo], { machineId: 'm', machine: 'mac', caller: null, ledger: ledger(), now: NOW, all: true })
+    expect(rows.find((r) => r.name === 'asleep')).toMatchObject({ state: 'stopped', cloud: { state: 'stopped', activity: 'Devin went to sleep after inactivity.', providerStatus: { status: 'suspended', detail: 'inactivity' } } })
+    expect(rows.find((r) => r.name === 'fo')!.cloud).toEqual({ state: 'idle', activity: 'Calling Hair Lab' })
+    expect(rows.find((r) => r.name === 'lead')).not.toHaveProperty('cloud')
+    expect(rowsOf([asleep], { machineId: 'm', machine: 'mac', caller: null, ledger: ledger(), now: NOW, all: false })).toEqual([])
+  })
+
   it('names every agent as the app does, never by its id', () => {
     // `harness ps` listed a Kilo harness as "kilo": the table here knew six agents and passed the rest through.
     const named = (engine: string) => rowsOf([frame('a', { engine })], { machineId: 'm', machine: 'mac', caller: null, ledger: ledger(), now: NOW, all: false })[0]!.agent

@@ -25,7 +25,13 @@ export interface Frame {
   /** `cloud`: a harness in its maker's cloud (lib/cloudAgents.ts), with no pane and no session. Its state and words are
    *  the cloud service's: `cloud.state` and `cloud_transcript`. */
   location?: string
-  cloud?: { state?: string; links?: Array<{ label: string; url: string }> } | null
+  cloud?: {
+    state?: string
+    activity?: string | null
+    links?: Array<{ label: string; url: string }>
+    /** The maker's own status. Absent for a harness saved before it was kept, and for Fo and Cursor. */
+    providerStatus?: { status?: string | null; detail?: string | null } | null
+  } | null
 }
 
 /** The agent running the verb: a harness in its own pane, or an agent outside Harness. Null for a person at a terminal. */
@@ -60,6 +66,15 @@ export interface Row {
   /** The person's last asks and the last turns' summaries, newest first, when the daemon has them. */
   asks?: string[]
   about?: string
+  /** A cloud harness's maker state, beside [state]. Absent for a harness on this machine. */
+  cloud?: CloudMeta
+}
+
+/** What `ps`, `show` and `wait` JSON say about a cloud harness, beside Harness's own state. */
+export interface CloudMeta {
+  state: string
+  activity: string | null
+  providerStatus?: { status: string | null; detail: string | null }
 }
 
 /** How long a stopped harness stays one to list: what ⌘B offers (desktop task_route.dart `stoppedSessionsWithin`). */
@@ -71,6 +86,17 @@ export const isAgent = (frame: Frame): boolean => !!frame.id && frame.engine !==
  *  person, so a wait read it as done (lampOS, #1444). */
 const CLOUD_STATES: Record<string, State> = {
   starting: 'starting', working: 'working', needs_input: 'needs-input', idle: 'idle', failed: 'failed', stopped: 'stopped',
+}
+
+/** A cloud harness's maker state from its frame, for `ps`, `show` and `wait` JSON. Nothing for any other harness,
+ *  and no `providerStatus` when the frame has none: an older harness, or Fo and Cursor. */
+export function cloudMeta(frame: Frame): CloudMeta | undefined {
+  if (frame.location !== 'cloud' || !frame.cloud || typeof frame.cloud.state !== 'string') return undefined
+  const raw = frame.cloud.providerStatus
+  const providerStatus = raw && typeof raw === 'object'
+    ? { status: typeof raw.status === 'string' ? raw.status : null, detail: typeof raw.detail === 'string' ? raw.detail : null }
+    : undefined
+  return { state: frame.cloud.state, activity: typeof frame.cloud.activity === 'string' ? frame.cloud.activity : null, ...(providerStatus ? { providerStatus } : {}) }
 }
 
 export function stateOf(frame: Frame): State {
@@ -139,6 +165,7 @@ export function rowsOf(frames: Frame[], ctx: RowContext): Row[] {
     const state = stateOf(frame)
     const last = frame.updatedAt ? Date.parse(frame.updatedAt) : NaN
     if (state === 'stopped' && (!ctx.all || !(ctx.now - last < STOPPED_WITHIN_MS))) continue
+    const cloud = cloudMeta(frame)
     const member = { machineId: ctx.machineId, agentId: frame.id }
     const you = ctx.caller?.agentId === frame.id && ctx.caller.machineId === ctx.machineId
     const parent = ctx.ledger.parentOf(member)
@@ -155,6 +182,7 @@ export function rowsOf(frames: Frame[], ctx: RowContext): Row[] {
       yours,
       self: you,
       lastActive: Number.isFinite(last) ? new Date(last).toISOString() : null,
+      ...(cloud ? { cloud } : {}),
     })
   }
   // Working first, then by last activity: what an agent choosing where work goes looks at first.

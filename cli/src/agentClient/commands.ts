@@ -30,7 +30,7 @@ import { AgentClientError, openDaemon, whereFor, type Daemon, type Where } from 
 import { Ledger, ledgerPath, type Pending, type Started } from './ledger.js'
 import { messagesRpc, type Rpc } from '../messages/rpc.js'
 import { sendPane } from '../messages/command.js'
-import { asSaid, callerOf, clip, cloudTurn, forAgent, isAgent, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type Frame, type HistoryEvent, type Row, type State } from './model.js'
+import { asSaid, callerOf, clip, cloudMeta, cloudTurn, forAgent, isAgent, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type CloudMeta, type Frame, type HistoryEvent, type Row, type State } from './model.js'
 
 export interface ClientDeps {
   pane?: string | undefined
@@ -672,11 +672,13 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         ? [{ run: `harness reply ${at} -- <the person's answer>`, when: 'it waits for the person: tell them what it asks' }]
         // `close` takes no cloud harness.
         : showNext(s.env, state, t.yours && t.frame.location !== 'cloud', at)
+      const cloud = cloudMeta(t.frame)
       const result = {
         name: t.frame.name, id: t.frame.id, agent: engineName(t.frame.engine ?? ''), machine: t.machine, state, startedBy,
         folder: t.frame.project?.cwd ?? null, branch: t.frame.project?.branch ?? null,
         ask: turn?.ask ?? null, answer: clip(answer, chars), truncated: answer.length > chars, tools: turn?.tools ?? 0, next,
         ...(state === 'needs-input' ? { needsPerson: true } : {}),
+        ...(cloud ? { cloud } : {}),
         ...(t.frame.cloud?.links?.length ? { links: t.frame.cloud.links } : {}),
       }
       if (flags.has('--json')) s.out(JSON.stringify(result, null, 1))
@@ -812,8 +814,13 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       }
       const look = async (t: Target, frames: Frame[]): Promise<Settled | null> => {
         const frame = frames.find((f) => f.id === t.frame.id)
-        // Not live: stopped, or gone. Asked of the full list only then.
-        if (!frame) return ended(t, (await list(t.daemon, true)).some((f) => f.id === t.frame.id) ? 'stopped' : 'gone')
+        // Not live: stopped, or gone. Asked of the full list only then. The stopped frame is the one this wait
+        // ended on: the frame from before the wait still has the maker's earlier status (lampOS, #1449).
+        if (!frame) {
+          const stopped = (await list(t.daemon, true)).find((f) => f.id === t.frame.id)
+          if (stopped) t.frame = stopped
+          return ended(t, stopped ? 'stopped' : 'gone')
+        }
         t.frame = frame
         if (frame.status === 'stopped') return ended(t, 'stopped')
         // A cloud harness says where it is itself, with no screen to read: done once it is no longer starting or working.
@@ -873,8 +880,11 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         }
         await s.sleep(Math.min(s.intervalMs, Math.max(0, deadline - s.now())))
       }
-      const results: Array<{ name: string; id: string; state: Settled | 'installing' | 'starting'; detail?: string }> = [
-        ...targets.filter((t) => settled.has(t)).map((t) => ({ name: t.frame.name ?? t.frame.id.slice(0, 8), id: t.frame.id, state: settled.get(t)! })),
+      const results: Array<{ name: string; id: string; state: Settled | 'installing' | 'starting'; detail?: string; cloud?: CloudMeta }> = [
+        ...targets.filter((t) => settled.has(t)).map((t) => {
+          const cloud = cloudMeta(t.frame)
+          return { name: t.frame.name ?? t.frame.id.slice(0, 8), id: t.frame.id, state: settled.get(t)!, ...(cloud ? { cloud } : {}) }
+        }),
         // Not started yet when the wait ended: said as what it waits for, which is what the agent waits on.
         ...following.filter((a) => gave.has(a)).map((a) => {
           const given = gave.get(a)!
