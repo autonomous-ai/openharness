@@ -348,8 +348,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (!state.machines.some(m => m.machineId === command.machineId) && state.machines.length >= 32) fail('MACHINES_FULL', 'A Super Tab can have up to 32 contributed machines.')
       // Before a machine was contributed, a Lead's start on it that never dispatched was left pending for good (12 on Ken's
       // Mac that day) and refused every contribution. Those finish as failed; a dispatched or recent start still blocks.
-      for (const start of state.starts ?? []) {
-        if (context.abandonedStartIds?.includes(start.id)) start.error = 'Abandoned before it started.'
+      const abandoned = (state.starts ?? []).filter(s => context.abandonedStartIds?.includes(s.id))
+      for (const start of abandoned) start.error = 'Abandoned before it started.'
+      // One command records one message, so the Lead's conversation hears it once, whichever groups asked.
+      const names = [...new Set(abandoned.map(s => s.request.name))]
+      if (names.length && state.conversations.some(c => c.id === 'lead')) {
+        message('lead', `${names.join(', ')} never started and will not start now. Start ${names.length > 1 ? 'them' : 'it'} again if still needed.`)
       }
       if (state.starts?.some(s => s.request.machineId === command.machineId && (!s.harnessId || (s.poolGeneration && !s.poolSettled)) && !s.error)) fail('STARTS_PENDING', 'Reconcile pending starts before changing this contribution.')
       state.machines = state.machines.filter(m => m.machineId !== command.machineId)

@@ -79,9 +79,13 @@ export interface SuperTabHostOptions {
 }
 
 export const hostJournalFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `host-${machineId}.json`)
-/** How long a machine that failed to add itself to a Swarm waits before trying again, and after an add before the
- *  roster can ask for another (a roster read may predate the add). */
+/** How long after an add the roster may ask for another (a roster read may predate the add), and the first wait after a
+ *  failed one. Each try probes every engine's account (about 14 login shells), so the wait doubles up to half an hour:
+ *  a refusal such as a dispatched start that never reports, or no signed-in engine, can last for days. */
 const JOIN_RETRY_MS = 60_000
+const JOIN_RETRY_MAX_MS = 30 * 60_000
+/** Refusals no retry can change while this host runs: the Swarm has all its machines, or this account does not own it. */
+const JOIN_FINAL = new Set(['MACHINES_FULL', 'OWNER_REQUIRED'])
 /** How long after a pre-#1527 Swarm launch its engine may first bind a session and still be the Swarm's own. */
 const LEGACY_FIRST_BIND_MS = 120_000
 const typedId = (entry: Entry) => `team:service:superTabs:${entry.deliveryId}`
@@ -114,8 +118,8 @@ export class SuperTabHost {
   private readonly observers: typeof publishObservers
   private readonly attachedFiles: typeof attachedFiles
   private readonly prepareContribution: typeof prepareContribution
-  /** Per tab, when this machine may next try to add itself to it; Infinity while an add runs. */
-  private readonly joins = new Map<string, number>()
+  /** Per tab the roster marks, the add in progress or when the next may run. */
+  private readonly joins = new Map<string, { running: boolean; failures: number; retryAt: number }>()
   /** Each delivery's downloaded files, so input held by a busy terminal is not downloaded again on every retry. Only a
    * complete download is kept: a failed one is tried again before the next delivery of the same message. */
   private readonly files = new Map<string, string>()
@@ -484,17 +488,23 @@ export class SuperTabHost {
    *  adds it as the + dialog does (desktop/lib/super_tabs/machines.dart), only if it is still missing, so a person's
    *  own contribution is never changed. A slow engine probe never delays deliveries. */
   private joinSwarms(rows: unknown[]): void {
-    for (const item of rows) {
-      const tabId = object(item).tabId
-      if (object(item).joinSwarm !== true || !identifier(tabId) || (this.joins.get(tabId) ?? 0) > this.now()) continue
-      this.joins.set(tabId, Infinity)
+    const marked = new Set(rows.map(object).filter(row => row.joinSwarm === true && identifier(row.tabId)).map(row => row.tabId as string))
+    for (const [tabId, join] of this.joins) if (!marked.has(tabId) && !join.running) this.joins.delete(tabId)
+    for (const tabId of marked) {
+      const join = this.joins.get(tabId) ?? { running: false, failures: 0, retryAt: 0 }
+      if (join.running || join.retryAt > this.now()) continue
+      join.running = true
+      this.joins.set(tabId, join)
       void (async () => {
         const prepared = await this.prepareContribution(this.core, { tabId, scope: 'swarm' })
         await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: randomUUID(), command: {
           type: 'machine.contribute', machineId: this.machineId, name: this.core.account.machineName() ?? hostname(),
           cwd: prepared.cwd, scope: 'swarm', engines: prepared.engines, maxAgents: prepared.maxAgents, ifMissing: true } })
-      })().catch(error => this.log(`Could not add this machine to its Swarm: ${error instanceof Error ? error.message : String(error)}`))
-        .finally(() => this.joins.set(tabId, this.now() + JOIN_RETRY_MS))
+      })().then(() => { join.failures = 0; join.retryAt = this.now() + JOIN_RETRY_MS }, error => {
+        join.retryAt = error instanceof SuperTabHostError && JOIN_FINAL.has(error.code) ? Infinity
+          : this.now() + Math.min(JOIN_RETRY_MAX_MS, JOIN_RETRY_MS * 2 ** join.failures++)
+        this.log(`Could not add this machine to its Swarm: ${error instanceof Error ? error.message : String(error)}`)
+      }).finally(() => { join.running = false })
     }
   }
 

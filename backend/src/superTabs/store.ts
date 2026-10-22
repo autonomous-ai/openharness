@@ -773,8 +773,9 @@ export class SuperTabStore {
           const waiting = state.conversations.find(c => activeWork(c) && c.assignment!.agentId === target.id &&
             c.assignment!.execution.machineId === machineId && ['needs_human', 'blocked'].includes(c.assignment!.status))?.assignment
           const attention = waiting ? { assignmentId: waiting.id, status: waiting.status, result: waiting.result?.slice(0, 500) ?? null } : null
-          // The owner's own machine runs this Swarm's Lead but is not one of its machines: the host adds it (cli/src/superTabs/host.ts).
-          const joinSwarm = state.ownerId === user.sub && !state.machines?.some(m => m.machineId === machineId)
+          // The owner's own machine runs the owner's own Lead of this Swarm but is not one of its machines: the host adds it
+          // (cli/src/superTabs/host.ts). A collaborator's Lead on a machine shared with them must not open it to every member.
+          const joinSwarm = state.ownerId === user.sub && target.contributorId === user.sub && !state.machines?.some(m => m.machineId === machineId)
             && state.conversations.some(c => !c.archived && c.leadId === target.id)
           result.push({ tabId: row.id, tabName: state.name, revision: row.revision, paused: state.paused, active, attention, agent: target, joinSwarm,
             stopRequested: target.workDecision === 'stop' && !state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id),

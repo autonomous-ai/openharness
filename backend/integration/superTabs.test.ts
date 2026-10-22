@@ -1556,6 +1556,7 @@ describe('the owner\'s Lead machine joins its Swarm', () => {
     expect(joined.starts!.find(s => s.id === abandoned)!.error).toBe('Abandoned before it started.')
     expect(joined.starts!.find(s => s.id === inFlight)!.error).toBe('Launch refused.')
     expect(joined.starts!.find(s => s.id === dispatched)!.error).toBeNull()
+    expect((await store.messages(owner, tab, 'lead', {})).messages.at(-1)!.text).toBe('Builder never started and will not start now. Start it again if still needed.')
     const added = joined.machines!.find(m => m.machineId === machineId)!
     expect(added).toMatchObject({ contributorId: owner.sub, maxAgents: 3, scope: 'swarm', cwd: '/swarm' })
     expect((await store.hostTabs(owner, machineId)).map(r => r.joinSwarm)).toEqual([false, false])
@@ -1572,5 +1573,15 @@ describe('the owner\'s Lead machine joins its Swarm', () => {
     await expect(run(tab, join)).rejects.toMatchObject({ code: 'OWNER_REQUIRED' })
     await expect(run(tab, join, host)).rejects.toMatchObject({ code: 'OWNER_REQUIRED' })
     expect((await store.read(owner, tab)).state.machines ?? []).toEqual([])
+  })
+
+  it('never marks the owner\'s machine for a collaborator\'s Lead running on it through a share', async () => {
+    const machineId = `owner-shared-${randomUUID()}`
+    await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    await db.machineShare.create({ data: { machineId, ownerId: owner.sub, autonomousEnv: 'prod', emails: [peer.email] } })
+    const tab = (await store.create(owner, randomUUID(), 'Shared Lead')).id
+    await invite(tab)
+    await run(tab, { type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'Peer Lead', configuration: config, lead: true }, peer)
+    expect((await store.hostTabs(owner, machineId)).map(r => [r.agent.contributorId, r.joinSwarm])).toEqual([[peer.sub, false]])
   })
 })
