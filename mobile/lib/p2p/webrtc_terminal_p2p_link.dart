@@ -28,7 +28,14 @@ const _maxMessageSize = 512 * 1024;
 /// (or relay) candidate is in, plus a moment for the other interfaces to report,
 /// and at the cap regardless. Whatever gathers after that trickles.
 const _gatherCap = Duration(seconds: 3);
-const _gatherSettleAfterReflexive = Duration(milliseconds: 500);
+
+/// ⚠️ **100 ms, down from 500 (2026-10-19).** The channel only comes up after the offer goes, and
+/// until then a terminal's keys ride the relay: on an iPhone 14 the offer left at +592 ms, 500 of them
+/// this wait, of a ~1.5 s setup. The wait buys nothing the connection needs — host candidates are in
+/// the SDP from the start, and every candidate found after the offer still reaches the responder,
+/// held until its answer and then trickled (`_lateCandidates`).
+@visibleForTesting
+const gatherSettleAfterReflexive = Duration(milliseconds: 100);
 
 class WebRtcTerminalP2pLinkFactory implements TerminalP2pLinkFactory {
   const WebRtcTerminalP2pLinkFactory();
@@ -187,7 +194,7 @@ class WebRtcTerminalP2pLink implements TerminalP2pLink {
     final how = await Future.any<String>([
       _gathered!.future.then((_) => 'gathered'),
       _reflexive!.future
-          .then((_) => Future<void>.delayed(_gatherSettleAfterReflexive))
+          .then((_) => Future<void>.delayed(gatherSettleAfterReflexive))
           .then((_) => 'gathered-enough'),
     ]).timeout(_gatherCap, onTimeout: () => 'gather-capped');
     if (_pc != pc || _finished) return;

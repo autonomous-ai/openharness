@@ -437,6 +437,40 @@ describe('sign-in approval proxy', () => {
   })
 })
 
+// The native desktop's chat files: its REST client has no account token, so the daemon streams the upload on with its own.
+describe('Super Tab attachment pass-through', () => {
+  it('hands a local multipart POST to the pass-through as a stream, guarded like the other writes', async () => {
+    const forward = vi.fn(async (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, path: string) => {
+      let bytes = 0
+      for await (const chunk of req) bytes += (chunk as Buffer).byteLength
+      res.writeHead(201, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ path, bytes }))
+    })
+    const { base } = await start({ onSuperTabAttachment: forward })
+    const headers = { 'x-adapter-local': '1', 'content-type': 'multipart/form-data; boundary=x' }
+    const body = Buffer.alloc(300 * 1024, 1)
+    for (const h of [{ 'content-type': headers['content-type'] }, { ...headers, origin: 'https://untrusted.example' }]) {
+      expect((await fetch(`${base}/api/super-tabs/tab-1/attachments`, { method: 'POST', headers: h, body })).status).toBe(403)
+    }
+    expect((await fetch(`${base}/api/super-tabs/../attachments`, { method: 'POST', headers, body })).status).toBe(404)
+    expect((await fetch(`${base}/api/super-tabs/tab-1/commands`, { method: 'POST', headers, body })).status).toBe(404)
+    expect(forward).not.toHaveBeenCalled()
+    // Past the 256 KiB the JSON routes read: the body reaches the pass-through whole, as a stream.
+    const r = await fetch(`${base}/api/super-tabs/tab-1/attachments?asAgentId=agent-1&other=x`, { method: 'POST', headers, body })
+    expect(r.status).toBe(201)
+    // An agent's own `post --attach` names it; nothing else in the query goes on.
+    expect(await r.json()).toEqual({ path: '/api/super-tabs/tab-1/attachments?asAgentId=agent-1', bytes: body.byteLength })
+    const person = await fetch(`${base}/api/super-tabs/tab-1/attachments?asAgentId=../x`, { method: 'POST', headers, body: 'x' })
+    expect(await person.json()).toEqual({ path: '/api/super-tabs/tab-1/attachments', bytes: 1 })
+  })
+
+  it('is unavailable on a daemon without it', async () => {
+    const { base } = await start({})
+    expect((await fetch(`${base}/api/super-tabs/tab-1/attachments`, { method: 'POST',
+      headers: { 'x-adapter-local': '1', 'content-type': 'multipart/form-data; boundary=x' }, body: 'x' })).status).toBe(503)
+  })
+})
+
 describe('account Experimental settings proxy', () => {
   it('proxies only voluntary fixed-choice feedback and guards it from cross-origin requests', async () => {
     const send = vi.fn(async () => ({ status: 200, body: { success: true, data: { accepted: true } } }))

@@ -342,6 +342,8 @@ export interface CoreApi {
   daemon: DaemonAddress
   /** The cloud agents' doors into the core (services/cloud.ts): absent from a core or a process that offers them none. */
   cloud?: CloudCore
+  /** The Super Tab service's door into the core (superTabs/attention.ts): absent from a core or a process that offers it none. */
+  superTabs?: SuperTabsCore
   /** The Wi-Fi device's doors into the core (services/wifi.ts): each one call it made when it ran here. */
   wifi: {
     /** What it lists and reads in line (`WifiView`), asked again before each request it answers. */
@@ -902,6 +904,8 @@ export interface RecapSession {
   agentId: string
   /** Its display name, which a summary card carries for a machine whose tile is not loaded. */
   name?: string
+  /** Its engine (`claude`, `codex`, …): what a finished turn's tier is decided with (lib/notifyTier.ts). */
+  engine?: string
   /** Its transcript: a Claude sub-agent writes its own beside it, which a held turn end watches. */
   transcriptPath?: string
   /** An Orchestrator specialist's turn, or its director's while specialists are out: nobody's news. Said
@@ -911,8 +915,9 @@ export interface RecapSession {
 }
 
 /** Who watches this machine's turn cards: a device at all (through the backend or on the cable), and one
- *  rendering this machine right now. */
-export interface RecapWatchers { device: boolean; active: boolean }
+ *  rendering this machine right now. `remote`: an app away from this desk (the phone, a browser) holds a session
+ *  over the relay, and hears how loudly each turn ends (`turn_summary`'s `tier`); absent from an older core. */
+export interface RecapWatchers { device: boolean; active: boolean; remote?: boolean }
 
 /** The turn lifecycle, as the core tells the recaps. */
 export type TurnLifecycle =
@@ -1136,6 +1141,32 @@ export interface CloudCore {
   unask(agentId: string, requestId: string): void
 }
 
+/** The request ids of the Super Tab waits on the devices: never an engine's (theirs are its tool ids), so an answer
+ *  sent back for one is never typed into a pane (services/devices.ts). */
+export const SUPER_TAB_REQUEST_PREFIX = 'supertab:'
+
+/**
+ * A Super Tab member on this machine waits on a person: its assignment needs a decision or is stuck
+ * (superTabs/attention.ts). Shown on the devices cabled here as a question nobody answers there: display only.
+ */
+export interface SuperTabAttention {
+  /** The local agent (its harness id). */
+  agentId: string
+  /** `supertab:<assignment>:<status>`: stable for one wait, never an engine's question id. */
+  requestId: string
+  /** The Super Tab's name, at most 48 bytes. */
+  superTab: string
+  attention: 'decision' | 'stuck'
+  /** What the device reads: the decision asked for, or why it is stuck. */
+  text: string
+}
+
+/** The Super Tab service's door into the core (core/superTabAttention.ts): the waits of its members here. */
+export interface SuperTabsCore {
+  /** Every wait, replacing the last set: the core raises what is new on the devices and closes what is gone. */
+  attention(items: SuperTabAttention[]): void
+}
+
 /** What the cloud service answers the core: done, or why not, in words a person reads. */
 export type CloudResult = { ok: true; detail?: string } | { ok: false; error: string; detail?: string }
 
@@ -1275,6 +1306,12 @@ export interface WifiResume {
 /** A receipt the device asked for by `harness device receipt`, or the service is not there to say. */
 export type WifiReceipt = { receipt: AutonomousDeviceReceipt | null } | { unavailable: true }
 
+/** `harness autonomous-device addon`: what devices published, a proposal sent, or one read back
+ *  (lib/autonomous-device/addons.ts); refused with the add-on layer's own code, or the service is not there. */
+export const WIFI_ADDON_OPS = ['state', 'propose', 'proposal'] as const
+export type WifiAddonOp = typeof WIFI_ADDON_OPS[number]
+export type WifiAddon = { result: Record<string, unknown> } | { error: { code: string; message: string } } | { unavailable: true }
+
 /** What the core lists for the Wi-Fi device, read in line while it answers a request: the agents as it
  *  shows them, the Store's evidence on each, and whether a window is attached to show one. */
 export interface WifiView {
@@ -1319,6 +1356,8 @@ export interface WifiPort {
   revealed(operationId: string, agentId: string): void
   /** `harness device receipt`: what became of one of a device's requests. */
   receipt(deviceId: string, idempotencyKey: string): Promise<WifiReceipt>
+  /** `harness autonomous-device addon`: an agent reads what devices published, or proposes to one. */
+  addon(op: WifiAddonOp, input: Record<string, unknown>): Promise<WifiAddon>
   stop(): Promise<void>
 }
 
@@ -1342,7 +1381,7 @@ export const WIFI_FALLBACKS: PortFallbacks<WifiPort> = {
   session: undefined, request: later(undefined), dropped: undefined, revoked: undefined, resume: later(undefined), card: undefined,
   turnStarted: undefined, turnEnded: undefined, stream: undefined, transcript: undefined, delivery: undefined,
   dispatched: undefined, inputStatus: undefined, agentGone: undefined, appFocus: later(undefined), revealed: undefined,
-  receipt: later({ unavailable: true }), stop: later(undefined),
+  receipt: later({ unavailable: true }), addon: later({ unavailable: true }), stop: later(undefined),
 }
 
 /*
@@ -1742,6 +1781,8 @@ export interface CoreApiDeps {
   wifi: CoreApi['wifi']
   /** The cloud agents' doors (core/agents/cloud.ts). */
   cloud?: CloudCore
+  /** The Super Tab service's door (core/superTabAttention.ts). */
+  superTabs?: SuperTabsCore
   /** The running cloud harnesses as list rows (`agents.cloud`). */
   cloudRows?: () => RegisteredSession[]
   lastTurn: CoreApi['transcripts']['lastTurn']
@@ -1757,7 +1798,7 @@ export function createCoreApi({
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, creationStatus, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText, activitySnapshot, activity, summaries,
   closeAgent, activityAt,
-  signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, cloudRows, lastTurn, nativeTurns, turnCard, turnSummary,
+  signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, superTabs, cloudRows, lastTurn, nativeTurns, turnCard, turnSummary,
   log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
   // The devices reach the windows through these alone, and only with their own frames: a devices process
@@ -1833,5 +1874,6 @@ export function createCoreApi({
     daemon,
     wifi,
     ...(cloud ? { cloud } : {}),
+    ...(superTabs ? { superTabs } : {}),
   }
 }

@@ -71,9 +71,15 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   const cwd = pool.scope === 'swarm'
     ? project.repository?.machineId === pool.machineId ? project.repository.cwd : `${pool.cwd.replace(/\/+$/, '')}/${project.id}`
     : pool.cwd
-  if (request.cwd !== cwd || !pool.engines.includes(request.engine)
-    || request.codexHome || request.gridModel || request.gridName || request.permissionMode) {
-    fail('OUTSIDE_CONTRIBUTION', 'Use the contributed project, engine and default account settings.', 403)
+  // Every refused field is named, with what the machine does accept. Values the caller sent are not echoed: an account
+  // setting can be a path or a name of the caller's own.
+  const refused: string[] = []
+  if (request.cwd !== cwd) refused.push(`cwd (this project uses ${cwd} on it)`)
+  if (!pool.engines.includes(request.engine)) refused.push(`engine (it contributes ${pool.engines.join(', ') || 'no engines'})`)
+  const settings = (['codexHome', 'gridModel', 'gridName', 'permissionMode'] as const).filter(key => request[key])
+  if (settings.length) refused.push(`${settings.join(', ')} (it runs with its own default account settings, so leave ${settings.length > 1 ? 'them' : 'it'} out)`)
+  if (refused.length) {
+    fail('OUTSIDE_CONTRIBUTION', `${pool.name} accepts only its contributed project folder, engines and default account settings. Refused: ${refused.join('; ')}.`, 403)
   }
   if (!pool.observation || now - pool.observation.receivedAt > 45_000) {
     fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')

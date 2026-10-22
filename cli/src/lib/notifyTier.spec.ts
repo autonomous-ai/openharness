@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { JevUnavailable } from './jev/jevClient.js'
-import { createTierDecider, type TierInput } from './notifyTier.js'
+import { createTierDecider, fallbackTier, isTier, tierState, type TierInput } from './notifyTier.js'
 
 const base: TierInput = {
   agent: 'lamp', engine: 'codex', recap: 'Shipped the thing.', durationS: 300,
@@ -13,6 +13,17 @@ const make = (jev: any, extra: object = {}) => {
 }
 
 describe('notifyTier', () => {
+  it('reads only the three tiers as one', () => {
+    for (const tier of ['alert', 'list', 'silent']) expect(isTier(tier)).toBe(true)
+    for (const value of [undefined, null, '', 'ALERT', 'loud', 1, {}]) expect(isTier(value)).toBe(false)
+  })
+
+  it('falls back to a list entry for a turn of two minutes or more, silence for a shorter or unknown one', () => {
+    expect(fallbackTier(120)).toBe('list')
+    expect(fallbackTier(119)).toBe('silent')
+    expect(fallbackTier(null)).toBe('silent')
+  })
+
   it('failed → alert by rule, Jev never asked', async () => {
     const jev = vi.fn()
     const { decide } = make(jev)
@@ -38,12 +49,30 @@ describe('notifyTier', () => {
     expect(jev).toHaveBeenCalledTimes(1)
     const [state, questions] = jev.mock.calls[0] as any[]
     expect(state.recap.length).toBeLessThanOrEqual(600)
-    expect(state).toMatchObject({
-      agent: 'lamp', engine: 'codex', duration_s: 300,
-      work: { tests_passed: 640, tests_failed: 0, commits: 1 }, recent: { alerts_30m: 0, lists_30m: 0 },
+    expect(state).toEqual({
+      agent: 'lamp (codex)', recap: 'x'.repeat(600), turn: 'ran 300 s; tests 640 passed, 0 failed; 1 commit',
+      recent: '0 alerts and 0 list entries in the last 30 minutes',
     })
     expect(Object.keys(questions)).toEqual(['tier'])
     expect(Object.keys(questions.tier.criteria)).toEqual(['alert', 'list', 'silent'])
+  })
+
+  it('shows Jev four fields of text, as the hosted route takes them (a record of strings, four keys at most)', () => {
+    const shapes = [
+      tierState(base, { alerts: 2, lists: 5 }),
+      tierState({ ...base, agent: '', engine: '', durationS: null, stats: {} }, { alerts: 0, lists: 0 }),
+      tierState({ ...base, engine: '', stats: { testsFailed: 2, commits: 3 } }, { alerts: 0, lists: 1 }),
+      tierState({ ...base, agent: '', stats: { testsPassed: 4 } }, { alerts: 0, lists: 0 }),
+    ]
+    for (const state of shapes) {
+      expect(Object.keys(state)).toHaveLength(4)
+      expect(Object.values(state).every((value) => typeof value === 'string')).toBe(true)
+    }
+    expect(shapes[0]).toEqual({ agent: 'lamp (codex)', recap: 'Shipped the thing.', turn: 'ran 300 s; tests 640 passed, 0 failed; 1 commit',
+      recent: '2 alerts and 5 list entries in the last 30 minutes' })
+    expect(shapes[1]).toMatchObject({ agent: 'an agent', turn: 'duration unknown' })
+    expect(shapes[2]).toMatchObject({ agent: 'lamp', turn: 'ran 300 s; tests 0 passed, 2 failed; 3 commits' })
+    expect(shapes[3]).toMatchObject({ agent: 'an agent (codex)', turn: 'ran 300 s; tests 4 passed, 0 failed' })
   })
 
   it('Jev unavailable / too slow / null answer → fallback by duration', async () => {
@@ -55,6 +84,9 @@ describe('notifyTier', () => {
     expect(await slow.decide(base)).toMatchObject({ tier: 'list', by: 'fallback:timeout' })
     const bad = make(vi.fn(async () => ({})))
     expect(await bad.decide({ ...base, durationS: 10 })).toMatchObject({ tier: 'silent', by: 'fallback:no-answer' })
+    // Anything else it throws is not Jev saying why: the rule all the same, said as an error.
+    const broken = make(vi.fn(async () => { throw new Error('socket hang up') }))
+    expect(await broken.decide(base)).toMatchObject({ tier: 'list', by: 'fallback:error' })
   })
 
   it('jev null → fallback without calling anything', async () => {
@@ -79,10 +111,10 @@ describe('notifyTier', () => {
     for (let i = 0; i < 3; i++) { t = i * 60_000; await decide(base) }
     t = 4 * 60_000
     await decide(base)
-    expect((jev.mock.calls[3] as any[])[0].recent.alerts_30m).toBe(3)
+    expect((jev.mock.calls[3] as any[])[0].recent).toBe('3 alerts and 0 list entries in the last 30 minutes')
     t = 31 * 60_000
     await decide(base)
-    expect((jev.mock.calls[4] as any[])[0].recent.alerts_30m).toBe(2)
+    expect((jev.mock.calls[4] as any[])[0].recent).toBe('2 alerts and 0 list entries in the last 30 minutes')
   })
 
   it('5 concurrent decisions resolve independently within the budget', async () => {

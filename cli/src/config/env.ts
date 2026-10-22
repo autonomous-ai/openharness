@@ -244,6 +244,12 @@ const fields = {
   // and every `harness` command with it).
   HARNESS_STORE_CATALOG_URL: url((address) => !address.username && !address.password && (address.protocol === 'https:'
     || (address.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(address.hostname)))),
+  // Where Super Tab chat files are served: the backend's SUPER_TAB_ATTACHMENTS_PUBLIC_BASE. The host downloads a
+  // delivered message's files from here alone, so a message cannot make this computer fetch any other address.
+  // Public HTTPS; loopback HTTP for the local Super Tab rig.
+  SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: (raw: string | undefined) => url((address) => !address.username && !address.password && !address.search
+    && (address.protocol === 'https:' || (address.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(address.hostname))))(raw)
+    ?? 'https://cdn.harness.autonomous.ai',
   // This computer's stable id, minted once and never regenerated (see computerIdFile above). Pin it
   // explicitly on a box with no durable home — a container or CI job that gets a fresh ~/.harness on
   // every boot would otherwise look like a NEW computer each time and collect a machine per start.
@@ -313,6 +319,11 @@ const fields = {
   // encrypted on the wire, so a packet capture cannot answer "what did the adapter actually send".
   // Never prints message text, transcripts, tokens or payload bodies.
   LOG_FRAMES: flag('false'),
+  // Log a remote client's keystrokes on their way to the pane and back: which wire each came on, how long it
+  // waited in line, held for a missing one, and until its echo went out. OFF by default: one line per hop per
+  // keystroke. Numbers and timings only (stream, seq, size) — never what was typed. The phone's own half is
+  // `--dart-define=HARNESS_TYPING_TRACE=true` (mobile/lib/logging/typing_trace.dart).
+  TYPING_TRACE: flag('false'),
   // TEMPORARY / diagnostic. Forces iceTransportPolicy:'relay', so the ONLY candidate either peer can
   // offer is a Cloudflare TURN allocation — the way to exercise the relay path on a pair that would
   // otherwise always connect directly. Costs money per GB while it is on; never ship it enabled.

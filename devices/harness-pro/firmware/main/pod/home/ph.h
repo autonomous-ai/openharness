@@ -95,7 +95,7 @@ int ph_notices_top(const pod_model_t *, int max, ph_notice_line_t *out);
 
 // ---- The notice toast (ph_toast.c) ----
 // The toast for unread entry `u` over whatever the frame holds (call it last, as the glue draws it): see the file's header. shown_ms: when it appeared; it
-// slides in over POD_TOAST_SLIDE_MS and its bar runs out at shown_ms + POD_TOAST_MS. Adds one POD_A_BANNER hit (arg 0, id = the agent). Returns the
+// slides in over POD_TOAST_SLIDE_MS and its bar runs out at shown_ms + POD_TOAST_MS (a Super Tab question's bar stays full: pod_model_attention). Adds one POD_A_BANNER hit (arg 0, id = the agent). Returns the
 // card's height. At most 9 runs.
 int ph_toast(pod_out_frame_t *, const pod_model_t *, const pod_unread_t *u, uint32_t shown_ms, uint32_t now_ms);
 

@@ -6,6 +6,7 @@ import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'message_text.dart';
+import 'model.dart';
 
 Future<void> showSuperTabWork(
   BuildContext context,
@@ -30,12 +31,12 @@ Future<void> showSuperTabWork(
                   SuperTabMessageText(group!.brief)
                 else
                   const Text(
-                    'The lead hasn’t defined an assignment in this conversation yet.',
+                    'The product manager hasn’t defined an assignment in this conversation yet.',
                   ),
                 if (assignment != null) ...[
                   const SizedBox(height: 16),
                   Text(
-                    '${c.snapshot?.agentName(assignment['agentId'] as String, fallback: 'Agent unavailable') ?? 'Agent unavailable'} · ${(assignment['status'] as String).replaceAll('_', ' ')}',
+                    '${c.snapshot?.agentName(assignment['agentId'] as String, fallback: 'Agent unavailable') ?? 'Agent unavailable'} · ${superTabWorkStatusLabel(assignment['status'] as String)}',
                   ),
                 ],
                 for (final check

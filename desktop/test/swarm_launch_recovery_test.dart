@@ -4,7 +4,7 @@ import 'package:harness/state/harness_launch_integration.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 
-import 'super_tab_launch_test.dart' show SuperTabLaunchFixture;
+import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 
 void main() {
   for (final resend in [false, true]) {
@@ -74,9 +74,11 @@ void main() {
   }
 
   test(
-    'a Swarm rejects a terminal-only lead before creating a native session',
+    'a Swarm rejects a terminal-only agent before creating a native session',
     () async {
+      // A new Lead cannot choose a terminal at all; an agent joining it can.
       final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
       final box = await f.box(engine: 'terminal');
       expect(await box.create(), NewHarnessOutcome.failed);
       expect(box.error, contains('Choose an agent that runs on a machine'));

@@ -225,7 +225,15 @@ export class FakeBackend {
         req.on('data', (chunk) => { raw += chunk })
         req.on('end', () => {
           if (!backend.jev) { res.statusCode = 503; res.end(json({ success: false, error: { code: 'JEV_BUSY', message: 'Fixture Jev is off.' } })); return }
-          res.end(json({ success: true, data: { answers: backend.jev(JSON.parse(raw || '{}')) } }))
+          const body = JSON.parse(raw || '{}') as Record<string, any>
+          // As the real route validates it (backend routes/jevRoute.ts): `state` is a record of strings, four keys
+          // at most. A fixture that took anything let a state of numbers and objects through for two days, while
+          // the real route answered every one of them with a 400 (2026-10-21).
+          const state = body.state
+          const valid = !!state && typeof state === 'object' && !Array.isArray(state) && Object.keys(state).length <= 4
+            && Object.values(state).every((value) => typeof value === 'string')
+          if (!valid) { res.statusCode = 400; res.end(json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Invalid input: state is a record of at most four strings' } })); return }
+          res.end(json({ success: true, data: { answers: backend.jev(body) } }))
         })
         return
       }

@@ -1,10 +1,13 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma.js'
+import { env } from '../config/env.js'
+import multipart from '@fastify/multipart'
+import { attachmentsFromEnv, MAX_ATTACHMENT_BYTES } from '../superTabs/attachments.js'
 import { validateBody, validateParams, validateQuery } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
 import { operationSchema } from '../superTabs/commands.js'
-import { SuperTabError } from '../superTabs/model.js'
+import { fail, SuperTabError } from '../superTabs/model.js'
 import { SuperTabStore } from '../superTabs/store.js'
 import { routingPolicySchema } from '../superTabs/routingPolicy.js'
 import { nativeEventSchema, openNativeSchema } from '../superTabs/native.js'
@@ -38,6 +41,7 @@ const deliveryAction = z.discriminatedUnion('type', [
 const savePolicy = z.object({ revision: z.number().int().nonnegative().safe(), policy: routingPolicySchema }).strict()
 const stop = z.object({ assignmentId: id, receipt: z.string().min(1).max(2000) }).strict()
 
+
 async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
   try { sendSuccess(reply, await action()) } catch (error) {
     if (!(error instanceof SuperTabError)) throw error
@@ -47,7 +51,7 @@ async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
 
 /** Uses the normal authenticated control API. It never accepts caller-provided host/contributor identities. */
 export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore } = {}) {
-  const store = options.store ?? new SuperTabStore(prisma)
+  const store = options.store ?? new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env))
   app.get<{ Params: z.infer<typeof hostParams> }>('/api/super-tabs/hosts/:machineId/pools', { preHandler: validateParams(hostParams) },
     (req, reply) => respond(reply, () => store.hostPools(req.user!, req.params.machineId)))
   app.get<{ Params: z.infer<typeof hostStartParams> }>('/api/super-tabs/hosts/:machineId/starts/:tabId/:startId', { preHandler: validateParams(hostStartParams) },
@@ -104,6 +108,38 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     { preHandler: [validateParams(tabParams), validateBody(operation, { named: true })] },
     (req, reply) => respond(reply, () => store.execute(req.user!, req.params.tabId,
       { operationId: req.body.operationId, command: req.body.command }, req.body.asAgentId)))
+  // A chat file comes straight from the client (the desktop's and the browser's account token, or the daemon's for
+  // `post --attach`), never through a machine or the relay. Multipart is parsed in this scope alone, so no other
+  // Super Tab route's body handling changes.
+  await app.register(async scope => {
+    // One byte over the limit, so the store sees an oversized file and refuses it rather than keeping a cut one.
+    await scope.register(multipart, { limits: { fileSize: MAX_ATTACHMENT_BYTES + 1, files: 1, fields: 1, parts: 2 } })
+    scope.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/attachments',
+      { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] }, (req, reply) => respond(reply, async () => {
+        let conversationId: string | null = null, uploaded: unknown = null, stored: unknown = null
+        try {
+          for await (const part of req.parts()) {
+            if (part.type === 'field') {
+              if (part.fieldname !== 'conversationId' || conversationId !== null || uploaded) fail('INVALID_ATTACHMENT', 'Send conversationId, then one file.', 400)
+              conversationId = id.safeParse(part.value).data ?? fail('INVALID_ATTACHMENT', 'Name the conversation to attach the file to.', 400)
+            } else {
+              if (!conversationId || uploaded) { part.file.resume(); fail('INVALID_ATTACHMENT', 'Send conversationId, then one file.', 400) }
+              try {
+                uploaded = await store.upload(req.user!, req.params.tabId, conversationId,
+                  { name: part.filename, mime: part.mimetype, body: part.file }, req.query.asAgentId)
+              } catch (error) { stored = error; throw error } finally { part.file.resume() }
+            }
+          }
+        } catch (error) {
+          // Only the form itself is the client's fault; the store's own failures keep their status.
+          const code = error && typeof error === 'object' && 'code' in error ? error.code : null
+          if (code === 'FST_REQ_FILE_TOO_LARGE') fail('ATTACHMENT_TOO_LARGE', 'A file can be at most 10 MB.', 413)
+          if (error instanceof SuperTabError || (error === stored && !(code && String(code).startsWith('FST_')))) throw error
+          fail('INVALID_ATTACHMENT', 'Send a multipart form with conversationId and one file.', 400)
+        }
+        return uploaded ?? fail('INVALID_ATTACHMENT', 'Attach one file.', 400)
+      }))
+  })
   app.get<{ Params: z.infer<typeof startParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/starts/:startId',
     { preHandler: [validateParams(startParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.start(req.user!, req.params.tabId, req.params.startId, req.query.asAgentId)))

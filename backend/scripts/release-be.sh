@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Cut a backend release: bump the version, tag HEAD `vX.Y.Z_backend`, push the tag.
 #
-#   ./scripts/release-be.sh              # patch bump  (v1.1.2_backend -> v1.1.3_backend)
-#   ./scripts/release-be.sh minor        # v1.1.2_backend -> v1.2.0_backend
-#   ./scripts/release-be.sh major        # v1.1.2_backend -> v2.0.0_backend
-#   ./scripts/release-be.sh 1.4.1        # exact version -> v1.4.1_backend
+#   ./scripts/release-be.sh              # patch bump  (v1.1.2_backend -> v1.1.3_backend, v1.1.99_backend -> v1.2.1_backend)
+#   ./scripts/release-be.sh minor        # v1.1.2_backend -> v1.2.1_backend
+#   ./scripts/release-be.sh major        # v1.1.2_backend -> v2.0.1_backend
+#   ./scripts/release-be.sh 1.4.1        # exact version -> v1.4.1_backend (patch 1 to 99)
 #   ./scripts/release-be.sh --dry-run    # print what it WOULD do, touch nothing
 #   ./scripts/release-be.sh --allow-older  # a rollback: older code under a higher version
 #
@@ -42,6 +42,10 @@ done
 if [[ "$BUMP" == "exact" ]] &&
   ! [[ "$EXACT" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
   echo "ERROR exact version '$EXACT' is invalid; use SemVer X.Y.Z (for example 1.4.1)." >&2
+  exit 1
+fi
+if [[ "$BUMP" == "exact" ]] && (( 10#${EXACT##*.} < 1 || 10#${EXACT##*.} > 99 )); then
+  echo "ERROR exact version '$EXACT' needs a patch from 1 to 99, like every other release." >&2
   exit 1
 fi
 
@@ -97,10 +101,13 @@ REST="${LATEST#*.}"
 MINOR="${REST%%.*}"
 PATCH="${REST#*.}"
 
+# A patch runs from 1 to 99, then the next minor starts at .1: the convention Desktop and web already follow
+# (desktop/scripts/release-desktop.sh next_patch_version). The backend lacked it, and v1.2.100_backend was cut
+# on October 21, 2026; a patch past 99 also rolls over, so the release after it is v1.3.1_backend.
 case "$BUMP" in
-  patch) NEXT="$MAJOR.$MINOR.$((PATCH + 1))" ;;
-  minor) NEXT="$MAJOR.$((MINOR + 1)).0" ;;
-  major) NEXT="$((MAJOR + 1)).0.0" ;;
+  patch) if (( PATCH >= 99 )); then NEXT="$MAJOR.$((MINOR + 1)).1"; else NEXT="$MAJOR.$MINOR.$((PATCH + 1))"; fi ;;
+  minor) NEXT="$MAJOR.$((MINOR + 1)).1" ;;
+  major) NEXT="$((MAJOR + 1)).0.1" ;;
   exact) NEXT="$EXACT" ;;
 esac
 

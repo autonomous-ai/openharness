@@ -342,6 +342,88 @@ void main() {
   });
 
   test(
+    'a tab closed on the phone leaves the desk, and the phone with it',
+    () async {
+      await join();
+      desk.note('t1');
+
+      desk.closeTab('t1');
+      await pumpEventQueue();
+
+      expect([for (final tab in desk.tabs) tab.id], ['t2']);
+      expect(backend.received, [
+        {'op': 'tab.close', 'id': 't1'},
+      ]);
+      expect([for (final tab in backend.tabs) tab.id], ['t2']);
+      // Out of it: the agent on screen decides again which tab the phone is in.
+      expect(desk.activeTabId, isNull);
+    },
+  );
+
+  test('closing another tab leaves the phone in the one it is in', () async {
+    await join();
+    desk.note('t1');
+
+    desk.closeTab('t2');
+    await pumpEventQueue();
+
+    expect([for (final tab in desk.tabs) tab.id], ['t1']);
+    expect(desk.activeTabId, 't1');
+  });
+
+  test('closing a tab that is gone, or with no desk, writes nothing', () async {
+    desk.closeTab('t1');
+    await pumpEventQueue();
+    expect(backend.received, isEmpty);
+
+    await join();
+    desk.closeTab('gone');
+    await pumpEventQueue();
+
+    expect(backend.received, isEmpty);
+    expect(desk.tabs, hasLength(2));
+  });
+
+  test(
+    'a tab renamed on the phone keeps the name every computer shows',
+    () async {
+      await join();
+
+      desk.renameTab('t2', '  Deep work ');
+      await pumpEventQueue();
+
+      expect(backend.received, [
+        {
+          'op': 'tab.rename',
+          'id': 't2',
+          'name': 'Deep work',
+          'nameIsCustom': true,
+        },
+      ]);
+      final renamed = desk.tabs.firstWhere((tab) => tab.id == 't2');
+      expect(renamed.name, 'Deep work');
+      expect(renamed.nameIsCustom, isTrue);
+    },
+  );
+
+  test('a name the desk would refuse is never sent', () async {
+    await join();
+
+    // The backend takes 80 at most (`DESK_NAME_MAX`), and a refused write
+    // would stop this phone writing to the desk at all.
+    desk.renameTab('t2', 'x' * (PhoneDesk.nameMaxLength + 1));
+    desk.renameTab('t2', '   ');
+    await pumpEventQueue();
+
+    expect(backend.received, isEmpty);
+    expect(desk.enabled, isTrue);
+
+    desk.renameTab('t2', 'x' * PhoneDesk.nameMaxLength);
+    await pumpEventQueue();
+    expect(backend.received, hasLength(1));
+  });
+
+  test(
     'a write held up by the network is kept and replayed, not dropped',
     () async {
       await join();

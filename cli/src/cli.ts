@@ -202,7 +202,7 @@ ${apiUsage}
 ${connectionsUsage}
 
 Browser end-to-end encryption:
-  harness autonomous-device <command>     pair/status/list/revoke an Autonomous device
+  harness autonomous-device <command>     pair/status/list/revoke an Autonomous device; addon state/propose/proposal
   harness pair <code>          pair a BROWSER (code shown on the machine page)
   harness pairings             list paired clients
   harness unpair <#|fp>        unpair one browser (by list number or fingerprint)

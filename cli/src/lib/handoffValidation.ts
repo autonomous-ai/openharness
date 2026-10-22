@@ -27,7 +27,7 @@ export function validateHandoff(value: unknown): asserts value is PreparedHandof
       && (read.cwd === null || path(read.cwd)) && text(read.fileKey, 128) && text(read.version, 256) && route(read.route))
     || !handoffShape(project, ['cwd', 'path', 'fileKey', 'route']) || !path(project.cwd) || !path(project.path) || !text(project.fileKey, 128) || !route(project.route)
     || !handoffShape(result, ['cwd', 'file', 'gitRepo', 'degraded']) || result.cwd !== project.cwd || typeof result.gitRepo !== 'boolean'
-    || !list(result.degraded, 3, item => ['git', 'transcript', 'file'].includes(item))
+    || !list(result.degraded, 4, item => ['git', 'transcript', 'file', 'summary'].includes(item))
     || !handoffShape(git, ['exclude', 'route', 'files']) || !(git.exclude === null || path(git.exclude)) || !route(git.route)
     || !list(git.files, 2, file => handoffShape(file, ['path', 'version']) && path(file.path) && text(file.version, 256))) return fail()
   if (documents === null ? result.file !== null : !handoffShape(documents, ['markdown', 'transcript'])

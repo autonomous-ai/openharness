@@ -234,7 +234,13 @@ class SampleRuntime implements SampleHarnessHost {
           name: harness.agent['name'] as String? ?? 'harness',
           machine: machine.machine.displayName,
         ),
-        (aborted: false, replay: false, subagent: false, reply: reply),
+        (
+          aborted: false,
+          replay: false,
+          subagent: false,
+          reply: reply,
+          tier: null,
+        ),
         watching: () => _watching(ref),
       );
     }

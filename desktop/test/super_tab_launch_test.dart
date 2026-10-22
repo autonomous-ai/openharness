@@ -48,6 +48,10 @@ class SuperTabFixtureConnection extends WsConn {
   static const streamId = '00112233-4455-6677-8899-aabbccddeeff';
   Map<String, dynamic>? native;
   String nativeName = 'Lead';
+  Map<String, dynamic> nativeProject = {
+    'cwd': '/work/project',
+    'label': 'Project',
+  };
   bool cancelledCreation = false;
   Future<Map<String, dynamic>> Function(String, Map<String, dynamic>)?
   creationRecovery;
@@ -272,7 +276,7 @@ class SuperTabFixtureConnection extends WsConn {
         'engine': payload['engine'],
         'closeSupported': true,
         'terminal': {'available': true},
-        'project': {'cwd': '/work/project', 'label': 'Project'},
+        'project': nativeProject,
       };
       if (loseCreate) {
         loseCreate = false;
@@ -347,6 +351,7 @@ class SuperTabLaunchFixture {
     HarnessAttachments? attachments,
     bool newProject = false,
     String? task = 'Discuss the architecture.',
+    String? harnessId,
   }) async {
     final integration = await SuperTabLaunch.open(
       app,
@@ -360,6 +365,7 @@ class SuperTabLaunchFixture {
       engine: engine,
       folder: '/work/project',
       task: task,
+      harnessId: harnessId,
       integration: integration,
       attachments: attachments,
     );
@@ -729,6 +735,26 @@ void main() {
     );
   }
 
+  test(
+    'a lead in a GitHub checkout shares its repository for other machines',
+    () async {
+      // The daemon's frame carries origin in its canonical form, without a scheme.
+      final f = SuperTabLaunchFixture()
+        ..connection.nativeProject = {
+          'name': 'project',
+          'cwd': '/work/project/mobile',
+          'root': '/work/project',
+          'remote': 'github.com/example/project',
+        };
+      final box = await f.box(engine: 'claude');
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect(f.connection.joins.single['command']['project'], {
+        'cwd': '/work/project',
+        'repositoryUrl': 'https://github.com/example/project',
+      });
+    },
+  );
+
   test('the lead prompt routes before starting or assigning work', () async {
     final f = SuperTabLaunchFixture()..connection.nativeName = 'hi';
     final box = await f.box(engine: 'claude');
@@ -739,9 +765,40 @@ void main() {
                 .$2['prompt']
             as String;
     expect(prompt, contains('route GROUP'));
+    expect(prompt, contains('size (small, medium or large)'));
     expect(prompt, contains('routeDecisionId'));
     expect(prompt, contains('overrideReason'));
     expect(prompt, contains('NO_CANDIDATE'));
+  });
+
+  test('a new Lead starts Claude Code or Codex; other agents stay open to the rest', () async {
+    final f = SuperTabLaunchFixture();
+    final lead = await f.box(engine: 'opencode');
+    expect(lead.integration!.engines, ['claude', 'codex']);
+    expect(lead.compatibleEngines, ['claude', 'codex']);
+    expect(lead.engine, isIn(['claude', 'codex']));
+    lead.focusField(NewHarnessField.harness);
+    expect(lead.options.map((option) => option.id), ['claude', 'codex']);
+    // Opened beside a Store harness's OpenCode pane, it inherits that agent and still gives way.
+    final inherited = await f.box(
+      engine: 'opencode',
+      harnessId: 'store-harness',
+    );
+    expect(inherited.engine, isIn(['claude', 'codex']));
+
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final member = NewHarnessController(
+      f.app,
+      machineId: 'm',
+      engine: 'opencode',
+      folder: '/work/project',
+      integration: await SuperTabLaunch.open(f.app, f.app.activeSwarm, 'lead'),
+    );
+    addTearDown(member.dispose);
+    await Future<void>.delayed(Duration.zero);
+    expect(member.integration!.engines, isNull);
+    expect(member.compatibleEngines, contains('opencode'));
+    expect(member.engine, 'opencode');
   });
 
   test('the lead prompt asks for short plain replies, answered once', () async {

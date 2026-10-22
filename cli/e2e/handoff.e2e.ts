@@ -71,6 +71,24 @@ describe('change agent in the edge host', () => {
     client.close()
   })
 
+  it('prepares a large Claude conversation for Codex using its recent context', async () => {
+    const { d, client, cwd, agentId } = await start()
+    await turn(client, agentId, '!grow 32')
+    await turn(client, agentId, 'keep the latest request when switching to Codex')
+    const request = { agentId, changeId: CHANGE, targetEngine: 'codex' }
+    const prepared = await client.request('agent_handoff_prepare', request, 6_000)
+    expect(prepared).toMatchObject({ agentId, cwd, gitRepo: true, degraded: ['transcript'] })
+    const text = readFileSync(join(cwd, prepared.file), 'utf8')
+    expect(text).toContain('keep the latest request when switching to Codex')
+    expect(text).toContain('Older history was omitted')
+    expect(await client.request('agent_handoff_prepare', request, 6_000)).toMatchObject({
+      agentId, cwd, gitRepo: true, degraded: ['transcript'], file: prepared.file,
+    })
+    await turn(client, agentId, 'the source still works until the switch closes it')
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
   it.each(['claude', 'codex'])('holds an unavailable %s native identity before publication and recovers the same request', async engine => {
     const { d, client, cwd, agentId } = await start({}, engine)
     await turn(client, agentId, 'keep this conversation while identity is unavailable')

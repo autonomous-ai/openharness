@@ -253,8 +253,10 @@ export interface TerminalStreamHandle<Ref extends TerminalRuntimeRef = TerminalR
   endSnapshot(): void
   writeRaw(bytes: Uint8Array): Promise<TerminalActionResult>
   /** A clipboard paste, delivered as one atomic unit rather than chunked like `writeRaw` — see
-   *  `pasteRawIntoTmux` for why a paste needs its own path instead of reusing the keystroke one. */
-  pasteRaw(text: string): Promise<TerminalActionResult>
+   *  `pasteRawIntoTmux` for why a paste needs its own path instead of reusing the keystroke one.
+   *  `allowed` is asked again just before the paste lands: a paste takes two tmux processes, and the
+   *  stream it was sent on may be closed or taken over meanwhile. */
+  pasteRaw(text: string, allowed?: () => boolean): Promise<TerminalActionResult>
   resize(size: TerminalStreamSize): Promise<TerminalActionResult>
   /** Scroll a full-screen TUI that owns mouse-tracking but mishandles SGR wheel
    *  reports (confirmed live for Grok: it echoes the raw escape bytes into its

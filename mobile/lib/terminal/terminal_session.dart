@@ -1075,9 +1075,22 @@ class TerminalSession extends ChangeNotifier {
     _quietBeats = 0;
     _lastHeardOnStream = DateTime.now();
     final generation = _generation;
+    // How long the frame waited behind the ones before it to be drawn: a keyframe that reached this
+    // session 0.64 s late was drawn 0.37 s later still (iPhone 14, 2026-10-19).
+    final queuedMs = kTypingTrace ? typingNowMs() : 0;
     _renderTail = _renderTail
         .then((_) async {
           if (!_isCurrent(generation) || frame.streamId != streamId) return;
+          if (kTypingTrace) {
+            final waited = typingNowMs() - queuedMs;
+            final line =
+                'render ${frame.kind.name} seq=${frame.seq} waited ${waited}ms behind earlier frames';
+            if (frame.kind == TerminalBinaryKind.keyframe) {
+              typingEvent(line);
+            } else if (waited >= 10) {
+              typingNote(line);
+            }
+          }
           final bytes = _decodeBinaryBytes(frame);
           if (bytes == null) {
             await _requestResync('TERMINAL_BINARY_DECODE_FAILED');

@@ -1,3 +1,5 @@
+import type { WifiAddon, WifiAddonOp } from '../core/api.js'
+
 /** Local HTTP validation only. Pairing and device state stay behind the gateway and Wi-Fi ports. */
 export interface AutonomousDeviceManagement {
   discover(): unknown | Promise<unknown>
@@ -7,9 +9,29 @@ export interface AutonomousDeviceManagement {
   status(): unknown | Promise<unknown>
   revoke(target: { id: string }): unknown | Promise<unknown>
   receipt(target: { deviceId: string; idempotencyKey: string }): unknown | Promise<unknown>
+  /** Device add-ons (lib/autonomous-device/addons.ts), which validates the proposal itself. */
+  addonState(target: { deviceId?: string }): unknown | Promise<unknown>
+  addonPropose(proposal: Record<string, unknown>): unknown | Promise<unknown>
+  addonProposal(target: { proposalId: string }): unknown | Promise<unknown>
 }
 
 export interface AutonomousDeviceLocalResponse { status: number; body: unknown }
+
+/** The add-on routes over the Wi-Fi device service's one `addon` door (core/api.ts `WifiPort.addon`). */
+export function deviceAddonRoutes(ask: (op: WifiAddonOp, input: Record<string, unknown>) => Promise<WifiAddon>):
+  Pick<AutonomousDeviceManagement, 'addonState' | 'addonPropose' | 'addonProposal'> {
+  const call = async (op: WifiAddonOp, input: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    const answer = await ask(op, input)
+    if ('unavailable' in answer) throw Object.assign(new Error('The Wi-Fi device service is not running on this computer. See the daemon\'s log.'), { code: 'UNAVAILABLE' })
+    if ('error' in answer) throw Object.assign(new Error(answer.error.message), { code: answer.error.code })
+    return answer.result
+  }
+  return {
+    addonState: (target) => call('state', target),
+    addonPropose: (proposal) => call('propose', proposal),
+    addonProposal: (target) => call('proposal', target),
+  }
+}
 
 const routes: Record<string, string> = {
   '/api/autonomous-device/discover': 'GET',
@@ -19,12 +41,23 @@ const routes: Record<string, string> = {
   '/api/autonomous-device/status': 'GET',
   '/api/autonomous-device/revoke': 'POST',
   '/api/autonomous-device/receipt': 'GET',
+  '/api/autonomous-device/addon/state': 'GET',
+  '/api/autonomous-device/addon/propose': 'POST',
+  '/api/autonomous-device/addon/proposal': 'GET',
+}
+
+/** The routes that take a query string, and the one parameter each may carry. */
+const queries: Record<string, { name: string; required: boolean; valid: (value: string) => boolean }> = {
+  '/api/autonomous-device/addon/state': { name: 'deviceId', required: false, valid: v => v.length > 0 && v.length <= 64 },
+  '/api/autonomous-device/addon/proposal': { name: 'proposalId', required: true, valid: v => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v) },
 }
 
 const errorStatus: Record<string, number> = {
   BAD_REQUEST: 400, UNKNOWN_DEVICE: 404, ALREADY_PAIRED: 409, BUSY: 409,
   DEVICE_NOT_FOUND: 404, BAD_CODE: 400, NO_INTENT: 409, STALE_PAIR: 409, CODE_MISMATCH: 403, BACKEND_DOWN: 503, TIMEOUT: 504, RATE_LIMITED: 429, EXPIRED: 410, CANCELLED: 409,
   LOCAL_NETWORK_BLOCKED: 503, UNAVAILABLE: 503,
+  INVALID_REQUEST: 400, PAYLOAD_TOO_LARGE: 413, MISSING_TARGET: 409, DEVICE_OFFLINE: 409, IDEMPOTENCY_CONFLICT: 409, BACKPRESSURE: 429,
+  PROPOSAL_UNKNOWN: 404, OUTCOME_UNKNOWN: 504,
 }
 
 function failure(status: number, code: string, message: string): AutonomousDeviceLocalResponse {
@@ -56,7 +89,7 @@ export async function autonomousDeviceLocalRequest(
   if (!expected) return failure(404, 'NOT_FOUND', 'Unknown device management endpoint')
   if (method !== expected) return failure(405, 'METHOD_NOT_ALLOWED', 'Method not allowed')
   if (method === 'GET' && body !== undefined) return bad()
-  if (url.pathname !== '/api/autonomous-device/receipt' && url.search) return bad()
+  if (url.pathname !== '/api/autonomous-device/receipt' && !Object.hasOwn(queries, url.pathname) && url.search) return bad()
   const input = body === undefined ? {} : body
   if (!object(input)) return bad()
   const keys = Object.keys(input)
@@ -79,6 +112,22 @@ export async function autonomousDeviceLocalRequest(
       const key = query.get('idempotencyKey')
       if (!deviceId(id) || !key || !/^[A-Za-z0-9_-]{1,64}$/.test(key)) return bad()
       call = () => service.receipt({ deviceId: id, idempotencyKey: key })
+      break
+    }
+    case '/api/autonomous-device/addon/propose':
+      call = () => service.addonPropose(input)
+      break
+    case '/api/autonomous-device/addon/state':
+    case '/api/autonomous-device/addon/proposal': {
+      const rule = queries[url.pathname]
+      const query = url.searchParams
+      const values = query.getAll(rule.name)
+      if ([...query.keys()].some(key => key !== rule.name) || values.length > 1 || (rule.required && !values.length)
+        || (values.length && !rule.valid(values[0]))) return bad()
+      const value = values[0]
+      call = url.pathname === '/api/autonomous-device/addon/state'
+        ? () => service.addonState(value ? { deviceId: value } : {})
+        : () => service.addonProposal({ proposalId: value })
       break
     }
     default:

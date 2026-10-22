@@ -191,11 +191,25 @@ function remoteBranch(ref: string | undefined): { remote: string; branch: string
   return { remote: match[1]!, branch: match[2]!, refspec: `+refs/heads/${match[2]}:refs/remotes/${match[1]}/${match[2]}` }
 }
 
+/** The remote's default branch as the ref a clone keeps it in: `origin/HEAD`, else `origin/main` or
+ *  `origin/master`, as `readGitProject` offers it. Null when the repository has no such ref. */
+async function originDefaultRef(path: string): Promise<string | null> {
+  const head = await git(path, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']).catch(() => null)
+  for (const ref of [head, 'refs/remotes/origin/main', 'refs/remotes/origin/master']) {
+    if (ref && await git(path, ['show-ref', '--verify', '--quiet', '--', ref]).then(() => true, () => false)) return ref
+  }
+  return null
+}
+
 export type GitProjectOptions = {
   root: string
   worktree: boolean
   /** Worktree on: what a new branch starts from. Worktree off: the branch the folder is on. */
   ref?: string
+  /** Worktree on, a new branch, no `ref`: start from the remote's default branch, fetched first, rather than
+   *  from wherever `HEAD` is. A checkout nobody works in (a Swarm host's clone) stays where it was cloned, days
+   *  behind. Only a Swarm start asks for it; a repository with no `origin` default branch starts from `HEAD`. */
+  fromDefaultBranch?: boolean
   /** The worktree's branch: created from `ref`, or with `existingBranch` checked out as it is. */
   branchName?: string
   existingBranch?: boolean
@@ -206,7 +220,8 @@ export type GitProjectOptions = {
 
 /** Worktree on: a new worktree under `<root>/worktrees/<repository>`, on `branchName` — created from
  * `ref`, or with `existingBranch` an existing local branch checked out as it is. Without a name one
- * is made up (`harness/brave-otter`). A remote base is fetched first, briefly.
+ * is made up (`harness/brave-otter`). A remote base is fetched first, briefly: so is the default branch
+ * with `fromDefaultBranch`, when there is no `ref`.
  *
  * Worktree off: the folder on the local `ref`. A branch that already has a worktree opens there; any
  * other is switched to, only in a folder with nothing uncommitted. With `branchName` the folder moves
@@ -222,25 +237,28 @@ export async function prepareGitProject(source: string, options: GitProjectOptio
   let root: string, head: string, prefix: string
   try {
     root = await git(source, ['rev-parse', '--show-toplevel'])
-    if (options.ref && !creating) {
-      if (!/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/.test(options.ref)) throw new Error('Invalid branch')
+    // The default branch is only ever a remote one, so it is fetched like any other remote base below.
+    const ref = options.ref ?? (options.fromDefaultBranch && options.worktree && !existing && !creating
+      ? await originDefaultRef(source) ?? undefined : undefined)
+    if (ref && !creating) {
+      if (!/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/.test(ref)) throw new Error('Invalid branch')
       // A freshly discovered remote branch may not have been fetched yet.
-      if (!(options.worktree && !existing && remoteBranch(options.ref))) {
-        await git(source, ['show-ref', '--verify', '--hash', '--', options.ref])
+      if (!(options.worktree && !existing && remoteBranch(ref))) {
+        await git(source, ['show-ref', '--verify', '--hash', '--', ref])
       }
     }
     // New work starts from where its branch is now, not from the last fetch: a remote branch is
     // fetched; a local one is fetched against its upstream and the newer of the two taken, so nothing
     // only the local one has is lost. Offline, slow or refused, it starts from what is here.
-    let start = existing ? `refs/heads/${options.branchName}` : creating ? 'HEAD' : options.ref ?? 'HEAD'
-    const remote = options.worktree && !existing ? remoteBranch(options.ref) : null
-    const upstream = options.worktree && !existing && !remote && options.ref
-      ? await git(source, ['for-each-ref', '--format=%(upstream)', options.ref]).then(ref => remoteBranch(ref) ? ref : null, () => null)
+    let start = existing ? `refs/heads/${options.branchName}` : creating ? 'HEAD' : ref ?? 'HEAD'
+    const remote = options.worktree && !existing ? remoteBranch(ref) : null
+    const upstream = options.worktree && !existing && !remote && ref
+      ? await git(source, ['for-each-ref', '--format=%(upstream)', ref]).then(found => remoteBranch(found) ? found : null, () => null)
       : null
     const fetch = remote ?? remoteBranch(upstream ?? undefined)
     if (fetch) await git(source, ['fetch', '--quiet', '--no-tags', fetch.remote, fetch.refspec], 10_000).catch(() => '')
     // Behind or level with its upstream: the upstream is the newer.
-    if (upstream && options.ref && await git(source, ['merge-base', '--is-ancestor', options.ref, upstream]).then(() => true, () => false)) {
+    if (upstream && ref && await git(source, ['merge-base', '--is-ancestor', ref, upstream]).then(() => true, () => false)) {
       start = upstream
     }
     head = await git(source, ['rev-parse', '--verify', '--end-of-options', `${start}^{commit}`])

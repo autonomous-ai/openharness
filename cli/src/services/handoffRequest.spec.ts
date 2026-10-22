@@ -69,3 +69,17 @@ it.each(['IDENTITY_UNAVAILABLE', 'HANDOFF_UNAVAILABLE', 'TIMEOUT', 'BUSY'])('rep
   expect(replies[0]).toMatchObject({ error: code, held: true, retryable: true, reason: expect.any(String) })
   expect(replies[0].file).toBeUndefined()
 })
+
+// A refusal used to leave no line in the log, so a switch that would not go through could only be guessed at (2026-10-21).
+it('logs every refusal by code, and passes a known hold on in the reply', async () => {
+  const logged = vi.spyOn(console, 'log').mockImplementation(() => {})
+  const replies = ask(async () => { throw { name: 'HandoffError', code: 'IDENTITY_UNAVAILABLE', hold: 'PROGRAM_REPLACED' } }, good({ agentId: 'a1b2c3d4-rest\nforged' }))
+  await vi.waitFor(() => expect(replies).toHaveLength(1))
+  expect(replies[0]).toMatchObject({ error: 'IDENTITY_UNAVAILABLE', held: true, hold: 'PROGRAM_REPLACED' })
+  const other = ask(async () => { throw { name: 'HandoffError', code: 'TIMEOUT', hold: 'made up /secret/path' } }, good())
+  await vi.waitFor(() => expect(other).toHaveLength(1))
+  expect(other[0].hold).toBeUndefined()
+  expect(logged.mock.calls.map(([line]) => line)).toEqual([
+    '[handoff] a1b2c3d4 refused · IDENTITY_UNAVAILABLE (PROGRAM_REPLACED)', '[handoff] a1 refused · TIMEOUT',
+  ])
+})

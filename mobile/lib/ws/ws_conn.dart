@@ -9,6 +9,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../logging/app_log.dart';
 import '../logging/redact.dart';
 import '../logging/startup_trace.dart';
+import '../logging/typing_trace.dart';
 import '../core/models.dart';
 import '../core/test_run.dart';
 import 'relay_codec.dart';
@@ -66,6 +67,7 @@ class WsRequestFailure implements Exception {
     required this.responseType,
     required this.code,
     this.detail,
+    this.hold,
   });
 
   /// The frame that carried the refusal — `agent_create_result`, say.
@@ -77,6 +79,10 @@ class WsRequestFailure implements Exception {
   /// The underlying cause behind the code, when the peer sends one — the tmux message behind
   /// SPAWN_FAILED. Already reads as a sentence; prefer it to anything rewritten from [code].
   final String? detail;
+
+  /// A code naming why the peer holds the request, when it sends one — `PROGRAM_REPLACED` from a
+  /// Change agent handoff. A code, never words to show: the caller picks its own sentence.
+  final String? hold;
 
   @override
   String toString() => detail == null || detail!.isEmpty
@@ -507,6 +513,20 @@ class WsConn {
     return decoded is Map<String, dynamic> ? decoded : null;
   }
 
+  /// A relay frame's turn in the inbound line, against when the socket handed it over: said when it
+  /// waited (or [always]), and only while somebody types — the channel's frames share this line
+  /// (`TerminalTransportHost.enqueueInbound`), so a wait here is a wait for the terminal too.
+  static void _traceInbound(String what, int arrivedMs, {bool always = false}) {
+    final waited = typingNowMs() - arrivedMs;
+    final line =
+        'ws in $what arrived t=$arrivedMs, waited ${waited}ms in the inbound line';
+    if (always) {
+      typingEvent(line);
+    } else if (waited >= 10) {
+      typingNote(line);
+    }
+  }
+
   static String _typeOf(Map<String, dynamic> message) =>
       message['type'] is String ? message['type'] as String : '?';
 
@@ -515,12 +535,16 @@ class WsConn {
 
   void _onRaw(dynamic raw) {
     final codec = _codec;
+    // When the socket handed the frame over, against when its turn in the inbound line came — see
+    // [_traceInbound].
+    final arrivedMs = kTypingTrace ? typingNowMs() : 0;
     if (raw is List<int>) {
       // The socket already hands over a Uint8List; copying it cost one allocation per chunk of
       // terminal output, for nothing.
       final bytes = raw is Uint8List ? raw : Uint8List.fromList(raw);
       _inboundTail = _inboundTail
           .then((_) async {
+            if (kTypingTrace) _traceInbound('binary', arrivedMs);
             final local = codec == null ? bytes : codec.decodeBinary(bytes);
             if (local == null) return;
             // Every relay binary frame is sealed by the machine — see [lastHeardFromMachineAt].
@@ -542,8 +566,16 @@ class WsConn {
         raw is String &&
         raw.length >= _decodeOffThreadFrom &&
         !kUnderTest) {
+      if (kTypingTrace) {
+        typingEvent(
+          'ws in large frame ${(raw.length / 1024).round()}KB arrived t=$arrivedMs',
+        );
+      }
       _inboundTail = _inboundTail
           .then((_) async {
+            if (kTypingTrace) {
+              _traceInbound('large frame', arrivedMs, always: true);
+            }
             final clock = Stopwatch()..start();
             final message = await _decodeOffThread(raw);
             if (message == null) return;
@@ -569,7 +601,10 @@ class WsConn {
     }
     if (codec != null) {
       _inboundTail = _inboundTail
-          .then((_) => _onRelayFrame(codec, message))
+          .then((_) {
+            if (kTypingTrace) _traceInbound(_typeOf(message), arrivedMs);
+            return _onRelayFrame(codec, message);
+          })
           .catchError((_) {
             // Keep the FIFO alive: a frame that will not open is dropped, never dispatched.
           });
@@ -838,11 +873,13 @@ class WsConn {
         // message behind SPAWN_FAILED, say. Without it an error code alone sends the user to a log file
         // on a machine that is not the one in front of them.
         final detail = payload['detail'];
+        final hold = payload['hold'];
         pending.completer.completeError(
           WsRequestFailure(
             responseType: message['type'] as String? ?? 'unknown_result',
             code: '${payload['error']}',
             detail: detail is String && detail.isNotEmpty ? detail : null,
+            hold: hold is String && hold.isNotEmpty ? hold : null,
           ),
         );
       } else {

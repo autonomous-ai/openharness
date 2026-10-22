@@ -4,8 +4,10 @@ import { routeTask } from './routeCommand.js'
 import { openDaemon, whereFor, type Daemon, type Where } from '../agentClient/daemon.js'
 import { callerOf, type Frame } from '../agentClient/model.js'
 import { identifier } from './host.js'
+import { resolve } from 'node:path'
+import { uploadAttachments } from './attach.js'
 
-const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status | messages GROUP | message GROUP MESSAGE_ID | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] | command OPERATION_ID JSON | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | help'
+const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status | messages GROUP | message GROUP MESSAGE_ID | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... | command OPERATION_ID JSON | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | help'
 export function parseSuperTabArgs(argv: readonly string[], where: Where) {
   const positional: string[] = []
   let tabId = '', agentId = ''
@@ -26,10 +28,19 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
   else if (action === 'message' && identifier(first) && identifier(second) && positional.length === 3) {
     Object.assign(payload, { conversationId: first, messageId: second })
   }
-  else if (action === 'post' && identifier(first) && second?.trim() && identifier(third)
-    && (positional.length === 4 || (positional.length === 6 && positional[4] === '--reply-to' && identifier(positional[5])))) {
-    Object.assign(payload, { action: 'command', operationId: third,
-      command: { type: 'message.send', conversationId: first, text: second, replyTo: positional[5] ?? null, recipientIds: [] } })
+  else if (action === 'post' && identifier(first) && typeof second === 'string' && identifier(third)) {
+    let replyTo: string | null = null
+    const attach: string[] = []
+    for (let i = 4; i < positional.length; i += 2) {
+      const [flag, value] = [positional[i], positional[i + 1]]
+      if (flag === '--reply-to' && identifier(value) && replyTo === null) replyTo = value
+      else if (flag === '--attach' && value && attach.length < 10) attach.push(resolve(value))
+      else throw new Error(USAGE)
+    }
+    // A screenshot or a log may go without words.
+    if (!second.trim() && !attach.length) throw new Error(USAGE)
+    Object.assign(payload, { action: 'command', operationId: third, ...(attach.length ? { attach } : {}),
+      command: { type: 'message.send', conversationId: first, text: second, replyTo, recipientIds: [] } })
   } else if (action === 'command' && identifier(first) && second && positional.length === 3) {
     Object.assign(payload, { operationId: first, command: JSON.parse(second) })
   } else if (action === 'start' && identifier(first) && second && positional.length === 3) {
@@ -44,7 +55,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
 }
 
 export async function superTabCommand(argv: readonly string[], deps: {
-  where?: () => Where; open?: typeof openDaemon; print?: (text: string) => void; pane?: string
+  where?: () => Where; open?: typeof openDaemon; print?: (text: string) => void; pane?: string; fetch?: typeof fetch
 } = {}): Promise<number> {
   let daemon: Daemon | null = null
   let operationId: unknown
@@ -80,7 +91,17 @@ export async function superTabCommand(argv: readonly string[], deps: {
     } else if (request.payload.action === 'route') {
       result = await routeTask({ tabId: String(request.payload.tabId), conversationId: String(request.payload.conversationId),
         assessment: request.payload.assessment }, scoped, request.where, deps.open)
-    } else result = await daemon.request('super_tabs', request.payload, 30_000)
+    } else {
+      const { attach, ...payload } = request.payload
+      // Each file goes to the daemon's local upload route, which streams it to the backend with the account's token;
+      // this process holds no account credential.
+      if (Array.isArray(attach)) {
+        const command = object(payload.command)
+        command.attachmentIds = await uploadAttachments(attach as string[], String(payload.operationId), { tabId: String(payload.tabId),
+          conversationId: String(command.conversationId), port: request.where.port, dataDir: request.where.dataDir }, scoped, deps.fetch)
+      }
+      result = await daemon.request('super_tabs', payload, 30_000)
+    }
     print(JSON.stringify({ ...result, ...(operationId ? { operationId } : {}) }))
     return result.error ? 1 : 0
   } catch (error) {

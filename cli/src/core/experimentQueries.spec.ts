@@ -26,6 +26,21 @@ describe('the cloud agents\' doors', () => {
   })
 })
 
+describe('the Super Tab service\'s door', () => {
+  it('is the Super Tab service\'s alone, and hands its members\' waits to the core whole', async () => {
+    const superTabs = { attention: vi.fn() }
+    const core = fakeCore({ superTabs })
+    const both = new Set(['orchestrator', 'superTabs'])
+    const item = { agentId: 'a1', requestId: 'supertab:x:blocked', superTab: 'Pilot', attention: 'stuck', text: 'Stuck: no key' }
+    expect(await answerExperimentQuery(core, both, 'superTabs', 'super_tab_attention', { items: [item] })).toEqual({})
+    expect(superTabs.attention).toHaveBeenLastCalledWith([item])
+    await answerExperimentQuery(core, both, 'superTabs', 'super_tab_attention', { items: 'x' })
+    expect(superTabs.attention).toHaveBeenLastCalledWith([])
+    expect(await answerExperimentQuery(core, both, 'orchestrator', 'super_tab_attention', {})).toEqual({ error: 'NOT_SUPER_TABS' })
+    expect(await answerExperimentQuery(fakeCore(), both, 'superTabs', 'super_tab_attention', {})).toEqual({ error: 'NOT_SUPER_TABS' })
+  })
+})
+
 describe('what an experiment in its own process may ask of the core', () => {
   it('reads exact creation observations without treating an unavailable provider as an absent launch', async () => {
     const id = 'creation-fixture-1234'

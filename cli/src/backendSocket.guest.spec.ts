@@ -130,4 +130,14 @@ describe('a guest session', () => {
       ['agent_synced', undefined], ['machines_changed', undefined],
     ])
   })
+
+  it('hears a question about its own harness sent to the apps away from this desk; the owner\'s goes to the group only', () => {
+    const { socket, gw } = session('kim@acme.io')
+    socket.agentGuest = (agentId) => (agentId === 'mine' ? 'kim@acme.io' : null)
+    const broadcast = vi.spyOn(gw, 'broadcast')
+    socket.sendRemote({ type: 'commander_question', agentId: 'mine', payload: { requestId: 'q1' } })
+    socket.sendRemote({ type: 'commander_question', agentId: 'owners', payload: { requestId: 'q2' } })
+    expect(broadcast.mock.calls.map(([frame, guest]) => [(frame.payload as { requestId?: unknown }).requestId, guest]))
+      .toEqual([['q1', 'kim@acme.io'], ['q2', undefined]])
+  })
 })

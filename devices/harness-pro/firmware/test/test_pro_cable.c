@@ -106,7 +106,10 @@ void pro_app_notif_seen(const char *id, const char *token)
 {
     ev_t *e = add(EV_NSEEN, id); put(e->a, token ? token : "(none)");
 }
-void pro_app_question(const char *id, const char *request, const char *text) { (void)request; put(add(EV_QUESTION, id)->a, text); }
+void pro_app_question(const char *id, const char *request, const char *text, const char *super_tab, pod_attention_t attention)
+{
+    ev_t *e = add(EV_QUESTION, id); (void)request; put(e->a, text); put(e->b, super_tab); e->n1 = attention;
+}
 void pro_app_question_close(const char *id) { add(EV_QCLOSE, id); }
 void pro_app_focus(const char *id) { add(EV_FOCUS, id); }
 void pro_app_voice_result(int kind, const char *text) { ev_t *e = add(EV_VOICE, NULL); e->n1 = kind; put(e->a, text); }
@@ -582,6 +585,30 @@ static void test_session_machines_library_voice(void)
     feed("{\"t\":\"question.close\",\"agentId\":\"a\",\"id\":\"q1\"}");
     feed("{\"t\":\"question.close\",\"agentId\":\"a\"}");
     CHECK(nev == 3 && !strcmp(evs[0].a, "Proceed?") && !strcmp(evs[1].a, "Needs your answer") && evs[2].kind == EV_QCLOSE);
+    CHECK(!strcmp(evs[0].b, "<null>") && evs[0].n1 == POD_ATTN_NONE && !strcmp(evs[1].b, "<null>") && evs[1].n1 == POD_ATTN_NONE);   // a plain question: as before
+
+    // a Super Tab's question: superTab names the project, attention says decision or stuck (an unknown one is a decision)
+    reset();
+    feed("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"q1\",\"questions\":[{\"q\":\"Staging or prod?\"}],\"superTab\":\"Launch v2\",\"attention\":\"decision\"}");
+    feed("{\"t\":\"question\",\"agentId\":\"b\",\"id\":\"q2\",\"questions\":[{\"q\":\"Stuck: no write access\"}],\"superTab\":\"Launch v2\",\"attention\":\"stuck\"}");
+    feed("{\"t\":\"question\",\"agentId\":\"c\",\"id\":\"q3\",\"questions\":[{\"q\":\"Which?\"}],\"superTab\":\"Launch v2\",\"attention\":\"blocked-ish\"}");
+    feed("{\"t\":\"question\",\"agentId\":\"d\",\"id\":\"q4\",\"questions\":[{\"q\":\"Which?\"}],\"superTab\":\"Launch v2\"}");
+    CHECK(nev == 4 && evs[0].kind == EV_QUESTION && !strcmp(evs[0].a, "Staging or prod?") && !strcmp(evs[0].b, "Launch v2") && evs[0].n1 == POD_ATTN_DECISION);
+    CHECK(!strcmp(evs[1].id, "b") && !strcmp(evs[1].a, "Stuck: no write access") && !strcmp(evs[1].b, "Launch v2") && evs[1].n1 == POD_ATTN_STUCK);
+    CHECK(evs[2].n1 == POD_ATTN_DECISION && evs[3].n1 == POD_ATTN_DECISION && !strcmp(evs[3].b, "Launch v2"));
+    reset();   // attention without a Super Tab, an empty or a non-string superTab: a plain question
+    feed("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"q1\",\"questions\":[{\"q\":\"x\"}],\"attention\":\"stuck\"}");
+    feed("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"q1\",\"questions\":[{\"q\":\"x\"}],\"superTab\":\"\",\"attention\":\"stuck\"}");
+    feed("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"q1\",\"questions\":[{\"q\":\"x\"}],\"superTab\":7,\"attention\":\"stuck\"}");
+    CHECK(nev == 3);
+    for (int i = 0; i < 3; i++) CHECK(!strcmp(evs[i].b, "<null>") && evs[i].n1 == POD_ATTN_NONE);
+    {   // a long Super Tab name is cut to SUPER_TAB_MAX - 1 bytes on a UTF-8 boundary
+        char *tab = repeat("\xC3\xA9", 40);
+        reset();
+        feedf("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"q1\",\"questions\":[{\"q\":\"x\"}],\"superTab\":\"%s\",\"attention\":\"stuck\"}", tab);
+        CHECK(nev == 1 && strlen(evs[0].b) <= SUPER_TAB_MAX - 1 && strlen(evs[0].b) >= SUPER_TAB_MAX - 2 && utf8_ok(evs[0].b) && evs[0].n1 == POD_ATTN_STUCK);
+        free(tab);
+    }
 
     // player.context is delivered (pro_app ignores it)
     reset();

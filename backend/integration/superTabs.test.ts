@@ -3,12 +3,13 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
+import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import type { Command } from '../src/superTabs/commands.js'
@@ -67,6 +68,29 @@ afterAll(async () => {
   await app?.close()
   await db?.$disconnect()
   await replica?.stop()
+})
+
+describe('agent member identities', () => {
+  it('keeps a name through replay and removal, including the stored message author', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'People and agents')).id
+    const operationId = randomUUID()
+    const command: Command = { type: 'agent.add', conversationId: 'lead', machineId: 'test-host',
+      harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true }
+    const added = await run(tab, command, owner, undefined, operationId)
+    const agentId = added.result.agentId as string
+    const first = await store.read(owner, tab)
+    const agent = first.state.agents.find(a => a.id === agentId)!
+    expect(agent.displayName).toBeTruthy()
+    expect(agent.displayName).not.toBe('Lead')
+    expect(await run(tab, command, owner, undefined, operationId)).toEqual(added)
+    expect((await store.read(owner, tab)).revision).toBe(first.revision)
+    await run(tab, message('The plan is ready.'), host, agentId)
+    await run(tab, { type: 'agent.remove', agentId })
+    const rows = (await store.messages(owner, tab, 'lead', {})).messages
+    expect(rows.find(row => row.text === 'The plan is ready.')!.author)
+      .toMatchObject({ id: agentId, name: 'Lead', displayName: agent.displayName })
+    expect((await store.read(owner, tab)).state.agents).toEqual([])
+  })
 })
 
 describe('deleting abandoned swarm projects', () => {
@@ -151,8 +175,6 @@ describe('deleting abandoned swarm projects', () => {
     const agentId = String((await run(tab, { type: 'agent.add', conversationId, machineId: 'test-host', harnessId,
       name: 'Private lead', configuration: config, lead: true })).result.agentId)
     const context = await store.native.open(owner, tab, { operationId: randomUUID(), conversationId, agentId })
-    await expect(run(tab, { type: 'project.delete', projectId })).rejects.toMatchObject({ code: 'PROJECT_HAS_AGENTS' })
-    await run(tab, { type: 'agent.remove', agentId })
     await run(tab, { type: 'project.delete', projectId })
     await expect(store.native.read(host, tab, context.contextId)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
     expect(await store.mayObserve(owner, tab, 'test-host', harnessId, host.sub)).toBe(false)
@@ -167,12 +189,12 @@ describe('deleting abandoned swarm projects', () => {
       run(tab, { type: 'project.delete', projectId }),
       run(tab, { type: 'agent.add', conversationId, machineId: 'test-host', harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true }),
     ])
-    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1)
-    expect(results.filter(r => r.status === 'rejected')).toHaveLength(1)
+    // Whichever runs first, the delete wins and takes a lead that arrived before it.
+    expect(results[0].status).toBe('fulfilled')
     const state = (await store.read(owner, tab)).state
-    const exists = state.projects!.some(p => p.id === projectId)
-    expect(state.agents.some(a => a.projectId === projectId)).toBe(exists)
-    expect(state.conversations.some(c => c.id === conversationId)).toBe(exists)
+    expect(state.projects!.some(p => p.id === projectId)).toBe(false)
+    expect(state.agents.some(a => a.projectId === projectId)).toBe(false)
+    expect(state.conversations.some(c => c.id === conversationId)).toBe(false)
   })
 })
 
@@ -499,6 +521,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
 
   it('tells the group once, in plain words, that a claimed delivery is waiting, and only for the claim holder', async () => {
     const { tab, lead } = await fixture()
+    const displayName = (await store.read(owner, tab)).state.agents.find(a => a.id === lead)!.displayName!
     await run(tab, message('Please start.'))
     const delivery = (await store.deliveries(host, tab, lead))[0]!
     await expect(store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_draft' }))
@@ -510,10 +533,12 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(await store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })).toEqual({ noticed: false })
     const rows = (await store.messages(owner, tab, 'lead', {})).messages
     expect(rows).toHaveLength(2)
-    expect(rows[1]).toMatchObject({ author: { kind: 'agent', id: lead }, recipientIds: [], deliveries: [],
-      text: expect.stringContaining('A message for Lead is waiting. There is unsent text in Lead\'s input box.') })
+    expect(rows[1]).toMatchObject({ author: { kind: 'agent', id: lead, displayName }, recipientIds: [], deliveries: [],
+      text: expect.stringContaining(`A message for ${displayName} is waiting. There is unsent text in ${displayName}'s input box.`) })
     await store.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'done', uncertain: false })
     expect(await store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })).toEqual({ noticed: false })
+    await run(tab, { type: 'agent.remove', agentId: lead })
+    expect((await store.messages(owner, tab, 'lead', {})).messages[1]!.author).toMatchObject({ displayName })
   })
 
   it('a withdrawn host can retire its receipt without regaining conversation access', async () => {
@@ -771,6 +796,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const { tab, lead } = await fixture()
     const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
       name: 'Builder', configuration: config, lead: false })).result.agentId as string
+    const displayName = (await store.read(owner, tab)).state.agents.find(a => a.id === worker)!.displayName!
     await run(tab, { type: 'work.define', conversationId: 'lead', brief: 'Build it.', checks: [{ description: 'Test passes.', independent: false }] })
     const assignmentId = (await run(tab, { type: 'work.assign', conversationId: 'lead', agentId: worker })).result.assignmentId as string
     const before = (await store.deliveries(host, tab, lead)).length
@@ -778,10 +804,13 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await store.stopped(host, tab, assignmentId, 'native-stop-receipt')
     const notices = (await store.messages(owner, tab, 'lead', {})).messages.filter(m => m.text.startsWith('Stopped'))
     expect(notices).toHaveLength(1)
-    expect(notices[0]).toMatchObject({ author: { kind: 'agent', id: worker, name: 'Builder' },
+    expect(notices[0]).toMatchObject({ author: { kind: 'agent', id: worker, name: 'Builder', displayName },
       text: 'Stopped\n\nThe execution host confirmed that this harness stopped. If this work should continue, assign a new attempt.' })
     expect(await store.deliveries(host, tab, lead)).toHaveLength(before + 1)
     expect((await store.read(owner, tab)).state.conversations[0]!.lastMessageSequence).toBe(notices[0]!.sequence)
+    await run(tab, { type: 'agent.remove', agentId: worker })
+    expect((await store.messages(owner, tab, 'lead', {})).messages.find(m => m.id === notices[0]!.id)!.author)
+      .toMatchObject({ displayName })
   })
 
   it('rejects unshared hosts and spoofed agent identities through the HTTP API', async () => {
@@ -860,6 +889,22 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await run(tab, { type: 'member.remove', userId: peer.sub })
     expect(await store.mayObserve(peer, tab, 'test-host', native, host.sub)).toBe(false)
     expect((await store.hostTabs(host, 'test-host')).find(t => t.tabId === tab)?.observers).not.toContainEqual({ email: peer.email, userId: peer.sub })
+  })
+
+  it('tells the execution host which of its agents need a decision or are stuck', async () => {
+    const { tab } = await fixture()
+    const group = (await run(tab, { type: 'conversation.create', title: 'Release', brief: 'Ship it.', checks: [{ description: 'Shipped.', independent: false }] })).result.conversationId as string
+    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Builder', configuration: config, lead: false })).result.agentId as string
+    const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
+    const row = async () => (await store.hostTabs(host, 'test-host')).find(t => t.tabId === tab && t.agent.id === worker)!
+    expect(await row()).toMatchObject({ tabName: 'Pilot', attention: null })
+    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'blocked', result: 'No access to staging.' } as Command, host, worker)
+    expect((await row()).attention).toEqual({ assignmentId, status: 'blocked', result: 'No access to staging.' })
+    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', result: null } as Command, host, worker)
+    expect((await row()).attention).toEqual({ assignmentId, status: 'needs_human', result: null })
+    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'working', result: null } as Command, host, worker)
+    expect((await row()).attention).toBeNull()
   })
 
   it('marks members of only archived groups inactive for host retention', async () => {
@@ -969,6 +1014,22 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(response.statusCode).toBe(200)
   })
 
+  it('returns the receipt of a recorded agent start after its machine stops being listed', async () => {
+    const { tab, lead } = await fixture()
+    const machineId = `second-${randomUUID()}`
+    await db.machine.create({ data: { machineId, userId: host.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    await db.machineShare.create({ data: { machineId, ownerId: host.sub, autonomousEnv: 'prod', emails: [owner.email] } })
+    const helper = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'Helper', configuration: config, lead: false })).result.agentId as string
+    const request = { conversationId: 'lead', machineId, engine: 'codex', name: 'Builder', cwd: '/work', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    const operationId = randomUUID(), command: Command = { type: 'agent.start', request }
+    const first = await run(tab, command, host, lead, operationId)
+    await run(tab, { type: 'agent.remove', agentId: helper })
+    // A new start on the machine is refused now, but the recorded one keeps its receipt.
+    await expect(run(tab, command, host, lead)).rejects.toMatchObject({ code: 'MACHINE_NOT_LISTED' })
+    expect((await run(tab, command, host, lead, operationId)).result.startId).toBe(first.result.startId)
+  })
+
   it('corrects the log to the model that ran when the routed switch failed, and reads the times of one decision', async () => {
     const { tab, lead } = await fixture()
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Docs.' },
@@ -1062,4 +1123,127 @@ it('allocates workgroup numbers transactionally and replays the same number afte
   expect(results.map(r => r.result.number).sort()).toEqual([1, 2, 3])
   expect((await run(tab, command, owner, undefined, operations[0])).result).toEqual(results[0]!.result)
   expect((await store.read(owner, tab)).state.conversations.map(c => c.number)).toEqual([undefined, 1, 2, 3])
+})
+
+describe('Super Tab chat attachments', () => {
+  const files = new MemoryAttachmentStore()
+  let attaching: SuperTabStore
+  let upload: FastifyInstance
+  beforeAll(async () => {
+    attaching = new SuperTabStore(db, Date.now, { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
+    upload = Fastify()
+    upload.setErrorHandler(errorHandler)
+    upload.addHook('onRequest', async (request, reply) => {
+      const user = [owner, peer, host].find(u => `Bearer ${u.sub}` === request.headers.authorization)
+      if (!user) return reply.code(401).send({ success: false })
+      request.user = user
+    })
+    await upload.register(superTabRoutes, { store: attaching })
+    await upload.ready()
+  })
+  afterAll(async () => { await upload?.close() })
+  type Part = [string, string] | [string, Uint8Array, string, string]
+  type Uploaded = { id: string; name: string; mime: string; size: number; url: string }
+  const post = async (tab: string, parts: Part[], user = owner, asAgentId?: string, server = upload) => {
+    const form = new FormData()
+    for (const part of parts) {
+      if (part.length === 2) form.append(part[0], part[1])
+      else form.append(part[0], new Blob([part[1]], { type: part[3] }), part[2])
+    }
+    const encoded = new Request('http://upload.test', { method: 'POST', body: form })
+    const response = await server.inject({ method: 'POST', url: `/api/super-tabs/${tab}/attachments${asAgentId ? `?asAgentId=${asAgentId}` : ''}`,
+      headers: { authorization: `Bearer ${user.sub}`, 'content-type': encoded.headers.get('content-type')! }, payload: Buffer.from(await encoded.arrayBuffer()) })
+    const body = response.json()
+    return { status: response.statusCode, code: body.error?.code ?? body.code, attachment: body.data?.attachment as Uploaded }
+  }
+  const file = (tab: string, name = 'screen.png', bytes = new Uint8Array([1, 2, 3]), mime = 'image/png', conversationId = 'lead', user = owner, asAgentId?: string) =>
+    post(tab, [['conversationId', conversationId], ['file', bytes, name, mime]], user, asAgentId)
+  const send = (tab: string, attachmentIds: string[], user = owner, asAgentId?: string, text = '', operationId = randomUUID()) =>
+    attaching.execute(user, tab, { operationId, command: { type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [], attachmentIds } }, asAgentId)
+  const objectKey = (url: string) => url.slice('https://cdn.example.test/'.length)
+
+  it('streams one file into the bucket under a random key and answers its metadata', async () => {
+    const { tab } = await fixture()
+    const bytes = new Uint8Array(2 * 1024 * 1024).map((_, i) => i % 251)
+    bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    const { status, attachment } = await file(tab, 'Screen Shot 1.png', bytes)
+    expect(status).toBe(200)
+    expect(attachment).toMatchObject({ name: 'Screen Shot 1.png', mime: 'image/png', size: bytes.byteLength })
+    expect(attachment.url).toMatch(new RegExp(`^https://cdn\\.example\\.test/super-tabs/${tab}/[0-9a-f]{32}/Screen_Shot_1\\.png$`))
+    expect(files.objects.get(objectKey(attachment.url))!.bytes.equals(Buffer.from(bytes))).toBe(true)
+    expect(files.objects.get(objectKey(attachment.url))).toMatchObject({ contentType: 'image/png', contentDisposition: "inline; filename*=UTF-8''Screen%20Shot%201.png" })
+    const html = await file(tab, 'page.html', new Uint8Array([60]), 'text/html')
+    expect(html.attachment.mime).toBe('text/html')
+    expect(files.objects.get(objectKey(html.attachment.url))).toMatchObject({ contentType: 'application/octet-stream', contentDisposition: "attachment; filename*=UTF-8''page.html" })
+    // A page renamed to .png is not an image: it is kept whole, as bytes to download.
+    const page = Buffer.from('<html><script>alert(1)</script></html>')
+    const disguised = await file(tab, 'cat.png', page, 'image/png')
+    expect(disguised.attachment.mime).toBe('application/octet-stream')
+    expect(files.objects.get(objectKey(disguised.attachment.url))).toMatchObject({ contentType: 'application/octet-stream', contentDisposition: "attachment; filename*=UTF-8''cat.png" })
+    expect(files.objects.get(objectKey(disguised.attachment.url))!.bytes.equals(page)).toBe(true)
+  })
+
+  it('refuses an oversized, second, misordered or hidden-named file, and a server with no bucket', async () => {
+    const { tab } = await fixture()
+    const before = files.objects.size
+    expect(await file(tab, 'big.bin', new Uint8Array(10 * 1024 * 1024 + 1), 'application/octet-stream')).toMatchObject({ status: 413, code: 'ATTACHMENT_TOO_LARGE' })
+    expect(await file(tab, 'exact.bin', new Uint8Array(10 * 1024 * 1024), 'application/octet-stream')).toMatchObject({ status: 200 })
+    expect(await post(tab, [['conversationId', 'lead'], ['file', new Uint8Array(1), 'a.png', 'image/png'], ['file', new Uint8Array(1), 'b.png', 'image/png']]))
+      .toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await post(tab, [['file', new Uint8Array(1), 'a.png', 'image/png'], ['conversationId', 'lead']])).toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await post(tab, [['conversationId', 'lead']])).toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    expect(await file(tab, 'evil‮gnp.exe')).toMatchObject({ status: 400, code: 'INVALID_ATTACHMENT' })
+    const json = await upload.inject({ method: 'POST', url: `/api/super-tabs/${tab}/attachments`, headers: { authorization: `Bearer ${owner.sub}` }, payload: { conversationId: 'lead' } })
+    expect([json.statusCode, json.json().error?.code ?? json.json().code]).toEqual([400, 'INVALID_ATTACHMENT'])
+    // The exact-size file, and the first of the two: the second is only seen after the first was stored. Its id was
+    // never answered to anyone, so nothing can send it.
+    expect(files.objects.size).toBe(before + 2)
+    expect(await post(tab, [['conversationId', 'lead'], ['file', new Uint8Array(1), 'a.png', 'image/png']], owner, undefined, app))
+      .toMatchObject({ status: 503, code: 'ATTACHMENTS_UNAVAILABLE' })
+  })
+
+  it('answers a bucket failure as unavailable, not as a server error', async () => {
+    const { tab } = await fixture()
+    const put = vi.spyOn(files, 'put').mockRejectedValueOnce(Object.assign(new Error('Forbidden'), { code: 403 }))
+    expect(await file(tab)).toMatchObject({ status: 503, code: 'ATTACHMENTS_UNAVAILABLE' })
+    put.mockRestore()
+    expect(await file(tab)).toMatchObject({ status: 200 })
+  })
+
+  it('sends uploaded files once, with empty text, and delivers their metadata to the agent', async () => {
+    const { tab, lead } = await fixture()
+    const { attachment } = await file(tab, 'log.txt', new Uint8Array(10), 'text/plain')
+    const sent = await send(tab, [attachment.id])
+    const row = (await store.messages(owner, tab, 'lead', {})).messages.find(m => m.id === sent.result.messageId)!
+    expect(row).toMatchObject({ text: '', attachments: [attachment] })
+    const delivery = (await store.deliveries(host, tab, lead)).find(d => d.messageId === sent.result.messageId)!
+    expect((await store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() })).message!.attachments).toEqual([attachment])
+    await expect(send(tab, [attachment.id])).rejects.toMatchObject({ code: 'ATTACHMENT_USED' })
+    await expect(send(tab, [])).rejects.toMatchObject({ code: 'TEXT_REQUIRED' })
+  })
+
+  it('lets only the uploading actor send a file, only in its conversation, and an agent attach from its host', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const mine = (await file(tab)).attachment
+    await expect(send(tab, [mine.id], peer)).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Elsewhere', brief: '', checks: [] })).result.conversationId)
+    const elsewhere = (await file(tab, 'x.png', new Uint8Array(5), 'image/png', group)).attachment
+    await expect(send(tab, [elsewhere.id])).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
+    await expect(send(tab, ['missing-attachment'])).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
+    expect(await file(tab, 'a.png', new Uint8Array(1), 'image/png', 'lead', peer, lead)).toMatchObject({ status: 403, code: 'FORBIDDEN' })
+    expect(await file(tab, 'a.png', new Uint8Array(1), 'image/png', 'no-such-group')).toMatchObject({ status: 404 })
+    const fromAgent = (await file(tab, 'result.png', new Uint8Array(7), 'image/png', 'lead', host, lead)).attachment
+    const sent = await send(tab, [fromAgent.id], host, lead, 'Here is the screenshot.')
+    expect((await store.messages(owner, tab, 'lead', {})).messages.find(m => m.id === sent.result.messageId))
+      .toMatchObject({ author: { kind: 'agent', id: lead }, attachments: [{ name: 'result.png', size: 7 }] })
+  })
+
+  it('refuses a viewer before storing anything', async () => {
+    const { tab } = await fixture()
+    await invite(tab, 'viewer')
+    const before = files.objects.size
+    expect(await file(tab, 'a.png', new Uint8Array(1), 'image/png', 'lead', peer)).toMatchObject({ status: 403, code: 'READ_ONLY' })
+    expect(files.objects.size).toBe(before)
+  })
 })

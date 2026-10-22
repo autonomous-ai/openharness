@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { RouteDecisionEffect } from './routeRecord.js'
+import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { canReadAgent, canReadProject, groupProject, projectsOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
@@ -21,6 +22,8 @@ export interface Agent {
   membershipGeneration: string
   hostGrant?: string | null
   name: string
+  /** A stable member name; native session and routing names remain in `name`. */
+  displayName?: string
   configuration: AgentConfiguration
   /** The last configuration operation fences delayed observations, including re-contribution. */
   configurationVersion?: string
@@ -57,7 +60,9 @@ export interface AgentStart {
   dispatched: boolean
   error: string | null
 }
-export type WorkStatus = 'planned' | 'working' | 'needs_human' | 'review' | 'done' | 'stopped' | 'reconciling'
+/** `needs_human`: the agent needs a person's decision (its result is the question). `blocked`: it cannot go on (its result
+ * says why). Both stay active work; the machine running the agent alerts its Harness Pro (cli/src/superTabs/attention.ts). */
+export type WorkStatus = 'planned' | 'working' | 'needs_human' | 'blocked' | 'review' | 'done' | 'stopped' | 'reconciling'
 export interface Check {
   id: string
   description: string
@@ -119,7 +124,7 @@ export interface SuperTabState {
 export type Actor =
   | { kind: 'person'; userId: string; email: string }
   | { kind: 'agent'; agentId: string; machineOwnerId: string }
-export interface Author { kind: 'person' | 'agent'; id: string; name: string; membershipGeneration: string }
+export interface Author { kind: 'person' | 'agent'; id: string; name: string; displayName?: string; membershipGeneration: string }
 export interface MessageDraft {
   id: string
   conversationId: string
@@ -129,6 +134,7 @@ export interface MessageDraft {
   recipients: string[]
   /** Structured row kind for clients; `native` is written by native.ts, `route`/`route-override` by commands. */
   source?: Record<string, unknown>
+  attachments?: import('./attachments.js').Attachment[]
 }
 export interface CommandEffects {
   state: SuperTabState
@@ -185,7 +191,7 @@ export function author(state: SuperTabState, actor: Actor, write = false): Autho
   const member = agent(state, actor.agentId)
   if (member.machineOwnerId !== actor.machineOwnerId) fail('FORBIDDEN', 'Only the execution host can speak as this agent.', 403)
   if (write && person(state, member.contributorId).role === 'viewer') fail('READ_ONLY', 'This contribution is read-only.', 403)
-  return { kind: 'agent', id: member.id, name: member.name, membershipGeneration: member.membershipGeneration }
+  return { kind: 'agent', id: member.id, name: member.name, displayName: agentDisplayName(state.agents, member.id), membershipGeneration: member.membershipGeneration }
 }
 
 export function createSuperTab(id: string, name: string, owner: { id: string; email: string }, environment: string, visibility?: ProjectVisibility): SuperTabState {
@@ -203,6 +209,7 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
 export function visibleState(state: SuperTabState, actor: Actor): SuperTabState {
   author(state, actor)
   const visible = structuredClone(state)
+  assignAgentDisplayNames(visible.agents)
   delete visible.sharing
   numberConversations(visible)
   delete visible.retiredConversationNumber

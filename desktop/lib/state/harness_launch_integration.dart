@@ -17,10 +17,13 @@ class HarnessLaunchIntegration {
     this.projectVisibility,
     this.projectVisibilityLocked = false,
     this.initialTask,
+    this.engines,
   });
   final String creationId, actionLabel;
   // Restores the person's original request from a destination launch journal.
   final String? initialTask;
+  // The only agents this destination may start, or null for any.
+  final List<String>? engines;
   String? projectVisibility;
   bool projectVisibilityLocked;
   final Future<String> Function(String machineId, String task) prepare;

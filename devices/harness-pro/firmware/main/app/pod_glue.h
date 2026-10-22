@@ -52,9 +52,11 @@ typedef struct {
     bool notice_on;
     bool notice_bad;             // the red pill (a failure), not the dark one
     // The notice toast (ph_toast, POD_TOAST_MS) (see pod_ui_notify): which entry (by agent), until when, and a contact that began on it.
+    // ban_stay: a Super Tab question's toast (pod_model_attention), which does not run out: it goes when swiped up, when the question
+    // closes (its entry goes) or once Notices is on screen; ban_until then only dates its slide-in.
     char ban_agent[ID_MAX];
     uint32_t ban_until;
-    bool ban_on, ban_touch;
+    bool ban_on, ban_touch, ban_stay;
     // player.library sweep: see pod_ui_sweep_*.
     struct {
         bool active, restart, ever;
@@ -109,7 +111,8 @@ pod_out_t pod_ui_swarms(pod_ui_t *, const cable_swarm_t *items, int n, const cab
 pod_out_t pod_ui_turn(pod_ui_t *, const char *id, const char *kind, const char *text, int elapsed_s, uint32_t now_ms);
 // turn.stats for an agent (-1 leaves a field unknown); unknown agents are ignored.
 pod_out_t pod_ui_turn_stats(pod_ui_t *, const char *id, int32_t passed, int32_t failed, int32_t commits, int32_t tokens_in, int32_t tokens_out);
-pod_out_t pod_ui_question(pod_ui_t *, const char *id, const char *text);
+// super_tab: the Super Tab the question was asked in (NULL = a plain question) and its attention (pod_model_question_tab).
+pod_out_t pod_ui_question(pod_ui_t *, const char *id, const char *text, const char *super_tab, pod_attention_t attention);
 // The daemon took a recording for this agent (voice.result): Working now, before its turn starts (pod_model_sent).
 pod_out_t pod_ui_sent(pod_ui_t *, const char *id, uint32_t now_ms);
 pod_out_t pod_ui_question_close(pod_ui_t *, const char *id);
@@ -163,7 +166,8 @@ bool pod_ui_updating(const pod_ui_t *);
 // ---- notifications ----
 // A live summary ended a turn: file an unread entry for the agent (its recap, name, elapsed; one per agent, the newest) and, for an
 // alert, show the toast for POD_TOAST_MS over a room (a newer one replaces it; none while TALK is on top; a tap opens Notices, a
-// swipe up dismisses). Nothing is filed when the agent is not on the roster.
+// swipe up dismisses). A Super Tab question's toast (pod_model_attention) stays instead: until swiped up, until the question
+// closes, or until Notices opens. Nothing is filed when the agent is not on the roster.
 #define POD_BANNER_SWIPE_PX 40
 // `awake`: the glass is lit. A dark one is not looking, even when it rests on that agent's screen.
 // When the current toast started (it shows for POD_TOAST_MS); the toast draw reads it for its timer line.

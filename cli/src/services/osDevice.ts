@@ -25,6 +25,7 @@ export const SETUP = '/usr/lib/harness-os/setup.py'
 /** Where the setup writes what became of its last join. */
 export const SETUP_RESULT = '/var/lib/harness-os/setup-result.json'
 export const PYTHON = '/usr/bin/python3'
+export const CMDLINE = '/proc/cmdline'
 export const HARNESS = '/usr/bin/harness'
 export const NMCLI = 'nmcli'
 /** How long an update counts as started: a second one inside it is refused BUSY. */
@@ -127,6 +128,15 @@ export function updateOf(status: Payload): Payload {
   const version = system.available === true && typeof system.version === 'string' ? system.version : runtimeReady ? basename(ready) : undefined
   if (version !== undefined) update.version = version
   if (status.restart_required === true) update.restartRequired = true
+  // Each part on its own, for the phone's Version page: what runs, and what is waiting. hn and the CLI come
+  // as one runtime; the OS package alone needs the computer restarted.
+  const text = (value: unknown): string | null => typeof value === 'string' && value ? value : null
+  const waiting = record(status.ready_versions) ? status.ready_versions : {}
+  update.parts = {
+    os: { running: text(status.os), available: system.available === true, next: system.available === true ? text(system.version) : null },
+    hn: { running: text(versions.hn), available: runtimeReady, next: runtimeReady ? text(waiting.hn) : null },
+    cli: { running: text(versions.cli), available: runtimeReady, next: runtimeReady ? text(waiting.cli) : null },
+  }
   return update
 }
 
@@ -159,20 +169,27 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
 
   const status = async (): Promise<Payload> => {
     if (!harnessOs()) return { harnessOs: false }
-    const [update, ssid] = await Promise.all([
+    const [update, ssid, hotspot, cmdline] = await Promise.all([
       exec(PYTHON, [LIVE_UPDATE, 'status'], { timeout: STATUS_TIMEOUT_MS }).then((out) => {
         const parsed: unknown = JSON.parse(out)
         if (!record(parsed)) throw new Error('live_update.py status did not answer an object')
         return updateOf(parsed)
       }).catch((error: unknown) => ({ available: false, error: short(error) })),
       currentSsid(),
+      // The open Wi-Fi it hosts while locked or not set up: where a phone finds it after a restart.
+      exec(PYTHON, [SETUP, 'name'], { timeout: NMCLI_TIMEOUT_MS }).then((out) => out.trim() || null).catch(() => null),
+      read(CMDLINE).catch(() => ''),
     ])
-    return { harnessOs: true, update, wifi: { ssid } }
+    // Encrypted, it waits for its password at every start (installer.py: rd.luks.name=).
+    return { harnessOs: true, update, wifi: { ssid }, hotspot, encrypted: /(^|\s)rd\.luks\.name=/.test(cmdline) }
   }
 
-  const update = (): Payload => {
+  const update = (payload: Payload): Payload => {
     if (updateStartedAt !== null && now() - updateStartedAt < UPDATE_BUSY_MS) return { error: 'BUSY' }
-    detached(HARNESS, ['update'])
+    // From a phone the person agreed to the restart there: a system update restarts the computer at once.
+    const args = payload.reboot === true ? ['update', '--reboot'] : ['update']
+    console.log(`[os-device] harness ${args.join(' ')}`)
+    detached(HARNESS, args)
     updateStartedAt = now()
     return { started: true }
   }
@@ -206,7 +223,7 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
       if (action !== 'update' && action !== 'wifi_scan' && action !== 'wifi_join' && action !== 'wifi_result') return { error: 'BAD_REQUEST' }
       if (!harnessOs()) return { error: 'UNSUPPORTED_OS' }
       try {
-        if (action === 'update') return update()
+        if (action === 'update') return update(payload)
         if (action === 'wifi_scan') return await scan()
         if (action === 'wifi_join') return join(payload)
         return await result()

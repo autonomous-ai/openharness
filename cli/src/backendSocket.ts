@@ -41,7 +41,7 @@ import { terminalHandoffRequest } from './lib/terminalHandoff.js'
 import { OwnerCommands, ROUTE_COMMAND_TYPES } from './lib/ownerCommands.js'
 import { VIEWER_DOWN_TYPES } from './lib/viewerFrames.js'
 import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
-import { encodeTerminalLocal, type TerminalBinaryClear } from './lib/terminalBinary.js'
+import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from './lib/terminalBinary.js'
 import { BACKEND_ONLY_DOWN_TYPES, GATEWAY_REQUEST_TYPES, isLocalClientId, logSafeType, PAIR_REQUESTS, PLATE_REQUEST, rpcResultType, type DownTransport } from './lib/relayFrames.js'
 import { sid, logFrame } from './lib/log.js'
 import { eventAgentId, GUEST_REFUSALS, guestVerdict } from './core/guestPolicy.js'
@@ -51,6 +51,10 @@ export { isLocalClientId, type DownTransport }
 /** Requests one local connection may queue before the daemon is ready (see `openRequests`). The app
  *  sends a handful on connect; hundreds is a client looping, not a person. */
 const MAX_REQUESTS_BEFORE_READY = 256
+/** A terminal stream's bookkeeping, handled as it arrives rather than in its connection's line — see `enqueueDown`. */
+const TERMINAL_BOOKKEEPING_TYPES: ReadonlySet<string> = new Set(['terminal_ack', 'terminal_alive'])
+/** An upload's control frames, which go in line with its chunks — see `enqueueDown`. */
+const TERMINAL_UPLOAD_CONTROL_TYPES: ReadonlySet<string> = new Set(['terminal_chunked_upload_begin', 'terminal_chunked_upload_cancel'])
 /** Agent Messages' requests, which the frame log leaves out: they carry what agents say to each other. */
 const MESSAGE_REQUESTS: ReadonlySet<string> = new Set(MESSAGES_REQUESTS)
 /** Share's requests, which the frame log leaves out as well: they carry who a harness is shared with. */
@@ -77,6 +81,8 @@ export class BackendSocket {
   /** Whether the backend link is up, as the gateway last said. */
   private linkUp = false
   private readonly downChains = new Map<string, Promise<void>>()
+  /** A remote client's terminal bytes, per connection and stream — see `enqueueTerminalBinary`. */
+  private readonly streamLanes = new Map<string, Promise<void>>()
   /**
    * Requests wait here until the daemon is ready (`openRequests`), each in its connection's own order.
    * The port answers long before start-up has wired every handler and confirmed the agents it
@@ -113,6 +119,9 @@ export class BackendSocket {
   onCommanderJoin: (() => void) | null = null
   /** Called only when commander presence crosses zero; drives the disposable recap-worker grace. */
   onCommanderPresenceChanged: ((connected: boolean) => void) | null = null
+  /** An app away from this desk (the phone, a browser) gained an E2EE session: it is told again what is still
+   *  being asked (core/questions.ts), as a window on this computer is when it attaches (localWsServer.ts). */
+  onRemoteAppJoined: (() => void) | null = null
   /** Cancels an agent's turn, for the orchestrator (cli.ts binds core/turns/cancel.ts). */
   onCancel: ((sessionId: string) => void) | null = null
   /** Takes a `cancel` frame, a turn interrupted with C-c (cli.ts binds core/turns/cancel.ts). */
@@ -329,6 +338,12 @@ export class BackendSocket {
     return [...this.remoteClients.values()].some((client) => client.role === 'device')
   }
 
+  /** True while an app away from this desk (the phone, a browser) holds an E2EE session over the relay: someone
+   *  who hears how loudly a turn ends, with no device in sight (services/recaps.ts). */
+  hasRemoteApp(): boolean {
+    return [...this.remoteClients.values()].some((client) => client.role === 'web')
+  }
+
   /** Live backend link state (`/api/status`), as the gateway last said. */
   isConnected(): boolean {
     return this.linkUp
@@ -364,7 +379,17 @@ export class BackendSocket {
     binary: (connId, clear) => this.enqueueTerminalBinary(connId, clear),
     client: (connId, client) => {
       this.wifi?.session(connId, client)
-      if (client) { this.remoteClients.set(connId, client); return }
+      if (client) {
+        const joined = client.role === 'web' && this.remoteClients.get(connId)?.role !== 'web'
+        this.remoteClients.set(connId, client)
+        // The client is registered whatever its replay does: a re-announce that throws costs only itself.
+        if (joined) {
+          try { this.onRemoteAppJoined?.() } catch (error) {
+            console.warn(`[backend] re-announcing to a remote app failed: ${error instanceof Error ? error.message : String(error)}`)
+          }
+        }
+        return
+      }
       if (!this.remoteClients.delete(connId)) return
       this.viewerStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
     },
@@ -526,10 +551,21 @@ export class BackendSocket {
     for (const [connId, sink] of this.localClients) {
       if (!sink.sendFrame(frame)) void this.unregisterLocalClient(connId)
     }
-    if (!this.thisComputerOnly) {
-      const guest = this.frameGuest(frame)
-      this.toGateway('web', (gateway) => gateway.broadcast(frame, guest ?? undefined))
-    }
+    this.toRemoteApps(frame)
+  }
+
+  /** An up-frame for the owner's apps away from this desk alone — the relay's web audience, sealed by the
+   *  gateway when it carries content — and never the windows here, which are told through `sendLocal`. An
+   *  agent's question goes both ways (core/questions.ts): `send` would add the tool connections too. */
+  sendRemote(frame: Frame): void {
+    if (env.LOG_FRAMES) logFrame('→', 'web', frame)
+    this.toRemoteApps(frame)
+  }
+
+  private toRemoteApps(frame: Frame): void {
+    if (this.thisComputerOnly) return
+    const guest = this.frameGuest(frame)
+    this.toGateway('web', (gateway) => gateway.broadcast(frame, guest ?? undefined))
   }
 
   /** The guest whose harness a frame is about (registry `guest`, through `agentGuest`), or null for the
@@ -752,6 +788,23 @@ export class BackendSocket {
         return Promise.resolve()
       }
     }
+    const type = frame.type
+    // A stream's acknowledgements and heartbeats are bookkeeping that every other frame may be ordered
+    // around (an ack for output a keyframe has since replaced is ignored), and one stuck behind a slow
+    // request let unacknowledged output pile up to the pause mark (384 KiB): the screen stopped while the
+    // connection waited on, say, `agents_list`.
+    if (this.requestsOpen && typeof type === 'string' && TERMINAL_BOOKKEEPING_TYPES.has(type)) {
+      return this.dispatchDown(frame, connId, transport, role).catch((err) => {
+        console.error('[backend] down-frame dispatch failed:', err instanceof Error ? err.message : err)
+      })
+    }
+    // An upload's begin and cancel go in line with its chunks, which ride the stream's input lane: a cancel
+    // and a new begin let through while the old upload's chunks still waited there would have taken those
+    // chunks into the new upload.
+    const streamId = (frame.payload as { streamId?: unknown } | undefined)?.streamId
+    if (transport !== 'local' && typeof type === 'string' && TERMINAL_UPLOAD_CONTROL_TYPES.has(type) && typeof streamId === 'string') {
+      return this.inStreamLane(connId, streamId, () => this.dispatchDown(frame, connId, transport, role), 'down-frame')
+    }
     const previous = this.downChains.get(key) ?? Promise.resolve()
     const next = previous
       .catch(() => { /* prior failure is already logged */ })
@@ -767,21 +820,39 @@ export class BackendSocket {
     return next
   }
 
-  /** A remote client's terminal bytes, opened by the gateway, in its connection's order (not gated: a
-   *  stream exists only once a request through the gate opened it). */
+  /**
+   * A remote client's terminal bytes, opened by the gateway: in their stream's order, and in nothing else's
+   * (not gated: a stream exists only once a request through the gate opened it). They used to share the
+   * connection's line with its requests, so a keystroke waited for whatever came before it: an
+   * `agents_list` (1–2s with ~250 agents), a `session_get` (up to 5s for a cold engine reader), another
+   * pane's keyframe (Codex: ~200ms and ~166KB at the median, daemon log 2026-10-13..15). Its own pane's
+   * keyframe still holds the echo, as it holds all of that pane's output, but no longer the keystroke. A
+   * window on this computer never waited (its bytes go straight to the streams, `handleLocalBinary`); a
+   * phone now does not either. A paste still holds the keystrokes typed after it, and an upload's chunks
+   * stay in line with its begin and cancel.
+   */
   private enqueueTerminalBinary(connId: string, clear: TerminalBinaryClear): Promise<void> {
-    const key = connId || '__backend__'
-    const previous = this.downChains.get(key) ?? Promise.resolve()
+    const traced = env.TYPING_TRACE && clear.kind === TerminalBinaryKind.input
+    const queuedAt = traced ? performance.now() : 0
+    return this.inStreamLane(connId, clear.streamId, async () => {
+      if (traced) console.log(`[typing] lane conn=${sid(connId)} stream=${sid(clear.streamId)} seq=${clear.seq} waited ${Math.round(performance.now() - queuedAt)}ms`)
+      await this.terminalStreams?.handleBinary(connId, clear)
+    }, 'binary terminal')
+  }
+
+  private inStreamLane(connId: string, streamId: string, task: () => Promise<void>, what: string): Promise<void> {
+    const key = `${connId || '__backend__'}\0${streamId}`
+    const previous = this.streamLanes.get(key) ?? Promise.resolve()
     const next = previous
       .catch(() => { /* prior failure is already logged */ })
-      .then(async () => { await this.terminalStreams?.handleBinary(connId, clear) })
+      .then(task)
       .catch((err) => {
-        console.error('[backend] binary terminal dispatch failed:', err instanceof Error ? err.message : err)
+        console.error(`[backend] ${what} dispatch failed:`, err instanceof Error ? err.message : err)
       })
       .finally(() => {
-        if (this.downChains.get(key) === next) this.downChains.delete(key)
+        if (this.streamLanes.get(key) === next) this.streamLanes.delete(key)
       })
-    this.downChains.set(key, next)
+    this.streamLanes.set(key, next)
     return next
   }
 

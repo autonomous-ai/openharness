@@ -25,6 +25,8 @@ export interface RecapDeps {
   clients: { hasActiveCommander(): boolean }
   deviceIsWatching: () => boolean
   cableWatchingLocal: () => boolean
+  /** Whether an app away from this desk (the phone, a browser) holds a session over the relay. */
+  remoteApp: () => boolean
   bySession: (sessionId: string) => RegisteredSession | undefined
   resolve: (id: string) => RegisteredSession | undefined
   /** A stopped agent's archived record (stoppedAgents.get). */
@@ -61,7 +63,7 @@ export interface TurnRecaps {
 }
 
 export function createRecaps({
-  port, turnActivity, clients, deviceIsWatching, cableWatchingLocal, bySession, resolve, stopped, live, sessionTurnOpen,
+  port, turnActivity, clients, deviceIsWatching, cableWatchingLocal, remoteApp, bySession, resolve, stopped, live, sessionTurnOpen,
   orchestratorRoleOf,
 }: RecapDeps) {
   /**
@@ -83,7 +85,9 @@ export function createRecaps({
     return role?.role === 'worker' || (role?.role === 'director' && role.busy)
   }
   /** Who watches the cards now: the recaps read it as they emit one. A plugged-in dial is always watching. */
-  const watchers = (): RecapWatchers => ({ device: deviceIsWatching(), active: clients.hasActiveCommander() || cableWatchingLocal() })
+  const watchers = (): RecapWatchers => ({
+    device: deviceIsWatching(), active: clients.hasActiveCommander() || cableWatchingLocal(), remote: remoteApp(),
+  })
   /** A session as the recaps address its cards. Whether it is a sub-agent's is asked only where a turn
    *  ends (it reads the orchestrator); elsewhere the recaps keep what they were last told. */
   const session = (sessionId: string, subagent?: boolean): RecapSession => {
@@ -92,6 +96,7 @@ export function createRecaps({
       sessionId,
       agentId: known?.agentId ?? sessionId,
       ...(known ? { name: projectDisplayName(known) } : {}),
+      ...(known?.engine ? { engine: known.engine } : {}),
       ...(known?.transcriptPath ? { transcriptPath: known.transcriptPath } : {}),
       ...(subagent === undefined ? {} : { subagent }),
     }
