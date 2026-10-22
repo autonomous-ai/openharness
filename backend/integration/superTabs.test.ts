@@ -564,6 +564,25 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await store.messages(owner, tab, 'lead', {})).messages[1]!.author).toMatchObject({ displayName })
   })
 
+  it('names the machine and its owner for a question on screen and sends the notice to the Lead, once', async () => {
+    const { tab, lead } = await fixture()
+    await db.user.update({ where: { id: host.sub }, data: { name: 'Huy' } })
+    await db.machine.update({ where: { machineId: 'test-host' }, data: { name: 'MacBookPro2021' } })
+    const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Release builder',
+      configuration: config, lead: false })).result.agentId as string
+    const displayName = (await store.read(owner, tab)).state.agents.find(a => a.id === worker)!.displayName!
+    await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Please start.', replyTo: null, recipientIds: [worker] })
+    const delivery = (await store.deliveries(host, tab, worker))[0]!
+    await store.delivery(host, tab, worker, delivery.id, { type: 'claim', claimId: 'claim' })
+    expect(await store.delivery(host, tab, worker, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_user' })).toEqual({ noticed: true })
+    expect(await store.delivery(host, tab, worker, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_user' })).toEqual({ noticed: false })
+    const notices = (await store.messages(owner, tab, 'lead', {})).messages.filter(m => m.source?.kind === 'delivery-hold')
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toMatchObject({ author: { id: worker }, recipientIds: [lead],
+      text: expect.stringContaining(`${displayName} is on MacBookPro2021. Only Huy (owner of that machine) can answer it.`) })
+    expect(notices[0]!.text).not.toContain(owner.email)
+  })
+
   it('stores the current delivery hold and its first time even after the compatibility notice exists', async () => {
     const { tab, lead } = await fixture()
     let now = Date.now()

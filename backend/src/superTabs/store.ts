@@ -910,11 +910,23 @@ export class SuperTabStore {
     const sender = author(state, { kind: 'agent', agentId: waiting.id, machineOwnerId: waiting.machineOwnerId })
     const revision = row.revision + 1
     if (!notice) group.lastMessageSequence = revision
+    // The Lead gets it too, like a host-stop notice; a waiting Lead has no one above it to tell.
+    const lead = group.leadId && group.leadId !== waiting.id && group.agentIds.includes(group.leadId) ? group.leadId : null
+    const host = !notice && reason === 'team_waiting_user' ? await this.holdHost(tx, state, waiting) : undefined
     await tx.superTab.update({ where: { id: row.id, revision: row.revision }, data: { revision, state: json(state) } })
-    if (!notice) await this.writeMessages(tx, row.id, state, [{ id, conversationId: group.id, replyTo: null, recipients: [],
+    if (!notice) await this.writeMessages(tx, row.id, state, [{ id, conversationId: group.id, replyTo: null, recipients: lead ? [lead] : [],
       source: { kind: 'delivery-hold', messageId: delivery.messageId, deliveryId: delivery.id, agentId: delivery.agentId },
-      text: holdNoticeText(sender.displayName ?? sender.name, reason), author: sender }], revision)
+      text: holdNoticeText(sender.displayName ?? sender.name, reason, host), author: sender }], revision)
     return { noticed: !notice }
+  }
+
+  /** The machine's name and its owner's name for a hold notice; left out when unknown rather than guessed. */
+  private async holdHost(tx: Transaction, state: SuperTabState, waiting: Agent) {
+    const contributed = state.machines?.find(m => m.machineId === waiting.machineId)?.name
+    const machine = contributed ?? (await tx.machine.findFirst({ where: { machineId: waiting.machineId, userId: waiting.machineOwnerId },
+      select: { name: true, hostname: true } }).then(m => m?.name ?? m?.hostname ?? null))
+    const owner = await tx.user.findUnique({ where: { id: waiting.machineOwnerId }, select: { name: true, email: true } })
+    return { machine: machine?.trim() || null, owner: owner?.name?.trim() || owner?.email || null }
   }
 
   /** Only the recorded execution host may attest that the actual session/attempt has stopped. */
