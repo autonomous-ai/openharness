@@ -1,3 +1,4 @@
+import { parseSwarmSkill, type SwarmSkill } from './swarmSkills.js'
 /**
  * Registry of process-owned AGENTS — one per supported top-level engine process in a tmux pane.
  *
@@ -202,6 +203,8 @@ export interface RegisteredSession {
   dsh?: string | null
   /** Stable key of the session-scoped harness runtime; preserved by bind, restore and fork. */
   dshRuntime?: string | null
+  /** Role and stable key of this Swarm session; absent for ordinary sessions. */
+  swarmSkill?: SwarmSkill
   /**
    * The engine's own named agent this pane was opened as (`agent_create`'s `agent`; opencode
    * `--agent <name>`), or null for a general session. Chosen at creation and carried into every
@@ -1319,6 +1322,7 @@ class Registry {
           ...normalizedForkedFrom((raw as { forkedFrom?: unknown }).forkedFrom),
           dsh: normalizedDshId((raw as { dsh?: unknown }).dsh),
           dshRuntime: typeof raw.dshRuntime === 'string' && raw.dshRuntime ? raw.dshRuntime : null,
+          ...(parseSwarmSkill(raw.swarmSkill) ? { swarmSkill: parseSwarmSkill(raw.swarmSkill) } : {}),
           agent: normalizedAgentName((raw as { agent?: unknown }).agent),
           ...(rawGridLaunch !== undefined ? { gridLaunch: rawGridLaunch } : {}),
           ...(rawGridLaunch ? { gridWebSearch: normalizedGridWebSearch(raw?.gridWebSearch) } : {}),
@@ -1629,6 +1633,7 @@ class Registry {
     codexHome?: string | null
     dsh?: string | null
     dshRuntime?: string | null
+    swarmSkill?: SwarmSkill
     /** The engine's named agent the pane was opened as (`agent_create`'s `agent`), validated upstream. */
     agent?: string | null
     bypassPermission?: boolean
@@ -1677,6 +1682,7 @@ class Registry {
       hermesHome: null,
       dsh: input.dsh ?? null,
       dshRuntime: input.dshRuntime ?? null,
+      ...(input.swarmSkill ? { swarmSkill: input.swarmSkill } : {}),
       agent: normalizedAgentName(input.agent),
       ...(input.bypassPermission ? { bypassPermission: true } : {}),
       ...(permissionModeName(input.permissionMode) ? { permissionMode: input.permissionMode } : {}),
@@ -2026,6 +2032,7 @@ class Registry {
       hermesHome: input.hermesHome ?? existing?.hermesHome ?? null,
       dsh: existing?.dsh ?? null,
       dshRuntime: existing?.dshRuntime ?? null,
+      ...(existing?.swarmSkill ? { swarmSkill: existing.swarmSkill } : {}),
       agent: existing?.agent ?? null,
       // Carried forward like `agent`: dropped at the first hook, a restart of a harness another agent started came
       // back without its pull request line (found by e2e/agentClient.e2e.ts).
@@ -2183,7 +2190,7 @@ class Registry {
     this.terminalAvailableAgents.delete(agentId)
     // The archived conversation owns the original Harness ID. Preserve the physical shell under
     // a new identity, without sending input, stopping processes or claiming its route twice.
-    const entry = separateShell ? { ...original, agentId: randomUUID(), dsh: null, dshRuntime: null, agent: null, defaultName: this.automaticName('Terminal', new Date()) } : original
+    const entry = separateShell ? { ...original, agentId: randomUUID(), dsh: null, dshRuntime: null, swarmSkill: undefined, agent: null, defaultName: this.automaticName('Terminal', new Date()) } : original
     // The shell under a new identity is the person's, not a harness an agent started: kept, a window took the new id for
     // a new child and opened the shell beside the agent, even after the person had closed the child (review of #1217).
     if (separateShell) delete entry.parentAgentId

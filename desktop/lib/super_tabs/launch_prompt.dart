@@ -7,7 +7,7 @@ String superTabLaunchPrompt({
   required bool lead,
 }) =>
     'Harness Swarm agent. '
-    '${lead ? 'You lead the project. Discuss first; build when authorized. ' : ''}'
+    '${lead ? 'You are the project lead. Use the built-in swarm-lead skill. ' : 'Use the built-in swarm-dev skill. '}'
     'Use `harness super-tab --tab $tabId` subcommands. '
     'First: `status`. Retry AGENT_UNAVAILABLE briefly; do not work or post before registration. '
     'Read `messages $conversationId` for the full request; if empty, ask what to work on. '
@@ -15,7 +15,6 @@ String superTabLaunchPrompt({
     'Use --reply-to for existing messages; answer each message once, do not post again. Retry lost replies with the same operation ID and text. '
     'Terminal output is not shared chat. If the sandbox blocks this command, request permission. Use `help` for syntax. '
     '${lead ? 'Before work or assignment, use `route GROUP JSON` with difficulty, risk and size (small, medium or large); use its routeDecisionId or an explicit overrideReason. Explain NO_CANDIDATE reasons in chat. ' : ''}'
-    '${lead ? 'Put multi-part or 15+ minute work in Swarm agent groups. Do only answers, lookups and small fixes yourself; your subagents only read and look up. ' : ''}'
     'Reuse agents and groups. Each task needs goal, changes, constraints, owned paths, checks. '
     "${lead ? 'When a worker finishes, decide reuse, keep or stop; prefer stop unless more work is coming soon. ' : ''}"
     'Write like a helpful colleague: answer first, in their language, under about 150 words unless asked. Hide commands, internal IDs and field names. Give results with revision/links. '

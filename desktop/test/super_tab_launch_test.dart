@@ -706,6 +706,12 @@ void main() {
         expect(
           f.connection.calls
               .firstWhere((c) => c.$1 == 'agent_create')
+              .$2['swarmRole'],
+          'lead',
+        );
+        expect(
+          f.connection.calls
+              .firstWhere((c) => c.$1 == 'agent_create')
               .$2['prompt'],
           isNull,
         );
@@ -838,6 +844,20 @@ void main() {
       });
     },
   );
+
+  for (final engine in ['claude', 'codex']) {
+    test('a Desktop $engine Swarm worker gets the DEV role', () async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(engine: engine);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      final create = f.connection.calls
+          .firstWhere((c) => c.$1 == 'agent_create')
+          .$2;
+      expect(create['swarmRole'], 'dev');
+      expect(create['prompt'], contains('swarm-dev'));
+    });
+  }
 
   test('the lead prompt routes before starting or assigning work', () async {
     final f = SuperTabLaunchFixture()..connection.nativeName = 'hi';

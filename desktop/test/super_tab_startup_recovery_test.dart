@@ -51,6 +51,7 @@ void main() {
         lessThanOrEqualTo(kFirstTaskMaxLength),
         reason: '${lead ? 'Lead' : 'Worker'} bootstrap must fit native creation',
       );
+      expect(prompt, contains(lead ? 'swarm-lead' : 'swarm-dev'));
     }
   });
 
@@ -95,6 +96,7 @@ void main() {
               (create.$2['prompt'] as String).length,
               lessThanOrEqualTo(kFirstTaskMaxLength),
             );
+            expect(create.$2['swarmRole'], 'lead');
             final messages = f.connection.server.messages;
             expect(messages, hasLength(task.trim().isEmpty ? 0 : 1));
             if (messages.isNotEmpty) {

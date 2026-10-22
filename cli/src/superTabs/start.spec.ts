@@ -217,6 +217,7 @@ it('uses one native creation receipt and joins its captured group after a lost j
   expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true, harnessId: 'native', agentId: 'worker' })
   const launches = f.request.mock.calls.filter(c => c[0] === 'agent_create')
   expect(launches).toHaveLength(1)
+  expect(launches[0][1]).toMatchObject({ swarmRole: 'dev' })
   expect(f.open).toHaveBeenCalledWith(where, 'target')
   const commands = f.scoped.mock.calls.map(c => c[0].command as Record<string, unknown>).filter(Boolean)
   expect(commands.find(c => c.type === 'agent.started')).toMatchObject({ startId: 'start', harnessId: 'native', configuration: { engine: 'claude', model: 'fixture-model', effort: 'high' } })

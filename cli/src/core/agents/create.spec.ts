@@ -166,6 +166,32 @@ describe('creating an agent', () => {
   })
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 
+  it.each(['claude', 'codex'] as const)('attaches each Swarm role before %s pane dispatch', async engine => {
+    for (const role of ['lead', 'dev'] as const) {
+      const cwd = folder()
+      await setup().create(request({ cwd, engine, swarmRole: role }))
+      const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
+      expect(pane.swarmSkill).toEqual({ role, key: pane.sessionLabel })
+      const place = vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2]
+      expect(place.swarmInstructions).toContain(`swarm-${role}/SKILL.md`)
+    }
+  })
+
+  it('keeps a selected Store harness when attaching a Swarm skill', async () => {
+    vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
+    expect(await setup().create(request({ dsh: 'blender', swarmRole: 'dev' }))).toMatchObject({ ok: true })
+    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]).toMatchObject({
+      dsh: 'blender', swarmSkill: { role: 'dev' }, env: expect.objectContaining({ HARNESS_DSH: 'blender' }),
+    })
+    expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.extraArgs).toContain('--dsh')
+  })
+
+  it('refuses an unsafe Swarm runtime before opening a pane', async () => {
+    const cwd = folder(['.harness'])
+    expect(await setup().create(request({ cwd, swarmRole: 'dev' }))).toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED' })
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
+  })
+
   it.each(['local', 'remote', 'nonempty', 'unreadable', 'unreadable before trust', 'revoked', 'revoked before trust', 'changed contents', 'replaced workspace', 'changed after enumeration', 'redirected during enumeration', 'error', 'thrown text', 'no trust contract', 'legacy'] as const)(
     'decides local trust before workspace preparation and writes it before final proof: %s', async mode => {
       const parent = mode === 'redirected during enumeration' ? folder() : root
