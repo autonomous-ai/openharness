@@ -820,7 +820,9 @@ void main() {
       for (final scale in [1.0, 2.0]) {
         // What the end shows at each width, widest first: avatars, then the chips.
         final states = <(int, bool, bool)>[];
-        for (var width = 460.0; width >= 180; width -= 10) {
+        // The 11 px figures keep Claude visible at 180 px. Sweep narrower so
+        // both text scales still reach the count-only stage.
+        for (var width = 460.0; width >= 160; width -= 10) {
           await tester.pumpWidget(
             MaterialApp(
               builder: (context, child) => MediaQuery(
