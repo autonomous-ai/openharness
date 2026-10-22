@@ -3,6 +3,7 @@ import { applyCommand, commandSchema, PAIR_CHAIN_LIMIT, type Command, type Comma
 import { machineSlots } from './machines.js'
 import { activeWork, agentRole, createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
+import { agentTarget, broken } from './rules.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -1160,5 +1161,106 @@ describe('Reviewer role', () => {
     f.run({ type: 'work.define', conversationId: group, brief: 'Again', checks: [{ description: 'Done', independent: false }] })
     f.run({ type: 'work.assign', conversationId: group, agentId: builder, ...via }, leadActor, decisionIn(group))
     expect(f.state.agents.find(a => a.id === reviewer)).not.toHaveProperty('workDecision')
+  })
+})
+
+describe('the owner\'s rules', () => {
+  const asked = { askedIn: { conversationId: 'lead', messageId: 'm1' } }
+  const ownerSaid = { askedIn: { author: { kind: 'person', id: 'owner', name: owner.email, membershipGeneration: 'tab' } } } as Partial<CommandContext>
+  const set = (rule: Record<string, unknown>, text = 'No Haiku.') => ({ type: 'rule.set', rule, text } as Command)
+  const startBy = (f: ReturnType<typeof routed>, actor: Actor, patch: Record<string, unknown> = {}) => f.run({ type: 'agent.start', request: { conversationId: 'lead', machineId: 'machine',
+    engine: 'claude', model: 'opus', effort: 'high', name: 'Builder', cwd: '/repo', worktree: true,
+    requirements: { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false }, ...patch }, ...via } as Command, actor, { contribution: f.contribution, ...decisionIn() })
+
+  it('lets the owner set, list and remove rules, and records who asked', () => {
+    const f = routed()
+    const added = f.run(set({ kind: 'forbidModel', model: 'haiku' }))
+    expect(f.state.rules).toEqual([{ id: added.result.ruleId, rule: { kind: 'forbidModel', model: 'haiku' }, text: 'No Haiku.', askedBy: 'owner', askedIn: null,
+      addedBy: 'person:owner', createdAt: new Date(1000).toISOString() }])
+    expect(added.messages[0]).toMatchObject({ conversationId: 'lead', text: 'Rule added: No Haiku.' })
+    // Everyone in the Swarm reads the rules with the tab.
+    expect(visibleState(f.state, f.leadActor).rules).toHaveLength(1)
+    // A second list of machines replaces the first.
+    f.run(set({ kind: 'machines', machineIds: ['m1'] }, 'Only m1.'))
+    f.run(set({ kind: 'machines', machineIds: ['m2'] }, 'Only m2.'))
+    expect(f.state.rules!.map(r => r.text)).toEqual(['No Haiku.', 'Only m2.'])
+    expect(f.run({ type: 'rule.remove', ruleId: added.result.ruleId as string }).messages[0]!.text).toBe('Rule removed: No Haiku.')
+    f.run({ type: 'rule.remove', ruleId: f.state.rules![0]!.id })
+    expect(f.state).not.toHaveProperty('rules')
+    expect(() => f.run({ type: 'rule.remove', ruleId: 'gone' })).toThrow('no such rule')
+    for (let i = 0; i < 50; i++) f.run(set({ kind: 'preferIdle' }, `Rule ${i}.`))
+    expect(() => f.run(set({ kind: 'preferIdle' }))).toThrow('50 rules')
+    expect(() => f.run(set({ kind: 'minEffort', effort: 'huge' }))).toThrow()
+  })
+  it('lets the Lead change rules only by quoting the owner\'s message, and nobody else', () => {
+    const f = routed()
+    const added = f.run({ ...set({ kind: 'forbidModel', model: 'haiku' }), ...asked } as Command, f.leadActor, ownerSaid)
+    expect(f.state.rules![0]).toMatchObject({ askedBy: 'owner', askedIn: asked.askedIn, addedBy: `agent:${f.lead}` })
+    expect(() => f.run(set({ kind: 'preferIdle' }), f.leadActor, ownerSaid)).toThrow('quote the owner')
+    expect(() => f.run({ ...set({ kind: 'preferIdle' }), ...asked } as Command, f.leadActor)).toThrow('quote the owner')
+    for (const author of [{ kind: 'person', id: 'peer' }, { kind: 'agent', id: 'owner' }]) {
+      expect(() => f.run({ ...set({ kind: 'preferIdle' }), ...asked } as Command, f.leadActor, { askedIn: { author } } as never)).toThrow('quote the owner')
+    }
+    expect(() => f.run({ ...set({ kind: 'preferIdle' }), ...asked } as Command, f.workerActor, ownerSaid)).toThrow('Only the Swarm owner')
+    f.invite()
+    expect(() => f.run(set({ kind: 'preferIdle' }), peer)).toThrow('Only the Swarm owner')
+    expect(() => f.run({ type: 'rule.remove', ruleId: added.result.ruleId as string }, peer)).toThrow('Only the Swarm owner')
+    f.run({ type: 'rule.remove', ruleId: added.result.ruleId as string, ...asked }, f.leadActor, ownerSaid)
+    expect(f.state).not.toHaveProperty('rules')
+  })
+  it('refuses an agent\'s start that breaks a hard rule, whatever reason it gives', () => {
+    const f = routed()
+    expect(startBy(f, f.leadActor).result.startId).toBeTruthy()
+    f.run(set({ kind: 'forbidModel', model: 'OPUS' }, 'No Opus.'))
+    expect(() => startBy(f, f.leadActor)).toThrow('The owner\'s rule "No Opus." rules out Claude opus. Route again.')
+    expect(startBy(f, f.leadActor, { model: 'sonnet' }).result.startId).toBeTruthy()
+    f.run(set({ kind: 'minEffort', engine: 'claude', effort: 'high' }, 'High effort.'))
+    expect(() => startBy(f, f.leadActor, { model: 'sonnet', effort: 'medium' })).toThrow('rules out Claude at medium effort')
+    expect(() => startBy(f, f.leadActor, { model: 'sonnet', effort: undefined })).toThrow('rules out Claude at an unnamed effort')
+    expect(startBy(f, f.leadActor, { model: 'sonnet', effort: 'max' }).result.startId).toBeTruthy()
+    f.run(set({ kind: 'machines', machineIds: ['elsewhere'] }, 'Only elsewhere.'))
+    expect(() => startBy(f, f.leadActor, { model: 'sonnet' })).toThrow('rules out this machine')
+  })
+  it('lets a person through with a warning the group sees', () => {
+    const f = routed()
+    f.run(set({ kind: 'forbidModel', model: 'opus' }, 'No Opus.'))
+    const effects = startBy(f, owner)
+    expect(effects.result).toMatchObject({ startId: expect.any(String), warnings: ['The owner\'s rule "No Opus." rules out Claude opus.'] })
+    expect(effects.messages).toEqual(expect.arrayContaining([expect.objectContaining({ conversationId: 'lead',
+      text: `${owner.email} started Builder anyway. The owner's rule "No Opus." rules out Claude opus.` })]))
+  })
+  it('refuses an agent\'s assignment of a worker that breaks a hard rule, with the effort it was launched with', () => {
+    const f = routed()
+    f.define('lead')
+    f.run(set({ kind: 'forbidModel', engine: 'codex', model: 'test' }, 'No test model.'))
+    expect(() => f.run({ type: 'work.assign', conversationId: 'lead', agentId: f.worker, ...via }, f.leadActor, decisionIn())).toThrow('rules out Codex test-model')
+    const effects = f.run({ type: 'work.assign', conversationId: 'lead', agentId: f.worker })
+    expect(effects.result.warnings).toEqual(['The owner\'s rule "No test model." rules out Codex test-model.'])
+    expect(effects.messages.map(m => m.text)).toContain(`${owner.email} assigned worker anyway. The owner's rule "No test model." rules out Codex test-model.`)
+    // An agent that reports `auto` is held to the effort its start asked for.
+    const worker = f.state.agents.find(a => a.id === f.worker)!
+    worker.configuration.effort = 'auto'
+    const rule = [{ id: 'r', rule: { kind: 'minEffort', effort: 'high' } as const, text: 'High.', askedBy: 'owner', askedIn: null, addedBy: 'person:owner', createdAt: '' }]
+    expect(broken(rule, agentTarget(f.state, worker))).toContain('an unnamed effort')
+    f.state.starts = [{ harnessId: worker.harnessId, request: { machineId: worker.machineId, effort: 'xhigh' } } as never]
+    expect(broken(rule, agentTarget(f.state, worker))).toBeNull()
+  })
+  it('refuses a recorded pick that breaks a hard rule, but not a ruled-out candidate that was not picked', () => {
+    const f = routed()
+    const route = (decision: unknown) => f.run({ type: 'route.record', conversationId: 'lead', decision } as Command, f.leadActor, { recentRoutes: 0 })
+    f.run(set({ kind: 'forbidModel', model: 'sonnet' }, 'No Sonnet.'))
+    expect(route(record()).result.routeDecisionId).toBeTruthy()
+    expect(() => route(record({ pick: 'c1' }))).toThrow('The owner\'s rule "No Sonnet." rules out Claude sonnet.')
+    // A member pick is judged by what the member runs now.
+    const member = record({ candidates: [candidate('c0', { kind: 'member', agentId: f.worker, machineId: 'host', engine: 'codex', model: 'other' })] })
+    f.run(set({ kind: 'forbidModel', model: 'test-model' }, 'No test model.'))
+    expect(() => route(member)).toThrow('rules out Codex test-model')
+  })
+  it('lets a person override to a ruled-out candidate with a warning', () => {
+    const f = routed()
+    f.run(set({ kind: 'forbidModel', model: 'sonnet' }, 'No Sonnet.'))
+    const open = { id: 'd1', conversationId: 'lead', record: record(), final: null, override: null, assignmentId: null, outcome: null } as unknown as RouteDecision
+    const effects = f.run({ type: 'route.override', decisionId: 'd1', candidateId: 'c1', reason: 'Because.' }, owner, { routeDecision: open })
+    expect(effects.result.warnings).toEqual(['The owner\'s rule "No Sonnet." rules out Claude sonnet.'])
   })
 })

@@ -8,6 +8,7 @@ import {
 } from './model.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSchema } from './routingPolicy.js'
+import { agentTarget, askedInSchema, broken, MAX_RULES, ruleSchema, ruleTextSchema, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentProjectId, deleteProject, groupProject, inviteLanding, manageProject, mutableProjects, projectMembers, projectOf, readAgent, readConversation, readProject, sameProject } from './projects.js'
 
@@ -58,6 +59,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('tab.project'), machineId: id, project }).strict(),
   z.object({ type: z.literal('tab.pause'), paused: z.boolean() }).strict(),
   z.object({ type: z.literal('tab.routingPolicy'), policy: routingOverrideSchema.nullable() }).strict(),
+  z.object({ type: z.literal('rule.set'), rule: ruleSchema, text: ruleTextSchema, askedIn: askedInSchema.optional() }).strict(),
+  z.object({ type: z.literal('rule.remove'), ruleId: id, askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('project.create'), name: title, visibility: z.enum(['public', 'private']), brief: z.string().trim().max(8000).default('') }).strict(),
   z.object({ type: z.literal('project.rename'), projectId: id, name: title }).strict(),
   z.object({ type: z.literal('project.delete'), projectId: id }).strict(),
@@ -112,6 +115,8 @@ export interface CommandContext {
   contribution?: { machineOwnerId: string; contributorId: string; hostGrant?: string | null }
   /** Loaded from this tab and conversation by the store. */
   reply?: { id: string; conversationId: string; author: Author }
+  /** The message a Lead quotes as the owner's request for a rule change, loaded from this tab by the store. */
+  askedIn?: { author: Author }
   /** The newest messages of this conversation before the one being sent, newest first, loaded by the store for `message.send`. */
   recent?: { author: Author; recipients: string[] }[]
   /** A host's receipt, not an elapsed lease, proves that an assignment stopped. */
@@ -169,6 +174,7 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if ('projectId' in command && command.projectId) readProject(state, actor, command.projectId)
   if ('agentId' in command) readAgent(state, actor, command.agentId)
   if (command.type === 'agent.start') readConversation(state, actor, command.request.conversationId)
+  if ((command.type === 'rule.set' || command.type === 'rule.remove') && command.askedIn) readConversation(state, actor, command.askedIn.conversationId)
   if ('startId' in command && command.type !== 'route.modelResult') {
     const start = state.starts?.find(s => s.id === command.startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
     readConversation(state, actor, start.request.conversationId)
@@ -236,6 +242,25 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   /** An agent starts or assigns only what the route chose; a person may still do either by hand. */
   const routed = (routeDecisionId?: string) => {
     if (actor.kind === 'agent' && !routeDecisionId) fail('ROUTE_REQUIRED', 'Route this task first, then start or assign the pick with its routeDecisionId.', 400)
+  }
+  /** A hard rule refuses an agent. A person acting by hand is not blocked: the command goes through and the group is told. */
+  const ruled = (target: RunTarget, conversationId: string, done: string) => {
+    const why = broken(state.rules, target)
+    if (!why) return
+    if (actor.kind === 'agent') fail('RULE_BROKEN', `${why} Route again.`, 403)
+    result.warnings = [why]
+    effects.messages.push({ id: stableId(operationId, 'rule'), conversationId, author: sender, text: `${done} anyway. ${why}`, replyTo: null, recipients: [] })
+  }
+  /** Only the owner changes rules, or the tab's Lead quoting the owner's message; a rule records who asked. */
+  const ruleChange = (askedIn: { conversationId: string; messageId: string } | undefined) => {
+    if (actor.kind === 'person' && actor.userId === state.ownerId) return
+    if (actor.kind !== 'agent' || conversation(state, 'lead').leadId !== actor.agentId) {
+      fail('OWNER_REQUIRED', 'Only the Swarm owner, or the Lead passing on the owner\'s request, changes rules.', 403)
+    }
+    const asker = askedIn && context.askedIn?.author
+    if (asker?.kind !== 'person' || asker.id !== state.ownerId) {
+      fail('OWNER_MESSAGE_REQUIRED', 'Only the Swarm owner sets rules; quote the owner\'s message that asked for this.', 403)
+    }
   }
   const openDecision = (): RouteDecision => {
     const decision = context.routeDecision ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
@@ -390,6 +415,25 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.policy && Object.keys(command.policy).length) state.routingPolicy = command.policy
       else delete state.routingPolicy
       break
+    case 'rule.set': {
+      ruleChange(command.askedIn)
+      // There is one machines list; a new one replaces it.
+      const rules = (state.rules ?? []).filter(r => command.rule.kind !== 'machines' || r.rule.kind !== 'machines')
+      if (rules.length >= MAX_RULES) fail('RULES_FULL', `This Swarm has ${MAX_RULES} rules. Remove one first.`)
+      state.rules = [...rules, { id: operationId, rule: command.rule, text: command.text, askedBy: state.ownerId,
+        askedIn: command.askedIn ?? null, addedBy: actorKey(actor), createdAt: new Date(context.now).toISOString() }]
+      result.ruleId = operationId
+      message('lead', `Rule added: ${command.text}`)
+      break
+    }
+    case 'rule.remove': {
+      ruleChange(command.askedIn)
+      const rule = state.rules?.find(r => r.id === command.ruleId) ?? fail('NOT_FOUND', 'This Swarm has no such rule.', 404)
+      state.rules = state.rules!.filter(r => r.id !== rule.id)
+      if (!state.rules.length) delete state.rules
+      message('lead', `Rule removed: ${rule.text}`)
+      break
+    }
     case 'conversation.create': {
       const brief = command.task ? renderWorkTask(command.task) : command.brief ?? ''
       const project = readProject(state, actor, command.projectId ??
@@ -478,6 +522,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'agent.start': {
       controls(state, actor, command.request.conversationId)
       routed(command.routeDecisionId)
+      ruled({ machineId: command.request.machineId, engine: command.request.engine, model: command.request.model ?? null, effort: command.request.effort ?? null },
+        command.request.conversationId, `${sender.name} started ${command.request.name}`)
       requireWorkerDecisions(state, actor, open(state, command.request.conversationId))
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
       if (command.request.role === 'reviewer' && !['claude', 'codex'].includes(command.request.engine)) {
@@ -762,6 +808,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const chosen = command.decision.candidates.find(c => c.id === command.decision.pick)!
       const member = chosen.kind === 'member' ? state.agents.find(a => a.id === chosen.agentId) : undefined
       if (member) assignable(conversation(state, command.conversationId), member)
+      // Only the pick is checked, so an older CLI that still lists a ruled-out candidate records an allowed pick.
+      ruled(member ? agentTarget(state, member) : chosen, command.conversationId, `Routing picked ${chosen.title}`)
       requireWorkerDecisions(state, actor, open(state, command.conversationId), chosen.kind === 'member' ? chosen.agentId : undefined)
       if ((context.recentRoutes ?? 0) >= 30) fail('RATE_LIMITED', 'This Super Tab routed 30 tasks in the last hour. Wait before routing again.', 429)
       const decision = command.decision
@@ -799,6 +847,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const chosen = decision.record.candidates.find(c => c.id === command.candidateId) ?? fail('NOT_FOUND', 'Choose one of this decision’s candidates.', 404)
       if (chosen.id === current) fail('ALREADY_CHOSEN', 'That candidate is already the choice.')
       if (chosen.kind === 'member' && !state.agents.some(a => a.id === chosen.agentId)) fail('CANDIDATE_UNAVAILABLE', 'That agent left this Super Tab. Choose another.')
+      ruled(chosen.kind === 'member' ? agentTarget(state, agent(state, chosen.agentId!)) : chosen, decision.conversationId, `${sender.name} chose ${chosen.title}`)
       effects.routeDecisions.push({ op: 'override', id: decision.id, override: { by: 'person', actorKey: actorKey(actor), candidateId: chosen.id, reason: command.reason } })
       const lead = conversation(state, decision.conversationId).leadId
       message(decision.conversationId,
@@ -836,6 +885,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (!group.brief || !group.checks.length) fail('BRIEF_REQUIRED', 'Record the brief and acceptance checks before assigning work.', 400)
       const worker = agent(state, command.agentId)
       assignable(group, worker)
+      ruled(agentTarget(state, worker), group.id, `${sender.name} assigned ${worker.name}`)
       sameProject(state, group, worker)
       requireWorkerDecisions(state, actor, group, worker.id)
       if (worker.workDecision === 'stop') fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
