@@ -202,27 +202,19 @@ void main() {
       );
     });
 
-    test('hover and focus say each state in its own words', () {
-      String tip(SuperTabMachineStatus s, [Duration? age]) =>
-          superTabMachineTip(s, age);
+    test('hover and focus say a state that is not online in its own words, never an age', () {
+      // Online says nothing: the dot does. No state says how old its reading is.
+      expect(superTabMachineTip(SuperTabMachineStatus.live), isNull);
+      expect(superTabMachineTip(SuperTabMachineStatus.late), isNull);
+      expect(superTabMachineTip(SuperTabMachineStatus.offline), 'Offline');
       expect(
-        tip(SuperTabMachineStatus.live, const Duration(seconds: 4)),
-        'Updated 4s ago',
+        superTabMachineTip(SuperTabMachineStatus.unknown),
+        "Can't reach Harness",
       );
       expect(
-        tip(SuperTabMachineStatus.late, const Duration(seconds: 28)),
-        'Updated 28s ago',
+        superTabMachineTip(SuperTabMachineStatus.refreshing),
+        'Refreshing…',
       );
-      expect(
-        tip(SuperTabMachineStatus.offline, const Duration(minutes: 3)),
-        'Offline · last seen 3 min ago',
-      );
-      expect(
-        tip(SuperTabMachineStatus.unknown, const Duration(minutes: 1)),
-        "Can't reach Harness · data from 1 min ago",
-      );
-      expect(tip(SuperTabMachineStatus.refreshing), 'Refreshing…');
-      expect(tip(SuperTabMachineStatus.offline), 'Offline');
       expect(
         superTabMachineStateLabel(SuperTabMachineStatus.unknown),
         'Status unknown',
@@ -249,11 +241,11 @@ void main() {
           findsOneWidget,
         );
         const tip =
-            'Updated 4s ago · CPU 80% free · RAM 16 GB free · SSD 500 GB free';
+            'Owned by owner · CPU 80% free · RAM 16 GB free · SSD 500 GB free';
         expect(tipOf(tester, 'm'), tip);
         expect(labelOf(tester, 'm'), 'Studio Mac, Live, $tip');
-        // One line: the name, and no number or age beside it.
-        expect(textsOf('m'), ['Studio Mac']);
+        // One line: the name and its Codex allowance; no hardware number, no age.
+        expect(textsOf('m'), ['Studio Mac', '90%']);
         expect(nameInkOf(tester, 'm'), isNot(DesktopChrome.muted));
         expect(find.byType(SuperTabMachinesPill), findsNothing);
 
@@ -273,12 +265,12 @@ void main() {
       await show(tester, c);
 
       expect(statusOf(tester, 'm'), SuperTabMachineStatus.late);
-      expect(tipOf(tester, 'm'), startsWith('Updated 28s ago · CPU 80% free'));
+      expect(tipOf(tester, 'm'), startsWith('Owned by owner · CPU 80% free'));
       expect(
         labelOf(tester, 'm'),
-        startsWith('Studio Mac, Late, Updated 28s ago'),
+        startsWith('Studio Mac, Late, Owned by owner'),
       );
-      expect(textsOf('m'), ['Studio Mac']);
+      expect(textsOf('m'), ['Studio Mac', '90%']);
 
       semantics.dispose();
       await tester.pumpWidget(const SizedBox());
@@ -326,9 +318,9 @@ void main() {
 
         expect(statusOf(tester, 'm'), SuperTabMachineStatus.offline);
         expect(nameInkOf(tester, 'm'), DesktopChrome.muted);
-        // Never blanked: its last numbers stay, after when it was last seen. The allowance is old, so no warning.
+        // Never blanked: its last numbers stay. Its allowance is old, so it has no chip.
         const tip =
-            'Offline · last seen 3 min ago · CPU 80% free · RAM 16 GB free · SSD 500 GB free';
+            'Offline · Owned by owner · CPU 80% free · RAM 16 GB free · SSD 500 GB free';
         expect(tipOf(tester, 'm'), tip);
         expect(labelOf(tester, 'm'), 'Studio Mac, Offline, $tip');
         expect(textsOf('m'), ['Studio Mac']);
@@ -344,7 +336,7 @@ void main() {
     );
 
     testWidgets(
-      'unknown while the Swarm cannot be read: not offline, its data from a minute ago kept in its tooltip',
+      'unknown while the Swarm cannot be read: not offline, its last numbers kept in its tooltip',
       (tester) async {
         final server = ConversationServer();
         server.state['machines'] = [
@@ -370,7 +362,7 @@ void main() {
           findsNothing,
         );
         const tip =
-            "Can't reach Harness · data from 1 min ago · CPU 80% free · RAM 16 GB free · SSD 500 GB free";
+            "Can't reach Harness · Owned by owner · CPU 80% free · RAM 16 GB free · SSD 500 GB free";
         expect(tipOf(tester, 'm'), tip);
         expect(labelOf(tester, 'm'), 'Studio Mac, Status unknown, $tip');
 
@@ -402,7 +394,7 @@ void main() {
         expect(statusOf(tester, 'm'), SuperTabMachineStatus.unknown);
         expect(
           tipOf(tester, 'm'),
-          startsWith("Can't reach Harness · data from 10 min ago"),
+          startsWith("Can't reach Harness · Owned by owner"),
         );
         await tester.pumpWidget(const SizedBox());
       },
@@ -440,16 +432,16 @@ void main() {
         await show(tester, c, app: f.app, readLocal: (_) async => null);
         expect(statusOf(tester, 'far'), SuperTabMachineStatus.refreshing);
         const tip =
-            'Refreshing… · CPU 80% free · RAM 16 GB free · SSD 500 GB free';
+            'Refreshing… · Owned by owner · CPU 80% free · RAM 16 GB free · SSD 500 GB free';
         expect(tipOf(tester, 'far'), tip);
         expect(labelOf(tester, 'far'), 'Far Mac, Refreshing, $tip');
-        expect(textsOf('far'), ['Far Mac']);
+        expect(textsOf('far'), ['Far Mac', '90%']);
 
         gate.complete();
         await landed(tester);
         await show(tester, c, app: f.app, readLocal: (_) async => null);
         expect(statusOf(tester, 'far'), SuperTabMachineStatus.live);
-        expect(tipOf(tester, 'far'), startsWith('Updated 10s ago · '));
+        expect(tipOf(tester, 'far'), startsWith('Owned by owner · '));
 
         semantics.dispose();
         await tester.pumpWidget(const SizedBox());
@@ -503,7 +495,7 @@ void main() {
       await c.refresh();
       await show(tester, c);
       const tip =
-          'Updated 4s ago · CPU 80% free · RAM 16 GB free · SSD 500 GB free';
+          'Owned by owner · CPU 80% free · RAM 16 GB free · SSD 500 GB free';
       expect(find.text(tip), findsNothing);
       final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
       await mouse.addPointer(location: Offset.zero);
@@ -522,7 +514,7 @@ void main() {
       c.offlineMachinesOpen = true;
       await show(tester, c);
       const tip =
-          'Offline · last seen 3 min ago · CPU 80% free · RAM 16 GB free · SSD 500 GB free';
+          'Offline · Owned by owner · CPU 80% free · RAM 16 GB free · SSD 500 GB free';
       expect(find.text(tip), findsNothing);
       // The disclosure first, then the machine under it.
       await tester.sendKeyEvent(LogicalKeyboardKey.tab);
@@ -693,7 +685,7 @@ void main() {
         await landed(tester);
         expect(
           tipOf(tester, 'm'),
-          'Updated just now · CPU 70% free · RAM 0 MB free',
+          'Owned by owner · CPU 70% free · RAM 0 MB free',
         );
         expect(statusOf(tester, 'm'), SuperTabMachineStatus.live);
 
@@ -707,7 +699,7 @@ void main() {
         expect(statusOf(tester, 'm'), SuperTabMachineStatus.refreshing);
         expect(
           tipOf(tester, 'm'),
-          'Refreshing… · CPU 70% free · RAM 0 MB free',
+          'Refreshing… · Owned by owner · CPU 70% free · RAM 0 MB free',
         );
 
         reads.last.complete(cpu(90));
@@ -715,7 +707,7 @@ void main() {
         expect(statusOf(tester, 'm'), SuperTabMachineStatus.live);
         expect(
           tipOf(tester, 'm'),
-          'Updated just now · CPU 10% free · RAM 0 MB free',
+          'Owned by owner · CPU 10% free · RAM 0 MB free',
         );
 
         await done(tester, f, c);
@@ -746,7 +738,7 @@ void main() {
       expect(statusOf(tester, 'm'), SuperTabMachineStatus.late);
       expect(
         tipOf(tester, 'm'),
-        'Updated 25s ago · CPU 70% free · RAM 0 MB free',
+        'Owned by owner · CPU 70% free · RAM 0 MB free',
       );
       now = base.add(const Duration(minutes: 5));
       await show(tester, c, app: f.app, readLocal: read);
@@ -770,7 +762,7 @@ void main() {
         expect(statusOf(tester, 'm'), SuperTabMachineStatus.offline);
         expect(
           tipOf(tester, 'm'),
-          'Offline · last seen just now · CPU 70% free · RAM 0 MB free',
+          'Offline · Owned by owner · CPU 70% free · RAM 0 MB free',
         );
 
         await done(tester, f, c);
@@ -821,10 +813,7 @@ void main() {
         await landed(tester);
         // This computer is read directly: live, and not dimmed. The other is only known through the Swarm.
         expect(statusOf(tester, 'm'), SuperTabMachineStatus.live);
-        expect(
-          tipOf(tester, 'm'),
-          startsWith('Updated just now · CPU 70% free'),
-        );
+        expect(tipOf(tester, 'm'), startsWith('Owned by owner · CPU 70% free'));
         expect(statusOf(tester, 'far'), SuperTabMachineStatus.unknown);
         expect(find.byType(SuperTabMachinesPill), findsOneWidget);
         expect(pill('Live'), findsNothing);

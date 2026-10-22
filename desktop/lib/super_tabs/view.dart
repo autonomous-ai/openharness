@@ -754,17 +754,31 @@ class _SuperTabViewState extends State<SuperTabView>
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                child: Text(
-                  group == null
-                      ? c.snapshot?.projects.isEmpty == true
-                            ? c.snapshot!.name
-                            : 'Choose a project'
-                      : c.snapshot!.isProjectLead(group.id)
-                      ? c.snapshot!.projectFor(group.id)!.name
-                      : group.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: DesktopChrome.text(medium: true),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      group == null
+                          ? c.snapshot?.projects.isEmpty == true
+                                ? c.snapshot!.name
+                                : 'Choose a project'
+                          : c.snapshot!.isProjectLead(group.id)
+                          ? c.snapshot!.projectFor(group.id)!.name
+                          : group.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: DesktopChrome.text(medium: true),
+                    ),
+                    if (c.reviewLine(group) case final line?)
+                      Text(
+                        line,
+                        key: const ValueKey('super-review-line'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: DesktopChrome.metadata(),
+                      ),
+                  ],
                 ),
               ),
             ),
@@ -1316,193 +1330,221 @@ class _SuperTabViewState extends State<SuperTabView>
               ),
             ),
           ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
-          child: Focus(
-            onKeyEvent: (node, event) {
-              final keys = HardwareKeyboard.instance;
-              final composing = _composer.value.composing;
-              if (_focus.hasFocus &&
-                  event is KeyDownEvent &&
-                  choices.isNotEmpty &&
-                  !keys.isControlPressed &&
-                  !keys.isMetaPressed &&
-                  !keys.isAltPressed &&
-                  !keys.isShiftPressed &&
-                  !(composing.isValid && !composing.isCollapsed)) {
-                final key = event.logicalKey;
-                if (key == LogicalKeyboardKey.arrowDown ||
-                    key == LogicalKeyboardKey.arrowUp) {
-                  _moveCompletion(
-                    (_mentionIndex +
-                            (key == LogicalKeyboardKey.arrowDown ? 1 : -1)) %
-                        choices.length,
-                  );
-                  return KeyEventResult.handled;
-                }
-                if (key == LogicalKeyboardKey.tab ||
-                    key == LogicalKeyboardKey.enter) {
-                  choices[_mentionIndex.clamp(0, choices.length - 1)].choose();
-                  return KeyEventResult.handled;
-                }
-                if (key == LogicalKeyboardKey.escape) {
-                  setState(
-                    () => _dismissedMention = _composer.text.substring(
-                      0,
-                      _composer.selection.baseOffset,
-                    ),
-                  );
-                  return KeyEventResult.handled;
-                }
-              }
-              if (_focus.hasFocus &&
-                  event is KeyDownEvent &&
-                  event.logicalKey == LogicalKeyboardKey.enter &&
-                  !keys.isShiftPressed &&
-                  !keys.isControlPressed &&
-                  !keys.isMetaPressed &&
-                  !keys.isAltPressed &&
-                  !(composing.isValid && !composing.isCollapsed)) {
-                unawaited(_send());
-                return KeyEventResult.handled;
-              }
-              return KeyEventResult.ignored;
-            },
-            child: DecoratedBox(
-              key: const ValueKey('super-message-composer-surface'),
-              decoration: BoxDecoration(
-                color: DesktopChrome.field,
-                borderRadius: BorderRadius.circular(
-                  DesktopChrome.controlRadius,
+        if (group != null && group.archived)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'This group is closed. You can read it but not write.',
+                    style: DesktopChrome.metadata(),
+                  ),
                 ),
-                border: Border.all(color: DesktopChrome.rim),
-              ),
-              child: NewHarnessDropZone(
-                attachments: _files,
-                enabled: writable && !busy,
-                child: GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onTap: writable ? _focus.requestFocus : null,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        ListenableBuilder(
-                          listenable: _files,
-                          builder: (context, _) => _files.isEmpty
-                              ? const SizedBox.shrink()
-                              : Padding(
-                                  padding: const EdgeInsets.only(
-                                    bottom: 8,
-                                    right: 8,
+                if (c.canWrite)
+                  TextButton(
+                    key: const ValueKey('super-group-reopen'),
+                    onPressed: c.saving
+                        ? null
+                        : () => _groupAction('archive', group),
+                    child: const Text('Reopen'),
+                  ),
+              ],
+            ),
+          )
+        else
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
+            child: Focus(
+              onKeyEvent: (node, event) {
+                final keys = HardwareKeyboard.instance;
+                final composing = _composer.value.composing;
+                if (_focus.hasFocus &&
+                    event is KeyDownEvent &&
+                    choices.isNotEmpty &&
+                    !keys.isControlPressed &&
+                    !keys.isMetaPressed &&
+                    !keys.isAltPressed &&
+                    !keys.isShiftPressed &&
+                    !(composing.isValid && !composing.isCollapsed)) {
+                  final key = event.logicalKey;
+                  if (key == LogicalKeyboardKey.arrowDown ||
+                      key == LogicalKeyboardKey.arrowUp) {
+                    _moveCompletion(
+                      (_mentionIndex +
+                              (key == LogicalKeyboardKey.arrowDown ? 1 : -1)) %
+                          choices.length,
+                    );
+                    return KeyEventResult.handled;
+                  }
+                  if (key == LogicalKeyboardKey.tab ||
+                      key == LogicalKeyboardKey.enter) {
+                    choices[_mentionIndex.clamp(0, choices.length - 1)]
+                        .choose();
+                    return KeyEventResult.handled;
+                  }
+                  if (key == LogicalKeyboardKey.escape) {
+                    setState(
+                      () => _dismissedMention = _composer.text.substring(
+                        0,
+                        _composer.selection.baseOffset,
+                      ),
+                    );
+                    return KeyEventResult.handled;
+                  }
+                }
+                if (_focus.hasFocus &&
+                    event is KeyDownEvent &&
+                    event.logicalKey == LogicalKeyboardKey.enter &&
+                    !keys.isShiftPressed &&
+                    !keys.isControlPressed &&
+                    !keys.isMetaPressed &&
+                    !keys.isAltPressed &&
+                    !(composing.isValid && !composing.isCollapsed)) {
+                  unawaited(_send());
+                  return KeyEventResult.handled;
+                }
+                return KeyEventResult.ignored;
+              },
+              child: DecoratedBox(
+                key: const ValueKey('super-message-composer-surface'),
+                decoration: BoxDecoration(
+                  color: DesktopChrome.field,
+                  borderRadius: BorderRadius.circular(
+                    DesktopChrome.controlRadius,
+                  ),
+                  border: Border.all(color: DesktopChrome.rim),
+                ),
+                child: NewHarnessDropZone(
+                  attachments: _files,
+                  enabled: writable && !busy,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onTap: writable ? _focus.requestFocus : null,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          ListenableBuilder(
+                            listenable: _files,
+                            builder: (context, _) => _files.isEmpty
+                                ? const SizedBox.shrink()
+                                : Padding(
+                                    padding: const EdgeInsets.only(
+                                      bottom: 8,
+                                      right: 8,
+                                    ),
+                                    child: NewHarnessAttachmentChips(
+                                      attachments: _files,
+                                      enabled: !c.saving,
+                                      isUploading: c.isUploading,
+                                      progressOf: c.uploadProgress,
+                                    ),
                                   ),
-                                  child: NewHarnessAttachmentChips(
+                          ),
+                          ConstrainedBox(
+                            constraints: BoxConstraints(
+                              minHeight: grid.AppControl.heightFieldScaled,
+                            ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Expanded(
+                                  child: NewHarnessPasteTarget(
                                     attachments: _files,
-                                    enabled: !c.saving,
-                                    isUploading: c.isUploading,
-                                    progressOf: c.uploadProgress,
+                                    enabled: writable && !busy,
+                                    focusNode: _focus,
+                                    child: TextField(
+                                      key: const ValueKey(
+                                        'super-message-composer',
+                                      ),
+                                      controller: _composer,
+                                      focusNode: _focus,
+                                      autofocus: !_terminalsVisible,
+                                      enabled: writable,
+                                      minLines: 1,
+                                      maxLines:
+                                          MediaQuery.sizeOf(context).height <
+                                              600
+                                          ? 3
+                                          : 8,
+                                      maxLength: 32000,
+                                      keyboardType: TextInputType.multiline,
+                                      textAlignVertical:
+                                          TextAlignVertical.center,
+                                      style: DesktopChrome.text(),
+                                      decoration: InputDecoration(
+                                        // The row centers the line. Inheriting a decorated
+                                        // field's minimum height leaves slack below its text.
+                                        isCollapsed: true,
+                                        constraints: const BoxConstraints(),
+                                        visualDensity: VisualDensity.standard,
+                                        hintStyle: DesktopChrome.text(
+                                          color: DesktopChrome.muted,
+                                        ),
+                                        contentPadding: EdgeInsets.zero,
+                                        hintText: group == null
+                                            ? 'Loading conversation…'
+                                            : c.canWrite
+                                            ? c.snapshot!.isProjectLead(
+                                                    group.id,
+                                                  )
+                                                  ? 'Message Product Manager'
+                                                  : 'Message ${group.title}'
+                                            : 'Read-only conversation',
+                                        border: InputBorder.none,
+                                        enabledBorder: InputBorder.none,
+                                        focusedBorder: InputBorder.none,
+                                        disabledBorder: InputBorder.none,
+                                        filled: false,
+                                        counterText: '',
+                                      ),
+                                      onChanged: (text) {
+                                        c.setDraft(c.selectedId, text);
+                                        setState(() {
+                                          _mentionIndex = 0;
+                                          _dismissedMention = null;
+                                        });
+                                      },
+                                    ),
                                   ),
                                 ),
-                        ),
-                        ConstrainedBox(
-                          constraints: BoxConstraints(
-                            minHeight: grid.AppControl.heightFieldScaled,
-                          ),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              Expanded(
-                                child: NewHarnessPasteTarget(
+                                NewHarnessAttachButton(
                                   attachments: _files,
                                   enabled: writable && !busy,
-                                  focusNode: _focus,
-                                  child: TextField(
-                                    key: const ValueKey(
-                                      'super-message-composer',
-                                    ),
-                                    controller: _composer,
-                                    focusNode: _focus,
-                                    autofocus: !_terminalsVisible,
-                                    enabled: writable,
-                                    minLines: 1,
-                                    maxLines:
-                                        MediaQuery.sizeOf(context).height < 600
-                                        ? 3
-                                        : 8,
-                                    maxLength: 32000,
-                                    keyboardType: TextInputType.multiline,
-                                    textAlignVertical: TextAlignVertical.center,
-                                    style: DesktopChrome.text(),
-                                    decoration: InputDecoration(
-                                      // The row centers the line. Inheriting a decorated
-                                      // field's minimum height leaves slack below its text.
-                                      isCollapsed: true,
-                                      constraints: const BoxConstraints(),
-                                      visualDensity: VisualDensity.standard,
-                                      hintStyle: DesktopChrome.text(
-                                        color: DesktopChrome.muted,
-                                      ),
-                                      contentPadding: EdgeInsets.zero,
-                                      hintText: group == null
-                                          ? 'Loading conversation…'
-                                          : c.canWrite
-                                          ? c.snapshot!.isProjectLead(group.id)
-                                                ? 'Message Product Manager'
-                                                : 'Message ${group.title}'
-                                          : 'Read-only conversation',
-                                      border: InputBorder.none,
-                                      enabledBorder: InputBorder.none,
-                                      focusedBorder: InputBorder.none,
-                                      disabledBorder: InputBorder.none,
-                                      filled: false,
-                                      counterText: '',
-                                    ),
-                                    onChanged: (text) {
-                                      c.setDraft(c.selectedId, text);
-                                      setState(() {
-                                        _mentionIndex = 0;
-                                        _dismissedMention = null;
-                                      });
-                                    },
+                                ),
+                                ListenableBuilder(
+                                  listenable: Listenable.merge([
+                                    _composer,
+                                    _files,
+                                  ]),
+                                  builder: (context, _) => AppIconButton(
+                                    icon: AppIcons.arrowUp,
+                                    tooltip: 'Send message',
+                                    color: DesktopChrome.accent,
+                                    onPressed:
+                                        writable &&
+                                            !busy &&
+                                            !c.hasPendingAction &&
+                                            (_composer.text.trim().isNotEmpty ||
+                                                !_files.isEmpty)
+                                        ? () => unawaited(_send())
+                                        : null,
                                   ),
                                 ),
-                              ),
-                              NewHarnessAttachButton(
-                                attachments: _files,
-                                enabled: writable && !busy,
-                              ),
-                              ListenableBuilder(
-                                listenable: Listenable.merge([
-                                  _composer,
-                                  _files,
-                                ]),
-                                builder: (context, _) => AppIconButton(
-                                  icon: AppIcons.arrowUp,
-                                  tooltip: 'Send message',
-                                  color: DesktopChrome.accent,
-                                  onPressed:
-                                      writable &&
-                                          !busy &&
-                                          !c.hasPendingAction &&
-                                          (_composer.text.trim().isNotEmpty ||
-                                              !_files.isEmpty)
-                                      ? () => unawaited(_send())
-                                      : null,
-                                ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
           ),
-        ),
       ],
     );
   }

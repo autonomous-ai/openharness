@@ -127,10 +127,19 @@ describe.skipIf(process.platform === 'win32')('the data folder claim, a Unix soc
   })
 
   it('waits for the core of a master that is gone, then claims the folder once it leaves', async () => {
-    const { dataDir, deps } = folder({ alive: () => false, pollMs: 20 })
+    let orphanObserved!: () => void
+    const waiting = new Promise<void>((resolve) => { orphanObserved = resolve })
+    const { dataDir, deps } = folder({ alive: () => false, pollMs: 20, log: (line) => {
+      lines.push(line)
+      orphanObserved()
+    } })
     const orphan = await claimDataFolder(dataDir, TOKEN, { ...deps, holder: { pid: 41, corePid: 42 } })
-    setTimeout(() => orphan.release(), 150)
-    expect((await take(dataDir, TOKEN, deps)).held).toBe(true)
+    const claiming = take(dataDir, TOKEN, deps)
+    // A timed close could cut the holder's proof in half under CI load and test the unrelated
+    // "not Harness" path. Release only after the claimant has proved and observed the orphan.
+    await waiting
+    orphan.release()
+    expect((await claiming).held).toBe(true)
     expect(lines).toContain(`[cli] this data folder is still claimed by the core (pid 42) of a master that is gone (pid 41) — waiting for it to leave`)
   })
 

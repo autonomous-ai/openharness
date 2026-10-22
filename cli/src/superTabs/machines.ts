@@ -5,6 +5,7 @@ import { identifier, object } from './wire.js'
 import { readCapabilities, quotaOf } from './capacity.js'
 import { startAgent, type ScopedRequest } from './start.js'
 import { prepareSwarmProject } from './projectFolder.js'
+import { createSwarmCloneTrustRepair } from './cloneTrust.js'
 
 const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
@@ -26,6 +27,7 @@ export class ContributedMachines {
   /** A pass or one of its publishes failed: the next one waits a whole beat, as every pass once did. */
   private failed = false
   private readonly cursors = new Map<string, number>()
+  private repairTrust?: ReturnType<typeof createSwarmCloneTrustRepair>
   /** Per tab, when its observation was last sent and what it said that matters to a reader: the harnesses
    *  running and stopped, whether new work is paused, and which starts are waiting. A change in any of them is
    *  sent at once; otherwise the heartbeat keeps the reading fresh. */
@@ -94,6 +96,9 @@ export class ContributedMachines {
           this.published.set(String(row.tabId), { at: began, signature })
         } catch (error) { this.failed = true; throw error }
         }
+        this.repairTrust ??= createSwarmCloneTrustRepair(this.core, this.deps.now)
+        try { await this.repairTrust(row) }
+        catch { /* Trust migration cannot prevent this pass from picking up pending starts. */ }
         // Two launches per pass bounds expensive native work. Pending starts
         // keep their original receipt across network failures and host restarts.
         const cursor = this.cursors.get(String(row.tabId)) ?? 0

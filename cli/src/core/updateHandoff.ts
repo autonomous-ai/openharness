@@ -50,6 +50,10 @@ export interface UpdateHandoffDeps {
   log(line: string): void
   error(line: string): void
   teardownDeadlineMs?: number
+  /** What must finish before the teardown starts, outside its deadline and bounded by its own: a host move that holds
+   *  input, whose held keystrokes the teardown's closed connections would lose (lib/hostMove/mover.ts
+   *  `settleMovesForHandOver`). */
+  beforeTeardown?: () => Promise<void>
 }
 
 export function createUpdateHandoff(deps: UpdateHandoffDeps) {
@@ -60,6 +64,7 @@ export function createUpdateHandoff(deps: UpdateHandoffDeps) {
 
   /** Every step, in order, each failure said and passed; given up on, all the same, after the deadline. */
   const releaseAll = async (teardown: readonly TeardownStep[]): Promise<void> => {
+    try { await deps.beforeTeardown?.() } catch (error) { deps.error(`[update] the moves did not settle (${message(error)}) — handing over all the same`) }
     let at = ''
     const steps = (async () => {
       for (const [name, release] of teardown) {

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { PROCESS_ENGINES } from '../engines/types.js'
 import type { AgentCommandOwnershipSnapshot } from './engineBin.js'
 import {
+  cleanPaneTitle,
   isNoTmuxServerError,
   LOAD_BUFFER_TIMEOUT_MS,
   pasteRawIntoTmux,
@@ -814,4 +815,30 @@ if [ "$1" = "load-buffer" ]; then exec sleep 30; fi
       rmSync(dir, { recursive: true, force: true })
     }
   }, 20_000)
+})
+
+describe('cleanPaneTitle', () => {
+  // tmux sets a pane's title from any APC string (ESC _ … ESC \), and a graphics query is one: Claude Code asks the
+  // terminal for kitty graphics when it thinks it is outside tmux, as a guest's harness does (its helper starts the
+  // engine with `env -i`, so no TMUX). The query became that harness's name (measured on tmux 3.7c, 2026-10-22).
+  it('drops a kitty graphics command, which is never a title', () => {
+    expect(cleanPaneTitle('Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA')).toBeNull()
+    expect(cleanPaneTitle('Ga=d')).toBeNull()
+    expect(cleanPaneTitle('Gi=1,a=T,f=100;iVBORw0KGgo=')).toBeNull()
+    // A transfer's later chunks, an empty payload, and the query as tmux keeps it with spaces around it.
+    expect(cleanPaneTitle('Gm=1;AAAA')).toBeNull()
+    expect(cleanPaneTitle('Gq=2,a=q;')).toBeNull()
+    expect(cleanPaneTitle('  Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA  ')).toBeNull()
+  })
+  it('keeps the titles engines set, those beginning with G too', () => {
+    expect(cleanPaneTitle('✳ Fix the login test')).toBe('Fix the login test')
+    expect(cleanPaneTitle('Gemini: review the PR')).toBe('Gemini: review the PR')
+    expect(cleanPaneTitle('Go build')).toBe('Go build')
+    expect(cleanPaneTitle('G=1 is the answer')).toBe('G=1 is the answer')
+    expect(cleanPaneTitle('Ga=1 wins')).toBe('Ga=1 wins')
+    expect(cleanPaneTitle('Gx=1; then build')).toBe('Gx=1; then build')
+    // Nothing else changes: an empty title is still none, and a long one is still cut at 80.
+    expect(cleanPaneTitle('   ')).toBeNull()
+    expect(cleanPaneTitle('x'.repeat(100))).toBe('x'.repeat(80))
+  })
 })

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { TerminalStreamSink } from '../lib/terminalTypes.js'
 import type { TerminalStreamManager } from '../lib/terminalStreamManager.js'
+import { MoveGate } from '../lib/hostMove/gate.js'
 import { createTerminalWatch, KEPT_VIEWERS, type TerminalWatchDeps } from './terminalWatch.js'
 
 type Manager = ConstructorParameters<typeof TerminalStreamManager>[0]
@@ -18,9 +19,12 @@ function manager() {
       handleFrame: vi.fn(async (viewer: string, type: string, payload: Record<string, unknown>) => { handled.push([viewer, type, payload]); return true }),
       closeConnection: vi.fn(async (viewer: string) => { closed.push(viewer) }),
       stop,
+      isLookedAt: vi.fn(() => false),
+      retarget: vi.fn(async (agentId: string, to: unknown) => { retargeted.push([agentId, to]) }),
     }
   }
-  return { built, handled, closed, stop, make }
+  const retargeted: Array<[string, unknown]> = []
+  return { built, handled, closed, stop, make, retargeted }
 }
 
 const setup = (over: Partial<TerminalWatchDeps> = {}) => {
@@ -39,6 +43,29 @@ const setup = (over: Partial<TerminalWatchDeps> = {}) => {
 }
 
 describe('a read-only view of agents\' terminals', () => {
+  it('says whether a viewer has an agent open, and no when nobody ever watched', async () => {
+    const quiet = setup()
+    expect(quiet.watch.isWatched('agent-1')).toBe(false)
+    const lookedAt = vi.fn((id: string) => id === 'agent-1')
+    const { watch } = setup({ manager: (() => ({ handleFrame: vi.fn(), closeConnection: vi.fn(), stop: vi.fn(), isLookedAt: lookedAt })) as never })
+    await watch.watch.frame('observer:ken', 'terminal_open', { agentId: 'agent-1' })
+    expect(watch.isWatched('agent-1')).toBe(true)
+    expect(watch.isWatched('agent-2')).toBe(false)
+  })
+
+  it('holds its viewers through a move to another host, and moves their streams with the agent', async () => {
+    const gate = new MoveGate()
+    const { watch, m } = setup({ moveGate: gate })
+    const pane = { backend: 'ptyhost', instance: 'p2-1.2.3', paneId: '%7' } as const
+    // No viewer yet: nothing to move, and no manager built for it.
+    await watch.retarget('agent-1', pane)
+    expect(m.built).toHaveLength(0)
+    await watch.watch.frame('observer:ken', 'terminal_open', { agentId: 'agent-1' })
+    expect(m.built[0]!.moveGate).toBe(gate)
+    await watch.retarget('agent-1', pane)
+    expect(m.retargeted).toEqual([['agent-1', pane]])
+  })
+
   it('builds no stream manager until its first viewer, and a read-only one then', async () => {
     const { watch, m, agent } = setup()
     expect(m.built).toHaveLength(0)

@@ -80,6 +80,7 @@ assert pairs == [
     ("stats", "turn-v1"),
     ("player", "library-v1"),
     ("superTab", "wait-v1"),
+    ("swarmCard", "v1"),
     ("ota", "v1"),
     ("mac", "aa"),
     ("settings", "{"),

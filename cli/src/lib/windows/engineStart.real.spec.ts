@@ -14,7 +14,7 @@ import { captureLaunchExecutable } from '../../engines/kit/launchExecutable.js'
 import { inspectNativeLaunch } from '../../engines/nativeLaunch.js'
 import type { AgentEngine } from '../../engines/types.js'
 import { PtyHostBackend } from '../ptyHostBackend.js'
-import { readDiscovery } from '../ptyHost/launch.js'
+import { listDiscoveries } from '../ptyHost/launch.js'
 import { PTY_PROTOCOL } from '../ptyHost/protocol.js'
 import { processRows } from '../processTable.js'
 import { registry, type RegisteredSession } from '../registry.js'
@@ -43,7 +43,7 @@ async function withBackend(run: (backend: PtyHostBackend) => Promise<void>): Pro
     if (prepared.state !== 'ready') throw new Error(`the pty host is unavailable: ${prepared.reason}`)
     await run(backend)
   } finally {
-    const discovery = readDiscovery(home, PTY_PROTOCOL)
+    const discovery = listDiscoveries(home).findLast((found) => found.protocol === PTY_PROTOCOL)
     backend.dispose()
     if (discovery) try { process.kill(discovery.pid) } catch { /* gone */ }
     removeTree(home)

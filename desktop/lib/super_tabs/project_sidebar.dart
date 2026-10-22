@@ -53,8 +53,12 @@ class ProjectSidebar extends StatelessWidget {
       SuperTabSectionHeading.actionWidth / 2 - _dotSize / 2;
 
   /// A project's lead row (level 1, under the heading) or a workgroup (level 2, under its project).
-  Widget _row(SuperTabConversation group, {SuperTabProject? project}) {
-    final level = project == null ? 2 : 1;
+  Widget _row(
+    SuperTabConversation group, {
+    SuperTabProject? project,
+    bool closed = false,
+  }) {
+    final level = project != null ? 1 : (closed ? 3 : 2);
     final selected = controller.selectedId == group.id;
     final groups = project == null
         ? [group]
@@ -185,6 +189,72 @@ class ProjectSidebar extends StatelessWidget {
     );
   }
 
+  /// A project's "Closed (N)" row and, when it is open, the archived groups under it.
+  List<Widget> _closed(SuperTabProject project) {
+    final groups = controller.snapshot!.conversations
+        .where(
+          (g) =>
+              g.projectId == project.id &&
+              g.id != project.leadConversationId &&
+              g.archived,
+        )
+        .toList();
+    if (groups.isEmpty) return const [];
+    final open = controller.closedOpenProjects.contains(project.id);
+    return [
+      Padding(
+        padding: const EdgeInsets.only(bottom: 2),
+        child: Material(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+          clipBehavior: Clip.antiAlias,
+          child: Semantics(
+            button: true,
+            expanded: open,
+            child: InkWell(
+              key: ValueKey('super-closed-${project.id}'),
+              onTap: () => controller.toggleClosed(project.id),
+              hoverColor: grid.AppSurface.hoverFill,
+              focusColor: grid.AppSurface.hoverFill,
+              borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+              child: Row(
+                children: [
+                  SizedBox(width: SuperTabSectionHeading.indentFor(2)),
+                  SizedBox(
+                    width: _iconColumn,
+                    child: Icon(
+                      open ? AppIcons.chevronDown : AppIcons.chevronRight,
+                      size: AppIcons.inlineSize,
+                      color: DesktopChrome.muted,
+                    ),
+                  ),
+                  Expanded(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(minHeight: 36),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          'Closed (${groups.length})',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: DesktopChrome.control(
+                            color: DesktopChrome.muted,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+      if (open)
+        for (final group in groups) _row(group, closed: true),
+    ];
+  }
+
   List<Widget> _workgroups(SuperTabProject project) {
     final groups = controller.snapshot!.conversations.where(
       (g) =>
@@ -238,8 +308,10 @@ class ProjectSidebar extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     _row(lead, project: project),
-                    if (controller.expandedProjects.contains(project.id))
+                    if (controller.expandedProjects.contains(project.id)) ...[
                       ..._workgroups(project),
+                      ..._closed(project),
+                    ],
                   ],
                 ),
           const SizedBox(height: 16),

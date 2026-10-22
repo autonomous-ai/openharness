@@ -139,7 +139,7 @@ void main() {
             'runningHarnessIds': [f.connection.native!['id']],
           },
         },
-        // A second Studio Mac, so the list tells the two apart by owner, and one long offline, under its
+        // A second Studio Mac, owned by someone else, and one long offline, under its
         // closed "Offline · 1".
         {
           'machineId': 'm-twin',
@@ -148,6 +148,24 @@ void main() {
           'observation': {
             'receivedAt': DateTime.now().millisecondsSinceEpoch,
             'resources': {'cpuPercent': 40},
+          },
+        },
+        // A Codex-only machine: its Claude slot stays blank, so its Codex % lines up with the others'.
+        {
+          'machineId': 'm-codex',
+          'name': 'Build Box',
+          'contributorId': 'person-1',
+          'observation': {
+            'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            'quotas': [
+              {
+                'engine': 'codex',
+                'known': true,
+                'windows': [
+                  {'name': '5-hour', 'usedPercent': 30},
+                ],
+              },
+            ],
           },
         },
         {
@@ -268,10 +286,65 @@ void main() {
       expect(find.text('CHATS'), findsNothing);
       expect(find.text('New group'), findsNothing);
       expect(find.byTooltip('New project'), findsOneWidget);
-      // Left sidebar: both Projects and Machines groups start open, one line a machine, the two Studio Macs told
-      // apart by owner, and the offline machine under its closed disclosure.
-      expect(find.text('Studio Mac · owner'), findsOneWidget);
-      expect(find.text('Studio Mac · person0'), findsOneWidget);
+      // Left sidebar: both Projects and Machines groups start open, one line a machine: its name, its Claude and
+      // Codex allowances and its agents, never its owner, and the offline machine under its closed disclosure.
+      // Both Studio Macs are online rows. A busy one's name may be shortened to
+      // keep its allowance on the line; it then carries its whole name on hover.
+      for (final id in ['m', 'm-twin']) {
+        final row = find.byKey(ValueKey('super-machine-$id'));
+        expect(row, findsOneWidget, reason: id);
+        final shown = tester
+            .widget<RichText>(
+              find.descendant(of: row, matching: find.byType(RichText)).first,
+            )
+            .text
+            .toPlainText();
+        expect(
+          shown == 'Studio Mac' ||
+              (shown.endsWith('…') &&
+                  'Studio Mac'.startsWith(
+                    shown.substring(0, shown.length - 1),
+                  ) &&
+                  find
+                      .descendant(
+                        of: row,
+                        matching: find.byTooltip('Studio Mac'),
+                      )
+                      .evaluate()
+                      .isNotEmpty),
+          isTrue,
+          reason: '$id shows "$shown"',
+        );
+        // Never its owner.
+        for (final who in ['owner', 'person0']) {
+          expect(
+            find.descendant(of: row, matching: find.textContaining(who)),
+            findsNothing,
+            reason: '$id names $who',
+          );
+        }
+      }
+      // Claude's chip always shows here; Codex's is the first to give way when the sidebar is narrow.
+      Finder chip(String engine, String figure) => find.descendant(
+        of: find.byKey(ValueKey('super-machine-allowance-m-$engine')),
+        matching: find.text(figure),
+      );
+      expect(chip('claude', '50%'), findsOneWidget);
+      if (find
+          .byKey(const ValueKey('super-machine-allowance-m-codex'))
+          .evaluate()
+          .isNotEmpty) {
+        expect(chip('codex', '88%'), findsOneWidget);
+        // The Codex-only machine's figure lines up with Studio Mac's.
+        double figureLeft(String id) => tester
+            .getTopLeft(find.byKey(ValueKey('super-machine-figure-$id-codex')))
+            .dx;
+        expect(figureLeft('m-codex'), closeTo(figureLeft('m'), .01));
+      }
+      expect(
+        find.byKey(const ValueKey('super-machine-figure-m-codex-claude')),
+        findsNothing,
+      );
       expect(find.text('Offline · 1'), findsOneWidget);
       expect(find.byKey(const ValueKey('super-machine-m-old')), findsNothing);
       expect(find.textContaining('CPU'), findsNothing);

@@ -8,7 +8,7 @@ import { rewrapTmuxHistory } from '../historyRewrap.js'
 import { removeTree, SHELL, WAIT_MS } from '../terminalBackend.contract.js'
 import { KEYFRAME_MAX_BYTES, type PtyRuntimeRef, type TerminalStreamSnapshot } from '../terminalTypes.js'
 import { CONVERSATION_HISTORY_LINES, SNAPSHOT_HISTORY_LINES, tmuxKeyframe, type PaneMeta } from '../tmuxStream.js'
-import { readDiscovery } from './launch.js'
+import { listDiscoveries } from './launch.js'
 import { encodeFrame, FrameKind, FrameReader, PTY_PROTOCOL, type PtyPaneMeta, type StreamSnapshotRequest } from './protocol.js'
 import { PtyHostStream, type PtyHostStreamOptions } from './stream.js'
 
@@ -534,7 +534,7 @@ describe.skipIf(!process.env.HARNESS_PTY_BIN)('PtyHostStream with the real harne
   let home: string | null = null
   afterEach(async () => {
     if (!home) return
-    const pid = readDiscovery(home, PTY_PROTOCOL)?.pid
+    const pid = listDiscoveries(home).findLast((found) => found.protocol === PTY_PROTOCOL)?.pid
     if (pid) try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
     const dir = home
     home = null

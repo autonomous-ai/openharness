@@ -97,29 +97,36 @@ a report every 15 seconds, so that a silent machine can be told from a quiet one
 that fails waits a whole 15 seconds before the next.
 
 Each machine in the sidebar is one line, at a project row's height and on its columns: a
-status dot where the project chevrons sit, the name where project names start, and at the
-end up to three of its agents, overlapping, then +N, the last centered under the heading's +.
-When two machines share a name, each is followed by its owner in muted text ("MacBook Pro ·
-tony"). The only other mark is a warning before the agents when one of the machine's model
-allowances is under 10% ("Claude Code: 2% left" on hover). Online machines come first, by
-name; offline ones follow under "Offline · N", closed until opened, which the Desktop
-remembers like the groups themselves. Clicking a machine opens its details.
+status dot where the project chevrons sit, the name where project names start (a computer's
+real hostname without `.local`, such as `MacBookPro2021`, or the name a person gave it), then three
+columns every row shares, so their figures line up down the list: Claude's allowance, Codex's,
+and the agents, whose avatars stand 16 points clear of the figures. An allowance is the engine's mark and the share left of its tightest window,
+each figure right after its mark, so the figures start at one x down the list; only a known, unexpired allowance shows, and a machine
+without one, or an offline or unreachable machine, leaves its slot blank. The share is amber
+below 20% and red below 10%, and hovering it shows its windows ("5-hour: 48% remaining ·
+resets in 1h 59m"). The agents column shows up to three overlapping avatars, then +N, and
+ends half an avatar past the heading's +. The list decides its columns once, never row by row:
+when the names would have less than about 48 points, the agents become a count, then the
+Codex column goes, then Claude's. Online machines come first, by name; offline ones follow
+under "Offline · N", closed until opened, which the Desktop remembers like the groups
+themselves. Clicking a machine opens its details.
 
 | State | When | Dot | Hover begins |
 | --- | --- | --- | --- |
-| Live | reading under 20 s old | green, with one short ping as each new reading arrives | `Updated 4s ago` |
-| Late | 20 s to 35 s | amber | `Updated 28s ago` |
-| Offline | 35 s or more (one named constant) | hollow grey ring; the name is muted | `Offline · last seen 3 min ago` |
-| Unknown | the Desktop cannot read the Swarm (contributing machines only) | dashed grey ring; the name is muted; not offline | `Can't reach Harness · data from 1 min ago` |
+| Live | reading under 20 s old | green, with one short ping as each new reading arrives | the owner |
+| Late | 20 s to 35 s | amber | the owner |
+| Offline | 35 s or more (one named constant) | hollow grey ring; the name is muted | `Offline` |
+| Unknown | the Desktop cannot read the Swarm (contributing machines only) | dashed grey ring; the name is muted; not offline | `Can't reach Harness` |
 | Refreshing | back from the background, no new reading yet | grey, breathing | `Refreshing…` |
 
-Hovering or focusing a row says the rest in words: its state and age, then its numbers and
-any allowance running out ("Updated 13s ago · CPU 37% free · GPU 4% free · RAM 18 GB free ·
-SSD 208 GB free"). The row's screen-reader label is the machine's name, its state and that
-text, so colour is never the only signal. Old numbers are always kept there for offline,
-unknown and refreshing machines, never blanked. While the Swarm cannot be read, the Machines
-heading carries a pill, "Reconnecting · 1m"; a live Swarm shows none. The pings and the
-breathing stop when the platform asks for reduced motion.
+Hovering or focusing a row says the rest in words: its state when it is not online, whose
+machine it is, and its hardware ("Owned by diego · CPU 37% free · GPU 4% free · RAM 18 GB
+free · SSD 208 GB free"), never how old the reading is. The row's screen-reader label is
+the machine's name, its state and that text, then each allowance in words, so colour is
+never the only signal. Old numbers are always kept there for offline, unknown and
+refreshing machines, never blanked. While the Swarm cannot be read, the Machines heading
+carries a pill, "Reconnecting · 1m"; a live Swarm shows none. The pings and the breathing
+stop when the platform asks for reduced motion.
 A machine reports every 15 s, so 35 s is two missed reports plus a margin.
 
 This computer is read directly by the Desktop, every 15 seconds, so it stays live while the

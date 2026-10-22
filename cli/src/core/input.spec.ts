@@ -126,6 +126,13 @@ describe('the session input controller\'s dependencies', () => {
     expect(await wired.beforeTeamWrite!(agents.get('a1')!)).toBeNull()
   })
 
+  it('hands the controller the move gate when it was given one, and none otherwise', () => {
+    const { deps: given } = deps()
+    expect('moveGate' in sessionInputDeps(given, () => lock([]))).toBe(false)
+    const moveGate = { held: () => false } as unknown as NonNullable<InputDeps['moveGate']>
+    expect(sessionInputDeps({ ...given, moveGate }, () => lock([])).moveGate).toBe(moveGate)
+  })
+
   it('tells the device of a delivery first, then its caller; its caller alone without a device', () => {
     const one = deps()
     sessionInputDeps(one.deps, () => lock([])).onDelivery!(delivery('d1'))

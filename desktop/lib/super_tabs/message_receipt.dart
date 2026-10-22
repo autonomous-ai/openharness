@@ -122,17 +122,19 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
         : null;
     final native = agent == null ? null : widget.app?.stateOf(agent.machineId);
     final direct = native?.isLocalMachine == true;
+    // A computer this Desktop reads itself is known by its own connection, not by a Swarm reading it may not have.
     final offline =
         !c.backendUnreachable &&
-        (machine != null || direct) &&
-        superTabMachineStatus(
-              age: readingAt == null ? null : now.difference(readingAt),
-              connected: direct
-                  ? native!.connectionStatus == ConnectionStatus.connected &&
-                        !native.isOffline
-                  : null,
-            ) ==
-            SuperTabMachineStatus.offline;
+        (direct
+            ? native!.connectionStatus != ConnectionStatus.connected ||
+                  native.isOffline
+            : machine != null &&
+                  superTabMachineStatus(
+                        age: readingAt == null
+                            ? null
+                            : now.difference(readingAt),
+                      ) ==
+                      SuperTabMachineStatus.offline);
     final working =
         delivery?.delivered == true &&
         agent != null &&

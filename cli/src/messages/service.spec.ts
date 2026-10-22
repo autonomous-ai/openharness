@@ -29,8 +29,8 @@ const OWNER_REMOTE = { local: false, owner: true }
 const session = (agentId: string, pane: string, engine = 'claude', cwd = `/work/${agentId}`) =>
   ({ agentId, sessionId: `s-${agentId}`, engine, cwd, tmuxPane: pane, runtimes: [{ backend: 'tmux', paneId: pane }], active: true, title: agentId }) as unknown as RegisteredSession
 /** A harness in a pty host pane: its `tmuxPane` is that pane's id, which a tmux pane may also have. */
-const ptySession = (agentId: string, pane: string, engine = 'claude') =>
-  ({ ...session(agentId, pane, engine), runtimes: [{ backend: 'ptyhost', instance: 'p1', paneId: pane }] }) as unknown as RegisteredSession
+const ptySession = (agentId: string, pane: string, engine = 'claude', instance = 'p1') =>
+  ({ ...session(agentId, pane, engine), runtimes: [{ backend: 'ptyhost', instance, paneId: pane }] }) as unknown as RegisteredSession
 
 interface Setup {
   tabs?: Array<{ id: string; name: string; panes: Array<{ machineId: string; agentId: string }>; leader?: { machineId: string; agentId: string } | null }>
@@ -732,6 +732,14 @@ describe('the roster note and the directory', () => {
     expect((await t.ask({ action: 'send', pane: '%5', to: 'b', text: 'hi' })).error).toBe('NOT_A_HARNESS')
     expect((await t.ask({ action: 'send', pane: 'p1:%5', to: 'b', text: 'hi' })).recipients).toEqual([{ name: 'b', state: 'queued' }])
     expect((await t.ask({ action: 'send', pane: 'p2:%5', to: 'b', text: 'hi' })).error).toBe('NOT_A_HARNESS')
+  })
+
+  it('names a versioned pty host\'s pane by its own instance: p2-0.4.21-dev.win1:%7 and p2-h0123456789ab:%7', async () => {
+    const tabs = [{ id: 'app', name: 'app', panes: ['a', 'b', 'c'].map((agentId) => ({ machineId: 'm1', agentId })) }]
+    const t = setup({ tabs, agents: [ptySession('a', '%7', 'claude', 'p2-0.4.21-dev.win1'), ptySession('b', '%7', 'claude', 'p2-h0123456789ab'), session('c', '%6')] })
+    expect((await t.ask({ action: 'send', pane: 'p2-0.4.21-dev.win1:%7', to: 'c', text: 'hi' })).recipients).toEqual([{ name: 'c', state: 'queued' }])
+    expect((await t.ask({ action: 'send', pane: 'p2-h0123456789ab:%7', to: 'c', text: 'hi' })).recipients).toEqual([{ name: 'c', state: 'queued' }])
+    expect((await t.ask({ action: 'send', pane: 'p2-0.4.22:%7', to: 'c', text: 'hi' })).error).toBe('NOT_A_HARNESS')
   })
 
   it('keeps the notes it put in the store, withdraws a gone harness\'s, and sweeps old files nothing waits on', async () => {

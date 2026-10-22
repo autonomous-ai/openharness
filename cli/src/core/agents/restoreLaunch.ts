@@ -16,7 +16,7 @@ interface RestoreLaunchDeps {
 }
 
 export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps['buildLaunch'] {
-  return async (entry, { current, ...opts }) => {
+  return async (entry, { current, prepare, ...opts }) => {
     if (externalResumePending(entry.externalResume)) return { held: 'search', holdScope: 'workspace',
       detail: entry.launch?.state === 'held' ? entry.launch.detail : 'Waiting to verify this external conversation.' }
     const missing = deps.workspaceMissing(entry.cwd)
@@ -31,19 +31,31 @@ export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps[
     if (!current()) return { cancelled: true }
     if (permission.nativeHold) return { held: 'native', detail: permission.nativeHold }
     if (built.overrides.native?.current() === false) return { held: 'native', detail: 'Waiting for fresh executable and hook evidence.' }
+    // A move builds its launch while the engine still runs (hostMove/moveAgent.ts): the conversation may only be
+    // prepared, and the row written, once that engine has stopped. The move runs this itself then, and relaunches with
+    // these same overrides if it falls back, so nothing is asked of the grid or the Store again while the agent's input
+    // is held.
+    const preparation = () => {
+      if (opts.resumeSessionId) deps.prepareSessionResume(entry)
+      deps.refreshGridWebSearch(entry.agentId, built.overrides)
+    }
     // These writes are synchronous and belong to the core. Neither a stopped conversation's
     // transcript/tail nor a replacement binding's grid may be changed by an old Store answer.
-    if (opts.resumeSessionId) {
-      try { deps.prepareSessionResume(entry) } catch (error) {
-        return { error: 'RESUME_PREPARATION_FAILED', detail: error instanceof Error ? error.message : String(error) }
+    if (prepare !== false) {
+      if (opts.resumeSessionId) {
+        try { deps.prepareSessionResume(entry) } catch (error) {
+          return { error: 'RESUME_PREPARATION_FAILED', detail: error instanceof Error ? error.message : String(error) }
+        }
       }
+      deps.refreshGridWebSearch(entry.agentId, built.overrides)
     }
-    deps.refreshGridWebSearch(entry.agentId, built.overrides)
     // Windows refuses a batch-file engine whose arguments cmd.exe would read (lib/windows/launch.ts): this row fails
     // alone. Thrown, it ended the whole pass ("restore skipped") on every start.
-    try { return await deps.launch(entry, opts, built.overrides, permission) } catch (error) {
+    let launched: RestoreLaunch
+    try { launched = await deps.launch(entry, opts, built.overrides, permission) } catch (error) {
       const { error: code, detail } = windowsLaunchRefusal(error)
       return { error: code, detail }
     }
+    return prepare === false ? { ...launched, deferred: { prepare: preparation, overrides: built.overrides, permission } } : launched
   }
 }

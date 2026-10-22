@@ -313,23 +313,16 @@ void main() {
     expect(devices.size, machinesAdd.size, reason: reason);
     expect(devices.center.dy, machinesAdd.center.dy, reason: reason);
     expect(devices.right, closeTo(machinesAdd.left, 0.01), reason: reason);
-    // A machine row's last mark, its +N, centers on the same column.
+    // Every machine's agents column ends half an avatar past the + column, so a
+    // trailing avatar centers under the + and a +N count ends with it.
     final more = find.descendant(
       of: find.byKey(const ValueKey('super-machine-studio')),
       matching: find.textContaining('+'),
     );
     expect(more, findsOneWidget, reason: reason);
-    final moreRect = tester.getRect(more);
-    final studio = tester.getRect(
-      find.byKey(const ValueKey('super-machine-studio')),
-    );
-    if (moreRect.width <= SuperTabSectionHeading.actionWidth) {
-      expect(moreRect.center.dx, closeTo(dot, 0.5), reason: reason);
-    } else {
-      // Enlarged text wider than the column ends at the row's edge instead.
-      expect(moreRect.right, closeTo(studio.right, 0.5), reason: reason);
-    }
-    // A shared name gives way before its owner, and a name cut short shows itself whole on hover.
+    expect(tester.getRect(more).right, closeTo(dot + 9, 0.5), reason: reason);
+    // The row never names the owner, even when another machine shares the name; a name cut short shows itself
+    // whole on hover.
     final shared = find
         .descendant(
           of: find.byKey(const ValueKey('super-machine-mbp-b')),
@@ -338,12 +331,13 @@ void main() {
         .evaluate()
         .map((e) => (e.widget as RichText).text.toPlainText())
         .join();
-    expect(shared, contains(' · tony'), reason: reason);
-    if (!shared.startsWith('MacBook Pro ·')) {
+    expect(shared, isNot(contains('tony')), reason: reason);
+    // Its real hostname, without .local; cut short, it shows itself whole on hover.
+    if (shared != 'MacBooks-MacBook-Pro-9') {
       expect(
         find.descendant(
           of: find.byKey(const ValueKey('super-machine-mbp-b')),
-          matching: find.byTooltip('MacBook Pro'),
+          matching: find.byTooltip('MacBooks-MacBook-Pro-9'),
         ),
         findsOneWidget,
         reason: reason,
@@ -610,11 +604,19 @@ void main() {
             closeTo(add, .01),
             reason: reason,
           );
-          expect(
-            centerX(inRow('super-machine-on', find.byType(SuperTabAvatar))),
-            closeTo(add, .5),
-            reason: reason,
-          );
+          // The last agent mark, the avatar or +1 once the list counts agents, ends
+          // half an avatar past the + column: an avatar centers under it.
+          final more = inRow('super-machine-on', find.text('+1'));
+          final avatar = inRow('super-machine-on', find.byType(SuperTabAvatar));
+          if (more.evaluate().isNotEmpty) {
+            expect(
+              tester.getRect(more).right,
+              closeTo(add + 9, .5),
+              reason: reason,
+            );
+          } else {
+            expect(centerX(avatar), closeTo(add, .5), reason: reason);
+          }
 
           // Every row's fill spans the full row, whatever its level.
           final rows = [

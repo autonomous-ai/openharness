@@ -46,6 +46,13 @@ export interface TerminalBackend<Ref extends TerminalRuntimeRef = TerminalRuntim
   typeLiteral(runtime: Ref, text: string): Promise<TerminalActionResult>
   submitText(runtime: Ref, text: string, options?: SubmitOptions): Promise<TerminalActionResult>
   sendKey(runtime: Ref, key: TerminalLogicalKey): Promise<TerminalActionResult>
+  /** Raw bytes into the pane, as a stream's input frame writes them, with no stream open: what was typed while
+   *  the agent changed host, delivered to the pane it ended on (hostMove/gate.ts). Optional: only the pty host
+   *  moves panes. */
+  writeInput?(runtime: Ref, bytes: Uint8Array): Promise<TerminalActionResult>
+  /** A paste into the pane, as a stream's paste frame makes it (bracketed when the program asked for that),
+   *  with no stream open: `writeInput`'s companion for a held paste. */
+  pasteInput?(runtime: Ref, text: string): Promise<TerminalActionResult>
   setTitle(runtime: Ref, title: string): Promise<TerminalActionResult>
   notify(runtime: Ref, title: string, body: string): Promise<TerminalActionResult>
 

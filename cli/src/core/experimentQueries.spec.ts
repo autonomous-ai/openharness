@@ -28,7 +28,7 @@ describe('the cloud agents\' doors', () => {
 
 describe('the Super Tab service\'s door', () => {
   it('is the Super Tab service\'s alone, and hands its members\' waits to the core whole', async () => {
-    const superTabs = { attention: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn() }
     const core = fakeCore({ superTabs })
     const both = new Set(['orchestrator', 'superTabs'])
     const item = { agentId: 'a1', requestId: 'supertab:x:blocked', superTab: 'Pilot', attention: 'stuck', text: 'Stuck: no key' }
@@ -38,6 +38,23 @@ describe('the Super Tab service\'s door', () => {
     expect(superTabs.attention).toHaveBeenLastCalledWith([])
     expect(await answerExperimentQuery(core, both, 'orchestrator', 'super_tab_attention', {})).toEqual({ error: 'NOT_SUPER_TABS' })
     expect(await answerExperimentQuery(fakeCore(), both, 'superTabs', 'super_tab_attention', {})).toEqual({ error: 'NOT_SUPER_TABS' })
+  })
+
+  it('hands it the Swarm cards and a Lead\'s recap the same way, to the Super Tab service alone', async () => {
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn() }
+    const core = fakeCore({ superTabs })
+    const both = new Set(['orchestrator', 'superTabs'])
+    const recap = { tabId: 't1', leadId: 'l1', text: 'Shipped', at: 1, none: false }
+    expect(await answerExperimentQuery(core, both, 'superTabs', 'super_tab_cards', { items: [{ id: 't1' }] })).toEqual({})
+    expect(superTabs.cards).toHaveBeenLastCalledWith([{ id: 't1' }])
+    await answerExperimentQuery(core, both, 'superTabs', 'super_tab_cards', { items: 'x' })
+    expect(superTabs.cards).toHaveBeenLastCalledWith([])
+    expect(await answerExperimentQuery(core, both, 'superTabs', 'super_tab_card_recap', { recap })).toEqual({})
+    expect(superTabs.cardRecap).toHaveBeenLastCalledWith(recap)
+    for (const query of ['super_tab_cards', 'super_tab_card_recap']) {
+      expect(await answerExperimentQuery(core, both, 'orchestrator', query, {})).toEqual({ error: 'NOT_SUPER_TABS' })
+      expect(await answerExperimentQuery(fakeCore(), both, 'superTabs', query, {})).toEqual({ error: 'NOT_SUPER_TABS' })
+    }
   })
 })
 

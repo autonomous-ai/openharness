@@ -1,16 +1,23 @@
 /** Super Tab routing v1, the pure half (docs/superpowers/specs/2026-10-19-super-tab-routing-v1-design.md), ordered by
  * strength, quota fit and effective cost since phase 1 (docs/plans/2026-10-21-swarm-routing-phase1.md).
- * The system removes what cannot run the task, Jev chooses among the rest with the full context, and a
- * fixed policy order decides when Jev is unsure or unavailable. Jev's acceptance rule is the voice
- * router's (`jevPick`), tuned on the owner's desk on 2026-10-10. */
-import { basename, isAbsolute } from 'node:path'
-import type { JevChoice, JevChoiceAnswer } from '../lib/jev/jevClient.js'
+ * The system removes what cannot run the task or breaks one of the owner's hard rules, and the first in a fixed order
+ * (the owner's soft rules, then the policy order) is the pick (docs/plans/2026-10-22-swarm-rules-routing.md). Jev chose
+ * among the candidates until 2026-10-22, when the Lead overrode it about half the time because it did not know the rules. */
+import { isAbsolute } from 'node:path'
 import { claudeAliasForModel } from '../engines/claude/runtimeProfile.js'
-import { jevPick } from '../lib/routeDecide.js'
 
 export type Level = 'low' | 'medium' | 'high'
 export type Size = 'small' | 'medium' | 'large'
-export interface Assessment { difficulty: Level; risk: Level; size: Size; why: string; needs: { tools: string[]; devices: string[]; cwd?: string } }
+/** `kind` is a word the Lead may give (`ui`, `docs`) for the owner's preferred-engine rules; a review group's is `review`. */
+export interface Assessment { difficulty: Level; risk: Level; size: Size; why: string; kind?: string; needs: { tools: string[]; devices: string[]; cwd?: string } }
+/** The owner's rules as the backend keeps them (backend/src/superTabs/rules.ts); only the rule and its words are read here. */
+export type Rule =
+  | { kind: 'forbidModel'; engine?: string; model: string }
+  | { kind: 'machines'; machineIds: string[] }
+  | { kind: 'minEffort'; engine?: string; effort: string }
+  | { kind: 'preferEngine'; taskKind: string | null; engine: string }
+  | { kind: 'preferIdle' }
+export interface SwarmRule { rule: Rule; text: string }
 export interface PolicyModel { engine: 'claude' | 'codex'; model: string; effort: string; quality: number; cost: number; enabled: boolean }
 export interface Policy { version: 1; models: PolicyModel[]; floor: Record<Level, number>; quotaReserve: number; notes: string }
 /** One usage window, named by the reader (`5-hour`, `weekly`); `leftPercent` is what remains of it. */
@@ -44,7 +51,7 @@ export interface Commitment { account: string; spend: Partial<Record<Window, num
 export interface Shown extends Probe { id: string; title: string; label: string; fit: Fit }
 /** `short` is set when no candidate is expected to cover the task, to tell the Lead. */
 export interface Choice { shown: Shown[]; excluded: Array<{ title: string; reason: string }>; floor: number; belowFloor: boolean; short?: string }
-export interface Verdict { pick: Shown; via: 'jev' | 'order' | 'only'; p: number | null; why: string; fallback?: 'unsure' | 'unavailable' }
+export interface Verdict { pick: Shown; via: 'order' | 'only'; p: null; why: string }
 
 const LEVELS: Level[] = ['low', 'medium', 'high']
 /** Run time and spend per window by task size, for a policy row of cost 2 (owner's table, 2026-10-21); not in the policy yet. */
@@ -58,37 +65,40 @@ const MAX_SHOWN = 12
 const ENGINE = { claude: 'Claude', codex: 'Codex' } as const
 const cut = (text: string, max: number) => text.length <= max ? text : `${text.slice(0, max - 1)}…`
 
-/** Jev is a hosted model, so nothing that identifies a person or opens an account goes to it. Emails and the common
- * key shapes are replaced before any text is cut, so a cut never leaves half a key behind. A long hex run is taken
- * for a key even when it is a commit id: a lost id costs less than a leaked key. */
-const SECRETS = [
-  /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}/g, /\bgh[pousr]_[A-Za-z0-9]{20,}/g, /\bxox[a-z]-[A-Za-z0-9-]{10,}/g, /\bAKIA[0-9A-Z]{16}\b/g,
-  /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}/g, /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/g, /\b[0-9a-fA-F]{32,}\b/g,
-]
-/** A base64 or base64url key, as opposed to a path, a URL or a branch name that is just as long: it has all three of
- * upper case, lower case and digits, and no words joined by hyphens. `/` and `.` end a run, so a long path is judged by
- * its segments and a JWT by its parts. */
-const keyLike = (run: string) => /[A-Z]/.test(run) && /[a-z]/.test(run) && /\d/.test(run) && !/[A-Z]?[a-z]{3,}-[A-Z]?[a-z]{3,}/.test(run)
-/** Standard base64 uses `/`, which also separates path pieces. A whole token (not a path from the root, no dot) is a key
- * when it looks like one and none of its pieces is a plain word, which a relative path would have. */
-const plainWord = (piece: string) => /^[A-Z]?[a-z]{5,}$/.test(piece)
-const slashedKey = (token: string) => /^[A-Za-z0-9+/]{32,}={0,2}$/.test(token) && token.includes('/') && keyLike(token) && !token.split('/').some(plainWord)
-export function scrub(text: string): string {
-  const plain = SECRETS.reduce((t, pattern) => t.replace(pattern, '[secret]'), text.replace(/[^\s@<>()"',;]+@[^\s@<>()"',;]+/g, '[email]'))
-  return plain.replace(/[^\s"'=:,;()<>]+/g, token => slashedKey(token) ? '[secret]' : token)
-    .replace(/[A-Za-z0-9+_=-]{32,}/g, run => keyLike(run) ? '[secret]' : run)
+const EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+/** `default` and `auto` say nothing about the effort, so they never meet a minimum. */
+const rank = (effort: string) => EFFORTS.indexOf(effort)
+const applies = (rule: { engine?: string }, engine: string) => !rule.engine || rule.engine === engine
+const FAMILY = /haiku|sonnet|opus|fable/
+/** The backend's `modelMatches`: `haiku` matches every Haiku id, `claude-haiku-4-5` also the `haiku` alias, and nothing
+ * matches `default`, which is not known. */
+function modelMatches(ruleModel: string, model: string): boolean {
+  const rule = ruleModel.toLowerCase(), target = model.toLowerCase()
+  return target !== 'default' && (target.includes(rule) || (FAMILY.exec(target)?.[0] === target && FAMILY.exec(rule)?.[0] === target))
 }
-const fit = (text: string, max: number) => cut(scrub(text), max)
-/** The newest lines that fit, for logs where the end matters most; a leading mark says older ones were dropped. */
-function newest(lines: string[], max: number): string {
-  if (lines.join('\n').length <= max) return lines.join('\n')
-  let kept = ''
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const next = kept ? `${lines[i]}\n${kept}` : lines[i]
-    if (next.length > max - 2) break
-    kept = next
-  }
-  return `…\n${kept}`
+
+/** The backend's check (backend/src/superTabs/rules.ts `broken`), so a pick shown here is never refused when it is
+ * started, assigned or recorded. */
+export function breaks(rules: SwarmRule[], p: { machineId: string; engine: string; model: string; effort: string }): string | null {
+  const out = rules.find(({ rule }) => rule.kind === 'forbidModel' ? applies(rule, p.engine) && modelMatches(rule.model, p.model)
+    : rule.kind === 'machines' ? !rule.machineIds.includes(p.machineId)
+    : rule.kind === 'minEffort' && applies(rule, p.engine) && rank(p.effort) < rank(rule.effort))
+  return out ? `Breaks the owner's rule: ${out.text}` : null
+}
+/** A new agent whose policy row leaves the effort to the engine starts at the owner's minimum instead (Lead, 2026-10-22), so
+ * a minimum does not rule out the Codex `default` row. */
+function lifted(rules: SwarmRule[], p: Probe): Probe {
+  if (p.kind !== 'new' || rank(p.effort) >= 0) return p
+  const least = Math.max(-1, ...rules.flatMap(({ rule }) => rule.kind === 'minEffort' && applies(rule, p.engine) ? [rank(rule.effort)] : []))
+  return least < 0 ? p : { ...p, effort: EFFORTS[least] }
+}
+/** The soft rules for this task: the engine preferred for its kind (a rule for the kind before one for every task), and
+ * whether idle agents come first. */
+interface Soft { engine: string | null; idle: boolean }
+function softOf(rules: SwarmRule[], kind: string | undefined): Soft {
+  const prefer = rules.flatMap(({ rule }) => rule.kind === 'preferEngine' ? [rule] : [])
+  const engine = (prefer.find(r => kind && r.taskKind === kind) ?? prefer.find(r => r.taskKind === null))?.engine ?? null
+  return { engine, idle: rules.some(r => r.rule.kind === 'preferIdle') }
 }
 
 export function parseAssessment(value: unknown): Assessment | string {
@@ -104,7 +114,9 @@ export function parseAssessment(value: unknown): Assessment | string {
   const list = (x: unknown) => Array.isArray(x) && x.every(i => typeof i === 'string') ? x as string[] : []
   const cwd = needs.cwd
   if (cwd !== undefined && (typeof cwd !== 'string' || !isAbsolute(cwd))) return 'needs.cwd must be an absolute path.'
-  return { difficulty: v.difficulty as Level, risk: v.risk as Level, size: size as Size, why, needs: { tools: list(needs.tools), devices: list(needs.devices), ...(cwd ? { cwd } : {}) } }
+  if (v.kind !== undefined && (typeof v.kind !== 'string' || !/^[a-z][a-z0-9-]{0,39}$/.test(v.kind))) return 'Set kind to one lowercase word, such as ui or docs.'
+  return { difficulty: v.difficulty as Level, risk: v.risk as Level, size: size as Size, why, ...(v.kind ? { kind: v.kind as string } : {}),
+    needs: { tools: list(needs.tools), devices: list(needs.devices), ...(cwd ? { cwd } : {}) } }
 }
 
 export const floorFor = (policy: Policy, a: Assessment): number => Math.min(3, policy.floor[a.difficulty] + (a.risk === 'high' ? 1 : 0))
@@ -151,7 +163,7 @@ export function rateFor(policy: Policy, engine: string, model: string | null, ef
 }
 
 const titleOf = (p: Probe) => cut(`${p.kind === 'member' ? p.name ?? 'Member' : 'New agent'} · ${ENGINE[p.engine]} ${p.model} ${p.effort} · ${p.machineName}`, 160)
-/** Jev does not know the time, so a reset or a last activity is told as how far away it is. */
+/** A reset or a last activity is told as how far away it is, which reads the same whenever the log is opened. */
 function span(ms: number): string {
   if (ms < 3_600_000) return `${Math.max(1, Math.round(ms / 60_000))}m`
   // Under ten hours, half an hour decides whether a task fits before the reset, so it keeps its minutes (4h30).
@@ -177,8 +189,8 @@ function memberText(p: Probe, now: number): string[] {
   const f = p.frame
   const repo = p.repo ? [p.repo === 'unknown' ? 'repo unknown' : `${p.repo} repo`] : []
   if (!f) return [...repo, 'activity unknown']
-  const where = [f.project && fit(f.project, 40), f.branch && `branch ${fit(f.branch, 40)}`].filter(Boolean).join(', ')
-  return [...repo, ...(f.title ? [`on "${fit(f.title, 80)}"`] : []), ...(where ? [f.project ? `in ${where}` : where] : []),
+  const where = [f.project && cut(f.project, 40), f.branch && `branch ${cut(f.branch, 40)}`].filter(Boolean).join(', ')
+  return [...repo, ...(f.title ? [`on "${cut(f.title, 80)}"`] : []), ...(where ? [f.project ? `in ${where}` : where] : []),
     f.updatedAt === null ? 'last active unknown' : `last active ${span(Math.max(0, now - f.updatedAt))} ago`]
 }
 function machineText(load: MachineLoad): string[] {
@@ -186,15 +198,15 @@ function machineText(load: MachineLoad): string[] {
     load.agents === null ? 'agents running unknown' : `${load.agents} ${load.agents === 1 ? 'agent' : 'agents'} running`,
     load.freeMemoryBytes === null ? 'free memory unknown' : `${bytes(load.freeMemoryBytes)} memory free`]
 }
-/** The most telling parts come first and the least last, because the hosted limit cuts the end. */
-const labelOf = (p: Probe & Sized, now: number) => fit([
-  p.kind === 'member' ? `Member ${fit(p.name ?? '', 40)}`.trim() : 'New agent', `${ENGINE[p.engine]} ${p.model} ${p.effort}`, `quality ${p.quality}, cost ${p.cost}`,
-  p.text, fit(p.machineName, 40), p.activity, ...(p.kind === 'member' ? memberText(p, now) : p.load ? machineText(p.load) : []),
-  ...(p.earlier?.length ? [`earlier here: ${p.earlier.slice(0, 3).map(e => `${fit(e.group, 40)} ${e.outcome}`).join('; ')}`] : []), quotaText(p.quota, now),
+/** The most telling parts come first and the least last, because the log's limit cuts the end. */
+const labelOf = (p: Probe & Sized, now: number) => cut([
+  p.kind === 'member' ? `Member ${cut(p.name ?? '', 40)}`.trim() : 'New agent', `${ENGINE[p.engine]} ${p.model} ${p.effort}`, `quality ${p.quality}, cost ${p.cost}`,
+  p.text, cut(p.machineName, 40), p.activity, ...(p.kind === 'member' ? memberText(p, now) : p.load ? machineText(p.load) : []),
+  ...(p.earlier?.length ? [`earlier here: ${p.earlier.slice(0, 3).map(e => `${cut(e.group, 40)} ${e.outcome}`).join('; ')}`] : []), quotaText(p.quota, now),
 ].join(' · '), 640)
 
 interface Measured { name: Window; usable: number; needed: number; resetsIn: number | null }
-/** A probe's fit, its tightest window (the one that runs out first) and the sentence Jev reads. */
+/** A probe's fit, its tightest window (the one that runs out first) and the sentence the log keeps. */
 interface Sized { fit: Fit; tight: Measured | null; text: string }
 const pct = (n: number) => `${Math.round(n)}%`
 const round = (n: number) => Math.round(n * 100) / 100
@@ -232,20 +244,29 @@ const WAY = ['right away', 'about a quarter of the way in', 'about halfway', 'ab
 const runsOut = (w: Measured) => `The ${w.name} window is expected to run out ${WAY[Math.round(Math.max(0, w.usable / w.needed) * 4)]}${w.resetsIn === null ? '' : `; resets in ${span(w.resetsIn)}`}.`
 const UNREAD = 'Its quota could not be read in full, and another candidate\'s quota fits this task.'
 
-/** The fixed policy order: cheaper in effect, stronger, more room on the tightest window, an idle member in the task's
- * repository before a new agent, then by title. */
-function compare(x: Probe & Sized, y: Probe & Sized): number {
+/** The fixed order: the owner's preferred engine, an idle member before a new agent and a less busy machine first when the
+ * owner prefers idle agents; then the policy order: cheaper in effect, stronger, more room on the tightest window, an idle
+ * member in the task's repository before a new agent, then by title. */
+function compare(x: Probe & Sized, y: Probe & Sized, soft: Soft): number {
   const placed = (p: Probe) => p.kind === 'member' && (p.repo ?? 'same') === 'same' ? 0 : 1
-  return x.fit.effectiveCost - y.fit.effectiveCost
+  const preferred = (p: Probe) => soft.engine && p.engine !== soft.engine ? 1 : 0
+  const fresh = (p: Probe) => soft.idle && p.kind === 'new' ? 1 : 0
+  const busy = (p: Probe) => soft.idle && p.kind === 'new' ? p.load?.agents ?? 1000 : 0
+  return preferred(x) - preferred(y) || fresh(x) - fresh(y) || busy(x) - busy(y)
+    || x.fit.effectiveCost - y.fit.effectiveCost
     || y.quality - x.quality
     || (y.tight?.usable ?? -Infinity) - (x.tight?.usable ?? -Infinity)
     || placed(x) - placed(y)
     || titleOf(x).localeCompare(titleOf(y))
 }
 
-export function choose(probes: Probe[], policy: Policy, a: Assessment, now: number = Date.now(), open: Commitment[] = []): Choice | { error: 'NO_CANDIDATE'; excluded: Array<{ title: string; reason: string }> } {
-  const excluded = probes.filter(p => p.refusals.length).map(p => ({ title: titleOf(p), reason: p.refusals.join(' ') }))
-  const viable = probes.filter(p => !p.refusals.length)
+export function choose(probes: Probe[], policy: Policy, a: Assessment, now: number = Date.now(), open: Commitment[] = [], rules: SwarmRule[] = []): Choice | { error: 'NO_CANDIDATE'; excluded: Array<{ title: string; reason: string }> } {
+  // A lifted row can equal another row on the same machine (Codex `default` lifted to high beside Codex high); one is kept.
+  const raised = probes.map(p => lifted(rules, p)), key = (p: Probe) => `${p.kind}\0${p.machineId}\0${p.engine}\0${p.model}\0${p.effort}`
+  const ruled = raised.filter((p, i) => p === probes[i] || !raised.some((q, j) => j !== i && key(q) === key(p) && (q === probes[j] || j < i)))
+    .map(p => { const why = breaks(rules, p); return why ? { ...p, refusals: [...p.refusals, why] } : p })
+  const excluded = ruled.filter(p => p.refusals.length).map(p => ({ title: titleOf(p), reason: p.refusals.join(' ') }))
+  const viable = ruled.filter(p => !p.refusals.length)
   if (!viable.length) return { error: 'NO_CANDIDATE', excluded }
   const floor = floorFor(policy, a)
   const meeting = viable.filter(p => p.quality >= floor)
@@ -257,87 +278,28 @@ export function choose(probes: Probe[], policy: Policy, a: Assessment, now: numb
   const status = (['fits', 'unknown', 'short'] as const).find(s => sized.some(p => p.fit.status === s))!
   excluded.push(...sized.filter(p => p.fit.status !== status).map(p => ({ title: titleOf(p), reason: p.fit.status === 'unknown' ? UNREAD : runsOut(p.tight!) })))
   // When every candidate is short, the one expected to get furthest goes first.
-  const set = sized.filter(p => p.fit.status === status).sort((x, y) => status === 'short' ? y.fit.coverage! - x.fit.coverage! || compare(x, y) : compare(x, y))
+  const soft = softOf(rules, a.kind)
+  const set = sized.filter(p => p.fit.status === status).sort((x, y) => status === 'short' ? y.fit.coverage! - x.fit.coverage! || compare(x, y, soft) : compare(x, y, soft))
   const shown = set.slice(0, MAX_SHOWN).map(({ tight, text, ...p }, i) => ({ ...p, id: `c${i}`, title: titleOf(p), label: labelOf({ ...p, tight, text }, now) }))
   const first = set[0].tight!
   return { shown, excluded, floor, belowFloor: !meeting.length, ...(status === 'short'
     ? { short: `No candidate is expected to cover this task; its ${first.name} quota is expected to run out partway${first.resetsIn === null ? '' : ` and resets in ${span(first.resetsIn)}`}.` } : {}) }
 }
 
-const INSTRUCTIONS = cut([
-  'Choose the candidate that should do this task.',
-  'The Lead assessed its difficulty and risk; every candidate shown meets the quality floor unless the policy says none does.',
-  'The list is already ordered by strength for the difficulty, fit and effective cost. Keep the first unless the task, its history or the policy notes give a clear reason otherwise.',
-  'A member marked "same repo" already has the task\'s code open, which saves a start; prefer it over an equal candidate.',
-  'A candidate that already failed or stopped on this task is a worse choice. A member that is idle in the Super Tab saves a start.',
-  'Unknown means the information could not be read; it is not a bad sign.',
-].join(' '), 1500)
-
-const folderText = (f: TaskFolder | null) => !f ? 'not stated'
-  : `${fit(basename(f.cwd) || f.cwd, 80)} (${f.kind === 'git' ? `git repository ${fit(f.name ?? '', 80)}` : f.kind === 'none' ? 'not a git repository'
-    : f.kind === 'missing' ? 'not on the Lead\'s machine' : 'repository unknown'})`
-
-export interface JevInput {
-  title: string; brief: string; checks: string[]
-  /** The last messages as `person`, `Lead` or an agent's name; null when they could not be read. */
-  messages: Array<{ from: string; text: string }> | null
-  /** True when the latest page of the group held only log rows (routing notes, transcripts), so "none" would mislead. */
-  noneInLatest?: boolean
-  folder: TaskFolder | null; attempts: Attempt[]
-  /** The Super Tab's latest routing decisions; null when they could not be read. */
-  recent: RecentRoute[] | null
-}
-
-/** The hosted route allows 4 keys and 17,000 characters of state. Each key has its own budget so that one long
- * brief cannot push out the messages or the history. */
-export function jevQuestion(input: JevInput, a: Assessment, policy: Policy, choice: Choice) {
-  const messages = input.messages === null ? 'Recent messages: unknown' : input.messages.length
-    ? `Recent messages:\n${newest(input.messages.map(m => `${fit(m.from, 40)}: ${fit(m.text, 600)}`), 3500)}` : `Recent messages: none${input.noneInLatest ? ' in the latest 100 messages' : ''}`
-  const base = policy.floor[a.difficulty]
-  const risk = a.risk === 'high' ? `, plus 1 for high risk${base + 1 > 3 ? ', at most 3' : ''}` : ''
-  const floor = `Quality floor: ${choice.floor} (difficulty ${a.difficulty} needs quality ${base}${risk})${choice.belowFloor ? '; no candidate meets it, so all are shown' : ''}. `
-    + 'Cost is relative: cost 3 is about 3 times cost 1. Notes: '
-  const attempts = input.attempts.length
-    ? `Attempts in this group:\n${newest(input.attempts.map(t => `- ${fit(t.agent, 60)}: ${fit(t.outcome, 20)}${t.result ? ` — ${fit(t.result, 200)}` : ''}`), 4700)}` : 'No earlier attempts in this group.'
-  const recent = input.recent === null ? 'Recent routing in this Super Tab: unknown' : input.recent.length
-    ? `Recent routing in this Super Tab:\n${input.recent.map(r => `- ${fit(r.title, 200)}${r.via ? ` (${fit(r.via, 20)})` : ''}: ${r.outcome ? fit(r.outcome, 20) : 'open'}`).join('\n')}` : 'Recent routing in this Super Tab: none'
-  const state = {
-    task: fit(`Group: ${fit(input.title, 160)}\nBrief: ${fit(input.brief, 2000)}\nChecks:\n${fit(input.checks.map(c => `- ${c}`).join('\n'), 1000)}\n${messages}`, 7000),
-    lead: fit(`Difficulty: ${a.difficulty}. Risk: ${a.risk}. Why: ${/[!?]$/.test(a.why) ? a.why : `${a.why.replace(/\.+$/, '')}.`} Task folder: ${folderText(input.folder)}. Needs tools: ${a.needs.tools.join(', ') || 'none'}; devices: ${a.needs.devices.join(', ') || 'none'}.`, 1000),
-    policy: fit(`${floor}${policy.notes || 'none'}`, 1000),
-    history: fit(`${attempts}\n\n${recent}`, 6000),
-  }
-  const questions: Record<string, JevChoice> = {
-    who: { type: 'choice', instructions: INSTRUCTIONS, criteria: Object.fromEntries(choice.shown.map(s => [s.id, s.label])) },
-  }
-  return { state, questions }
-}
-
-/** How many characters Jev was given in all, for the decision log. */
-export const contextSize = (q: ReturnType<typeof jevQuestion>): number =>
-  Object.values(q.state).reduce((sum, v) => sum + v.length, 0) + Object.values(q.questions.who.criteria).reduce((sum, v) => sum + v.length, 0) + q.questions.who.instructions.length
-
-export function decide(choice: Choice, answer: JevChoiceAnswer | undefined, unavailable: string | null): Verdict {
-  const first = choice.shown[0]
-  if (choice.shown.length === 1) return { pick: first, via: 'only', p: null, why: 'Only candidate that can run this task.' }
-  const picked = unavailable ? undefined : jevPick(answer, choice.shown.map(s => s.id), true)
-  if (picked) {
-    const pick = choice.shown.find(s => s.id === picked)!
-    return { pick, via: 'jev', p: answer!.probabilities[picked], why: `Jev chose ${pick.title}.` }
-  }
-  const reason = unavailable ? `Jev unavailable (${unavailable})` : 'Jev unsure'
-  return { pick: first, via: 'order', p: null, why: `${reason}; first in the policy order.`, fallback: unavailable ? 'unavailable' : 'unsure' }
+export function decide(choice: Choice): Verdict {
+  const pick = choice.shown[0]
+  return choice.shown.length === 1 ? { pick, via: 'only', p: null, why: 'Only candidate that can run this task.' }
+    : { pick, via: 'order', p: null, why: "First by the owner's rules and the policy order." }
 }
 
 /** `v1` leaves out size and fit, for a backend from before phase 1, whose strict schema refuses them. */
-export function recordOf(choice: Choice, verdict: Verdict, a: Assessment, policy: Policy, context?: { chars: number; missing: string[] }, v1 = false): Record<string, unknown> {
+export function recordOf(choice: Choice, verdict: Verdict, a: Assessment, policy: Policy, v1 = false): Record<string, unknown> {
   return {
     assessment: { difficulty: a.difficulty, risk: a.risk, why: a.why, ...(v1 ? {} : { size: a.size }) },
     candidates: choice.shown.map(s => ({ id: s.id, kind: s.kind, ...(s.agentId ? { agentId: s.agentId } : {}), machineId: s.machineId,
       engine: s.engine, model: s.model, effort: s.effort, quality: s.quality, cost: s.cost, title: s.title, label: s.label, ...(v1 ? {} : { fit: s.fit }) })),
     excluded: choice.excluded.slice(0, 200).map(e => ({ title: e.title, reason: cut(e.reason, 500) })),
     floor: choice.floor, notes: policy.notes.length > 0,
-    pick: verdict.pick.id, via: verdict.via, ...(verdict.fallback ? { fallback: verdict.fallback } : {}), p: verdict.p, belowFloor: choice.belowFloor, why: cut(verdict.why, 300),
-    ...(context ? { context } : {}),
+    pick: verdict.pick.id, via: verdict.via, p: verdict.p, belowFloor: choice.belowFloor, why: cut(verdict.why, 300),
   }
 }

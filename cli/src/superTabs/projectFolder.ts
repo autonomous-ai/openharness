@@ -2,6 +2,7 @@ import { isAbsolute, join, resolve } from 'node:path'
 import type { CoreApi } from '../core/api.js'
 import { otherGitHubTransport, parseProjectFolder, prepareProjectFolder, ProjectFolderError, RepositoryAccessError } from '../lib/projectFolder.js'
 import { identifier, object } from './wire.js'
+import { repairSwarmCloneTrust, swarmCloneRoot } from './cloneTrust.js'
 
 type Json = Record<string, unknown>
 
@@ -22,8 +23,8 @@ export async function prepareSwarmProject(core: CoreApi, row: Json, start: Json,
     .find(p => Array.isArray(p.conversationIds) && p.conversationIds.includes(request.conversationId))
   if (!project || !identifier(project.id) || !identifier(row.tabId)) throw new Error('This start has no authorized project.')
   const repository = object(project.repository)
-  const expectedRoot = join(core.dataDir, 'swarm-projects', row.tabId)
-  if (typeof pool.cwd !== 'string' || resolve(pool.cwd) !== resolve(expectedRoot)) throw new Error('Add this machine again to authorize its swarm workspace.')
+  const expectedRoot = swarmCloneRoot(core.dataDir, row.tabId, pool.cwd)
+  if (!expectedRoot) throw new Error('Add this machine again to authorize its swarm workspace.')
   if (repository.machineId === core.daemon.machineId() && sameFolder(request.cwd, repository.cwd)) return
   const expected = join(expectedRoot, project.id)
   if (!sameFolder(request.cwd, expected)) throw new Error('The requested folder is outside this project.')
@@ -45,4 +46,5 @@ export async function prepareSwarmProject(core: CoreApi, row: Json, start: Json,
     }
   }
   if (cwd !== expected) throw new Error('The prepared checkout does not match the authorized project.')
+  await repairSwarmCloneTrust(core, row, typeof request.codexHome === 'string' ? request.codexHome : undefined)
 }

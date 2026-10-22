@@ -17,6 +17,7 @@
  */
 import { chmodSync, mkdirSync, readdirSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { PTY_HOST_INSTANCE_SOURCE } from '../lib/ptyHost/instance.js'
 
 /** What one inbox file holds: the text, and the engine conversation it is for. A hook in any other conversation
  *  (a Codex sub-agent runs its hooks from its parent's pane) leaves it. `notice` is the line the pane shows the
@@ -25,11 +26,17 @@ export interface InboxItem { session: string; text: string; notice?: string }
 
 const LEGACY_PANE = /^%(\d{1,9})$/
 const TMUX_PANE = /^tmux\u0000%(\d{1,9})$/
-const PTY_PANE = /^ptyhost\u0000(p\d{1,4})\u0000%(\d{1,9})$/
+const PTY_PANE = new RegExp(`^ptyhost\\u0000(${PTY_HOST_INSTANCE_SOURCE})\\u0000%(\\d{1,9})$`)
 const KEY = /^[0-9a-z._-]{1,120}$/
 /** What a folder name (or a typing/claimed name's prefix) says the pane is: a tmux pane's number, or a pty host's. */
 const TMUX_FOLDER = /^(\d{1,9})$/
-const PTY_FOLDER = /^ptyhost\.(p\d{1,4})\.(\d{1,9})$/
+// A versioned instance has dots of its own (`p2-0.4.21`): the pane is the number after the last one.
+const PTY_FOLDER = new RegExp(`^ptyhost\\.(${PTY_HOST_INSTANCE_SOURCE})\\.(\\d{1,9})$`)
+/**
+ * A reclaimed item's name, `<pane folder>-<key>`. An instance may have a `-` in it, as a key does: the folder ends at
+ * the last `.<pane number>-`, since no key (a message id and a hash, or `0note-<hash>`) has a `.` in it.
+ */
+const RECLAIMED = new RegExp(`^(\\d{1,9}|ptyhost\\.${PTY_HOST_INSTANCE_SOURCE}\\.\\d{1,9})-(.+)\\.json$`)
 
 /** A pane as Agent Messages keys it: its route key, with a legacy bare `%N` read as the tmux pane it was. */
 export function inboxPaneKey(pane: string): string {
@@ -169,7 +176,7 @@ export class PaneInbox {
     let names: string[] = []
     try { names = readdirSync(this.dir('typing')) } catch { /* nothing reclaimed */ }
     return names.flatMap((name) => {
-      const match = /^(\d{1,9}|ptyhost\.p\d{1,4}\.\d{1,9})-(.+)\.json$/.exec(name)
+      const match = RECLAIMED.exec(name)
       return match ? [[paneOfFolder(match[1])!, match[2]] as [string, string]] : []
     })
   }

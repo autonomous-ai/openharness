@@ -20,7 +20,9 @@
  * - `cloud_publish`, `cloud_ask`, `cloud_unask`: the cloud agents' harnesses and their questions
  *   (`core.cloud`, core/agents/cloud.ts), for the cloud service alone;
  * - `super_tab_attention`: the Super Tab members here waiting on a person (`core.superTabs`,
- *   core/superTabAttention.ts), for the Super Tab service alone.
+ *   core/superTabAttention.ts), for the Super Tab service alone;
+ * - `super_tab_cards`, `super_tab_card_recap`: the Swarms' cards and a Lead's last message for the Harness Pro
+ *   (`core.superTabs`, core/superTabCards.ts), for the Super Tab service alone.
  * The core answers them only for the experiments (core/api.ts `EXPERIMENTS`): creating an agent or
  * telling the windows something is no other process's to ask. The process's side is
  * services/processCoreApi.ts. Agent Messages, an experiment until 2026-10-12, asks a few of the same and is
@@ -34,7 +36,7 @@ import { nativeTurnCursorIn } from '../lib/nativeTurnObservations.js'
 type Payload = Record<string, unknown>
 type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud' | 'superTabs' | 'transcripts'>
 
-const QUERIES: ReadonlySet<string> = new Set(['shown', 'close_swarm', 'stopped', 'gone', 'creation_status', 'native_turns', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention'])
+const QUERIES: ReadonlySet<string> = new Set(['shown', 'close_swarm', 'stopped', 'gone', 'creation_status', 'native_turns', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention', 'super_tab_cards', 'super_tab_card_recap'])
 const METHODS: ReadonlySet<string> = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
@@ -138,6 +140,14 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       // The core checks each item (core/superTabAttention.ts): what reaches the devices is decided there, not here.
       if (service !== 'superTabs' || !core.superTabs) return { error: 'NOT_SUPER_TABS' }
       core.superTabs.attention(Array.isArray(payload.items) ? payload.items : [])
+      return {}
+    }
+    case 'super_tab_cards':
+    case 'super_tab_card_recap': {
+      // Checked by the core (core/superTabCards.ts), which drops what is not sound; here only the list's shape.
+      if (service !== 'superTabs' || !core.superTabs) return { error: 'NOT_SUPER_TABS' }
+      if (query === 'super_tab_cards') core.superTabs.cards(Array.isArray(payload.items) ? payload.items : [])
+      else core.superTabs.cardRecap(payload.recap as never)
       return {}
     }
     case 'account': {

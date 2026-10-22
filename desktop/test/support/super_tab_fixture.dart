@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -36,6 +37,8 @@ class ConversationServer {
   int revision = 0;
   bool loseReply = false, reject = false, failSave = false, failReads = false;
   Map<String, dynamic>? saved;
+  // While set, every read waits for it: a slow server.
+  Completer<void>? holdReads;
   // Makes every command answer with this refusal: {code, message}.
   Map<String, String>? refuse;
   final posts = <Map<String, dynamic>>[];
@@ -197,6 +200,14 @@ class ConversationServer {
           'brief': command['brief'] ?? '',
         });
         output.addAll({'projectId': id, 'conversationId': leadId});
+      } else if (command['type'] == 'conversation.archive') {
+        (state['conversations'] as List)
+                .cast<Map<String, dynamic>>()
+                .firstWhere(
+                  (g) => g['id'] == command['conversationId'],
+                )['archived'] =
+            command['archived'];
+        revision++;
       } else if (command['type'] == 'project.delete') {
         final projectId = command['projectId'];
         final projects =
@@ -245,6 +256,7 @@ class ConversationServer {
       }
       return result;
     }
+    if (holdReads case final hold?) await hold.future;
     if (failReads) throw StateError('Offline');
     final uri = Uri.parse(path);
     if (uri.pathSegments.last == 'routing-policy') {

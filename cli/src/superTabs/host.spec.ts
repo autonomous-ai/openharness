@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { prepareSwarmSkill } from '../lib/swarmSkills.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
@@ -48,6 +49,16 @@ function setup(messageFields: Record<string, unknown> = {}) {
 }
 
 describe('current Swarm role lookup', () => {
+  it('derives a Reviewer from its stored role while it is in a current group', async () => {
+    const t = setup()
+    const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', role: 'reviewer' }
+    let groups = [{ leadId: 'other', agentIds: ['agent'] }]
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
+      path.includes('/hosts/') ? [{ tabId: 'tab', agent }] : { state: { agents: [agent], conversations: groups } } } }))
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBe('review')
+    groups = []
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBeNull()
+  })
   it.each(['lead', 'member', 'assigned'] as const)('derives an old %s from current groups on its machine', async kind => {
     const t = setup()
     const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }
@@ -130,8 +141,8 @@ describe('Super Tab native delivery handoff', () => {
       'In reply to message question-2. Read it before interpreting the answer:'
     ), 'team:service:superTabs:delivery')
     expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Message message from Collaborator:\nYes, keep them.')
-    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('On Claude Code or Codex, Leads use swarm-lead and workers use swarm-dev.')
-    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Leads coordinate: assign multi-part or 15+ minute work to Swarm agent groups; do only answers, lookups and small fixes yourself; your subagents only read/look up.')
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('On Claude Code or Codex, Leads use swarm-lead, Builders swarm-dev and Reviewers swarm-review.')
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Leads coordinate: assign multi-part or 15+ minute work to Swarm agent groups; do only answers, lookups and work under 15 minutes yourself; your subagents only read/look up.')
   })
 
   it('keeps a slow configuration observation out of the native delivery and lease path', async () => {
@@ -434,6 +445,43 @@ it('confirms a stopped assignment only with fresh native evidence, including aft
   expect(proof).toHaveLength(1)
 })
 
+describe('the super-tab command in delivered input', () => {
+  it('names the short command in every line that names a command, and asks for it once while the input is held', async () => {
+    const t = setup({ replyTo: 'earlier' })
+    const agentCommand = vi.fn(async () => 'harness super-tab')
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), agentCommand }); hosts.push(host)
+    await host.tick()
+    const text = String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1])
+    expect(text).toContain(`Read its state: harness super-tab --tab 'tab' --agent 'agent' status`)
+    expect(text).toContain(`harness super-tab --tab 'tab' --agent 'agent' message 'lead' 'earlier'`)
+    expect(text).toContain(`harness super-tab --tab 'tab' --agent 'agent' route GROUP JSON`)
+    expect(text).not.toContain('--port')
+    t.event('rejected', 'team_waiting_busy')
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+    expect(agentCommand).toHaveBeenCalledTimes(1)
+    expect(agentCommand).toHaveBeenCalledWith(t.core, 'machine-1')
+  })
+  it('falls back to the full command when the lookup fails, and does not ask again', async () => {
+    const t = setup()
+    const agentCommand = vi.fn(async () => { throw new Error('no shell') })
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), agentCommand }); hosts.push(host)
+    await host.tick()
+    expect(String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]))
+      .toContain(`Read its state: ${t.core.daemon.command} super-tab --port ${t.core.daemon.port} --machine 'machine-1' --tab 'tab' --agent 'agent' status`)
+    t.event('rejected', 'team_waiting_busy')
+    await host.tick()
+    expect(agentCommand).toHaveBeenCalledTimes(1)
+  })
+  it('keeps the daemon\'s full command when nothing proves a shorter one works (no launcher is looked up in a spec)', async () => {
+    const t = setup()
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn() }); hosts.push(host)
+    await host.tick()
+    expect(String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]))
+      .toContain(`Read its state: ${t.core.daemon.command} super-tab --port ${t.core.daemon.port} --machine 'machine-1' --tab 'tab' --agent 'agent' status`)
+  })
+})
+
 describe('Super Tab attachments in delivered input', () => {
   it('lists the downloaded files after the text and downloads them once while the terminal holds the input', async () => {
     const file = { id: 'a1', name: 'screen.png', mime: 'image/png', size: 5, url: 'https://cdn.example.test/x/screen.png' }
@@ -483,7 +531,7 @@ describe('Super Tab waits for the Harness Pro', () => {
       if (offline) throw new Error('Host offline')
       return { status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }
     })
-    const superTabs = { attention: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { creationStatus: vi.fn(async creationId => ({ creationId, state: 'created' as const, agentId: 'harness' })), byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
     const open = () => { const host = new SuperTabHost(core, 'machine-1', { log: vi.fn() }); hosts.push(host); return host }
@@ -520,7 +568,7 @@ describe('Super Tab waits for the Harness Pro', () => {
       agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }]
     const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }))
     let here = true, clock = 0
-    const superTabs = { attention: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { byAgent: vi.fn(() => (here ? { agentId: 'harness' } : undefined) as never), terminalAvailable: vi.fn(() => true) } })
     const host = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(host)
@@ -912,5 +960,104 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
     t.rows[0]!.joinSwarm = true
     await t.pass(24 * 60 * 60_000 + 2)
     expect(t.prepare).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('built-in skill text after a CLI update', () => {
+  const older = '---\nname: swarm-dev\n---\nAn older release of this skill.\n'
+  function syncFixture(stale = true) {
+    const t = setup(), workspace = mkdtempSync(join(tmpdir(), 'super-tab-skills-')); roots.push(workspace)
+    const roles = { lead: 'lead', builder: 'dev', reviewer: 'review' } as const
+    const sessions = Object.fromEntries([...Object.entries(roles).map(([name, role]) => [`h-${name}`,
+      { agentId: `h-${name}`, cwd: workspace, swarmSkill: { role, key: `key-${name}` } }]),
+      ['h-personal', { agentId: 'h-personal', cwd: workspace }]])
+    const files = Object.fromEntries(Object.entries(roles).map(([name, role]) => {
+      const { file } = prepareSwarmSkill(workspace, { role, key: `key-${name}` })
+      // What an older CLI left: its own text and no record of which text it was.
+      if (stale) { writeFileSync(file, older); rmSync(join(dirname(file), 'version.json')) }
+      return [name, file]
+    }))
+    const agents = [...Object.keys(roles), 'personal'].map(name => ({ id: `a-${name}`, harnessId: `h-${name}`, machineId: 'machine-1' }))
+    let groups: Array<Record<string, unknown>> = [
+      { id: 'lead-group', leadId: 'a-lead', agentIds: ['a-lead', 'a-builder', 'a-reviewer'] },
+      { id: 'work', leadId: 'a-lead', agentIds: ['a-lead', 'a-builder'], assignment: { agentId: 'a-builder', status: 'working' } },
+    ]
+    const sent: Array<{ operationId: string; asAgentId: string; command: Record<string, any> }> = []
+    const receipts = new Map<string, string>()
+    let inFlight = 0
+    t.core.agents.byAgent = vi.fn(id => sessions[id] as never)
+    t.core.agents.terminalAvailable = vi.fn(() => true)
+    t.core.account.backend = vi.fn(async (method, path, body) => {
+      inFlight++
+      await Promise.resolve()
+      inFlight--
+      const request = body as any
+      if (path.includes('/hosts/')) return { status: 200, body: { data: agents.map(agent => ({ tabId: 'tab', agent })) } }
+      if (path.endsWith('/deliveries')) return { status: 200, body: { data: [] } }
+      if (request?.command?.type === 'message.send') {
+        // As the backend does: a repeated operation gets its first receipt; the same id for a different request is refused.
+        const prior = receipts.get(request.operationId), same = JSON.stringify(request.command)
+        if (prior !== undefined && prior !== same) return { status: 409, body: { success: false, error: { code: 'OPERATION_REUSED', message: 'Use a new operation ID for a different request.' } } }
+        if (prior === undefined) { receipts.set(request.operationId, same); sent.push(request) }
+        return { status: 200, body: { data: {} } }
+      }
+      return { status: 200, body: { data: { state: { agents, conversations: groups } } } }
+    })
+    // The refresh runs beside the poll: wait until no backend call is in flight and the host's own work has had its turn.
+    const pass = async (host = t.open(), advance = 0) => {
+      t.wait(advance); await host.tick()
+      for (let idle = 0; idle < 3;) { await new Promise(resolve => setImmediate(resolve)); idle = inFlight ? 0 : idle + 1 }
+      return host
+    }
+    return { t, files, sent, pass, setGroups: (next: typeof groups) => { groups = next } }
+  }
+
+  it('rewrites each running Lead, Builder and Reviewer skill once and tells each agent once, never a personal session', async () => {
+    const f = syncFixture()
+    const host = await f.pass()
+    for (const file of Object.values(f.files)) expect(readFileSync(file, 'utf8')).not.toBe(older)
+    expect(f.sent.map(s => [s.asAgentId, s.command.recipientIds, s.command.conversationId]).sort()).toEqual([
+      ['a-builder', ['a-builder'], 'work'], ['a-lead', ['a-lead'], 'lead-group'], ['a-reviewer', ['a-reviewer'], 'lead-group']])
+    for (const s of f.sent) expect(s.command.text).toContain(f.files[s.asAgentId.slice(2)]!)
+    expect(f.sent.find(s => s.asAgentId === 'a-reviewer')!.command.text).toContain('swarm-review skill')
+    // A second pass and a restarted host find the files current and say nothing more.
+    await f.pass(host, 5_000)
+    await f.pass()
+    expect(f.sent).toHaveLength(3)
+  })
+
+  it('records a notice that was sent before its record was lost, even after its group changed', async () => {
+    const f = syncFixture()
+    await f.pass()
+    const lead = join(dirname(f.files.lead!), 'version.json'), record = JSON.parse(readFileSync(lead, 'utf8'))
+    // The send succeeded, the record did not survive, and the Lead's group was archived meanwhile.
+    writeFileSync(lead, JSON.stringify({ ...record, notified: 'older' }))
+    f.setGroups([{ id: 'lead-group', archived: true, leadId: 'a-lead', agentIds: ['a-lead'] }, { id: 'next', leadId: 'a-lead', agentIds: ['a-lead'] }])
+    await f.pass()
+    expect(JSON.parse(readFileSync(lead, 'utf8')).notified).toBe(record.notified)
+    expect(f.t.log).not.toHaveBeenCalled()
+    const calls = vi.mocked(f.t.core.account.backend).mock.calls.length
+    await f.pass()
+    expect(vi.mocked(f.t.core.account.backend).mock.calls.slice(calls).some(([, , body]) => (body as any)?.command?.type === 'message.send')).toBe(false)
+    expect(f.sent).toHaveLength(3)
+  })
+
+  it('says nothing when the skill files already hold the built-in text', async () => {
+    const f = syncFixture(false)
+    await f.pass()
+    expect(f.sent).toEqual([])
+  })
+
+  it('rewrites the file of a session in no open group at once and tells it once it joins one', async () => {
+    const f = syncFixture()
+    f.setGroups([{ id: 'old', archived: true, leadId: 'a-lead', agentIds: ['a-lead', 'a-builder', 'a-reviewer'] }])
+    const host = await f.pass()
+    for (const file of Object.values(f.files)) expect(readFileSync(file, 'utf8')).not.toBe(older)
+    expect(f.sent).toEqual([])
+    f.setGroups([{ id: 'next', leadId: 'a-lead', agentIds: ['a-lead', 'a-builder', 'a-reviewer'] }])
+    await f.pass(host, 60_000)
+    expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-builder', 'a-lead', 'a-reviewer'])
+    await f.pass(host, 60_000)
+    expect(f.sent).toHaveLength(3)
   })
 })

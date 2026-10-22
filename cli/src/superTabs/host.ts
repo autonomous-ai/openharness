@@ -9,6 +9,9 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, join } from 'node:path'
 import type { CoreApi, TurnDelivery } from '../core/api.js'
 import { shellQuote } from '../orchestrator/prompts.js'
+import { agentCommandPrefix, fullCommandPrefix } from './shortCommand.js'
+import { readAuthSession } from '../lib/authSession.js'
+import { computerId } from '../lib/daemonState.js'
 import { noticeReason, WithheldDeliveries } from './withheld.js'
 import { attentionOf } from './attention.js'
 import { prepareContribution } from './contribution.js'
@@ -21,7 +24,7 @@ export class SuperTabHostError extends Error {
 }
 export { identifier, object } from './wire.js'
 import { ENDED_WORK, identifier, object } from './wire.js'
-import type { SwarmRole } from '../lib/swarmSkills.js'
+import { recordSwarmSkillNotice, refreshSwarmSkill, type SwarmRole, type SwarmSkill } from '../lib/swarmSkills.js'
 
 /** The core signs each request. Neither the service nor its journal holds an account credential. */
 export async function backend(core: CoreApi, method: string, path: string, body?: unknown): Promise<unknown> {
@@ -54,9 +57,10 @@ export async function swarmRoleFor(core: CoreApi, machineId: string, harnessId: 
     const groups = (Array.isArray(state.conversations) ? state.conversations.map(object) : []).filter(group => group.archived !== true)
     if (groups.some(group => group.leadId === target.id)) return 'lead'
     return groups.some(group => Array.isArray(group.agentIds) && group.agentIds.includes(target.id)
-      || object(group.assignment).agentId === target.id && object(object(group.assignment).execution).machineId === machineId) ? 'dev' : null
+      || object(group.assignment).agentId === target.id && object(object(group.assignment).execution).machineId === machineId)
+      ? agent.role === 'reviewer' ? 'review' : 'dev' : null
   }))
-  return roles.includes('lead') ? 'lead' : roles.includes('dev') ? 'dev' : null
+  return (['lead', 'dev', 'review'] as const).find(role => roles.includes(role)) ?? null
 }
 
 interface Entry {
@@ -77,13 +81,19 @@ export interface SuperTabHostOptions {
   observers?: typeof publishObservers
   attachedFiles?: typeof attachedFiles
   prepareContribution?: typeof prepareContribution
+  /** The `… super-tab` prefix agents are told to run (superTabs/shortCommand.ts), for a spec. */
+  agentCommand?: (core: CoreApi, machineId: string) => Promise<string>
 }
 
+const defaultAgentCommand = (core: CoreApi, machineId: string) => agentCommandPrefix(core.daemon, machineId,
+  () => readAuthSession()?.machineId || computerId())
 export const hostJournalFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `host-${machineId}.json`)
 /** How long after an add the roster may ask for another (a roster read may predate the add), and the first wait after a
  *  failed one. Each try probes every engine's account (about 14 login shells), so the wait doubles up to half an hour:
  *  a refusal such as a dispatched start that never reports, or no signed-in engine, can last for days. */
 const JOIN_RETRY_MS = 60_000
+/** How long a skill re-read notice that could not be sent (no open group yet, or the backend failed) waits to retry. */
+const SKILL_RETRY_MS = 60_000
 const JOIN_RETRY_MAX_MS = 30 * 60_000
 /** Refusals no retry can change while this host runs: the Swarm has all its machines, or this account does not own it. */
 const JOIN_FINAL = new Set(['MACHINES_FULL', 'OWNER_REQUIRED'])
@@ -105,7 +115,7 @@ const SUPER_TAB_REPLY_STYLE = 'Write to the people in this tab like a helpful co
   + 'Do not describe your own tools or permission prompts unless that blocks what they asked. '
   + 'Answer each message once: post with --reply-to MESSAGE_ID. If you have already answered a message, do not post again. '
   + 'When you hand over finished work, give the result with the revision and links they need. '
-  + 'Lead: when a worker finishes, decide reuse, keep or stop; prefer stop unless more work is coming soon.'
+  + 'Lead: when a Builder finishes, decide reuse, keep or stop; prefer stop unless more work is coming soon.'
 
 /** Owns only the handoff between a durable backend claim and the core's native input.
  * A process restart never interprets a lost acknowledgement as permission to type twice. */
@@ -138,6 +148,9 @@ export class SuperTabHost {
   private receiptsRunning: Promise<void> | null = null
   private nextReceiptsAt = 0
   private receiptCursor = 0
+  private readonly agentCommand: (core: CoreApi, machineId: string) => Promise<string>
+  /** Asked once, on the first delivery: the answer cannot change while this daemon runs (superTabs/shortCommand.ts). */
+  private prefix: Promise<string> | null = null
   private configurationsRunning: Promise<void> | null = null
   private nextConfigurationsAt = 0
   private replacementsRunning: Promise<void> | null = null
@@ -150,6 +163,10 @@ export class SuperTabHost {
   private attention: string | null = null
   /** The harnesses last handed over waiting, and since when each has been missing from the core's live agents. */
   private waiting = new Set<string>()
+  /** When each running Swarm session's skill is next compared with the built-in text: once per host, and again while
+   *  its re-read notice is still owed. */
+  private readonly skillChecks = new Map<string, number>()
+  private skillsRunning: Promise<void> | null = null
   private missing = new Map<string, number>()
 
   constructor(private readonly core: CoreApi, readonly machineId: string, options: SuperTabHostOptions = {}) {
@@ -158,6 +175,7 @@ export class SuperTabHost {
     this.observers = options.observers ?? publishObservers
     this.attachedFiles = options.attachedFiles ?? attachedFiles
     this.prepareContribution = options.prepareContribution ?? prepareContribution
+    this.agentCommand = options.agentCommand ?? defaultAgentCommand
     this.now = options.now ?? Date.now
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
@@ -445,6 +463,7 @@ export class SuperTabHost {
     const stopKeys = new Set(data.filter(item => object(item).stopRequested === true).map(item => { const row = object(item); return `${row.tabId}:${object(row.agent).id}` }))
     for (const key of this.releaseAttempts.keys()) if (!stopKeys.has(key)) this.releaseAttempts.delete(key)
     const seen = new Set<string>()
+    const running: HostAgent[] = []
     for (const item of data) {
       const row = object(item), agent = object(row.agent)
       if (!identifier(row.tabId) || !identifier(agent.id) || !identifier(agent.harnessId) || agent.machineId !== this.machineId) continue
@@ -456,6 +475,7 @@ export class SuperTabHost {
       }
       // Never adopt another live session as a replacement for the recorded harness.
       if (!this.core.agents.byAgent(target.agent.harnessId) || !this.core.agents.terminalAvailable(target.agent.harnessId)) continue
+      running.push(target)
       const path = `/api/super-tabs/${target.tabId}/agents/${target.agent.id}/deliveries`
       try {
         const deliveries = await backend(this.core, 'GET', path)
@@ -492,6 +512,50 @@ export class SuperTabHost {
       }
     }
     await this.leases()
+    // Off the poll, so the backend calls of a notice never delay the next lease renewal. Owed at most once per text release.
+    this.skillsRunning ??= (async () => { for (const target of running) await this.refreshSkill(target) })()
+      .finally(() => { this.skillsRunning = null })
+  }
+
+  /** A CLI update can ship new built-in skill text while Swarm sessions run; until now a running agent kept the text it
+   *  read at start, so a skill release reached nobody until each agent restarted (owner, 2026-10-22). Rewrite a role
+   *  session's file at once; tell its agent through the Swarm, as any delivery, once it is in an open group. The
+   *  operation id names the agent and the text, so a retry, a restart or a second daemon never sends it twice. */
+  private async refreshSkill(target: HostAgent): Promise<void> {
+    const session = this.core.agents.byAgent(target.agent.harnessId)
+    const skill = session?.swarmSkill
+    const due = this.skillChecks.get(target.agent.harnessId) ?? 0
+    if (!skill || !session.cwd || this.now() < due) return
+    this.skillChecks.set(target.agent.harnessId, Infinity)
+    try {
+      const refresh = refreshSwarmSkill(session.cwd, skill)
+      if (!refresh?.owed) return
+      if (await this.tellSkill(target, skill, refresh)) recordSwarmSkillNotice(session.cwd, skill, refresh.version)
+      else this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
+    } catch (error) {
+      this.log(error instanceof Error ? error.message : String(error))
+      this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
+    }
+  }
+  private async tellSkill(target: HostAgent, skill: SwarmSkill, refresh: { file: string; version: string }): Promise<boolean> {
+    const id = target.agent.id
+    const answer = object(await backend(this.core, 'GET', `/api/super-tabs/${target.tabId}?asAgentId=${id}`))
+    const groups = (Array.isArray(object(answer.state).conversations) ? object(answer.state).conversations as unknown[] : []).map(object)
+      .filter(group => group.archived !== true && identifier(group.id) && Array.isArray(group.agentIds) && group.agentIds.includes(id))
+    const group = groups.find(g => g.leadId === id) ?? groups.find(g => object(g.assignment).agentId === id) ?? groups[0]
+    if (!group) return false
+    try {
+      await backend(this.core, 'POST', `/api/super-tabs/${target.tabId}/commands`, {
+        operationId: `skill-${id}-${refresh.version.slice(0, 32)}`, asAgentId: id,
+        command: { type: 'message.send', conversationId: group.id, replyTo: null, recipientIds: [id],
+          text: `Harness updated your built-in swarm-${skill.role} skill. Before your next step, read ${JSON.stringify(refresh.file)} again with your file or shell tool and follow the new version.` },
+      })
+    } catch (error) {
+      // The notice was sent, but its record was lost (a crash, a restart, another daemon) and its group has changed since:
+      // the same operation id now names a different request. It was delivered once; record it rather than retry forever.
+      if (!(error instanceof SuperTabHostError) || error.code !== 'OPERATION_REUSED') throw error
+    }
+    return true
   }
 
   /** The roster marks a Swarm whose Lead runs on this machine of its owner while the machine is not one of the Swarm's
@@ -608,6 +672,8 @@ export class SuperTabHost {
       files = downloaded.text
       if (downloaded.complete) this.files.set(deliveryId, files)
     }
+    this.prefix ??= this.agentCommand(this.core, this.machineId).catch(() => fullCommandPrefix(this.core.daemon, this.machineId))
+    const command = await this.prefix
     if (this.stopped || this.journal.entries[deliveryId] !== entry) return
     this.authorized.set(id, this.now() + 2_500)
     if (!(await this.leases()) || this.stopped) { this.authorized.delete(id); return }
@@ -617,7 +683,7 @@ export class SuperTabHost {
     entry.stage = 'submitting'
     this.persist()
     this.active.add(id)
-    this.core.turns.deliver(entry.harnessId, this.prompt(entry, message, files), id)
+    this.core.turns.deliver(entry.harnessId, this.prompt(entry, message, files, command), id)
   }
 
   private async recordConfigurations(rows: unknown[]): Promise<void> {
@@ -641,8 +707,8 @@ export class SuperTabHost {
     } catch (error) { this.log(error instanceof Error ? error.message : String(error)) }
   }
 
-  private prompt(entry: Entry, message: Json, files: string): string {
-    const command = `${this.core.daemon.command} super-tab --port ${this.core.daemon.port} --machine ${shellQuote(this.machineId)} --tab ${shellQuote(entry.tabId)} --agent ${shellQuote(entry.agentId)}`
+  private prompt(entry: Entry, message: Json, files: string, prefix: string): string {
+    const command = `${prefix} --tab ${shellQuote(entry.tabId)} --agent ${shellQuote(entry.agentId)}`
     const group = message.conversationId as string
     const reply = identifier(message.replyTo)
       ? `In reply to message ${message.replyTo}. Read it before interpreting the answer: ${command} message ${shellQuote(group)} ${shellQuote(message.replyTo)}\n\n`
@@ -654,7 +720,7 @@ export class SuperTabHost {
     return `You are participating in a shared Super Tab conversation (${group}). Other humans and agents see messages posted there.\n`
       + `Read its state: ${command} status\nRead this conversation: ${command} messages ${shellQuote(group)}\n`
       + `Reply there: ${command} post ${shellQuote(group)} 'your message' UNIQUE_OPERATION_ID --reply-to ${shellQuote(String(message.id))}\n`
-      + `Manage agreed work and delegation: ${command} help. Leads: route before starting or assigning: ${command} route GROUP JSON. Each task needs goal, changes, constraints, owned code and acceptance checks. On Claude Code or Codex, Leads use swarm-lead and workers use swarm-dev. Leads coordinate: assign multi-part or 15+ minute work to Swarm agent groups; do only answers, lookups and small fixes yourself; your subagents only read/look up.\n`
+      + `Manage agreed work and delegation: ${command} help. Leads: route only when starting an agent or assigning work to another agent (not work you do yourself): ${command} route GROUP JSON. Each task needs goal, changes, constraints, owned code and acceptance checks. On Claude Code or Codex, Leads use swarm-lead, Builders swarm-dev and Reviewers swarm-review. Leads coordinate: assign multi-part or 15+ minute work to Swarm agent groups; do only answers, lookups and work under 15 minutes yourself; your subagents only read/look up.\n`
       + `Ask questions and post results in this conversation. ${SUPER_TAB_REPLY_STYLE} Replies to these delivered instructions must be posted here explicitly.\n\n`
       + native + reply + `Message ${String(message.id)} from ${String(object(message.author).name ?? 'a collaborator')}:\n${message.text}`
       + (files ? `${message.text ? '\n\n' : ''}${files}` : '')

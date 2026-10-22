@@ -141,10 +141,14 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
       // Both direct and contributed-host starts reach this boundary. Existing
       // native receipts are read above and never have their permissions changed.
       // Engines without a full mode retain their existing approving launch flags.
+      // The backend starts a Reviewer only on Claude Code or Codex, the engines with built-in Swarm skills.
+      const skilled = ['claude', 'codex'].includes(String(request.engine)), reviewer = request.role === 'reviewer'
       const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: true,
         ...(permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
-        ...(['claude', 'codex'].includes(String(request.engine)) ? { swarmRole: 'dev' } : {}),
-        prompt: `You are joining a shared Super Tab. ${['claude', 'codex'].includes(String(request.engine)) ? 'Use the built-in swarm-dev skill. ' : ''}Run harness super-tab --tab ${input.tabId} status until this harness appears in the roster. Do not begin project work yet. Your lead will assign work in conversation ${request.conversationId}. Reply in that conversation using harness super-tab --tab ${input.tabId} post ${request.conversationId} 'your message' UNIQUE_OPERATION_ID. Run harness super-tab help for commands. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`,
+        ...(skilled ? { swarmRole: reviewer ? 'review' : 'dev' } : {}),
+        prompt: `You are joining a shared Super Tab${reviewer ? ' as a Reviewer' : ''}. ${skilled ? `Use the built-in swarm-${reviewer ? 'review' : 'dev'} skill. ` : ''}Run harness super-tab --tab ${input.tabId} status until this harness appears in the roster. ${reviewer
+          ? `Do not review yet. You review work in conversation ${request.conversationId} when it is ready for review.`
+          : `Do not begin project work yet. Your lead will assign work in conversation ${request.conversationId}.`} Reply in that conversation using harness super-tab --tab ${input.tabId} post ${request.conversationId} 'your message' UNIQUE_OPERATION_ID. Run harness super-tab help for commands. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`,
         ...(request.worktree ? { projectSource: 'worktree', gitSource: request.cwd, branchName: `super-tab/${startId}`,
           // No branch named: the repository's default branch, fetched, not the host checkout's old HEAD.
           ...(request.branchRef ? { branchRef: request.branchRef } : { branchBase: 'default' }) } : { cwd: request.cwd }),

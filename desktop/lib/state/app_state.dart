@@ -962,6 +962,9 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed) return;
     final wasForeground = foreground.value;
     foreground.value = state == null || state == AppLifecycleState.resumed;
+    // Every transition, not only the three the listener has callbacks for: hidden -> inactive fires
+    // onShow, and a window shown again without focus must not keep telling the daemon it shows nothing.
+    _announceVisibleAgents();
     if (wasForeground && !foreground.value) {
       _awaySince = phoneOfferClock();
       _missedWhileAway = null;
@@ -1425,6 +1428,9 @@ class AppNotifier extends ChangeNotifier {
   CurrentUserProfile? get currentUser => _currentUser;
   set currentUser(CurrentUserProfile? profile) {
     if (_currentUser?.id != profile?.id) {
+      // Initial identity loading may follow a restored Swarm; leaving a known
+      // account must not reveal the feature to the next one.
+      if (_currentUser != null) _superTabsEntered = false;
       _closeAttachmentSessions();
       _closeOwnerMemories();
       deviceHosts.clear();
@@ -1708,10 +1714,14 @@ class AppNotifier extends ChangeNotifier {
     upload: uploadWith(() => api),
     discoveryInterval: kUnderTest ? Duration.zero : const Duration(seconds: 15),
     onTabs: (tabs, hidden) {
-      // The browser can learn its account before the saved layout finishes
-      // loading. Discovery must not persist over that workspace during boot.
+      // Discovery can finish while an already signed-in machine is re-seating
+      // its saved desk, too. Publishing a SuperTab then advances the layout
+      // revision and replaces regular tabs before their restore can finish.
       if (_disposed ||
           status != AppStatus.authenticated ||
+          _paneLayoutRestores != 0 ||
+          _workspaceCleanup != null ||
+          !_superTabsEntered ||
           currentUser?.id == null) {
         return;
       }
@@ -1747,8 +1757,19 @@ class AppNotifier extends ChangeNotifier {
       // The closed list is read from these names, so it can change on its own.
       if (changed || namesChanged) notifyListeners();
     },
-    onSnapshot: (controller) {
+    onSelection: (controller) {
       if (_disposed || controller.accountId != currentUser?.id) return;
+      // The Harness Pro shows the open project's Leads, so a project change
+      // is a change to the desk it was told about.
+      _announceOpenPanesToDial();
+    },
+    onSnapshot: (controller) {
+      if (_disposed ||
+          _paneLayoutRestores != 0 ||
+          _workspaceCleanup != null ||
+          controller.accountId != currentUser?.id) {
+        return;
+      }
       var shown = false;
       for (final tab in swarms.where((s) => s.superTabId == controller.tabId)) {
         if (tab.name != controller.snapshot!.name || !tab.nameIsCustom) {
@@ -1779,6 +1800,12 @@ class AppNotifier extends ChangeNotifier {
   );
 
   Map<String, String> _superTabNames = {};
+  bool _superTabsEntered = false;
+
+  /// Membership alone must not reveal the hidden feature in a regular workspace.
+  /// The hidden shortcut, an explicit open, or a restored Swarm supplies that intent.
+  void enterSuperTabs() => _superTabsEntered = true;
+
   final StreamController<String> _superTabClosures =
       StreamController<String>.broadcast();
 
@@ -1869,6 +1896,7 @@ class AppNotifier extends ChangeNotifier {
   void bindSuperTab(String swarmId, String tabId, String name) {
     final swarm = swarms.where((s) => s.id == swarmId).firstOrNull;
     if (swarm == null) return;
+    enterSuperTabs();
     // A discovery response can beat the creation response back to this
     // computer. Keep the lead form's tab and retain any already-open panes.
     for (final duplicate
@@ -1898,6 +1926,7 @@ class AppNotifier extends ChangeNotifier {
   /// instead of being left behind. Any history entry for the tab is dropped, so
   /// Reopen later cannot add a second view.
   void openSuperTab(String tabId, String name, {String? intoSwarmId}) {
+    enterSuperTabs();
     _rememberSuperTabVisibility(tabId, true);
     _closedHistory.removeWhere(
       (entry) => entry is ClosedSwarm && entry.superTabId == tabId,
@@ -1945,6 +1974,7 @@ class AppNotifier extends ChangeNotifier {
   void markSuperTabDraft(String swarmId) {
     final swarm = swarms.where((s) => s.id == swarmId).firstOrNull;
     if (swarm == null) return;
+    enterSuperTabs();
     swarm.kind = 'superTab';
     _persistLayout();
     notifyListeners();
@@ -3928,6 +3958,48 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  Future<void> _openSuperTabProject(
+    MachineState source,
+    String tabId,
+    String projectId,
+  ) async {
+    final open = swarms.where((s) => s.superTabId == tabId).firstOrNull;
+    final name = open?.name ?? _superTabNames[tabId];
+    // A tab this account does not belong to is nobody's to open.
+    if (name == null) return;
+    _requestDeviceWindow(source);
+    // Every announce until the project lands says the device caused it: the
+    // open and the refresh can take longer than the daemon's echo window, and
+    // an announce naming the tab's old project would pull the device off the
+    // Lead it just picked.
+    final pick = ++_devicePick;
+    _announceFromDevice = true;
+    final abandon = Timer(const Duration(seconds: 5), () {
+      if (_devicePick == pick) _announceFromDevice = false;
+    });
+    try {
+      _fromDevice(
+        () => open == null ? openSuperTab(tabId, name) : selectSwarm(open.id),
+      );
+      final controller = await superTabs.open(tabId);
+      if (_disposed || _devicePick != pick || !_announceFromDevice) return;
+      if (controller.snapshot == null) await controller.refresh();
+      if (_disposed || _devicePick != pick || !_announceFromDevice) return;
+      final project = controller.snapshot?.projects
+          .where((p) => p.id == projectId)
+          .firstOrNull;
+      if (project == null) return;
+      controller.select(project.leadConversationId);
+      // Selecting what is already selected announces nothing by itself.
+      _announceOpenPanesToDial();
+    } catch (error) {
+      appLog.warn('super-tab', 'Could not open the picked project: $error');
+    } finally {
+      abandon.cancel();
+      if (_devicePick == pick) _announceFromDevice = false;
+    }
+  }
+
   void _noteNavigation() {
     _paneFocusByUser = !_navigatingFromDevice;
     // A device's move is not a person opening anything — but it does leave a
@@ -4898,7 +4970,9 @@ class AppNotifier extends ChangeNotifier {
     // restarted — has never been told what is on the grid. Without this
     // the dial goes back to beeping about tiles in plain sight until the
     // next time a pane happens to change.
+    _announcedVisible.remove(machineId);
     _announceOpenPanesToDial();
+    _announceVisibleAgents();
     _announceUnreadToDial();
     // ...nor which tile this window is looking at. The daemon repeats that to the dial after every
     // list push, which is what keeps the two screens from drifting apart — but it can only repeat
@@ -4959,7 +5033,71 @@ class AppNotifier extends ChangeNotifier {
     if (previousMachineId != null && previousMachineId != machineId) {
       _sendAppFocus(previousMachineId, null);
     }
+    _announcedFocusAgentId = machineId == null ? null : agentId;
     if (machineId != null) _sendAppFocus(machineId, agentId);
+    // The selected pane moved with a tab switch or a close, and the tiles on screen moved with it.
+    _announceVisibleAgents();
+  }
+
+  String? _announcedFocusAgentId;
+
+  /// The signature of the `visibleAgents` last sent to each machine's daemon, so a change in what is
+  /// on screen is sent once and a repeat is not. Forgotten on (re)connect: a new daemon has no list.
+  final Map<String, String> _announcedVisible = {};
+
+  /// Whether the super tab [swarmId] shows its terminal canvas (it hides it behind chat or the
+  /// member list, with the panes still mounted `Offstage`). Only the workspace knows.
+  String? _superTerminalsShownSwarm;
+
+  void setSuperTabTerminalsShown(String swarmId, bool shown) {
+    final next = shown ? swarmId : null;
+    if (_superTerminalsShownSwarm == next ||
+        (!shown && _superTerminalsShownSwarm != swarmId)) {
+      return;
+    }
+    _superTerminalsShownSwarm = next;
+    _announceVisibleAgents();
+  }
+
+  /// The agents on [machineId] whose tiles a person can see in this window right now: the active
+  /// tab's mounted, non-`Offstage` tiles (the zoomed one alone while zoomed), and none while the
+  /// window is minimized or hidden to the tray. A window that is merely behind another app still
+  /// shows its tiles, so it still lists them; only hidden/paused/detached empty the list.
+  List<String> visibleAgentIds(String machineId) {
+    switch (lifecycle()) {
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        return const [];
+      case AppLifecycleState.resumed:
+      case AppLifecycleState.inactive:
+      case null:
+        break;
+    }
+    final tab = activeSwarm;
+    if (tab.isStore || tab.isOrchestrator) return const [];
+    if (tab.isSuperTab && _superTerminalsShownSwarm != tab.id) return const [];
+    return [
+      for (final pane in tab.panes)
+        if (pane.machineId == machineId &&
+            (tab.zoomedPaneId == null || pane.id == tab.zoomedPaneId))
+          ?pane.agentId,
+    ];
+  }
+
+  /// Tell each daemon on this computer which terminals are on screen, when that changed.
+  void _announceVisibleAgents() {
+    final pool = _pool;
+    if (pool == null) return;
+    for (final machineId in pool.machineIds) {
+      final list = visibleAgentIds(machineId);
+      if (_announcedVisible[machineId] == list.join(',')) continue;
+      if (_deskConnection(machineId) == null) continue;
+      _sendAppFocus(
+        machineId,
+        machineId == _announcedFocusMachineId ? _announcedFocusAgentId : null,
+      );
+    }
   }
 
   /// The socket [machineId]'s desk frames ride — `app_focus`, `app_panes`, `app_swarms`, `app_unread`,
@@ -4976,10 +5114,15 @@ class AppNotifier extends ChangeNotifier {
     // Never create a socket just to move focus, and never queue stale focus
     // across a reconnect. The connected callback reasserts the current pane.
     final send = focusFrameSenderForTest;
+    final visible = visibleAgentIds(machineId);
+    _announcedVisible[machineId] = visible.join(',');
     final pending = send != null
         ? send(machineId, agentId)
         : _deskConnection(machineId)?.sendTerminalFrame('app_focus', {
             'agentId': agentId,
+            // Every terminal of this machine that is on screen; [] for a hidden window. An older
+            // daemon ignores it.
+            'visibleAgents': visible,
             if (_deviceFocusRevision != null)
               'focusRevision': _deviceFocusRevision,
           });
@@ -5080,7 +5223,13 @@ class AppNotifier extends ChangeNotifier {
   /// Re-send the tile roster because the WINDOW moved, not because the tiles
   /// did. Public so the lifecycle listener can say so; the roster itself is
   /// unchanged and the `foreground` flag riding with it is the point.
-  void announceWindowForeground() => _announceOpenPanesToDial();
+  void announceWindowForeground() {
+    _announceOpenPanesToDial();
+    _announceVisibleAgents();
+  }
+
+  bool _announceFromDevice = false;
+  int _devicePick = 0;
 
   /// The tile roster and the tabs, to every daemon this window reaches over
   /// its loopback ([_deskConnection]) — never a relayed machine's.
@@ -5137,11 +5286,22 @@ class AppNotifier extends ChangeNotifier {
           ];
     // The swarms travel with the tiles: the dial names the one on screen above the agent and offers
     // the others, and a pick there comes back as `dial_swarm`.
+    final fromDevice = _announceFromDevice;
     final swarmRows = [
       for (final swarm in swarms)
         {
           'id': swarm.id,
           'name': swarm.name,
+          // The backend tab and the project open in it, for a device that
+          // draws the Swarm's Leads and asks for one by these ids. Left out
+          // while the tab has not loaded: a project is not guessed.
+          if (swarm.superTabId case final tabId?) ...{
+            'superTabId': tabId,
+            if (superTabs.peek(tabId) case final controller?)
+              if (controller.snapshot?.projectFor(controller.selectedId)
+                  case final project?)
+                'projectId': project.id,
+          },
           'agentIds': [
             for (final pane in swarm.panes)
               if (onDial(pane)) pane.agentId!,
@@ -5187,6 +5347,9 @@ class AppNotifier extends ChangeNotifier {
             .sendTerminalFrame('app_swarms', {
               'active': activeSwarmId,
               'swarms': swarmRows,
+              // Set on the announces a device's pick caused, so the daemon
+              // does not send the pick back to the device as a new focus.
+              if (fromDevice) 'fromDevice': true,
               // Only the active one's. It is the only grid the device draws, and sending every tab's
               // geometry would be two dozen shapes to carry one.
               'tiles': activeTiles,
@@ -18013,6 +18176,7 @@ class AppNotifier extends ChangeNotifier {
     if (id == null || panes.length < 2) return;
     zoomedPaneId = zoomedPaneId == id ? null : id;
     _persistLayout();
+    _announceVisibleAgents();
     notifyListeners();
   }
 
@@ -18335,6 +18499,7 @@ class AppNotifier extends ChangeNotifier {
   }
 
   int _layoutRevision = 0;
+  int _paneLayoutRestores = 0;
 
   Future<void> flushPaneLayout() => workspaceEnabled?.call() == false
       ? Future<void>.value()
@@ -18985,6 +19150,7 @@ class AppNotifier extends ChangeNotifier {
     });
     _layoutRevision++;
     _announceOpenPanesToDial();
+    _announceVisibleAgents();
     _freezeDeskLayouts();
     _deskQueueDiff();
     final saved = swarms.where((swarm) => !isDraftSwarm(swarm.id)).toList();
@@ -19032,6 +19198,18 @@ class AppNotifier extends ChangeNotifier {
     if (workspaceEnabled?.call() == false) return;
     final store = _paneLayout;
     if (store == null) return;
+    _paneLayoutRestores++;
+    try {
+      await _readPaneLayout(store, claimOnAttach: claimOnAttach);
+    } finally {
+      _paneLayoutRestores--;
+    }
+  }
+
+  Future<void> _readPaneLayout(
+    PaneLayoutStore store, {
+    required bool claimOnAttach,
+  }) async {
     // Before any chat is restored: its Finder comes back with its agent.
     await finderRoots.load();
     final initialSwarm = activeSwarm;
@@ -19215,6 +19393,7 @@ class AppNotifier extends ChangeNotifier {
         swarms
           ..clear()
           ..addAll(restored);
+        if (restored.any((swarm) => swarm.isSuperTab)) enterSuperTabs();
         _activeSwarmId = restored.any((s) => s.id == saved['activeId'])
             ? saved['activeId'] as String
             : restored.first.id;
@@ -20164,6 +20343,15 @@ class AppNotifier extends ChangeNotifier {
             _requestDeviceWindow(machine);
           }
           _fromDevice(() => selectSwarm(swarmId));
+        }
+        break;
+      case 'dial_super_tab':
+        // The Harness Pro picked a Lead's project. Show that Swarm, then the
+        // project's Lead chat as a click on its row in the sidebar does.
+        final tabId = payload['superTabId'];
+        final projectId = payload['projectId'];
+        if (tabId is String && projectId is String) {
+          await _openSuperTabProject(machine, tabId, projectId);
         }
         break;
       case 'dial_forked':
