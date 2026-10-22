@@ -925,8 +925,8 @@ export class SuperTabStore {
     const contributed = state.machines?.find(m => m.machineId === waiting.machineId)?.name
     const machine = contributed ?? (await tx.machine.findFirst({ where: { machineId: waiting.machineId, userId: waiting.machineOwnerId },
       select: { name: true, hostname: true } }).then(m => m?.name ?? m?.hostname ?? null))
-    const owner = await tx.user.findUnique({ where: { id: waiting.machineOwnerId }, select: { name: true, email: true } })
-    return { machine: machine?.trim() || null, owner: owner?.name?.trim() || owner?.email || null }
+    const owner = await tx.user.findUnique({ where: { id: waiting.machineOwnerId }, select: { name: true } })
+    return { machine: machine?.trim() || null, owner: owner?.name?.trim() || null }
   }
 
   /** Only the recorded execution host may attest that the actual session/attempt has stopped. */

@@ -23,7 +23,7 @@ export interface HoldHost { machine: string | null; owner: string | null }
 export const holdNoticeText = (agentName: string, reason: HoldReason, host?: HoldHost): string => {
   // A question on screen is answered at that machine, so name it and its owner; never anyone who cannot reach it.
   const where = reason === 'team_waiting_user' && host
-    ? `${host.machine ? ` ${agentName} is on ${host.machine}.` : ''}${host.owner ? ` Only ${host.owner} (owner of that machine) can answer it.` : ''}`
+    ? `${host.machine ? ` ${agentName} is on ${host.machine}.` : ''}${host.owner ? ` Only ${host.owner} (owner of ${host.machine ? 'that' : 'the'} machine${host.machine ? '' : ' it runs on'}) can answer it.` : ''}`
     : ''
   return `A message for ${agentName} is waiting. ${WHY[reason](agentName)}${where} It stays queued and goes in by itself as soon as that clears.`
 }

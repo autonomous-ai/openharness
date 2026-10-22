@@ -581,6 +581,18 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(notices[0]).toMatchObject({ author: { id: worker }, recipientIds: [lead],
       text: expect.stringContaining(`${displayName} is on MacBookPro2021. Only Huy (owner of that machine) can answer it.`) })
     expect(notices[0]!.text).not.toContain(owner.email)
+    // An owner with no name is left out, never replaced by an email address.
+    await db.user.update({ where: { id: host.sub }, data: { name: null } })
+    const second = await fixture()
+    const quiet = (await run(second.tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Quiet builder',
+      configuration: config, lead: false })).result.agentId as string
+    await run(second.tab, { type: 'message.send', conversationId: 'lead', text: 'Please start.', replyTo: null, recipientIds: [quiet] })
+    const held = (await store.deliveries(host, second.tab, quiet))[0]!
+    await store.delivery(host, second.tab, quiet, held.id, { type: 'claim', claimId: 'claim' })
+    await store.delivery(host, second.tab, quiet, held.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_user' })
+    const text = (await store.messages(owner, second.tab, 'lead', {})).messages.find(m => m.source?.kind === 'delivery-hold')!.text
+    expect(text).toContain('is on MacBookPro2021.')
+    expect(text).not.toMatch(/Only|@/)
   })
 
   it('stores the current delivery hold and its first time even after the compatibility notice exists', async () => {
