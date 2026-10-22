@@ -12,6 +12,7 @@ import { createSubmissions } from '../core/engines/submissions.js'
 import { screenFor } from '../engines/screens.js'
 import { submissionFor } from '../engines/submissions.js'
 import { submissionPolicy } from '../engines/submissionPolicies.js'
+import type { SubmissionReading } from '../engines/facets/submission.js'
 
 function session(engine: 'claude' | 'codex' | 'cursor' | 'commandcode' = 'codex'): RegisteredSession {
   return {
@@ -135,8 +136,8 @@ describe('SessionInputController', () => {
 
   it('ignores an older busy person observation after an identical new person write', async () => {
     vi.useFakeTimers()
-    let resolveOld!: (reading: { composer: boolean; draft: boolean }) => void
-    const oldReading = new Promise<{ composer: boolean; draft: boolean }>(resolve => { resolveOld = resolve })
+    let resolveOld!: (reading: SubmissionReading) => void
+    const oldReading = new Promise<SubmissionReading>(resolve => { resolveOld = resolve })
     const typed: string[] = [], firstReceipt = vi.fn(), secondReceipt = vi.fn()
     let reads = 0, draft = ''
     const controller = new SessionInputController({ readScreen: readInlineScreen,
@@ -153,7 +154,7 @@ describe('SessionInputController', () => {
     controller.submit('s1', 'continue', undefined, undefined, secondReceipt)
     await vi.advanceTimersByTimeAsync(1)
     draft = 'continue'
-    resolveOld({ composer: true, draft: false })
+    resolveOld({ composer: true, draft: false, nativeDraft: 'clear' })
     await vi.advanceTimersByTimeAsync(1)
     expect(typed).toEqual(['continue', 'continue'])
     expect(secondReceipt).not.toHaveBeenCalled()
