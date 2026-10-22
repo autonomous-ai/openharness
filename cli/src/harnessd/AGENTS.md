@@ -58,9 +58,6 @@ It keeps the core and the services running, and nothing else.
    The core sends `harnessd:want` for one of its services; from then on it is kept running like any other.
    A core that speaks an older protocol than the process's `askedSince` never asks, so `unasked` starts it
    as that core binds. Making a process on demand bumps `HARNESSD_PROTOCOL` and sets `askedSince` to it.
-   One the core asked for runs again whenever the master starts its services again after stopping them (a
-   re-execution the new bundle refused leaves the same core running, and it asks only once, as it starts); one
-   never asked for stays off.
    A `want` is heard before the core binds too: a core signed in asks for the gateway as it starts, so the
    relay comes up beside it.
 11. **`HARNESSD_*` are for harnessd's processes alone, never a child's.** What the master tells the core and

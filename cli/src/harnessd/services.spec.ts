@@ -386,29 +386,11 @@ describe('ServiceSupervisor', () => {
     expect(never.status()[0].state).toBe('off')
     never.unasked(2)
     expect(children.map((child) => child.spec.name)).toEqual(['orchestrator', 'devices', 'messages'])
-    // One the core asked for, then stopped and started with the others, runs again: the core asks once, as it
-    // starts, and a refused re-execution leaves that core running (remote-deepseek's Swarm service, 2026-10-22).
+    // One running then is stopped and started with the others, and waits to be asked for again.
     never.stop(vi.fn())
     latest('messages').exit(0)
     never.start()
-    expect(never.status()[0].state).toBe('starting')
-    expect(children.filter((child) => child.spec.name === 'messages')).toHaveLength(2)
-    expect(lines.filter((line) => line.includes('service messages started'))).toHaveLength(2)
-  })
-
-  it('starts a process on demand again after a stop only when the core had asked for it', () => {
-    const swarm: ServiceSpec = { name: 'superTabs', services: ['superTabs'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true }
-    const unused: ServiceSpec = { ...swarm, name: 'memory', services: ['memory'] }
-    const supervisor = make([swarm, unused])
-    supervisor.start()
-    supervisor.want('superTabs')
-    latest('superTabs').beat()
-    supervisor.stop(vi.fn())
-    latest('superTabs').exit(0)
-    expect(supervisor.status().map((status) => status.state)).toEqual(['stopped', 'stopped'])
-    supervisor.start()
-    expect(supervisor.status().map((status) => status.state)).toEqual(['starting', 'off'])
-    expect(children.map((child) => child.spec.name)).toEqual(['superTabs', 'superTabs'])
+    expect(never.status()[0].state).toBe('off')
   })
 
   it('with no services, starting does nothing and stopping is done at once', () => {
