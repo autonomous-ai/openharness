@@ -60,6 +60,7 @@ void main() {
         ),
       );
       if (lead) {
+        expect(prompt, contains('Discuss first; build when authorized.'));
         expect(
           prompt,
           contains(

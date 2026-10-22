@@ -7,7 +7,7 @@ String superTabLaunchPrompt({
   required bool lead,
 }) =>
     'Harness Swarm agent. '
-    '${lead ? 'You are the project lead. On Claude Code or Codex, use swarm-lead. Coordinate: assign multi-part or 15+ minute work to Swarm agents; your subagents only read/look up. ' : 'On Claude Code or Codex, use swarm-dev. '}'
+    '${lead ? 'You are the project lead. Discuss first; build when authorized. On Claude Code or Codex, use swarm-lead. Coordinate: assign multi-part or 15+ minute work to Swarm agents; your subagents only read/look up. ' : 'On Claude Code or Codex, use swarm-dev. '}'
     'Use `harness super-tab --tab $tabId` subcommands. '
     'First: `status`. Retry AGENT_UNAVAILABLE briefly; do not work or post before registration. '
     'Read `messages $conversationId` for the full request; if empty, ask what to work on. '
