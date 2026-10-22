@@ -133,6 +133,33 @@ describe('SessionInputController', () => {
     controller.forget('s1')
   })
 
+  it('ignores an older busy person observation after an identical new person write', async () => {
+    vi.useFakeTimers()
+    let resolveOld!: (reading: { composer: boolean; draft: boolean }) => void
+    const oldReading = new Promise<{ composer: boolean; draft: boolean }>(resolve => { resolveOld = resolve })
+    const typed: string[] = [], firstReceipt = vi.fn(), secondReceipt = vi.fn()
+    let reads = 0, draft = ''
+    const controller = new SessionInputController({ readScreen: readInlineScreen,
+      submission: { ...inlineSubmission, read: async (record, capture, prompt) => ++reads === 1 ? oldReading : inlineSubmission.read(record, capture, prompt) },
+      getSession: () => session('claude'), validateRuntime: async () => true,
+      inject: async (_id, text) => { typed.push(text); return true }, capture: async () => claudeBox(draft),
+      sendKey: async () => true, beforeTeamWrite: async () => null, onError: vi.fn() })
+    controller.setTurnOpen('s1', true)
+    controller.submit('s1', 'continue', undefined, undefined, firstReceipt)
+    await vi.advanceTimersByTimeAsync(1)
+    controller.submit('s1', 'Swarm', 'team:service:superTabs:waiting')
+    await vi.advanceTimersByTimeAsync(3_001)
+    expect(reads).toBe(1)
+    controller.submit('s1', 'continue', undefined, undefined, secondReceipt)
+    await vi.advanceTimersByTimeAsync(1)
+    draft = 'continue'
+    resolveOld({ composer: true, draft: false })
+    await vi.advanceTimersByTimeAsync(1)
+    expect(typed).toEqual(['continue', 'continue'])
+    expect(secondReceipt).not.toHaveBeenCalled()
+    controller.forget('s1')
+  })
+
   it('settles accepted Swarm input before a person writes during its composer check', async () => {
     vi.useFakeTimers()
     const onDelivery = vi.fn(), onError = vi.fn(), typed: string[] = []

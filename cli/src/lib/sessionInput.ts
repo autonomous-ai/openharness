@@ -118,6 +118,8 @@ interface InputState {
   awaitingContent: string | null
   /** The receipt of the person's message typed last, until it is settled ([settle]). */
   awaitingReceipt?: MessageReceipt
+  /** Identical follow-ups still own different asynchronous composer observations. */
+  personWriteVersion?: number
   controlLocked: boolean
   settling: boolean
   queue: QueuedInput[]
@@ -568,6 +570,7 @@ export class SessionInputController {
   /** Preserve the established injection path for every caller that opts out of receipts. */
   private async injectLegacy(sessionId: string, session: RegisteredSession, content: string, inputContext?: string, receipt?: MessageReceipt): Promise<void> {
     const state = this.state(sessionId)
+    state.personWriteVersion = (state.personWriteVersion ?? 0) + 1
     if (!(await this.deps.validateRuntime(session))) {
       console.warn(`[inject] ${sid(sessionId)} abort · engine=${session.engine} · process not running`)
       receipt?.('runtime_gone')
@@ -923,9 +926,9 @@ export class SessionInputController {
    * enough to release it: a hidden composer or unavailable reader must leave the person's receipt for
    * its real turn event, as before, rather than run the idle retry/error path. */
   private async observeBusyPerson(sessionId: string, session: RegisteredSession, state: InputState): Promise<void> {
-    const expected = state.awaitingFingerprint
+    const expected = state.awaitingFingerprint, version = state.personWriteVersion
     if (!expected || state.observes >= SUBMIT_MAX_OBSERVES) return
-    const current = () => this.states.get(sessionId) === state && state.awaitingFingerprint === expected
+    const current = () => this.states.get(sessionId) === state && state.awaitingFingerprint === expected && state.personWriteVersion === version
       && !state.deliveryId && state.turnOpen && this.swarmTypesWhileBusy(session.engine, state.queue[0]?.deliveryId)
     if (!current()) return
     state.observes++
