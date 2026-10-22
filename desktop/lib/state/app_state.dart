@@ -1427,6 +1427,9 @@ class AppNotifier extends ChangeNotifier {
   CurrentUserProfile? get currentUser => _currentUser;
   set currentUser(CurrentUserProfile? profile) {
     if (_currentUser?.id != profile?.id) {
+      // Initial identity loading may follow a restored Swarm; leaving a known
+      // account must not reveal the feature to the next one.
+      if (_currentUser != null) _superTabsEntered = false;
       _closeAttachmentSessions();
       _closeOwnerMemories();
       deviceHosts.clear();
@@ -1717,6 +1720,7 @@ class AppNotifier extends ChangeNotifier {
           status != AppStatus.authenticated ||
           _paneLayoutRestores != 0 ||
           _workspaceCleanup != null ||
+          !_superTabsEntered ||
           currentUser?.id == null) {
         return;
       }
@@ -1795,6 +1799,12 @@ class AppNotifier extends ChangeNotifier {
   );
 
   Map<String, String> _superTabNames = {};
+  bool _superTabsEntered = false;
+
+  /// Membership alone must not reveal the hidden feature in a regular workspace.
+  /// The hidden shortcut, an explicit open, or a restored Swarm supplies that intent.
+  void enterSuperTabs() => _superTabsEntered = true;
+
   final StreamController<String> _superTabClosures =
       StreamController<String>.broadcast();
 
@@ -1885,6 +1895,7 @@ class AppNotifier extends ChangeNotifier {
   void bindSuperTab(String swarmId, String tabId, String name) {
     final swarm = swarms.where((s) => s.id == swarmId).firstOrNull;
     if (swarm == null) return;
+    enterSuperTabs();
     // A discovery response can beat the creation response back to this
     // computer. Keep the lead form's tab and retain any already-open panes.
     for (final duplicate
@@ -1914,6 +1925,7 @@ class AppNotifier extends ChangeNotifier {
   /// instead of being left behind. Any history entry for the tab is dropped, so
   /// Reopen later cannot add a second view.
   void openSuperTab(String tabId, String name, {String? intoSwarmId}) {
+    enterSuperTabs();
     _rememberSuperTabVisibility(tabId, true);
     _closedHistory.removeWhere(
       (entry) => entry is ClosedSwarm && entry.superTabId == tabId,
@@ -1961,6 +1973,7 @@ class AppNotifier extends ChangeNotifier {
   void markSuperTabDraft(String swarmId) {
     final swarm = swarms.where((s) => s.id == swarmId).firstOrNull;
     if (swarm == null) return;
+    enterSuperTabs();
     swarm.kind = 'superTab';
     _persistLayout();
     notifyListeners();
@@ -19356,6 +19369,7 @@ class AppNotifier extends ChangeNotifier {
         swarms
           ..clear()
           ..addAll(restored);
+        if (restored.any((swarm) => swarm.isSuperTab)) enterSuperTabs();
         _activeSwarmId = restored.any((s) => s.id == saved['activeId'])
             ? saved['activeId'] as String
             : restored.first.id;

@@ -95,7 +95,11 @@ class _Connection extends WsConn {
   }
 }
 
-AppNotifier _computer(_Catalog catalog, MemoryStore store) {
+AppNotifier _computer(
+  _Catalog catalog,
+  MemoryStore store, {
+  bool enteredSuperTabs = true,
+}) {
   final connection = _Connection(catalog);
   final app = createApp(
     store: store,
@@ -108,6 +112,7 @@ AppNotifier _computer(_Catalog catalog, MemoryStore store) {
     id: 'owner',
     email: 'owner@example.invalid',
   );
+  if (enteredSuperTabs) app.enterSuperTabs();
   addTearDown(app.dispose);
   return app;
 }
@@ -123,6 +128,63 @@ Future<void> _close(AppNotifier app, Swarm tab) async {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('account membership cannot reveal SuperTabs before deliberate entry', () async {
+    final store = MemoryStore();
+    final app = _computer(_Catalog(), store, enteredSuperTabs: false);
+    app.newSwarm(name: 'Regular work');
+    final regular = app.activeSwarm;
+    await app.superTabs.refreshTabs();
+    expect(app.swarms.where((s) => s.isSuperTab), isEmpty);
+    expect(app.activeSwarm, same(regular));
+    // The hidden shortcut marks a draft. It permits discovery without replacing
+    // or navigating away from the existing regular work.
+    app.newSwarm(newTabPage: true);
+    app.markSuperTabDraft(app.activeSwarmId);
+    final draft = app.activeSwarm;
+    await app.superTabs.refreshTabs();
+    expect(app.swarms, contains(regular));
+    expect(app.activeSwarm, same(draft));
+    expect(app.swarms.where((s) => s.superTabId != null).single.name, 'Pilot');
+  });
+
+  test(
+    'restoring an already-open SuperTab keeps discovery available',
+    () async {
+      final store = MemoryStore();
+      await PaneLayoutStore(storage: store).saveSwarms([
+        Swarm(id: 'work', name: 'Regular work'),
+        Swarm(id: 'pilot', name: 'Pilot', kind: 'superTab')
+          ..superTabId = '0123456789abcdef01234567',
+      ], 'work');
+      final app = _computer(_Catalog(), store, enteredSuperTabs: false);
+      app.currentUser = null;
+      await app.restorePaneLayoutForTest();
+      app.currentUser = const CurrentUserProfile(
+        id: 'owner',
+        email: 'owner@example.invalid',
+      );
+      await app.superTabs.refreshTabs();
+      expect(app.swarms.map((s) => s.id), ['work', 'pilot']);
+      expect(app.activeSwarmId, 'work');
+    },
+  );
+
+  test(
+    'entering SuperTabs for one account does not reveal them to another',
+    () async {
+      final app = _computer(_Catalog(), MemoryStore());
+      app.currentUser = const CurrentUserProfile(
+        id: 'other',
+        email: 'other@example.invalid',
+      );
+      await app.superTabs.refreshTabs();
+      expect(app.swarms.where((s) => s.isSuperTab), isEmpty);
+      app.enterSuperTabs();
+      await app.superTabs.refreshTabs();
+      expect(app.swarms.where((s) => s.isSuperTab), hasLength(1));
+    },
+  );
 
   testWidgets(
     'another computer opens the discovered tab and its shared messages',
