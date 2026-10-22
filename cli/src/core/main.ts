@@ -2672,6 +2672,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     clearDeleted,
     stopNative: (session, current, confirmUnused) => nativeControls.stop(session, current, confirmUnused),
     atFolderTrust: async (session) => (await screens.read(session, await captureTerminal(session.agentId, 80)))?.messageHold === 'trust_open',
+    atEmptyComposer: async (session) => {
+      const reading = await screens.read(session, await captureTerminal(session.agentId, 80))
+      return !!reading && !reading.busy && !reading.question && reading.messageHold === null && reading.teamHold === null
+    },
     sessionCheckpoints,
     mirror,
     sessionSearch,

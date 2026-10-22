@@ -34,6 +34,8 @@ export interface LifecycleDeps {
   stopNative: StopAgentServiceDeps['stopNative']
   /** Whether a fresh read of the agent's pane shows its engine waiting at the folder-trust question (main.ts reads the screen). */
   atFolderTrust?: (session: RegisteredSession) => Promise<boolean>
+  /** The same, for an idle pane with an empty composer (a restored agent that never started a conversation). */
+  atEmptyComposer?: (session: RegisteredSession) => Promise<boolean>
   markDeleted: typeof markDeletedFn
   clearDeleted: typeof clearDeletedFn
   sessionCheckpoints: SessionCheckpointStore
@@ -59,7 +61,7 @@ export interface LifecycleDeps {
 export function createAgentLifecycle({
   registry, stoppedAgents, restartJobs, createBackend, noBackendCode, backendFor, agentReconciler, forgetSession, markDeleted, clearDeleted, stopNative, settlePane, cancelExternal,
   sessionCheckpoints, mirror, sessionSearch, send, pinnedControls, retainExitedSession, announceSession,
-  relaunchOverrides, prepareSessionResume, refreshGridWebSearch, attachDsh, attachSession, relaunchMarks, stopped, atFolderTrust,
+  relaunchOverrides, prepareSessionResume, refreshGridWebSearch, attachDsh, attachSession, relaunchMarks, stopped, atFolderTrust, atEmptyComposer,
 }: LifecycleDeps) {
   /**
    * Stop Harness (`agent_delete`) archives its conversation and launch settings, removes the live
@@ -85,6 +87,7 @@ export function createAgentLifecycle({
     stopped: stoppedAgents, checkpoints: sessionCheckpoints, stop: stopAgent,
     restarting: id => restartJobs.busy(id) || stopJobs.has(id),
     atFolderTrust,
+    atEmptyComposer,
     deleted: s => {
       if (s.sessionId) { mirror.deleteHistory(s.sessionId); sessionSearch?.deleteHistory(s.sessionId) }
       registry.deleteSavedNames([s.agentId, s.sessionId].filter(Boolean))

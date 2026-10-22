@@ -563,7 +563,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('INVALID_REPLY', 'Reply to a message in this conversation.', 400)
       }
       const replyAgent = context.reply?.author.kind === 'agent' ? context.reply.author.id : null
-      const automatic = actor.kind === 'person' ? (replyAgent && group.agentIds.includes(replyAgent) ? replyAgent : group.leadId) : null
+      // An assigned worker's own post in its group reaches the Lead. Workers reported results as plain posts, which went to no
+      // one: the Lead heard only at the next scheduled consolidation, and the owner saw no summary of finished work for up to
+      // 19 minutes (2026-10-21/22). Only the worker's posts are routed, never the Lead's back, so agents cannot loop.
+      const worker = actor.kind === 'agent' && activeWork(group) && group.assignment?.agentId === actor.agentId
+        && group.leadId && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? group.leadId : null
+      const automatic = actor.kind === 'person' ? (replyAgent && group.agentIds.includes(replyAgent) ? replyAgent : group.leadId) : worker
       const recipients = [...new Set(command.recipientIds.length ? command.recipientIds : automatic ? [automatic] : [])]
       for (const id of recipients) {
         agent(state, id)

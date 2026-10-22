@@ -82,17 +82,18 @@ class ReleaseChannel(unittest.TestCase):
         self.assertEqual(update.release('0.1.8.r1792577066.g8df82cc2bc-1'), '0.1.8')
         self.assertEqual(update.release('0.1.9-1'), '0.1.9')
         self.assertEqual(update.release('0.1.0pre4.r3-1'), '0.1.0pre4.r3')
-        self.manifest['package']['version'] = '0.1.8.r1792578870.gbefebc64d5-1'
-        self.publish()
+        later, iso = '0.1.8.r1792578870.gbefebc64d5-1', '0.1.8.r1792577066.g8df82cc2bc-1'
         asked = []
-        def commands(args, **_):
-            if args[0] == 'pacman':
-                return 'harness-os 0.1.8.r1792577066.g8df82cc2bc-1\n'
+        def vercmp(args, **_):
             asked.append(args[1:])
-            return '0\n'
-        with patch.object(update.subprocess, 'check_output', side_effect=commands):
-            self.assertFalse(update.discover(self.url + '/metadata.json')['available'])
-        self.assertEqual(asked, [['0.1.8', '0.1.8']])
+            return '0\n' if args[1:] == ['0.1.8', '0.1.8'] else '1\n'
+        with patch.object(update.subprocess, 'check_output', side_effect=vercmp):
+            # The official channel: the release alone.
+            self.assertFalse(update.is_newer(later, iso))
+            self.assertTrue(update.is_newer('0.1.9.r1792642003.g2086a4ac66-1', iso))
+            # A developer's loopback feed exercises the update with a later build of the same release.
+            self.assertTrue(update.is_newer(later, iso, builds=True))
+        self.assertEqual(asked, [['0.1.8', '0.1.8'], ['0.1.9', '0.1.8'], [later, iso]])
 
     def test_existing_feed_discovers_an_official_release_without_reconfiguring_the_client(self):
         self.manifest['requires_os_version'] = '0.1.0'

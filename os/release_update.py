@@ -69,6 +69,19 @@ def release(package_version):
     return re.sub(r'\.r\d+\.g[0-9a-f]+$', '', package_version.rsplit('-', 1)[0] if '-' in package_version else package_version)
 
 
+def is_newer(candidate, installed, builds=False):
+    """Newer only as a release: 0.1.9 after 0.1.8. The same release built from a later commit
+    (0.1.8.r1792578870.gbefebc64d5-1 after the ISO's 0.1.8.r1792577066.g8df82cc2bc-1) is not an
+    update for anyone to take.
+
+    [builds]: a developer's loopback feed only (release_update_vm.py), whose package is a later
+    build of the very release its ISO installed — how the update path is exercised before release.
+    The official channel never counts builds."""
+    if not builds:
+        candidate, installed = release(candidate), release(installed)
+    return int(subprocess.check_output(['vercmp', candidate, installed], text=True)) > 0
+
+
 def discover(feed=FEED):
     fixture = feed != FEED
     try:
@@ -93,10 +106,7 @@ def discover(feed=FEED):
     current = subprocess.check_output(['pacman', '-Q', 'harness-os'], text=True).strip().split()
     if len(current) != 2 or current[0] != 'harness-os' or not re.fullmatch(r'[0-9A-Za-z.+_-]+', current[1]):
         raise ValueError('Cannot identify the installed Harness system package.')
-    # Newer only as a release: 0.1.9 after 0.1.8. The same release built from a later commit
-    # (0.1.8.r1792578870.gbefebc64d5-1 after the ISO's 0.1.8.r1792577066.g8df82cc2bc-1) is not an
-    # update for anyone to take.
-    newer = int(subprocess.check_output(['vercmp', release(value), release(current[1])], text=True)) > 0
+    newer = is_newer(value, current[1], builds=fixture)
     if newer:
         base = json.loads(LOCK.read_text())
         load_runtime_updater().validate_base(manifest, base)

@@ -25,11 +25,12 @@ vi.mock('../core/engines/cursorTasks.js', () => ({ removePendingCursorTasks: vi.
  */
 let root: string, row: RegisteredSession, stopped: StoppedAgentStore, kill: ReturnType<typeof vi.fn<NonNullable<ReturnType<StopAgentServiceDeps['backendFor']>>['kill']>>
 let atFolderTrust: ReturnType<typeof vi.fn<(session: RegisteredSession) => Promise<boolean>>>
+let atEmptyComposer: typeof atFolderTrust
 let stopNative: ReturnType<typeof vi.fn<StopAgentServiceDeps['stopNative']>>
 
 const purge = () => new PurgeAgentService({
   live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stopped.list()], stopped,
-  checkpoints: new SessionCheckpointStore(join(root, 'checkpoints')), restarting: () => false, deleted: vi.fn(), atFolderTrust,
+  checkpoints: new SessionCheckpointStore(join(root, 'checkpoints')), restarting: () => false, deleted: vi.fn(), atFolderTrust, atEmptyComposer,
   stop: createStopAgentService({ registry, stoppedAgents: stopped, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
     backendFor: () => ({ kill }), agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
     forgetSession: id => registry.removeAgent(id), markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative }),
@@ -47,6 +48,7 @@ beforeEach(() => {
   Object.assign(row, { launch: { state: 'ready' }, processIdentity: { pid: 77, executable: 'codex', startMarker: 'fixture' } })
   kill = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const }))
   atFolderTrust = vi.fn(async () => true)
+  atEmptyComposer = vi.fn(async () => true)
   // The contract of core/engines/nativeControls.ts for an unbound chat while the shared server runs.
   stopNative = vi.fn(async (session, _current, confirmUnused) => {
     if (!await confirmUnused?.(session)) throw new Error('Cannot confirm which conversation is open. Nothing was stopped.')
@@ -87,4 +89,45 @@ it('does not take a bound conversation for an unused chat, whatever the screen s
   await service.request({ agentId: row.agentId, sessionId: 'bound', createdAt: row.registeredAt, mode: 'delete', reviewId: String(review.reviewId) })
   expect(atFolderTrust).not.toHaveBeenCalled()
   expect(stop).toHaveBeenCalledWith(row.agentId, { current: expect.any(Function) })
+})
+
+/**
+ * "Devices" (Codex, dsh autonomous/devices), put back by a daemon restart (2026-10-22): no id, no transcript, never bound,
+ * no hook since, `resumeOnly`, an empty composer. Delete refused it for the same two reasons as above.
+ */
+const restored = (over: Partial<RegisteredSession> = {}) =>
+  Object.assign(row, { resumeOnly: true, lastHookAt: 0, boundAt: null, transcriptPath: null, sessionId: '', dsh: 'autonomous/devices', ...over })
+
+it('deletes a restored (resumeOnly) agent that never bound a conversation, at an empty composer', async () => {
+  restored(); atFolderTrust.mockResolvedValue(false)
+  expect(await deleteIt(purge())).toMatchObject({ deleted: true })
+  expect(kill).toHaveBeenCalledTimes(1)
+  expect(registry.byAgent(row.agentId)).toBeUndefined()
+})
+
+it.each([
+  ['a hook has reached it', { lastHookAt: 5 }],
+  ['it was bound', { boundAt: 7 }],
+  ['it has a transcript', { transcriptPath: '/codex/sessions/rollout.jsonl' }],
+  ['a hook awaits admission', { admissionHold: 'pending native hook' }],
+  ['an adoption is in flight', { externalResume: { phase: 'pending' } as never }],
+  ['it is not a Claude Code or Codex row', { engine: 'opencode' as const }],
+  ['it is not ready', { launch: { state: 'failed', error: 'RESUME_FAILED' } as never }],
+])('still refuses a restored agent when %s', async (_why, over) => {
+  restored(over); atFolderTrust.mockResolvedValue(false)
+  expect(await deleteIt(purge())).toHaveProperty('error')
+  expect(kill).not.toHaveBeenCalled()
+  expect(registry.byAgent(row.agentId)).toBeDefined()
+})
+
+it('still refuses a restored agent whose pane is busy, asks something or holds a draft', async () => {
+  restored(); atFolderTrust.mockResolvedValue(false); atEmptyComposer.mockResolvedValue(false)
+  expect(await deleteIt(purge())).toMatchObject({ error: 'IDENTITY_UNAVAILABLE' })
+  expect(kill).not.toHaveBeenCalled()
+})
+
+it('never reads the pane of a row that already holds evidence of a conversation', async () => {
+  restored({ lastHookAt: 5 }); atFolderTrust.mockResolvedValue(false)
+  await deleteIt(purge())
+  expect(atEmptyComposer).not.toHaveBeenCalled()
 })

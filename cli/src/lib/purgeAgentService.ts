@@ -198,9 +198,25 @@ export interface PurgeDeps {
   deleted(session: RegisteredSession): void
   /** A fresh read of the pane says the engine is waiting at its folder-trust question (Codex's "Do you trust the contents of this directory?"). */
   atFolderTrust?(session: RegisteredSession): Promise<boolean>
+  /** A fresh read of the pane says nothing is running, nothing is asked and the composer is empty (`teamHold` null, not busy). */
+  atEmptyComposer?(session: RegisteredSession): Promise<boolean>
   inspect?: typeof inspectNativeHistory
   erase?: typeof eraseNativeHistory
   now?: () => number
+}
+
+/**
+ * A Claude Code or Codex row a daemon restart (or a resume of a saved agent that had none) put back, that has never shown
+ * a conversation. `resumeOnly` only says that Enter must not start a fresh conversation (registry.ts:103); it carries no
+ * conversation of its own. This row has no id (`sessionId`), no transcript, was never bound (`boundAt`), and no hook has
+ * reached it since its process started: `resumePendingAgent` zeroes `lastHookAt` (registry.ts:1725) and registering a hook
+ * sets it (registry.ts:2046), so a prompt submitted in this pane would have moved it. A pending admission (`admissionHold`, a
+ * hook that arrived but is not yet confirmed) or an external resume counts as evidence, not as absence.
+ */
+export function restoredWithoutConversation(s: RegisteredSession): boolean {
+  return (s.engine === 'claude' || s.engine === 'codex') && s.resumeOnly === true && s.lastHookAt === 0
+    && !s.sessionId && !s.transcriptPath && s.boundAt == null && !s.admissionHold && !s.externalResume
+    && (s.launch == null || s.launch.state === 'ready')
 }
 
 export class PurgeAgentService {
@@ -273,9 +289,15 @@ export class PurgeAgentService {
    * (2026-10-22). Anything that ever bound a conversation is not this, whatever the screen shows.
    */
   private async unstartedChat(live: RegisteredSession | undefined): Promise<Pick<StopAgentOptions, 'withoutConversation' | 'confirmUnusedConversation'>> {
-    const atTrust = this.deps.atFolderTrust
-    if (!live || !atTrust || !unusedChat(live) || !await atTrust(live)) return {}
-    return { withoutConversation: () => {}, confirmUnusedConversation: async captured => unusedChat(captured) && await atTrust(captured) }
+    const shows = (session: RegisteredSession): Promise<boolean> => this.showsNoConversation(session)
+    if (!live || !await shows(live)) return {}
+    return { withoutConversation: () => {}, confirmUnusedConversation: async captured => await shows(captured) }
+  }
+
+  /** The row and a fresh read of its pane agree that no conversation was ever started. */
+  private async showsNoConversation(session: RegisteredSession): Promise<boolean> {
+    if (unusedChat(session)) return await this.deps.atFolderTrust?.(session) === true
+    return restoredWithoutConversation(session) && await this.deps.atEmptyComposer?.(session) === true
   }
 
   private current(request: Pick<PurgeRequest, 'agentId' | 'sessionId' | 'createdAt'>, deletingHistory = true): RegisteredSession {
