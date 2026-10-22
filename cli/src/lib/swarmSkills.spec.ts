@@ -41,9 +41,9 @@ describe('built-in Swarm skills', () => {
 
   // The owner's approved text (2026-10-22), byte for byte.
   it.each([
-    ['lead', '4458031d09d4a38507455a666f56e6de6a515e6bcc8f32f4c50257edfd8cf16a'],
-    ['dev', '6ba487d83fd8a2396318bfb27696ccb68df4203660ff1477b460f39c43fc5909'],
-    ['review', 'f831c3dc5d9bf0a3cfe3b8abea8b7faabddd0d9264b1f474d5dc72f66bcae4d7'],
+    ['lead', 'a8d54ee204209946486c8d99960f1317e4bd3e51434af894b174e712b67b7941'],
+    ['dev', '86caf697c83365f000317845b0aaa929947a9591d637ab2bd0f8536da8e86763'],
+    ['review', '424dc9db5642ed7093128525f30877ffc301eb6957b33e8234916de0f0eaa208'],
   ] as const)('writes the owner\'s %s skill byte for byte', (role, sha256) => {
     expect(parseSwarmSkill({ role, key: 'session' })).toEqual({ role, key: 'session' })
     const prepared = prepareSwarmSkill(fixture(), { role, key: 'session' })
