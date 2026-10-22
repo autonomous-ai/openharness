@@ -786,6 +786,9 @@ SIGN_OUT_UNIT = 'harness-sign-out'
 INITIAL_ACCOUNT = STATE / 'initial-account.json'
 CMDLINE = Path('/proc/cmdline')
 SSHD = 'sshd.service'
+# A phone sets this computer up next (network.py UNLOCKED_BY_PHONE): the screen's Wi-Fi page keeps
+# off the radio the hotspot needs, until a key there.
+PHONE_SETS_UP = Path('/run/harness-os/unlocked-by-phone')
 
 
 def as_user(*command, timeout=30):
@@ -880,9 +883,11 @@ def forget_wifi():
 
 
 def open_hotspot():
-    """The watcher opens the hotspot for a phone at once (headless or not: asked for)."""
+    """The watcher opens the hotspot for a phone at once (headless or not: asked for), and the screen's
+    Wi-Fi page, opening as the computer goes offline, leaves the radio to it until a key there."""
     NOW.parent.mkdir(parents=True, exist_ok=True)
     NOW.touch()
+    PHONE_SETS_UP.touch()
 
 
 def sign_out(keep_wifi=False):

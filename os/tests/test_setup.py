@@ -301,7 +301,7 @@ class FactoryReset(unittest.TestCase):
             self.steps.append(' '.join(command[:3]))
             return result()
         with patch.object(setup, 'HOME', home), patch.object(setup, 'RESULT', state / 'r.json'), \
-             patch.object(setup, 'FROM_PHONE', state / 'from-phone'), patch.object(setup, 'NOW', state / 'now'), \
+             patch.object(setup, 'FROM_PHONE', state / 'from-phone'), patch.object(setup, 'NOW', state / 'now'), patch.object(setup, 'PHONE_SETS_UP', state / 'phone'), \
              patch.object(setup, 'SCREEN', state / 'screen'), patch.object(setup, 'as_user', side_effect=user), \
              patch.object(setup.subprocess, 'run', side_effect=run), patch.object(setup.time, 'sleep'), \
              patch.object(setup.pwd, 'getpwnam', return_value=Account()), \
@@ -325,7 +325,7 @@ class FactoryReset(unittest.TestCase):
             self.assertFalse((state / 'r.json').exists() or (state / 'from-phone').exists())
             self.assertIn(['systemctl', 'disable', '--now', 'sshd.service'], commands)
             self.assertEqual(wifi, [('connection', 'delete', 'uuid', 'u-home')])
-            self.assertTrue((state / 'now').exists())
+            self.assertTrue((state / 'now').exists() and (state / 'phone').exists())
 
     def test_off_its_account_while_signed_in_then_every_process_before_the_files(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -371,13 +371,13 @@ class SignOut(unittest.TestCase):
             state = Path(folder)
             (state / 'from-phone').touch()
             with patch.object(setup, 'as_user', side_effect=lambda *c, timeout=30: users.append(c) or result()), \
-                 patch.object(setup, 'FROM_PHONE', state / 'from-phone'), patch.object(setup, 'NOW', state / 'now'), \
+                 patch.object(setup, 'FROM_PHONE', state / 'from-phone'), patch.object(setup, 'NOW', state / 'now'), patch.object(setup, 'PHONE_SETS_UP', state / 'phone'), \
                  patch.object(setup, 'rows', return_value=[['u-home', '802-11-wireless']]), \
                  patch.object(setup, 'nmcli', side_effect=lambda *a, **k: wifi.append(a) or result()):
                 setup.sign_out()
             self.assertEqual(users, [('/usr/bin/harness', 'logout')])
             self.assertEqual(wifi, [('connection', 'delete', 'uuid', 'u-home')])
-            self.assertTrue((state / 'now').exists())
+            self.assertTrue((state / 'now').exists() and (state / 'phone').exists())
 
 
 class Password(unittest.TestCase):
