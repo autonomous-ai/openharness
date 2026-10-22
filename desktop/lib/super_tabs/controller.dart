@@ -159,6 +159,17 @@ class SuperTabController extends ChangeNotifier {
     _changed();
   }
 
+  /// Projects whose "Closed (N)" row is open; every one starts collapsed and
+  /// the choice is not saved.
+  final closedOpenProjects = <String>{};
+
+  void toggleClosed(String projectId) {
+    if (!closedOpenProjects.remove(projectId)) {
+      closedOpenProjects.add(projectId);
+    }
+    _changed();
+  }
+
   void toggleProjectsGroup() {
     projectsGroupOpen = !projectsGroupOpen;
     _saveSoon();
@@ -366,7 +377,9 @@ class SuperTabController extends ChangeNotifier {
   void select(String id) {
     if (snapshot?.conversation(id) == null || id == selectedId) return;
     if (!snapshot!.isProjectLead(id)) {
-      expandedProjects.add(snapshot!.conversation(id)!.projectId);
+      final group = snapshot!.conversation(id)!;
+      expandedProjects.add(group.projectId);
+      if (group.archived) closedOpenProjects.add(group.projectId);
     }
     selectedId = id;
     _saveSoon();

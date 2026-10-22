@@ -1316,6 +1316,27 @@ class _SuperTabViewState extends State<SuperTabView>
               ),
             ),
           ),
+        if (group != null && group.archived && c.canWrite)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'This group is closed. You can read it but not write.',
+                    style: DesktopChrome.metadata(),
+                  ),
+                ),
+                TextButton(
+                  key: const ValueKey('super-group-reopen'),
+                  onPressed: c.saving
+                      ? null
+                      : () => _groupAction('archive', group),
+                  child: const Text('Reopen'),
+                ),
+              ],
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
           child: Focus(
