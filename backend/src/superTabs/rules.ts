@@ -18,7 +18,7 @@ export const ruleSchema = z.discriminatedUnion('kind', [
 export const ruleTextSchema = z.string().trim().min(1).max(200)
 export const askedInSchema = z.object({ conversationId: id, messageId: id }).strict()
 export const MAX_RULES = 50
-/** How long an owner's message can back a rule change the Lead passes on; each message backs one change only. */
+/** How long an owner's message can back the rule changes the Lead passes on. */
 export const RULE_MESSAGE_MS = 24 * 3_600_000
 
 export interface SwarmRule {

@@ -135,8 +135,6 @@ export interface SuperTabState {
   routingPolicy?: import('./routingPolicy.js').RoutingOverride
   /** The owner's routing rules (rules.ts); absent until the first is set. */
   rules?: import('./rules.js').SwarmRule[]
-  /** The owner's messages that already backed a rule change the Lead passed on, newest last (at most 200). */
-  ruleMessageIds?: string[]
   /** Owner-only sharing configuration; visibleState always removes it. */
   sharing?: import('./sharing.js').SwarmSharing
   paused: boolean

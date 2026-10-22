@@ -65,16 +65,14 @@ Two new commands go through the existing `command` path:
 - A person may change rules only if they are the Swarm owner, and they omit `askedIn`.
 - An agent may change rules only if it is the tab's Lead (the `controls(state, actor)` check that
   `tab.rename` uses), and it must pass `askedIn`. The backend reads that message, the way it reads
-  `replyTo` for `message.send`. The message must meet four conditions:
+  `replyTo` for `message.send`. The message must meet three conditions:
   - its author is the owner, as a person;
   - it is a plain chat message: no system row, such as the owner's own "Rule added" row or a warning;
-  - it is at most a day old;
-  - no other rule change used it. The Swarm keeps the last 200 such message ids.
+  - it is at most a day old.
 
   Otherwise the change is refused with "Only the Swarm owner sets rules; quote a chat message the owner
-  wrote in the last day for this change, one no other rule change used." This was added in the review of
-  #1586. An owner message that asks for two rules backs only one of them, so the owner states the other
-  in its own message.
+  wrote in the last day asking for this change." This was added in the review of #1586. One owner
+  message may ask for several rules, so the Lead may quote it for each of them.
 - Everyone else is refused with `OWNER_REQUIRED`: "Only the Swarm owner, or the Lead passing on the
   owner's request, changes rules."
 - Each change posts one row in the lead group ("Rule added: No Haiku."), so the change can be seen

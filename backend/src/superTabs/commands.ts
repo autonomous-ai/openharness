@@ -255,8 +255,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     result.warnings = [why]
     effects.messages.push({ id: stableId(operationId, 'rule'), conversationId, author: sender, text: `${done} anyway. ${why}`, replyTo: null, recipients: [], source: RULE_ROW })
   }
-  /** Only the owner changes rules, or the tab's Lead quoting a recent chat message of the owner's that no rule change used
-   * yet (review of #1586: any owner row, a rule row included, could otherwise be quoted again and again). */
+  /** Only the owner changes rules, or the tab's Lead quoting a chat message the owner wrote in the last day (review of
+   * #1586: any owner row, a rule row included, could otherwise be quoted at any time). One message may ask for several rules. */
   const ruleChange = (askedIn: { conversationId: string; messageId: string } | undefined) => {
     if (actor.kind === 'person' && actor.userId === state.ownerId) return
     if (actor.kind !== 'agent' || conversation(state, 'lead').leadId !== actor.agentId) {
@@ -264,10 +264,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     const asked = askedIn && context.askedIn
     if (!asked || asked.author.kind !== 'person' || asked.author.id !== state.ownerId || asked.source
-      || context.now - asked.createdAt > RULE_MESSAGE_MS || state.ruleMessageIds?.includes(askedIn.messageId)) {
-      fail('OWNER_MESSAGE_REQUIRED', 'Only the Swarm owner sets rules; quote a chat message the owner wrote in the last day for this change, one no other rule change used.', 403)
+      || context.now - asked.createdAt > RULE_MESSAGE_MS) {
+      fail('OWNER_MESSAGE_REQUIRED', 'Only the Swarm owner sets rules; quote a chat message the owner wrote in the last day asking for this change.', 403)
     }
-    state.ruleMessageIds = [...state.ruleMessageIds ?? [], askedIn.messageId].slice(-200)
   }
   const openDecision = (): RouteDecision => {
     const decision = context.routeDecision ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)

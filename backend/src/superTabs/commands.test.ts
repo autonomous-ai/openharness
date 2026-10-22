@@ -1205,19 +1205,18 @@ describe('the owner\'s rules', () => {
     for (const author of [{ kind: 'person', id: 'peer' }, { kind: 'agent', id: 'owner' }]) {
       expect(() => relay('m2', said({ author }))).toThrow('quote a chat message the owner wrote')
     }
-    // The owner's own system rows ("Rule added", warnings), a message older than a day, and one already used do not count.
+    // The owner's own system rows ("Rule added", warnings) and a message older than a day do not count.
     expect(() => relay('m2', said({ source: true }))).toThrow('quote a chat message the owner wrote')
     expect(() => relay('m2', said({ createdAt: 1000 - 24 * 3_600_000 - 1 }))).toThrow('quote a chat message the owner wrote')
-    expect(() => relay('m1', ownerSaid)).toThrow('one no other rule change used')
+    // One message may ask for several rules.
+    expect(relay('m1', ownerSaid).result.ruleId).toBeTruthy()
     expect(relay('m2', said({ createdAt: 1000 - 24 * 3_600_000 })).result.ruleId).toBeTruthy()
-    expect(f.state.ruleMessageIds).toEqual(['m1', 'm2'])
     expect(() => f.run({ ...set({ kind: 'preferIdle' }), ...asked } as Command, f.workerActor, ownerSaid)).toThrow('Only the Swarm owner')
     f.invite()
     expect(() => f.run(set({ kind: 'preferIdle' }), peer)).toThrow('Only the Swarm owner')
     expect(() => f.run({ type: 'rule.remove', ruleId: added.result.ruleId as string }, peer)).toThrow('Only the Swarm owner')
-    expect(() => f.run({ type: 'rule.remove', ruleId: added.result.ruleId as string, ...asked }, f.leadActor, ownerSaid)).toThrow('one no other rule change used')
-    f.run({ type: 'rule.remove', ruleId: added.result.ruleId as string, ...quoting('m3') }, f.leadActor, ownerSaid)
-    expect(f.state.rules!.map(r => r.text)).toEqual(['No Haiku.'])
+    f.run({ type: 'rule.remove', ruleId: added.result.ruleId as string, ...asked }, f.leadActor, ownerSaid)
+    expect(f.state.rules!.map(r => r.text)).toEqual(['No Haiku.', 'No Haiku.'])
   })
   it('refuses an agent\'s start that breaks a hard rule, whatever reason it gives', () => {
     const f = routed()
