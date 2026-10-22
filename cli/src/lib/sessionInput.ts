@@ -780,6 +780,10 @@ export class SessionInputController {
   }
 
   private async retrySubmit(sessionId: string, session: RegisteredSession, state: InputState): Promise<void> {
+    if (state.turnOpen && !state.deliveryId) {
+      await this.observeBusyPerson(sessionId, session, state)
+      return
+    }
     if (this.swarmTypesWhileBusy(session.engine, state.deliveryId)) {
       // Use the same native composer reading as person input. A cleared composer confirms
       // queue acceptance without waiting for a new turn; automatic traffic never retries Enter.
@@ -839,7 +843,7 @@ export class SessionInputController {
       // Claude Code and Codex (their worker reads the pane) and Command Code: verify against the terminal
       // before pressing Enter again or declaring failure.
       const capture = await this.deps.capture?.(session.agentId)
-      if (!state.awaitingFingerprint || (state.turnOpen && !this.checksWhileBusy(session, state))) return
+      if (!state.awaitingFingerprint || state.turnOpen) return
       if (await this.dialogOverComposer(sessionId, session, state, capture)) return
       // Command Code writes the user line to its transcript only once the model has finished THINKING, so
       // the turn_started this used to wait for can be half a minute late on a real task — and the user
@@ -863,7 +867,7 @@ export class SessionInputController {
         const reading = this.deps.submission.policy(session.engine)
           ? await this.deps.submission.read(this.readingSession(session), capture, prompt).catch(() => null)
           : { draft: composerHolds(capture, prompt), composer: composerShown(capture) }
-        if (this.states.get(sessionId) !== state || !state.awaitingFingerprint || (state.turnOpen && !this.checksWhileBusy(session, state))) return
+        if (this.states.get(sessionId) !== state || !state.awaitingFingerprint || state.turnOpen) return
         // No reading is no evidence (the engine's worker down, or the agent rebound while it read): never
         // an Enter on it, and never a claim the message was or was not taken, as for an unreadable screen.
         if (!reading) {
@@ -882,9 +886,6 @@ export class SessionInputController {
         return
       }
     }
-    // A person follow-up can clear while its preceding turn still runs. Observe
-    // that acceptance to release Swarm input, without adding Enter retries while busy.
-    if (state.turnOpen) { this.armSubmitCheck(sessionId, session, state); return }
     if (state.retries >= SUBMIT_MAX_RETRIES) {
       console.warn(`[inject] ${sid(sessionId)} not accepted · engine=${session.engine} · gave up after ${state.retries} retries`)
       state.awaitingFingerprint = null
@@ -916,6 +917,31 @@ export class SessionInputController {
       ? !delivery
       : delivery.dispatch === 'possibly_executed'
     this.armSubmitCheck(sessionId, session, state)
+  }
+
+  /** A queued Swarm item may follow a person input already accepted by the busy engine. Observe only
+   * enough to release it: a hidden composer or unavailable reader must leave the person's receipt for
+   * its real turn event, as before, rather than run the idle retry/error path. */
+  private async observeBusyPerson(sessionId: string, session: RegisteredSession, state: InputState): Promise<void> {
+    const expected = state.awaitingFingerprint
+    if (!expected || state.observes >= SUBMIT_MAX_OBSERVES) return
+    const current = () => this.states.get(sessionId) === state && state.awaitingFingerprint === expected
+      && !state.deliveryId && state.turnOpen && this.swarmTypesWhileBusy(session.engine, state.queue[0]?.deliveryId)
+    if (!current()) return
+    state.observes++
+    const capture = await this.deps.capture?.(session.agentId).catch(() => null)
+    if (!current() || !capture) return
+    const screen = await this.deps.readScreen(this.readingSession(session), capture).catch(() => null)
+    if (!current() || !screen || screen.messageHold) return
+    const reading = await this.deps.submission.read(this.readingSession(session), capture, state.awaitingContent ?? '').catch(() => null)
+    if (!current() || !reading) return
+    if (reading.composer && !reading.draft && !state.ambiguousDispatch) {
+      state.awaitingFingerprint = null
+      state.awaitingContent = null
+      state.observes = 0
+      this.settle(state, 'taken')
+      this.drainOne(sessionId, state)
+    } else if (state.observes < SUBMIT_MAX_OBSERVES) this.armSubmitCheck(sessionId, session, state)
   }
 
   /** Settle only this pasted Swarm prompt, before its composer state can be replaced by another writer. */
@@ -989,7 +1015,7 @@ export class SessionInputController {
   private async dialogOverComposer(sessionId: string, session: RegisteredSession, state: InputState, capture: string | null | undefined): Promise<boolean> {
     if (capture === undefined) return false
     const screen = await this.deps.readScreen(this.readingSession(session), capture)
-    if (this.states.get(sessionId) !== state || (state.turnOpen && !this.checksWhileBusy(session, state)) || !state.awaitingFingerprint) return true
+    if (this.states.get(sessionId) !== state || state.turnOpen || !state.awaitingFingerprint) return true
     const hold = screen ? screen.messageHold : 'screen_unreadable'
     if (!hold) return false
     if (state.deliveryId || (hold !== 'permission_open' && hold !== 'question_open')) {

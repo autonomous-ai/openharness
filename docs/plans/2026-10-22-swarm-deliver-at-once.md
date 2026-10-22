@@ -16,6 +16,21 @@
 - Ambiguous terminal dispatch or unreadable submission evidence never becomes confirmed acceptance.
 - Agent Messages and engines without busy typing retain their idle gate.
 
+## Esc interruption evidence
+
+An isolated real Claude Code 2.1.307 run used a disposable HOME/config, `--bare`, a fake API key,
+a loopback streaming Anthropic fixture and private tmux. A follow-up submitted while the first
+response streamed left the composer and entered the native queue. Esc interrupted that response
+and automatically executed the exact queued follow-up; it did not restore an unsent draft. The
+next conversation request included the interruption marker and follow-up, with an empty composer
+while that response ran. This covers the tested version/configuration, not every future engine.
+
+The fake Claude engine models this behavior. The Super Tab E2E asserts acknowledged busy input,
+Esc, a new turn containing the exact queued Swarm message, no draft restoration and a retained
+delivered receipt. Busy person-input checks observe acceptance only to drain waiting Swarm input;
+overlays or unavailable readings leave the person receipt for its real turn event, and a persistent
+draft cannot keep the observer polling indefinitely.
+
 ## Task 1: Immediate, safe native delivery
 
 Files: `cli/src/lib/sessionInput.ts`, `cli/src/core/input.ts`, `cli/src/engines/kit/screen.ts`, their specs and `cli/e2e/superTabs.e2e.ts`.

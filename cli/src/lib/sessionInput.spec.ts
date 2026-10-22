@@ -34,6 +34,105 @@ const codexComposer = (draft: string, footer = '  ? for shortcuts') => `\n\u001b
 describe('SessionInputController', () => {
   afterEach(() => vi.useRealTimers())
 
+  it('keeps Swarm B queued through a person paste and its uncleared composer after accepting Swarm A', async () => {
+    vi.useFakeTimers()
+    let release!: (ok: boolean) => void
+    const personWrite = new Promise<boolean>(resolve => { release = resolve })
+    const typed: string[] = [], onDelivery = vi.fn()
+    let draft = ''
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session('claude'), validateRuntime: async () => true,
+      inject: async (_id, text) => { typed.push(text); return text === 'person' ? personWrite : true },
+      sendKey: async () => true, capture: async () => claudeBox(draft), beforeTeamWrite: async () => null,
+      onDelivery, onError: vi.fn() })
+    controller.setTurnOpen('s1', true)
+    controller.submit('s1', 'A', 'team:service:superTabs:A')
+    await vi.advanceTimersByTimeAsync(1)
+    controller.submit('s1', 'B', 'team:service:superTabs:B')
+    controller.submit('s1', 'person')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(typed).toEqual(['A', 'person'])
+    draft = 'person'
+    release(true)
+    await vi.advanceTimersByTimeAsync(6_000)
+    expect(typed).toEqual(['A', 'person'])
+    draft = ''
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(typed).toEqual(['A', 'person', 'B'])
+    expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'team:service:superTabs:B', state: 'delivered' }))
+    controller.forget('s1')
+  })
+
+  it('serializes a person message arriving while drained Swarm B is mid-paste', async () => {
+    vi.useFakeTimers()
+    let release!: (ok: boolean) => void
+    const swarmWrite = new Promise<boolean>(resolve => { release = resolve })
+    const typed: string[] = [], onDelivery = vi.fn()
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session('claude'), validateRuntime: async () => true,
+      inject: async (_id, text) => { typed.push(text); return text === 'B' ? swarmWrite : true },
+      sendKey: async () => true, capture: async () => claudeBox(''), beforeTeamWrite: async () => null,
+      onDelivery, onError: vi.fn() })
+    controller.setTurnOpen('s1', true)
+    controller.submit('s1', 'A', 'team:service:superTabs:A')
+    controller.submit('s1', 'B', 'team:service:superTabs:B')
+    await vi.advanceTimersByTimeAsync(3_001)
+    expect(typed).toEqual(['A', 'B'])
+    controller.submit('s1', 'person')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(typed).toEqual(['A', 'B'])
+    release(true)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(typed).toEqual(['A', 'B', 'person'])
+    expect(onDelivery).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'team:service:superTabs:B', state: 'delivered' }))
+    controller.forget('s1')
+  })
+
+  it.each(['transcript', 'screen unavailable', 'submission unavailable'] as const)('does not fail a busy person receipt with waiting Swarm input when %s', async mode => {
+    vi.useFakeTimers()
+    const receipt = vi.fn(), onError = vi.fn(), typed: string[] = []
+    const controller = new SessionInputController({
+      readScreen: async (record, capture) => {
+        if (mode === 'screen unavailable') return null
+        const screen = await readInlineScreen(record, capture)
+        return screen && mode === 'transcript' ? { ...screen, messageHold: 'transcript_open' } : screen
+      },
+      submission: { ...inlineSubmission, read: async (record, capture, prompt) => mode === 'submission unavailable' ? null : inlineSubmission.read(record, capture, prompt) },
+      getSession: () => session('claude'), validateRuntime: async () => true,
+      inject: async (_id, text) => { typed.push(text); return true }, capture: async () => claudeBox(''),
+      sendKey: async () => true, beforeTeamWrite: async () => 'team_waiting_dialog', onError })
+    controller.setTurnOpen('s1', true)
+    controller.submit('s1', 'person', undefined, undefined, receipt)
+    await vi.advanceTimersByTimeAsync(1)
+    controller.submit('s1', 'Swarm', 'team:service:superTabs:waiting')
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(typed).toEqual(['person'])
+    expect(receipt).not.toHaveBeenCalled()
+    expect(onError).not.toHaveBeenCalled()
+    controller.onTurnStarted('s1', 'person')
+    expect(receipt).toHaveBeenCalledExactlyOnceWith('started')
+    controller.forget('s1')
+  })
+
+  it.each(['claude', 'codex'] as const)('bounds busy %s person-draft observations while Swarm waits', async engine => {
+    vi.useFakeTimers()
+    const capture = vi.fn(async () => engine === 'claude' ? claudeBox('person') : codexComposer('person'))
+    const onError = vi.fn(), sendKey = vi.fn(async () => true)
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session(engine), validateRuntime: async () => true, inject: async () => true,
+      capture, sendKey, beforeTeamWrite: async () => 'team_waiting_draft', onError })
+    controller.setTurnOpen('s1', true)
+    controller.submit('s1', 'person')
+    await vi.advanceTimersByTimeAsync(1)
+    controller.submit('s1', 'Swarm', 'team:service:superTabs:waiting')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(capture.mock.calls.length).toBeGreaterThan(0)
+    expect(capture.mock.calls.length).toBeLessThanOrEqual(6)
+    expect(sendKey).not.toHaveBeenCalled()
+    expect(onError).not.toHaveBeenCalled()
+    controller.forget('s1')
+  })
+
   it('settles accepted Swarm input before a person writes during its composer check', async () => {
     vi.useFakeTimers()
     const onDelivery = vi.fn(), onError = vi.fn(), typed: string[] = []
