@@ -95,14 +95,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.selectedId, 'offline');
     expect(find.text('Verified the offline result.'), findsOneWidget);
-    expect(
-      tester
-          .widget<TextField>(
-            find.byKey(const ValueKey('super-message-composer')),
-          )
-          .enabled,
-      isFalse,
-    );
+    expect(find.byKey(const ValueKey('super-message-composer')), findsNothing);
     await tester.tap(find.byTooltip('Workgroup options'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Reopen conversation'));
@@ -222,45 +215,44 @@ void main() {
     },
   );
 
-  testWidgets(
-    'projects stay collapsed and creation remains in the sidebar',
-    (tester) async {
-      await tester.binding.setSurfaceSize(const Size(1100, 700));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final server = ConversationServer();
-      final controller = server.controller();
-      await controller.refresh();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: SuperTabView(
-              controller: controller,
-              onInvite: () {},
-              onAddAgent: (_) {},
-              onOpenTerminal: (_) {},
-              onNewProject: () {},
-              machineName: (_) => 'Test Mac',
-            ),
+  testWidgets('projects stay collapsed and creation remains in the sidebar', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1100, 700));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final server = ConversationServer();
+    final controller = server.controller();
+    await controller.refresh();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SuperTabView(
+            controller: controller,
+            onInvite: () {},
+            onAddAgent: (_) {},
+            onOpenTerminal: (_) {},
+            onNewProject: () {},
+            machineName: (_) => 'Test Mac',
           ),
         ),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('Pilot'), findsNWidgets(2));
-      expect(find.text('CHATS'), findsNothing);
-      expect(find.byKey(const ValueKey('super-group-lead')), findsOneWidget);
-      expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
-      expect(find.text('New group'), findsNothing);
-      expect(find.byTooltip('New project'), findsOneWidget);
-      expect(find.byTooltip('Invite people'), findsOneWidget);
-      expect(
-        tester.getCenter(find.byTooltip('Invite people')).dx,
-        greaterThan(800),
-      );
-      await tester.pumpWidget(const SizedBox());
-      await controller.flush();
-      controller.dispose();
-    },
-  );
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Pilot'), findsNWidgets(2));
+    expect(find.text('CHATS'), findsNothing);
+    expect(find.byKey(const ValueKey('super-group-lead')), findsOneWidget);
+    expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
+    expect(find.text('New group'), findsNothing);
+    expect(find.byTooltip('New project'), findsOneWidget);
+    expect(find.byTooltip('Invite people'), findsOneWidget);
+    expect(
+      tester.getCenter(find.byTooltip('Invite people')).dx,
+      greaterThan(800),
+    );
+    await tester.pumpWidget(const SizedBox());
+    await controller.flush();
+    controller.dispose();
+  });
 
   for (final rename in [true]) {
     testWidgets(

@@ -133,14 +133,12 @@ void main() {
         await tester.pumpAndSettle();
         expect(controller.selectedId, 'offline');
         expect(find.text('Verified the offline result.'), findsOneWidget);
+        // A closed group has no message box, only the notice and Reopen.
         expect(
-          tester
-              .widget<TextField>(
-                find.byKey(const ValueKey('super-message-composer')),
-              )
-              .enabled,
-          isFalse,
+          find.byKey(const ValueKey('super-message-composer')),
+          findsNothing,
         );
+        expect(find.textContaining('This group is closed'), findsOneWidget);
 
         await _shot(tester, 'closed-read-only-${brightness.name}');
         await tester.tap(find.byKey(const ValueKey('super-group-reopen')));
