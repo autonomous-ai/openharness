@@ -366,6 +366,8 @@ export interface SkillRefresh { file: string; version: string; owed: boolean }
  * notice owed instead of losing it. Null when this workspace never prepared the session's skill. */
 export function refreshSwarmSkill(workspace: string, saved: SwarmSkill): SkillRefresh | null {
   if (!parseSwarmSkill(saved)) throw new Error('A Swarm skill needs a role and session key')
+  // A removed worktree has nothing to refresh; the host would otherwise retry and log it every minute.
+  if (!existsSync(workspace)) return null
   const dir = skillDirectory(realpathSync(workspace), saved, false)
   const file = dir && join(dir, 'SKILL.md')
   if (!dir || !file || !existsSync(file)) return null

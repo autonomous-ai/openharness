@@ -88,6 +88,7 @@ describe('built-in Swarm skills', () => {
     })
     it('does nothing for a session whose skill was never prepared in this workspace', () => {
       expect(refreshSwarmSkill(fixture(), skill)).toBeNull()
+      expect(refreshSwarmSkill(join(fixture(), 'removed-worktree'), skill)).toBeNull()
     })
     it('never writes through a redirected skill file', () => {
       const workspace = fixture(), file = older(workspace, false), target = join(fixture(), 'elsewhere.md')
