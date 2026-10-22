@@ -66,16 +66,21 @@ export function parseDarwinMemory(vm: string, total: number, sysctl: string): Me
   if (!pageSize || !Number.isFinite(total) || total <= 0) return null
   const counts = new Map<string, number>()
   for (const match of vm.matchAll(/^([^:\n]+):\s+(\d+)\.?\s*$/gm)) counts.set(match[1].trim(), Number(match[2]))
-  const keys = ['Pages active', 'Pages inactive', 'Pages speculative', 'Pages wired down',
-    'Pages occupied by compressor', 'Pages purgeable', 'File-backed pages']
+  const keys = ['Pages free', 'Pages inactive', 'Pages speculative', 'Pages wired down', 'Pages purgeable', 'File-backed pages']
   if (keys.some(key => !counts.has(key))) return null
-  const used = (keys.slice(0, 5).reduce((sum, key) => sum + counts.get(key)!, 0)
-    - counts.get('Pages purgeable')! - counts.get('File-backed pages')!) * pageSize
-  if (!Number.isFinite(used) || used < 0 || used > total) return null
+  const page = (key: string) => counts.get(key)!
+  // What the kernel can hand out without hurting anything: free, speculative and purgeable pages, and the inactive
+  // or file-backed cache (file pages are usually inside the inactive count, so take the larger, never the sum).
+  // Compressed pages are neither added nor subtracted: counting them as fully used made a 32 GiB Mac with 7 GiB
+  // of free and reclaimable memory read 5 GiB available (2026-10-22). Wired memory can never be reclaimed, so it bounds the answer.
+  const reclaimable = (page('Pages free') + page('Pages speculative') + page('Pages purgeable')
+    + Math.max(page('Pages inactive'), page('File-backed pages'))) * pageSize
+  const available = Math.min(reclaimable, total - page('Pages wired down') * pageSize)
+  if (!Number.isFinite(available) || available < 0) return null
   const pressureLevel = /^\s*([124])\s*$/m.exec(sysctl)?.[1]
   const swap = /used\s*=\s*([\d.]+)([KMG])\b/.exec(sysctl)
   const swapValue = number(swap?.[1])
-  return { total, available: total - used,
+  return { total, available,
     pressure: pressureLevel === '1' ? 'normal' : pressureLevel === '2' ? 'warning' : pressureLevel === '4' ? 'critical' : null,
     swapUsedBytes: swap && swapValue != null ? swapValue * ({ K: KiB, M: MiB, G: KiB ** 3 }[swap[2]]!) : null,
   }

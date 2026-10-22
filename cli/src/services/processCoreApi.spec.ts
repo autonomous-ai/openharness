@@ -343,6 +343,16 @@ it('asks for native stop evidence and treats an absent or failed link as unknown
   expect(await processCoreApi('/data', 'superTabs').agents.stopped!('a')).toBe(false)
 })
 
+it('asks whether an agent is gone and treats an absent or failed link as not gone', async () => {
+  const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ gone: true }))
+  const api = processCoreApi('/data', 'superTabs', { ask })
+  expect(await api.agents.gone!('a')).toBe(true)
+  expect(ask).toHaveBeenLastCalledWith('gone', { agentId: 'a' })
+  ask.mockRejectedValueOnce(new Error('offline'))
+  expect(await api.agents.gone!('a')).toBe(false)
+  expect(await processCoreApi('/data', 'superTabs').agents.gone!('a')).toBe(false)
+})
+
 it('carries the exact native close identity through the service process and fails closed without the core', async () => {
   const request = { agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', createdAt: '2026-10-22T00:00:00.000Z' }
   const ask = vi.fn(async () => ({ closed: true as const }))

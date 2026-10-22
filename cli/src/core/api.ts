@@ -164,6 +164,9 @@ export interface CoreApi {
     /** Fresh native lifecycle evidence. Absence from a live snapshot alone is
      * not a stop: a saved stopped record must also exist in the core. */
     stopped?(agentId: string): Promise<boolean>
+    /** The agent is neither live nor kept as a stopped record: closed by hand, or its record deleted. Only for an agent
+     * the caller already knows was created; it does not prove an agent that is still starting is gone. */
+    gone?(agentId: string): Promise<boolean>
     /** The exact durable native creation receipt. Null means unavailable, never
      * proof that a launch was missing, cancelled or failed. */
     creationStatus?(creationId: string): Promise<CreationObservation | null>
@@ -1727,7 +1730,7 @@ export interface CoreApiDeps {
   conversations?: ConversationReads
   dataDir: string
   registry: Pick<typeof registry, 'list' | 'byAgent' | 'resolve' | 'advertised' | 'terminalAvailable'>
-  stoppedAgents: Pick<StoppedAgentStore, 'list'>
+  stoppedAgents: Pick<StoppedAgentStore, 'list' | 'ids'>
   databaseHistory: CoreApi['transcripts']['databaseHistory']
   syncSession: CoreApi['agents']['sync']
   runtimeModels: CoreApi['agents']['runtimeModels']
@@ -1818,6 +1821,7 @@ export function createCoreApi({
     agents: {
       all: () => [...registry.list(), ...stoppedAgents.list()],
       stopped: async id => !registry.byAgent(id) && stoppedAgents.list().some(s => s.agentId === id),
+      gone: async id => !registry.byAgent(id) && !stoppedAgents.ids().includes(id),
       live: () => registry.list(),
       displayName: projectDisplayName,
       byAgent: (agentId) => registry.byAgent(agentId),

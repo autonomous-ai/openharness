@@ -69,6 +69,14 @@ describe('what an experiment in its own process may ask of the core', () => {
     expect(await answerExperimentQuery(fakeCore(), experiments, 'orchestrator', 'stopped', { agentId: 'unknown' })).toEqual({ stopped: false })
   })
 
+  it('says an agent is gone only on fresh evidence, and not for a core that cannot tell', async () => {
+    const core = fakeCore({ agents: { gone: async id => id === 'closed' } })
+    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'gone', { agentId: 'closed' })).toEqual({ gone: true })
+    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'gone', { agentId: 'live' })).toEqual({ gone: false })
+    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'gone', {})).toEqual({ gone: false })
+    expect(await answerExperimentQuery(fakeCore(), experiments, 'orchestrator', 'gone', { agentId: 'closed' })).toEqual({ gone: false })
+  })
+
   it('bounds native observation queries and keeps an older core unavailable', async () => {
     const cursor = { epoch: 'fixture-observation-epoch', sequence: 0 }
     const page = { cursor, observations: [], gap: false }, nativeTurns = vi.fn(async () => page)

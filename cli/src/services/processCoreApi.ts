@@ -123,6 +123,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       closeSwarm: async request => await (ask?.('close_swarm', { ...request }) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }))
         .catch(() => ({ error: 'SERVICE_UNAVAILABLE' })),
       stopped: async agentId => (await ask?.('stopped', { agentId }).catch(() => null))?.stopped === true,
+      gone: async agentId => (await ask?.('gone', { agentId }).catch(() => null))?.gone === true,
       creationStatus: async creationId => creationObservation(creationId,
         (await ask?.('creation_status', { creationId }).catch(() => null))?.observation),
       resolve: (id) => resolveAgent(live(), id),

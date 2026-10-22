@@ -134,7 +134,7 @@ describe('the core API services stand on', () => {
         advertised: vi.fn(() => [row('live')]),
         terminalAvailable: vi.fn((agentId: string) => agentId === 'live'),
       } as unknown as CoreApiDeps['registry'],
-      stoppedAgents: { list: vi.fn(() => [row('stopped')]) } as unknown as CoreApiDeps['stoppedAgents'],
+      stoppedAgents: { list: vi.fn(() => [row('stopped')]), ids: vi.fn(() => ['stopped']) } as unknown as CoreApiDeps['stoppedAgents'],
       databaseHistory: vi.fn(),
       syncSession: vi.fn(),
       runtimeModels: vi.fn(async () => []),
@@ -206,6 +206,10 @@ describe('the core API services stand on', () => {
     expect(await core.agents.stopped!('live')).toBe(false)
     expect(await core.agents.stopped!('unknown')).toBe(false)
     expect(await core.agents.stopped!('stopped')).toBe(true)
+    // Gone is neither live nor kept: an agent closed by hand, never a live or stopped one.
+    expect(await core.agents.gone!('live')).toBe(false)
+    expect(await core.agents.gone!('stopped')).toBe(false)
+    expect(await core.agents.gone!('closed-by-hand')).toBe(true)
     expect(core.agents.live().map((s) => s.agentId)).toEqual(['live'])
     expect(core.agents.displayName).toBe(projectDisplayName)
     expect(core.transcripts.databaseHistory).toBe(deps.databaseHistory)
