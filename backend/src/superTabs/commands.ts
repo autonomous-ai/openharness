@@ -3,7 +3,7 @@ import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
   activeWork, actorKey, agent, agentRole, author, conversation, fail, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
-  finishWorker, requireWorkerDecisions,
+  finishWorker, requireWorkerDecisions, reviewing,
   type Actor, type Agent, type Author, type CommandEffects, type SuperTabState,
 } from './model.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
@@ -433,6 +433,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const existing = state.agents.find(a => a.id === agentId)
       if (existing) sameProject(state, group, existing)
       if (existing?.workDecision === 'stop' && command.lead) fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
+      if (existing && agentRole(existing) === 'reviewer' && command.lead) fail('REVIEWER_NOT_LEAD', 'A Reviewer reviews work and cannot lead a group.')
       if (!existing) reserveHarnessSlot(state, command.machineId, command.harnessId, operationId)
       if (!existing) state.agents.push({ id: agentId, machineId: command.machineId, harnessId: command.harnessId,
         ...(state.projects ? { projectId: project.id } : {}),
@@ -573,6 +574,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (!isLead && !isOwner) fail('FORBIDDEN', 'Only this project’s Lead, the contributor or tab owner can release a worker.', 403)
       if (state.conversations.some(c => c.leadId === target.id)) fail('LEAD_REQUIRED', 'Release workers only; keep the Lead running.')
       if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id)) fail('WORK_ACTIVE', 'Finish active work before releasing this worker.')
+      if (reviewing(state, target.id)) fail('WORK_ACTIVE', 'This Reviewer is reviewing active work. Remove it from that group or wait for the work to end.')
       // A Reviewer is never assigned work, so the Lead may keep or stop it at any time.
       if (!target.workDecision && agentRole(target) !== 'reviewer' && !state.conversations.some(c => c.assignment?.agentId === target.id)) {
         fail('WORK_REQUIRED', 'This worker has no finished assignment to release.')
@@ -744,6 +746,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'route.record': {
       controls(state, actor, command.conversationId)
       const chosen = command.decision.candidates.find(c => c.id === command.decision.pick)!
+      if (chosen.kind === 'member' && state.agents.some(a => a.id === chosen.agentId && agentRole(a) === 'reviewer')) {
+        fail('REVIEWER_NOT_ASSIGNABLE', 'A Reviewer reviews work and is never assigned it. Route to a Builder.')
+      }
       requireWorkerDecisions(state, actor, open(state, command.conversationId), chosen.kind === 'member' ? chosen.agentId : undefined)
       if ((context.recentRoutes ?? 0) >= 30) fail('RATE_LIMITED', 'This Super Tab routed 30 tasks in the last hour. Wait before routing again.', 429)
       const decision = command.decision
@@ -872,7 +877,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           ['needs_human', 'blocked', 'review', 'done'].includes(command.status)
         // Ready for review also wakes the group's Reviewers, whoever marked it.
         const reviewers = command.status !== 'review' ? [] : group.agentIds.filter(id => id !== lead &&
-          (actor.kind !== 'agent' || id !== actor.agentId) && state.agents.some(a => a.id === id && agentRole(a) === 'reviewer'))
+          (actor.kind !== 'agent' || id !== actor.agentId) && state.agents.some(a => a.id === id && agentRole(a) === 'reviewer' && a.workDecision !== 'stop'))
         message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}`, [...(tellLead ? [lead] : []), ...reviewers])
       }
       break

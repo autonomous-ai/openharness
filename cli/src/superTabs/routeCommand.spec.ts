@@ -84,6 +84,14 @@ describe('routeTask', () => {
     expect(offered.length).toBeGreaterThan(0)
     expect(offered.some(c => /^(Lead|Multiply) ·/.test(c))).toBe(false)
   })
+  it('never offers an idle Reviewer as a build candidate', async () => {
+    const reviewed = tab(); reviewed.state.agents = agents.map(a => a.id === 'a1' ? { ...a, role: 'reviewer' } : a)
+    const s = scoped({ tab: reviewed })
+    await routeTask(input, s, where as never, opener(), () => 'op')
+    const offered = (recorded(s).command.decision.candidates as Array<{ title: string; kind: string }>)
+    expect(offered.length).toBeGreaterThan(0)
+    expect(offered.some(c => c.title.startsWith('Multiply'))).toBe(false)
+  })
   it('tells the Lead how to assign a member or start a new agent with the decision', async () => {
     const member = await routeTask(input, scoped({ jev: { ok: true, value: { unavailable: 'BUSY' } } }), where as never, opener(), () => 'op')
     // Cheapest first: the member on sonnet.

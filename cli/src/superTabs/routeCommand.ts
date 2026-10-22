@@ -118,7 +118,8 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // The group's Lead and the tab Lead coordinate; neither is a worker candidate even when idle.
   const busy = new Set([String(group.leadId), String(conversations.find(c => c.id === 'lead')?.leadId),
     ...conversations.filter(c => active(c.assignment)).map(c => String(object(c.assignment).agentId))])
-  const members = agents.filter(a => !busy.has(String(a.id)) && ENGINES.includes(String(object(a.configuration).engine))).map(a => withLaunchEffort(a, list(state.starts)))
+  // A Reviewer is never assigned work, so it is never a build candidate either.
+  const members = agents.filter(a => !busy.has(String(a.id)) && a.role !== 'reviewer' && ENGINES.includes(String(object(a.configuration).engine))).map(a => withLaunchEffort(a, list(state.starts)))
   // A new agent starts only on a machine in the Swarm's Machines list (the backend refuses any other): a contributed machine, or
   // one an agent of the Swarm runs on. The Lead runs here, so its own machine is always listed. Of the account's machines
   // only those count; the rest were never prepared with the project and would only be excluded for a missing folder

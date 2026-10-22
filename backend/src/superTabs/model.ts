@@ -208,7 +208,7 @@ export function finishWorker(state: SuperTabState, workerId: string, group?: Con
   }
 }
 /** A Reviewer is busy while any group it is in has active work. */
-function reviewing(state: SuperTabState, agentId: string): boolean {
+export function reviewing(state: SuperTabState, agentId: string): boolean {
   return state.agents.some(a => a.id === agentId && agentRole(a) === 'reviewer') &&
     state.conversations.some(c => activeWork(c) && c.agentIds.includes(agentId))
 }

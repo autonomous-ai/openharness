@@ -1039,10 +1039,15 @@ describe('Reviewer role', () => {
     expect(() => f.run({ type: 'agent.start', request: request(group, { role: 'reviewer', engine: 'opencode' }) } as Command, owner, { contribution })).toThrow('Claude Code or Codex')
   })
 
-  it('refuses to assign work to a Reviewer or make it a Lead', () => {
-    const { f, group, reviewer } = reviewed()
+  it('refuses to assign, route work to or make a Lead of a Reviewer', () => {
+    const { f, leadActor, group, reviewer } = reviewed()
     expect(() => f.run({ type: 'work.assign', conversationId: group, agentId: reviewer })).toThrow('Reviewer')
     expect(() => f.run({ type: 'conversation.agent', conversationId: group, agentId: reviewer, present: true, lead: true })).toThrow('Reviewer')
+    expect(() => f.run({ type: 'agent.add', conversationId: group, machineId: 'host', harnessId: 'native-reviewer', name: 'Reviewer', configuration: config, lead: true },
+      owner, { contribution: { machineOwnerId: 'target-owner', contributorId: 'owner' } })).toThrow('cannot lead')
+    expect(f.state.conversations.find(c => c.id === group)!.leadId).toBe(leadActor.agentId)
+    const pick = record({ candidates: [candidate('c0', { kind: 'member', agentId: reviewer, machineId: 'host' })], pick: 'c0' })
+    expect(() => f.run({ type: 'route.record', conversationId: group, decision: pick } as Command, leadActor)).toThrow('Route to a Builder')
   })
 
   it('tells the Lead and the group\'s Reviewers when work is ready for review', () => {
@@ -1059,6 +1064,25 @@ describe('Reviewer role', () => {
     f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'working', result: null }, builderActor)
     f.run({ type: 'conversation.agent', conversationId: group, agentId: reviewer, present: false, lead: false })
     expect(f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'Head 789' }, builderActor).messages[0]!.recipients).toEqual([lead])
+  })
+
+  it('does not wake a Reviewer that is stopping', () => {
+    const { f, lead, leadActor, group, reviewer, builder } = reviewed()
+    f.run({ type: 'agent.release', agentId: reviewer, decision: 'stop' }, leadActor)
+    const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: builder }).result.assignmentId as string
+    const ready = f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'Head abc' }, { kind: 'agent', agentId: builder, machineOwnerId: 'host-owner' })
+    expect(ready.messages[0]!.recipients).toEqual([lead])
+  })
+
+  it('refuses to keep or stop a Reviewer while a group it is in has active work', () => {
+    const { f, leadActor, group, reviewer, builder } = reviewed()
+    const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: builder }).result.assignmentId as string
+    for (const decision of ['keep', 'stop'] as const) {
+      expect(() => f.run({ type: 'agent.release', agentId: reviewer, decision }, leadActor)).toThrow('reviewing active work')
+    }
+    f.run({ type: 'work.cancel', conversationId: group, assignmentId, reason: 'Obsolete' }, leadActor)
+    f.run({ type: 'agent.release', agentId: reviewer, decision: 'stop' }, leadActor)
+    expect(f.state.agents.find(a => a.id === reviewer)).toHaveProperty('workDecision', 'stop')
   })
 
   it('lets the Lead keep or stop a Reviewer that never had work, but not such a Builder', () => {
