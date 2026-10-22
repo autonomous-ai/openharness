@@ -202,3 +202,16 @@ describe('what an experiment in its own process may ask of the core', () => {
     expect(await createForExperiment(null, request)).toEqual({ ok: false, error: 'UNSUPPORTED', detail: 'This daemon cannot create agents.' })
   })
 })
+
+it('exposes identity-bound close only to the Swarm service and validates its native identity', async () => {
+  const close = vi.fn(async () => ({ closed: true as const })), core = fakeCore({ agents: { close } })
+  const allowed = new Set(['superTabs', 'orchestrator'])
+  const payload = { agentId: 'worker', sessionId: 'native', createdAt: '2026-10-22T00:00:00.000Z', mode: 'now' }
+  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'close_session', payload)).toEqual({ closed: true })
+  expect(close).toHaveBeenCalledWith(payload)
+  expect(await answerExperimentQuery(core, allowed, 'orchestrator', 'close_session', payload)).toEqual({ error: 'NOT_SUPER_TABS' })
+  for (const invalid of [{ ...payload, agentId: '' }, { ...payload, sessionId: 1 }, { ...payload, createdAt: 'bad' }, { ...payload, mode: 'idle' }]) {
+    expect(await answerExperimentQuery(core, allowed, 'superTabs', 'close_session', invalid)).toEqual({ error: 'INVALID_REQUEST' })
+  }
+  expect(await answerExperimentQuery(fakeCore(), allowed, 'superTabs', 'close_session', payload)).toEqual({ error: 'UNSUPPORTED' })
+})

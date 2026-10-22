@@ -6,6 +6,15 @@ import { FAIL, readFallback } from './serviceHost.js'
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
 describe('the core API services stand on', () => {
+  it('offers the existing identity-bound native close lifecycle for contributed sessions', async () => {
+    const request = { agentId: 'mine', sessionId: 's-mine', createdAt: '2026-10-12T08:00:00.000Z', mode: 'now' as const }
+    const closeAgent = vi.fn(async () => ({ closed: true as const }))
+    const core = createCoreApi({ ...coreDeps(), closeAgent })
+    expect(await core.agents.close!(request)).toEqual({ closed: true })
+    expect(closeAgent).toHaveBeenCalledWith(request)
+    expect(await createCoreApi(coreDeps()).agents.close!(request)).toEqual({ error: 'UNSUPPORTED' })
+  })
+
   it('exposes an optional native-turn observer without importing feature state', () => {
     const nativeTurns = vi.fn(async () => null)
     expect(createCoreApi({ ...coreDeps(), nativeTurns }).transcripts.nativeTurns).toBe(nativeTurns)

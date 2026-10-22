@@ -342,3 +342,13 @@ it('asks for native stop evidence and treats an absent or failed link as unknown
   expect(await api.agents.stopped!('a')).toBe(false)
   expect(await processCoreApi('/data', 'superTabs').agents.stopped!('a')).toBe(false)
 })
+
+it('carries the exact native close identity through the service process and fails closed without the core', async () => {
+  const request = { agentId: 'worker', sessionId: 'native', createdAt: '2026-10-22T00:00:00.000Z', mode: 'now' as const }
+  const ask = vi.fn(async () => ({ closed: true as const }))
+  expect(await processCoreApi('/data', 'superTabs', { ask }).agents.close!(request)).toEqual({ closed: true })
+  expect(ask).toHaveBeenCalledWith('close_session', request)
+  ask.mockRejectedValueOnce(new Error('Gone'))
+  expect(await processCoreApi('/data', 'superTabs', { ask }).agents.close!(request)).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+  expect(await processCoreApi('/data', 'superTabs').agents.close!(request)).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+})
