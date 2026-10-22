@@ -10,6 +10,8 @@ import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { processLaunchArgs } from '../../lib/processTable.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import { createAgentRestarter, type RestartDeps } from './restart.js'
+import { createLaunchAuthority } from './launchAuthority.js'
+import { createSwarmSkillAdoption } from './swarmSkills.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
 vi.mock('../../lib/engineBin.js', async (real) => ({ ...await real<object>(), enginePathOverride: vi.fn(() => undefined) }))
@@ -92,6 +94,18 @@ describe('restarting an agent', () => {
     expect(await run.restart('a1')).toMatchObject({ error: 'AGENT_CHANGED' })
     expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
     expect(restartAgent).not.toHaveBeenCalled()
+  })
+
+  it('restarts when an unrelated registry field changes during a no-role lookup', async () => {
+    const session = agent({ registeredAt: 1 })
+    const authority = createLaunchAuthority({ byAgent: () => session, revision: () => 0, cancelled: () => false })
+    const adoptSwarmSkill = createSwarmSkillAdoption({
+      authority, save: vi.fn(), candidate: () => true,
+      role: async () => { session.dsh = 'changed-during-lookup'; return null },
+    })
+    const run = setup(session, { adoptSwarmSkill })
+    expect(await run.restart('a1')).toMatchObject({ ok: true })
+    expect(restartAgent).toHaveBeenCalledOnce()
   })
 
   it.each(['starting', 'held'] as const)('does not replace an unbound native %s launch with a generic fresh restart', async state => {

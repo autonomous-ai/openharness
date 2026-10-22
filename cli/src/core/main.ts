@@ -1,5 +1,6 @@
 import { createSwarmSkillAdoption } from './agents/swarmSkills.js'
 import { swarmRoleThrough } from './superTabSkills.js'
+import { retainedHarnesses } from '../superTabs/retention.js'
 import { createGridAssignments } from './agents/gridAssignments.js'
 import { createQuestionControls } from './engines/questionControls.js'
 import { masterRunsEngineQuestionControl } from '../harnessd/services.js'
@@ -2296,6 +2297,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const launchAuthority = createLaunchAuthority({ byAgent: id => registry.byAgent(id), revision: restoreRevision, cancelled: id => launchCancelled(id) })
   const adoptSwarmSkill = createSwarmSkillAdoption({
     authority: launchAuthority,
+    candidate: id => retainedHarnesses(env.ADAPTER_DATA_DIR).has(id),
     role: outOfProcess.has('superTabs')
       ? swarmRoleThrough((type, payload) => serviceLinks.call('superTabs', type, payload, 3500))
       : id => ports.superTabs?.swarmRole(id) ?? Promise.resolve(null),

@@ -5,6 +5,7 @@ import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
+import { retainContributions } from '../src/superTabs/retention.js'
 
 const ME: FakeMachine = { machineId: 'c9'.repeat(16), computerId: 'legacy-sw-test', name: 'Fixture', token: 'legacy-sw-token' }
 let daemon: IsolatedDaemon | undefined, relay: FakeBackend | undefined, client: LocalClient | undefined
@@ -45,6 +46,7 @@ it('old Lead and worker restarts and stopped resume gain only their skill; perso
     if (name !== 'personal') agents.push({ id: name, harnessId: created.agent.id, machineId: ME.machineId })
   }
   groups.push({ leadId: 'lead', agentIds: ['lead', 'worker', 'removed', 'resumed'], archived: false })
+  retainContributions(d.dataDir, ME.machineId, agents.map(agent => ({ tabId: 'tab', agent })))
   for (const [name, engine, role] of [['lead', 'claude', 'lead'], ['worker', 'codex', 'dev'], ['personal', 'claude', null], ['removed', 'codex', null]] as const) {
     const before = argv().length
     const reply = await c.request('agent_restart', { agentId: ids[name] }, 90_000)

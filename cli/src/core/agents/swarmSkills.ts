@@ -7,18 +7,27 @@ export type AdoptSwarmSkill = (session: RegisteredSession, current: () => boolea
 
 export function createSwarmSkillAdoption(deps: {
   role(harnessId: string): Promise<SwarmRole | null>
+  candidate(harnessId: string): boolean
   authority(agentId: string): () => boolean
   save: typeof registry.setSwarmSkill
 }): AdoptSwarmSkill {
+  const noRole = new Set<string>()
   return async (session, current) => {
     if (!current()) return null
     if (session.swarmSkill || session.guest || !session.cwd || (session.engine !== 'claude' && session.engine !== 'codex')) return session
+    if (noRole.has(session.agentId)) return session
+    // The host's last confirmed roster is only a cheap candidate filter; the live backend remains authoritative.
+    try { if (!deps.candidate(session.agentId)) return session } catch { return session }
     const owns = deps.authority(session.agentId)
     const saved = structuredClone(session)
     let role: SwarmRole | null = null
     try { role = await deps.role(saved.agentId) } catch { /* An unreadable roster grants no skill. */ }
-    if (!current() || !owns()) return null
-    if (!role) return saved
+    if (!current()) return null
+    if (!role) {
+      noRole.add(saved.agentId)
+      return session
+    }
+    if (!owns()) return null
     const swarmSkill = { role, key: saved.agentId }
     // A stopped row is not live yet: resumePendingAgent persists the returned copy when dispatch allocates its pane.
     deps.save(saved.agentId, swarmSkill)

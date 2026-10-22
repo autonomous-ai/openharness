@@ -14,7 +14,7 @@ function setup(saved = row(), live: RegisteredSession | null = saved) {
     live.swarmSkill = skill; return true
   }
   const authority = createLaunchAuthority({ byAgent: () => live ?? undefined, revision: () => 0, cancelled: () => !current })
-  return { saved, role, adopt: createSwarmSkillAdoption({ role, authority, save }), cancel: () => { current = false },
+  return { saved, role, adopt: createSwarmSkillAdoption({ role, authority, save, candidate: () => true }), cancel: () => { current = false },
     change: () => { if (live) live.cwd = '/replacement' }, current: () => current }
 }
 
@@ -36,6 +36,43 @@ describe('old Swarm role adoption', () => {
     if (role === null) t.role.mockResolvedValue(null)
     else t.role.mockRejectedValue(new Error('Offline'))
     expect(await t.adopt(t.saved, t.current)).toEqual(t.saved)
+    expect(t.saved.swarmSkill).toBeUndefined()
+  })
+  it('does not wait for an offline backend when local membership excludes a personal session', async () => {
+    const t = setup()
+    t.role.mockImplementation(() => new Promise(() => {}))
+    const adopt = createSwarmSkillAdoption({ role: t.role, authority: () => () => true, save: vi.fn(), candidate: () => false })
+    const answer = await Promise.race([adopt(t.saved, t.current), new Promise(resolve => setTimeout(() => resolve('waiting'), 30))])
+    expect(answer).toBe(t.saved)
+    expect(t.role).not.toHaveBeenCalled()
+  })
+  it('does not call the backend when the local roster record is unreadable', async () => {
+    const t = setup()
+    const adopt = createSwarmSkillAdoption({ role: t.role, authority: () => () => true, save: vi.fn(), candidate: () => { throw new Error('Unreadable roster') } })
+    expect(await adopt(t.saved, t.current)).toBe(t.saved)
+    expect(t.role).not.toHaveBeenCalled()
+  })
+  it.each(['absent', 'offline'] as const)('remembers a checked %s result across restarts', async result => {
+    const t = setup()
+    if (result === 'absent') t.role.mockResolvedValue(null)
+    else t.role.mockRejectedValue(new Error('Offline'))
+    await t.adopt(t.saved, t.current)
+    await t.adopt(t.saved, t.current)
+    expect(t.role).toHaveBeenCalledTimes(1)
+  })
+  it('can adopt after a local roster snapshot first excludes the session', async () => {
+    const t = setup()
+    let present = false
+    const adopt = createSwarmSkillAdoption({ role: t.role, authority: () => () => true, save: vi.fn(), candidate: () => present })
+    expect(await adopt(t.saved, t.current)).toBe(t.saved)
+    present = true
+    expect(await adopt(t.saved, t.current)).toMatchObject({ swarmSkill: { role: 'lead' } })
+    expect(t.role).toHaveBeenCalledOnce()
+  })
+  it('allows an unrelated live-row update while a no-role lookup runs', async () => {
+    const t = setup()
+    t.role.mockImplementation(async () => { t.change(); return null })
+    expect(await t.adopt(t.saved, t.current)).toBe(t.saved)
     expect(t.saved.swarmSkill).toBeUndefined()
   })
   it.each([{ engine: 'opencode' }, { cwd: '' }, { guest: {} }, { swarmSkill: { role: 'dev', key: 'already-saved' } }] as Partial<RegisteredSession>[])
