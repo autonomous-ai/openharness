@@ -48,6 +48,16 @@ function setup(messageFields: Record<string, unknown> = {}) {
 }
 
 describe('current Swarm role lookup', () => {
+  it('derives a Reviewer from its stored role while it is in a current group', async () => {
+    const t = setup()
+    const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', role: 'reviewer' }
+    let groups = [{ leadId: 'other', agentIds: ['agent'] }]
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
+      path.includes('/hosts/') ? [{ tabId: 'tab', agent }] : { state: { agents: [agent], conversations: groups } } } }))
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBe('reviewer')
+    groups = []
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBeNull()
+  })
   it.each(['lead', 'member', 'assigned'] as const)('derives an old %s from current groups on its machine', async kind => {
     const t = setup()
     const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }

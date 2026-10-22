@@ -53,9 +53,10 @@ export async function swarmRoleFor(core: CoreApi, machineId: string, harnessId: 
     const groups = (Array.isArray(state.conversations) ? state.conversations.map(object) : []).filter(group => group.archived !== true)
     if (groups.some(group => group.leadId === target.id)) return 'lead'
     return groups.some(group => Array.isArray(group.agentIds) && group.agentIds.includes(target.id)
-      || object(group.assignment).agentId === target.id && object(object(group.assignment).execution).machineId === machineId) ? 'dev' : null
+      || object(group.assignment).agentId === target.id && object(object(group.assignment).execution).machineId === machineId)
+      ? agent.role === 'reviewer' ? 'reviewer' : 'dev' : null
   }))
-  return roles.includes('lead') ? 'lead' : roles.includes('dev') ? 'dev' : null
+  return (['lead', 'dev', 'reviewer'] as const).find(role => roles.includes(role)) ?? null
 }
 
 interface Entry {

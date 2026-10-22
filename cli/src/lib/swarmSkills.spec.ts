@@ -38,6 +38,26 @@ describe('built-in Swarm skills', () => {
     expect(readdirSync(data)).toEqual([])
   })
 
+  it('gives a Reviewer the owner\'s review skill, verbatim', () => {
+    expect(parseSwarmSkill({ role: 'reviewer', key: 'session' })).toEqual({ role: 'reviewer', key: 'session' })
+    const prepared = prepareSwarmSkill(fixture(), { role: 'reviewer', key: 'session' })
+    expect(prepared.instructions).toContain('swarm-reviewer')
+    expect(readFileSync(prepared.file, 'utf8')).toBe(`---
+name: swarm-reviewer
+description: Use when reviewing a Harness Swarm group's work as its Reviewer, before judging a revision.
+---
+# Review a group's work
+
+1. Read only; no subagents. Read fully before judging; run the important checks yourself.
+2. Check plan alignment first: everything planned is present; flag each deviation so the builder can say if it was intended; if the plan itself is wrong, say so.
+3. Review against the group's description; where it is silent, judge by what an ordinary user would expect.
+4. Look at tests (real behavior, not mocks), edge cases, security, backward compatibility and data migration, docs.
+5. Say what was done well first.
+6. Findings graded Critical / Important / Minor with a location each; grade by real severity, never mark a nitpick Critical; say how to fix when it is not obvious.
+7. List what you set aside. Tie the verdict ("Ready: yes/no/with fixes") to one revision; never re-review a revision already reviewed. Push risky calls to the Lead.
+`)
+  })
+
   it('keeps standalone session skills out of Git, including git add -A', () => {
     const workspace = fixture()
     execFileSync('git', ['init', '-q', workspace])
@@ -90,7 +110,7 @@ describe('built-in Swarm skills', () => {
   })
 
   it('validates persisted role metadata and refuses an empty key', () => {
-    for (const value of [null, undefined, {}, { role: 'reviewer', key: 'x' }, { role: 'dev', key: '' }, { role: 'lead', key: 7 }]) expect(parseSwarmSkill(value)).toBeUndefined()
+    for (const value of [null, undefined, {}, { role: 'builder', key: 'x' }, { role: 'dev', key: '' }, { role: 'lead', key: 7 }]) expect(parseSwarmSkill(value)).toBeUndefined()
     expect(parseSwarmSkill({ role: 'dev', key: 'x' })).toEqual({ role: 'dev', key: 'x' })
     expect(() => prepareSwarmSkill(fixture(), { role: 'lead', key: '' })).toThrow()
   })

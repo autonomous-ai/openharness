@@ -4,13 +4,14 @@ import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 
-export type SwarmRole = 'lead' | 'dev'
+export type SwarmRole = 'lead' | 'dev' | 'reviewer'
 export interface SwarmSkill { role: SwarmRole; key: string }
+export const isSwarmRole = (value: unknown): value is SwarmRole => value === 'lead' || value === 'dev' || value === 'reviewer'
 
 export function parseSwarmSkill(value: unknown): SwarmSkill | undefined {
   if (!value || typeof value !== 'object') return undefined
   const { role, key } = value as Partial<SwarmSkill>
-  return (role === 'lead' || role === 'dev') && typeof key === 'string' && key.length > 0 ? { role, key } : undefined
+  return isSwarmRole(role) && typeof key === 'string' && key.length > 0 ? { role, key } : undefined
 }
 
 const skills: Record<SwarmRole, string> = {
@@ -40,6 +41,20 @@ description: Use when receiving or carrying out an assigned workgroup as a Harne
 5. Every handoff includes “Ready: yes/no”, evidence, the revision and useful links, and what remains unverified. Distinguish local checks from runs in the real environment.
 6. Ask the Lead to route work instead of opening your own subagents to split it. Do not touch other groups' code. Merge, push or open a PR only when told.
 7. Print little to save quota; keep useful progress and blocker reports in the group chat.
+`,
+  reviewer: `---
+name: swarm-reviewer
+description: Use when reviewing a Harness Swarm group's work as its Reviewer, before judging a revision.
+---
+# Review a group's work
+
+1. Read only; no subagents. Read fully before judging; run the important checks yourself.
+2. Check plan alignment first: everything planned is present; flag each deviation so the builder can say if it was intended; if the plan itself is wrong, say so.
+3. Review against the group's description; where it is silent, judge by what an ordinary user would expect.
+4. Look at tests (real behavior, not mocks), edge cases, security, backward compatibility and data migration, docs.
+5. Say what was done well first.
+6. Findings graded Critical / Important / Minor with a location each; grade by real severity, never mark a nitpick Critical; say how to fix when it is not obvious.
+7. List what you set aside. Tie the verdict ("Ready: yes/no/with fixes") to one revision; never re-review a revision already reviewed. Push risky calls to the Lead.
 `,
 }
 

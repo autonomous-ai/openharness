@@ -652,7 +652,7 @@ export const MEMORY_REQUESTS = ['memory_snapshot', 'memory_about_put', 'memory_d
  *  the client that asks, which acts on it. */
 export const ROUTER_REQUESTS = ['route_decide'] as const
 export const SUPER_TAB_REQUESTS = ['super_tabs'] as const
-export interface SuperTabsPort { connected(): void; disconnected(): void; stop(): void; swarmRole(harnessId: string): Promise<'lead' | 'dev' | null | undefined> }
+export interface SuperTabsPort { connected(): void; disconnected(): void; stop(): void; swarmRole(harnessId: string): Promise<import('../lib/swarmSkills.js').SwarmRole | null | undefined> }
 export const SUPER_TAB_FALLBACKS: PortFallbacks<SuperTabsPort> = { connected: undefined, disconnected: undefined, stop: undefined, swarmRole: later(undefined) }
 /** The project and folder readers (services/projects.ts). */
 export const PROJECTS_REQUESTS = ['git_pull_request', 'git_pull_requests_status', 'git_project_info', 'scm_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file'] as const
