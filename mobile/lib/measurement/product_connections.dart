@@ -103,6 +103,25 @@ class ProductConnections {
     entry.finish(outcome);
   }
 
+  /// The app went to the background with these dials open: each ends `cancelled`, as `remote_connect`'s do —
+  /// the phone left before the socket answered, and a suspended app may never hear it. Both kinds end, and
+  /// an asked-for dial's [manualDeadline] goes with it, so nothing is counted `failed` later. They leave the
+  /// maps as they end: the socket's own answer finds none to end again, and a dial once the app is back is
+  /// a new count.
+  void cancelOpen() {
+    final asked = _manual.values.toList();
+    final own = _pending.values.toList();
+    _manual.clear();
+    _pending.clear();
+    for (final entry in asked) {
+      entry.deadline.cancel();
+      entry.finish(ProductOutcome.cancelled);
+    }
+    for (final finish in own) {
+      finish(ProductOutcome.cancelled);
+    }
+  }
+
   /// Drops every open observation uncounted: a sign-out, another account, a sharing change.
   void clear() {
     _pending.clear();

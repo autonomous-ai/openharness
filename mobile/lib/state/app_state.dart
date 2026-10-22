@@ -1410,6 +1410,18 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// The app went to the background with dials or a launch still open. Every dial ends `cancelled` —
+  /// `remote_connect`'s ([_cancelMeasurementConnections]) and `connect_user`/`connect_auto`'s
+  /// ([ProductConnections.cancelOpen]) — and the launch, if no computer has answered, `unknown`
+  /// ([LaunchMeasurement.foreground]), as it does when the app is hidden. Only the background ends them: a
+  /// system sheet or the app switcher (`inactive`) is not leaving, and a dial after the app is back is a
+  /// new count.
+  void _endOpenMeasurementsForBackground() {
+    _cancelMeasurementConnections();
+    productConnections.cancelOpen();
+    launchMeasurement?.foreground(false);
+  }
+
   /// Ends every dial still going as `cancelled`: the person left the screen before it had an answer,
   /// which is neither a success nor a failure of the socket. Each count is dropped from
   /// [_measurementConnections] as it ends, so the socket's own answer later finds none to end again
@@ -10736,9 +10748,9 @@ class AppNotifier extends ChangeNotifier {
   /// And write the machine cache now ([_keepMachineCache]): this is the last moment the app is sure
   /// to run, since closing it from the app switcher starts by sending it here.
   ///
-  /// A dial still going ends `cancelled` ([_cancelMeasurementConnections]) before the counts are
-  /// sent: an app the OS suspends in its first seconds away never hears the socket's answer, and
-  /// the dial would stay without an outcome.
+  /// What the phone was still waiting on has no one to wait for it now, and ends before the counts are
+  /// sent ([_endOpenMeasurementsForBackground]): an app the OS suspends in its first seconds away never
+  /// hears the socket's answer, and the dial or launch would stay without an outcome.
   void handleAppPaused() {
     // The first pause of this time away: a second without a resume between (the OS repeating
     // itself) does not move the moment the phone actually left.
@@ -10753,7 +10765,7 @@ class AppNotifier extends ChangeNotifier {
     }
     // The agents this run learned between lists, for the next launch — see [_keepMachineCache].
     _keepMachineCache();
-    _cancelMeasurementConnections();
+    _endOpenMeasurementsForBackground();
     _sendMeasurementBeforeBackground();
   }
 
