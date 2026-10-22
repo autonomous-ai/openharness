@@ -82,7 +82,11 @@ ConversationServer _seed(String scenario) {
     return server;
   }
 
-  final projects = scenario == 'rich' ? _projects() : _projects().take(1).toList();
+  final projects = scenario == 'empty'
+      ? <Map<String, dynamic>>[]
+      : scenario == 'rich'
+      ? _projects()
+      : _projects().take(1).toList();
   final conversations = _conversations(scenario);
   server.state..clear()..addAll({
     'version': 1,

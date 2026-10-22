@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Super Tab mobile-first mockup</title>
+  <style>
+    :root { --ink:#1d1e23; --muted:#71747d; --line:#e6e8ec; --bg:#f5f6f8; --panel:#fff; --accent:#2f6fed; --warn:#c2410c; --ok:#15803d; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.45 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+    header { max-width:1160px; margin:0 auto; padding:32px 24px 8px; }
+    header h1 { font-size:26px; margin:0 0 8px; }
+    header p { color:var(--muted); margin:0; max-width:760px; }
+    .flow { display:flex; gap:28px; flex-wrap:wrap; justify-content:center; align-items:flex-start; max-width:1160px; margin:24px auto 0; padding:0 24px 48px; }
+    .step { width:390px; }
+    .step h2 { font-size:15px; margin:0 0 10px; color:var(--muted); font-weight:600; }
+    .phone { width:390px; height:844px; background:var(--panel); border:1px solid var(--line); border-radius:28px; overflow:hidden; box-shadow:0 12px 30px rgba(0,0,0,.08); display:flex; flex-direction:column; }
+    .statusbar { height:24px; background:var(--panel); display:flex; align-items:center; padding:0 14px; color:var(--muted); font-size:12px; }
+    .top { display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid var(--line); min-height:44px; }
+    .top .title { font-weight:600; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .iconbtn { width:44px; height:44px; border:none; background:transparent; color:var(--ink); border-radius:8px; display:flex; align-items:center; justify-content:center; cursor:default; }
+    .iconbtn.round { border:1px solid var(--line); background:#fff; }
+    .body { flex:1; overflow:hidden; display:flex; flex-direction:column; }
+    .list { flex:1; overflow:auto; scrollbar-width:none; }
+    .card { margin:10px; padding:14px; background:#fff; border:1px solid var(--line); border-radius:8px; }
+    .card h3 { margin:0 0 4px; font-size:16px; line-height:1.3; }
+    .card p { margin:0; color:var(--muted); font-size:13px; }
+    .row { display:flex; align-items:center; gap:10px; padding:12px 14px; min-height:44px; border-bottom:1px solid var(--line); }
+    .row:last-child { border-bottom:none; }
+    .avatar { width:32px; height:32px; border-radius:50%; background:#dfe7f8; color:var(--accent); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px; }
+    .avatar.g { background:#e4e7ec; color:#4b5563; }
+    .avatar.o { background:#fff1e0; color:#b45309; }
+    .meta { flex:1; min-width:0; }
+    .meta .name { font-weight:600; font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .meta .sub { color:var(--muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .badge { font-size:11px; font-weight:700; padding:2px 7px; border-radius:5px; }
+    .badge.working { background:#e0f2fe; color:#075985; }
+    .badge.live { background:#dcfce7; color:#166534; }
+    .badge.needs { background:#fef3c7; color:#92400e; }
+    .badge.stopped { background:#eef1f4; color:#4b5563; }
+    .dot { width:8px; height:8px; border-radius:50%; background:var(--ok); flex:none; }
+    .dot.warn { background:var(--warn); }
+    .dot.muted { background:#c4c8cf; }
+    .chat { flex:1; overflow:auto; padding:14px; scrollbar-width:none; background:#fff; }
+    .msg { margin-bottom:14px; }
+    .msg .who { color:var(--muted); font-size:12px; margin-bottom:4px; }
+    .bubble { max-width:86%; padding:10px 12px; border-radius:8px; background:#f2f4f7; }
+    .bubble.own { margin-left:auto; background:#e7efff; }
+    .bubble code { display:block; white-space:pre-wrap; background:#1e2330; color:#e5e7eb; padding:10px; border-radius:6px; font-size:12px; }
+    .route { color:var(--muted); font-size:12px; margin:8px 0; }
+    .notice { margin:10px 0; padding:10px 12px; background:#fff8e6; border:1px solid #f4e3b0; border-radius:8px; color:#7a4d0b; font-size:12px; }
+    .workcards { padding:0 10px; border-bottom:1px solid var(--line); }
+    .workcard { margin:8px 0; padding:12px; background:#fff; border:1px solid var(--line); border-radius:8px; }
+    .workcard .head { display:flex; align-items:center; gap:8px; }
+    .workcard .name { flex:1; font-weight:600; font-size:14px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .workcard .actions { display:flex; gap:6px; }
+    .pill { padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:#fff; font-size:12px; font-weight:600; }
+    .composer { padding:10px 12px 12px; border-top:1px solid var(--line); background:#fff; }
+    .composer .input { min-height:44px; display:flex; align-items:center; background:#f2f4f7; border-radius:8px; padding:0 12px; gap:8px; }
+    .composer .input span { flex:1; color:#9aa0aa; font-size:14px; }
+    .composer .got { min-height:44px; display:flex; gap:8px; margin-top:8px; }
+    .composer .got .btn { flex:1; border:none; border-radius:8px; font-size:14px; font-weight:600; color:#fff; background:var(--accent); }
+    .composer .got .ghost { flex:none; width:44px; border:1px solid var(--line); background:#fff; border-radius:8px; }
+    .sheet-back { position:relative; }
+    .sheet-tab { margin:0 12px 8px; border-radius:8px; background:#fff; border:1px solid var(--line); box-shadow:0 -8px 24px rgba(0,0,0,.08); overflow:hidden; }
+    .sheet-tab .grab { text-align:center; padding:8px; }
+    .sheet-tab .grab::before { content:""; display:inline-block; width:44px; height:5px; border-radius:3px; background:#c4c8cf; }
+    .seg { height:30px; background:#eef1f4; border-radius:8px; margin:10px 12px; display:flex; padding:3px; }
+    .seg span { flex:1; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:600; color:var(--muted); border-radius:6px; }
+    .seg span.on { background:#fff; color:var(--ink); box-shadow:0 1px 2px rgba(0,0,0,.08); }
+    .fab { position:absolute; right:18px; bottom:18px; width:56px; height:56px; border-radius:16px; background:var(--accent); color:#fff; display:flex; align-items:center; justify-content:center; box-shadow:0 8px 18px rgba(47,111,237,.35); }
+    footer { max-width:1160px; margin:0 auto; padding:0 24px 40px; color:var(--muted); }
+    footer a { color:var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Super Tab mobile-first mockup</h1>
+    <p>A proposed phone flow built on the same fixture data: project list → full-screen Lead chat → workgroups as cards → a bottom sheet for machines, agents and settings. Every target is 44px; nothing is hover-only.</p>
+  </header>
+  <div class="flow">
+    <div class="step">
+      <h2>1 · Project list</h2>
+      <div class="phone">
+        <div class="statusbar">9:41</div>
+        <div class="top"><span style="font-weight:700">Projects</span><span class="iconbtn">🔍</span><span class="iconbtn round">＋</span></div>
+        <div class="body">
+          <div class="list">
+            <div class="card">
+              <h3>Harness Web Mobile Redesign</h3>
+              <p>Designer needs you · 2 workgroups open</p>
+              <div class="row" style="padding:8px 0 0;border:none"><span class="dot warn"></span><span class="badge needs">needs_human</span></div>
+            </div>
+            <div class="card">
+              <h3>A Very Long Mobile Application Project Title That Runs Past Any Row</h3>
+              <p>2 collaborators · private</p>
+              <div class="row" style="padding:8px 0 0;border:none"><span class="dot"></span><span class="badge working">working</span></div>
+            </div>
+            <div class="card">
+              <h3>On Hold</h3>
+              <p>Paused until the release settles</p>
+              <div class="row" style="padding:8px 0 0;border:none"><span class="dot muted"></span><span class="badge stopped">stopped</span></div>
+            </div>
+            <div class="card">
+              <h3>Offline machines</h3>
+              <p>MacBook Pro · Diego’s Mac · Build Farm</p>
+              <div class="row" style="padding:8px 0 0;border:none"><span class="dot warn"></span><span class="badge needs">offline</span></div>
+            </div>
+          </div>
+          <div class="composer"><div class="input"><span>Search or start a project</span></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <h2>2 · Full-screen Lead chat + workgroup cards</h2>
+      <div class="phone">
+        <div class="statusbar">9:41</div>
+        <div class="top"><span class="iconbtn">←</span><span class="title">Harness Web Mobile Redesign</span><span class="iconbtn round">⋯</span></div>
+        <div class="body">
+          <div class="workcards">
+            <div class="workcard">
+              <div class="head"><span class="dot warn"></span><span class="name">Owner decision</span><span class="badge needs">needs_human</span></div>
+              <div class="actions" style="margin-top:8px"><span class="pill">PR #1543</span><span class="pill">Open</span></div>
+            </div>
+            <div class="workcard">
+              <div class="head"><span class="dot"></span><span class="name">Layout audit</span><span class="badge working">working</span></div>
+              <div class="actions" style="margin-top:8px"><span class="pill">PR #1551</span><span class="pill">Open</span></div>
+            </div>
+          </div>
+          <div class="chat">
+            <div class="msg"><div class="who">Lead · 3:52 PM</div><div class="bubble">**Phase 1 plan** — capture every state at 320 / 375 / 390 / 1440 px.</div></div>
+            <div class="msg"><div class="who">Lark · 3:50 PM</div><div class="bubble"><code>final width = MediaQuery.sizeOf(context).width;
+final narrow = width &lt; 720;</code></div></div>
+            <div class="route">Routed to Designer · Only available candidate</div>
+            <div class="notice">Designer is busy · waiting 0:49</div>
+            <div class="msg"><div class="who">You · 3:45 PM</div><div class="bubble own">Actually, can you run the 320px pass first?</div></div>
+          </div>
+          <div class="composer">
+            <div class="input">📎 <span>Message Product Manager</span></div>
+            <div class="got"><button class="ghost">📷</button><button class="btn">Send</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step sheet-back">
+      <h2>3 · Bottom sheet for machines / agents / settings</h2>
+      <div class="phone">
+        <div class="statusbar">9:41</div>
+        <div class="top"><span class="iconbtn">←</span><span class="title">Harness Web Mobile Redesign</span></div>
+        <div class="body">
+          <div class="chat" style="opacity:.45">
+            <div class="msg"><div class="who">Lead · 3:52 PM</div><div class="bubble">The bottom sheet keeps the conversation in view.</div></div>
+            <div class="msg"><div class="who">You · 3:45 PM</div><div class="bubble own">Choose an agent below.</div></div>
+          </div>
+          <div class="sheet-tab">
+            <div class="grab"></div>
+            <div class="seg"><span class="on">Machines</span><span>Agents</span><span>Settings</span></div>
+            <div class="row"><div class="avatar">M</div><div class="meta"><div class="name">MacBook Pro (Local)</div><div class="sub">Online · 4 agents</div></div><span class="badge live">Live</span></div>
+            <div class="row"><div class="avatar g">D</div><div class="meta"><div class="name">Diego’s Mac</div><div class="sub">Offline · 1 agent</div></div><span class="badge stopped">Offline</span></div>
+            <div class="row"><div class="avatar o">B</div><div class="meta"><div class="name">Build Farm</div><div class="sub">Online · 6 agents</div></div><span class="badge live">Live</span></div>
+            <div style="padding:12px;border-top:1px solid var(--line)"><button class="btn" style="width:100%;min-height:44px">Add a machine</button></div>
+          </div>
+          <div class="fab">＋</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <footer>
+    <p>Built from the fixture data in <a href="review.html">the audit review page</a>. This is a proposal for owner approval, not a production change.</p>
+  </footer>
+</body>
+</html>
