@@ -498,6 +498,25 @@ describe('harness login --json', () => {
     expect(calls.map((c) => c.url)).not.toContain('/api/auth/qr/cancel')
   }, 30_000)
 
+  it('reports an expired spoken-code claim as EXPIRED after the person says yes', async () => {
+    const root = tempRoot()
+    const { base } = await fakeBackend({
+      routes: {
+        '/api/auth/qr/start': () => ({ code: 'hnq_x', pollToken: 'hnp_poll', expiresIn: 120, spokenCode: '12345678' }),
+        '/api/auth/qr/poll': () => ({ status: 'approved', email: 'dee@example.com' }),
+        '/api/auth/qr/claim': () => new Refusal(401, 'QR_INVALID', 'Nothing to claim: scan again.'),
+        '/api/auth/qr/cancel': () => ({ cancelled: true }),
+      },
+    })
+    const login = jsonChild(root, base, ['login', '--force', '--code', '--json'])
+    expect(await login.next()).toEqual({ type: 'code', code: '12345678', expiresIn: 120 })
+    expect(await login.next()).toEqual({ type: 'confirm', email: 'dee@example.com' })
+    login.child.stdin.end('yes\n')
+    expect(await login.next()).toMatchObject({ type: 'result', status: 'error', code: 'EXPIRED' })
+    expect(await login.exit).toBe(1)
+    expect(existsSync(join(root, 'auth', 'session.json'))).toBe(false)
+  }, 30_000)
+
   it('already signed in, an app that closes its pipe at once still gets the one success line', async () => {
     // Nothing waits on a person here, so the app going away is no reason to stop: the answer it
     // asked for is already on its way, and a CANCELLED here would read as a failed sign-in.
