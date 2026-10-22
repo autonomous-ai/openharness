@@ -57,10 +57,19 @@ it('starts phone and Desktop harnesses when managed tmux arrives after daemon st
   daemon = d
   onTestFailed(() => { console.log(d.log().split('\n').slice(-150).join('\n')) })
   // Neither the daemon, its shell nor its known install locations can find the host's tmux.
-  d.env.PATH = '/usr/bin:/bin:/usr/sbin:/sbin'
+  // Linux installs tmux in /usr/bin, so even the system PATH must be a private tools directory.
+  const tools = join(d.root, 'tools-without-tmux')
+  mkdirSync(tools)
+  for (const name of ['ps', 'lsof', 'sleep', 'stty', 'clear', 'rm', 'mkdir', 'mv', 'chmod', 'cat', 'dirname', 'basename',
+    'wc', 'dd', 'grep', 'stat', 'date', 'sort', 'head', 'tail', 'awk', 'sed', 'touch', 'uname', 'env', 'find', 'readlink', 'xargs', 'tty', 'id']) {
+    const binary = resolveBinaryOnPath(name)
+    if (binary) symlinkSync(binary, join(tools, name))
+  }
+  symlinkSync(process.execPath, join(tools, 'node'))
+  d.env.PATH = `${join(d.root, 'bin')}:${tools}`
   d.env.SHELL = '/bin/zsh'
   d.env.HARNESS_HOMEBREW_PREFIXES = join(d.root, 'no-homebrew')
-  writeFileSync(join(d.env.HOME!, '.zshrc'), 'export PATH=/usr/bin:/bin:/usr/sbin:/sbin\n')
+  writeFileSync(join(d.env.HOME!, '.zshrc'), `export PATH=${JSON.stringify(d.env.PATH)}\n`)
   await d.start()
   const client = await LocalClient.connect(d)
   try {
