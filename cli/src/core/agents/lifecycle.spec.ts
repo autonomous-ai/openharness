@@ -111,7 +111,10 @@ describe('stopping, purging and resuming an agent', () => {
 
     it('asks the pane, through the core, whether an agent waits at its folder-trust question', () => {
       const atFolderTrust = vi.fn(async () => true)
-      expect(setup({ atFolderTrust }).purge.atFolderTrust).toBe(atFolderTrust)
+      const atEmptyComposer = vi.fn(async () => true)
+      const { purge } = setup({ atFolderTrust, atEmptyComposer })
+      expect(purge.atFolderTrust).toBe(atFolderTrust)
+      expect(purge.atEmptyComposer).toBe(atEmptyComposer)
     })
 
     it('waits on an agent that is restarting or stopping', () => {
