@@ -42,7 +42,9 @@ void main() {
       expect(find.text('queued message'), findsOneWidget);
       expect(find.text('claimed message'), findsOneWidget);
       expect(find.text('Queued'), findsNothing);
-      expect(find.textContaining('Check delivery'), findsOneWidget);
+      // The uncertain review is now the latest message's receipt and its actions (message_receipt.dart).
+      expect(find.text("Couldn't confirm delivery"), findsOneWidget);
+      expect(find.text('Send again'), findsOneWidget);
     },
   );
 
