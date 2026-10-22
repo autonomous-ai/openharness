@@ -251,6 +251,21 @@ class VoiceInputController extends ChangeNotifier {
   /// its way to `listening`. See [startHold].
   bool _holdReleased = false;
 
+  /// A first-task chip takes the same send and feedback path as spoken words.
+  /// Never replaces an unfinished voice take.
+  Future<void> submitText(
+    String text,
+    Future<bool> Function(String) deliver,
+  ) async {
+    if (_isSending ||
+        _status != VoiceInputStatus.idle ||
+        transcript.isNotEmpty) {
+      return;
+    }
+    _heard = text;
+    await submit(deliver);
+  }
+
   /// Sends everything heard, and empties the transcript once it is sent — kept
   /// when delivery fails, so nothing said has to be said twice.
   ///

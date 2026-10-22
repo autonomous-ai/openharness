@@ -104,6 +104,36 @@ bool _isTyped(BufferLine line) {
 /// How many rows a prompt's typed text can run to — a long paste included.
 const _maxInputRows = 200;
 
+/// OpenCode's boxed composer, read at its cursor, before its blank row and
+/// model footer. A cursor at the start means the grey placeholder is not text.
+/// The first-arrival starter is a sentence; the TUI wraps it at word boundaries.
+String? openCodePromptText(Buffer buffer) {
+  final cursor = buffer.absoluteCursorY;
+  if (cursor < 0 || cursor >= buffer.lines.length) return null;
+  final current = buffer.lines[cursor].getText();
+  final side = current.indexOf('┃');
+  if (side < 0 || buffer.cursorX <= side + 3) return null;
+  String? row(int y) {
+    if (y < 0 || y >= buffer.lines.length) return null;
+    final text = buffer.lines[y].getText();
+    if (text.indexOf('┃') != side || text.length <= side + 3) return null;
+    final content = text.substring(side + 3).trimRight();
+    return content.isEmpty ? null : content;
+  }
+
+  var top = cursor;
+  while (top > 0 && cursor - top < _maxInputRows && row(top - 1) != null) {
+    top--;
+  }
+  final parts = <String>[];
+  for (var y = top; y < buffer.lines.length && y - top < _maxInputRows; y++) {
+    final content = row(y);
+    if (content == null) break;
+    parts.add(content);
+  }
+  return parts.isEmpty ? null : parts.join(' ');
+}
+
 /// What an agent's prompt starts with, in column 0 or just inside a box's side: Claude Code's `❯`
 /// (`>` in older builds), its `!` shell mode and `#` memory mode, and Codex's `›`. A shell themed
 /// with a `❯` prompt reads the same way, and rightly: what follows it is what was typed.
