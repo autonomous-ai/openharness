@@ -342,7 +342,7 @@ it('tracks a durable launch through polls without persisting its receipt or coun
   now += 65_000
   usage.launch({ id, phase: 'failed', failure: 'setup' }); usage.launch({ id, phase: 'failed', failure: 'setup' })
   await usage.sync()
-  expect(totals()).toEqual({ measurement_v2_installation_days: 1, first_launch_installations: 1, first_launch_engine_other: 1, launch_started: 1, launch_wait_install: 1, launch_failed: 1, launch_failed_setup: 1, launch_1m_to_5m: 1 })
+  expect(totals()).toEqual({ measurement_v2_installation_days: 1, first_launch_installations: 1, first_launch_engine_other: 1, launch_started: 1, launch_wait_install: 1, launch_failed: 1, launch_failed_setup: 1, launch_failed_setup_code_unlisted: 1, launch_1m_to_5m: 1 })
   expect(JSON.stringify(sent) + readFileSync(file, 'utf8')).not.toContain(id)
 })
 
@@ -460,6 +460,22 @@ it('names the code of an `other` launch failure, so the codes add up to launch_f
   const codes = Object.entries(t).filter(([name]) => name.startsWith('launch_failed_code_')).reduce((n, [, v]) => n + v, 0)
   expect(codes).toBe(t.launch_failed_other)
   expect(JSON.stringify(sent)).not.toContain('PRIVATE_CANARY')
+})
+
+it('counts a setup launch reason once across polls, separately from other failures and without retaining identifiers', async () => {
+  await usage.sync()
+  for (const [index, code] of ['tmux_unavailable', 'native_launch_held', 'PRIVATE_CANARY' as never].entries()) {
+    const id = `PRIVATE_CREATION_${index}`
+    usage.launch({ id, phase: 'start' })
+    for (let poll = 0; poll < 2; poll++) usage.launch({ id, phase: 'failed', failure: 'setup', code: code as never })
+  }
+  await flush()
+  const t = totals()
+  expect(t).toMatchObject({ launch_started: 3, launch_failed: 3, launch_failed_setup: 3,
+    launch_failed_setup_code_tmux_unavailable: 1, launch_failed_setup_code_native_launch_held: 1, launch_failed_setup_code_unlisted: 1 })
+  expect(Object.entries(t).filter(([name]) => name.startsWith('launch_failed_setup_code_')).reduce((sum, [, count]) => sum + count, 0)).toBe(t.launch_failed_setup)
+  expect(Object.keys(t).some(name => name.startsWith('launch_failed_code_'))).toBe(false)
+  expect(JSON.stringify(sent) + readFileSync(file, 'utf8')).not.toContain('PRIVATE_')
 })
 
 it('counts a created launch whose engine then did not start as a late failure, once, by its code', async () => {

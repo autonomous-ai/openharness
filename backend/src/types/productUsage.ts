@@ -162,9 +162,11 @@ export type LaunchErrorCode = typeof LAUNCH_ERROR_CODES[number]
 /** The families counted by code: a launch's failure, its start failing after it was created, the create
  * and resume requests' `other` refusals, and every delete and restart refusal — from any client, and again,
  * apart, those the phone asked for (`phone_`), which a daemon's report otherwise carries mixed with the
- * Desktop's, the TUI's and tools'. */
+ * Desktop's, the TUI's and tools'. Setup reasons have their own families, adding up to `launch_failed_setup`,
+ * `create_error_setup` and `request_phone_create_error_setup`; existing `other` families keep their meaning. */
 export const LAUNCH_ERROR_FAMILIES = ['launch_failed_code', 'launch_late_failed_code', 'create_error_code', 'resume_error_code',
-  'delete_error_code', 'restart_error_code', 'phone_delete_error_code', 'phone_restart_error_code'] as const
+  'delete_error_code', 'restart_error_code', 'phone_delete_error_code', 'phone_restart_error_code',
+  'launch_failed_setup_code', 'create_error_setup_code', 'phone_create_error_setup_code'] as const
 /** The engine an installation's first launch asked for; any other engine is `other`. */
 export const PRODUCT_USAGE_LAUNCH_ENGINES = ['opencode', 'claude', 'codex', 'other'] as const
 export type ProductUsageLaunchEngine = typeof PRODUCT_USAGE_LAUNCH_ENGINES[number]

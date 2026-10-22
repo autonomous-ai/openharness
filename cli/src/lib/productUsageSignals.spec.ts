@@ -105,10 +105,46 @@ it.each(['ENGINE_LAUNCH_REFUSED', 'PTY_HOST_UNAVAILABLE', 'GIT_PROJECT_UNAVAILAB
   'INVALID_BRANCH', 'BRANCH_SWITCH_FAILED', 'BRANCH_IN_USE', 'WORKTREE_FAILED'])('names the launch helper refusal %s', code => {
   expect(launchErrorCode(code)).toBe(code.toLowerCase())
 })
-it('names no code for a failure of a fixed kind, which its kind already says', () => {
+it('keeps a setup refusal\'s fixed code for the separate setup diagnostic, leaving other kinds alone', () => {
   const emit = vi.fn()
   productUsageLaunch('agent_create_status', 'fixture-creation-one', emit)('TMUX_UNAVAILABLE', 'failed', false, undefined)
-  expect(emit).toHaveBeenCalledWith({ id: 'fixture-creation-one', phase: 'failed', failure: 'setup' })
+  expect(emit).toHaveBeenLastCalledWith({ id: 'fixture-creation-one', phase: 'failed', failure: 'setup', code: 'tmux_unavailable' })
+  for (const [error, failure] of [['AUTH_REQUIRED', 'auth'], ['TIMEOUT', 'unavailable'], ['INVALID_CWD', 'invalid']]) {
+    productUsageLaunch('agent_create_status', 'fixture-creation-one', emit)(error, 'failed', false, undefined)
+    expect(emit).toHaveBeenLastCalledWith({ id: 'fixture-creation-one', phase: 'failed', failure })
+  }
+})
+
+it('counts setup reasons once per create request, apart for the phone, without changing other-by-code totals', () => {
+  const emit = vi.fn()
+  const phone = productUsageRequest('agent_create', emit, () => 0, 'phone')
+  phone('TMUX_UNAVAILABLE', 'failed', false); phone('SPAWN_FAILED', 'failed', false)
+  productUsageRequest('agent_create', emit, () => 0, 'app')('NATIVE_LAUNCH_HELD', 'failed', false)
+  productUsageRequest('agent_create', emit, () => 0, 'tool')('PTY_HOST_UNAVAILABLE', 'failed', false)
+  productUsageRequest('agent_create', emit, () => 0, 'phone')('PRIVATE_CANARY', 'failed', false)
+  productUsageRequest('agent_create', emit, () => 0, 'phone')(undefined, 'pending', false)
+  productUsageRequest('agent_create_status', emit, () => 0, 'phone')('SPAWN_FAILED', 'failed', false)
+  const names: string[] = emit.mock.calls.flat()
+  expect(names.filter(name => name.startsWith('create_error_setup_code_')).sort()).toEqual([
+    'create_error_setup_code_native_launch_held', 'create_error_setup_code_pty_host_unavailable', 'create_error_setup_code_tmux_unavailable',
+  ])
+  expect(names.filter(name => name.startsWith('phone_create_error_setup_code_'))).toEqual(['phone_create_error_setup_code_tmux_unavailable'])
+  expect(names.filter(name => name === 'create_error_setup')).toHaveLength(3)
+  expect(names.filter(name => name === 'request_phone_create_error_setup')).toHaveLength(1)
+  expect(names.filter(name => name.startsWith('create_error_code_'))).toEqual(['create_error_code_unlisted'])
+  for (const name of names) expect(PRODUCT_USAGE_METRICS).toContain(name)
+  expect(JSON.stringify(names)).not.toContain('PRIVATE_CANARY')
+})
+
+it('keeps a failed phone create measurable when the optional setup diagnostic cannot be recorded', () => {
+  const names: string[] = []
+  const measured = productUsageRequest('agent_create', metric => {
+    if (metric.startsWith('phone_create_error_setup_code_')) throw Error('reporting unavailable')
+    names.push(metric)
+  }, () => 0, 'phone')
+  expect(() => measured('TMUX_UNAVAILABLE', 'failed', false)).not.toThrow()
+  expect(names).toContain('request_phone_create_error_setup')
+  expect(names).toContain('create_error_setup_code_tmux_unavailable')
 })
 
 it('counts the code of an `other` create or resume refusal beside its kind, so each code family adds up to its `_other`', () => {
