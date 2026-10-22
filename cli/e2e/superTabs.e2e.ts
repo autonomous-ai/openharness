@@ -8,6 +8,7 @@ import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { superTabCommand } from '../src/superTabs/command.js'
 import { object } from '../src/superTabs/wire.js'
 import { retainedHarnesses } from '../src/superTabs/retention.js'
+import { screenFor } from '../src/engines/screens.js'
 import { TerminalBinaryKind } from '../src/lib/terminalBinary.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
@@ -187,6 +188,17 @@ it('starts either engine once, posts to its captured group and delivers shared i
     expect(client.frames.slice(busyFrom).filter(frame => frame.type === 'turn_ended' && frame.agentId === started.answer.harnessId && !frame.replay),
       'Swarm input must be typed and acknowledged before the current turn ends').toHaveLength(0)
     console.log(`${engine}: busy Swarm input acknowledged in ${Math.round(performance.now() - queuedAt)} ms`)
+    if (engine === 'claude') {
+      const rows = await client.request('agents_list')
+      const pane = rows.agents.find((agent: Record<string, any>) => agent.id === started.answer.harnessId).tmuxPane
+      await d.tmux.run('send-keys', '-t', pane, 'Escape')
+      await until('queued Swarm input to run after Esc interrupts the preceding response', () =>
+        client.frames.slice(busyFrom).some(frame => frame.type === 'turn_started' && frame.agentId === started.answer.harnessId && !frame.replay) || null,
+      5_000, 100)
+      const afterEscape = await d.tmux.run('capture-pane', '-p', '-e', '-t', pane)
+      expect(screenFor('claude').inspect(afterEscape).pane.draft, `Esc must not restore delivered Swarm input as an unsent draft:\n${afterEscape}`).toBe(false)
+      expect(pending.get(target)?.status).toBe('delivered')
+    }
     const submitted = readFileSync(join(d.root, 'submitted-prompts'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line) as string)
     expect(submitted.filter(prompt => prompt.includes(`verify-super-tab-${engine}`))).toHaveLength(1)
     expect(submitted.find(prompt => prompt.includes(`verify-super-tab-${engine}`))).toContain(`In reply to message question-${engine}.`)
