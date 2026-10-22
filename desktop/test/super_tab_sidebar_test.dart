@@ -109,19 +109,26 @@ void main() {
         expect(c.selectedId, 'offline');
         await tester.tap(empty);
         await tester.pumpAndSettle();
-        expect(c.selectedId, 'empty-lead');
-        expect(c.expandedProjects, isNot(contains('empty')));
+        expect(c.selectedId, 'offline');
+        expect(c.expandedProjects, contains('empty'));
+        expect(inside(find.text('No workgroups yet')), findsOneWidget);
         expect(
-          find.byTooltip('Chat with sample-project product manager'),
-          findsOneWidget,
+          tester.getTopLeft(inside(find.text('No workgroups yet'))).dx,
+          projectX,
         );
+        expect(find.byTooltip('Collapse sample-project'), findsOneWidget);
         expect(
           find.descendant(
             of: empty,
-            matching: find.byIcon(AppIcons.chevronRight),
+            matching: find.byIcon(AppIcons.chevronDown),
           ),
           findsOneWidget,
         );
+
+        await tester.tap(empty);
+        await tester.pumpAndSettle();
+        expect(inside(find.text('No workgroups yet')), findsNothing);
+        expect(c.selectedId, 'offline');
 
         // Both navigation actions retain keyboard activation.
         final newProject = find.byKey(const ValueKey('super-new-project'));
@@ -136,8 +143,16 @@ void main() {
         expect(created, 1);
         await tester.tap(find.byKey(const ValueKey('super-your-devices')));
         await tester.pumpAndSettle();
-        expect(app.machinesRequest, (devicePub: null, phones: false));
-        expect(c.selectedId, 'empty-lead');
+        expect(app.activeSwarm.isDevices, isTrue);
+        expect(app.activeSwarm.panes.first.isDevices, isTrue);
+        expect(app.activeSwarm.panes.last.isViewer, isFalse);
+        expect(app.machinesRequest, isNull);
+        final devicesId = app.activeSwarmId;
+        await tester.tap(find.byKey(const ValueKey('super-your-devices')));
+        await tester.pumpAndSettle();
+        expect(app.activeSwarmId, devicesId);
+        expect(app.swarms.where((s) => s.isDevices), hasLength(1));
+        expect(c.selectedId, 'offline');
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox());
         await c.flush();

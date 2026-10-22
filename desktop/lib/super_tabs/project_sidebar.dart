@@ -34,11 +34,8 @@ class ProjectSidebar extends StatelessWidget {
           );
     final waiting = groups.any((g) => needsHuman(g) > 0);
     final unread = groups.any(controller.unread);
-    final hasChildren =
-        project != null &&
-        groups.any((g) => g.id != project.leadConversationId);
     final expanded =
-        hasChildren && controller.expandedProjects.contains(project.id);
+        project != null && controller.expandedProjects.contains(project.id);
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
       child: Material(
@@ -71,12 +68,9 @@ class ProjectSidebar extends StatelessWidget {
                     overlayColor: WidgetStatePropertyAll(Colors.transparent),
                     backgroundColor: WidgetStatePropertyAll(Colors.transparent),
                   ),
-                  tooltip: hasChildren
-                      ? '${expanded ? 'Collapse' : 'Expand'} ${project.name}'
-                      : 'Chat with ${project.name} product manager',
-                  onPressed: () => hasChildren
-                      ? controller.toggleProject(project.id)
-                      : onSelect(group.id),
+                  tooltip:
+                      '${expanded ? 'Collapse' : 'Expand'} ${project.name}',
+                  onPressed: () => controller.toggleProject(project.id),
                 )
               else
                 const SizedBox(width: _iconColumn),
@@ -197,6 +191,34 @@ class ProjectSidebar extends StatelessWidget {
     ),
   );
 
+  List<Widget> _workgroups(SuperTabProject project) {
+    final groups = controller.snapshot!.conversations.where(
+      (g) =>
+          g.projectId == project.id &&
+          g.id != project.leadConversationId &&
+          !g.archived,
+    );
+    return groups.isEmpty
+        ? [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                _iconColumn + _textGap,
+                8,
+                12,
+                10,
+              ),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'No workgroups yet',
+                  style: DesktopChrome.metadata(),
+                ),
+              ),
+            ),
+          ]
+        : [for (final group in groups) _row(group)];
+  }
+
   @override
   Widget build(BuildContext context) {
     final snapshot = controller.snapshot;
@@ -238,11 +260,7 @@ class ProjectSidebar extends StatelessWidget {
                       children: [
                         _row(lead, project: project),
                         if (controller.expandedProjects.contains(project.id))
-                          for (final group in snapshot!.conversations)
-                            if (group.projectId == project.id &&
-                                group.id != project.leadConversationId &&
-                                !group.archived)
-                              _row(group),
+                          ..._workgroups(project),
                       ],
                     ),
               ],

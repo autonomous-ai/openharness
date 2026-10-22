@@ -137,6 +137,7 @@ void main() {
         controller.unread(controller.snapshot!.conversation('lead')!),
         isTrue,
       );
+      await controller.loadMessages('lead');
       controller.markRead('lead');
       expect(
         controller.unread(controller.snapshot!.conversation('lead')!),
@@ -144,6 +145,69 @@ void main() {
       );
     },
   );
+
+  test(
+    'a displayed tail stays read when an older snapshot catches up',
+    () async {
+      final server = ConversationServer()..append('First visible update');
+      final c = await open(server);
+      c.markRead('lead', through: 1);
+      server.append('Arrived before the snapshot');
+      await c.loadMessages('lead');
+      expect(c.selected!.lastMessageSequence, 1);
+      expect(c.unread(c.selected!), isTrue);
+      c.markRead('lead', through: 2);
+      await c.flush();
+      expect(server.saved!['readAt'], {'lead': 2});
+      await c.refresh();
+      expect(c.selected!.lastMessageSequence, 2);
+      expect(c.unread(c.selected!), isFalse);
+    },
+  );
+
+  test(
+    'read boundaries cannot acknowledge messages that were never loaded',
+    () async {
+      final server = ConversationServer()..append('Loaded update');
+      final c = await open(server);
+      server.append('A newer lead message');
+      server.append('A workgroup never opened', conversationId: 'offline');
+      c.select('offline');
+      // The selected-group request has not returned. No snapshot-only boundary
+      // can acknowledge either the missing workgroup or the missing lead tail.
+      c.markRead('offline', through: 999);
+      c.markRead('lead', through: 999);
+      await c.flush();
+      expect(server.saved!['readAt'], {'lead': 1});
+      await c.refresh();
+      c.markRead('lead', through: 999);
+      expect(c.unread(c.snapshot!.conversation('lead')!), isTrue);
+      expect(c.unread(c.snapshot!.conversation('offline')!), isTrue);
+      c.markRead('offline', through: 3);
+      expect(c.unread(c.snapshot!.conversation('offline')!), isFalse);
+      expect(c.unread(c.snapshot!.conversation('lead')!), isTrue);
+    },
+  );
+
+  test('read markers persist for their Swarm and account only', () async {
+    final server = ConversationServer()..append('Seen update');
+    final c = await open(server);
+    c.markRead('lead', through: 1);
+    await c.flush();
+    final saved = server.saved!;
+    final restored = server.controller(initial: saved);
+    final other = server.controller(initial: saved, account: 'other');
+    addTearDown(restored.dispose);
+    addTearDown(other.dispose);
+    await restored.refresh();
+    await other.refresh();
+    expect(restored.unread(restored.selected!), isFalse);
+    expect(other.unread(other.selected!), isTrue);
+    restored.revokeAccess('Removed');
+    restored.markRead('lead', through: 99);
+    await restored.flush();
+    expect(server.saved!['readAt'], {'lead': 1});
+  });
 
   test(
     'a lost send reply reuses its durable receipt after closing and reopening',

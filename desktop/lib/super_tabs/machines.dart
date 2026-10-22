@@ -18,6 +18,7 @@ import '../widgets/workspace_subscription_usage.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
+import 'machine_details.dart';
 import 'model.dart';
 import 'section_heading.dart';
 
@@ -643,19 +644,12 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       ];
     }
     final usage = WorkspaceSubscriptionUsage.fromRows(online ? accounts : []);
-    final running = fresh
-        ? (observation['runningHarnessIds'] as List? ?? []).length
-        : agents
-              .where(
-                (a) =>
-                    state?.agents
-                        .where((n) => n.id == a.harnessId && !n.isStopped)
-                        .isNotEmpty ==
-                    true,
-              )
-              .length;
     final paused = shared?['paused'] == true;
-    final diskTotal = value?.projectDiskTotalBytes ?? value?.diskTotalBytes;
+    final status = !online
+        ? 'Offline'
+        : paused
+        ? 'New work paused'
+        : 'Online';
     final diskFree = value?.projectDiskTotalBytes == null
         ? value?.diskFreeBytes
         : value?.projectDiskFreeBytes;
@@ -666,187 +660,160 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             0,
             value.memoryTotalBytes!,
           );
-    String available(double? used) =>
-        resourcePercent(used == null ? null : (100 - used).clamp(0, 100));
+    String available(double used) =>
+        resourcePercent((100 - used).clamp(0, 100));
     final metrics = [
-      if (value?.cpuPercent != null) 'CPU ${available(value!.cpuPercent)}',
-      if (value?.busiestGpu?.utilizationPercent != null)
-        'GPU ${available(value!.busiestGpu!.utilizationPercent)}',
-      if (memoryFree != null) 'RAM ${resourceBytes(memoryFree.toDouble())}',
-      if (diskFree != null) 'SSD ${resourceBytes(diskFree)}',
+      if (value?.cpuPercent case final cpu?) ('CPU', available(cpu)),
+      if (value?.busiestGpu?.utilizationPercent case final gpu?)
+        ('GPU', available(gpu)),
+      if (memoryFree != null) ('RAM', resourceBytes(memoryFree.toDouble())),
+      if (diskFree != null) ('SSD', resourceBytes(diskFree)),
     ];
     final visibleAccounts = usage.accounts
         .where((a) => a.figure != '—')
         .toList();
-    return Padding(
-      key: ValueKey('super-machine-row-$id'),
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          InkWell(
-            key: ValueKey('super-machine-$id'),
-            borderRadius: BorderRadius.circular(8),
-            onTap: () => showAppDialog<void>(
-              context: context,
-              builder: (context) => AlertDialog(
-                title: Text(name),
-                content: Text(
-                  [
-                    if (person != null) person.email,
-                    paused
-                        ? 'New work paused'
-                        : online
-                        ? 'Online'
-                        : 'Offline',
-                    if (value?.deviceType != null) value!.deviceType!,
-                    if (value?.chip != null) value!.chip!,
-                    if (value?.os != null) value!.os!,
-                    if (shared?['cwd'] != null) shared!['cwd'] as String,
-                    if (allowed != null) 'Engines: ${allowed.join(', ')}',
-                    'RAM: ${resourceBytes(value?.memoryTotalBytes)}',
-                    'Disk: ${resourceBytes(value?.diskTotalBytes)}',
-                    for (final gpu in value?.gpus ?? const <MachineGpu>[])
-                      'GPU: ${gpu.name}',
-                    if (usage.accounts.isNotEmpty) usage.detail,
-                  ].join('\n'),
-                ),
-                actions: [
-                  if (shared != null && contributor == c.accountId)
-                    TextButton(
-                      onPressed: () async {
-                        final result = await c.command({
-                          'type': 'machine.pause',
-                          'machineId': id,
-                          'paused': !paused,
-                        });
-                        if (context.mounted && result != null) {
-                          Navigator.pop(context);
-                        }
-                      },
-                      child: Text(
-                        paused ? 'Resume new work' : 'Pause new work',
-                      ),
-                    ),
-                  if (contributor == c.accountId)
-                    TextButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        unawaited(
-                          _contribute(existing: shared ?? {'machineId': id}),
-                        );
-                      },
-                      child: const Text('Configure'),
-                    ),
-                  if (c.canWrite && c.selected != null)
-                    TextButton(
-                      onPressed: () {
-                        final group = c.selected!;
-                        Navigator.pop(context);
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          if (mounted) widget.onAddAgent(group);
-                        });
-                      },
-                      child: const Text('Attach running agent'),
-                    ),
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Close'),
-                  ),
-                ],
-              ),
+    return ListTile(
+      key: ValueKey('super-machine-$id'),
+      dense: true,
+      minTileHeight: 48,
+      minVerticalPadding: 8,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+      title: _MachineHeader(
+        key: ValueKey('super-machine-header-$id'),
+        name: name,
+        owner: person,
+        agents: [
+          for (final agent in agents)
+            (
+              id: agent.id,
+              name: c.snapshot!.agentName(agent.id),
+              role: c.snapshot!.isLead(agent.id)
+                  ? 'Product Manager'
+                  : 'Engineer',
             ),
-            child: Tooltip(
-              message: [name, if (person != null) person.email].join('\n'),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(minHeight: 32),
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 2,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    Text(
-                      superTabMachineName(name),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: DesktopChrome.control(
-                        medium: true,
-                        color: online ? null : DesktopChrome.muted,
-                      ),
-                    ),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
+        ],
+        online: online,
+        paused: paused,
+      ),
+      subtitle: metrics.isEmpty && visibleAccounts.isEmpty
+          ? null
+          : Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (metrics.isNotEmpty)
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
                       children: [
-                        if (person != null) ...[
-                          Flexible(
+                        for (final metric in metrics)
+                          Tooltip(
+                            message: '${metric.$1} ${metric.$2} available',
                             child: Text(
-                              superTabPersonName(person.email),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                              '${metric.$1} ${metric.$2}',
                               style: DesktopChrome.metadata(),
                             ),
                           ),
-                          const SizedBox(width: 8),
-                        ],
-                        Text(
-                          paused
-                              ? 'Paused'
-                              : !online
-                              ? 'Offline'
-                              : '$running ${running == 1 ? 'agent' : 'agents'}',
-                          style: DesktopChrome.metadata(),
-                        ),
                       ],
                     ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          if (metrics.isNotEmpty) ...[
-            Tooltip(
-              message:
-                  'Available capacity\nCPU and GPU: idle percentage at the latest reading\nRAM: ${resourceBytes(memoryFree?.toDouble())} free of ${resourceBytes(value?.memoryTotalBytes)}\nSSD: ${resourceBytes(diskFree)} free of ${resourceBytes(diskTotal)}',
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 4,
-                children: [
-                  for (final metric in metrics)
-                    Text(metric, style: DesktopChrome.metadata()),
+                  if (metrics.isNotEmpty && visibleAccounts.isNotEmpty)
+                    const SizedBox(height: 6),
+                  if (visibleAccounts.isNotEmpty)
+                    Wrap(
+                      spacing: 16,
+                      runSpacing: 6,
+                      children: [
+                        for (final account in visibleAccounts)
+                          Tooltip(
+                            message: account.detail,
+                            child: Semantics(
+                              label:
+                                  '${account.name} ${account.figure} remaining',
+                              excludeSemantics: true,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  EngineMark(engine: account.engine, size: 16),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    account.figure,
+                                    style: DesktopChrome.control(
+                                      medium: true,
+                                      color: account.ink(
+                                        DesktopChrome.foreground,
+                                        DesktopChrome.surface,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                 ],
               ),
             ),
-          ],
-          if (visibleAccounts.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Wrap(
-              spacing: 16,
-              runSpacing: 8,
-              children: [
-                for (final account in visibleAccounts)
-                  Tooltip(
-                    message: account.detail,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        EngineMark(engine: account.engine, size: 16),
-                        const SizedBox(width: 6),
-                        Text(
-                          account.figure,
-                          style: DesktopChrome.control(
-                            medium: true,
-                            color: account.tone == WorkspaceUsageTone.exhausted
-                                ? grid.AppPalette.warn
-                                : null,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-              ],
+      onTap: () => showAppDialog<void>(
+        context: context,
+        builder: (context) => SuperTabDialogScope(
+          controller: c,
+          requireWrite: false,
+          child: AlertDialog(
+            title: Text(superTabMachineName(name)),
+            content: SuperTabMachineDetails(
+              name: name,
+              owner: person?.email,
+              status: paused && !online ? 'Offline, new work paused' : status,
+              resources: value,
+              cwd: shared?['cwd'] as String?,
+              engines: allowed,
+              accounts: online ? accounts : const [],
             ),
-          ],
-        ],
+            actions: [
+              if (shared != null && contributor == c.accountId)
+                TextButton(
+                  onPressed: () async {
+                    final result = await c.command({
+                      'type': 'machine.pause',
+                      'machineId': id,
+                      'paused': !paused,
+                    });
+                    if (context.mounted && result != null) {
+                      Navigator.pop(context);
+                    }
+                  },
+                  child: Text(paused ? 'Resume new work' : 'Pause new work'),
+                ),
+              if (contributor == c.accountId)
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    unawaited(
+                      _contribute(existing: shared ?? {'machineId': id}),
+                    );
+                  },
+                  child: const Text('Configure'),
+                ),
+              if (c.canWrite && c.selected != null)
+                TextButton(
+                  onPressed: () {
+                    final group = c.selected!;
+                    Navigator.pop(context);
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) widget.onAddAgent(group);
+                    });
+                  },
+                  child: const Text('Attach running agent'),
+                ),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Close'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -880,4 +847,137 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           )
         : ListView(children: children);
   }
+}
+
+/// The same identities as the roster, with full names available on hover.
+/// The row stays one line; only agents that cannot fit become a compact +N.
+class _MachineHeader extends StatelessWidget {
+  const _MachineHeader({
+    super.key,
+    required this.name,
+    required this.owner,
+    required this.agents,
+    required this.online,
+    required this.paused,
+  });
+
+  final String name;
+  final SuperTabPerson? owner;
+  final List<({String id, String name, String role})> agents;
+  final bool online, paused;
+
+  Widget _avatar(String identity, String name, String label) => Tooltip(
+    message: label,
+    child: Semantics(
+      label: label,
+      excludeSemantics: true,
+      child: Builder(
+        builder: (context) => MediaQuery.withClampedTextScaling(
+          maxScaleFactor: 1,
+          child: SuperTabAvatar(identity: identity, name: name, size: 24),
+        ),
+      ),
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final style = DesktopChrome.control(
+        medium: true,
+        color: online ? null : DesktopChrome.muted,
+      );
+      double width(String text, TextStyle style) {
+        final painter = TextPainter(
+          text: TextSpan(text: text, style: style),
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+        )..layout();
+        final result = painter.width;
+        painter.dispose();
+        return result;
+      }
+
+      final readableName = superTabMachineName(name);
+      final nameWidth = width(
+        readableName,
+        style,
+      ).clamp(0.0, constraints.maxWidth * .55);
+      final room =
+          constraints.maxWidth -
+          nameWidth -
+          (owner == null ? 0 : 32) -
+          (!online || paused ? 24 : 0);
+      var count = agents.length;
+      while (count > 0 &&
+          count * 28 +
+                  (count < agents.length
+                      ? width(
+                              '+${agents.length - count}',
+                              DesktopChrome.metadata(),
+                            ) +
+                            8
+                      : 0) >
+              room) {
+        count--;
+      }
+      return Row(
+        children: [
+          Flexible(
+            child: Tooltip(
+              message: name,
+              child: Text(
+                readableName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: style,
+              ),
+            ),
+          ),
+          if (owner case final person?) ...[
+            const SizedBox(width: 8),
+            _avatar(
+              'person:${person.id}',
+              superTabPersonName(person.email),
+              '${person.email}\nMachine owner',
+            ),
+          ],
+          for (final agent in agents.take(count)) ...[
+            const SizedBox(width: 4),
+            _avatar(
+              'agent:${agent.id}',
+              agent.name,
+              '${agent.name}\n${agent.role}',
+            ),
+          ],
+          if (count < agents.length) ...[
+            const SizedBox(width: 8),
+            Tooltip(
+              message: agents
+                  .skip(count)
+                  .map((a) => '${a.name} — ${a.role}')
+                  .join('\n'),
+              child: Text(
+                '+${agents.length - count}',
+                style: DesktopChrome.metadata(),
+              ),
+            ),
+          ],
+          if (!online || paused) ...[
+            const SizedBox(width: 8),
+            Tooltip(
+              message: !online
+                  ? (paused ? 'Offline, new work paused' : 'Offline')
+                  : 'New work paused',
+              child: Icon(
+                !online ? AppIcons.monitorOff : AppIcons.pause,
+                size: 16,
+                color: DesktopChrome.muted,
+              ),
+            ),
+          ],
+        ],
+      );
+    },
+  );
 }

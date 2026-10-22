@@ -1,17 +1,21 @@
+import 'dart:io';
 import 'dart:ui' show PointerDeviceKind;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/machines.dart';
+import 'package:harness/super_tabs/machine_details.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/widgets/engine_identity.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
+import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
 
 Future<void> _openAddMachineDialog(
@@ -54,6 +58,8 @@ final _picker = find.byKey(const ValueKey('swarm-machine-picker'));
 Finder _option(String id) => find.byKey(ValueKey('swarm-machine-option-$id'));
 
 void main() {
+  final capture = Platform.environment['HARNESS_SUPER_TAB_CAPTURE'];
+  setUpAll(() => loadCaptureFonts(capture));
   test(
     'generated computer names are readable and custom names stay intact',
     () {
@@ -77,7 +83,7 @@ void main() {
     },
   );
   testWidgets(
-    'offline machines have one row and only available readings are shown',
+    'machine rows show known capacity and allowances while stale readings stay hidden',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(280, 700));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -122,9 +128,9 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      final offline = find.byKey(const ValueKey('super-machine-row-offline'));
+      final offline = find.byKey(const ValueKey('super-machine-offline'));
       expect(
-        find.descendant(of: offline, matching: find.text('Offline')),
+        find.descendant(of: offline, matching: find.byTooltip('Offline')),
         findsOneWidget,
       );
       expect(
@@ -135,27 +141,338 @@ void main() {
         find.descendant(of: offline, matching: find.textContaining('CPU')),
         findsNothing,
       );
-      expect(tester.getSize(offline).height, lessThanOrEqualTo(40));
+      final online = find.byKey(const ValueKey('super-machine-online'));
+      expect(
+        tester.getSize(online).height,
+        greaterThan(tester.getSize(offline).height),
+      );
       expect(find.text('CPU 100%'), findsOneWidget);
       expect(find.text('RAM 0 GB'), findsOneWidget);
       expect(find.text('SSD 141 GB'), findsOneWidget);
+      expect(find.byType(EngineMark), findsOneWidget);
+      // The entire row opens its details, including keyboard activation.
+      Focus.of(tester.element(find.text('Studio Mac'))).requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(find.text('Available capacity'), findsOneWidget);
+      expect(find.text('CPU'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(SuperTabMachineDetails),
+          matching: find.text('100%'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('0 GB of 32 GB'), findsOneWidget);
+      expect(find.text('141 GB of 1000 GB'), findsOneWidget);
       expect(find.textContaining('GPU'), findsNothing);
       expect(find.text('—'), findsNothing);
-      expect(find.text('100%'), findsOneWidget);
+      expect(find.text('100% left'), findsOneWidget);
       expect(
-        tester.widget<EngineMark>(find.byType(EngineMark)).engine,
+        tester
+            .widget<EngineMark>(
+              find.descendant(
+                of: find.byType(AlertDialog),
+                matching: find.byType(EngineMark),
+              ),
+            )
+            .engine,
         'codex',
       );
-      // The complete identity and actions remain accessible from the compact row.
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('super-machine-offline')));
       await tester.pumpAndSettle();
-      expect(find.widgetWithText(AlertDialog, 'M2'), findsOneWidget);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(
+        (tester.widget<AlertDialog>(find.byType(AlertDialog)).title! as Text)
+            .data,
+        'M2',
+      );
+      expect(find.text('Available capacity'), findsNothing);
+      expect(find.text('Model allowances'), findsNothing);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       await c.flush();
       c.dispose();
     },
   );
+
+  for (final brightness in [Brightness.dark, Brightness.light]) {
+    for (final textScale in [1.0, 2.0]) {
+      for (final width in [280.0, 380.0]) {
+        testWidgets(
+          'machine identity, full-row target and details fit ${brightness.name} ${textScale}x at $width',
+          (tester) async {
+            await tester.binding.setSurfaceSize(const Size(900, 850));
+            addTearDown(() => tester.binding.setSurfaceSize(null));
+            final previousBrightness = grid.AppTheme.brightness.value;
+            grid.AppTheme.brightness.value = brightness;
+            addTearDown(
+              () => grid.AppTheme.brightness.value = previousBrightness,
+            );
+            final server = ConversationServer();
+            server.state['people'] = [
+              {'id': 'owner', 'email': 'dee@example.com', 'role': 'owner'},
+            ];
+            server.state['agents'] = [
+              for (var i = 0; i < 8; i++)
+                {
+                  'id': 'agent-$i',
+                  'name': 'Harness $i',
+                  'displayName': i == 0 ? 'Atlas' : 'Engineer $i',
+                  'machineId': 'm',
+                  'harnessId': 'native-$i',
+                  'contributorId': 'owner',
+                  'configuration': {'engine': 'codex'},
+                },
+            ];
+            (server.state['conversations'] as List)[0]
+              ..['leadId'] = 'agent-0'
+              ..['agentIds'] = ['agent-0'];
+            server.state['machines'] = [
+              {
+                'machineId': 'm',
+                'name': 'M2',
+                'contributorId': 'owner',
+                'paused': true,
+                'engines': ['claude', 'codex'],
+                'cwd': '/work/a-very-long-project-folder-without-spaces/checked-out-project',
+                'observation': {
+                  'receivedAt': DateTime.now().millisecondsSinceEpoch,
+                  'resources': {
+                    'deviceType': 'MacBook Pro',
+                    'chip': 'Apple M2 Max',
+                    'os': 'macOS',
+                    'cpuPercent': 27,
+                    'gpuPercent': 7,
+                    'memoryTotalBytes': 64000000000,
+                    'memoryUsedBytes': 36000000000,
+                    'diskTotalBytes': 1000000000000,
+                    'diskFreeBytes': 141000000000,
+                  },
+                  'quotas': [
+                    {'engine': 'claude', 'known': false, 'windows': []},
+                    {
+                      'engine': 'codex',
+                      'known': true,
+                      'windows': [
+                        {
+                          'name': '5-hour',
+                          'usedPercent': 30,
+                          'resetsAt': DateTime.now()
+                              .add(const Duration(hours: 2))
+                              .millisecondsSinceEpoch,
+                        },
+                        {
+                          'name': 'Weekly',
+                          'usedPercent': 10,
+                          'resetsAt': DateTime.now()
+                              .add(const Duration(days: 3))
+                              .millisecondsSinceEpoch,
+                        },
+                      ],
+                    },
+                  ],
+                },
+              },
+            ];
+            final c = server.controller();
+            await c.refresh();
+            final machineBoundary = GlobalKey();
+            await tester.pumpWidget(
+              MaterialApp(
+                debugShowCheckedModeBanner: false,
+                theme: grid.buildAppTheme(brightness: brightness),
+                builder: (context, child) => MediaQuery(
+                  data: MediaQuery.of(context)
+                      .copyWith(textScaler: TextScaler.linear(textScale)),
+                  child: child!,
+                ),
+                home: Scaffold(
+                  body: Align(
+                    alignment: Alignment.topLeft,
+                    child: RepaintBoundary(
+                      key: machineBoundary,
+                      child: Material(
+                        color: grid.AppDesktop.surface,
+                        child: SizedBox(
+                          width: width,
+                          child: SuperTabMachines(
+                            controller: c,
+                            embedded: true,
+                            onAddAgent: (_) {},
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+            await tester.pumpAndSettle();
+            if (capture != null) {
+              // A frame can settle before asynchronous bitmap decoding has
+              // finished. Wait for the real asset before photographing it.
+              await tester.runAsync(
+                () => precacheImage(
+                  AssetImage(engineIdentity('codex').asset!),
+                  tester.element(find.byType(EngineMark).first),
+                ).timeout(const Duration(seconds: 10)),
+              );
+              await tester.pumpAndSettle();
+            }
+            final row = find.byKey(const ValueKey('super-machine-m'));
+            final header = find.byKey(const ValueKey('super-machine-header-m'));
+            final avatars = tester
+                .widgetList<SuperTabAvatar>(
+                  find.descendant(
+                    of: header,
+                    matching: find.byType(SuperTabAvatar),
+                  ),
+                )
+                .toList();
+            expect(avatars.first.identity, 'person:owner');
+            expect(avatars.first.name, 'dee');
+            expect(avatars[1].identity, 'agent:agent-0');
+            expect(avatars[1].name, 'Atlas');
+            expect(
+              find.byTooltip('dee@example.com\nMachine owner'),
+              findsOneWidget,
+            );
+            expect(find.byTooltip('Atlas\nProduct Manager'), findsOneWidget);
+            expect(find.byTooltip('New work paused'), findsOneWidget);
+            expect(find.textContaining('agents'), findsNothing);
+            expect(find.text('dee'), findsNothing);
+            final hiddenAgents = 8 - (avatars.length - 1);
+            expect(
+              find.text('+$hiddenAgents'),
+              hiddenAgents == 0 ? findsNothing : findsOneWidget,
+            );
+            if (width == 280) expect(hiddenAgents, greaterThan(0));
+            for (final value in [
+              'CPU 73%',
+              'GPU 93%',
+              'RAM 28 GB',
+              'SSD 141 GB',
+              '70%',
+            ]) {
+              expect(find.text(value), findsOneWidget);
+            }
+            final rowRect = tester.getRect(row);
+            final ink = find.descendant(
+              of: row,
+              matching: find.byType(InkWell),
+            );
+            expect(tester.getRect(ink), rowRect);
+            expect(rowRect.width, width);
+            final headerRect = tester.getRect(header);
+            for (final avatar
+                in find
+                    .descendant(
+                      of: header,
+                      matching: find.byType(SuperTabAvatar),
+                    )
+                    .evaluate()) {
+              final rect = tester.getRect(find.byWidget(avatar.widget));
+              expect(rect.center.dy, closeTo(headerRect.center.dy, .1));
+              expect(rect.right, lessThanOrEqualTo(rowRect.right - 16));
+            }
+            expect(tester.takeException(), isNull);
+
+            // The blank right edge and all capacity/allowance lines belong to
+            // the same hover and click target as the machine's name.
+            final mouse = await tester.createGesture(
+              kind: PointerDeviceKind.mouse,
+            );
+            await mouse.addPointer(
+              location: Offset(rowRect.right + 20, rowRect.center.dy),
+            );
+            await tester.pump();
+            await mouse.moveTo(Offset(rowRect.right - 2, rowRect.center.dy));
+            await tester.pumpAndSettle();
+            final captureName =
+                '${brightness.name}-${textScale}x-${width.toInt()}';
+            await captureBoundary(
+              tester,
+              machineBoundary.currentContext!.findRenderObject()!
+                  as RenderRepaintBoundary,
+              capture,
+              'machine-hover-$captureName',
+            );
+            await tester.tapAt(Offset(rowRect.right - 2, rowRect.center.dy));
+            await mouse.removePointer();
+            await tester.pumpAndSettle();
+            final dialog = find.byType(AlertDialog);
+            final details = find.byType(SuperTabMachineDetails);
+            expect(dialog, findsOneWidget);
+            expect(details, findsOneWidget);
+            expect(
+              find.descendant(
+                of: details,
+                matching: find.text('28 GB of 64 GB'),
+              ),
+              findsOneWidget,
+            );
+            expect(
+              find.descendant(
+                of: details,
+                matching: find.text('141 GB of 1000 GB'),
+              ),
+              findsOneWidget,
+            );
+            expect(
+              find.descendant(
+                of: details,
+                matching: find.textContaining(
+                  '5-hour: 70% remaining\nResets in ',
+                ),
+              ),
+              findsOneWidget,
+            );
+            expect(
+              find.descendant(
+                of: details,
+                matching: find.textContaining(
+                  'Weekly: 90% remaining\nResets in ',
+                ),
+              ),
+              findsOneWidget,
+            );
+            expect(
+              find.descendant(of: details, matching: find.text('—')),
+              findsNothing,
+            );
+            expect(tester.takeException(), isNull);
+            await captureWindow(
+              tester,
+              capture,
+              'machine-details-$captureName',
+            );
+            if (capture != null && textScale > 1) {
+              await Scrollable.ensureVisible(
+                tester.element(find.text('Model allowances')),
+                alignment: 0,
+              );
+              await tester.pumpAndSettle();
+              await captureWindow(
+                tester,
+                capture,
+                'machine-details-more-$captureName',
+              );
+            }
+            await tester.tap(find.widgetWithText(TextButton, 'Close'));
+            await tester.pumpAndSettle();
+            expect(tester.takeException(), isNull);
+            await tester.pumpWidget(const SizedBox());
+            await c.flush();
+            c.dispose();
+          },
+        );
+      }
+    }
+  }
 
   test('shared repository metadata excludes embedded credentials', () {
     expect(
@@ -604,7 +921,7 @@ void main() {
     );
   }
 
-  testWidgets('A machine card omits unknown subscription allowances', (
+  testWidgets('Machine details omit unknown subscription allowances', (
     tester,
   ) async {
     final f = SuperTabLaunchFixture();
@@ -645,6 +962,10 @@ void main() {
         ),
       ),
     );
+    await tester.pumpAndSettle();
+    expect(find.byType(EngineMark), findsOneWidget);
+    expect(tester.widget<EngineMark>(find.byType(EngineMark)).engine, 'claude');
+    await tester.tap(find.byKey(const ValueKey('super-machine-m')));
     await tester.pumpAndSettle();
     expect(
       tester

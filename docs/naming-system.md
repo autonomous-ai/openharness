@@ -85,8 +85,14 @@ A pane is a view, so closing a pane or tab closes views. **Stop Harness** ends t
 running harness. Adding harnesses to a tab groups them without a separate team
 setup. A **Swarm** occupies one tab in that same tab bar. A person can belong to several Swarms.
 Its project names open their product manager chats; a separate chevron reveals each project's workgroups.
+An expanded project without workgroups says **No workgroups yet**. **Your devices** opens the
+existing Devices tab. The navigation, conversation and people panes have draggable dividers.
 Agents have individual display names and the same avatar treatment as people. Their role badges
 are **PM** and **Dev**; project context appears underneath. Engine names belong in details.
+Chat headings and quoted replies use the same current agent identity as the roster, including
+older messages. When an agent has left, its recorded author name remains available in history.
+Machine rows reuse the owner's and agents' avatars, keep known capacity and allowances visible,
+and open labeled details. Offline machines omit stale readings.
 The stored `lead` and `builder` routing roles and native harness names remain compatible.
 People, agents and machines belong to the Swarm. A project's **Public** visibility means everyone
 in that Swarm; **Private** means its owner and explicitly invited project members. Swarms are

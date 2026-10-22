@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
 import '../state/terminal_pane.dart';
+import 'agent_group_picker.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
@@ -314,13 +315,15 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
     String groupId, {
     bool resume = false,
   }) {
+    final group = controller.snapshot?.conversation(groupId);
     if (!mounted ||
         app.activeSwarmId != tabId ||
-        controller.snapshot
-                ?.conversation(groupId)
-                ?.agentIds
-                .contains(agent.id) !=
-            true) {
+        controller.accountId != app.currentUser?.id ||
+        controller.accessRevoked ||
+        controller.snapshot?.agent(agent.id) == null ||
+        group == null ||
+        group.archived ||
+        !group.agentIds.contains(agent.id)) {
       return;
     }
     controller.select(groupId);
@@ -352,40 +355,9 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
         controller: controller,
         requireWrite: false,
         projectId: agent.projectId,
-        child: AlertDialog(
-          title: Text(
-            'Open ${controller.snapshot?.agentName(agent.id) ?? agent.name}',
-          ),
-          content: SizedBox(
-            width: 360,
-            child: ListenableBuilder(
-              listenable: controller,
-              builder: (context, _) => ListView(
-                shrinkWrap: true,
-                children: [
-                  for (final group
-                      in controller.snapshot?.conversations ??
-                          <SuperTabConversation>[])
-                    if (!group.archived && group.agentIds.contains(agent.id))
-                      ListTile(
-                        key: ValueKey('super-agent-group-${group.id}'),
-                        title: Text(
-                          controller.snapshot!.isProjectLead(group.id)
-                              ? '${controller.snapshot!.projectFor(group.id)!.name} product manager'
-                              : group.label,
-                        ),
-                        onTap: () => Navigator.pop(context, group.id),
-                      ),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-          ],
+        child: SuperTabAgentGroupPicker(
+          controller: controller,
+          agentId: agent.id,
         ),
       ),
     );

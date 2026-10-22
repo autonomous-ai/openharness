@@ -132,7 +132,6 @@ ConversationServer polishFixture() {
       'kind': 'agent',
       'id': 'lead-agent',
       'name': 'Lead',
-      'displayName': 'Atlas',
     };
   }
 

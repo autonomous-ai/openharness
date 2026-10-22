@@ -170,7 +170,11 @@ class SuperTabSnapshot {
   String agentName(String id, {String fallback = 'Agent'}) =>
       agent(id)?.displayName ?? agent(id)?.name ?? fallback;
 
-  String authorName(SuperTabMessage message) => message.authorName;
+  // Resolve the person shown in chat from the same identity as the roster.
+  // Recorded labels remain the fallback for agents no longer in the Swarm.
+  String authorName(SuperTabMessage message) => message.fromAgent
+      ? agentName(message.authorId, fallback: message.authorName)
+      : message.authorName;
 }
 
 class SuperTabRouteChoice {
@@ -289,8 +293,8 @@ class SuperTabMessage {
   final DateTime? createdAt;
   final List<SuperTabAttachment> attachments;
   final List<Map<String, dynamic>> deliveries;
-  // History and message grouping use the identity recorded at send time, even
-  // after removal. Legacy messages retain their original author label.
+  // Preserve the recorded identity for history and for removed agents. Views
+  // with a current roster resolve the visible name through Snapshot.authorName.
   String get authorName =>
       (fromAgent ? author['displayName'] as String? : null) ??
       author['name'] as String? ??
