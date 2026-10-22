@@ -74,3 +74,18 @@ CLI source/toolchain: changed Super Tab modules and transitive engine trust, Git
   while retaining completed trust records. An arbitrary backend-selected config remains refused.
 - RED first: shell capture repeats at five seconds; missing config repeats lstat; a later local
   profile misses source/worktree trust. All three new regressions failed before these fixes.
+
+### Later clones and migration isolation
+
+- Refresh the two consented root folder listings on every periodic pass, including after an empty or
+  fully settled repair. New folder names reopen repair while successful Git discovery and settings
+  records stay cached; steady polls only reread the directory names and retain failure backoff.
+- Do not cache a missing .git directory as permanent rejection: a clone can be observed before Git
+  initialization completes. A changed pending path also drops that clone's discovery for a fresh check.
+- Catch migration exceptions before start pickup and preserve backoff even when repair throws.
+- A Codex table already present settles that path, including explicit untrusted. Preserve the person's
+  decision and stop polling its config; missing/malformed settings retain the slow retry.
+- RED first: four later-clone cases (empty/previously repaired, failed one-shot shell/config), an
+  initializing clone, thrown repair and explicit untrusted retry. All seven regressions failed before
+  implementation and pass afterward.
+- Lead explicitly authorized marking #1531 ready after the final push so automatic CLI CI runs.

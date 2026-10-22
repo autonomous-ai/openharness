@@ -282,7 +282,7 @@ describe('consented Swarm clones', () => {
       expectTrusted(source)
     } finally { vi.mocked(launchEnvironment).mockImplementation(async () => ({ ...process.env })); machine.stop() }
   })
-  it('defers skipped configs without filesystem work and repairs them on the slow recheck', async () => {
+  it('defers skipped configs without repeated trust path checks and repairs them on the slow recheck', async () => {
     const f = fixture(true), source = clone(join(f.oldRoot, 'project')), codex = join(process.env.CODEX_HOME!, 'config.toml')
     rmSync(codex)
     let now = 1
@@ -321,4 +321,82 @@ describe('consented Swarm clones', () => {
       expect(f.deps.capacity).toHaveBeenCalledTimes(1)
     } finally { machine.stop() }
   })
+  it.each([
+    { existing: false, failure: 'shell' }, { existing: true, failure: 'shell' },
+    { existing: false, failure: 'config' }, { existing: true, failure: 'config' },
+  ])('discovers a later clone after one-shot $failure failure (existing=$existing)', async ({ existing, failure }) => {
+    const f = fixture(true), earlier = existing ? clone(join(f.oldRoot, 'earlier')) : undefined
+    let now = 1
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
+      open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => now } as never)
+    try {
+      await machine.tick()
+      const earlierReads = vi.mocked(readGitProject).mock.calls.filter(call => call[0] === earlier).length
+      const source = clone(join(f.oldRoot, 'project')), codex = join(process.env.CODEX_HOME!, 'config.toml')
+      if (failure === 'shell') vi.mocked(launchEnvironment).mockResolvedValueOnce(null)
+      else { rmSync(codex); mkdirSync(codex) }
+      await prepareSwarmProject(f.core, f.row, { request: { conversationId: 'work', cwd: source }, dispatched: false }, async () => source)
+      if (failure === 'config') { rmSync(codex, { recursive: true }); writeFileSync(codex, '') }
+      expect(folderTrust('codex')!.trusts(source)).toBe(false)
+      const readsAfterPreparation = vi.mocked(readGitProject).mock.calls.filter(call => call[0] === earlier).length
+      now = 5_001; await machine.tick()
+      expectTrusted(source)
+      // The one-shot scan may revisit it; the periodic pass must reuse successful Git discovery.
+      expect(vi.mocked(readGitProject).mock.calls.filter(call => call[0] === earlier)).toHaveLength(readsAfterPreparation)
+      if (existing) expect(earlierReads).toBe(1)
+    } finally { machine.stop() }
+  })
+  it('retries a clone directory first seen before git initialization completes', async () => {
+    const f = fixture(true), source = join(f.oldRoot, 'project')
+    mkdirSync(source, { recursive: true })
+    let now = 1
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
+      open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => now } as never)
+    try {
+      await machine.tick()
+      clone(source)
+      now = 15_001; await machine.tick()
+      expectTrusted(source)
+    } finally { machine.stop() }
+  })
+  it('dispatches starts and backs off even when repair throws', async () => {
+    const f = fixture(true), source = clone(join(f.oldRoot, 'project'))
+    Object.assign(f.row, { starts: [{ id: 'start', dispatched: true }] })
+    let now = 1
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const start = vi.fn(async () => ({ ok: false }))
+    const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
+      open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start, now: () => now } as never)
+    vi.mocked(launchEnvironment).mockRejectedValueOnce(new Error('temporary repair failure'))
+    try {
+      await machine.tick()
+      expect(start).toHaveBeenCalledTimes(1)
+      now = 5_001; await machine.tick()
+      expect(start).toHaveBeenCalledTimes(2)
+      expect(launchEnvironment).toHaveBeenCalledTimes(1)
+      now = 15_001; await machine.tick()
+      expectTrusted(source)
+    } finally { machine.stop() }
+  })
+  it('settles an existing untrusted Codex entry without rewriting or retrying it', async () => {
+    const f = fixture(true), source = clone(join(f.oldRoot, 'project')), codex = join(process.env.CODEX_HOME!, 'config.toml')
+    const original = `[projects.${JSON.stringify(source)}]\ntrust_level = "untrusted"\n`
+    writeFileSync(codex, original)
+    let now = 1
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string) => path.endsWith('/pools') ? [f.row] : {})
+    const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend,
+      open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => now } as never)
+    try {
+      await machine.tick()
+      expect(folderTrust('codex')!.trusts(source)).toBe(false)
+      const stats = vi.mocked(lstat).mock.calls.length, records = vi.mocked(recordTrustIn).mock.calls.length
+      now = 300_001; await machine.tick()
+      expect(lstat).toHaveBeenCalledTimes(stats)
+      expect(recordTrustIn).toHaveBeenCalledTimes(records)
+      expect(readFileSync(codex, 'utf8')).toBe(original)
+    } finally { machine.stop() }
+  })
+
 })

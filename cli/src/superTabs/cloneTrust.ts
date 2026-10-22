@@ -58,28 +58,34 @@ async function physicalRoot(base: string, ...parts: string[]): Promise<string | 
   }
 }
 
+/** Folder names are cheap to reread; a clone can arrive after a completely successful or empty pass.
+ * Keep the Git/worktree results separate so steady polling never repeats that expensive discovery. */
+async function cloneFolders(core: CoreApi, tabId: string): Promise<DiscoverySnapshot['roots']> {
+  const roots: DiscoverySnapshot['roots'] = new Map()
+  for (const [index, lexicalRoot] of swarmCloneRoots(core.dataDir, tabId).entries()) {
+    try {
+      const root = index === 0 ? await physicalRoot(homedir(), 'harnesses', 'swarms', tabId)
+        : await physicalRoot(core.dataDir, 'swarm-projects', tabId)
+      const entries = root ? (await readdir(root, { withFileTypes: true }))
+        .filter(entry => entry.isDirectory() && identifier(entry.name))
+        .map(entry => ({ source: join(root, entry.name), lexical: join(lexicalRoot, entry.name) }))
+        .sort((a, b) => a.source.localeCompare(b.source)) : []
+      roots.set(lexicalRoot, entries)
+    } catch { /* A missing reading stays incomplete so discovery retries after backoff. */ }
+  }
+  return roots
+}
+
 async function discoverClones(core: CoreApi, row: Json, tabId: string, snapshot: DiscoverySnapshot): Promise<{ clones: ClonePaths[]; complete: boolean }> {
   const clones: ClonePaths[] = []
-  let complete = true
+  let complete = snapshot.roots.size === swarmCloneRoots(core.dataDir, tabId).length
   const ids = new Set(Array.isArray(row.harnessIds) ? row.harnessIds.filter(identifier) : [])
   const agents = core.agents.all().filter(agent => ids.has(agent.agentId))
   const agentFolders = await Promise.all(agents.map(agent => agent.cwd ? realpath(agent.cwd).catch(() => null) : null))
   let worktrees: string | null
   try { worktrees = await physicalRoot(homedir(), 'harnesses', 'worktrees') }
   catch { return { clones, complete: false } }
-  const requested = swarmCloneRoots(core.dataDir, tabId)
-  for (const [index, lexicalRoot] of requested.entries()) {
-    let entries = snapshot.roots.get(lexicalRoot)
-    if (!entries) {
-      try {
-        const root = index === 0 ? await physicalRoot(homedir(), 'harnesses', 'swarms', tabId)
-          : await physicalRoot(core.dataDir, 'swarm-projects', tabId)
-        entries = root ? (await readdir(root, { withFileTypes: true }))
-          .filter(entry => entry.isDirectory() && identifier(entry.name))
-          .map(entry => ({ source: join(root, entry.name), lexical: join(lexicalRoot, entry.name) })) : []
-        snapshot.roots.set(lexicalRoot, entries)
-      } catch { complete = false; continue }
-    }
+  for (const [lexicalRoot, entries] of snapshot.roots) {
     for (const { source, lexical } of entries) {
       if (snapshot.clones.has(source)) {
         const known = snapshot.clones.get(source)
@@ -93,7 +99,8 @@ async function discoverClones(core: CoreApi, row: Json, tabId: string, snapshot:
           throw error
         })
         // A clone owns its .git directory; a link or a worktree is not another consented clone.
-        if (!git?.isDirectory()) { snapshot.clones.set(source, null); continue }
+        if (!git) { complete = false; continue } // A clone may still be initializing its .git directory.
+        if (!git.isDirectory()) { snapshot.clones.set(source, null); continue }
         const project = await readGitProject(source, { knownRoots: [lexicalRoot] })
         if ('error' in project) throw new Error('Clone discovery unavailable')
         if (!('root' in project) || resolve(project.root) !== source || 'mainFolder' in project) {
@@ -140,15 +147,19 @@ interface RepairSnapshot {
 
 /** The host owns this cache. A steady pool does no shell/Git/config work after successful repair. */
 export function createSwarmCloneTrustRepair(core: CoreApi, now: () => number = Date.now): (row: Json) => Promise<void> {
-  const repairs = new Map<string, { generation: unknown; homes: string; snapshot: RepairSnapshot; failures: number; next: number }>()
+  const repairs = new Map<string, { generation: unknown; homes: string; folders: string; snapshot: RepairSnapshot; failures: number; next: number }>()
   return async row => {
     if (!identifier(row.tabId)) return
-    const generation = object(row.machine).generation
+    const pool = object(row.machine)
+    if (pool.scope !== 'swarm' || !swarmCloneRoot(core.dataDir, row.tabId, pool.cwd)) return
+    const generation = pool.generation
+    const roots = await cloneFolders(core, row.tabId)
+    const folders = JSON.stringify([...roots])
     const homes = JSON.stringify([...new Set(core.agents.all().filter(agent => agent.engine === 'codex' && agent.codexHome)
       .map(agent => resolve(agent.codexHome!)))].sort())
     let repair = repairs.get(row.tabId)
     if (!repair || repair.generation !== generation) {
-      repair = { generation, homes, snapshot: { recorded: new Set() }, failures: 0, next: 0 }
+      repair = { generation, homes, folders, snapshot: { recorded: new Set() }, failures: 0, next: 0 }
       repairs.set(row.tabId, repair)
     } else if (repair.homes !== homes) {
       // A newly registered profile may already have a worktree. Discover it even without a new grant.
@@ -158,14 +169,24 @@ export function createSwarmCloneTrustRepair(core: CoreApi, now: () => number = D
       repair.failures = 0
       repair.next = 0
     }
+    if (repair.folders !== folders) {
+      repair.folders = folders
+      repair.snapshot.complete = false
+      repair.failures = 0
+      repair.next = 0
+    }
+    const discovery = repair.snapshot.discovery ??= { roots, clones: new Map() }
+    discovery.roots = roots
     if (repair.snapshot.complete || now() < repair.next) return
-    await repairSwarmCloneTrust(core, row, undefined, repair.snapshot)
-    if (!repair.snapshot.complete) {
-      // Five-second start pickup must not run a broken login shell or unavailable config each pass.
-      // Engines that have never run have no config yet; look again slowly without creating one.
-      const delay = repair.snapshot.slowRetry ? 300_000 : Math.min(15_000 * 2 ** repair.failures, 300_000)
-      repair.failures = Math.min(repair.failures + 1, 5)
-      repair.next = now() + delay
+    try { await repairSwarmCloneTrust(core, row, undefined, repair.snapshot) }
+    finally {
+      if (!repair.snapshot.complete) {
+        // Five-second start pickup must not run a broken login shell or unavailable config each pass.
+        // Engines that have never run have no config yet; look again slowly without creating one.
+        const delay = repair.snapshot.slowRetry ? 300_000 : Math.min(15_000 * 2 ** repair.failures, 300_000)
+        repair.failures = Math.min(repair.failures + 1, 5)
+        repair.next = now() + delay
+      }
     }
   }
 }
@@ -177,7 +198,7 @@ export async function repairSwarmCloneTrust(core: CoreApi, row: Json, profile?: 
   const pool = object(row.machine)
   if (pool.scope !== 'swarm' || !identifier(row.tabId) || !swarmCloneRoot(core.dataDir, row.tabId, pool.cwd) || snapshot.complete) return
   snapshot.slowRetry = false
-  const discovery = snapshot.discovery ??= { roots: new Map(), clones: new Map() }
+  const discovery = snapshot.discovery ??= { roots: await cloneFolders(core, row.tabId), clones: new Map() }
   const { clones, complete: discovered } = await discoverClones(core, row, row.tabId, discovery)
   if (!clones.length) { snapshot.complete = discovered; return }
   const local = core.agents.all()
@@ -203,12 +224,14 @@ export async function repairSwarmCloneTrust(core: CoreApi, row: Json, profile?: 
       if (snapshot.recorded.has(key)) continue
       // Failed settings retry against the original physical identity, never an alias that now escapes.
       if (!await stillMatches(clone.source, clone.proofs.get(clone.source)!) || !await stillMatches(cwd, clone.proofs.get(cwd)!)) {
+        snapshot.discovery?.clones.delete(clone.source)
         complete = false; continue
       }
       try {
         const result = trust?.record(cwd)
         if (result === 'skipped') snapshot.slowRetry = true
-        if ((result === 'trusted' || result === 'already') && trust?.trusts(cwd)) snapshot.recorded.add(key)
+        // Codex also returns already for an explicit refusal. Keep that answer and stop retrying it.
+        if (result === 'trusted' || result === 'already') snapshot.recorded.add(key)
         else complete = false
       } catch { complete = false /* Retry only this setting; another engine and the pool still proceed. */ }
     }

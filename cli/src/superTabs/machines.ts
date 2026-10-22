@@ -97,7 +97,8 @@ export class ContributedMachines {
         } catch (error) { this.failed = true; throw error }
         }
         this.repairTrust ??= createSwarmCloneTrustRepair(this.core, this.deps.now)
-        await this.repairTrust(row)
+        try { await this.repairTrust(row) }
+        catch { /* Trust migration cannot prevent this pass from picking up pending starts. */ }
         // Two launches per pass bounds expensive native work. Pending starts
         // keep their original receipt across network failures and host restarts.
         const cursor = this.cursors.get(String(row.tabId)) ?? 0
