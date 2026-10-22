@@ -4,7 +4,7 @@
 
 **Goal:** Require the Lead to reuse, keep or stop each finished worker; stopping closes its native session and returns its machine slot.
 
-**Architecture:** Persist the decision on the Swarm agent, independently of the group's replaceable assignment. The backend gates new routing, starting and assignment. The execution host consumes stop requests through the existing identity-bound core lifecycle, including its service-process bridge, and confirms removal through the command transaction, which also cancels deliveries. A global SuperTabRun reservation prevents another public Swarm from assigning the same native session during close. A pending stop cannot be reassigned. An owner or contributor can withdraw a stuck stop with normal Remove; this clears its reservation and permanently retires that native ID from Swarm contributions, so delayed closure cannot hit newly assigned work. Native core closure accepts only the original recorded Swarm launch and refuses personally resumed sessions throughout saving/stopping.
+**Architecture:** Persist the decision on the Swarm agent, independently of the group's replaceable assignment. The backend gates new routing, starting and assignment. The execution host consumes stop requests through the existing identity-bound core lifecycle, including its service-process bridge, and confirms removal through the command transaction, which also cancels deliveries. A global SuperTabRun reservation prevents another public Swarm from assigning the same native session during close. A pending stop cannot be reassigned. An owner or contributor can withdraw a stuck stop with normal Remove; this clears its work reservation and retires that native ID only in this Swarm. Native capacity remains reserved until host stop proof. A separate two-minute close lease protects other Swarms from an already-running close; completion or expiry permits reuse elsewhere. Native core closure accepts only the original recorded Swarm launch and refuses personally resumed sessions throughout saving/stopping.
 
 **Tech stack:** Existing TypeScript, Zod, Prisma/MongoDB, Vitest and Flutter. No new dependencies.
 
@@ -25,7 +25,7 @@
 - Decisions survive replacing a brief or archiving the finished group.
 - Only the execution host can acknowledge physical stopping. A person may administratively withdraw a stuck stop; an agent cannot impersonate that withdrawal.
 - Repeated host polls and lost acknowledgements never close a replacement session or close the same session twice.
-- Removing the agent also removes its outstanding deliveries and releases the slot despite an older running observation/start receipt.
+- Removing the agent cancels outstanding deliveries. Capacity is released only by host stop evidence; person withdrawal retains its native reservation.
 
 ### Task 1: Backend policy and state
 
@@ -42,7 +42,7 @@
 
 **Files:** backend/src/superTabs/store.ts, backend/integration/superTabs.test.ts; cli/src/superTabs/host.ts, host.spec.ts; cli/src/core/api.ts, experimentQueries.ts and their tests; cli/src/services/processCoreApi.ts and its tests. Core API additions are kept in a separate commit.
 
-**Interfaces:** Host roster exposes stop requests only without active work. The CLI passes the creation receipt, native session ID and creation time recorded by agent.started to core.agents.closeSwarm. Core checks agent ownership, the original creation receipt and conversation identity, and refuses personal resume before/after asynchronous lookup and throughout the lifecycle. An authoritatively absent native session counts as stopped even without a stopped-history record. Only a positive close result permits host acknowledgement as that agent. The close request carries the exact native session identity and is exposed only to the Swarm service process. Backend host removal requires the current release token, shares cancellation semantics with ordinary withdrawal, and stores a durable stopped-harness receipt independent of replaceable observations. Stop intent refuses any other Swarm membership, including an idle Lead. Session-scope writes serialize contribution and stop transactions. Optional session-scope stopReleaseId and released fields preserve compatibility with existing Mongo records. A re-contribution after a confirmed stop reserves its slot until removal: unversioned late observations cannot prove that its new runtime stopped.
+**Interfaces:** Host roster exposes stop requests only without active work. The CLI passes the creation receipt, native session ID and creation time recorded by agent.started to core.agents.closeSwarm. Core checks agent ownership, the original creation receipt and conversation identity, and refuses personal resume before/after asynchronous lookup and throughout the lifecycle. An authoritatively absent native session counts as stopped even without a stopped-history record. Only a positive close result permits host acknowledgement as that agent. The close request carries the exact native session identity and is exposed only to the Swarm service process. Backend host removal requires the current release token, shares cancellation semantics with ordinary withdrawal, and stores a durable stopped-harness receipt independent of replaceable observations. Stop intent refuses any other Swarm membership, including an idle Lead. Session-scope writes serialize contribution and stop transactions. Optional session-scope stopReleaseId and close-lease fields plus default-empty releasedTabIds preserve compatibility with existing Mongo records. A re-contribution reserves a new generation: unversioned late observations cannot prove that its new runtime stopped, even after membership removal. Host polling includes withdrawn reservations; matching generation-stamped stop observations retire them and persist durable physical-stop proof.
 
 - [x] Add failing tests for host stop pickup, safe retry, refusal/unavailable lifecycle, foreign sessions and slot release through real Mongo transactions.
 - [x] Implement stop pickup outside native delivery; withhold new input for stop-requested agents.
@@ -61,9 +61,9 @@
 - [x] Fetch/rebase current main, inspect new interactions and repeat only invalidated checks. Commit/push the reviewed changes and open a draft PR with exact evidence and timing. Report its URL and head revision.
 
 
-## Review corrections and validation record
+## Earlier review validation (superseded by final review below)
 
-Validated source: `5f5595e53`, rebased cleanly on current main `f1a67cd22`. The final evidence-only commit does not change component inputs. Node 24.3.0, locked npm dependencies, disposable MongoDB 7.0.24 replica set; Flutter 3.47.5 / Dart 3.13.4 on macOS arm64. Tested component trees: CLI `ef737f3b94e7ff1f67b55f2f2920267f1e0c9d3e`, backend `0ab259684dc680db212ece9e595d4a3d0bffd817`, Desktop `b50fcb14523b4af8c98a7f3c7fe8907536ce737e`.
+Earlier validated source: `5f5595e53`, rebased cleanly on current main `f1a67cd22`. The final evidence-only commit does not change component inputs. Node 24.3.0, locked npm dependencies, disposable MongoDB 7.0.24 replica set; Flutter 3.47.5 / Dart 3.13.4 on macOS arm64. Tested component trees: CLI `ef737f3b94e7ff1f67b55f2f2920267f1e0c9d3e`, backend `0ab259684dc680db212ece9e595d4a3d0bffd817`, Desktop `b50fcb14523b4af8c98a7f3c7fe8907536ce737e`.
 
 Every requested review correction had a failing regression before its implementation:
 
@@ -95,3 +95,33 @@ The first review-fix core attempt collided with coverage cleanup from a parallel
 The original full CLI `npm test -- --maxWorkers=4` run was stopped at its ten-minute budget. It encountered failures in unchanged `sessionRepair.spec.ts`, `stoppedAgents.spec.ts`, `storePool.spec.ts`, `exactTranscript.spec.ts`, `nativeDescriptors.golden.spec.ts`, `messages/rpc.spec.ts` and `publishedGridConfig.spec.ts`. New regressions were added during that broad run, so it is incomplete and is not a final-source pass. Stable affected tests, core results, types, routing coverage and native E2E are separate receipts. No required gate was lowered or silently skipped.
 
 Timing (UTC): initial explicit Go 03:48; draft publication 04:14, first handover 04:17 (29 minutes total, including overlapping implementation/review/validation). Review-fix implementation, follow-up review and validation continued in the same request; final publication timing is recorded in the shared handover. No merge or release occurred. PR #1527 remains draft.
+
+
+## Second review corrections and final validation
+
+Final source is rebased on `9313c4429`, preserving main's five-part delegation and change-driven Machines publisher. The merged maximum-ID Lead prompt is 1,994 units and its 49 bootstrap/launch tests pass. A conflict-resolution syntax error was caught and corrected before final validation.
+
+All three requested regressions failed before implementation:
+
+- A person withdrawing a stuck stop no longer creates physical-stop receipts or frees capacity. Every new contribution records a native slot reservation independently of membership. Person removal retains it; the host continues polling withdrawn IDs, including contributed sessions without start receipts. Re-contribution invalidates old receipts and uses a new generation. Matching host stop proof persists durably, so older running observations cannot resurrect a confirmed released slot, even while old membership remains. Older unversioned hosts may prove a first contribution stopped; renewed reservations conservatively need generation-stamped host proof or the exact host removal acknowledgement.
+- Administrative retirement records only the originating tab. Other Swarms can use the contributor's session after any in-flight close finishes or its bounded lease expires. The Lead explicitly approved a two-minute native-close lease. Its completion and expiration paths have transactional regressions. Core enforces the deadline before/after asynchronous receipt lookup and through save/stop callbacks. The host derives its local deadline from request-start time plus the returned duration, so clock skew and network delay cannot extend server authority; a server-clock-skew regression failed first.
+- Making a project private skips rebinding stopping agents while preserving historical audience checks and private-scope updates.
+
+| Scope | Final observed result |
+| --- | --- |
+| CLI `npm run test:super-tabs` | 111 pass; all four coverage measures 100% |
+| CLI `npm run typecheck` | Pass |
+| CLI affected tests (same command above) | 517 pass |
+| CLI `npm run test:core -- --maxWorkers=3 --testTimeout=15000` | 2,946 pass; changed core/service files 100%; unchanged osDevice.ts:181 keeps gate nonzero |
+| CLI isolated native E2E (same command above) | 1 pass, 57.27s; real private daemon/service process/backend/tmux, leased original-launch stop, personal session/Lead preserved |
+| Backend `npx tsc --noEmit` | Pass |
+| Backend `npm test -- --maxWorkers=3` | 1,702 pass, 11 skipped |
+| Backend `npm run test:super-tabs` | 68 pass |
+| Desktop bootstrap/launch (same two files above) | 49 pass |
+| Desktop affected analyzer | No issues |
+
+The earlier full Desktop analyzer diagnostics and incomplete broad CLI baseline remain explicit validation gaps. Component CI is intentionally deferred while this remains a draft. No coverage threshold was lowered. Final source revision, exact component trees, review result and publication time are recorded at delivery.
+
+Final independent read-only review: no remaining material findings.
+
+Final validated source: `d8ef49df645f131bcfc200f3b6e6eea617e3d015`; CLI tree `e0b9dd89a159cd5732cee605a2025acfccb71148`, backend tree `a5318553728bbc76da167b173b2c93f7821a9022`, Desktop tree `eae4b0e36e8cdcb904215870ec4d24a526fbccec`. The evidence-only commit changes none of those inputs.
