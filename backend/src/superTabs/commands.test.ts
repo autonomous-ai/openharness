@@ -809,6 +809,49 @@ it('allows the contributor to keep a completed worker and refuses another projec
   expect(() => f.run({ type: 'agent.release', agentId: worker, decision: 'stop' }, { kind: 'agent', agentId: otherLead, machineOwnerId: 'host-owner' })).toThrow()
 })
 
+describe('cancelling work', () => {
+  function active() {
+    const f = fixture(); f.invite()
+    const lead = f.add('lead', 'owner', 'lead', true), group = f.group(), worker = f.add('worker', 'owner', group)
+    const leadActor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    const workerActor: Actor = { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }
+    const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
+    const cancel = { type: 'work.cancel', conversationId: group, assignmentId, reason: 'Duplicate of another task' } as Command
+    return { f, group, worker, leadActor, workerActor, assignmentId, cancel }
+  }
+  it('lets the Lead cancel, tells the worker once, and frees the worker to release', () => {
+    const { f, group, worker, leadActor, cancel } = active()
+    const effects = f.run(cancel, leadActor)
+    const assignment = f.state.conversations.find(c => c.id === group)!.assignment!
+    expect(assignment).toMatchObject({ status: 'cancelled', result: 'Duplicate of another task' })
+    expect(activeWork(f.state.conversations.find(c => c.id === group)!)).toBe(false)
+    expect(effects.messages).toHaveLength(1)
+    expect(effects.messages[0]).toMatchObject({ recipients: [worker], text: 'The Lead cancelled this task: Duplicate of another task. Stop working on it.' })
+    expect(f.run(cancel, leadActor).messages).toHaveLength(0)
+    expect(f.state.agents.find(a => a.id === worker)!.workDecision).toBe('awaiting')
+    f.run({ type: 'agent.release', agentId: worker, decision: 'keep' }, leadActor)
+    expect(f.state.agents.find(a => a.id === worker)!.workDecision).toBe('keep')
+  })
+  it('lets the tab owner cancel, and never counts a check as passed', () => {
+    const { f, group, cancel } = active()
+    f.run(cancel)
+    expect(f.state.conversations.find(c => c.id === group)!.checks.every(c => !c.passedBy)).toBe(true)
+  })
+  it('refuses the worker, a collaborator and another project’s Lead', () => {
+    const { f, workerActor, cancel } = active()
+    const project = f.run({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' }).result
+    const otherLead = f.add('other-lead', 'owner', project.conversationId as string, true)
+    expect(() => f.run(cancel, workerActor)).toThrow('Lead')
+    expect(() => f.run(cancel, peer)).toThrow('Lead')
+    expect(() => f.run(cancel, { kind: 'agent', agentId: otherLead, machineOwnerId: 'host-owner' })).toThrow()
+  })
+  it('refuses work that already finished', () => {
+    const { f, group, leadActor, assignmentId, cancel } = active()
+    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'stopped', result: null }, owner, { confirmedStopped: true })
+    expect(() => f.run(cancel, leadActor)).toThrow('already ended')
+  })
+})
+
 it('allows routing directly to the awaiting worker without first keeping it', () => {
   const f = routed(), group = f.group()
   const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: f.worker }).result.assignmentId as string

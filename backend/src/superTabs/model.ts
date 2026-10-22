@@ -67,7 +67,7 @@ export interface AgentStart {
 }
 /** `needs_human`: the agent needs a person's decision (its result is the question). `blocked`: it cannot go on (its result
  * says why). Both stay active work; the machine running the agent alerts its Harness Pro (cli/src/superTabs/attention.ts). */
-export type WorkStatus = 'planned' | 'working' | 'needs_human' | 'blocked' | 'review' | 'done' | 'stopped' | 'reconciling'
+export type WorkStatus = 'planned' | 'working' | 'needs_human' | 'blocked' | 'review' | 'done' | 'stopped' | 'cancelled' | 'reconciling'
 export interface Check {
   id: string
   description: string
@@ -175,7 +175,7 @@ export function fail(code: string, message: string, status = 409): never { throw
 export const stableId = (...parts: string[]): string => createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 24)
 export const actorKey = (actor: Actor): string => actor.kind === 'person' ? `person:${actor.userId}` : `agent:${actor.agentId}`
 export const activeWork = (group: Conversation): boolean => !!group.assignment &&
-  !['done', 'stopped'].includes(group.assignment.status)
+  !['done', 'stopped', 'cancelled'].includes(group.assignment.status)
 
 /** Old states derive pending decisions from their closed assignments; new states persist them on the worker. */
 export function awaitingWorkers(state: SuperTabState, projectId: string): Agent[] {

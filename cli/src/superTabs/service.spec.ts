@@ -502,6 +502,7 @@ it('documents finished worker decisions and explains an older backend without re
   const t = setup()
   const help = (await t.ask({ action: 'help' }, owner)).help as { commands: unknown[]; release: string }
   expect(help.commands).toContainEqual({ type: 'agent.release', agentId: 'AGENT', decision: 'keep|stop' })
+  expect(help.commands).toContainEqual(expect.objectContaining({ type: 'work.cancel', assignmentId: 'ATTEMPT' }))
   expect(help.release).toContain('prefer stop')
   t.call.mockImplementation(async (...args: unknown[]) => args[0] === 'POST'
     ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'Invalid request' } } } as never

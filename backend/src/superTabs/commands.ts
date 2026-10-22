@@ -92,6 +92,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('work.assign'), conversationId: id, agentId: id, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   z.object({ type: z.literal('work.status'), conversationId: id, assignmentId: id,
     status: z.enum(['working', 'needs_human', 'blocked', 'review', 'done', 'stopped']), result: text.nullable() }).strict(),
+  z.object({ type: z.literal('work.cancel'), conversationId: id, assignmentId: id, reason }).strict(),
   z.object({ type: z.literal('route.record'), conversationId: id, decision: routeRecordSchema }).strict(),
   z.object({ type: z.literal('route.override'), decisionId: id, candidateId: z.string().regex(/^c\d{1,2}$/), reason }).strict(),
   z.object({ type: z.literal('route.modelResult'), decisionId: id, startId: id, model: z.string().min(1).max(200), effort: z.string().min(1).max(80) }).strict(),
@@ -804,6 +805,24 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           ['needs_human', 'blocked', 'review', 'done'].includes(command.status)
         message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}`, tellLead ? [lead] : [])
       }
+      break
+    }
+    case 'work.cancel': {
+      const group = open(state, command.conversationId)
+      const assignment = group.assignment
+      if (!assignment || assignment.id !== command.assignmentId) fail('STALE_ASSIGNMENT', 'This is no longer the active assignment.')
+      const project = groupProject(state, group)
+      const isLead = actor.kind === 'agent' && conversation(state, project.leadConversationId).leadId === actor.agentId
+      if (!isLead && !(actor.kind === 'person' && actor.userId === state.ownerId)) {
+        fail('FORBIDDEN', 'Only this project’s Lead or the tab owner can cancel work.', 403)
+      }
+      // A retry after the cancel keeps the first reason and tells the worker once.
+      if (assignment.status === 'cancelled') break
+      if (!activeWork(group)) fail('ATTEMPT_CLOSED', 'This attempt has already ended.')
+      assignment.status = 'cancelled'
+      assignment.result = command.reason
+      finishWorker(state, assignment.agentId)
+      message(group.id, `The Lead cancelled this task: ${command.reason}. Stop working on it.`, [assignment.agentId])
       break
     }
     case 'work.check': {

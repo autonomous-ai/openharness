@@ -21,6 +21,8 @@ void main() {
     expect(superTabWorkStatusLabel('blocked'), 'stuck');
     expect(superTabWorkStatusLabel('needs_human'), 'needs human');
     expect(superTabWorkStatusLabel('reconciling'), 'reconciling');
+    expect(superTabWorkStatusLabel('cancelled'), 'cancelled');
+    expect(superTabWorkWaits('cancelled'), isFalse);
   });
 
   Future<SuperTabController> show(

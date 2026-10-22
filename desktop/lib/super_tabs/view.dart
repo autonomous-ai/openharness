@@ -875,6 +875,7 @@ class _SuperTabViewState extends State<SuperTabView>
                       const [
                         'done',
                         'stopped',
+                        'cancelled',
                       ].contains(group.assignment!['status'])
                   ? () => _groupAction('archive', group)
                   : null,

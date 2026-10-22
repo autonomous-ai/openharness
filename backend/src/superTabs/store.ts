@@ -480,6 +480,9 @@ export class SuperTabStore {
         revision, state: json(effects.state), ...indexes(effects.state),
       } })
       await writeRouteEffects(tx, tabId, effects.routeDecisions, context.now)
+      if (command.type === 'work.cancel' && !activeWork(conversation(effects.state, command.conversationId)) && effects.messages.length) {
+        await closeAssignment(tx, tabId, command.assignmentId, 'cancelled', context.now)
+      }
       if (command.type === 'work.status' && (command.status === 'done' || command.status === 'stopped')) {
         await closeAssignment(tx, tabId, command.assignmentId, command.status, context.now)
       }
