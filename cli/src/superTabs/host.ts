@@ -90,6 +90,8 @@ export class SuperTabHost {
   private running: Promise<void> | null = null
   private stopsRunning: Promise<void> | null = null
   private readonly releases = new Set<string>()
+  /** Eligibility and failures belong to this stop and native runtime; a new runtime or stop gets a fresh decision. */
+  private readonly releaseAttempts = new Map<string, { signature: string; failures: number; retryAt: number; closed?: true }>()
   private nextStopsAt = 0
   private receiptsRunning: Promise<void> | null = null
   private nextReceiptsAt = 0
@@ -218,11 +220,18 @@ export class SuperTabHost {
     }
   }
 
-  /** Stop intent cannot be reused or revoked. Re-read membership before closing, and require native evidence before removal. */
+  /** Re-read stop intent and native launch authority; require core evidence before confirming removal. */
   private async releaseWorker(target: HostAgent): Promise<void> {
     const { tabId, agent } = target
     const key = `${tabId}:${agent.id}`
     if (this.releases.has(key) || !this.core.agents.closeSwarm) return
+    const native = this.core.agents.byAgent(agent.harnessId)
+    const signature = JSON.stringify([agent.releaseId, object(agent).startedSession, native
+      ? [native.sessionId, native.registeredAt, native.startedBy, native.resumeOnly, native.processIdentity] : null])
+    const previous = this.releaseAttempts.get(key)
+    const attempt = previous?.signature === signature ? previous : { signature, failures: 0, retryAt: 0, closed: undefined }
+    if (this.now() < attempt.retryAt) return
+    this.releaseAttempts.set(key, attempt)
     this.releases.add(key)
     try {
       const current = object(object(await backend(this.core, 'GET', `/api/super-tabs/${tabId}?asAgentId=${agent.id}`)).state)
@@ -233,24 +242,61 @@ export class SuperTabHost {
         const work = object(c.assignment)
         return work.agentId === agent.id && !['done', 'stopped'].includes(String(work.status))
       })) return
-      // Start locally before asking: server clock skew cannot extend authority, and network delay consumes it.
-      const leaseRequestedAt = Date.now()
-      const leased = object(object(await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, {
-        operationId: `close-lease-${randomUUID()}`, asAgentId: agent.id,
-        command: { type: 'agent.stopLease', agentId: agent.id, releaseId: agent.releaseId },
-      })).result)
-      if (typeof leased.durationMs !== 'number' || !Number.isFinite(leased.durationMs) || leased.durationMs <= 0 || leased.durationMs > 120_000) throw new Error('The host could not reserve this native close. Remove a stuck contribution or update its backend.')
-      const identity = object(member.startedSession)
-      const result = await this.core.agents.closeSwarm({ agentId: agent.harnessId, expiresAt: leaseRequestedAt + (leased.durationMs as number),
-        ...(typeof identity.creationId === 'string' ? { creationId: identity.creationId } : {}),
-        ...(typeof identity.sessionId === 'string' ? { sessionId: identity.sessionId } : {}),
-        ...(typeof identity.createdAt === 'string' ? { createdAt: identity.createdAt } : {}) })
-      if (!result.closed) throw new Error(result.detail ?? result.error ?? 'Could not stop this Swarm worker.')
+      if (attempt.closed) {
+        // A failed acknowledgement can outlive the native stop; a fresh core read must still rule out personal resume.
+        const confirmed = await this.core.agents.closeSwarm({ agentId: agent.harnessId })
+        if (!confirmed.closed) {
+          if (['NOT_SWARM_STARTED', 'AGENT_CHANGED'].includes(String(confirmed.error))) attempt.retryAt = Infinity
+          throw new Error(confirmed.detail ?? confirmed.error ?? 'The stopped session could not be confirmed.')
+        }
+      } else {
+        const identity = object(member.startedSession)
+        let result
+        if (!native) {
+          // The process snapshot can lag. Only the authoritative core may confirm absence; no lease can close a live row.
+          result = await this.core.agents.closeSwarm({ agentId: agent.harnessId })
+        } else {
+          if (native.startedBy !== 'agent' || native.resumeOnly || !identifier(identity.creationId)
+            || typeof identity.sessionId !== 'string' || !identity.sessionId || typeof identity.createdAt !== 'string'
+            || native.sessionId !== identity.sessionId || native.registeredAt !== Date.parse(identity.createdAt)) {
+            attempt.retryAt = Infinity
+            this.log('This session is not the original Swarm launch. Remove its stuck contribution.')
+            return
+          }
+          const creation = await this.core.agents.creationStatus?.(identity.creationId)
+          if (creation?.state === 'created' && creation.agentId !== agent.harnessId) {
+            attempt.retryAt = Infinity
+            this.log('This session is not the original Swarm launch. Remove its stuck contribution.')
+            return
+          }
+          if (creation?.state !== 'created') throw new Error('The original Swarm launch could not be confirmed. Stop will retry with backoff.')
+          if (this.stopped) return
+          // Start locally before asking: server clock skew cannot extend authority, and network delay consumes it.
+          const leaseRequestedAt = Date.now()
+          const leased = object(object(await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, {
+            operationId: `close-lease-${randomUUID()}`, asAgentId: agent.id,
+            command: { type: 'agent.stopLease', agentId: agent.id, releaseId: agent.releaseId },
+          })).result)
+          if (typeof leased.durationMs !== 'number' || !Number.isFinite(leased.durationMs) || leased.durationMs <= 0 || leased.durationMs > 120_000) throw new Error('The host could not reserve this native close. Remove a stuck contribution or update its backend.')
+          result = await this.core.agents.closeSwarm({ agentId: agent.harnessId, expiresAt: leaseRequestedAt + leased.durationMs,
+            creationId: identity.creationId, sessionId: identity.sessionId, createdAt: identity.createdAt })
+        }
+        if (!result.closed) {
+          if (['NOT_SWARM_STARTED', 'AGENT_CHANGED'].includes(String(result.error))) attempt.retryAt = Infinity
+          throw new Error(result.detail ?? result.error ?? 'Could not stop this Swarm worker.')
+        }
+        attempt.closed = true
+      }
       if (this.stopped) return
       await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, {
         operationId: `release-${agent.releaseId ?? agent.id}`, asAgentId: agent.id, command: { type: 'agent.remove', agentId: agent.id, releaseId: agent.releaseId },
       })
+      attempt.retryAt = Infinity
     } catch (error) {
+      attempt.failures++
+      // Five attempts total; permanent ownership/identity refusals never acquire another lease for this runtime.
+      if (attempt.retryAt !== Infinity) attempt.retryAt = attempt.failures >= 5 ? Infinity
+        : this.now() + [5_000, 15_000, 60_000, 120_000][attempt.failures - 1]!
       this.log(error instanceof Error ? error.message : String(error))
     } finally { this.releases.delete(key) }
   }
@@ -313,6 +359,8 @@ export class SuperTabHost {
         this.nextConfigurationsAt = this.now() + 5_000
       })
     }
+    const stopKeys = new Set(data.filter(item => object(item).stopRequested === true).map(item => { const row = object(item); return `${row.tabId}:${object(row.agent).id}` }))
+    for (const key of this.releaseAttempts.keys()) if (!stopKeys.has(key)) this.releaseAttempts.delete(key)
     const seen = new Set<string>()
     for (const item of data) {
       const row = object(item), agent = object(row.agent)

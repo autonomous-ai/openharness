@@ -351,7 +351,7 @@ it('starts either engine once, posts to its captured group and delivers shared i
   expect(contributed.error, JSON.stringify(contributed)).toBeUndefined()
   const contributedId = idFor(contributed.agent.id)
   agents.push({ id: contributedId, harnessId: contributed.agent.id, machineId: ME.machineId, workDecision: 'stop', releaseId: 'personal-session-stop' })
-  await until('the core to refuse closing a personal session', () => d.log().includes('NOT_SWARM_STARTED') || null, 15_000, 100)
+  await until('the core to refuse closing a personal session', () => d.log().includes('not the original Swarm launch') || null, 15_000, 100)
   expect((await client.request('agents_list')).agents.some((a: Record<string, any>) => a.id === contributed.agent.id)).toBe(true)
   agents.splice(agents.findIndex(a => a.id === contributedId), 1)
   // Only the recorded original Swarm launch may be closed through the service process.
