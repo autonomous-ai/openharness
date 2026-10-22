@@ -234,9 +234,79 @@ describe('Super Tab collaboration policy', () => {
     expect(post(as(worker))).toEqual([lead])
     expect(post(as(worker), [other])).toEqual([other])
     expect(post(as(other))).toEqual([])
-    expect(post(as(lead))).toEqual([])
+    expect(post(as(lead))).toEqual([worker])
     f.run({ type: 'work.status', conversationId: group, assignmentId: f.state.conversations[1]!.assignment!.id, status: 'blocked', result: 'Stuck.' }, as(worker))
     expect(post(as(worker))).toEqual([lead])
+  })
+
+  describe('a Lead\'s message to the assigned worker (#1549)', () => {
+    const setup = () => {
+      const f = fixture()
+      const lead = f.add('lead', 'owner', 'lead', true)
+      const group = f.group(), worker = f.add('worker', 'owner', group), other = f.add('other', 'owner', group)
+      const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+      const history: { author: { kind: 'agent' | 'person'; id: string }; recipients: string[]; id: string }[] = []
+      const post = (agentId: string, recipientIds: string[] = [], replyTo: string | null = null) => {
+        const reply = history.find(m => m.id === replyTo)
+        const sent = f.run({ type: 'message.send', conversationId: group, text: 'Update.', replyTo, recipientIds }, as(agentId), {
+          recent: history.slice().reverse().slice(0, 8).map(m => ({ author: m.author as never, recipients: m.recipients })),
+          ...(reply ? { reply: { id: reply.id, conversationId: group, author: reply.author as never } } : {}),
+        }).messages[0]!
+        history.push({ author: { kind: 'agent', id: agentId }, recipients: sent.recipients, id: sent.id })
+        return sent
+      }
+      return { f, lead, group, worker, other, as, post, history }
+    }
+
+    it('reaches the assigned worker for a plain post, only while the work is active', () => {
+      const { f, lead, group, worker, post } = setup()
+      expect(post(lead).recipients).toEqual([])
+      f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+      expect(post(lead).recipients).toEqual([worker])
+      f.run({ type: 'work.cancel', conversationId: group, assignmentId: f.state.conversations[1]!.assignment!.id, reason: 'Duplicate of another task' })
+      expect(post(lead).recipients).toEqual([])
+    })
+
+    it('reaches the assigned worker for a reply to the worker\'s message', () => {
+      const { f, lead, group, worker, post } = setup()
+      f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+      const report = post(worker)
+      expect(report.recipients).toEqual([lead])
+      expect(post(lead, [], report.id).recipients).toEqual([worker])
+    })
+
+    it('lets explicit recipients win and leaves other members, replies to others and person routing alone', () => {
+      const { f, lead, group, worker, other, as, post, history } = setup()
+      f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+      expect(post(lead, [other]).recipients).toEqual([other])
+      const aside = post(other)
+      expect(aside.recipients).toEqual([])
+      expect(post(lead, [], aside.id).recipients).toEqual([])
+      const personMessage = f.run({ type: 'message.send', conversationId: group, text: 'Status?', replyTo: null, recipientIds: [] }).messages[0]!
+      history.push({ author: { kind: 'person', id: 'owner' }, recipients: personMessage.recipients, id: personMessage.id })
+      expect(personMessage.recipients).toEqual([lead])
+      const reply = f.run({ type: 'message.send', conversationId: group, text: 'Ask the worker', replyTo: personMessage.id, recipientIds: [] }, as(lead), {
+        reply: { id: personMessage.id, conversationId: group, author: personMessage.author },
+      }).messages[0]!
+      expect(reply.recipients).toEqual([])
+    })
+
+    it('delivers at most one automatic round trip between the Lead and the worker', () => {
+      const { f, lead, group, worker, post } = setup()
+      f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+      const hops: string[][] = []
+      let speaker = worker
+      // Each agent answers every message it receives, the worst case for a loop.
+      for (let turn = 0; turn < 20; turn++) {
+        const sent = post(speaker, [], null)
+        hops.push(sent.recipients)
+        const next = sent.recipients[0]
+        if (!next) break
+        speaker = next
+      }
+      expect(hops).toEqual([[lead], [worker], [lead], []])
+      expect(post(lead, [worker]).recipients).toEqual([worker])
+    })
   })
 
   it('lets a viewer read and leave, but not send, assign, attach or invite', () => {

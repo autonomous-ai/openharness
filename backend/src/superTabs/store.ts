@@ -28,6 +28,8 @@ type Transaction = Prisma.TransactionClient
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
 type SendCommand = Extract<Command, { type: 'message.send' }>
 // Prisma on MongoDB: `usedBy: null` alone misses rows that never had the field.
+/** How far back `message.send` looks for an automatic Lead/worker round trip (commands.ts leadWorkerBounced). */
+const RECENT_MESSAGES = 8
 const unused = { OR: [{ usedBy: null }, { usedBy: { isSet: false } }] }
 const hash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const stateOf = (row: SuperTab): SuperTabState => {
@@ -383,6 +385,11 @@ export class SuperTabStore {
       if (command.type === 'message.send' && command.replyTo) {
         const reply = await tx.superTabMessage.findFirst({ where: { id: command.replyTo, tabId, conversationId: command.conversationId } })
         if (reply) context.reply = { id: reply.id, conversationId: reply.conversationId, author: reply.author as unknown as Author }
+      }
+      if (command.type === 'message.send' && actor.kind === 'agent') {
+        const recent = await tx.superTabMessage.findMany({ where: { tabId, conversationId: command.conversationId },
+          orderBy: { sequence: 'desc' }, take: RECENT_MESSAGES, select: { author: true, recipientIds: true } })
+        context.recent = recent.map(m => ({ author: m.author as unknown as Author, recipients: m.recipientIds }))
       }
       if (command.type === 'work.status' && command.status === 'stopped') {
         const proof = await tx.superTabStopReceipt.findUnique({ where: { tabId_assignmentId: { tabId, assignmentId: command.assignmentId } } })
