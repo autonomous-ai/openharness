@@ -1318,14 +1318,14 @@ it('releases a finished worker through its execution host, cancels deliveries an
   await store.observeMachine(host, tab, 'test-host', { ...oldObservation, runningHarnessIds: [], stoppedHarnessIds: [native],
     stoppedReservations: [{ harnessId: native, generation: 'old-generation' }] })
   const stillReserved = (await store.read(owner, tab)).state
-  expect(machineSlots(stillReserved, stillReserved.machines![0]!)).toBe(2)
+  expect(stillReserved.machines![0]!.availableSlots).toBe(2)
   await store.observeMachine(host, tab, 'test-host', { ...oldObservation, runningHarnessIds: [], stoppedHarnessIds: [native],
     stoppedReservations: [reservation] })
   const physicallyStopped = (await store.read(owner, tab)).state
-  expect(machineSlots(physicallyStopped, physicallyStopped.machines![0]!)).toBe(1)
+  expect(physicallyStopped.machines![0]!.availableSlots).toBe(3)
   await store.observeMachine(host, tab, 'test-host', oldObservation)
   const delayedAgain = (await store.read(owner, tab)).state
-  expect(machineSlots(delayedAgain, delayedAgain.machines![0]!)).toBe(1)
+  expect(delayedAgain.machines![0]!.availableSlots).toBe(3)
 })
 
 it('fences a shared native session globally while its release is pending', async () => {

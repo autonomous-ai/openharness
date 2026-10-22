@@ -233,6 +233,7 @@ export class SuperTabHost {
         const work = object(c.assignment)
         return work.agentId === agent.id && !['done', 'stopped'].includes(String(work.status))
       })) return
+      // Start locally before asking: server clock skew cannot extend authority, and network delay consumes it.
       const leaseRequestedAt = Date.now()
       const leased = object(object(await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, {
         operationId: `close-lease-${randomUUID()}`, asAgentId: agent.id,

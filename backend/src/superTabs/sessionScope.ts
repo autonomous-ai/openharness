@@ -10,7 +10,7 @@ export async function bindSession(tx: Prisma.TransactionClient, state: SuperTabS
   const id = stableId('swarm-session', state.environment, target.machineOwnerId, target.id)
   const prior = await tx.superTabSessionScope.findUnique({ where: { id } })
   if (prior?.releasedTabIds.includes(state.id)) fail('SESSION_RELEASED', 'This session was withdrawn while stopping in this Swarm. Start a new Harness here or use it in another Swarm.')
-  if (prior?.closeLeaseUntil && prior.closeLeaseUntil.getTime() > now) fail('CLOSE_PENDING', 'A previous Swarm is finishing a native close. Wait up to two minutes, then retry.')
+  if (prior?.closeLeaseUntil && prior.closeLeaseUntil.getTime() > now) fail('CLOSE_PENDING', 'Another Swarm is stopping this session. Wait up to two minutes, then try again.')
   if (prior?.stopReleaseId) fail('STOP_REQUESTED', 'This session is stopping. Wait for its host or withdraw it before contributing another session.')
   const running = await tx.superTabRun.findUnique({ where: { id: target.id } })
   if (running?.assignmentId.startsWith('release-')) fail('STOP_REQUESTED', 'This session is stopping. Wait for its host or force-withdraw it before contributing another session.')

@@ -121,5 +121,7 @@ it('keeps durable release receipts authoritative over stale observations and ret
   f.state.releasedHarnesses = [{ machineId: 'host', harnessId: 'finished' }]
   expect(machineSlots(f.state, pool)).toBe(0)
   f.state.agents.push({ machineId: 'host', harnessId: 'finished' } as never)
+  expect(machineSlots(f.state, pool)).toBe(0)
+  f.state.harnessReservations = [{ machineId: 'host', harnessId: 'finished', generation: 'new-runtime', renewed: true }]
   expect(machineSlots(f.state, pool)).toBe(1)
 })

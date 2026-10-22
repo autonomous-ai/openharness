@@ -251,6 +251,7 @@ export function visibleState(state: SuperTabState, actor: Actor): SuperTabState 
   const visible = structuredClone(state)
   assignAgentDisplayNames(visible.agents)
   delete visible.sharing
+  delete visible.harnessReservations
   delete visible.releasedHarnesses
   numberConversations(visible)
   delete visible.retiredConversationNumber
@@ -268,6 +269,7 @@ export function visibleState(state: SuperTabState, actor: Actor): SuperTabState 
       if (!pool.observation) continue
       pool.observation.runningHarnessIds = pool.observation.runningHarnessIds.filter(id => harnesses.has(id))
       pool.observation.stoppedHarnessIds = pool.observation.stoppedHarnessIds.filter(id => harnesses.has(id))
+      if (pool.observation.stoppedReservations) pool.observation.stoppedReservations = pool.observation.stoppedReservations.filter(r => harnesses.has(r.harnessId))
     }
     visible.invitations = visible.invitations.filter(i => visible.conversations.some(c => c.id === i.conversationId))
   }

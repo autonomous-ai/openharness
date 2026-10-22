@@ -51,7 +51,7 @@ export function machineContribution(state: SuperTabState, machineId: string) {
 /** Pending intents reserve slots too. Only an explicit host stop frees a launched slot. */
 export function machineSlots(state: SuperTabState, pool: ContributedMachine) {
   const reservations = (state.harnessReservations ?? []).filter(r => r.machineId === pool.machineId)
-  const live = new Set([...state.agents.filter(a => a.machineId === pool.machineId).map(a => a.harnessId), ...reservations.map(r => r.harnessId)])
+  const live = new Set(reservations.map(r => r.harnessId))
   const released = (state.releasedHarnesses ?? []).filter(r => r.machineId === pool.machineId && !live.has(r.harnessId)).map(r => r.harnessId)
   const observed = pool.observation?.stoppedHarnessIds ?? []
   const stopped = new Set([...observed.filter(id => {

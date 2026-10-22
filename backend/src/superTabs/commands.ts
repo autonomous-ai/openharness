@@ -568,7 +568,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       } else if (actor.kind !== 'person' || (actor.userId !== state.ownerId && actor.userId !== target.contributorId)) {
         fail('FORBIDDEN', 'Only the contributor or tab owner can withdraw this agent.', 403)
       }
-      if (actor.kind === 'person' && !state.harnessReservations?.some(r => r.machineId === target.machineId && r.harnessId === target.harnessId)) {
+      if (actor.kind === 'person' && !state.harnessReservations?.some(r => r.machineId === target.machineId && r.harnessId === target.harnessId)
+        && !state.releasedHarnesses?.some(r => r.machineId === target.machineId && r.harnessId === target.harnessId)) {
         reserveHarnessSlot(state, target.machineId, target.harnessId, operationId)
       }
       removeAgent(target)
