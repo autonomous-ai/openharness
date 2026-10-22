@@ -87,7 +87,7 @@ void main() {
           final editableRect = editor.localToGlobal(Offset.zero) & editor.size;
           final hint = find.descendant(
             of: field,
-            matching: find.text('Message Lead'),
+            matching: find.text('Message Product Manager'),
           );
           measurements[name] = {
             'surfaceHeight': rect.height,

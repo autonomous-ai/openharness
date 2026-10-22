@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:window_manager/window_manager.dart';
@@ -39,6 +40,10 @@ void main() {
       await windowManager
           .setSize(const Size(1280, 800))
           .timeout(const Duration(seconds: 10));
+      // macOS stops delivering frames to a fully occluded native test window.
+      // Keep only this isolated fixture above other running Harness builds.
+      await windowManager.setAlwaysOnTop(true);
+      addTearDown(() => windowManager.setAlwaysOnTop(false));
       await windowManager.show().timeout(const Duration(seconds: 10));
       await windowManager.focus().timeout(const Duration(seconds: 10));
       debugPrint('Swarm fixture: create lead');
@@ -68,6 +73,9 @@ void main() {
       f.app.machineStates['m']!.agents = [Agent.fromJson(f.connection.native!)];
       final server = f.connection.server;
       server.state['name'] = 'Company';
+      for (final agent in server.state['agents'] as List) {
+        agent['displayName'] = agent['id'] == 'lead-agent' ? 'Atlas' : 'Sage';
+      }
       server.state['projects'] = [
         projectFixture('lead', 'Lamp OS', 'lead'),
         projectFixture(
@@ -202,6 +210,35 @@ void main() {
       expect(find.byTooltip('Invite people'), findsOneWidget);
       expect(find.text('CHATS'), findsNothing);
       expect(find.text('New group'), findsNothing);
+      expect(find.text('New project'), findsOneWidget);
+      debugPrint('Swarm fixture: empty project disclosure');
+      await tester.tap(
+        find.byKey(const ValueKey('super-project-expand-design')),
+      );
+      await tester.pumpAndSettle();
+      expect(c!.selectedId, 'lead');
+      expect(c.expandedProjects.contains('design'), isTrue);
+      expect(find.text('No workgroups yet'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+      await tester.pumpAndSettle();
+      expect(c.selectedId, 'lead');
+      final swarmId = f.app.activeSwarmId;
+      debugPrint('Swarm fixture: open Devices');
+      await tester.tap(find.byKey(const ValueKey('super-your-devices')));
+      // This fixture reserves the utility's conversation pane without a machine.
+      // Assert navigation while that pane waits for a connection instead of
+      // waiting for its indeterminate progress animation to settle.
+      await tester
+          .pump(const Duration(milliseconds: 100))
+          .timeout(const Duration(seconds: 10));
+      debugPrint('Swarm fixture: Devices frame painted');
+      expect(f.app.activeSwarm.isDevices, isTrue);
+      expect(f.app.activeSwarm.panes.first.isDevices, isTrue);
+      expect(f.app.activeSwarm.panes.last.isViewer, isFalse);
+      expect(f.app.takeMachinesRequest(), isNull);
+      f.app.selectSwarm(swarmId);
+      await tester.pumpAndSettle();
+      debugPrint('Swarm fixture: returned from Devices');
       final folder = Platform.environment['SUPER_TAB_NATIVE_SHOTS'];
       Future<void> shot(String name) async {
         if (folder == null) return;
@@ -217,6 +254,17 @@ void main() {
       }
 
       await shot('conversation');
+      expect(find.text('Lead'), findsNothing);
+      expect(find.text('Atlas'), findsNWidgets(2));
+      expect(find.text('Available capacity'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('super-machine-m')));
+      await tester.pumpAndSettle();
+      expect(find.text('Available capacity'), findsOneWidget);
+      expect(find.text('CPU'), findsOneWidget);
+      expect(find.text('86%'), findsOneWidget);
+      await shot('machine-details');
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
       expect(
         tester.getTopLeft(find.text('Routed to Multiply')).dx,
         tester.getTopLeft(find.byType(SuperTabMessageText).first).dx,
@@ -237,7 +285,7 @@ void main() {
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       await tester.tap(
-        find.byKey(ValueKey('super-member-${c!.snapshot!.agents.single.id}')),
+        find.byKey(ValueKey('super-member-${c.snapshot!.agents.single.id}')),
       );
       debugPrint('Swarm fixture: terminal requested');
       for (var i = 0; i < 30 && f.app.activeSwarm.panes.isEmpty; i++) {
@@ -269,12 +317,51 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
       debugPrint('Swarm fixture: terminal ready');
       await shot('terminal');
+      final liveSession = f.app.activeSwarm.panes.single.session;
+      final nativePanel = tester.element(find.byType(TerminalPanel));
+      final initialMiddle = tester
+          .getSize(find.byKey(const ValueKey('super-center-pane')))
+          .width;
+      await tester.drag(
+        find.byKey(const ValueKey('super-resize-left')),
+        const Offset(30, 0),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.drag(
+        find.byKey(const ValueKey('super-resize-right')),
+        const Offset(-30, 0),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(
+        tester.getSize(find.byKey(const ValueKey('super-center-pane'))).width,
+        closeTo(initialMiddle - 60, 1),
+      );
+      expect(f.app.activeSwarm.panes.single.session, same(liveSession));
+      expect(tester.element(find.byType(TerminalPanel)), same(nativePanel));
+      expect(
+        f.app.activeSwarm.panes.single.session?.streamId,
+        SuperTabFixtureConnection.streamId,
+      );
+      await shot('terminal-resized');
+      final focusRequest = f.app.paneFocusRequest;
+      final divider = find.byKey(const ValueKey('super-resize-right'));
+      tester
+          .widget<Focus>(
+            find.descendant(of: divider, matching: find.byType(Focus)),
+          )
+          .focusNode!
+          .requestFocus();
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(f.app.paneFocusRequest, focusRequest + 1);
+      expect(f.app.activeSwarm.panes.single.session, same(liveSession));
       expect(find.byType(PaneGrid), findsOneWidget);
       expect(
         tester
             .widget<Text>(find.byKey(const ValueKey('terminal-pane-title')))
             .data,
-        'Lead',
+        'Atlas',
       );
       var reviews = 0;
       f.app.reviewSessionClose = (_, {tabName, canStop}) async {
@@ -393,6 +480,16 @@ void main() {
       expect(find.text('#1 Offline editing'), findsWidgets);
       expect(tester.takeException(), isNull);
       await shot('group-terminals');
+      await tester.tap(find.byKey(const ValueKey('super-member-lead-agent')));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(
+        find.byKey(const ValueKey('super-agent-group-open')),
+        findsOneWidget,
+      );
+      await shot('agent-workgroups');
+      await tester.tap(find.byKey(const ValueKey('super-agent-group-cancel')));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(c.selectedId, 'offline');
 
       await tester.pumpWidget(const SizedBox());
       await c.flush();

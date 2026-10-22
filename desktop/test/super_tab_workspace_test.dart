@@ -229,6 +229,10 @@ void main() {
       );
       await tester.tap(find.byKey(const ValueKey('super-agent-group-lead')));
       await tester.pumpAndSettle();
+      expect(c.selectedId, 'offline');
+      expect(f.app.activeSwarm.panes, hasLength(4));
+      await tester.tap(find.byKey(const ValueKey('super-agent-group-open')));
+      await tester.pumpAndSettle();
       expect(c.selectedId, 'lead');
       expect(f.app.activeSwarm.panes.single.agentId, 'native-b');
       expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);

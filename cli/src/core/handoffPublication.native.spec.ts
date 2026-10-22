@@ -85,6 +85,71 @@ async function setup(rows = [row], found = true) {
 
 const noPublication = () => expect(fs.existsSync(join(cwd, '.harness', 'handoff'))).toBe(false)
 
+it.each(['claude', 'codex'] as const)('hands off recent context from a 2 GiB %s transcript within a bounded read', async engine => {
+  if (engine === 'claude') {
+    path = join(root, 'CLAUDE_CONFIG_DIR', 'projects', 'fixture', `${ID}.jsonl`)
+    vi.stubEnv('CLAUDE_PROJECTS_DIR', dirname(dirname(path)))
+    row = { ...row, engine, transcriptPath: path }
+  }
+  const records = engine === 'codex' ? transcript() : [
+    { type: 'user', sessionId: ID, cwd, isCompactSummary: true, message: { role: 'user', content: 'Earlier design decisions survive compaction.' } },
+    { type: 'user', sessionId: ID, cwd, timestamp: '2026-10-10T07:00:00Z', message: { role: 'user', content: 'Keep the reviewed conversation' } },
+    { type: 'assistant', sessionId: ID, cwd, timestamp: '2026-10-10T07:00:01Z', message: {
+      role: 'assistant', content: [{ type: 'text', text: 'Reviewed answer' }], stop_reason: 'end_turn' } },
+  ].map(line => JSON.stringify(line)).join('\n') + '\n'
+  write(path, records)
+  // A sparse output record models the reported 2 GB Claude log without allocating its contents.
+  const fd = fs.openSync(path, 'r+')
+  try {
+    fs.ftruncateSync(fd, 2 * 1024 ** 3)
+    fs.writeSync(fd, '\n' + records, 2 * 1024 ** 3)
+  } finally { fs.closeSync(fd) }
+  const open = promises.open
+  let bytesRead = 0
+  vi.spyOn(promises, 'open').mockImplementation(async (...args) => {
+    const handle = await open(...args)
+    if (String(args[0]) === path) {
+      const read = handle.read.bind(handle)
+      handle.read = (async (...args: Parameters<typeof read>) => {
+        const result = await read(...args)
+        bytesRead += result.bytesRead
+        return result
+      }) as typeof handle.read
+    }
+    return handle
+  })
+  const ctx = await setup(), started = performance.now()
+  const result = await ctx.prepare()
+  console.log(`[handoff-budget] ${engine}: ${Math.round(performance.now() - started)} ms, ${bytesRead} body bytes`)
+  // Turns use at most 16 MiB; Claude's separate, bounded compaction-summary lookup uses at most 8 MiB.
+  expect(bytesRead).toBeLessThanOrEqual((engine === 'claude' ? 24 : 16) * 1024 * 1024)
+  expect(result.degraded).toContain('transcript')
+  const markdown = fs.readFileSync(join(cwd, result.file!), 'utf8')
+  const history = fs.readFileSync(join(cwd, result.file!.replace(/\.md$/, '.transcript.md')), 'utf8')
+  for (const document of [markdown, history]) {
+    expect(document).toContain('Keep the reviewed conversation')
+    expect(document).toContain('Reviewed answer')
+    expect(document).toContain('Older history was omitted')
+  }
+  expect(markdown).not.toContain('The whole conversation')
+  if (engine === 'claude') expect(markdown).toContain('Earlier design decisions survive compaction.')
+}, 15_000)
+
+it.each(['own', 'fork'])('does not mistake an omitted %s conversation for empty history', async mode => {
+  const fd = fs.openSync(path, 'r+')
+  try {
+    fs.ftruncateSync(fd, 32 * 1024 * 1024)
+    fs.writeSync(fd, '\n', 32 * 1024 * 1024)
+    if (mode === 'fork') fs.writeSync(fd, transcript().replaceAll('07:00:', '09:00:'), 32 * 1024 * 1024 + 1)
+  } finally { fs.closeSync(fd) }
+  const parent = { ...row }
+  if (mode === 'fork') row = { ...row, agentId: 'fork', sessionId: '', transcriptPath: null,
+    forkedFrom: { agentId: parent.agentId, name: 'Parent', sessionId: ID, transcriptPath: path } }
+  const ctx = await setup(mode === 'fork' ? [row, parent] : [row])
+  await expect(ctx.prepare()).rejects.toMatchObject({ code: 'HANDOFF_UNAVAILABLE' })
+  noPublication()
+})
+
 it.each(['wrong header', 'incomplete header', 'delegated header', 'unavailable catalog'])('holds an own handoff with %s, without a mirror fallback', async fault => {
   const ctx = await setup()
   if (fault === 'wrong header') write(path, transcript(OTHER))

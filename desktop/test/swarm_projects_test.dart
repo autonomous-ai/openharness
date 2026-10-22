@@ -65,7 +65,7 @@ void main() {
       expect(find.byIcon(AppIcons.lock), findsOneWidget);
       expect(
         find.byKey(const ValueKey('super-project-expand-design')),
-        findsNothing,
+        findsOneWidget,
       );
       expect(find.text('Leads'), findsNothing);
       expect(find.text('Projects'), findsNothing);
@@ -130,7 +130,7 @@ void main() {
       expect(
         tester.getTopLeft(find.text('#12 Offline editing')).dx -
             tester.getTopLeft(projectName).dx,
-        8,
+        0,
       );
 
       // A child row's formerly empty inset is part of its one click target.

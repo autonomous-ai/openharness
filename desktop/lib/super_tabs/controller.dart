@@ -226,8 +226,15 @@ class SuperTabController extends ChangeNotifier {
     ),
   );
   bool hasOlder(String id) => _before[id] != null;
+  int _loadedMessageSequence(String id) =>
+      _messages[id]?.reversed
+          .where((m) => m.source['kind'] != 'update-request')
+          .firstOrNull
+          ?.sequence ??
+      0;
   bool unread(SuperTabConversation group) =>
-      group.lastMessageSequence > (_readAt[group.id] ?? 0);
+      max(group.lastMessageSequence, _loadedMessageSequence(group.id)) >
+      (_readAt[group.id] ?? 0);
 
   void start() {
     if (_disposed) return;
@@ -325,11 +332,14 @@ class SuperTabController extends ChangeNotifier {
     unawaited(loadMessages(id));
   }
 
-  /// A visible transcript passes its loaded boundary: a newer snapshot may
-  /// already advertise messages that have not arrived on this client yet.
+  /// A visible transcript passes the boundary it displayed. The loaded messages
+  /// are authoritative: snapshots can arrive either before or after their tail.
   void markRead(String id, {int? through}) {
-    final advertised = snapshot?.conversation(id)?.lastMessageSequence ?? 0;
-    final last = through == null ? advertised : min(through, advertised);
+    if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+      return;
+    }
+    final loaded = _loadedMessageSequence(id);
+    final last = min(through ?? loaded, loaded);
     if ((_readAt[id] ?? 0) >= last) return;
     _readAt[id] = last;
     _saveSoon();

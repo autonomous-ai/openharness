@@ -41,6 +41,9 @@ class SuperTabRoster extends StatefulWidget {
 class _SuperTabRosterState extends State<SuperTabRoster> {
   SuperTabController get c => widget.controller;
 
+  String _role(SuperTabAgent agent) =>
+      c.snapshot!.isLead(agent.id) ? 'Product Manager' : 'Engineer';
+
   HarnessActivity _activity(SuperTabAgent agent) {
     final app = widget.app;
     final native = app == null
@@ -77,7 +80,13 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Text(_role(agent)),
             Text(engineIdentity(agent.engine).label),
+            if (agent.name != c.snapshot!.agentName(agent.id))
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text('Harness: ${agent.name}'),
+              ),
             for (final field in [
               ('Model', 'model'),
               ('Effort', 'effort'),
@@ -143,23 +152,57 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
       child: ListTile(
         key: ValueKey('super-member-${agent.id}'),
         dense: true,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 1),
+        minTileHeight: 48,
+        minVerticalPadding: 6,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16),
         title: Row(
           children: [
             Tooltip(
               message: engineIdentity(agent.engine).label,
-              child: EngineMark(engine: agent.engine, size: 20),
+              child: SuperTabAvatar(
+                identity: 'agent:${agent.id}',
+                name: name,
+                size: 24,
+              ),
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
             Expanded(
-              child: Tooltip(
-                message: name,
-                child: Text(
-                  name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: DesktopChrome.control(medium: true),
-                ),
+              child: Row(
+                children: [
+                  Flexible(
+                    child: Tooltip(
+                      message: name,
+                      child: Text(
+                        name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: DesktopChrome.control(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Tooltip(
+                    message: _role(agent),
+                    child: Semantics(
+                      label: _role(agent),
+                      excludeSemantics: true,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 5,
+                          vertical: 1,
+                        ),
+                        decoration: BoxDecoration(
+                          color: grid.AppSurface.hoverFill,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          c.snapshot!.isLead(agent.id) ? 'PM' : 'Dev',
+                          style: DesktopChrome.metadata(),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(width: 8),
@@ -176,7 +219,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         subtitle: project == null
             ? null
             : Padding(
-                padding: const EdgeInsets.only(left: 30),
+                padding: const EdgeInsets.only(left: 32),
                 child: Tooltip(
                   message: project.name,
                   child: Text(
@@ -210,11 +253,15 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
       for (final person in state?.people ?? const <SuperTabPerson>[])
         ListTile(
           dense: true,
+          minTileHeight: 36,
+          minVerticalPadding: 6,
+          minLeadingWidth: 24,
           contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-          horizontalTitleGap: 10,
+          horizontalTitleGap: 8,
           leading: SuperTabAvatar(
             identity: 'person:${person.id}',
             name: superTabPersonName(person.email),
+            size: 24,
           ),
           title: Tooltip(
             message: person.email,
@@ -246,7 +293,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             ),
           ),
         ),
-      const SizedBox(height: 20),
+      const SizedBox(height: 16),
       SuperTabSectionHeading(
         'Agents',
         onAdd: c.canWrite && c.selected != null
@@ -275,7 +322,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           padding: const EdgeInsets.symmetric(vertical: 12),
           children: [
             ..._members(),
-            const SizedBox(height: 20),
+            const SizedBox(height: 16),
             SuperTabMachines(
               controller: c,
               app: widget.app,

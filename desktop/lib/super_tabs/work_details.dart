@@ -31,7 +31,7 @@ Future<void> showSuperTabWork(
                   SuperTabMessageText(group!.brief)
                 else
                   const Text(
-                    'The lead hasn’t defined an assignment in this conversation yet.',
+                    'The product manager hasn’t defined an assignment in this conversation yet.',
                   ),
                 if (assignment != null) ...[
                   const SizedBox(height: 16),

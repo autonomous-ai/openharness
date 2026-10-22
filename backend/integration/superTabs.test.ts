@@ -70,6 +70,29 @@ afterAll(async () => {
   await replica?.stop()
 })
 
+describe('agent member identities', () => {
+  it('keeps a name through replay and removal, including the stored message author', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'People and agents')).id
+    const operationId = randomUUID()
+    const command: Command = { type: 'agent.add', conversationId: 'lead', machineId: 'test-host',
+      harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true }
+    const added = await run(tab, command, owner, undefined, operationId)
+    const agentId = added.result.agentId as string
+    const first = await store.read(owner, tab)
+    const agent = first.state.agents.find(a => a.id === agentId)!
+    expect(agent.displayName).toBeTruthy()
+    expect(agent.displayName).not.toBe('Lead')
+    expect(await run(tab, command, owner, undefined, operationId)).toEqual(added)
+    expect((await store.read(owner, tab)).revision).toBe(first.revision)
+    await run(tab, message('The plan is ready.'), host, agentId)
+    await run(tab, { type: 'agent.remove', agentId })
+    const rows = (await store.messages(owner, tab, 'lead', {})).messages
+    expect(rows.find(row => row.text === 'The plan is ready.')!.author)
+      .toMatchObject({ id: agentId, name: 'Lead', displayName: agent.displayName })
+    expect((await store.read(owner, tab)).state.agents).toEqual([])
+  })
+})
+
 describe('deleting abandoned swarm projects', () => {
   it('deletes the project through the API, fences stale requests, and replays only the deletion receipt', async () => {
     const { tab } = await fixture()
@@ -498,6 +521,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
 
   it('tells the group once, in plain words, that a claimed delivery is waiting, and only for the claim holder', async () => {
     const { tab, lead } = await fixture()
+    const displayName = (await store.read(owner, tab)).state.agents.find(a => a.id === lead)!.displayName!
     await run(tab, message('Please start.'))
     const delivery = (await store.deliveries(host, tab, lead))[0]!
     await expect(store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_draft' }))
@@ -509,10 +533,12 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(await store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })).toEqual({ noticed: false })
     const rows = (await store.messages(owner, tab, 'lead', {})).messages
     expect(rows).toHaveLength(2)
-    expect(rows[1]).toMatchObject({ author: { kind: 'agent', id: lead }, recipientIds: [], deliveries: [],
-      text: expect.stringContaining('A message for Lead is waiting. There is unsent text in Lead\'s input box.') })
+    expect(rows[1]).toMatchObject({ author: { kind: 'agent', id: lead, displayName }, recipientIds: [], deliveries: [],
+      text: expect.stringContaining(`A message for ${displayName} is waiting. There is unsent text in ${displayName}'s input box.`) })
     await store.delivery(host, tab, lead, delivery.id, { type: 'ack', claimId: 'claim', receipt: 'done', uncertain: false })
     expect(await store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })).toEqual({ noticed: false })
+    await run(tab, { type: 'agent.remove', agentId: lead })
+    expect((await store.messages(owner, tab, 'lead', {})).messages[1]!.author).toMatchObject({ displayName })
   })
 
   it('a withdrawn host can retire its receipt without regaining conversation access', async () => {
@@ -770,6 +796,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const { tab, lead } = await fixture()
     const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
       name: 'Builder', configuration: config, lead: false })).result.agentId as string
+    const displayName = (await store.read(owner, tab)).state.agents.find(a => a.id === worker)!.displayName!
     await run(tab, { type: 'work.define', conversationId: 'lead', brief: 'Build it.', checks: [{ description: 'Test passes.', independent: false }] })
     const assignmentId = (await run(tab, { type: 'work.assign', conversationId: 'lead', agentId: worker })).result.assignmentId as string
     const before = (await store.deliveries(host, tab, lead)).length
@@ -777,10 +804,13 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await store.stopped(host, tab, assignmentId, 'native-stop-receipt')
     const notices = (await store.messages(owner, tab, 'lead', {})).messages.filter(m => m.text.startsWith('Stopped'))
     expect(notices).toHaveLength(1)
-    expect(notices[0]).toMatchObject({ author: { kind: 'agent', id: worker, name: 'Builder' },
+    expect(notices[0]).toMatchObject({ author: { kind: 'agent', id: worker, name: 'Builder', displayName },
       text: 'Stopped\n\nThe execution host confirmed that this harness stopped. If this work should continue, assign a new attempt.' })
     expect(await store.deliveries(host, tab, lead)).toHaveLength(before + 1)
     expect((await store.read(owner, tab)).state.conversations[0]!.lastMessageSequence).toBe(notices[0]!.sequence)
+    await run(tab, { type: 'agent.remove', agentId: worker })
+    expect((await store.messages(owner, tab, 'lead', {})).messages.find(m => m.id === notices[0]!.id)!.author)
+      .toMatchObject({ displayName })
   })
 
   it('rejects unshared hosts and spoofed agent identities through the HTTP API', async () => {
