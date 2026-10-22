@@ -230,13 +230,40 @@ describe('Super Tab collaboration policy', () => {
     const post = (actor: Actor, recipientIds: string[] = []) => f.run({ type: 'message.send', conversationId: group, text: 'PR is green.',
       replyTo: null, recipientIds }, actor).messages[0]!.recipients
     expect(post(as(worker))).toEqual([])
+    expect(post(as(lead))).toEqual([])
     f.run({ type: 'work.assign', conversationId: group, agentId: worker })
     expect(post(as(worker))).toEqual([lead])
     expect(post(as(worker), [other])).toEqual([other])
     expect(post(as(other))).toEqual([])
-    expect(post(as(lead))).toEqual([])
+    expect(post(as(lead))).toEqual([worker])
     f.run({ type: 'work.status', conversationId: group, assignmentId: f.state.conversations[1]!.assignment!.id, status: 'blocked', result: 'Stuck.' }, as(worker))
     expect(post(as(worker))).toEqual([lead])
+  })
+
+  it('delivers a Lead\'s active-work replies and plain posts to its worker only', () => {
+    const f = fixture()
+    const lead = f.add('lead', 'owner', 'lead', true)
+    const group = f.group(), worker = f.add('worker', 'owner', group), other = f.add('other', 'owner', group)
+    const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+    f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+
+    const workerPost = f.run({ type: 'message.send', conversationId: group, text: 'Here is the plan.', replyTo: null, recipientIds: [] }, as(worker)).messages[0]!
+    expect(workerPost.recipients).toEqual([lead])
+    const leadReply = f.run({ type: 'message.send', conversationId: group, text: 'Approved.', replyTo: workerPost.id, recipientIds: [] }, as(lead),
+      { reply: { id: workerPost.id, conversationId: group, author: workerPost.author } }).messages[0]!
+    expect(leadReply.recipients).toEqual([worker])
+
+    const leadPost = f.run({ type: 'message.send', conversationId: group, text: 'Please continue.', replyTo: null, recipientIds: [] }, as(lead)).messages[0]!
+    expect(leadPost.recipients).toEqual([worker])
+
+    const otherPost = f.run({ type: 'message.send', conversationId: group, text: 'Unrelated update.', replyTo: null, recipientIds: [] }, as(other)).messages[0]!
+    expect(otherPost.recipients).toEqual([])
+    const unrelatedReply = f.run({ type: 'message.send', conversationId: group, text: 'Thanks.', replyTo: otherPost.id, recipientIds: [] }, as(lead),
+      { reply: { id: otherPost.id, conversationId: group, author: otherPost.author } }).messages[0]!
+    expect(unrelatedReply.recipients).toEqual([])
+
+    const explicit = f.run({ type: 'message.send', conversationId: group, text: 'For another agent.', replyTo: null, recipientIds: [other] }, as(lead)).messages[0]!
+    expect(explicit.recipients).toEqual([other])
   })
 
   it('lets a viewer read and leave, but not send, assign, attach or invite', () => {

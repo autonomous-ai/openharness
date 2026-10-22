@@ -804,6 +804,29 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(await store.deliveryReceipt(host, tab, lead, queued.id)).toEqual({ id: queued.id, status: 'answered' })
   })
 
+  it('delivers a Lead reply and a plain post to the assigned worker', async () => {
+    const { tab, lead } = await fixture()
+    const group = (await run(tab, { type: 'conversation.create', title: 'Active work', brief: 'Implement the change.',
+      checks: [{ description: 'The change works.', independent: false }] })).result.conversationId as string
+    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Worker', configuration: config, lead: false })).result.agentId as string
+    await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })
+
+    const workerPost = await run(tab, { type: 'message.send', conversationId: group, text: 'Plan ready.', replyTo: null, recipientIds: [] }, host, worker)
+    const reply = await run(tab, { type: 'message.send', conversationId: group, text: 'Approved.', replyTo: workerPost.result.messageId as string,
+      recipientIds: [] }, host, lead)
+    const replyDelivery = (await store.deliveries(host, tab, worker)).find(d => d.messageId === reply.result.messageId)
+    expect(replyDelivery).toMatchObject({ agentId: worker, messageId: reply.result.messageId })
+    expect((await store.messages(owner, tab, group, {})).messages.find(m => m.id === reply.result.messageId))
+      .toMatchObject({ text: 'Approved.', recipientIds: [worker] })
+
+    const plain = await run(tab, { type: 'message.send', conversationId: group, text: 'Please continue.', replyTo: null, recipientIds: [] }, host, lead)
+    const plainDelivery = (await store.deliveries(host, tab, worker)).find(d => d.messageId === plain.result.messageId)
+    expect(plainDelivery).toMatchObject({ agentId: worker, messageId: plain.result.messageId })
+    expect((await store.messages(owner, tab, group, {})).messages.find(m => m.id === plain.result.messageId))
+      .toMatchObject({ text: 'Please continue.', recipientIds: [worker] })
+  })
+
   it('durably resumes a claim, never steals it on timeout, and does not resurrect revoked messages on rejoin', async () => {
     const { tab, lead } = await fixture()
     await invite(tab)
