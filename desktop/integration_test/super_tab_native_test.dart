@@ -225,7 +225,13 @@ void main() {
       final swarmId = f.app.activeSwarmId;
       debugPrint('Swarm fixture: open Devices');
       await tester.tap(find.byKey(const ValueKey('super-your-devices')));
-      await tester.pumpAndSettle();
+      // This fixture deliberately has no device discovery transport. Assert
+      // navigation while the Devices viewer is loading instead of waiting for
+      // its indeterminate progress animation to settle.
+      await tester
+          .pump(const Duration(milliseconds: 100))
+          .timeout(const Duration(seconds: 10));
+      debugPrint('Swarm fixture: Devices frame painted');
       expect(f.app.activeSwarm.isDevices, isTrue);
       expect(f.app.activeSwarm.panes.first.isDevices, isTrue);
       expect(f.app.activeSwarm.panes.last.isViewer, isFalse);
