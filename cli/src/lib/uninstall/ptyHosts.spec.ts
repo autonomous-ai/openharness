@@ -5,10 +5,10 @@ import { describe, expect, it } from 'vitest'
 import type { PtyHostDiscovery } from '../ptyHost/client.js'
 import { endPtyHosts, HOST_EXIT_WAIT_MS, PANE_GRACE_MS, ptyHostsDeps, type HostClient, type PtyHostsDeps } from './ptyHosts.js'
 
-const discovery = (pid: number, protocol = 2): PtyHostDiscovery => ({ protocol, instance: `p${protocol}`, endpoint: 'e', pid, version: '0.5.0', token: 't' })
+const discovery = (pid: number, protocol = 2, instance = `p${protocol}`): PtyHostDiscovery => ({ protocol, instance, endpoint: 'e', pid, version: '0.5.0', token: 't' })
 /** When the record was written, as it was read: after both rows' start markers below. */
 const WRITTEN = Date.parse('Sun Oct 18 10:00:00 2026')
-const rec = (pid: number, protocol = 2, written: number | null = WRITTEN) => ({ discovery: discovery(pid, protocol), written })
+const rec = (pid: number, protocol = 2, written: number | null = WRITTEN, instance = `p${protocol}`) => ({ discovery: discovery(pid, protocol, instance), written })
 const filetime = (ms: number) => `w:${(BigInt(ms) + 11_644_473_600_000n) * 10_000n}`
 
 const WIN_HOME = 'C:\\Users\\u\\.harness\\adapters\\pty'
@@ -228,7 +228,50 @@ describe('endPtyHosts', () => {
   })
 })
 
+describe('endPtyHosts, several instances', () => {
+  it('ends a legacy and two versioned hosts of one protocol in one home', async () => {
+    const instances = new Map([[101, 'p2'], [102, 'p2-1.0.0'], [103, 'p2-1.1.0']])
+    const up = new Set(instances.keys())
+    const reached: string[] = []
+    const shut: number[] = []
+    const t = deps(null, {
+      discover: () => [...instances].map(([pid, instance]) => rec(pid, 2, WRITTEN, instance)),
+      alive: (pid) => up.has(pid),
+      reach: async (instance) => {
+        reached.push(instance)
+        const pid = [...instances].find(([, name]) => name === instance)![0]
+        const h = host([])
+        const call = h.client.call
+        h.client.call = (async (op: { op: string }) => { if (op.op === 'shutdown') { up.delete(pid); shut.push(pid) } return call(op as never) }) as typeof call
+        return { client: h.client }
+      },
+    })
+    expect(await endPtyHosts(t.deps)).toEqual([101, 102, 103].map((pid) => ({ pid, protocol: 2, panes: 0, how: 'shut down' })))
+    expect(reached).toEqual(['p2', 'p2-1.0.0', 'p2-1.1.0'])
+    expect(shut).toEqual([101, 102, 103])
+  })
+})
+
 describe('ptyHostsDeps', () => {
+  it('lists every instance with its own record time, legacy and versioned', () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'pty-hosts-'))
+    try {
+      mkdirSync(path.join(home, 'run'))
+      const names = ['p2', 'p2-1.0.0', 'p2-1.1.0']
+      names.forEach((instance, i) => {
+        const file = path.join(home, 'run', instance === 'p2' ? 'pty-host-2.json' : `pty-host-${instance}.json`)
+        writeFileSync(file, JSON.stringify(discovery(100 + i, 2, instance)))
+        const at = new Date(WRITTEN - (i + 1) * 60_000)
+        utimesSync(file, at, at)
+      })
+      const found = ptyHostsDeps(home).discover()
+      expect(found.map((r) => r.discovery.instance).sort()).toEqual([...names].sort())
+      for (const r of found) expect(r.written).toBe(WRITTEN - (names.indexOf(r.discovery.instance) + 1) * 60_000)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
   it("takes each record's time as it reads the record, so a host that removes its record while it exits is still judged", async () => {
     const home = mkdtempSync(path.join(tmpdir(), 'pty-hosts-'))
     try {

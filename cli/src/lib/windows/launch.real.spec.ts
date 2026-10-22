@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { PtyHostBackend } from '../ptyHostBackend.js'
-import { readDiscovery } from '../ptyHost/launch.js'
+import { listDiscoveries } from '../ptyHost/launch.js'
 import { PTY_PROTOCOL } from '../ptyHost/protocol.js'
 import { processRows } from '../processTable.js'
 import { removeTree } from '../terminalBackend.contract.js'
@@ -34,7 +34,7 @@ async function withBackend(run: (backend: PtyHostBackend, scratch: string) => Pr
     if (prepared.state !== 'ready') throw new Error(`the pty host is unavailable: ${prepared.reason}`)
     await run(backend, scratch)
   } finally {
-    const discovery = readDiscovery(home, PTY_PROTOCOL)
+    const discovery = listDiscoveries(home).findLast((found) => found.protocol === PTY_PROTOCOL)
     backend.dispose()
     if (discovery) try { process.kill(discovery.pid) } catch { /* gone */ }
     removeTree(home)

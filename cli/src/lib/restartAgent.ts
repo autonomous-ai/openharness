@@ -111,9 +111,10 @@ export interface RestartAgentDeps {
   keepAbandoned?: () => void
 }
 
-/** Outcomes that mean the old process is confirmed gone — safe to respawn over the pane. `not-ours` and
- *  `failed` are NOT here on purpose: never respawn over a target the kill sequence could not confirm. */
-const KILL_CONFIRMED: ReadonlySet<TerminateOutcome> = new Set(['gone', 'terminated', 'killed'])
+/** Outcomes that mean the old process is confirmed gone — safe to respawn over the pane (or, for a move, to start
+ *  the engine in another one: hostMove/moveAgent.ts). `not-ours` and `failed` are NOT here on purpose: never
+ *  respawn over a target the kill sequence could not confirm. */
+export const KILL_CONFIRMED: ReadonlySet<TerminateOutcome> = new Set(['gone', 'terminated', 'killed'])
 
 export async function restartAgent(
   session: { engine: AgentEngine; sessionId: string; resumeOnly?: true },

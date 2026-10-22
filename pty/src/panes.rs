@@ -192,6 +192,7 @@ fn spec(
         cols,
         rows,
         clear_env,
+        seed: None,
     }
 }
 
@@ -517,6 +518,7 @@ impl Panes {
                 hold,
                 after_exit,
                 clear_inherited,
+                seed,
             } => {
                 let cleared = clearable(clear_inherited);
                 // A child given no directory starts in the user's home (`Pane::spawn`).
@@ -528,20 +530,18 @@ impl Panes {
                 if self.closing.load(Ordering::SeqCst) {
                     return Err(OpError::new("bad_request", "the host is shutting down"));
                 }
-                let pane = Pane::spawn(
-                    id.clone(),
-                    spec(
-                        command.clone(),
-                        cwd,
-                        self.child_env(&id, env.clone()),
-                        cols,
-                        rows,
-                        &cleared,
-                    ),
-                    self.history_limit,
-                    self.sink.clone(),
-                )
-                .map_err(|e| OpError::new("spawn_failed", e.to_string()))?;
+                let mut pane_spec = spec(
+                    command.clone(),
+                    cwd,
+                    self.child_env(&id, env.clone()),
+                    cols,
+                    rows,
+                    &cleared,
+                );
+                pane_spec.seed = seed.map(String::into_bytes);
+                let pane =
+                    Pane::spawn(id.clone(), pane_spec, self.history_limit, self.sink.clone())
+                        .map_err(|e| OpError::new("spawn_failed", e.to_string()))?;
                 let generation = pane.generation();
                 table.insert(
                     id.clone(),

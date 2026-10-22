@@ -43,7 +43,7 @@ export interface LocalWsBackend {
   handleLocalFrame: (connId: string, frame: Frame) => void
   handleLocalBinary: (connId: string, frame: TerminalBinaryClear) => Promise<void>
   /** The agent this window has focused, or null — which of its terminals gets the short output window. */
-  setLocalTerminalFocus?: (connId: string, agentId: string | null) => void
+  setLocalTerminalFocus?: (connId: string, agentId: string | null, visibleAgents?: readonly string[]) => void
   /** hn's `product_observe`, from a connection on this computer's own socket bound to this machine. */
   observeProduct?: (connId: string, payload: unknown) => void
 }
@@ -760,7 +760,11 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
               // Ahead of the dial's revision check below: that gate is about which agent the voice
               // follows, and a stale one says nothing about which terminal is in front of the person.
               // Only this daemon's own streams — a relayed machine's live on that machine's daemon.
-              if (!relay && boundMachineId === options.machineId) options.backend.setLocalTerminalFocus?.(connId, agentId)
+              if (!relay && boundMachineId === options.machineId) {
+                const listed = (parsed.payload as Record<string, unknown>)?.visibleAgents
+                const visible = Array.isArray(listed) ? listed.filter((id): id is string => typeof id === 'string' && !!id) : undefined
+                options.backend.setLocalTerminalFocus?.(connId, agentId, visible)
+              }
               const revision = (parsed.payload as Record<string, unknown>)?.focusRevision
               if (options.onAppFocusState?.(boundMachineId, agentId, connId,
                 typeof revision === 'string' ? revision : undefined) === false) return

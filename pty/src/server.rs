@@ -25,7 +25,7 @@ use serde_json::{Map, Value, json};
 use crate::pane::PaneEvent;
 use crate::panes::Panes;
 use crate::protocol::{
-    Failure, HelloLine, Op, PROTOCOL, Request, Role, hello_auth, hello_proof, valid_nonce,
+    FEATURES, Failure, HelloLine, Op, PROTOCOL, Request, Role, hello_auth, hello_proof, valid_nonce,
 };
 use crate::transport::{Connection, Listener};
 
@@ -214,6 +214,7 @@ impl Ctx {
             "instance": self.info.instance,
             "version": self.info.version,
             "pid": self.info.pid,
+            "features": FEATURES,
             "proof": hello_proof(&self.info.token, nonce),
         }})
         .to_string()

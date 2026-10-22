@@ -240,6 +240,18 @@ describe('restarting an agent', () => {
       expect(await setup(null).restart('a1')).toEqual({ ok: false, error: 'AGENT_NOT_FOUND' })
     })
 
+    it('for an agent a stopped move may still run beside, held this start, with the move\'s line', async () => {
+      const log = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const held = vi.fn(() => ({ ok: false, error: 'HELD' }))
+      const run = setup(agent(), { moveHeld: (id) => id === 'a1', restartHeld: held as never })
+      expect(await run.restart('a1')).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
+      // Neither a swap nor a held agent's launch runs: either would start a second engine on the conversation.
+      expect(held).not.toHaveBeenCalled()
+      expect(restartAgent).not.toHaveBeenCalled()
+      expect(log).toHaveBeenCalledWith('[terminal] move a1: held until the next start: a pane its stopped move left was not confirmed closed')
+      log.mockRestore()
+    })
+
     it('for a guest\'s harness, which a relaunch would run as the owner', async () => {
       const run = setup(agent({ guest: 'kim@acme.io' }))
       expect(await run.restart('a1')).toEqual(GUEST_HARNESS_REFUSAL)

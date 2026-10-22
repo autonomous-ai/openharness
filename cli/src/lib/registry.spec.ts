@@ -539,6 +539,10 @@ describe('registry remote display names', () => {
     const { validTerminalRuntime } = await loadRegistryModule()
     expect(validTerminalRuntime({ backend: 'ptyhost', instance: 'p3', paneId: '%0' })).toBe(true)
     expect(validTerminalRuntime({ backend: 'ptyhost', instance: 'p12345', paneId: '%0' })).toBe(false)
+    // A versioned host's: two builds of one protocol run side by side.
+    expect(validTerminalRuntime({ backend: 'ptyhost', instance: 'p2-0.4.21-dev.win1', paneId: '%7' })).toBe(true)
+    expect(validTerminalRuntime({ backend: 'ptyhost', instance: 'p2-h0123456789ab', paneId: '%7' })).toBe(true)
+    expect(validTerminalRuntime({ backend: 'ptyhost', instance: 'p2-0.4.21/x', paneId: '%7' })).toBe(false)
     expect(validTerminalRuntime({ backend: 'ptyhost', instance: 'default', paneId: '%0' })).toBe(false)
     expect(validTerminalRuntime({ backend: 'ptyhost', paneId: '%0' })).toBe(false)
     expect(validTerminalRuntime({ backend: 'ptyhost', instance: 'p3', paneId: 'w1:p1' })).toBe(false)

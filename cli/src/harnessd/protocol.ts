@@ -89,8 +89,17 @@ export type MasterMessage =
    *  from before ignores it, and is ended once its grace is over, as one that ignored SIGTERM was. */
   | { type: 'harnessd:shutdown' }
 
-/** What the updater says to the master: it staged `version` on disk. */
-export type UpdaterMessage = { type: 'harnessd:staged'; version: string }
+/** What the updater says to the master: it staged CLI build `version`, terminal host `ptyVersion` (Windows), or both,
+ *  on disk, for one handover. At least one of the two is there. A master from before takes only `version`. */
+export type UpdaterMessage = { type: 'harnessd:staged'; version?: string; ptyVersion?: string }
+
+/** What one `harnessd:staged` staged, with each part there only when it was. */
+export interface StagedUpdate { version?: string; ptyVersion?: string }
+
+/** `9.9.9`, `terminal host 0.11.0`, or `9.9.9 and terminal host 0.11.0`: what a log line says was staged. */
+export function describeStaged(staged: StagedUpdate): string {
+  return [staged.version, staged.ptyVersion && `terminal host ${staged.ptyVersion}`].filter(Boolean).join(' and ')
+}
 
 /** The exit code a service uses to be started again at once, on the bundle now on disk, without counting
  *  as a crash: the updater, once it has staged a build, so that it next runs as that build. */
@@ -99,7 +108,9 @@ export const SERVICE_EXIT_RESTART = 75
 export function isUpdaterMessage(value: unknown): value is UpdaterMessage {
   if (!value || typeof value !== 'object') return false
   const message = value as Record<string, unknown>
-  return message.type === 'harnessd:staged' && typeof message.version === 'string' && message.version.length > 0
+  if (message.type !== 'harnessd:staged') return false
+  const parts = [message.version, message.ptyVersion]
+  return parts.every((part) => part === undefined || typeof part === 'string') && parts.some((part) => typeof part === 'string' && part.length > 0)
 }
 
 export function isCoreMessage(value: unknown): value is CoreMessage {

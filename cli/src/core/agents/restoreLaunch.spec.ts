@@ -30,6 +30,41 @@ describe('a restore launch Windows refuses', () => {
   })
 })
 
+describe('a launch built without preparation', () => {
+  it('writes neither the conversation nor the row, and builds the same launch', async () => {
+    const { deps, build } = setup()
+    expect(await build(entry, { resumeSessionId: 'conversation', current: () => true, prepare: false })).toMatchObject({ argv: ['engine'] })
+    expect(deps.prepareSessionResume).not.toHaveBeenCalled()
+    expect(deps.refreshGridWebSearch).not.toHaveBeenCalled()
+    expect(deps.launch).toHaveBeenCalledWith(entry, { resumeSessionId: 'conversation' }, built.overrides, { bypassPermission: false })
+    const prepared = await build(entry, { resumeSessionId: 'conversation', current: () => true })
+    expect(prepared).toEqual({ argv: ['engine'] })
+    expect(deps.prepareSessionResume).toHaveBeenCalledWith(entry)
+    expect(deps.refreshGridWebSearch).toHaveBeenCalledTimes(1)
+  })
+
+  it('hands back what it left out, run later with the overrides it was built with, never asked for again', async () => {
+    const { deps, build } = setup()
+    deps.downgradedPermission.mockResolvedValue({ bypassPermission: true, permissionMode: 'plan' } as never)
+    const launch = await build(entry, { resumeSessionId: 'conversation', current: () => true, prepare: false })
+    if (!('argv' in launch) || !launch.deferred) throw new Error('expected a deferred launch')
+    expect(launch.deferred.overrides).toBe(built.overrides)
+    expect(launch.deferred.permission).toEqual({ bypassPermission: true, permissionMode: 'plan' })
+    launch.deferred.prepare()
+    expect(deps.prepareSessionResume).toHaveBeenCalledWith(entry)
+    expect(deps.refreshGridWebSearch).toHaveBeenCalledWith('agent', built.overrides)
+    expect(deps.relaunchOverrides).toHaveBeenCalledTimes(1)
+    // A preparation that fails says so to its caller, which falls back (hostMove/moveAgent.ts).
+    deps.prepareSessionResume.mockImplementationOnce(() => { throw new Error('rollout unreadable') })
+    expect(() => launch.deferred!.prepare()).toThrow('rollout unreadable')
+    // Nothing to resume: nothing to prepare, only the grid's web search.
+    const fresh = await build(entry, { current: () => true, prepare: false })
+    if (!('argv' in fresh) || !fresh.deferred) throw new Error('expected a deferred launch')
+    fresh.deferred.prepare()
+    expect(deps.prepareSessionResume).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('restore preparation keeps session authority in core', () => {
   it.each(['unknown flags', 'changed executable', 'ready'] as const)('preserves native preparation evidence through restore: %s', async stage => {
     const { deps, build } = setup()

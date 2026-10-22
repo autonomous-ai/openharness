@@ -961,6 +961,9 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed) return;
     final wasForeground = foreground.value;
     foreground.value = state == null || state == AppLifecycleState.resumed;
+    // Every transition, not only the three the listener has callbacks for: hidden -> inactive fires
+    // onShow, and a window shown again without focus must not keep telling the daemon it shows nothing.
+    _announceVisibleAgents();
     if (wasForeground && !foreground.value) {
       _awaySince = phoneOfferClock();
       _missedWhileAway = null;
@@ -4945,7 +4948,9 @@ class AppNotifier extends ChangeNotifier {
     // restarted — has never been told what is on the grid. Without this
     // the dial goes back to beeping about tiles in plain sight until the
     // next time a pane happens to change.
+    _announcedVisible.remove(machineId);
     _announceOpenPanesToDial();
+    _announceVisibleAgents();
     _announceUnreadToDial();
     // ...nor which tile this window is looking at. The daemon repeats that to the dial after every
     // list push, which is what keeps the two screens from drifting apart — but it can only repeat
@@ -5006,7 +5011,71 @@ class AppNotifier extends ChangeNotifier {
     if (previousMachineId != null && previousMachineId != machineId) {
       _sendAppFocus(previousMachineId, null);
     }
+    _announcedFocusAgentId = machineId == null ? null : agentId;
     if (machineId != null) _sendAppFocus(machineId, agentId);
+    // The selected pane moved with a tab switch or a close, and the tiles on screen moved with it.
+    _announceVisibleAgents();
+  }
+
+  String? _announcedFocusAgentId;
+
+  /// The signature of the `visibleAgents` last sent to each machine's daemon, so a change in what is
+  /// on screen is sent once and a repeat is not. Forgotten on (re)connect: a new daemon has no list.
+  final Map<String, String> _announcedVisible = {};
+
+  /// Whether the super tab [swarmId] shows its terminal canvas (it hides it behind chat or the
+  /// member list, with the panes still mounted `Offstage`). Only the workspace knows.
+  String? _superTerminalsShownSwarm;
+
+  void setSuperTabTerminalsShown(String swarmId, bool shown) {
+    final next = shown ? swarmId : null;
+    if (_superTerminalsShownSwarm == next ||
+        (!shown && _superTerminalsShownSwarm != swarmId)) {
+      return;
+    }
+    _superTerminalsShownSwarm = next;
+    _announceVisibleAgents();
+  }
+
+  /// The agents on [machineId] whose tiles a person can see in this window right now: the active
+  /// tab's mounted, non-`Offstage` tiles (the zoomed one alone while zoomed), and none while the
+  /// window is minimized or hidden to the tray. A window that is merely behind another app still
+  /// shows its tiles, so it still lists them; only hidden/paused/detached empty the list.
+  List<String> visibleAgentIds(String machineId) {
+    switch (lifecycle()) {
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        return const [];
+      case AppLifecycleState.resumed:
+      case AppLifecycleState.inactive:
+      case null:
+        break;
+    }
+    final tab = activeSwarm;
+    if (tab.isStore || tab.isOrchestrator) return const [];
+    if (tab.isSuperTab && _superTerminalsShownSwarm != tab.id) return const [];
+    return [
+      for (final pane in tab.panes)
+        if (pane.machineId == machineId &&
+            (tab.zoomedPaneId == null || pane.id == tab.zoomedPaneId))
+          ?pane.agentId,
+    ];
+  }
+
+  /// Tell each daemon on this computer which terminals are on screen, when that changed.
+  void _announceVisibleAgents() {
+    final pool = _pool;
+    if (pool == null) return;
+    for (final machineId in pool.machineIds) {
+      final list = visibleAgentIds(machineId);
+      if (_announcedVisible[machineId] == list.join(',')) continue;
+      if (_deskConnection(machineId) == null) continue;
+      _sendAppFocus(
+        machineId,
+        machineId == _announcedFocusMachineId ? _announcedFocusAgentId : null,
+      );
+    }
   }
 
   /// The socket [machineId]'s desk frames ride — `app_focus`, `app_panes`, `app_swarms`, `app_unread`,
@@ -5023,10 +5092,15 @@ class AppNotifier extends ChangeNotifier {
     // Never create a socket just to move focus, and never queue stale focus
     // across a reconnect. The connected callback reasserts the current pane.
     final send = focusFrameSenderForTest;
+    final visible = visibleAgentIds(machineId);
+    _announcedVisible[machineId] = visible.join(',');
     final pending = send != null
         ? send(machineId, agentId)
         : _deskConnection(machineId)?.sendTerminalFrame('app_focus', {
             'agentId': agentId,
+            // Every terminal of this machine that is on screen; [] for a hidden window. An older
+            // daemon ignores it.
+            'visibleAgents': visible,
             if (_deviceFocusRevision != null)
               'focusRevision': _deviceFocusRevision,
           });
@@ -5127,7 +5201,10 @@ class AppNotifier extends ChangeNotifier {
   /// Re-send the tile roster because the WINDOW moved, not because the tiles
   /// did. Public so the lifecycle listener can say so; the roster itself is
   /// unchanged and the `foreground` flag riding with it is the point.
-  void announceWindowForeground() => _announceOpenPanesToDial();
+  void announceWindowForeground() {
+    _announceOpenPanesToDial();
+    _announceVisibleAgents();
+  }
 
   bool _announceFromDevice = false;
   int _devicePick = 0;
@@ -18054,6 +18131,7 @@ class AppNotifier extends ChangeNotifier {
     if (id == null || panes.length < 2) return;
     zoomedPaneId = zoomedPaneId == id ? null : id;
     _persistLayout();
+    _announceVisibleAgents();
     notifyListeners();
   }
 
@@ -19026,6 +19104,7 @@ class AppNotifier extends ChangeNotifier {
     });
     _layoutRevision++;
     _announceOpenPanesToDial();
+    _announceVisibleAgents();
     _freezeDeskLayouts();
     _deskQueueDiff();
     final saved = swarms.where((swarm) => !isDraftSwarm(swarm.id)).toList();

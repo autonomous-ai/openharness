@@ -78,11 +78,16 @@ import { createHandoffDependencies } from './handoffDependencies.js'
 import { TmuxBackend } from '../lib/tmuxBackend.js'
 import { tmuxAvailableNow } from '../lib/tmuxOnPath.js'
 import { createTerminalBackendRecovery } from '../lib/terminalBackendRecovery.js'
-import { isDrainBackend, ptyHostBackends, PtyHostDrain, rowsOnInstance } from '../lib/ptyHost/drain.js'
-import { removeUnusedPtyVersions } from '../lib/ptyHost/launch.js'
+import { isDrainBackend, ptyHostBackends, ptyHostOnProbation, PtyHostDrain, rowInstancesOf, rowsOnInstance, untilHostAttached, withoutCreateHost } from '../lib/ptyHost/drain.js'
+import { removeUnusedPtyVersions, targetHost } from '../lib/ptyHost/launch.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from '../lib/hostTheme.js'
 import { restoreAgents, type RestoreAgentsDeps, type RestoreSummary } from '../lib/restoreAgents.js'
 import { restoreTerminals } from '../lib/restoreTerminals.js'
+import { acquireAfterHold, MoveGate } from '../lib/hostMove/gate.js'
+import { HostMover, settleMovesForHandOver } from '../lib/hostMove/mover.js'
+import { moveHeldLine, removeOrphanMovePanes, type MoveOutcome } from '../lib/hostMove/moveAgent.js'
+import { QUIET_MS, QuietClock } from '../lib/hostMove/quiet.js'
+import { resumesConversation } from '../lib/resumeCapability.js'
 import { createRetainExitedSession } from '../lib/retainExitedSession.js'
 import { createKeepAbandonedConversation } from '../lib/keepAbandonedConversation.js'
 import { RESUME_READINESS_BUDGET_MS } from '../lib/resumeStoppedAgent.js'
@@ -171,6 +176,7 @@ import { createAgentForker } from './agents/fork.js'
 import { createPaneSwap } from './agents/swap.js'
 import { createAgentRetargeter } from './agents/retarget.js'
 import { createAgentRestarter } from './agents/restart.js'
+import { createHostMove, moveWaitingArgv } from './agents/hostMove.js'
 import { createAgentLifecycle, createPurgeRequest, createStopRequest } from './agents/lifecycle.js'
 import { createAgentClosing, createCloseRequests } from './agents/close.js'
 import { answerConversationQuery, conversationReads } from './conversationQueries.js'
@@ -483,7 +489,17 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (core/agents/heldLaunches.ts): the boot's restore of only those agents, set where tmux is there to restore into.
   const restorePanes = createPaneOperations()
   const restartJobs = new AgentRestartCoordinator()
-  const forgetRestartRevision = (agentId: string): void => restartJobs.forget(agentId)
+  // Moving agents off a drained pty host (lib/hostMove/): how long each has been idle and untouched, the one gate an
+  // agent's input waits in while it changes host, and the agents a move a dead daemon left may still run beside
+  // (`removeOrphanMovePanes` below), held this start: neither restored, nor discovered, nor moved.
+  const hostQuiet = new QuietClock({ now: Date.now })
+  const moveGate = new MoveGate()
+  const moveHeld = new Set<string>()
+  /** The conversations of the agents in [moveHeld]: an adoption of one would start a second engine on it too. */
+  const moveHeldConversations = new Map<string, string>()
+  let hostMover: HostMover | null = null
+  // Every removal of a row goes through here: its clocks go with it.
+  const forgetRestartRevision = (agentId: string): void => { restartJobs.forget(agentId); hostQuiet.forget(agentId) }
   const restoreRevision = (agentId: string): number => restartJobs.revision(agentId)
   let externalResumes: ReturnType<typeof createExternalResumes> | null = null
   let searchGeneration = 0
@@ -521,6 +537,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     probeMaster: () => probeStagedMaster((done) => execFile(managedNodePath(), [SCRIPT_PATH, PROBE_COMMAND], { encoding: 'utf8', env: harnessdEnv() }, (error, stdout) => done(error, stdout))),
     handOff: () => { startMasterHere(); process.exit(0) },
     log: (line) => console.log(line), error: (line) => console.error(line),
+    // A move to another pty host that holds input: waited for, or its input written out, before the teardown closes the
+    // pty host connection the held keystrokes would be written through (lib/hostMove/mover.ts).
+    beforeTeardown: () => settleMovesForHandOver({ mover: hostMover, gate: moveGate, log: (line) => console.log(line) }),
   })
 
   // Another daemon serves this data folder: leave before reading or writing anything of its — its
@@ -578,10 +597,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const candidates: TerminalBackend[] = []
   const configuredTmux = terminalConfig.backends.includes('tmux') ? new TmuxBackend(() => hostTheme) : null
   if (configuredTmux) candidates.push(configuredTmux)
-  // The Harness PTY host (pty/): reached, or started detached so its panes outlive this daemon. A host of the
-  // protocol before, still running from before an update, is a drain backend beside it (lib/ptyHost/drain.ts).
+  // The Harness PTY host (pty/): reached, or started detached so its panes outlive this daemon. New panes go to the
+  // target's host, the build this daemon would start; any other host, still running from before an update, is a
+  // drain backend beside it (lib/ptyHost/drain.ts). The target is read here once, for this core's life: it runs the
+  // binary (`harness-pty version`, up to 5 s), and an update that moves it starts a new core.
+  const ptyTarget = terminalConfig.backends.includes('ptyhost') ? targetHost() : null
+  if (terminalConfig.backends.includes('ptyhost')) {
+    console.log(ptyTarget ? `[terminal] ptyhost: target ${ptyTarget.instance}` : '[terminal] ptyhost: target unknown')
+  }
   const ptyHosts = terminalConfig.backends.includes('ptyhost')
-    ? ptyHostBackends(env.HARNESS_PTY_DIR, { rowsOn: (instanceId) => rowsOnInstance(registry.list(), instanceId) })
+    ? ptyHostBackends(env.HARNESS_PTY_DIR, { target: ptyTarget, rowInstances: () => rowInstancesOf(registry.list()) })
     : null
   const ptyHostBackend = ptyHosts?.create ?? null
   if (ptyHosts) candidates.push(ptyHosts.create, ...ptyHosts.drain)
@@ -594,7 +619,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const loginShellEnvPromise = warmLoginShellEnvironment()
   console.log(`[terminal] enabled backends: ${terminalConfig.backends.join(', ')}`)
   const prepared = await preparing
-  const terminalBackends = prepared.filter((p) => p.result.state === 'ready').map((p) => p.backend)
+  const readyBackends = prepared.filter((p) => p.result.state === 'ready').map((p) => p.backend)
+  // With no target, the create backend took whichever host answered, which a drain backend may be on too.
+  const terminalBackends = ptyHosts ? withoutCreateHost(readyBackends, ptyHosts.create) : readyBackends
   // The first backend that could not be readied, and why, for the status's `discoveryError`.
   let terminalUnavailable: { backend: TerminalBackend['name']; reason: string; code: string } | null = prepared.flatMap(({ backend, result }) => result.state === 'unavailable'
     ? [{ backend: backend.name, reason: result.reason, code: result.code }] : [])[0] ?? null
@@ -632,6 +659,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       coordinator: terminals,
       inUse: (instanceId) => rowsOnInstance(registry.list(), instanceId),
       cleanup: () => { removeUnusedPtyVersions(env.HARNESS_PTY_DIR) },
+      // An old host is not shut down while new panes have no host to go to: it may be the only one that serves.
+      createAvailable: () => createBackend === ptyHosts.create && ptyHosts.create.attached,
     })
     : null
   const sqliteWarning = sqlitePreflightMessage()
@@ -656,7 +685,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Reading and writing panes through control leases (core/terminals/control.ts).
   const terminalControl = createTerminalControl({ resolve: (target) => registry.resolve(target), terminals })
   const pinnedControls = terminalControl.pinnedControls
-  restoreCancelled = (agentId) => pinnedControls.has(agentId)
+  restoreCancelled = (agentId) => pinnedControls.has(agentId) || moveHeld.has(agentId)
   const invalidateTerminalControl = terminalControl.invalidateTerminalControl
   const captureTerminal = terminalControl.captureTerminal
   const submitTerminal = terminalControl.submitTerminal
@@ -773,7 +802,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Delivered turns (core/deliveries.ts): text a feature writes into an agent under a delivery id of its
   // own, and what becomes of each, told back to whoever made it, in this process or in its own.
   // A read-only view of agents' terminals for an experiment's viewers, told to its process (core/terminalWatch.ts).
-  const terminalWatch = createTerminalWatch({ terminals, resolve: (id) => registry.resolve(id), watchers: new Set(Object.keys(EXPERIMENTS)),
+  const terminalWatch = createTerminalWatch({ terminals, resolve: (id) => registry.resolve(id), watchers: new Set(Object.keys(EXPERIMENTS)), moveGate,
     tell: (service, viewer, output) => serviceLinksRef?.notify(service, { type: 'service_event', payload: { kind: 'watch', viewer, output } }) ?? false })
   const deliveries = createDeliveries({
     submit: (agentId, text, deliveryId) => backendRef?.onMessage?.(agentId, text, deliveryId),
@@ -1150,6 +1179,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // a sleeping grid starts that grid while the person types. Here, in the daemon's own input path, so
     // an older desktop and typing from a phone get it too; an agent on its own login has no `grid`.
     onInput: (agentId, typed, from) => {
+      // What the person typed restarts the agent's quiet period: one in use is not moved to another host.
+      if (typed) hostQuiet.noteInput(agentId)
       if (typed) browser.typed(agentId, from)
       if (typed) nativeTurns.typed(agentId, from.inputContext, from.submitted === true)
       const grid = registry.resolve(agentId)?.grid
@@ -1157,6 +1188,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // The person typing into a harness another agent started makes it theirs (services/agentCleanup.ts).
       if (typed) ports.agentCleanup?.typed(agentId)
     },
+    moveGate,
   })
   backend.setTerminalStreamManager(terminalStreams)
   // What a harness's pane runs and where, and the desktop's pane colours (core/terminals/requests.ts). A
@@ -1303,11 +1335,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     emit: (sessionId, events) => emitSessionEvents(sessionId, events),
     // Declared further down: read as a prompt is typed, never now.
     promptTyped: (session, capture, screen, inputContext) => {
+      // A message typed into the pane, from any sender (`harness send`, Agent Messages, the Device): the agent is in use.
+      hostQuiet.noteInput(session.agentId)
       nativeTurns.submitting(session.agentId, inputContext)
       if (session.sessionId) questionWatcher.notePrompt(session.sessionId, capture, screen.question)
     },
     // The person sent a harness text from a window or the phone (services/agentCleanup.ts).
     typed: (id) => ports.agentCleanup?.typed(id),
+    moveGate,
   })
   const input = inputs.input
   const deviceInput = inputs.deviceInput
@@ -1675,7 +1710,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     sendText: submitTerminal,
     sendLiteral: typeTerminal,
     sendKey: keyTerminal,
-    acquireInput: acquireTerminalControl,
+    // The /model picker waits out a move to another host rather than answer BUSY (hostMove/gate.ts).
+    acquireInput: (id) => acquireAfterHold(moveGate, registry.resolve(id)?.agentId ?? id, () => acquireTerminalControl(id)),
   })
   /**
    * Engine session id → the agent that owns it. The event stream speaks in ENGINE session ids while
@@ -1740,6 +1776,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     startHeartbeat,
     questionWatcher,
     mirror,
+    // A live turn, however short and with no input of its own (a /loop wake-up, a background notification), restarts
+    // the agent's quiet period: the mover's ticks alone, seconds apart, would miss it.
+    working: (agentId) => hostQuiet.noteActivity(agentId, 'working'),
   })
   // Cursor's Task hooks and the sub-agents they start (core/engines/cursorTasks.ts).
   const cursorTasks = createCursorTaskHooks({ emitSessionEvents, watcher, registry, cursorNormalizers })
@@ -1864,6 +1903,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
           console.error('[terminal] ptyhost: drain failed:', error instanceof Error ? error.message : error)
         })
       }
+      // At most one idle, unwatched agent at a time moves off a drained host (lib/hostMove/mover.ts).
+      void hostMover?.step().catch((error) => {
+        console.error('[terminal] move: the mover failed:', error instanceof Error ? error.message : error)
+      })
     },
     onProbeStatus: (status) => {
       discoveryReady = status.ready
@@ -2361,6 +2404,59 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const saved = isTerminalEngine(entry.engine) ? stoppedAgents.get(entry.agentId) : null
     if (saved && !isTerminalEngine(saved.engine)) retainExitedSession(entry, true)
   }
+  // What restore asks of the terminals, each pane of its own backend, and the launch it builds (both shared with a move
+  // to another pty host, core/agents/hostMove.ts). Every pane question asked of the pane's own backend, as every other
+  // pane read is.
+  const restoreOn = restoreTerminals({
+    backendFor: (runtime) => terminals.backendFor(runtime),
+    listTmuxPanes: () => listTmuxPanes(),
+    cwd: homedir(),
+    label: (engine) => buildHarnessSessionLabel(engine),
+  })
+  const restoreLaunch = createRestoreLaunch({
+    workspaceMissing, relaunchOverrides, prepareSessionResume, refreshGridWebSearch,
+    downgradedPermission: (entry, native) => downgradedPermission(entry, entry.bypassPermission === true, 'restore', native),
+    launch: (entry, opts, overrides, permission) => {
+      const { env: launchEnv, extraArgs, clearEnv } = overrides
+      const argv = buildEngineLaunchArgv(entry.engine, {
+        ...opts,
+        ...(overrides.native ? { native: overrides.native } : {}),
+        ...(entry.externalResume?.continue && entry.externalResume.signal === 'sent' && !entry.externalResume.dispatched && supportsFirstPrompt(entry.engine) ? { firstPrompt: 'continue' } : {}),
+        bypassPermission: permission.bypassPermission === true,
+        ...(permission.permissionMode ? { permissionMode: permission.permissionMode } : {}),
+        installIfMissing: enginePathOverride(entry.engine) ? undefined : engineInstallRecipe(entry.engine),
+        ...(entry.cwd ? { cwd: entry.cwd } : {}),
+        ...(extraArgs.length ? { extraArgs } : {}),
+        ...(clearEnv.length ? { clearEnv } : {}),
+        ...(launchEnv.HARNESS_DSH ? { harnessNode: true } : {}),
+      })
+      // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
+      const paneEnv = { ...launchEnv, ...engineLaunchEnv(entry.engine, overrides.native) }
+      return { argv, ...(overrides.native ? { nativeToken: overrides.native.token, current: overrides.native.current } : {}), ...(Object.keys(paneEnv).length ? { env: paneEnv } : {}),
+        // Windows: the workspace to start in and the shell the pane becomes after the engine (lib/windows/engineStart.ts).
+        paneLaunch: windowsPaneLaunch(entry.engine, { cwd: entry.cwd, clearEnv, native: overrides.native, held: isWindowsHeldPane(argv) }) }
+    },
+  })
+  // A move a dead daemon left before its switch left a pane marked as that move's, which no row names: closed now,
+  // before restore relaunches the row's own engine and discovery could mint that pane an agent beside it. One whose
+  // close is not confirmed may still run an engine on the conversation: its agent is held this start (not restored,
+  // not discovered, not moved), and so is the pane's route, until the next start closes it.
+  if (ptyHosts) {
+    const swept = await removeOrphanMovePanes(terminalBackends.filter((backend) => backend.name === 'ptyhost'), registry.list())
+      .catch((error) => {
+        console.warn(`[terminal] move: could not look for panes a stopped move left: ${error instanceof Error ? error.message : error}`)
+        return { removed: 0, unconfirmed: [] as string[], keptPanes: [] }
+      })
+    if (swept.removed) console.log(`[terminal] move: closed ${swept.removed} pane(s) a stopped move left`)
+    for (const pane of swept.keptPanes) agentReconciler.holdRoute(terminalRouteKey(pane), null)
+    for (const agentId of swept.unconfirmed) {
+      moveHeld.add(agentId)
+      const conversation = registry.byAgent(agentId)?.sessionId ?? stoppedAgents.get(agentId)?.sessionId
+      if (conversation) moveHeldConversations.set(conversation, agentId)
+      for (const runtime of registry.byAgent(agentId)?.runtimes ?? []) agentReconciler.holdRoute(terminalRouteKey(runtime), null)
+      console.warn(moveHeldLine(agentId))
+    }
+  }
   // Later passes over held agents (core/agents/heldLaunches.ts) wait for this one.
   await heldLaunches.boot(async (current) => {
   // Restore runs where a backend can rebuild and relaunch a pane in place (tmux, the pty host): each row on the
@@ -2370,13 +2466,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    // tiles, not the daemon. `restoreDegraded` then stops discovery retiring the rows whose panes
    // restore never got to, so the next daemon can put them back.
    try {
-    // Every pane question asked of the pane's own backend, as every other pane read is.
-    const restoreOn = restoreTerminals({
-      backendFor: (runtime) => terminals.backendFor(runtime),
-      listTmuxPanes: () => listTmuxPanes(),
-      cwd: homedir(),
-      label: (engine) => buildHarnessSessionLabel(engine),
-    })
     const restoreDeps: RestoreAgentsDeps = {
       cancelled: (agentId) => !current() || restoreCancelled(agentId),
       revision: (agentId) => restoreRevision(agentId),
@@ -2395,30 +2484,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       restorable: restoreOn.restorable,
       waitingPane: restoreOn.waitingPane,
       liveProcess: restoreOn.liveProcess,
-      buildLaunch: createRestoreLaunch({
-        workspaceMissing, relaunchOverrides, prepareSessionResume, refreshGridWebSearch,
-        downgradedPermission: (entry, native) => downgradedPermission(entry, entry.bypassPermission === true, 'restore', native),
-        launch: (entry, opts, overrides, permission) => {
-          const { env: launchEnv, extraArgs, clearEnv } = overrides
-          const argv = buildEngineLaunchArgv(entry.engine, {
-            ...opts,
-            ...(overrides.native ? { native: overrides.native } : {}),
-            ...(entry.externalResume?.continue && entry.externalResume.signal === 'sent' && !entry.externalResume.dispatched && supportsFirstPrompt(entry.engine) ? { firstPrompt: 'continue' } : {}),
-            bypassPermission: permission.bypassPermission === true,
-            ...(permission.permissionMode ? { permissionMode: permission.permissionMode } : {}),
-            installIfMissing: enginePathOverride(entry.engine) ? undefined : engineInstallRecipe(entry.engine),
-            ...(entry.cwd ? { cwd: entry.cwd } : {}),
-            ...(extraArgs.length ? { extraArgs } : {}),
-            ...(clearEnv.length ? { clearEnv } : {}),
-            ...(launchEnv.HARNESS_DSH ? { harnessNode: true } : {}),
-          })
-          // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
-          const paneEnv = { ...launchEnv, ...engineLaunchEnv(entry.engine, overrides.native) }
-          return { argv, ...(overrides.native ? { nativeToken: overrides.native.token, current: overrides.native.current } : {}), ...(Object.keys(paneEnv).length ? { env: paneEnv } : {}),
-            // Windows: the workspace to start in and the shell the pane becomes after the engine (lib/windows/engineStart.ts).
-            paneLaunch: windowsPaneLaunch(entry.engine, { cwd: entry.cwd, clearEnv, native: overrides.native, held: isWindowsHeldPane(argv) }) }
-        },
-      }),
+      buildLaunch: restoreLaunch,
       createPane: restoreOn.createPane,
       respawn: restoreOn.respawn,
       probeProcess: restoreOn.probeProcess,
@@ -2596,6 +2662,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       native: prepareNativeLaunch, hookPort, hooksDisabled: env.DISABLE_HOOK_INSTALL, installOpencodePlugin: installOpencodePluginBeforeSpawn }),
     announce: announceSession, launch: () => { void heldLaunches.restoreHeld('search') },
     forget: id => forgetSession(id, { force: true }),
+    heldConversation: (sessionId) => moveHeldConversations.get(sessionId) ?? null,
   })
 
   // Creating an agent (core/agents/create.ts).
@@ -2665,7 +2732,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.onRetargetAgent = createAgentRetargeter({
     noBackendCode: createUnavailable,
     sessionTurnOpen,
-    purgeBusy: (agentId) => restorePanes.busy(agentId) || backend.purgeAgentService?.busy(agentId),
+    // A retarget swaps the engine too: not of an agent a stopped move may still run beside (`moveHeld`).
+    purgeBusy: (agentId) => restorePanes.busy(agentId) || backend.purgeAgentService?.busy(agentId) || moveHeld.has(registry.resolve(agentId)?.agentId ?? agentId),
     terminals,
     registry,
     runtimeProfiles,
@@ -2719,10 +2787,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     relaunchMarks,
     // A harness closed or stopped: the harnesses it started close with it (services/agentCleanup.ts).
     stopped: (agentId) => ports.agentCleanup?.closed(agentId),
+    moveHeld: (agentId) => moveHeld.has(agentId),
   })
   const stopJobs = lifecycle.stopJobs
   launchCancelled = id => stopJobs.has(id)
-  restoreCancelled = (agentId) => stopJobs.has(agentId) || pinnedControls.has(agentId) || (restartJobs.operation(agentId) !== undefined && restartJobs.operation(agentId) !== 'restart')
+  restoreCancelled = (agentId) => stopJobs.has(agentId) || pinnedControls.has(agentId) || moveHeld.has(agentId) || (restartJobs.operation(agentId) !== undefined && restartJobs.operation(agentId) !== 'restart')
   binding.whileChanging((agentId) => restorePanes.busy(agentId) || restartJobs.busy(agentId) || stopJobs.has(agentId))
   const stopAgent = lifecycle.stopAgent
   const stopTerminalAgent = createStopRequest({ byAgent: (id) => registry.byAgent(id), stop: stopAgent })
@@ -2772,7 +2841,68 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     liveBypassPermission,
     paneSwapDeps,
     restartHeld: (agentId) => heldLaunches.restartHeld(agentId),
+    moveHeld: (agentId) => moveHeld.has(agentId),
   })
+  // Agents on a drained pty host move, one at a time and only while nobody uses them, to the target host once it can seed
+  // a pane (lib/hostMove/mover.ts). Each move is the agent's lifecycle operation: a restart, stop or delete waits for it
+  // or cancels it, as it would another restart.
+  if (ptyHosts?.drain.length && ptyHostBackend) {
+    const target = ptyHostBackend
+    const moveActivity = (row: RegisteredSession) => activityFrameContextRef?.(row)?.state ?? 'unknown'
+    const moveLookedAt = (agentId: string) => terminalStreams.isLookedAt(agentId) || terminalWatch.isWatched(agentId)
+    const moveOne = createHostMove({
+      registry, terminals, createBackend: () => createBackend,
+      restore: restoreOn, buildLaunch: restoreLaunch, paneSwapDeps,
+      // Every stream open to the agent follows it: the windows' and phones', and Share viewers'.
+      retarget: async (agentId, runtime) => { await Promise.all([terminalStreams.retarget(agentId, runtime), terminalWatch.retarget(agentId, runtime)]) },
+      gate: moveGate,
+      // What the mover picked the agent for, asked again up to the old engine's stop: still idle, quiet, unwatched.
+      eligible: (agentId) => {
+        // Handing over: a move not yet past the old engine's stop cancels itself (`settleMovesForHandOver`).
+        if (hostMover?.stopped) return false
+        const row = registry.byAgent(agentId)
+        return !!row && moveActivity(row) === 'idle' && hostQuiet.quietFor(agentId) >= QUIET_MS && !moveLookedAt(agentId)
+      },
+      holdRoute: (key, ms) => agentReconciler.holdRoute(key, ms),
+      announce: announceSession,
+      invalidateControl: invalidateTerminalControl,
+      refreshGridAssignment: gridAssignments.refresh,
+      waitingArgv: () => moveWaitingArgv(),
+      log: (line) => console.log(line),
+    })
+    hostMover = new HostMover({
+      list: () => registry.list(),
+      isDrainRow: (row) => row.runtimes.some((runtime) => {
+        const on = terminals.backendFor(runtime)
+        return !!on && isDrainBackend(on)
+      }),
+      // Only while the target's host is the one new panes are made on, and it lists `seed`.
+      targetCanSeed: () => createBackend === target && target.canSeed,
+      target: ptyTarget?.instance ?? target.instanceId.replace(/^ptyhost:/, ''),
+      resumesConversation,
+      activity: moveActivity,
+      quiet: hostQuiet,
+      lookedAt: moveLookedAt,
+      busy: (agentId) => restartJobs.busy(agentId) || stopJobs.has(agentId) || restorePanes.busy(agentId) || pinnedControls.has(agentId)
+        || moveHeld.has(agentId),
+      move: async (row) => {
+        let outcome: MoveOutcome | null = null
+        const reply = await restartJobs.run(row.agentId, async (current) => {
+          outcome = await moveOne(row, current)
+          return outcome.moved
+            ? { ok: true, session: registry.byAgent(row.agentId) ?? row, resumed: outcome.resumed }
+            : { ok: false, error: 'MOVE_FAILED', detail: outcome.reason }
+        }, 'move')
+        if (outcome) return outcome
+        // Another lifecycle operation held the agent: nothing ran, so nothing failed. Anything else counts as a failure.
+        const reason = reply.ok ? 'the move did not run' : reply.detail ?? reply.error
+        return !reply.ok && reply.error === 'AGENT_BUSY'
+          ? { moved: false, reason, fellBack: false, cancelled: true }
+          : { moved: false, reason, fellBack: false }
+      },
+      log: (line) => console.log(line),
+    })
+  }
   const guestCreate = createGuestCreate({
     launch: (input) => (ports.sharedMachines ?? SHARED_MACHINES_OFF).guestLaunch(input),
     tmuxBackend: () => tmuxBackend, registry, announceSession, watchNewPane,
@@ -3041,6 +3171,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // answered now, in order, by the handlers meant to answer them (see BackendSocket.openRequests).
   // Only the end-to-end harness sets this: a start-up that hangs after binding, for the master's deadline.
   if (harnessd.HARNESSD_TEST_HOLD_READY === '1') await new Promise<never>(() => {})
+  // A terminal host on probation is judged by this ready: a host whose version answers may still fail to serve (its
+  // conpty.dll, its endpoint), and kept, every new pane would fail on it. Not ready until the create backend is attached
+  // to the target's host; never, if it cannot be, and the master's ready timeout rolls the host back (lib/ptyHost/drain.ts).
+  if (ptyHosts && coreLink.supervised && ptyHostOnProbation(env.ADAPTER_RUNTIME_DIR)) {
+    const create = ptyHosts.create
+    await untilHostAttached(() => ptyTarget !== null && createBackend === create && create.attached, ptyTarget?.instance ?? null, (line) => console.log(line))
+  }
   backend.openRequests()
   daemonBoot.openRequests = null
   coreLink.ready()

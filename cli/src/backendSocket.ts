@@ -745,9 +745,11 @@ export class BackendSocket {
   }
 
   /** The window's focused agent on this local connection — its terminal gets the short output window. */
-  setLocalTerminalFocus(connId: string, agentId: string | null): void {
+  setLocalTerminalFocus(connId: string, agentId: string | null, visibleAgents?: readonly string[]): void {
     if (!this.localClients.has(connId)) return
     this.terminalStreams?.setFocusedAgent(connId, agentId)
+    // Absent (an older desktop) stays null: that window keeps counting as looking.
+    if (visibleAgents) this.terminalStreams?.setVisibleAgents(connId, visibleAgents)
   }
 
   /** Route an authenticated local terminal frame without applying cloud E2EE. */

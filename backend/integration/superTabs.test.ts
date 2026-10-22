@@ -776,6 +776,24 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await expect(store.read({ ...owner, autonomousEnv: 'stag' }, tab)).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
 
+  it('lets the Lead record a rule only by quoting a message the owner wrote in this tab', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const said = (await run(tab, message('Never use Haiku.'))).result.messageId as string
+    const other = (await run(tab, message('Use Haiku.'), peer)).result.messageId as string
+    const rule = (messageId: string): Command => ({ type: 'rule.set', rule: { kind: 'forbidModel', model: 'haiku' }, text: 'Never use Haiku.',
+      askedIn: { conversationId: 'lead', messageId } })
+    await expect(run(tab, rule(other), host, lead)).rejects.toMatchObject({ code: 'OWNER_MESSAGE_REQUIRED' })
+    await expect(run(tab, rule('missing'), host, lead)).rejects.toMatchObject({ code: 'OWNER_MESSAGE_REQUIRED' })
+    await run(tab, rule(said), host, lead)
+    const state = (await store.read(owner, tab)).state
+    expect(state.rules).toEqual([expect.objectContaining({ text: 'Never use Haiku.', askedBy: owner.sub, askedIn: { conversationId: 'lead', messageId: said } })])
+    // One message may ask for several rules, but the owner's "Rule added" row is not the owner asking.
+    await run(tab, { ...rule(said), rule: { kind: 'minEffort', effort: 'high' } } as Command, host, lead)
+    expect((await store.read(owner, tab)).state.rules).toHaveLength(2)
+    const ownRow = await run(tab, { type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Reuse idle agents.' })
+    await expect(run(tab, rule(ownRow.result.messageId as string), host, lead)).rejects.toMatchObject({ code: 'OWNER_MESSAGE_REQUIRED' })
+  })
   it('closes the replying agent\'s own deliveries of a message as answered, and nobody else\'s', async () => {
     const { tab, lead } = await fixture()
     const helper = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),

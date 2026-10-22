@@ -8,6 +8,7 @@ import type { clearDeleted as clearDeletedFn, markDeleted as markDeletedFn } fro
 import { PurgeAgentService } from '../../lib/purgeAgentService.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { createResumeAgentService, type ResumeAgentServiceDeps } from '../../lib/resumeAgentService.js'
+import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
 import type { SessionCheckpointStore } from '../../lib/sessionCheckpoint.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 import { AgentStopError, createStopAgentService, type StopAgentServiceDeps } from '../../lib/stopAgentService.js'
@@ -57,12 +58,14 @@ export interface LifecycleDeps {
   /** An agent was stopped: closed (`agent_close`), Stop Harness, or purged. The harnesses it started close with it
    *  (services/agentCleanup.ts `closed`). */
   stopped?: (agentId: string) => void
+  /** An agent a move a dead daemon left may still run beside (main.ts `moveHeld`): no engine of it starts this start. */
+  moveHeld?: (agentId: string) => boolean
 }
 
 export function createAgentLifecycle({
   registry, stoppedAgents, restartJobs, createBackend, noBackendCode, backendFor, agentReconciler, forgetSession, markDeleted, clearDeleted, stopNative, settlePane, cancelExternal,
   sessionCheckpoints, mirror, sessionSearch, send, pinnedControls, retainExitedSession, announceSession,
-  relaunchOverrides, prepareSessionResume, refreshGridWebSearch, adoptSwarmSkill, attachDsh, attachSession, relaunchMarks, stopped, atFolderTrust, atEmptyComposer,
+  relaunchOverrides, prepareSessionResume, refreshGridWebSearch, adoptSwarmSkill, attachDsh, attachSession, relaunchMarks, stopped, atFolderTrust, atEmptyComposer, moveHeld,
 }: LifecycleDeps) {
   /**
    * Stop Harness (`agent_delete`) archives its conversation and launch settings, removes the live
@@ -101,7 +104,17 @@ export function createAgentLifecycle({
     retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume, adoptSwarmSkill,
     refreshGridWebSearch, clearDeleted, attachDsh, attachSession, relaunchMarks,
   })
-  const resumeAgent: ResumeAgent = (id, permissionMode) => (stoppedAgents.get(id) ?? registry.byAgent(id))?.guest
+  const resumeAgent: ResumeAgent = (id, permissionMode) => {
+    // A pane a stopped move left may still run this conversation's engine, which no record names (its pid was never
+    // the row's), so a resume would find the engine gone and start a second one beside it: not this start.
+    const heldId = (stoppedAgents.get(id) ?? registry.byAgent(id))?.agentId ?? id
+    if (moveHeld?.(heldId)) {
+      console.warn(moveHeldLine(heldId))
+      return Promise.resolve({ ok: false, error: 'AGENT_BUSY', detail: 'This harness is held until the daemon restarts.' })
+    }
+    return resumeChecked(id, permissionMode)
+  }
+  const resumeChecked: ResumeAgent = (id, permissionMode) => (stoppedAgents.get(id) ?? registry.byAgent(id))?.guest
     ? Promise.resolve(GUEST_HARNESS_REFUSAL)
     : purgeAgentService.busy(id) || purgeAgentService.blocksFolder(stoppedAgents.get(id)?.cwd)
       ? Promise.resolve({ ok: false, error: 'AGENT_BUSY' }) : resume(id, permissionMode)
