@@ -120,6 +120,13 @@ class SuperTabController extends ChangeNotifier {
   /// offline, and the Swarm says its backend is unreachable instead of calling machines offline.
   bool get backendUnreachable => _refreshFailing && !accessRevoked;
   bool _refreshFailing = false;
+
+  /// Since when the reads have been failing, while [backendUnreachable]: the first failure of this run of them.
+  DateTime? unreachableSince;
+
+  /// How many reads of the Swarm's state have been answered. A sidebar that is waiting for a new reading (back from
+  /// the background) knows it has one when this moves.
+  int stateReads = 0;
   Future<void> _persisting = Future.value();
   Map<String, dynamic>? _pending;
   final _drafts = <String, String>{};
@@ -366,6 +373,8 @@ class SuperTabController extends ChangeNotifier {
       final answer = await request('GET', _path);
       if (_disposed || accessRevoked) return;
       _refreshFailing = false;
+      unreachableSince = null;
+      stateReads++;
       final nextRevision = (answer['revision'] as num).toInt();
       // How long the Swarm took to answer, and nothing it said: the log shows a slow or failing
       // backend, which the sidebar's ages and the machines' states otherwise only hint at.
@@ -415,7 +424,10 @@ class SuperTabController extends ChangeNotifier {
       await loadMessages(selectedId);
     } catch (failure) {
       _readFailure(failure);
-      if (!_disposed && !accessRevoked) _refreshFailing = true;
+      if (!_disposed && !accessRevoked) {
+        _refreshFailing = true;
+        unreachableSince ??= DateTime.now();
+      }
       // The kind and code of the failure, never its message: a refusal can quote what was sent.
       appLog.warn(
         'swarm',

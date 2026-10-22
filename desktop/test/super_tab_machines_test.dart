@@ -83,7 +83,7 @@ void main() {
     },
   );
   testWidgets(
-    'machine rows show known capacity and allowances while stale readings stay hidden',
+    'machine rows show known capacity and allowances, and an offline machine keeps its old readings dimmed',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(280, 700));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -129,27 +129,29 @@ void main() {
       );
       await tester.pumpAndSettle();
       final offline = find.byKey(const ValueKey('super-machine-offline'));
+      final online = find.byKey(const ValueKey('super-machine-online'));
+      // Offline: said by the row's tooltip, and its old numbers stay, dimmed, instead of being blanked.
+      expect(find.byTooltip('Offline · last seen 1 min ago'), findsOneWidget);
       expect(
-        find.descendant(of: offline, matching: find.byTooltip('Offline')),
+        find.descendant(of: offline, matching: find.textContaining('CPU')),
         findsOneWidget,
       );
       expect(
         find.descendant(of: offline, matching: find.byType(EngineMark)),
-        findsNothing,
+        findsOneWidget,
       );
-      expect(
-        find.descendant(of: offline, matching: find.textContaining('CPU')),
-        findsNothing,
-      );
-      final online = find.byKey(const ValueKey('super-machine-online'));
-      expect(
-        tester.getSize(online).height,
-        greaterThan(tester.getSize(offline).height),
-      );
-      expect(find.text('CPU 100%'), findsOneWidget);
-      expect(find.text('RAM 0 GB'), findsOneWidget);
-      expect(find.text('SSD 141 GB'), findsOneWidget);
-      expect(find.byType(EngineMark), findsOneWidget);
+      double dimmest(Finder row) => tester
+          .widgetList<Opacity>(
+            find.descendant(of: row, matching: find.byType(Opacity)),
+          )
+          .map((o) => o.opacity)
+          .fold(1.0, (a, b) => a < b ? a : b);
+      expect(dimmest(offline), lessThan(1));
+      expect(dimmest(online), 1);
+      expect(find.text('CPU 100%'), findsNWidgets(2));
+      expect(find.text('RAM 0 GB'), findsNWidgets(2));
+      expect(find.text('SSD 141 GB'), findsNWidgets(2));
+      expect(find.byType(EngineMark), findsNWidgets(2));
       // The entire row opens its details, including keyboard activation.
       Focus.of(tester.element(find.text('Studio Mac'))).requestFocus();
       await tester.pump();

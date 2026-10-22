@@ -11,11 +11,15 @@ class SuperTabSectionHeading extends StatelessWidget {
     super.key,
     this.onAdd,
     this.addTooltip,
+    this.trailing,
   });
 
   final String title;
   final VoidCallback? onAdd;
   final String? addTooltip;
+
+  /// Beside the title, before the add action: a status the heading carries, such as the Machines pill.
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -32,6 +36,7 @@ class SuperTabSectionHeading extends StatelessWidget {
               ),
             ),
           ),
+          if (trailing != null) ...[trailing!, const SizedBox(width: 4)],
           if (onAdd != null)
             AppIconButton(
               icon: AppIcons.plus,
