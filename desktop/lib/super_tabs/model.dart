@@ -41,11 +41,15 @@ class SuperTabAgent {
       machineId = _text(row, 'machineId'),
       harnessId = _text(row, 'harnessId'),
       contributorId = _text(row, 'contributorId'),
+      role = row['role'] as String?,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
   // Keep the legacy default for callers while allowing group-based roster ownership.
   final bool hasProjectId;
   final String? displayName;
+  // Absent until the backend sends one; an agent without a role is a Builder.
+  final String? role;
+  bool get isReviewer => role == 'reviewer';
   final Map<String, dynamic> configuration;
   String get engine => configuration['engine'] as String? ?? '';
 }
@@ -184,6 +188,12 @@ class SuperTabSnapshot {
   bool isLead(String agentId) => projects.any(
     (p) => conversation(p.leadConversationId)?.leadId == agentId,
   );
+
+  /// The agents of a workgroup whose role is Reviewer.
+  List<SuperTabAgent> reviewers(SuperTabConversation group) => [
+    for (final id in group.agentIds)
+      if (agent(id) case final a? when a.isReviewer) a,
+  ];
 
   String agentName(String id, {String fallback = 'Agent'}) =>
       agent(id)?.displayName ?? agent(id)?.name ?? fallback;

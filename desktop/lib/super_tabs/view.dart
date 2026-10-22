@@ -754,17 +754,31 @@ class _SuperTabViewState extends State<SuperTabView>
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                child: Text(
-                  group == null
-                      ? c.snapshot?.projects.isEmpty == true
-                            ? c.snapshot!.name
-                            : 'Choose a project'
-                      : c.snapshot!.isProjectLead(group.id)
-                      ? c.snapshot!.projectFor(group.id)!.name
-                      : group.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: DesktopChrome.text(medium: true),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      group == null
+                          ? c.snapshot?.projects.isEmpty == true
+                                ? c.snapshot!.name
+                                : 'Choose a project'
+                          : c.snapshot!.isProjectLead(group.id)
+                          ? c.snapshot!.projectFor(group.id)!.name
+                          : group.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: DesktopChrome.text(medium: true),
+                    ),
+                    if (c.reviewLine(group) case final line?)
+                      Text(
+                        line,
+                        key: const ValueKey('super-review-line'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: DesktopChrome.metadata(),
+                      ),
+                  ],
                 ),
               ),
             ),

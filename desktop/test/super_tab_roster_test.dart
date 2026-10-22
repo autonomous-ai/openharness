@@ -290,6 +290,21 @@ void main() {
     await f.close(tester);
   });
 
+  testWidgets('a reviewer reads Rev; an agent without a role stays Dev', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    (f.server.state['agents'] as List)[1]['role'] = 'reviewer';
+    await f.controller.refresh();
+    await f.show(tester);
+    expect(f.inRow(1, find.text('Rev')), findsOneWidget);
+    expect(f.inRow(1, find.byTooltip('Reviewer')), findsOneWidget);
+    expect(f.inRow(1, find.text('Dev')), findsNothing);
+    expect(f.inRow(3, find.text('Dev')), findsOneWidget);
+    expect(f.inRow(0, find.text('PM')), findsOneWidget);
+    await f.close(tester);
+  });
+
   testWidgets('agents follow project selection', (tester) async {
     final f = await fixture(tester);
     f.app.stateOf('m')!.agents = const [

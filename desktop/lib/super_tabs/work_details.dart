@@ -48,6 +48,10 @@ Future<void> showSuperTabWork(
                   const Text(
                     'The product manager hasn’t defined an assignment in this conversation yet.',
                   ),
+                if (c.reviewLine(group) case final line?) ...[
+                  const SizedBox(height: 16),
+                  Text(line),
+                ],
                 if (assignment != null) ...[
                   const SizedBox(height: 16),
                   Text(
