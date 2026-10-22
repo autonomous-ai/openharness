@@ -7,6 +7,7 @@ it('reads only validated role answers through the Super Tab process', async () =
   const read = swarmRoleThrough(call)
   expect(await read('native')).toBe('lead')
   expect(await read('native')).toBe('dev')
-  for (let i = 0; i < 4; i++) expect(await read('native')).toBeNull()
+  expect(await read('native')).toBeNull()
+  for (let i = 0; i < 3; i++) expect(await read('native')).toBeUndefined()
   expect(call).toHaveBeenCalledWith('super_tabs', { action: 'swarmRole', harnessId: 'native' })
 })

@@ -109,7 +109,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     },
     disconnected: disconnect,
     stop: disconnect,
-    swarmRole: (harnessId: string) => within(swarmRoleFor(core, core.daemon.machineId(), harnessId)),
+    swarmRole: async (harnessId: string) => (await within(swarmRoleFor(core, core.daemon.machineId(), harnessId).then(role => ({ role }))))?.role,
   }
   const requests: ServiceRequests = {
     super_tabs: async (payload, asker, closed) => {

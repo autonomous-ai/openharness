@@ -2300,7 +2300,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     candidate: id => retainedHarnesses(env.ADAPTER_DATA_DIR).has(id),
     role: outOfProcess.has('superTabs')
       ? swarmRoleThrough((type, payload) => serviceLinks.call('superTabs', type, payload, 3500))
-      : id => ports.superTabs?.swarmRole(id) ?? Promise.resolve(null),
+      : id => ports.superTabs?.swarmRole(id) ?? Promise.resolve(undefined),
     save: (id, skill) => registry.setSwarmSkill(id, skill),
   })
   const launchHelpers = createLaunchHelpers({

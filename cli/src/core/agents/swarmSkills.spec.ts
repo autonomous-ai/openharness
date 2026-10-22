@@ -8,7 +8,7 @@ const row = (over: Partial<RegisteredSession> = {}) => ({ agentId: 'old-session'
 
 function setup(saved = row(), live: RegisteredSession | null = saved) {
   let current = true
-  const role = vi.fn(async (): Promise<'lead' | 'dev' | null> => 'lead')
+  const role = vi.fn(async (): Promise<'lead' | 'dev' | null | undefined> => 'lead')
   const save = (id: string, skill: NonNullable<RegisteredSession['swarmSkill']>) => {
     if (!live || live.agentId !== id) return false
     live.swarmSkill = skill; return true
@@ -52,13 +52,21 @@ describe('old Swarm role adoption', () => {
     expect(await adopt(t.saved, t.current)).toBe(t.saved)
     expect(t.role).not.toHaveBeenCalled()
   })
-  it.each(['absent', 'offline'] as const)('remembers a checked %s result across restarts', async result => {
+  it('remembers a confirmed no-role result across restarts', async () => {
     const t = setup()
-    if (result === 'absent') t.role.mockResolvedValue(null)
-    else t.role.mockRejectedValue(new Error('Offline'))
+    t.role.mockResolvedValue(null)
     await t.adopt(t.saved, t.current)
     await t.adopt(t.saved, t.current)
     expect(t.role).toHaveBeenCalledTimes(1)
+  })
+  it.each(['offline', 'unregistered'] as const)('retries an %s lookup and adopts the role when available', async unavailable => {
+    const t = setup()
+    if (unavailable === 'offline') t.role.mockRejectedValueOnce(new Error('Offline'))
+    else t.role.mockResolvedValueOnce(undefined)
+    t.role.mockResolvedValueOnce('dev')
+    expect(await t.adopt(t.saved, t.current)).toBe(t.saved)
+    expect(await t.adopt(t.saved, t.current)).toMatchObject({ swarmSkill: { role: 'dev' } })
+    expect(t.role).toHaveBeenCalledTimes(2)
   })
   it('can adopt after a local roster snapshot first excludes the session', async () => {
     const t = setup()

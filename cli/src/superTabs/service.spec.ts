@@ -38,7 +38,7 @@ describe('restart role lookup through the service', () => {
     expect(await service.requests.super_tabs({ action: 'swarmRole', harnessId: 'old-native' }, owner)).toEqual({ ok: true, role: 'lead' })
     expect(await service.requests.super_tabs({ action: 'swarmRole', harnessId: 'old-native' }, visitor)).toMatchObject({ error: 'OWNER_REQUIRED' })
     call.mockRejectedValueOnce(new Error('Offline'))
-    expect(await service.port.swarmRole('old-native')).toBeNull()
+    expect(await service.port.swarmRole('old-native')).toBeUndefined()
     service.port.stop()
   })
   it('bounds an unavailable backend lookup without delaying restart indefinitely', async () => {
@@ -48,7 +48,7 @@ describe('restart role lookup through the service', () => {
       const service = superTabService(core)
       const read = service.port.swarmRole('old-native')
       await vi.advanceTimersByTimeAsync(3000)
-      expect(await read).toBeNull()
+      expect(await read).toBeUndefined()
       service.port.stop()
     } finally { vi.useRealTimers() }
   })

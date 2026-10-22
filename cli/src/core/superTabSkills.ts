@@ -2,8 +2,10 @@
 import type { SwarmRole } from '../lib/swarmSkills.js'
 
 export function swarmRoleThrough(call: (type: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>) {
-  return async (harnessId: string): Promise<SwarmRole | null> => {
+  return async (harnessId: string): Promise<SwarmRole | null | undefined> => {
     const answer = await call('super_tabs', { action: 'swarmRole', harnessId })
-    return answer.ok === true && (answer.role === 'lead' || answer.role === 'dev') ? answer.role : null
+    if (answer.ok !== true) return undefined
+    if (answer.role === null) return null
+    return answer.role === 'lead' || answer.role === 'dev' ? answer.role : undefined
   }
 }

@@ -6,7 +6,7 @@ import type { SwarmRole } from '../../lib/swarmSkills.js'
 export type AdoptSwarmSkill = (session: RegisteredSession, current: () => boolean) => Promise<RegisteredSession | null>
 
 export function createSwarmSkillAdoption(deps: {
-  role(harnessId: string): Promise<SwarmRole | null>
+  role(harnessId: string): Promise<SwarmRole | null | undefined>
   candidate(harnessId: string): boolean
   authority(agentId: string): () => boolean
   save: typeof registry.setSwarmSkill
@@ -20,10 +20,11 @@ export function createSwarmSkillAdoption(deps: {
     try { if (!deps.candidate(session.agentId)) return session } catch { return session }
     const owns = deps.authority(session.agentId)
     const saved = structuredClone(session)
-    let role: SwarmRole | null = null
+    let role: SwarmRole | null | undefined
     try { role = await deps.role(saved.agentId) } catch { /* An unreadable roster grants no skill. */ }
     if (!current()) return null
-    if (!role) {
+    if (role === undefined) return session
+    if (role === null) {
       noRole.add(saved.agentId)
       return session
     }

@@ -1,9 +1,9 @@
-import type { AdoptSwarmSkill } from './swarmSkills.js'
 /**
  * Restarting an agent in its own pane (`agent_restart`): same agentId, same session, same launch.
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
+import type { AdoptSwarmSkill } from './swarmSkills.js'
 import { homedir } from 'node:os'
 import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
@@ -157,15 +157,16 @@ export function createAgentRestarter({
     }
     if (!session.processIdentity) return { ok: false, error: 'NO_ACTIVE_PROCESS' }
 
-    // The relaunch runs the engine's command again, so an engine uninstalled since the agent started
-    // cannot come back. Asked anyway, the swap killed the working agent and gave up twenty seconds
-    // later with "did not come back up" (updates.e2e.ts, round 24). Asked here, before anything is
-    // touched, the agent goes on running and the person is told why.
+    // Fill a missing Swarm role before native inspection and launch preparation.
     if (adoptSwarmSkill) {
       const adopted = await adoptSwarmSkill(session, current)
       if (!adopted || !current()) return changed
       session = adopted
     }
+    // The relaunch runs the engine's command again, so an engine uninstalled since the agent started
+    // cannot come back. Asked anyway, the swap killed the working agent and gave up twenty seconds
+    // later with "did not come back up" (updates.e2e.ts, round 24). Asked here, before anything is
+    // touched, the agent goes on running and the person is told why.
     const inspected = await inspectNative?.(engine, session, { id: session.agentId, current })
     if (!current()) return changed
     if (inspected && !inspected.ok) return inspected
