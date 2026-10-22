@@ -21,7 +21,7 @@ enum { PH_HOME_BG = 0x151413,
        PH_LETTER_WHO = 0x9A5A2E, PH_LETTER_MORE = 0x9A8A76, PH_LETTER_MARK = 0xD9622B, PH_LETTER_BADGE = 0xFF7A2F,
        PH_TOAST_FILL = 0x1B2A3D, PH_TOAST_EDGE = 0x2A3D55, PH_TOAST_NAME = 0xFFB36B, PH_TOAST_INK = 0xF2F7FC, PH_TOAST_BAR = 0xFF8A3D,   // the notice toast
        PH_CARD_INK = 0xFFFFFF, PH_PILL_WORK = 0x9DFFC0, PH_PILL_ASK = 0xFFC796,
-       PH_SWARM1 = 0x6A4BB0, PH_SWARM2 = 0x22163F,   // the Swarm card's gradient (purple)
+       PH_SWARM1 = 0x6B4FA3, PH_SWARM2 = 0x231A3B,   // the Swarm card's gradient (the Super Tab purple of Notices, darkened toward the ground)
        PH_LEAD_WORK = 0x3EE05B, PH_LEAD_ASK = 0xFFC796, PH_LEAD_STUCK = 0xFFB0B0 };   // a Lead's status line: working, needs you, stuck (done is white at 60 %)
 
 // Home's equaliser: four 8 px bars 5 px apart (47 wide) in a 36 px box at (x, y), PH_ROOM_GREEN, a triangle wave between 40 % and 100 %, 900 ms.
