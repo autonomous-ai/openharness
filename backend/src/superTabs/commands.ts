@@ -51,7 +51,8 @@ const task = z.object({
 }).strict()
 
 export const commandSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('machine.contribute'), machineId: id, name: title, cwd: path, scope: z.literal('swarm').optional(), engines: z.array(z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/)).min(1).max(32), maxAgents: z.number().int().min(1).max(16) }).strict(),
+  z.object({ type: z.literal('machine.contribute'), machineId: id, name: title, cwd: path, scope: z.literal('swarm').optional(), engines: z.array(z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/)).min(1).max(32), maxAgents: z.number().int().min(1).max(16),
+    ifMissing: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('machine.pause'), machineId: id, paused: z.boolean() }).strict(),
   z.object({ type: z.literal('tab.rename'), name: title }).strict(),
   z.object({ type: z.literal('tab.project'), machineId: id, project }).strict(),
@@ -123,6 +124,9 @@ export interface CommandContext {
   recentRoutes?: number
   /** The decision a command names, read from SuperTabRouteDecision by the store. */
   routeDecision?: RouteDecision
+  /** Starts on the machine being contributed that the store found abandoned: never contributed, never dispatched,
+   *  and older than ABANDONED_START_MS by their operation receipt. */
+  abandonedStartIds?: string[]
 }
 
 /** Messages in a row between the Lead and its worker after which the Lead's message is no longer delivered automatically. */
@@ -335,7 +339,18 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (actor.kind !== 'person' || context.contribution?.machineOwnerId !== actor.userId) fail('OWNER_REQUIRED', 'Only the machine owner can contribute it.', 403)
       const contributor = person(state, actor.userId)
       state.machines ??= []
+      // The owner's host adds the machine its Lead runs on by itself (cli/src/superTabs/host.ts). It only fills a gap:
+      // on 2026-10-22 Ken's Mac ran the Lead of a Swarm it was never added to, so its starts bypassed the machine's slots.
+      if (command.ifMissing) {
+        if (actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Swarm owner adds a machine automatically.', 403)
+        if (state.machines.some(m => m.machineId === command.machineId)) break
+      }
       if (!state.machines.some(m => m.machineId === command.machineId) && state.machines.length >= 32) fail('MACHINES_FULL', 'A Super Tab can have up to 32 contributed machines.')
+      // Before a machine was contributed, a Lead's start on it that never dispatched was left pending for good (12 on Ken's
+      // Mac that day) and refused every contribution. Those finish as failed; a dispatched or recent start still blocks.
+      for (const start of state.starts ?? []) {
+        if (context.abandonedStartIds?.includes(start.id)) start.error = 'Abandoned before it started.'
+      }
       if (state.starts?.some(s => s.request.machineId === command.machineId && (!s.harnessId || (s.poolGeneration && !s.poolSettled)) && !s.error)) fail('STARTS_PENDING', 'Reconcile pending starts before changing this contribution.')
       state.machines = state.machines.filter(m => m.machineId !== command.machineId)
       state.machines.push({ machineId: command.machineId, name: command.name, cwd: command.cwd, engines: [...new Set(command.engines)], maxAgents: command.maxAgents,

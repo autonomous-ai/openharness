@@ -824,3 +824,40 @@ it('rechecks authoritative native absence before retrying a lost acknowledgement
   expect(t.remove).toHaveBeenCalledOnce()
   expect(t.close).toHaveBeenLastCalledWith({ agentId: 'harness' })
 })
+
+describe('adding the machine its own Lead runs on to the Swarm', () => {
+  it('adds it once with the prepared slots, retries a refusal a minute later and leaves unmarked Swarms alone', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'super-tab-join-')); roots.push(dir)
+    const agent = { id: 'lead', harnessId: 'harness', machineId: 'machine-1' }
+    const rows = [{ tabId: 'own', joinSwarm: true, agent }, { tabId: 'other', joinSwarm: false, agent }, { tabId: 'old', agent }]
+    const commands: unknown[] = []
+    let refuse = true, clock = 0
+    const call: CoreApi['account']['backend'] = vi.fn(async (method, path, body) => {
+      if (path.endsWith('/commands')) {
+        commands.push({ path, ...(body as object) })
+        if (refuse) { refuse = false; return { status: 409, body: { success: false, error: { code: 'STARTS_PENDING', message: 'Reconcile pending starts.' } } } }
+        return { status: 200, body: { success: true, data: {} } }
+      }
+      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }
+    })
+    const core = fakeCore({ dataDir: dir, account: { backend: call, machineName: vi.fn(() => 'Ken Mac') } })
+    const prepare = vi.fn(async () => ({ ok: true, state: 'ready', cwd: '/data/swarm-projects/own', engines: ['claude', 'codex'], maxAgents: 3, scope: 'swarm' }))
+    const log = vi.fn()
+    const host = new SuperTabHost(core, 'machine-1', { log, now: () => clock, prepareContribution: prepare }); hosts.push(host)
+    await host.tick()
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith('Could not add this machine to its Swarm: Reconcile pending starts.'))
+    await host.tick()
+    expect(prepare).toHaveBeenCalledTimes(1)
+    expect(prepare).toHaveBeenCalledWith(core, { tabId: 'own', scope: 'swarm' })
+    clock += 60_000
+    await host.tick()
+    await vi.waitFor(() => expect(commands).toHaveLength(2))
+    expect(commands[1]).toMatchObject({ path: '/api/super-tabs/own/commands', command: { type: 'machine.contribute', machineId: 'machine-1', name: 'Ken Mac',
+      cwd: '/data/swarm-projects/own', scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 3, ifMissing: true } })
+    rows[0]!.joinSwarm = false
+    clock += 60_000
+    await host.tick()
+    expect(prepare).toHaveBeenCalledTimes(2)
+    expect(commands).toHaveLength(2)
+  })
+})

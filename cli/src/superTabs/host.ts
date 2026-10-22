@@ -11,6 +11,8 @@ import type { CoreApi, TurnDelivery } from '../core/api.js'
 import { shellQuote } from '../orchestrator/prompts.js'
 import { noticeReason, WithheldDeliveries } from './withheld.js'
 import { attentionOf } from './attention.js'
+import { prepareContribution } from './contribution.js'
+import { hostname } from 'node:os'
 
 type Json = Record<string, unknown>
 export class SuperTabHostError extends Error {
@@ -73,9 +75,13 @@ export interface SuperTabHostOptions {
   log?: (message: string) => void
   observers?: typeof publishObservers
   attachedFiles?: typeof attachedFiles
+  prepareContribution?: typeof prepareContribution
 }
 
 export const hostJournalFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `host-${machineId}.json`)
+/** How long a machine that failed to add itself to a Swarm waits before trying again, and after an add before the
+ *  roster can ask for another (a roster read may predate the add). */
+const JOIN_RETRY_MS = 60_000
 /** How long after a pre-#1527 Swarm launch its engine may first bind a session and still be the Swarm's own. */
 const LEGACY_FIRST_BIND_MS = 120_000
 const typedId = (entry: Entry) => `team:service:superTabs:${entry.deliveryId}`
@@ -107,6 +113,9 @@ export class SuperTabHost {
   private retentionError: string | null = null
   private readonly observers: typeof publishObservers
   private readonly attachedFiles: typeof attachedFiles
+  private readonly prepareContribution: typeof prepareContribution
+  /** Per tab, when this machine may next try to add itself to it; Infinity while an add runs. */
+  private readonly joins = new Map<string, number>()
   /** Each delivery's downloaded files, so input held by a busy terminal is not downloaded again on every retry. Only a
    * complete download is kept: a failed one is tried again before the next delivery of the same message. */
   private readonly files = new Map<string, string>()
@@ -141,6 +150,7 @@ export class SuperTabHost {
     this.file = hostJournalFile(core.dataDir, machineId)
     this.observers = options.observers ?? publishObservers
     this.attachedFiles = options.attachedFiles ?? attachedFiles
+    this.prepareContribution = options.prepareContribution ?? prepareContribution
     this.now = options.now ?? Date.now
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
@@ -408,6 +418,7 @@ export class SuperTabHost {
     }
     this.observers(this.core.dataDir, this.machineId, data, requestedAt + 2500)
     this.publishAttention(data)
+    this.joinSwarms(data)
     // Runtime observations cannot delay the live input leases. A stale host
     // observation is fenced by the backend's per-agent configuration version.
     if (!this.configurationsRunning && this.now() >= this.nextConfigurationsAt) {
@@ -466,6 +477,25 @@ export class SuperTabHost {
       }
     }
     await this.leases()
+  }
+
+  /** The roster marks a Swarm whose Lead runs on this machine of its owner while the machine is not one of the Swarm's
+   *  (Swarm creation never added it; on 2026-10-22 Ken's Mac ran a Lead outside its own Swarm's machines). The host
+   *  adds it as the + dialog does (desktop/lib/super_tabs/machines.dart), only if it is still missing, so a person's
+   *  own contribution is never changed. A slow engine probe never delays deliveries. */
+  private joinSwarms(rows: unknown[]): void {
+    for (const item of rows) {
+      const tabId = object(item).tabId
+      if (object(item).joinSwarm !== true || !identifier(tabId) || (this.joins.get(tabId) ?? 0) > this.now()) continue
+      this.joins.set(tabId, Infinity)
+      void (async () => {
+        const prepared = await this.prepareContribution(this.core, { tabId, scope: 'swarm' })
+        await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: randomUUID(), command: {
+          type: 'machine.contribute', machineId: this.machineId, name: this.core.account.machineName() ?? hostname(),
+          cwd: prepared.cwd, scope: 'swarm', engines: prepared.engines, maxAgents: prepared.maxAgents, ifMissing: true } })
+      })().catch(error => this.log(`Could not add this machine to its Swarm: ${error instanceof Error ? error.message : String(error)}`))
+        .finally(() => this.joins.set(tabId, this.now() + JOIN_RETRY_MS))
+    }
   }
 
   /** Hands the core this roster's waits when they changed (or on the first roster). A failed roster read changes
