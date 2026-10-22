@@ -130,6 +130,27 @@ it('keeps a guest harness whose process is still running after its pane closed',
   expect(deps.forgetSession).not.toHaveBeenCalled()
   expect(registry.byAgent(row.agentId)).toBe(row)
 })
+it('checks the saved guest process after its pane removes the registry row, without claiming the changed stop completed', async () => {
+  vi.useFakeTimers()
+  Object.assign(row, { guest: 'kim@example.com' })
+  const identity = { ...row.processIdentity! }
+  tmuxKill.mockImplementationOnce(async () => {
+    registry.removeAgent(row.agentId)
+    return { state: 'succeeded', dispatch: 'executed' }
+  })
+  vi.mocked(checkPidRuntime).mockResolvedValueOnce({ state: 'alive' })
+    .mockResolvedValue({ state: 'gone', reason: 'guest exited after its pane closed' })
+  try {
+    const result = expect(createStopAgentService(deps)(row.agentId)).rejects.toThrow('The harness changed while pausing')
+    await vi.advanceTimersByTimeAsync(250)
+    await result
+    expect(checkPidRuntime).toHaveBeenCalledTimes(2)
+    for (const [session] of vi.mocked(checkPidRuntime).mock.calls) expect(session.processIdentity).toEqual(identity)
+    expect(deps.forgetSession).not.toHaveBeenCalled()
+    expect(terminateDeletedAgent).not.toHaveBeenCalled()
+    expect(stoppedAgents.get(row.agentId)?.sessionId).toBe('saved')
+  } finally { vi.useRealTimers() }
+})
 it('waits for the process a starting guest harness gained while it was saved', async () => {
   // Stopped before its engine was seen, which the pane's watcher binds while the screen is saved: an older copy of the
   // row has no process, which reads as gone at once.
