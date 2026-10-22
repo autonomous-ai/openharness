@@ -8,6 +8,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/state/swarm.dart';
+import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/super_tabs/client.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -44,6 +45,22 @@ class _Catalog {
     if (hold case final waiting?) await waiting.future;
     if (fail == path) throw StateError('Connection lost');
     return {'tabs': rows, 'next': next};
+  }
+}
+
+class _RestoringStore extends MemoryStore {
+  final readingLayout = Completer<void>();
+  final releaseLayout = Completer<void>();
+  bool holdLayout = false;
+
+  @override
+  Future<String?> read(String key) async {
+    final value = await super.read(key);
+    if (holdLayout && key == 'swarm_layout_v1') {
+      readingLayout.complete();
+      await releaseLayout.future;
+    }
+    return value;
   }
 }
 
@@ -155,6 +172,43 @@ void main() {
       expect(app.swarms.where((s) => s.isSuperTab), hasLength(1));
     },
   );
+
+  test('discovery cannot replace regular tabs during an authenticated layout restore', () async {
+    final store = _RestoringStore();
+    final layout = PaneLayoutStore(storage: store);
+    await layout.saveSwarms([
+      Swarm(id: 'work', name: 'Existing work')
+        ..panes.add(TerminalPane(id: 1, machineId: 'm', agentId: 'a0')),
+      Swarm(id: 'notes', name: 'Notes')
+        ..panes.add(TerminalPane(id: 2, machineId: 'm', agentId: 'a1')),
+    ], 'notes');
+    final saved = store.values['swarm_layout_v1'];
+    final app = _computer(_Catalog(), store);
+    store.holdLayout = true;
+    final restoring = app.restorePaneLayoutForTest();
+    await store.readingLayout.future;
+    List<Swarm>? discoveredDuringRestore;
+    String? savedDuringRestore;
+    try {
+      // Re-seating a signed-in machine restores through the same path while
+      // the workspace is already authenticated. The boot status is no fence.
+      await app.superTabs.refreshTabs();
+      discoveredDuringRestore = app.swarms.where((s) => s.isSuperTab).toList();
+      savedDuringRestore = store.values['swarm_layout_v1'];
+    } finally {
+      store.holdLayout = false;
+      store.releaseLayout.complete();
+      await restoring;
+    }
+    expect(app.swarms.map((s) => s.id), ['work', 'notes']);
+    expect(app.activeSwarmId, 'notes');
+    expect(app.allPanes.map((p) => p.agentId), ['a0', 'a1']);
+    expect(discoveredDuringRestore, isEmpty);
+    expect(savedDuringRestore, saved);
+    await app.superTabs.refreshTabs();
+    expect(app.swarms.map((s) => s.name), ['Existing work', 'Notes', 'Pilot']);
+    expect(app.activeSwarmId, 'notes');
+  });
 
   test(
     'two computers discover the same tab without navigation or a local copy',

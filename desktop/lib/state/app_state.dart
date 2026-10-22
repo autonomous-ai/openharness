@@ -1710,10 +1710,13 @@ class AppNotifier extends ChangeNotifier {
     upload: uploadWith(() => api),
     discoveryInterval: kUnderTest ? Duration.zero : const Duration(seconds: 15),
     onTabs: (tabs, hidden) {
-      // The browser can learn its account before the saved layout finishes
-      // loading. Discovery must not persist over that workspace during boot.
+      // Discovery can finish while an already signed-in machine is re-seating
+      // its saved desk, too. Publishing a SuperTab then advances the layout
+      // revision and replaces regular tabs before their restore can finish.
       if (_disposed ||
           status != AppStatus.authenticated ||
+          _paneLayoutRestores != 0 ||
+          _workspaceCleanup != null ||
           currentUser?.id == null) {
         return;
       }
@@ -1756,7 +1759,12 @@ class AppNotifier extends ChangeNotifier {
       _announceOpenPanesToDial();
     },
     onSnapshot: (controller) {
-      if (_disposed || controller.accountId != currentUser?.id) return;
+      if (_disposed ||
+          _paneLayoutRestores != 0 ||
+          _workspaceCleanup != null ||
+          controller.accountId != currentUser?.id) {
+        return;
+      }
       var shown = false;
       for (final tab in swarms.where((s) => s.superTabId == controller.tabId)) {
         if (tab.name != controller.snapshot!.name || !tab.nameIsCustom) {
@@ -18454,6 +18462,7 @@ class AppNotifier extends ChangeNotifier {
   }
 
   int _layoutRevision = 0;
+  int _paneLayoutRestores = 0;
 
   Future<void> flushPaneLayout() => workspaceEnabled?.call() == false
       ? Future<void>.value()
@@ -19152,6 +19161,18 @@ class AppNotifier extends ChangeNotifier {
     if (workspaceEnabled?.call() == false) return;
     final store = _paneLayout;
     if (store == null) return;
+    _paneLayoutRestores++;
+    try {
+      await _readPaneLayout(store, claimOnAttach: claimOnAttach);
+    } finally {
+      _paneLayoutRestores--;
+    }
+  }
+
+  Future<void> _readPaneLayout(
+    PaneLayoutStore store, {
+    required bool claimOnAttach,
+  }) async {
     // Before any chat is restored: its Finder comes back with its agent.
     await finderRoots.load();
     final initialSwarm = activeSwarm;
