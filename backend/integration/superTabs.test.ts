@@ -70,6 +70,27 @@ afterAll(async () => {
   await replica?.stop()
 })
 
+describe('five-part task persistence', () => {
+  it('stores structured tasks through the API and delivers all parts to the worker', async () => {
+    const { tab, lead } = await fixture()
+    const task = { goal: 'Keep drafts', changes: 'Persist pending edits', constraints: 'No dependencies', owns: ['backend/src/superTabs'] }
+    const checks = [{ description: 'Draft survives reconnect', independent: false }]
+    const created = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`,
+      headers: { authorization: `Bearer ${host.sub}` }, payload: { operationId: randomUUID(), asAgentId: lead,
+        command: { type: 'conversation.create', title: 'Drafts', task, checks } } })
+    expect(created.statusCode, created.body).toBe(200)
+    const group = created.json().data.result.conversationId as string
+    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(), name: 'Worker', configuration: config, lead: false })).result.agentId as string
+    const row = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!
+    expect(row.task).toEqual(task)
+    expect(row.brief).toContain('Goal:\nKeep drafts')
+    await run(tab, { type: 'work.assign', conversationId: group, agentId: worker }, host, lead)
+    const messages = (await store.messages(owner, tab, group, {})).messages
+    const delivered = messages.at(-1)!.text
+    for (const part of ['Goal:', 'Changes:', 'Constraints:', 'Owns:', 'Acceptance checks:', ...Object.values(task).flat(), checks[0]!.description]) expect(delivered).toContain(part)
+  })
+})
+
 describe('agent member identities', () => {
   it('keeps a name through replay and removal, including the stored message author', async () => {
     const tab = (await store.create(owner, randomUUID(), 'People and agents')).id

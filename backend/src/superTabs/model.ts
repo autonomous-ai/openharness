@@ -78,6 +78,17 @@ export interface Assignment {
   execution: { machineId: string; harnessId: string; machineOwnerId: string }
   result: string | null
 }
+export interface WorkTask {
+  goal: string
+  changes: string
+  constraints: string
+  owns: string[]
+}
+
+export function renderWorkTask(task: WorkTask): string {
+  return `Goal:\n${task.goal}\n\nChanges:\n${task.changes}\n\nConstraints:\n${task.constraints}\n\nOwns:\n${task.owns.map(area => `- ${area}`).join('\n')}`
+}
+
 export interface Conversation {
   id: string
   projectId?: string
@@ -88,6 +99,7 @@ export interface Conversation {
   agentIds: string[]
   archived: boolean
   brief: string
+  task?: WorkTask
   checks: Check[]
   assignment: Assignment | null
   lastMessageSequence: number
