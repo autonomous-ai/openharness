@@ -573,7 +573,13 @@ pub(super) fn launch(app: &mut App, request: Request) {
     // shell-launch, so a composed command there was refused GUEST_NOT_ALLOWED. Start it as New Harness does there,
     // and Desktop: Claude Code or Codex in that folder, on the owner's plans (a model route stays behind).
     if app.fleet.shares.contains_key(&machine) {
-        let mode = app.options.get("@hn-permission-mode", "", None).filter(|m| !m.is_empty()).unwrap_or_else(|| "auto".into());
+        if launch.model.is_some() {
+            return reply(app, &request, 1, "On a computer shared with you, the harness runs on its owner's plans: leave the model out.");
+        }
+        if !guest_folder(&path, app.homes.get(&machine).map(String::as_str), app.guest_folders.get(&machine)) {
+            return reply(app, &request, 1, "On a computer shared with you, start in your workspace (~) or a folder its owner shares.");
+        }
+        let mode = guest_mode(&launch.engine, app.options.get("@hn-permission-mode", "", None));
         let payload = match guest_launch(&launch.engine, &path, &args, &mode) {
             Ok(p) => p,
             Err(e) => return reply(app, &request, 1, &e),
@@ -581,7 +587,18 @@ pub(super) fn launch(app: &mut App, request: Request) {
         app.shell_context.pending = Some(request.clone());
         let epoch = app.account_epoch;
         let source_cwd = Some(launch.cwd.clone());
-        app.spawn(async move { link.rpc("agent_create", payload, Duration::from_secs(180)).await }, move |app, result| {
+        let creation = payload["creationId"].clone();
+        app.spawn(async move {
+            // A lost answer is not a launch that failed: the receipt says whether it started (as shell_open_status
+            // does for the remote shell), and `started` closes one this command no longer waits for.
+            match link.rpc("agent_create", payload, Duration::from_secs(180)).await {
+                Err(error) => match link.rpc("agent_create_status", json!({"creationId":creation}), Duration::from_secs(15)).await {
+                    Ok(reply) if reply["state"] == "created" => Ok(reply),
+                    _ => Err(error),
+                },
+                other => other,
+            }
+        }, move |app, result| {
             if app.account_epoch != epoch { return }
             // A refusal recorded on the receipt is `failure`, as New Harness reads it.
             let result = result.and_then(|v| match v["failure"]["code"].as_str() {
@@ -647,6 +664,21 @@ fn started(app: &mut App, request: Request, machine: String, source: (String, St
         }else{finish(app,1,"The computer did not create the agent.")},
         Err(e)=>finish(app,1,&format!("Could not start: {e}")),
     }
+}
+
+/// The permission mode a guest's harness asks: @hn-permission-mode when [engine] has it (as New Harness reads it), or
+/// auto. One setting serves every engine, and the owner's daemon refuses a mode the engine lacks.
+fn guest_mode(engine: &str, option: Option<String>) -> String {
+    option.filter(|m| crate::new_harness::data::modes(engine).iter().any(|(id, _)| id == m)).unwrap_or_else(|| "auto".into())
+}
+
+/// Whether a guest may start in [path]: its workspace ([home]) or a folder the owner shares, or below one. The owner's
+/// daemon starts anything else in the workspace without saying so. Not loaded yet ([shared] none): its daemon decides.
+fn guest_folder(path: &str, home: Option<&str>, shared: Option<&Vec<(String, bool)>>) -> bool {
+    let Some(shared) = shared else { return true };
+    if path.split('/').any(|part| part == "..") { return false }
+    let under = |root: &str| { let root = root.trim_end_matches('/'); path == root || path.starts_with(&format!("{root}/")) };
+    home.is_some_and(under) || shared.iter().any(|(folder, _)| under(folder))
 }
 
 /// What a composed command starts on a computer shared with this account: Claude Code or Codex in [cwd], on its
@@ -715,6 +747,26 @@ mod tests {
         // Its own options, and other agents, are refused with why.
         assert!(guest_launch("claude", "/w", &["--model".into(), "opus".into()], "auto").unwrap_err().contains("without options"));
         assert!(guest_launch("gemini", "/w", &[], "auto").unwrap_err().contains("Claude Code or Codex"));
+    }
+
+    #[test]
+    fn a_guest_launch_asks_only_what_its_engine_has_in_a_folder_it_may_use() {
+        // @hn-permission-mode is one setting for every engine; the daemon refuses a mode its engine lacks.
+        assert_eq!(guest_mode("codex", Some("plan".into())), "auto");
+        assert_eq!(guest_mode("claude", Some("plan".into())), "plan");
+        assert_eq!(guest_mode("claude", None), "auto");
+        // Its workspace or a folder the owner shares (and below them); the owner's daemon would start anything
+        // else in the workspace without saying so.
+        let shared = vec![("/Users/dee/code/app".to_string(), true)];
+        let home = Some("/Users/Shared/HarnessGuests/hg_1/work");
+        for ok in ["/Users/Shared/HarnessGuests/hg_1/work", "/Users/Shared/HarnessGuests/hg_1/work/sub", "/Users/dee/code/app", "/Users/dee/code/app/src"] {
+            assert!(guest_folder(ok, home, Some(&shared)), "{ok}");
+        }
+        for no in ["/Users/dee", "/Users/dee/code/application", "/Users/dee/code/app/../secret", "/etc"] {
+            assert!(!guest_folder(no, home, Some(&shared)), "{no}");
+        }
+        // Not loaded yet: the owner's daemon decides.
+        assert!(guest_folder("/Users/dee", home, None));
     }
 
     #[test]
