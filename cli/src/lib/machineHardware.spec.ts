@@ -29,7 +29,7 @@ afterEach(() => {
 describe('host memory counters', () => {
   it('counts reclaimable cache on macOS and reads pressure and swap separately', () => {
     expect(parseDarwinMemory(vm, 8 * 1024 ** 3, '2\ntotal = 2048.00M used = 512.50M free = 1535.50M')).toEqual({
-      total: 8 * 1024 ** 3, available: 130 * 16384,
+      total: 8 * 1024 ** 3, available: 110 * 16384,
       pressure: 'warning', swapUsedBytes: 512.5 * 1024 ** 2,
     })
     expect(parseDarwinMemory(vm, 8 * 1024 ** 3, '4')?.pressure).toBe('critical')
@@ -65,16 +65,17 @@ Swapins:                                    95450347.
 Swapouts:                                  100622631.
 `
     const reading = parseDarwinMemory(captured, 32 * 1024 ** 3, '2\ntotal = 16384.00M  used = 15304.62M  free = 1079.38M  (encrypted)')!
-    expect(reading.available).toBe((3903 + 4048 + 2 + 454033) * 16384)
+    expect(reading.available).toBe((3903 + 454033 + 4048) * 16384)
     expect(reading.available / 1024 ** 3).toBeCloseTo(7.05, 2)
     expect(reading.pressure).toBe('warning')
     expect(parseDarwinMemory(captured, 32 * 1024 ** 3, '4')).toMatchObject({ available: reading.available, pressure: 'critical' })
   })
 
-  it('takes the larger of inactive and file-backed pages, and never more than the memory that is not wired', () => {
+  it('takes the larger of two overlapping views, never their sum, and no more than what is not wired or compressed', () => {
     const only = (text: string) => parseDarwinMemory(text, 8 * 1024 ** 3, '')!.available
-    expect(only(vm.replace('File-backed pages: 90', 'File-backed pages: 200'))).toBe((10 + 20 + 10 + 200) * 16384)
-    expect(only(vm.replace('Pages wired down: 50', 'Pages wired down: 524200'))).toBe(8 * 1024 ** 3 - 524200 * 16384)
+    // Speculative pages (20) are in the file-backed count too: 10 free + max(80 + 20, 300 + 10), not 10 + 80 + 20 + 300.
+    expect(only(vm.replace('File-backed pages: 90', 'File-backed pages: 300'))).toBe((10 + 310) * 16384)
+    expect(only(vm.replace('Pages wired down: 50', 'Pages wired down: 524200'))).toBe(8 * 1024 ** 3 - (524200 + 30) * 16384)
     expect(parseDarwinMemory(vm.replace('Pages wired down: 50', 'Pages wired down: 999999'), 8 * 1024 ** 3, '')).toBeNull()
     expect(parseDarwinMemory(vm.replace('Pages free: 10.\n', ''), 8 * 1024 ** 3, '')).toBeNull()
   })

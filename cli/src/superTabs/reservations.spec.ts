@@ -104,6 +104,15 @@ it('releases the memory of an agent the person closed by hand, on the next reser
   expect(await book.reserve(input(3, 100))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE' })
 })
 
+it('frees the disk of an agent the person closed by hand together with its memory', async () => {
+  const f = setup(), book = f.open()
+  await book.reserve(input(1, 0, 60))
+  f.native.set(id(1), { creationId: id(1), state: 'created', agentId: 'closed-by-hand' })
+  expect(await book.reserve(input(2, 0, 60))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE', detail: expect.stringContaining('disk') })
+  f.gone.add('closed-by-hand')
+  expect(await book.reserve(input(2, 0, 60))).toMatchObject({ ok: true })
+})
+
 it('does not release on a gone answer that fails or that an older core cannot give', async () => {
   const f = setup(), book = f.open()
   await book.reserve(input(1, 100))
