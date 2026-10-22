@@ -28,6 +28,20 @@ import 'section_heading.dart';
 
 export 'machine_status.dart';
 
+/// The owner's agent slots run 1–8 in this dialog, though the backend itself
+/// accepts up to 16: the number an owner picks here is what fits their machine,
+/// and preparation's memory-based suggestion already lands in this range
+/// (`cli/src/superTabs/contribution.ts`). Widening the UI to the backend's
+/// ceiling would only invite a number the machine cannot run.
+const kSuperTabAgentSlotsMin = 1;
+const kSuperTabAgentSlotsMax = 8;
+
+/// A number the dialog may hold and send: in range, or the floor when nothing
+/// is known yet — a contributed machine always offers at least one slot.
+int clampSuperTabAgentSlots(num? value) => value == null
+    ? kSuperTabAgentSlotsMin
+    : value.toInt().clamp(kSuperTabAgentSlotsMin, kSuperTabAgentSlotsMax);
+
 class SuperTabMachines extends StatefulWidget {
   const SuperTabMachines({
     super.key,
@@ -75,6 +89,91 @@ class _MachineChoice {
 
   final String id, label;
   final ({IconData icon, String message})? unavailable;
+}
+
+/// "Agent slots" — how many agents this machine offers the Swarm — with the one
+/// thing the number is not: a promise. Preparation suggests it from what is
+/// free now, and what is free moves.
+///
+/// A stepper rather than a number field, so no keystroke can leave the dialog
+/// holding a count the backend would refuse; both buttons go dead at the bounds
+/// rather than staying lit and doing nothing.
+class _AgentSlots extends StatelessWidget {
+  const _AgentSlots({
+    required this.value,
+    required this.busy,
+    required this.onChanged,
+  });
+
+  /// Null until preparation has answered and the machine has no number yet.
+  final int? value;
+  final bool busy;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final value = this.value;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(child: Text('Agent slots', style: DesktopChrome.text())),
+            Container(
+              width: 96,
+              constraints: const BoxConstraints(
+                minHeight: grid.AppControl.height,
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              decoration: BoxDecoration(
+                // The same recessed well the picker's control sits in.
+                color: grid.AppSurface.recess,
+                borderRadius: BorderRadius.circular(grid.AppControl.radius),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  AppIconButton(
+                    key: const ValueKey('agent-slots-fewer'),
+                    icon: AppIcons.minus,
+                    size: 16,
+                    tooltip: 'Fewer slots',
+                    onPressed:
+                        busy || value == null || value <= kSuperTabAgentSlotsMin
+                        ? null
+                        : () => onChanged(value - 1),
+                  ),
+                  Text(
+                    // No number is known yet, so there is none to show and
+                    // none to send — Save waits for the same preparation.
+                    value?.toString() ?? '–',
+                    key: const ValueKey('agent-slots-value'),
+                    style: DesktopChrome.control(),
+                  ),
+                  AppIconButton(
+                    key: const ValueKey('agent-slots-more'),
+                    icon: AppIcons.plus,
+                    size: 16,
+                    tooltip: 'More slots',
+                    onPressed:
+                        busy || value == null || value >= kSuperTabAgentSlotsMax
+                        ? null
+                        : () => onChanged(value + 1),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Each new agent still needs free memory when it starts.',
+          style: DesktopChrome.metadata(),
+        ),
+      ],
+    );
+  }
 }
 
 /// Unlike an ordinary choice field, this inventory also explains computers
@@ -404,6 +503,57 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     String? error;
     var busy = false;
     String? setupId;
+    // The agent slots the owner is choosing. A machine already in this Swarm
+    // starts at the number it has (null means it has none yet — a new machine,
+    // filling in with preparation's suggestion below).
+    int? slotsFor(String? id) {
+      final row = id == null
+          ? null
+          : c.snapshot?.machines.where((m) => m['machineId'] == id).firstOrNull;
+      final current = row?['maxAgents'];
+      return current is num ? clampSuperTabAgentSlots(current) : null;
+    }
+
+    int? slots = slotsFor(machineId);
+    // The open dialog and its own setState, once it is built: preparation
+    // answers while the form is open, and the field has to repaint when it
+    // does. Both are read only while the dialog is still there — a suggestion
+    // that arrives after it closed has nothing to repaint.
+    BuildContext? dialog;
+    void Function(void Function())? repaint;
+    var suggesting = false;
+
+    /// Ask preparation what it would suggest, so the field starts where the
+    /// machine's own memory says rather than leaving the owner to guess. Any
+    /// failure stays quiet — Save runs the same preparation and reports it
+    /// there, in the words it already uses.
+    Future<void> suggestSlots() async {
+      final id = machineId;
+      if (id == null || !canSelect(app.stateOf(id))) return;
+      // The same preparation Save runs, and through the same receipt: one
+      // setup per dialog, read rather than repeated.
+      setupId ??= superTabOperationId();
+      Map<String, dynamic> prepared;
+      try {
+        prepared = await app.superTabMachineRequest(id, {
+          'action': 'prepareContribution',
+          'tabId': c.tabId,
+          'scope': 'swarm',
+          'operationId': setupId,
+        });
+      } catch (_) {
+        return;
+      }
+      // The picker may have moved on to another machine, whose own number is
+      // the one that belongs in the field now — or the dialog may have closed.
+      if (machineId != id || dialog?.mounted != true) return;
+      final suggested = prepared['maxAgents'];
+      if (prepared['state'] != 'ready' || suggested is! num) return;
+      // Never over a number the machine already had, or one the owner has set.
+      if (slots != null) return;
+      repaint?.call(() => slots = clampSuperTabAgentSlots(suggested));
+    }
+
     await showAppDialog<void>(
       context: context,
       builder: (context) => SuperTabDialogScope(
@@ -412,6 +562,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           listenable: app,
           builder: (context, _) => StatefulBuilder(
             builder: (context, update) {
+              dialog = context;
+              repaint = update;
+              if (!suggesting) {
+                suggesting = true;
+                // Not awaited: the form is usable immediately, and the number
+                // only has to be there by the time the owner reads it.
+                unawaited(suggestSlots());
+              }
               Future<void> save() async {
                 if (busy ||
                     !c.canWrite ||
@@ -458,6 +616,13 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   }
                   if (!context.mounted || !c.canWrite) return;
                   final machine = app.stateOf(selected);
+                  // A Save pressed before preparation's answer reached the
+                  // field still contributes the number it was about to show,
+                  // rather than a slot count nobody chose.
+                  final suggested = prepared['maxAgents'];
+                  if (slots == null && suggested is num) {
+                    slots = clampSuperTabAgentSlots(suggested);
+                  }
                   final result =
                       c.pendingCommand?['type'] == 'machine.contribute'
                       ? await c.retry()
@@ -469,7 +634,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                           if (prepared['scope'] != null)
                             'scope': prepared['scope'],
                           'engines': prepared['engines'],
-                          'maxAgents': prepared['maxAgents'],
+                          'maxAgents': clampSuperTabAgentSlots(slots),
                         });
                   if (result == null) {
                     throw SuperTabFailure(
@@ -522,7 +687,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                               machineId = id;
                               setupId = null;
                               error = null;
+                              // Another machine has its own number: the one it
+                              // already offers, or its own suggestion.
+                              slots = slotsFor(id);
                             });
+                            unawaited(suggestSlots());
                           },
                         )
                       else
@@ -563,6 +732,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                             },
                             child: const Text('Open Machines'),
                           ),
+                        ),
+                      ],
+                      if (own.isNotEmpty) ...[
+                        const SizedBox(height: 16),
+                        _AgentSlots(
+                          value: slots,
+                          busy: busy,
+                          onChanged: (next) => update(() => slots = next),
                         ),
                       ],
                       if (error != null) ...[
