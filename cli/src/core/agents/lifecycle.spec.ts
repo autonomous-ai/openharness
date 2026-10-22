@@ -109,6 +109,11 @@ describe('stopping, purging and resuming an agent', () => {
       expect(purge.stop).toBe(lifecycle.stopAgent)
     })
 
+    it('asks the pane, through the core, whether an agent waits at its folder-trust question', () => {
+      const atFolderTrust = vi.fn(async () => true)
+      expect(setup({ atFolderTrust }).purge.atFolderTrust).toBe(atFolderTrust)
+    })
+
     it('waits on an agent that is restarting or stopping', () => {
       const restarting = setup({ restartJobs: { busy: vi.fn((id: string) => id === 'a1') } as never })
       expect(restarting.purge.restarting('a1')).toBe(true)

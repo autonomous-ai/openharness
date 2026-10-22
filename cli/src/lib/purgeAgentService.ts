@@ -16,6 +16,7 @@ import { sqliteReadAll } from './sqliteRead.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import type { SessionCheckpointStore } from './sessionCheckpoint.js'
 import type { StopAgentOptions } from './stopAgentService.js'
+import { unusedChat } from './closeAgentService.js'
 import { inspectWorkspace, inspectWorktree, removeReviewedWorktree, type WorktreeReview } from './worktreeDeletion.js'
 
 const exec = promisify(execFile)
@@ -195,6 +196,8 @@ export interface PurgeDeps {
   stop(id: string, options: StopAgentOptions): Promise<void>
   restarting(id: string): boolean
   deleted(session: RegisteredSession): void
+  /** A fresh read of the pane says the engine is waiting at its folder-trust question (Codex's "Do you trust the contents of this directory?"). */
+  atFolderTrust?(session: RegisteredSession): Promise<boolean>
   inspect?: typeof inspectNativeHistory
   erase?: typeof eraseNativeHistory
   now?: () => number
@@ -260,6 +263,19 @@ export class PurgeAgentService {
       return { error: 'WORKTREE_DELETE_REFUSED', stopped, detail: (error instanceof Error ? error.message : 'The worktree could not be deleted.')
         + (stopped ? ' The harness is stopped. Review its worktree again before retrying.' : '') }
     }
+  }
+
+  /**
+   * An engine waiting at its folder-trust question has opened no conversation, and cannot before it is answered. Stop
+   * is told so, as Close tells it of a chat it saw empty: otherwise a Codex with no bound conversation is held while
+   * the shared server runs ("Cannot confirm which conversation is open"), and where the process cannot be read its
+   * conversation is held too, so two agents a Super Tab started into an untrusted folder could not be deleted
+   * (2026-10-22). Anything that ever bound a conversation is not this, whatever the screen shows.
+   */
+  private async unstartedChat(live: RegisteredSession | undefined): Promise<Pick<StopAgentOptions, 'withoutConversation' | 'confirmUnusedConversation'>> {
+    const atTrust = this.deps.atFolderTrust
+    if (!live || !atTrust || !unusedChat(live) || !await atTrust(live)) return {}
+    return { withoutConversation: () => {}, confirmUnusedConversation: async captured => unusedChat(captured) && await atTrust(captured) }
   }
 
   private current(request: Pick<PurgeRequest, 'agentId' | 'sessionId' | 'createdAt'>, deletingHistory = true): RegisteredSession {
@@ -335,7 +351,7 @@ export class PurgeAgentService {
           await this.deps.stop(request.agentId, { current: () => {
             const live = this.deps.live(request.agentId)
             return !!live && identity(live) === review.signature
-          } })
+          }, ...await this.unstartedChat(this.deps.live(request.agentId)) })
         }
         if (this.deps.live(request.agentId)) return fail('The harness did not stop. No session data was deleted.')
         stopped = true

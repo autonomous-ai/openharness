@@ -327,6 +327,19 @@ launch refusals and its engines that did not start after a create each name thei
 codes; a large `unlisted` share means a code is missing from `LAUNCH_ERROR_CODES`. Feedback
 is one source of evidence; a missing response does not identify why a person stopped using Harness.
 
+Launch codes include Windows launch and terminal-host refusals, and Git branch/worktree preparation
+refusals. Older CLI releases reported these as `unlisted`; an old total cannot recover which code it
+contained. Naming a refusal in a later release does not establish the cause of an earlier failure.
+
+Setup refusals are also counted by their fixed code in separate families: `launch_failed_setup_code_<code>`
+adds up to `launch_failed_setup`, `create_error_setup_code_<code>` to `create_error_setup`, and
+`phone_create_error_setup_code_<code>` to `request_phone_create_error_setup`. This distinguishes missing
+tmux/terminal hosts, native preparation, spawning and registration failures without sending their messages
+or paths. Existing failure-kind totals and the `other`-by-code families keep their meaning. A launch's
+status polls count its setup outcome once; request counters still count each create request. Older CLI
+releases send no setup-by-code counts, so compare coverage by release. Deploy the backend vocabulary before
+the CLI: an older backend refuses a whole report containing a new counter.
+
 ## Rollout and privacy controls
 
 Deploy backend schema and the singleton worker first, including unique indexes and TTL indexes.

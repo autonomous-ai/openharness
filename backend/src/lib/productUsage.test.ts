@@ -109,6 +109,28 @@ it('stores launch codes as day totals like any other counter', async () => {
     .toEqual(Object.entries(counters).map(([metric, value]) => [metric, { $inc: { value } }]))
 })
 
+it('accepts the Windows and Git helper refusals that older launch reports called unlisted', async () => {
+  const codes = ['engine_launch_refused', 'pty_host_unavailable', 'git_project_unavailable', 'branch_exists',
+    'invalid_branch', 'branch_switch_failed', 'branch_in_use', 'worktree_failed']
+  const counters = Object.fromEntries(codes.map(code => [`launch_failed_code_${code}`, 1]))
+  expect(await ingestProductUsage('private-account', { ...report, counters }, now)).toEqual({ accepted: true })
+  expect(db.$runCommandRaw.mock.calls[0][0].updates.map((u: { q: { metric: string } }) => u.q.metric))
+    .toEqual(Object.keys(counters))
+})
+
+it('stores setup reasons in separate families without reinterpreting the other-failure totals', async () => {
+  const counters = {
+    launch_failed_setup: 2, launch_failed_setup_code_tmux_unavailable: 1, launch_failed_setup_code_native_launch_held: 1,
+    create_error_setup: 2, create_error_setup_code_tmux_unavailable: 1, create_error_setup_code_pty_host_unavailable: 1,
+    request_phone_create_error_setup: 1, phone_create_error_setup_code_tmux_unavailable: 1,
+    launch_failed_other: 1, launch_failed_code_worktree_failed: 1,
+  }
+  expect(await ingestProductUsage('private-account', { ...report, counters }, now)).toEqual({ accepted: true })
+  const stored = db.$runCommandRaw.mock.calls[0][0].updates.map((u: { q: { metric: string }; u: unknown }) => [u.q.metric, u.u])
+  expect(stored).toEqual(Object.entries(counters).map(([metric, value]) => [metric, { $inc: { value } }]))
+  expect(JSON.stringify(stored)).not.toContain('private-account')
+})
+
 describe('preference', () => {
   it('defaults on but preserves a prior off choice', async () => {
     expect(await productUsageChoice('private-account')).toEqual({ enabled: true, revision: 0 })

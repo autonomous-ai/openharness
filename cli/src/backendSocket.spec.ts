@@ -3880,6 +3880,43 @@ describe('agent_recent replies', () => {
 })
 
 describe('request sources', () => {
+  it.each(['phone', 'Desktop'] as const)('%s: names a project preparation refusal for a Claude or Codex creation', async surface => {
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
+    socket.connect()
+    const ws = wsMock.instances.at(-1)!
+    ws.open()
+    const counters: string[] = [], signals: unknown[] = []
+    vi.spyOn(gatewayOf(socket), 'usageCounter').mockImplementation(metric => { counters.push(metric) })
+    vi.spyOn(gatewayOf(socket), 'usageLaunch').mockImplementation(signal => { signals.push(signal) })
+    // The real creation handler translates this imported helper's refusal into a durable receipt.
+    vi.spyOn(projectFolder, 'prepareProjectFolder').mockRejectedValue(new projectFolder.ProjectFolderError('WORKTREE_FAILED', 'PRIVATE_CANARY'))
+    socket.onCreateAgent = vi.fn()
+    socket.registerLocalClient('local:creation-report', { sendFrame: () => true, sendBinary: () => true })
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
+    try {
+      for (const engine of ['claude', 'codex']) {
+        const creationId = randomUUID()
+        const frame = { type: 'agent_create', payload: { creationId, requestId: creationId, engine,
+          projectSource: 'worktree', gitSource: '/PRIVATE_FOLDER', ...(surface === 'phone' ? { usageSurface: 'phone' } : {}) } }
+        if (surface === 'phone') {
+          vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue(frame)
+          ws.message({ t: 'down', connId: 'phone-creation-report', frame: { type: 'agent_create', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } } } })
+        } else socket.handleLocalFrame('local:creation-report', frame)
+        await vi.waitFor(() => expect(signals).toContainEqual({ id: creationId, phase: 'failed', failure: 'other', code: 'worktree_failed' }))
+      }
+      expect(counters.filter(name => name === 'create_error_code_worktree_failed')).toHaveLength(2)
+      expect(counters.filter(name => name === `request_${surface === 'phone' ? 'phone' : 'app'}_create_failed`)).toHaveLength(2)
+      expect(socket.onCreateAgent).not.toHaveBeenCalled()
+      expect(JSON.stringify([counters, signals])).not.toContain('PRIVATE')
+    } finally {
+      await socket.unregisterLocalClient('local:creation-report')
+      await socket.stop()
+      vi.restoreAllMocks()
+    }
+  })
+
   // The counter a request starts with, for a remote `web` client: the phone only by its own word.
   async function startedFor(payload: Record<string, unknown>) {
     const socket = relaySocket('token')

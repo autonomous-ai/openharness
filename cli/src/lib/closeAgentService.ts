@@ -37,7 +37,7 @@ export const CLOSE_STARTING_MS = 60_000
 
 type CloseSession = Pick<RegisteredSession, 'engine' | 'sessionId' | 'transcriptPath' | 'boundAt' | 'launch' | 'resumeOnly'>
 
-function unusedChat(session: CloseSession): boolean {
+export function unusedChat(session: CloseSession): boolean {
   return (session.engine === 'claude' || session.engine === 'codex')
     && !session.sessionId && !session.transcriptPath && session.boundAt == null && !session.resumeOnly
     && (session.launch == null || session.launch.state === 'ready')
