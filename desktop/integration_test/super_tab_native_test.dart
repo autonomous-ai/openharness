@@ -157,8 +157,24 @@ void main() {
       server.append(
         'Keep changes on the device and sync when the connection returns.',
       );
+      final instruction = server.messages.last;
+      final deliveredAt = DateTime.now().subtract(const Duration(seconds: 42));
+      instruction['deliveries'] = [
+        // Typed loosely: the test advances this row through hold, uncertain and answered below.
+        <String, Object?>{
+          'id': 'native-receipt',
+          'agentId': 'lead-agent',
+          'status': 'delivered',
+          'deliveredAt': deliveredAt.toIso8601String(),
+        },
+      ];
       server.append('Routed to Multiply');
       server.messages.last['source'] = routeRow()['source'];
+      server.messages.last['author'] = {
+        'kind': 'agent',
+        'id': 'lead-agent',
+        'name': 'Lead',
+      };
       server.routeDecisions['d1'] = decision();
       debugPrint('Swarm fixture: load conversation controller');
       final c = await tester.runAsync(() async {
@@ -207,10 +223,27 @@ void main() {
         const Duration(seconds: 10),
       );
       debugPrint('Swarm fixture: conversation settled');
+      final folder = Platform.environment['SUPER_TAB_NATIVE_SHOTS'];
+      Future<void> shot(String name) async {
+        if (folder == null) return;
+        final render =
+            boundary.currentContext!.findRenderObject()!
+                as RenderRepaintBoundary;
+        final image = await render.toImage(pixelRatio: 1);
+        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+        await Directory(folder).create(recursive: true);
+        await File('$folder/$name.png')
+            .writeAsBytes(bytes!.buffer.asUint8List());
+        image.dispose();
+      }
+
       expect(find.byTooltip('Invite people'), findsOneWidget);
       expect(find.text('CHATS'), findsNothing);
       expect(find.text('New group'), findsNothing);
-      expect(find.text('New project'), findsOneWidget);
+      expect(find.byTooltip('New project'), findsOneWidget);
+      // Left sidebar: both Projects and Machines groups start open.
+      expect(find.text('Studio Mac'), findsOneWidget);
+      await shot('sidebar-groups');
       debugPrint('Swarm fixture: empty project disclosure');
       await tester.tap(
         find.byKey(const ValueKey('super-project-expand-design')),
@@ -239,21 +272,59 @@ void main() {
       f.app.selectSwarm(swarmId);
       await tester.pumpAndSettle();
       debugPrint('Swarm fixture: returned from Devices');
-      final folder = Platform.environment['SUPER_TAB_NATIVE_SHOTS'];
-      Future<void> shot(String name) async {
-        if (folder == null) return;
-        final render =
-            boundary.currentContext!.findRenderObject()!
-                as RenderRepaintBoundary;
-        final image = await render.toImage(pixelRatio: 1);
-        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-        await Directory(folder).create(recursive: true);
-        await File('$folder/$name.png')
-            .writeAsBytes(bytes!.buffer.asUint8List());
-        image.dispose();
-      }
-
       await shot('conversation');
+      expect(find.textContaining('Delivered '), findsOneWidget);
+      expect(find.text('Queued'), findsNothing);
+      final receipt =
+          (instruction['deliveries'] as List).single as Map<String, Object?>;
+      receipt.addAll({
+        'status': 'claimed',
+        'holdReason': 'team_waiting_idle',
+        'holdSince': DateTime.now()
+            .subtract(const Duration(seconds: 34))
+            .toIso8601String(),
+      });
+      await c.refresh();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.textContaining('Atlas is busy · waiting'), findsOneWidget);
+      expect(
+        find.text(
+          "Atlas is finishing another task. Your message goes in by itself when it's done.",
+        ),
+        findsOneWidget,
+      );
+      await shot('receipt-held');
+      receipt['status'] = 'uncertain';
+      await c.refresh();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text("Couldn't confirm delivery"), findsOneWidget);
+      for (final label in ['Open terminal', 'Send again', 'It arrived']) {
+        expect(find.text(label), findsOneWidget);
+      }
+      await shot('receipt-uncertain');
+      receipt.addAll({
+        'status': 'answered',
+        'deliveredAt': deliveredAt.toIso8601String(),
+        'answeredAt': deliveredAt
+            .add(const Duration(seconds: 72))
+            .toIso8601String(),
+      });
+      await c.refresh();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('Replied · 1m 12s'), findsOneWidget);
+      await shot('receipt-replied');
+      debugPrint('Swarm fixture: collapse both left sidebar groups');
+      await tester.tap(find.byTooltip('Collapse Projects'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Collapse Machines'));
+      await tester.pumpAndSettle();
+      expect(find.text('Design'), findsNothing);
+      expect(find.text('Studio Mac'), findsNothing);
+      await shot('sidebar-collapsed');
+      await tester.tap(find.byTooltip('Expand Projects'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Expand Machines'));
+      await tester.pumpAndSettle();
       expect(find.text('Lead'), findsNothing);
       expect(find.text('Atlas'), findsNWidgets(2));
       expect(find.text('Available capacity'), findsNothing);

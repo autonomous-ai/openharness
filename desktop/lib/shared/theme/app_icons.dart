@@ -44,6 +44,7 @@ abstract final class AppIcons {
   static const calendarDays = LucideIcons.calendarDays400;
   static const chartNoAxesColumn = LucideIcons.chartNoAxesColumn400;
   static const check = LucideIcons.check400;
+  static const checkCheck = LucideIcons.checkCheck400;
   static const chevronDown = LucideIcons.chevronDown400;
   static const chevronLeft = LucideIcons.chevronLeft400;
   static const chevronRight = LucideIcons.chevronRight400;

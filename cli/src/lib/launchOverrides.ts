@@ -1,3 +1,4 @@
+import { prepareSwarmSkill, type SwarmSkill } from './swarmSkills.js'
 /**
  * What a pane has to be launched WITH, beyond the engine's own argv, for the engine to come back
  * where it was: on the same grid with the same credential, or under the same Codex profile.
@@ -125,6 +126,7 @@ export interface LaunchSource extends NativeLaunchSource {
   dsh?: string | null
   /** The session-scoped runtime bundle. Older rows use their stable agent id. */
   dshRuntime?: string | null
+  swarmSkill?: SwarmSkill
   /** The workspace, for the DSH's `${workspace}` — the registry row's `cwd`. */
   cwd?: string | null
   /**
@@ -280,8 +282,15 @@ export async function prepareLaunchOverrides(
     }
     // What Harness tells the agent rides every relaunch, in the slot `agent_create` gave it: last. Read again each
     // time, with the person's switches and settings as they are now.
+    let swarmInstructions: string | undefined
+    if (source.swarmSkill) {
+      try {
+        if (!source.cwd) throw new Error('The Swarm session has no saved workspace')
+        swarmInstructions = prepareSwarmSkill(source.cwd, source.swarmSkill).instructions
+      } catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
+    }
     const told = agentLaunchArgs(engine, source.startedBy, {
-      cwd: source.cwd ?? null, profile: source.codexHome, environment: native?.environment, read: deps.readAttribution,
+      cwd: source.cwd ?? null, profile: source.codexHome, environment: native?.environment, read: deps.readAttribution, ...(swarmInstructions ? { swarmInstructions } : {}),
     })
     if (told.length) overrides = { ...overrides, extraArgs: joinedInstructions(engine, [...overrides.extraArgs, ...told]) }
     return { ok: true, overrides: { ...overrides, ...(native ? { native, env: { ...overrides.env, ...native.environment } } : {}), clearEnv: [...overrides.clearEnv, ...harnessEnvToClear(overrides.env)] } }

@@ -27,7 +27,22 @@ Future<void> showSuperTabWork(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (group?.brief.isNotEmpty == true)
+                if (group?.task case final task?) ...[
+                  for (final section in [
+                    ('Goal', task.goal),
+                    ('Changes', task.changes),
+                    ('Constraints', task.constraints),
+                    ('Owns', task.owns.map((area) => '- $area').join('\n')),
+                  ]) ...[
+                    Text(
+                      section.$1,
+                      style: DesktopChrome.control(medium: true),
+                    ),
+                    const SizedBox(height: 4),
+                    SuperTabMessageText(section.$2),
+                    const SizedBox(height: 16),
+                  ],
+                ] else if (group?.brief.isNotEmpty == true)
                   SuperTabMessageText(group!.brief)
                 else
                   const Text(
@@ -37,6 +52,13 @@ Future<void> showSuperTabWork(
                   const SizedBox(height: 16),
                   Text(
                     '${c.snapshot?.agentName(assignment['agentId'] as String, fallback: 'Agent unavailable') ?? 'Agent unavailable'} · ${superTabWorkStatusLabel(assignment['status'] as String)}',
+                  ),
+                ],
+                if (group?.checks.isNotEmpty == true) ...[
+                  const SizedBox(height: 16),
+                  Text(
+                    'Acceptance checks',
+                    style: DesktopChrome.control(medium: true),
                   ),
                 ],
                 for (final check

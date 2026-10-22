@@ -15,12 +15,16 @@ import '../usage/models_menu_controller.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/workspace_subscription_usage.dart';
+import 'action_row.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
+import 'machine_status.dart';
 import 'machine_details.dart';
 import 'model.dart';
 import 'section_heading.dart';
+
+export 'machine_status.dart';
 
 class SuperTabMachines extends StatefulWidget {
   const SuperTabMachines({
@@ -29,11 +33,32 @@ class SuperTabMachines extends StatefulWidget {
     required this.onAddAgent,
     this.app,
     this.embedded = false,
+    this.now = DateTime.now,
+    this.readLocal,
+    this.collapsed = false,
+    this.onToggleCollapsed,
+    this.onYourDevices,
   });
   final SuperTabController controller;
   final AppNotifier? app;
   final bool embedded;
+
+  /// Whether the body below the heading is hidden. The heading itself, and
+  /// its Add machine action, remain visible so the group stays reachable.
+  final bool collapsed;
+  final VoidCallback? onToggleCollapsed;
+
+  /// Rendered as a row in the group's body, moved here from the roster.
+  final VoidCallback? onYourDevices;
   final ValueChanged<SuperTabConversation> onAddAgent;
+
+  /// The clock the readings' ages are counted against.
+  final DateTime Function() now;
+
+  /// Reads this computer's own view of a machine, in place of [AppNotifier.readMachineResources]. A test gives it
+  /// to have the readings taken (they are not, under `flutter test`, unless it does).
+  @visibleForTesting
+  final Future<MachineResources?> Function(String machineId)? readLocal;
   @override
   State<SuperTabMachines> createState() => _SuperTabMachinesState();
 }
@@ -210,6 +235,18 @@ class _MachinePickerState extends State<_MachinePicker> {
 
 class _SuperTabMachinesState extends State<SuperTabMachines> {
   final _samples = <String, (MachineResources, DateTime)>{};
+
+  /// Machines whose sample in [_samples] was taken before the app last came back to the front: it is shown, dimmed,
+  /// as "refreshing…" until the read that follows replaces it.
+  final _awaiting = <String>{};
+
+  /// How many reads of the Swarm's state had been answered when the app came back to the front; the machines
+  /// reporting through it are refreshing until one more is. Null: the app has not been away.
+  int? _swarmReadsAtReturn;
+
+  /// Once a second, so that ages, states and the heading's count follow the clock between the Swarm's reads.
+  Timer? _tick;
+  final _tips = <String, GlobalKey<TooltipState>>{};
   ModelsMenuController? _usage;
   Timer? _timer;
   bool _reading = false;
@@ -224,7 +261,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   @override
   void initState() {
     super.initState();
-    if (!kUnderTest && widget.app != null) {
+    if (!kUnderTest) {
+      _tick = Timer.periodic(const Duration(seconds: 1), (_) => _changed());
+    }
+    if ((!kUnderTest || widget.readLocal != null) && widget.app != null) {
       _updateUsage();
       widget.app!.foreground.addListener(_foreground);
       unawaited(_refresh());
@@ -252,9 +292,17 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     _updateUsage();
     _revision++;
     _timer?.cancel();
-    _samples.clear();
-    _changed();
-    if (widget.app?.foreground.value == true) unawaited(_refresh());
+    if (widget.app?.foreground.value == true) {
+      // Back in front: what was read before stays on the screen, dimmed, as refreshing — it used to vanish and
+      // come back a second later. The Swarm is read again at once, and so are this computer's readings.
+      _awaiting.addAll(_samples.keys);
+      _swarmReadsAtReturn = c.stateReads;
+      unawaited(c.refresh());
+      _changed();
+      unawaited(_refresh());
+    } else {
+      _changed();
+    }
   }
 
   Future<void> _refresh() async {
@@ -266,18 +314,22 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       for (var i = 0; i < ids.length; i += 2) {
         await Future.wait(
           ids.skip(i).take(2).map((id) async {
-            final value = await widget.app!.readMachineResources(id);
+            final value =
+                await (widget.readLocal ?? widget.app!.readMachineResources)(
+                  id,
+                );
             if (!mounted || revision != _revision || !_ids.contains(id)) return;
-            if (value == null) {
-              _samples.remove(id);
-            } else {
-              _samples[id] = (value, DateTime.now());
-            }
+            // Read or not, the wait for it is over; with nothing read the last sample stands and ages.
+            _awaiting.remove(id);
+            if (value != null) _samples[id] = (value, widget.now());
+            // Each machine as its read arrives, not once all of them have been read.
+            _changed();
           }),
         );
         if (!mounted || revision != _revision) return;
       }
-      _changed();
+      _samples.removeWhere((id, _) => !_ids.contains(id));
+      _awaiting.removeWhere((id) => !_samples.containsKey(id));
     } finally {
       _reading = false;
       if (mounted && widget.app?.foreground.value == true) {
@@ -290,6 +342,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   void dispose() {
     _revision++;
     _timer?.cancel();
+    _tick?.cancel();
     widget.app?.foreground.removeListener(_foreground);
     _usage?.removeListener(_changed);
     _usage?.dispose();
@@ -479,8 +532,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                         Text(
                           'Let the product manager run agents here using this machine’s signed-in accounts.',
                           style: DesktopChrome.text(),
-                        )
-                      else ...[
+                        ),
+                      if (own.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          'Agents the Swarm starts on this machine run without asking for permission.',
+                          style: DesktopChrome.text(),
+                        ),
+                      ] else ...[
                         Text(
                           'To add another computer, install Harness on it and sign in with '
                           'this account, or approve a device with no screen from Machines.',
@@ -588,19 +647,43 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     final observation = superTabMap(
       shared?['observation'] ?? const <String, dynamic>{},
     );
+    final now = widget.now();
     final received = observation['receivedAt'];
-    final fresh =
-        received is num &&
-        DateTime.now().millisecondsSinceEpoch - received < 45000;
-    final online = shared == null
-        ? state?.connectionStatus == ConnectionStatus.connected &&
-              state?.nodeOnline != false
-        : fresh;
+    final observedAt = received is num
+        ? DateTime.fromMillisecondsSinceEpoch(received.toInt())
+        : null;
     final sample = _samples[id];
+    final connected =
+        state?.connectionStatus == ConnectionStatus.connected &&
+        state?.nodeOnline != false;
+    // Where the reading comes from. A computer this Desktop reads itself is known by that reading — and so is
+    // this very computer when it contributes and its own sample is the newer, which is why it stays live while
+    // the Swarm cannot be read. Any other contributing machine is known by what it reports through the Swarm.
+    final direct =
+        shared == null ||
+        (state?.isLocalMachine == true &&
+            sample != null &&
+            (observedAt == null || sample.$2.isAfter(observedAt)));
+    final readingAt = direct ? sample?.$2 : observedAt;
+    final age = readingAt == null ? null : now.difference(readingAt);
+    final status = superTabMachineStatus(
+      age: age,
+      // The Swarm cannot be read: a machine's silence is not known to be its own, so it is not offline.
+      unreachable: !direct && c.backendUnreachable,
+      refreshing: direct
+          ? _awaiting.contains(id)
+          : _swarmReadsAtReturn != null && c.stateReads <= _swarmReadsAtReturn!,
+      connected: direct ? connected : null,
+    );
+    // Old numbers are kept, dimmed, for every state that is not live or late: never blanked.
+    final dim =
+        status == SuperTabMachineStatus.offline ||
+        status == SuperTabMachineStatus.unknown ||
+        status == SuperTabMachineStatus.refreshing;
     final resource = superTabMap(
       observation['resources'] ?? const <String, dynamic>{},
     );
-    final value = fresh
+    final observed = observedAt != null
         ? MachineResources.fromJson({
             ...resource,
             if (resource['gpuPercent'] != null)
@@ -612,11 +695,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 },
               ],
           })
-        : online &&
-              sample != null &&
-              DateTime.now().difference(sample.$2) < const Duration(seconds: 45)
-        ? sample.$1
         : null;
+    final value = direct ? sample?.$1 : observed;
     final name =
         shared?['name'] as String? ??
         state?.machine.displayName ??
@@ -635,7 +715,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             )
             .toList() ??
         const <Map<String, Object?>>[];
-    if (accounts.isEmpty && fresh) {
+    if (accounts.isEmpty && observedAt != null) {
       accounts = [
         for (final raw in observation['quotas'] as List? ?? [])
           // Routing reads quota for these two only; other engines drew "—".
@@ -643,13 +723,17 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             _quotaRow(superTabMap(raw), id),
       ];
     }
-    final usage = WorkspaceSubscriptionUsage.fromRows(online ? accounts : []);
+    final usage = WorkspaceSubscriptionUsage.fromRows(accounts);
     final paused = shared?['paused'] == true;
-    final status = !online
-        ? 'Offline'
-        : paused
-        ? 'New work paused'
-        : 'Online';
+    final tip = superTabMachineTip(status, age);
+    final details = switch (status) {
+      SuperTabMachineStatus.live ||
+      SuperTabMachineStatus.late => paused ? 'New work paused' : 'Online',
+      SuperTabMachineStatus.offline =>
+        paused ? 'Offline, new work paused' : 'Offline',
+      SuperTabMachineStatus.unknown => "Can't reach Harness",
+      SuperTabMachineStatus.refreshing => 'Refreshing…',
+    };
     final diskFree = value?.projectDiskTotalBytes == null
         ? value?.diskFreeBytes
         : value?.projectDiskFreeBytes;
@@ -672,14 +756,31 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     final visibleAccounts = usage.accounts
         .where((a) => a.figure != '—')
         .toList();
-    return ListTile(
+    final tail = status == SuperTabMachineStatus.refreshing
+        ? 'refreshing…'
+        : age == null
+        ? null
+        : superTabAgo(age);
+    final tipKey = _tips.putIfAbsent(id, GlobalKey<TooltipState>.new);
+    final tile = ListTile(
       key: ValueKey('super-machine-$id'),
       dense: true,
       minTileHeight: 48,
       minVerticalPadding: 8,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+      // Hover shows the row's tooltip; so does keyboard focus, which a Tooltip does not do by itself.
+      onFocusChange: (focused) {
+        if (focused &&
+            FocusManager.instance.highlightMode ==
+                FocusHighlightMode.traditional) {
+          tipKey.currentState?.ensureTooltipVisible();
+        } else if (!focused) {
+          Tooltip.dismissAllToolTips();
+        }
+      },
       title: _MachineHeader(
         key: ValueKey('super-machine-header-$id'),
+        id: id,
         name: name,
         owner: person,
         agents: [
@@ -692,65 +793,105 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   : 'Engineer',
             ),
         ],
-        online: online,
+        status: status,
+        readingAt: readingAt,
+        arrived: age != null && age < const Duration(milliseconds: 1200),
         paused: paused,
       ),
-      subtitle: metrics.isEmpty && visibleAccounts.isEmpty
+      subtitle: metrics.isEmpty && visibleAccounts.isEmpty && tail == null
           ? null
           : Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  if (metrics.isNotEmpty)
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 4,
+                  if (metrics.isNotEmpty || tail != null)
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        for (final metric in metrics)
-                          Tooltip(
-                            message: '${metric.$1} ${metric.$2} available',
-                            child: Text(
-                              '${metric.$1} ${metric.$2}',
-                              style: DesktopChrome.metadata(),
+                        Expanded(
+                          child: Opacity(
+                            opacity: dim ? .55 : 1,
+                            child: Wrap(
+                              spacing: 8,
+                              runSpacing: 4,
+                              children: [
+                                for (final metric in metrics)
+                                  Tooltip(
+                                    message:
+                                        '${metric.$1} ${metric.$2} available',
+                                    child: Text(
+                                      '${metric.$1} ${metric.$2}',
+                                      style: DesktopChrome.metadata().copyWith(
+                                        fontFeatures: const [
+                                          FontFeature.tabularFigures(),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                              ],
                             ),
                           ),
+                        ),
+                        // At the end of the metrics line: how old all of it is.
+                        // Bounded so a long phrase at a large text scale in a
+                        // narrow drawer ellipsizes instead of overflowing the
+                        // row; well above any phrase's normal width.
+                        if (tail != null) ...[
+                          const SizedBox(width: 8),
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 150),
+                            child: Text(
+                              tail,
+                              key: ValueKey('super-machine-age-$id'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: superTabAgeStyle(status),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   if (metrics.isNotEmpty && visibleAccounts.isNotEmpty)
                     const SizedBox(height: 6),
                   if (visibleAccounts.isNotEmpty)
-                    Wrap(
-                      spacing: 16,
-                      runSpacing: 6,
-                      children: [
-                        for (final account in visibleAccounts)
-                          Tooltip(
-                            message: account.detail,
-                            child: Semantics(
-                              label:
-                                  '${account.name} ${account.figure} remaining',
-                              excludeSemantics: true,
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  EngineMark(engine: account.engine, size: 16),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    account.figure,
-                                    style: DesktopChrome.control(
-                                      medium: true,
-                                      color: account.ink(
-                                        DesktopChrome.foreground,
-                                        DesktopChrome.surface,
+                    Opacity(
+                      opacity: dim ? .55 : 1,
+                      child: Wrap(
+                        spacing: 16,
+                        runSpacing: 6,
+                        children: [
+                          for (final account in visibleAccounts)
+                            Tooltip(
+                              message: account.detail,
+                              child: Semantics(
+                                label:
+                                    '${account.name} ${account.figure} remaining',
+                                excludeSemantics: true,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    EngineMark(
+                                      engine: account.engine,
+                                      size: 16,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      account.figure,
+                                      style: DesktopChrome.control(
+                                        medium: true,
+                                        color: account.ink(
+                                          DesktopChrome.foreground,
+                                          DesktopChrome.surface,
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
                             ),
-                          ),
-                      ],
+                        ],
+                      ),
                     ),
                 ],
               ),
@@ -765,11 +906,12 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             content: SuperTabMachineDetails(
               name: name,
               owner: person?.email,
-              status: paused && !online ? 'Offline, new work paused' : status,
-              resources: value,
+              status: details,
+              // The row keeps old numbers, dimmed; the details do not present them as capacity to use.
+              resources: dim ? null : value,
               cwd: shared?['cwd'] as String?,
               engines: allowed,
-              accounts: online ? accounts : const [],
+              accounts: dim ? const [] : accounts,
             ),
             actions: [
               if (shared != null && contributor == c.accountId)
@@ -816,10 +958,23 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         ),
       ),
     );
+    // One label for the row, so that colour is never the only signal: the machine, its state in words, and
+    // what hovering it says.
+    return Semantics(
+      container: true,
+      label: '$name, ${superTabMachineStateLabel(status)}, $tip',
+      child: Tooltip(
+        key: tipKey,
+        message: tip,
+        excludeFromSemantics: true,
+        child: tile,
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final failingSince = c.backendUnreachable ? c.unreachableSince : null;
     final children = [
       SuperTabSectionHeading(
         'Machines',
@@ -827,17 +982,35 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             ? () => unawaited(_contribute())
             : null,
         addTooltip: 'Add machine',
+        trailing: SuperTabMachinesPill(
+          reconnectingFor: c.backendUnreachable
+              ? (failingSince == null
+                    ? Duration.zero
+                    : widget.now().difference(failingSince))
+              : null,
+        ),
+        collapsed: widget.onToggleCollapsed == null ? null : widget.collapsed,
+        onToggleCollapsed: widget.onToggleCollapsed,
       ),
-      if (_ids.isEmpty)
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-          child: Text(
-            'Add a machine for the product manager to use.',
-            style: DesktopChrome.metadata(),
+      if (!widget.collapsed) ...[
+        if (widget.onYourDevices != null)
+          SuperTabActionRow(
+            actionKey: 'super-your-devices',
+            icon: AppIcons.circle,
+            label: 'Your devices',
+            onPressed: widget.onYourDevices,
           ),
-        )
-      else
-        for (final id in _ids) _machine(id),
+        if (_ids.isEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: Text(
+              'Add a machine for the product manager to use.',
+              style: DesktopChrome.metadata(),
+            ),
+          )
+        else
+          for (final id in _ids) _machine(id),
+      ],
     ];
     return widget.embedded
         ? Column(
@@ -854,17 +1027,24 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 class _MachineHeader extends StatelessWidget {
   const _MachineHeader({
     super.key,
+    required this.id,
     required this.name,
     required this.owner,
     required this.agents,
-    required this.online,
+    required this.status,
+    required this.readingAt,
+    required this.arrived,
     required this.paused,
   });
 
-  final String name;
+  final String id, name;
   final SuperTabPerson? owner;
   final List<({String id, String name, String role})> agents;
-  final bool online, paused;
+  final SuperTabMachineStatus status;
+
+  /// When the reading shown was taken, and whether that is just now (the dot pings once).
+  final DateTime? readingAt;
+  final bool arrived, paused;
 
   Widget _avatar(String identity, String name, String label) => Tooltip(
     message: label,
@@ -883,9 +1063,14 @@ class _MachineHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
+      // Offline and unknown machines are named in the muted ink.
       final style = DesktopChrome.control(
         medium: true,
-        color: online ? null : DesktopChrome.muted,
+        color:
+            status == SuperTabMachineStatus.offline ||
+                status == SuperTabMachineStatus.unknown
+            ? DesktopChrome.muted
+            : null,
       );
       double width(String text, TextStyle style) {
         final painter = TextPainter(
@@ -905,9 +1090,10 @@ class _MachineHeader extends StatelessWidget {
       ).clamp(0.0, constraints.maxWidth * .55);
       final room =
           constraints.maxWidth -
+          14 -
           nameWidth -
           (owner == null ? 0 : 32) -
-          (!online || paused ? 24 : 0);
+          (paused ? 24 : 0);
       var count = agents.length;
       while (count > 0 &&
           count * 28 +
@@ -923,6 +1109,18 @@ class _MachineHeader extends StatelessWidget {
       }
       return Row(
         children: [
+          // The state, before the name: 8 px, and never colour alone (the row's label and tooltip say it too).
+          Padding(
+            padding: const EdgeInsets.only(right: 6),
+            child: KeyedSubtree(
+              key: ValueKey('super-machine-state-$id-${status.name}'),
+              child: SuperTabMachineDot(
+                status: status,
+                readingAt: readingAt,
+                arrived: arrived,
+              ),
+            ),
+          ),
           Flexible(
             child: Tooltip(
               message: name,
@@ -963,17 +1161,11 @@ class _MachineHeader extends StatelessWidget {
               ),
             ),
           ],
-          if (!online || paused) ...[
+          if (paused) ...[
             const SizedBox(width: 8),
             Tooltip(
-              message: !online
-                  ? (paused ? 'Offline, new work paused' : 'Offline')
-                  : 'New work paused',
-              child: Icon(
-                !online ? AppIcons.monitorOff : AppIcons.pause,
-                size: 16,
-                color: DesktopChrome.muted,
-              ),
+              message: 'New work paused',
+              child: Icon(AppIcons.pause, size: 16, color: DesktopChrome.muted),
             ),
           ],
         ],

@@ -28,11 +28,12 @@ export const HARNESS_INSTRUCTIONS = 'You are running in Harness, and the person 
  * A launch’s argv for legacy agent-spawn instructions, read at each launch.
  * The retired PR branding preference never changes a new launch.
  */
-export function agentLaunchArgs(engine: string, _startedBy: StartedBy | null | undefined, place: AttributionPlace,
+export function agentLaunchArgs(engine: string, _startedBy: StartedBy | null | undefined, place: AttributionPlace & { swarmInstructions?: string },
   dataDir: string = env.ADAPTER_DATA_DIR): string[] {
-  const settings = readAgentSettings(dataDir)
+  // Swarm roles route through their Lead; generic spawning advice would invite private worker teams.
+  const instructions = place.swarmInstructions ?? (readAgentSettings(dataDir).agentsStartAgents ? HARNESS_INSTRUCTIONS : null)
   return agentInstructionArgs(engine, {
-    instructions: settings.agentsStartAgents ? HARNESS_INSTRUCTIONS : null,
+    instructions,
     prLine: null,
   }, place)
 }

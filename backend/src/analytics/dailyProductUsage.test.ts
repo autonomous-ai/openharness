@@ -16,6 +16,14 @@ it('keeps missing client coverage separate from zero and separates relay activit
   expect(JSON.stringify(report)).not.toContain('PRIVATE_CANARY')
 })
 
+it('reports the phone\'s debug and simulator opens beside its total, which still counts them', () => {
+  const report = dailyProductUsage([
+    { dayUtc: new Date('2026-10-13'), metric: 'relay_mobile_opens', value: 15104 },
+    { dayUtc: new Date('2026-10-13'), metric: 'relay_mobile_debug_opens', value: 14760 },
+  ], 1, new Date('2026-10-13T12:00:00Z'))
+  expect(report.daily[0].counters).toMatchObject({ relay_mobile_opens: 15104, relay_mobile_debug_opens: 14760 })
+})
+
 it('uses the preceding complete week as the retention denominator, never this partial week', () => {
   const report = dailyProductUsage([
     { dayUtc: new Date('2026-09-28'), metric: 'weekly_working_installations', value: 10 },

@@ -262,6 +262,19 @@ describe('agent_create, refused before any pane exists', () => {
     expect(create).not.toHaveBeenCalled()
   })
 
+  it('passes explicit Swarm roles and refuses invalid role metadata before dispatch', async () => {
+    const { ask, create } = setup()
+    for (const engine of ['claude', 'codex']) for (const swarmRole of ['lead', 'dev']) {
+      await ask({ engine, cwd: '/w', swarmRole })
+      expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ engine, swarmRole })
+    }
+    for (const swarmRole of [7, '', 'reviewer']) {
+      expect(await ask({ engine: 'claude', cwd: '/w', swarmRole })).toMatchObject({ error: 'INVALID_SWARM_ROLE' })
+    }
+    expect(await ask({ engine: 'terminal', cwd: '/w', swarmRole: 'dev' })).toMatchObject({ error: 'INVALID_SWARM_ROLE' })
+    expect(await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev', resumeSessionId: 'old-session' })).toMatchObject({ error: 'INVALID_SESSION' })
+  })
+
   it('a first prompt that is not text, too long, or for an engine that cannot take one', async () => {
     const { ask, create } = setup()
     expect(await ask({ engine: 'claude', cwd: '/w', prompt: 7 })).toStrictEqual({ error: 'INVALID_PROMPT', detail: 'prompt must be a string' })

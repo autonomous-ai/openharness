@@ -80,6 +80,40 @@ refusal names each refused field (`cwd`, `engine`, or any of `codexHome`,
 folder this project uses there and the engines it contributes. It does not
 repeat the values the start sent.
 
+A contributing machine reports its state (processor and memory use, allowances, which
+harnesses run or have stopped) to the Swarm. It looks at what its Swarms ask of it every
+5 seconds, and sends a report at once when something it says changes: a harness starts or
+stops, new work is paused or allowed again, or a start is waiting. A start waiting on a
+machine is therefore picked up within about 5 seconds. When nothing changes it still sends
+a report every 15 seconds, so that a silent machine can be told from a quiet one; a pass
+that fails waits a whole 15 seconds before the next.
+
+Each machine in the sidebar has a status dot before its name, and the age of its reading
+at the end of its metrics line ("4s ago"):
+
+| State | When | Dot | Age |
+| --- | --- | --- | --- |
+| Live | reading under 20 s old | green, with one short ping as each new reading arrives | `4s ago` |
+| Late | 20 s to 35 s | amber | `28s ago`, in amber |
+| Offline | 35 s or more (one named constant) | hollow grey ring; the name is muted | `3 min ago` |
+| Unknown | the Desktop cannot read the Swarm (contributing machines only) | dashed grey ring; the name is muted; not offline | `1 min ago` |
+| Refreshing | back from the background, no new reading yet | grey, breathing | `refreshing…` |
+
+Hovering or focusing a row says it in words ("Updated 4s ago", "Offline · last seen 3 min
+ago", "Can't reach Harness · data from 1 min ago", "Refreshing…"), and the row's screen-reader
+label is the machine's name, its state and that text, so colour is never the only signal.
+Old numbers are always kept, dimmed, for offline, unknown and refreshing machines, never
+blanked. The Machines heading carries a pill, "Live" or "Reconnecting · 1m" while the Swarm
+cannot be read. The pings and the breathing stop when the platform asks for reduced motion.
+A machine reports every 15 s, so 35 s is two missed reports plus a margin.
+
+This computer is read directly by the Desktop, every 15 seconds, so it stays live while the
+Swarm cannot be read, even when it also contributes (its own newer sample is used); a
+computer that is connected is late, not offline, if its readings stop. The readings stay on
+screen when the app returns to the foreground, dimmed and refreshing, until the new ones
+arrive. The Desktop log (`app-*.log`, category `swarm`) records how long each read of the
+Swarm's state took and when one failed, without what it said.
+
 Ordinary guest machine sharing does not authorize Swarm controls under the
 owner's account. The owner contributes the machine or an agent. The lead's
 routing policy still determines eligible engines, capacity and model choices.
@@ -133,7 +167,8 @@ Use the matching backend, CLI and Desktop versions together for this feature:
    `SuperTabSessionScope`, before serving the new project commands.
 2. Update participating hosts to the CLI with Swarm-scoped contributions and
    project checkout preparation. A host on an older CLI ignores the request for
-   the default branch and starts Builders from its checkout's current commit.
+   the default branch and starts Builders from its checkout's current commit. A host older than
+   the immediate reports still reports, and picks up a waiting start, only every 15 seconds.
 3. Install the Desktop build with the project sidebar and Cmd-S entry point.
 
 A signed internal Desktop artifact alone does not update the backend or host

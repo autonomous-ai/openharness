@@ -69,6 +69,14 @@ describe('what an experiment in its own process may ask of the core', () => {
     expect(await answerExperimentQuery(fakeCore(), experiments, 'orchestrator', 'stopped', { agentId: 'unknown' })).toEqual({ stopped: false })
   })
 
+  it('says an agent is gone only on fresh evidence, and not for a core that cannot tell', async () => {
+    const core = fakeCore({ agents: { gone: async id => id === 'closed' } })
+    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'gone', { agentId: 'closed' })).toEqual({ gone: true })
+    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'gone', { agentId: 'live' })).toEqual({ gone: false })
+    expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'gone', {})).toEqual({ gone: false })
+    expect(await answerExperimentQuery(fakeCore(), experiments, 'orchestrator', 'gone', { agentId: 'closed' })).toEqual({ gone: false })
+  })
+
   it('bounds native observation queries and keeps an older core unavailable', async () => {
     const cursor = { epoch: 'fixture-observation-epoch', sequence: 0 }
     const page = { cursor, observations: [], gap: false }, nativeTurns = vi.fn(async () => page)
@@ -201,4 +209,19 @@ describe('what an experiment in its own process may ask of the core', () => {
     expect(await createForExperiment(create as never, request)).toEqual({ ok: false, error: 'ENGINE_MISSING' })
     expect(await createForExperiment(null, request)).toEqual({ ok: false, error: 'UNSUPPORTED', detail: 'This daemon cannot create agents.' })
   })
+})
+
+it('exposes identity-bound close only to the Swarm service and validates its native identity', async () => {
+  const closeSwarm = vi.fn(async () => ({ closed: true as const })), core = fakeCore({ agents: { closeSwarm } })
+  const allowed = new Set(['superTabs', 'orchestrator'])
+  const payload = { expiresAt: Date.now() + 120_000, agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', createdAt: '2026-10-22T00:00:00.000Z' }
+  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'close_swarm', payload)).toEqual({ closed: true })
+  expect(closeSwarm).toHaveBeenCalledWith(payload)
+  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'close_swarm', { agentId: 'gone' })).toEqual({ closed: true })
+  expect(closeSwarm).toHaveBeenLastCalledWith({ agentId: 'gone' })
+  expect(await answerExperimentQuery(core, allowed, 'orchestrator', 'close_swarm', payload)).toEqual({ error: 'NOT_SUPER_TABS' })
+  for (const invalid of [{ ...payload, agentId: '' }, { ...payload, sessionId: 1 }, { ...payload, createdAt: 'bad' }, { ...payload, creationId: 'bad' }, { ...payload, creationId: 4 }, { ...payload, createdAt: 4 }, { ...payload, expiresAt: 'later' }, { ...payload, expiresAt: Infinity }]) {
+    expect(await answerExperimentQuery(core, allowed, 'superTabs', 'close_swarm', invalid)).toEqual({ error: 'INVALID_REQUEST' })
+  }
+  expect(await answerExperimentQuery(fakeCore(), allowed, 'superTabs', 'close_swarm', payload)).toEqual({ error: 'UNSUPPORTED' })
 })

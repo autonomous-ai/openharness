@@ -132,8 +132,10 @@ export class CapacityReservations implements ReservationBook {
         const observation = await this.native(row.creation_id)
         const harnessId = observation?.state === 'created' ? observation.agentId : row.harness_id
         if (row.harness_id && harnessId !== row.harness_id) throw new Error('The native creation identity changed. Inspect this machine before starting more agents.')
+        // A stopped agent keeps its record; one the person closed by hand does not, and neither is running.
         const released = observation?.state === 'failed' || observation?.state === 'cancelled'
           || (!!harnessId && await this.core.agents.stopped?.(harnessId).catch(() => false) === true)
+          || (observation?.state === 'created' && await this.core.agents.gone?.(harnessId!).catch(() => false) === true)
         return { row, harnessId, released }
       }))
       this.transaction(() => {
