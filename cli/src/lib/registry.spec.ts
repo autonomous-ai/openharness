@@ -78,6 +78,33 @@ describe('registry remote display names', () => {
     delete process.env.CURSOR_HOME
   })
 
+  // tmux takes an APC string as a pane's title, and Claude Code's kitty graphics query named a guest's harness
+  // "Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA" (2026-10-22). tmux.ts no longer reads one as a title; one a registry already
+  // stored is not a name either.
+  it('never names a harness with a kitty graphics query, one stored before included', async () => {
+    const query = 'Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA'
+    const transcriptPath = join(dataDir, 'session-1.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    let { registry, projectDisplayName, titleDisplayName } = await loadRegistryModule()
+    expect(titleDisplayName(query)).toBeNull()
+    expect(titleDisplayName('✳ Fix the login test')).toBe('Fix the login test')
+    registry.load()
+    const registered = registerProcess(registry, { launcherId: 'h1', sessionId: 'session-1', transcriptPath, tmuxPane: '%1', cwd: '/tmp/demo' })
+    const named = projectDisplayName(registered!.entry)
+    registry.updateTitle('session-1', query)
+    expect(projectDisplayName(registry.bySession('session-1')!)).toBe(named)
+    // Written by a daemon before the fix.
+    const file = join(dataDir, 'registry.json')
+    const rows = JSON.parse(readFileSync(file, 'utf-8')) as Array<Record<string, unknown>>
+    rows[0].title = query
+    writeFileSync(file, JSON.stringify(rows))
+    ;({ registry, projectDisplayName } = await loadRegistryModule())
+    registry.load()
+    expect(projectDisplayName(registry.bySession('session-1')!)).toBe(named)
+    registry.updateTitle('session-1', '✳ Fix the login test')
+    expect(projectDisplayName(registry.bySession('session-1')!)).toBe('Fix the login test')
+  })
+
   it('persists renamed display names independently from session removal', async () => {
     const transcriptPath = join(dataDir, 'session-1.jsonl')
     writeFileSync(transcriptPath, '{}\n')

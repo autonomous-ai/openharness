@@ -367,6 +367,14 @@ export async function run(engine, config = {}, { native = false } = {}) {
       process.stdout.write('\x1b[H\x1b[2J')
     }
   }
+  // `graphicsQuery`: Claude Code asks the terminal for kitty graphics, an APC string, when it believes it is not inside
+  // tmux, as a guest's harness on a shared machine does (its helper starts the engine with `env -i`, so no TMUX). tmux
+  // takes any APC string as the pane's title. Later it sets its title as usual (OSC 0, `title`).
+  if (config.graphicsQuery) {
+    process.stdout.write('\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\')
+    const titled = setTimeout(() => process.stdout.write(`\x1b]0;✳ ${config.graphicsQuery.title}\x07`), config.graphicsQuery.titleAfterMs)
+    titled.unref?.()
+  }
   let transcript = engine === 'claude'
     ? join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`)
     : resumed && !fork && config.rolloutFor?.[resumed]

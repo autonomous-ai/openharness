@@ -255,8 +255,11 @@ describe('Super Tab collaboration policy', () => {
         history.push({ author: { kind: 'agent', id: agentId }, recipients: sent.recipients, id: sent.id })
         return sent
       }
+      // A Lead routes before it assigns (#1555); a person assigns directly.
       const assign = (assigner: 'lead' | 'person') => {
-        const sent = f.run({ type: 'work.assign', conversationId: group, agentId: worker }, assigner === 'lead' ? as(lead) : owner).messages[0]!
+        const sent = (assigner === 'lead'
+          ? f.run({ type: 'work.assign', conversationId: group, agentId: worker, ...via }, as(lead), decisionIn(group))
+          : f.run({ type: 'work.assign', conversationId: group, agentId: worker }, owner)).messages[0]!
         history.push({ author: { kind: assigner === 'lead' ? 'agent' : 'person', id: assigner === 'lead' ? lead : 'owner' }, recipients: sent.recipients, id: sent.id })
         return sent
       }
