@@ -125,3 +125,20 @@ The earlier full Desktop analyzer diagnostics and incomplete broad CLI baseline 
 Final independent read-only review: no remaining material findings.
 
 Final validated source: `d8ef49df645f131bcfc200f3b6e6eea617e3d015`; CLI tree `e0b9dd89a159cd5732cee605a2025acfccb71148`, backend tree `a5318553728bbc76da167b173b2c93f7821a9022`, Desktop tree `eae4b0e36e8cdcb904215870ec4d24a526fbccec`. The evidence-only commit changes none of those inputs.
+
+
+## Third review: stop retry bounds
+
+The host used to acquire a fresh close lease every second for a stop that could never close. Seven new regressions failed before the fix. The host now checks recorded original-launch identity, current native ownership/resume state and the native creation receipt before any lease write. A definitive ownership/identity refusal disables retries for that exact stop/runtime. Unknown/transient failures back off for 5, 15, 60 and 120 seconds, at most five attempts. The memo key includes native process identity; a changed runtime or disappeared session gets a fresh check. Removed stop requests discard the memo.
+
+An absent process snapshot is not stop proof: the authoritative core confirms absence without a lease. A failed removal acknowledgement similarly rechecks core absence before retrying, without acquiring another lease. This preserves deleted-session cleanup and refuses a personal resume hidden by a stale process snapshot. Tests cover repeated personal/missing-record/replacement sessions, wrong creation receipts, permanent close refusals, unknown receipt reads, timed retry bounds, changed runtimes, absence recovery and lost acknowledgements.
+
+Rebased cleanly on `9142773b0`; main's full-permission starts changed an old E2E refusal expectation. The fixture now uses an invalid Claude codexHome combination to preserve the same pre-dispatch cancellation/replay assertions. No application permission logic changed in this review fix.
+
+Final checks for this review: CLI `vitest run src/superTabs` 383 pass; `npm run test:super-tabs` 111 pass at 100% in all four coverage measures; CLI typecheck pass. After integrating main, backend `vitest run src/superTabs` 125 pass, backend integration 68 pass and backend types pass; Desktop bootstrap/launch/Machines 79 pass. Native E2E and full Desktop analyzer results are recorded below once complete. Prior core coverage/full backend evidence is reused only for its unchanged scope; the unchanged coverage/broad CLI baseline gaps remain explicit.
+
+Independent read-only review of `5a4d9caeb`: no material findings. Two additional regressions for transient receipt reads and lost-ack authoritative absence also pass in the final 383-test run.
+
+Third-review final native E2E: 1 pass in58.45s (42.02s test), real disposable daemon/service process/backend/tmux. Full Desktop analyzer refreshed:44 diagnostics (5 warnings,39infos), no errors; same unchanged baseline. No core/service implementation changed in this review; its earlier2,946-test coverage receipt remains scoped to unchanged core/services. No coverage threshold was lowered.
+
+Third-review validated source: `c04a8a880b6308c33849e32277e9b72037c96ed2`; CLI tree `65954bc5471951345e651a30d47980f3549be866`, backend tree `472bd37bd0cbd699a23fff815fc436d568c40f99`, Desktop tree `73fc6a9b30e128234fea74789797eec7efc2aee1`. Final evidence-only commit changes none of these inputs.
