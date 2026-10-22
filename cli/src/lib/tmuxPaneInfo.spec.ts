@@ -19,10 +19,16 @@ describe.skipIf(!hasTmux)('tmuxPaneInfo', () => {
   const tmux = (...args: string[]) => execFileSync('tmux', ['-S', socket, ...args], { env }).toString().trim()
   let pane = ''
 
-  beforeAll(() => {
+  beforeAll(async () => {
     // A command whose name is certain (on macOS `sh` is bash).
     tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'info', '-c', dir, 'sleep 600')
     pane = tmux('display-message', '-p', '-t', 'info', '#{pane_id}')
+    // The pane's process is tmux's own fork until it execs `sleep`: on the Linux CI runner
+    // (2026-10-22) the read below came first and named `tmux`. Wait for the exec, briefly.
+    const deadline = Date.now() + 5_000
+    while (tmux('display-message', '-p', '-t', pane, '#{pane_current_command}') !== 'sleep' && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
   })
 
   afterAll(() => {

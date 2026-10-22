@@ -78,6 +78,22 @@ class ReleaseChannel(unittest.TestCase):
         with patch.object(update.subprocess, 'check_output', side_effect=['harness-os 0.1.0pre4.r3-1', '-1']):
             self.assertFalse(update.discover(self.url + '/metadata.json')['available'])
 
+    def test_only_a_newer_release_is_an_update_not_a_later_build_of_the_same_one(self):
+        self.assertEqual(update.release('0.1.8.r1792577066.g8df82cc2bc-1'), '0.1.8')
+        self.assertEqual(update.release('0.1.9-1'), '0.1.9')
+        self.assertEqual(update.release('0.1.0pre4.r3-1'), '0.1.0pre4.r3')
+        self.manifest['package']['version'] = '0.1.8.r1792578870.gbefebc64d5-1'
+        self.publish()
+        asked = []
+        def commands(args, **_):
+            if args[0] == 'pacman':
+                return 'harness-os 0.1.8.r1792577066.g8df82cc2bc-1\n'
+            asked.append(args[1:])
+            return '0\n'
+        with patch.object(update.subprocess, 'check_output', side_effect=commands):
+            self.assertFalse(update.discover(self.url + '/metadata.json')['available'])
+        self.assertEqual(asked, [['0.1.8', '0.1.8']])
+
     def test_existing_feed_discovers_an_official_release_without_reconfiguring_the_client(self):
         self.manifest['requires_os_version'] = '0.1.0'
         self.manifest['upgrades_from'] = [self.base]
