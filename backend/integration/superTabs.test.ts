@@ -1309,6 +1309,23 @@ it('releases a finished worker through its execution host, cancels deliveries an
   expect(delayed.machines![0]!.availableSlots).toBe(3)
   expect(await db.superTabDelivery.count({ where: { tabId: tab, agentId: worker, status: { in: ['queued', 'claimed', 'uncertain'] } } })).toBe(0)
   expect((await store.hostTabs(host, 'test-host')).some(r => r.agent.id === worker)).toBe(false)
+  // Re-contribution reserves a new runtime; ordinary removal must not reuse its old stop proof.
+  await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Renewed worker', configuration: config, lead: false })
+  await run(tab, { type: 'agent.remove', agentId: worker })
+  const hostPool = (await store.hostPools(host, 'test-host')).find(p => p.tabId === tab)!
+  expect(hostPool.harnessIds).toContain(native)
+  const reservation = hostPool.reservations.find(r => r.harnessId === native)!
+  await store.observeMachine(host, tab, 'test-host', { ...oldObservation, runningHarnessIds: [], stoppedHarnessIds: [native],
+    stoppedReservations: [{ harnessId: native, generation: 'old-generation' }] })
+  const stillReserved = (await store.read(owner, tab)).state
+  expect(machineSlots(stillReserved, stillReserved.machines![0]!)).toBe(2)
+  await store.observeMachine(host, tab, 'test-host', { ...oldObservation, runningHarnessIds: [], stoppedHarnessIds: [native],
+    stoppedReservations: [reservation] })
+  const physicallyStopped = (await store.read(owner, tab)).state
+  expect(machineSlots(physicallyStopped, physicallyStopped.machines![0]!)).toBe(1)
+  await store.observeMachine(host, tab, 'test-host', oldObservation)
+  const delayedAgain = (await store.read(owner, tab)).state
+  expect(machineSlots(delayedAgain, delayedAgain.machines![0]!)).toBe(1)
 })
 
 it('fences a shared native session globally while its release is pending', async () => {
@@ -1348,6 +1365,9 @@ it('lets a person force-withdraw a stuck stop, clears its fence and retires the 
   expect((await store.read(owner, tab)).state.agents.some(a => a.id === worker)).toBe(false)
   // The old native identity cannot receive new work while a delayed close may still be finishing.
   await expect(run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Retired worker', configuration: config, lead: false })).rejects.toMatchObject({ code: 'SESSION_RELEASED' })
+  const other = await fixture()
+  const reused = await run(other.tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: native, name: 'Contributor reuse', configuration: config, lead: false })
+  expect(reused.result.agentId).toBe(worker)
   await run(tab, { type: 'project.delete', projectId: 'lead' })
 })
 
@@ -1360,4 +1380,40 @@ it('refuses to stop a finished worker that is the Lead of another Swarm', async 
   await run(second.tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: native, name: 'Other Lead', configuration: config, lead: true })
   await expect(run(first.tab, { type: 'agent.release', agentId: worker, decision: 'stop' }, host, first.lead)).rejects.toMatchObject({ code: 'SESSION_SHARED' })
   expect((await store.read(owner, first.tab)).state.agents.find(a => a.id === worker)!.workDecision).toBe('awaiting')
+})
+
+
+it('makes a project private while its worker is stopping', async () => {
+  const { tab, lead } = await fixture(), native = randomUUID()
+  const group = (await run(tab, { type: 'conversation.create', title: 'Finished task', brief: 'Work', checks: [{ description: 'Done', independent: false }] })).result.conversationId as string
+  const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Worker', configuration: config, lead: false })).result.agentId as string
+  const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
+  await store.stopped(host, tab, assignmentId, 'completed')
+  await run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' }, host, lead)
+  await run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
+  const state = (await store.read(owner, tab)).state
+  expect(state.projects!.find(p => p.id === 'lead')!.visibility).toBe('private')
+  expect(state.agents.find(a => a.id === worker)!.workDecision).toBe('stop')
+})
+
+
+it.each(['finished', 'expired'] as const)('lets another Swarm reuse after the native close lease is %s', async outcome => {
+  const first = await fixture(), other = await fixture(), native = randomUUID()
+  const group = (await run(first.tab, { type: 'conversation.create', title: 'Task', brief: 'Work', checks: [{ description: 'Done', independent: false }] })).result.conversationId as string
+  const worker = (await run(first.tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Worker', configuration: config, lead: false })).result.agentId as string
+  const assignmentId = (await run(first.tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
+  await store.stopped(host, first.tab, assignmentId, 'completed')
+  await run(first.tab, { type: 'agent.release', agentId: worker, decision: 'stop' }, host, first.lead)
+  const leased = await run(first.tab, { type: 'agent.stopLease', agentId: worker, releaseId: (await store.read(owner, first.tab)).state.agents.find(a => a.id === worker)!.releaseId! } as Command, host, worker)
+  const reuse = { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: native, name: 'Reused', configuration: config, lead: false } as Command
+  if (outcome === 'expired') await run(first.tab, { type: 'agent.remove', agentId: worker })
+  await expect(run(other.tab, reuse)).rejects.toMatchObject({ code: 'CLOSE_PENDING' })
+  if (outcome === 'finished') {
+    const releaseId = (await store.read(owner, first.tab)).state.agents.find(a => a.id === worker)!.releaseId!
+    await run(first.tab, { type: 'agent.remove', agentId: worker, releaseId }, host, worker)
+    expect((await run(other.tab, reuse)).result.agentId).toBe(worker)
+  } else {
+    const later = new SuperTabStore(db, () => Number(leased.result.expiresAt) + 1)
+    expect((await later.execute(owner, other.tab, { operationId: randomUUID(), command: reuse })).result.agentId).toBe(worker)
+  }
 })

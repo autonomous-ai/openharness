@@ -503,8 +503,9 @@ it('stops a requested worker once, confirms removal, and releases retention on t
   let closed = false, removed = false, acknowledgements = 0
   const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop' }
   t.core.agents.stopped = async () => closed
-  t.core.agents.closeSwarm = async request => { expect(request.agentId).toBe('harness'); closed = true; return { closed: true } }
-  t.core.account.backend = async (method, path) => {
+  t.core.agents.closeSwarm = async request => { expect(request.agentId).toBe('harness'); expect(request.expiresAt).toBeLessThanOrEqual(Date.now() + 120_000); closed = true; return { closed: true } }
+  t.core.account.backend = async (method, path, body) => {
+    if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 3_600_000, durationMs: 120_000 } } } }
     if (path.includes('/hosts/')) return { status: 200, body: { data: removed ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }] } }
     if (method === 'GET') return { status: 200, body: { data: { state: { agents: [target], conversations: [] } } } }
     acknowledgements++; removed = true
@@ -527,7 +528,8 @@ it.each(['active', 'foreign', 'changed', 'missing', 'refused', 'unconfirmed', 'u
   const acknowledge = vi.fn()
   t.core.agents.closeSwarm = kind === 'unsupported' ? undefined : close
   t.core.agents.stopped = async () => false
-  t.core.account.backend = async (method, path) => {
+  t.core.account.backend = async (method, path, body) => {
+    if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 3_600_000, durationMs: 120_000 } } } }
     if (path.includes('/hosts/')) return { status: 200, body: { data: [{ tabId: 'tab', agent: target, stopRequested: true }] } }
     if (method === 'GET') return { status: 200, body: { data: { state: {
       agents: kind === 'missing' ? [] : [{ ...target, machineId: kind === 'foreign' ? 'foreign' : target.machineId, releaseId: kind === 'changed' ? 'release-2' : 'release-1' }],
@@ -552,7 +554,8 @@ it('retries a lost removal acknowledgement from native stopped evidence without 
   const close = vi.fn()
   t.core.agents.closeSwarm = async () => { if (!stopped) { close(); stopped = true }; return { closed: true } }
   t.core.agents.stopped = async () => stopped
-  t.core.account.backend = async (method, path) => {
+  t.core.account.backend = async (method, path, body) => {
+    if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 3_600_000, durationMs: 120_000 } } } }
     if (path.includes('/hosts/')) return { status: 200, body: { data: [{ tabId: 'tab', agent: target, stopRequested: true }] } }
     if (method === 'GET') return { status: 200, body: { data: { state: { agents: [target], conversations: [] } } } }
     attempts++

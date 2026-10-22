@@ -70,14 +70,15 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       return shownAgents(core)
     case 'close_swarm': {
       if (service !== 'superTabs') return { error: 'NOT_SUPER_TABS' }
-      const { agentId, creationId, sessionId, createdAt } = payload
+      const { agentId, creationId, sessionId, createdAt, expiresAt } = payload
       if (!/^[A-Za-z0-9_-]{1,160}$/.test(text(agentId)) ||
           creationId !== undefined && (typeof creationId !== 'string' || !/^[A-Za-z0-9_-]{16,96}$/.test(creationId)) ||
           sessionId !== undefined && typeof sessionId !== 'string' ||
-          createdAt !== undefined && (typeof createdAt !== 'string' || !Number.isFinite(Date.parse(createdAt)))) return { error: 'INVALID_REQUEST' }
+          createdAt !== undefined && (typeof createdAt !== 'string' || !Number.isFinite(Date.parse(createdAt))) ||
+          expiresAt !== undefined && (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt))) return { error: 'INVALID_REQUEST' }
       return { ...await (core.agents.closeSwarm?.({ agentId: agentId as string,
         ...(typeof creationId === 'string' ? { creationId } : {}), ...(typeof sessionId === 'string' ? { sessionId } : {}),
-        ...(typeof createdAt === 'string' ? { createdAt } : {}) }) ?? { error: 'UNSUPPORTED' }) }
+        ...(typeof createdAt === 'string' ? { createdAt } : {}), ...(typeof expiresAt === 'number' ? { expiresAt } : {}) }) ?? { error: 'UNSUPPORTED' }) }
     }
     case 'stopped':
       return { stopped: !!text(payload.agentId) && await core.agents.stopped?.(text(payload.agentId)) === true }

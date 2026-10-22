@@ -89,6 +89,7 @@ it('starts either engine once, posts to its captured group and delivers shared i
         if (!starts.has(startId)) starts.set(startId, { id: startId, creationId: `super-${startId}`, request: command.request, dispatched: false, harnessId: null })
         return { data: { result: { startId } } }
       }
+      if (command.type === 'agent.stopLease') return { data: { result: { expiresAt: Date.now() + 120_000, durationMs: 120_000 } } }
       const start = starts.get(String(command.startId))
       if (command.type === 'agent.startDispatch') {
         if (start!.dispatched) throw new Error('Duplicate dispatch')

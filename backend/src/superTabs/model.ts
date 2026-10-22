@@ -27,8 +27,6 @@ export interface Agent {
   /** A finished worker stays undecided even when its group receives a new brief. */
   workDecision?: 'awaiting' | 'keep' | 'stop'
   releaseId?: string
-  /** This membership follows a prior native stop; unversioned observations cannot free its slot. */
-  recontributed?: true
   /** Captured from the original Swarm launch, never inferred from a later live session with the same id. */
   startedSession?: { creationId: string; sessionId: string; createdAt: string }
   configuration: AgentConfiguration
@@ -139,6 +137,8 @@ export interface SuperTabState {
   invitations: Invitation[]
   starts?: AgentStart[]
   machines?: import('./machines.js').ContributedMachine[]
+  /** Slot claims survive person withdrawal; only host proof for this generation releases them. */
+  harnessReservations?: Array<{ machineId: string; harnessId: string; generation: string; renewed: boolean }>
   /** Native stop receipts survive late replaceable machine observations. */
   releasedHarnesses?: Array<{ machineId: string; harnessId: string }>
 }

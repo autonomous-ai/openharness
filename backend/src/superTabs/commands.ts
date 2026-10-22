@@ -73,6 +73,7 @@ export const commandSchema = z.discriminatedUnion('type', [
     startedSession: z.object({ sessionId: id, createdAt: z.iso.datetime() }).strict().optional() }).strict(),
   z.object({ type: z.literal('agent.startSettled'), startId: id, warning: z.string().max(2000).nullable() }).strict(),
   z.object({ type: z.literal('agent.startFailed'), startId: id, error: text }).strict(),
+  z.object({ type: z.literal('agent.stopLease'), agentId: id, releaseId: id }).strict(),
   z.object({ type: z.literal('agent.remove'), agentId: id, releaseId: id.optional() }).strict(),
   z.object({ type: z.literal('agent.release'), agentId: id, decision: z.enum(['keep', 'stop']) }).strict(),
   z.object({ type: z.literal('agent.configuration'), previousVersion: id.nullable(), configuration }).strict(),
@@ -388,9 +389,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const existing = state.agents.find(a => a.id === agentId)
       if (existing) sameProject(state, group, existing)
       if (existing?.workDecision === 'stop' && command.lead) fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
-      const recontributed = !existing && invalidateStoppedProof(state, command.machineId, command.harnessId)
+      if (!existing) reserveHarnessSlot(state, command.machineId, command.harnessId, operationId)
       if (!existing) state.agents.push({ id: agentId, machineId: command.machineId, harnessId: command.harnessId,
-        ...(recontributed ? { recontributed: true } : {}),
         ...(state.projects ? { projectId: project.id } : {}),
         machineOwnerId: grant.machineOwnerId, contributorId: grant.contributorId, membershipGeneration: contributor.generation,
         hostGrant: grant.hostGrant ?? null,
@@ -490,9 +490,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const group = open(state, start.request.conversationId)
       const agentId = stableId(start.request.machineId, command.harnessId)
       if (state.agents.some(a => a.id === agentId)) fail('ALREADY_SHARED', 'This native harness is already in the tab.')
-      const recontributed = invalidateStoppedProof(state, start.request.machineId, command.harnessId)
+      reserveHarnessSlot(state, start.request.machineId, command.harnessId, operationId)
       state.agents.push({ id: agentId, machineId: start.request.machineId, harnessId: command.harnessId,
-        ...(recontributed ? { recontributed: true } : {}),
         ...(state.projects ? { projectId: groupProject(state, group).id } : {}),
         machineOwnerId: start.machineOwnerId, contributorId: start.contributorId, membershipGeneration: start.membershipGeneration,
         hostGrant: start.hostGrant, name: start.request.name, configuration: command.configuration, configurationVersion: operationId,
@@ -531,6 +530,16 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       target.workDecision = command.decision
       break
     }
+    case 'agent.stopLease': {
+      const target = agent(state, command.agentId)
+      if (actor.kind !== 'agent' || actor.agentId !== target.id || target.workDecision !== 'stop' || command.releaseId !== target.releaseId) {
+        fail('STALE_RELEASE', 'Only the execution host can claim the current worker stop.', 403)
+      }
+      result.leaseId = operationId
+      result.durationMs = 120_000
+      result.expiresAt = context.now + 120_000
+      break
+    }
     case 'agent.remove': {
       const target = agent(state, command.agentId)
       const hostStop = actor.kind === 'agent' && actor.agentId === target.id && target.workDecision === 'stop'
@@ -539,16 +548,18 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (hostStop || forceStop) {
         if (hostStop && (command.releaseId !== target.releaseId || !target.releaseId)) fail('STALE_RELEASE', 'Read the current stop request before confirming removal.')
         if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id)) fail('WORK_ACTIVE', 'Finish active work before stopping this worker.')
-        // Host confirmation or a person's explicit withdrawal retires this contribution despite late observations.
-        // The store also fences a force-withdrawn native id against future work while an earlier close may be in flight.
-        state.releasedHarnesses ??= []
-        if (!state.releasedHarnesses.some(r => r.machineId === target.machineId && r.harnessId === target.harnessId)) {
-          state.releasedHarnesses.push({ machineId: target.machineId, harnessId: target.harnessId })
-        }
-        const observation = state.machines?.find(m => m.machineId === target.machineId)?.observation
-        if (observation) {
-          observation.runningHarnessIds = observation.runningHarnessIds.filter(id => id !== target.harnessId)
-          if (!observation.stoppedHarnessIds.includes(target.harnessId)) observation.stoppedHarnessIds.push(target.harnessId)
+        // Administrative withdrawal never attests physical stopping or releases native capacity.
+        if (hostStop) {
+          state.releasedHarnesses ??= []
+          if (!state.releasedHarnesses.some(r => r.machineId === target.machineId && r.harnessId === target.harnessId)) {
+            state.releasedHarnesses.push({ machineId: target.machineId, harnessId: target.harnessId })
+          }
+          state.harnessReservations = state.harnessReservations?.filter(r => r.machineId !== target.machineId || r.harnessId !== target.harnessId)
+          const observation = state.machines?.find(m => m.machineId === target.machineId)?.observation
+          if (observation) {
+            observation.runningHarnessIds = observation.runningHarnessIds.filter(id => id !== target.harnessId)
+            if (!observation.stoppedHarnessIds.includes(target.harnessId)) observation.stoppedHarnessIds.push(target.harnessId)
+          }
         }
         if (actor.kind === 'agent') result.releasedBy = actor.machineOwnerId
         if (forceStop) result.forceReleased = target.id
@@ -556,6 +567,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('FORBIDDEN', 'Only its contributor or tab owner can force-withdraw a stopping worker.', 403)
       } else if (actor.kind !== 'person' || (actor.userId !== state.ownerId && actor.userId !== target.contributorId)) {
         fail('FORBIDDEN', 'Only the contributor or tab owner can withdraw this agent.', 403)
+      }
+      if (actor.kind === 'person' && !state.harnessReservations?.some(r => r.machineId === target.machineId && r.harnessId === target.harnessId)) {
+        reserveHarnessSlot(state, target.machineId, target.harnessId, operationId)
       }
       removeAgent(target)
       break
@@ -804,15 +818,15 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   return effects
 }
 
-/** A fresh contribution is newer than the previous native stop receipt. */
-function invalidateStoppedProof(state: SuperTabState, machineId: string, harnessId: string) {
+/** A contribution owns capacity independently of membership. Reuse invalidates every prior stop proof. */
+function reserveHarnessSlot(state: SuperTabState, machineId: string, harnessId: string, generation: string) {
   const observation = state.machines?.find(m => m.machineId === machineId)?.observation
-  const stopped = observation?.stoppedHarnessIds.includes(harnessId) || state.releasedHarnesses?.some(r => r.machineId === machineId && r.harnessId === harnessId)
+  const renewed = !!(state.harnessReservations?.some(r => r.machineId === machineId && r.harnessId === harnessId)
+    || state.releasedHarnesses?.some(r => r.machineId === machineId && r.harnessId === harnessId)
+    || observation?.stoppedHarnessIds.includes(harnessId))
   if (observation) observation.stoppedHarnessIds = observation.stoppedHarnessIds.filter(id => id !== harnessId)
-  // Keep the tombstone across later withdrawals/re-contributions; old observations have no generation.
-  if (stopped && !state.releasedHarnesses?.some(r => r.machineId === machineId && r.harnessId === harnessId)) {
-    state.releasedHarnesses ??= []
-    state.releasedHarnesses.push({ machineId, harnessId })
-  }
-  return stopped
+  state.releasedHarnesses = state.releasedHarnesses?.filter(r => r.machineId !== machineId || r.harnessId !== harnessId)
+  state.harnessReservations ??= []
+  state.harnessReservations = state.harnessReservations.filter(r => r.machineId !== machineId || r.harnessId !== harnessId)
+  state.harnessReservations.push({ machineId, harnessId, generation, renewed })
 }

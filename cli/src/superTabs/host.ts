@@ -233,8 +233,14 @@ export class SuperTabHost {
         const work = object(c.assignment)
         return work.agentId === agent.id && !['done', 'stopped'].includes(String(work.status))
       })) return
+      const leaseRequestedAt = Date.now()
+      const leased = object(object(await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, {
+        operationId: `close-lease-${randomUUID()}`, asAgentId: agent.id,
+        command: { type: 'agent.stopLease', agentId: agent.id, releaseId: agent.releaseId },
+      })).result)
+      if (typeof leased.durationMs !== 'number' || !Number.isFinite(leased.durationMs) || leased.durationMs <= 0 || leased.durationMs > 120_000) throw new Error('The host could not reserve this native close. Remove a stuck contribution or update its backend.')
       const identity = object(member.startedSession)
-      const result = await this.core.agents.closeSwarm({ agentId: agent.harnessId,
+      const result = await this.core.agents.closeSwarm({ agentId: agent.harnessId, expiresAt: leaseRequestedAt + (leased.durationMs as number),
         ...(typeof identity.creationId === 'string' ? { creationId: identity.creationId } : {}),
         ...(typeof identity.sessionId === 'string' ? { sessionId: identity.sessionId } : {}),
         ...(typeof identity.createdAt === 'string' ? { createdAt: identity.createdAt } : {}) })

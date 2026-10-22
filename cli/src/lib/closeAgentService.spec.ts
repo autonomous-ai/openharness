@@ -45,6 +45,15 @@ it.each(['before', 'activity', 'checkpoint'] as const)('a Swarm close preserves 
   expect(registry.byAgent(row.agentId)).toBe(row)
 })
 
+it.each(['before', 'activity', 'checkpoint'] as const)('an expired native close lease preserves the worker at %s', async phase => {
+  const guarded = { ...request('now'), expiresAt: time + 1 }
+  if (phase === 'before') time += 2
+  if (phase === 'activity') vi.mocked(deps.activity).mockImplementation(async () => { time += 2; return 'idle' })
+  if (phase === 'checkpoint') vi.mocked(deps.checkpoint).mockImplementation(async () => { time += 2 })
+  expect(await service.request(guarded)).toMatchObject({ error: expect.any(String) })
+  expect(registry.byAgent(row.agentId)).toBe(row)
+})
+
 it('backs up an idle session before stopping, without treating a tab switch as Close', async () => {
   service.start()
   expect(deps.activity).not.toHaveBeenCalled()

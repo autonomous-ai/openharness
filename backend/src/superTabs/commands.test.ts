@@ -113,11 +113,26 @@ describe('Super Tab collaboration policy', () => {
     // A delayed machine observation from the stopped runtime arrives after re-contribution.
     f.state.machines![0]!.observation!.stoppedHarnessIds = ['worker']
     expect(machineSlots(f.state, f.state.machines![0]!)).toBe(1)
-    f.run({ type: 'agent.remove', agentId: worker })
     f.state.machines![0]!.observation!.stoppedHarnessIds = []
+    f.state.machines![0]!.observation!.runningHarnessIds = ['worker']
+    f.run({ type: 'agent.remove', agentId: worker })
+    expect(machineSlots(f.state, f.state.machines![0]!)).toBe(1)
     f.add('worker')
     f.state.machines![0]!.observation!.stoppedHarnessIds = ['worker']
     expect(machineSlots(f.state, f.state.machines![0]!)).toBe(1)
+  })
+
+  it('a person withdrawing a stuck stop keeps its native slot until the host reports stopping', () => {
+    const f = fixture(), worker = f.add('worker')
+    f.state.agents[0]!.workDecision = 'awaiting'
+    f.run({ type: 'agent.release', agentId: worker, decision: 'stop' })
+    const pool = { machineId: 'host', name: 'Host', contributorId: 'owner', membershipGeneration: f.state.people[0]!.generation,
+      generation: 'pool', cwd: '/work', engines: ['codex'], maxAgents: 1, paused: false }
+    f.state.machines = [pool]
+    f.run({ type: 'agent.remove', agentId: worker })
+    expect(f.state.releasedHarnesses ?? []).toEqual([])
+    expect(machineSlots(f.state, pool)).toBe(1)
+    // An old/offline host has not sent any observation; no physical stop is implied by Remove.
   })
 
   it('fences observations from an earlier contribution of the same native harness', () => {

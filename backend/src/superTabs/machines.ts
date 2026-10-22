@@ -34,6 +34,7 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
   tools: z.record(z.string().max(80), z.boolean()).refine(v => Object.keys(v).length <= 20),
   quotas: z.array(quota).max(32), runningHarnessIds: z.array(z.string().max(160)).max(1000),
   stoppedHarnessIds: z.array(z.string().max(160)).max(1000),
+  stoppedReservations: z.array(z.object({ harnessId: z.string().min(1).max(160), generation: z.string().min(1).max(160) }).strict()).max(1000).optional(),
 }).strict()
 export type MachineObservation = z.infer<typeof machineObservationSchema>
 
@@ -49,14 +50,18 @@ export function machineContribution(state: SuperTabState, machineId: string) {
 
 /** Pending intents reserve slots too. Only an explicit host stop frees a launched slot. */
 export function machineSlots(state: SuperTabState, pool: ContributedMachine) {
-  const live = new Set(state.agents.filter(a => a.machineId === pool.machineId).map(a => a.harnessId))
+  const reservations = (state.harnessReservations ?? []).filter(r => r.machineId === pool.machineId)
+  const live = new Set([...state.agents.filter(a => a.machineId === pool.machineId).map(a => a.harnessId), ...reservations.map(r => r.harnessId)])
   const released = (state.releasedHarnesses ?? []).filter(r => r.machineId === pool.machineId && !live.has(r.harnessId)).map(r => r.harnessId)
-  // Old hosts do not version native observations. A re-contribution after a stop reserves its slot until
-  // removal, even if a delayed observation still describes its previous stopped runtime.
-  const renewed = new Set(state.agents.filter(a => a.machineId === pool.machineId && a.recontributed).map(a => a.harnessId))
-  const stopped = new Set([...(pool.observation?.stoppedHarnessIds ?? []).filter(id => !renewed.has(id)), ...released])
+  const observed = pool.observation?.stoppedHarnessIds ?? []
+  const stopped = new Set([...observed.filter(id => {
+    const reservation = reservations.find(r => r.harnessId === id)
+    // Older hosts can prove a first launch stopped, but cannot distinguish a resumed runtime from its predecessor.
+    return !reservation || !reservation.renewed || pool.observation?.stoppedReservations?.some(r => r.harnessId === id && r.generation === reservation.generation)
+  }), ...released])
   const running = new Set((pool.observation?.runningHarnessIds ?? []).filter(id => !stopped.has(id)))
   for (const a of state.agents) if (a.machineId === pool.machineId && !stopped.has(a.harnessId)) running.add(a.harnessId)
+  for (const r of reservations) if (!stopped.has(r.harnessId)) running.add(r.harnessId)
   let pending = 0
   for (const start of state.starts ?? []) {
     if (start.request.machineId !== pool.machineId || start.error) continue

@@ -7,14 +7,14 @@ const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 
 
 describe('the core API services stand on', () => {
   it('closes only the original Swarm-started native session and treats an absent session as gone', async () => {
-    const request = { agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(1000).toISOString() }
+    const request = { agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', expiresAt: Date.now() + 120_000, createdAt: new Date(1000).toISOString() }
     const session = { ...row('worker'), sessionId: 'native', registeredAt: 1000, startedBy: 'agent' as const }
     const deps = coreDeps(), byAgent = vi.fn(() => session as RegisteredSession | undefined)
     const closeAgent = vi.fn(async () => ({ closed: true as const }))
     const creationStatus = vi.fn(async () => ({ creationId: request.creationId, state: 'created' as const, agentId: 'worker' }))
     const core = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent } as CoreApiDeps['registry'], closeAgent, creationStatus })
     expect(await core.agents.closeSwarm!(request)).toEqual({ closed: true })
-    expect(closeAgent).toHaveBeenCalledWith({ agentId: 'worker', sessionId: 'native', createdAt: request.createdAt, mode: 'now', onlyIfOriginalLaunch: true })
+    expect(closeAgent).toHaveBeenCalledWith({ agentId: 'worker', sessionId: 'native', createdAt: request.createdAt, mode: 'now', onlyIfOriginalLaunch: true, expiresAt: request.expiresAt })
     closeAgent.mockClear()
     byAgent.mockReturnValue({ ...session, startedBy: undefined })
     expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: 'NOT_SWARM_STARTED' })
@@ -38,7 +38,7 @@ describe('the core API services stand on', () => {
   })
 
   it('refuses a personal resume before or during the original creation lookup', async () => {
-    const request = { agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(1000).toISOString() }
+    const request = { agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', expiresAt: Date.now() + 120_000, createdAt: new Date(1000).toISOString() }
     const session = { ...row('worker'), sessionId: 'native', registeredAt: 1000, startedBy: 'agent' as const, resumeOnly: true }
     const deps = coreDeps(), closeAgent = vi.fn(async () => ({ closed: true as const }))
     const creationStatus = vi.fn(async () => {
@@ -51,6 +51,21 @@ describe('the core API services stand on', () => {
     session.resumeOnly = false
     expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: expect.any(String) })
     expect(closeAgent).not.toHaveBeenCalled()
+  })
+
+  it('refuses missing or expired close leases, including expiry during the creation lookup', async () => {
+    let now = 1000
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      const request = { agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(1000).toISOString(), expiresAt: 1100 }
+      const deps = coreDeps(), closeAgent = vi.fn(async () => ({ closed: true as const }))
+      const session = { ...row('worker'), sessionId: 'native', registeredAt: 1000, startedBy: 'agent' as const }
+      const creationStatus = vi.fn(async () => { now = 1200; return { creationId: request.creationId, state: 'created' as const, agentId: 'worker' } })
+      const core = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent: () => session } as CoreApiDeps['registry'], closeAgent, creationStatus })
+      for (const expiresAt of [undefined, NaN, 999]) expect(await core.agents.closeSwarm!({ ...request, expiresAt })).toEqual({ error: 'STOP_LEASE_EXPIRED' })
+      expect(await core.agents.closeSwarm!(request)).toEqual({ error: 'STOP_LEASE_EXPIRED' })
+      expect(closeAgent).not.toHaveBeenCalled()
+    } finally { clock.mockRestore() }
   })
 
   it('exposes an optional native-turn observer without importing feature state', () => {
