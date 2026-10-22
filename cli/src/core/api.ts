@@ -164,6 +164,9 @@ export interface CoreApi {
     /** Fresh native lifecycle evidence. Absence from a live snapshot alone is
      * not a stop: a saved stopped record must also exist in the core. */
     stopped?(agentId: string): Promise<boolean>
+    /** The agent is neither live nor kept as a stopped record: closed by hand, or its record deleted. Only for an agent
+     * the caller already knows was created; it does not prove an agent that is still starting is gone. */
+    gone?(agentId: string): Promise<boolean>
     /** The exact durable native creation receipt. Null means unavailable, never
      * proof that a launch was missing, cancelled or failed. */
     creationStatus?(creationId: string): Promise<CreationObservation | null>
@@ -200,6 +203,8 @@ export interface CoreApi {
      *  (`SESSION_NOT_IDLE`); `now` does not. Any other harness is refused (`NOT_AGENT_STARTED`): the agent cleanup
      *  (services/agentCleanup.ts) closes those, and nothing else. Absent where the core does not let a service close. */
     closeStarted?(agentId: string, mode: 'idle' | 'now'): Promise<AgentCloseResult>
+    /** Close only the recorded native identity started for a Swarm. Missing live sessions are already gone. */
+    closeSwarm?(request: { agentId: string; creationId?: string; sessionId?: string; createdAt?: string; expiresAt?: number }): Promise<AgentCloseResult>
     /** When a live agent's conversation last moved, epoch ms: the latest dated work in its transcript
      *  (lib/transcriptActivity.ts), what the apps' `updatedAt` is when there is one. Null for none live, and for an
      *  engine that keeps no dated transcript: a hook's time or the bind's is not when it last answered. Absent where
@@ -1725,7 +1730,7 @@ export interface CoreApiDeps {
   conversations?: ConversationReads
   dataDir: string
   registry: Pick<typeof registry, 'list' | 'byAgent' | 'resolve' | 'advertised' | 'terminalAvailable'>
-  stoppedAgents: Pick<StoppedAgentStore, 'list'>
+  stoppedAgents: Pick<StoppedAgentStore, 'list' | 'ids'>
   databaseHistory: CoreApi['transcripts']['databaseHistory']
   syncSession: CoreApi['agents']['sync']
   runtimeModels: CoreApi['agents']['runtimeModels']
@@ -1816,6 +1821,7 @@ export function createCoreApi({
     agents: {
       all: () => [...registry.list(), ...stoppedAgents.list()],
       stopped: async id => !registry.byAgent(id) && stoppedAgents.list().some(s => s.agentId === id),
+      gone: async id => !registry.byAgent(id) && !stoppedAgents.ids().includes(id),
       live: () => registry.list(),
       displayName: projectDisplayName,
       byAgent: (agentId) => registry.byAgent(agentId),
@@ -1837,6 +1843,21 @@ export function createCoreApi({
       summaries: summaries ?? (async () => ({})),
       // Decided here, not in the service: whatever the cleanup asks, from its process or this one, the core closes only
       // a harness another agent started, the conversation it reviewed (`agent_close`'s identity), and keeps it.
+      closeSwarm: async request => {
+        const session = registry.byAgent(request.agentId)
+        // This is the authoritative live registry, not a service's possibly old snapshot or a failed read.
+        if (!session) return { closed: true }
+        if (session.startedBy !== 'agent' || session.resumeOnly || !request.creationId || typeof request.sessionId !== 'string' || !request.createdAt) return { error: 'NOT_SWARM_STARTED' }
+        if (session.sessionId !== request.sessionId || session.registeredAt !== Date.parse(request.createdAt)) return { error: 'AGENT_CHANGED' }
+        if (!Number.isFinite(request.expiresAt) || request.expiresAt! <= Date.now()) return { error: 'STOP_LEASE_EXPIRED' }
+        const creation = await creationStatus?.(request.creationId)
+        if (creation?.state !== 'created' || creation.agentId !== request.agentId) return { error: 'NOT_SWARM_STARTED' }
+        if (request.expiresAt! <= Date.now()) return { error: 'STOP_LEASE_EXPIRED' }
+        const latest = registry.byAgent(request.agentId)
+        if (!latest || latest.startedBy !== 'agent' || latest.resumeOnly || latest.sessionId !== request.sessionId
+          || latest.registeredAt !== Date.parse(request.createdAt)) return { error: 'AGENT_CHANGED' }
+        return closeAgent ? closeAgent({ agentId: request.agentId, sessionId: request.sessionId, createdAt: request.createdAt, mode: 'now', onlyIfOriginalLaunch: true, expiresAt: request.expiresAt }) : { error: 'UNSUPPORTED' }
+      },
       closeStarted: async (agentId, mode) => {
         const session = registry.byAgent(agentId)
         if (!session) return { error: 'AGENT_CHANGED' }

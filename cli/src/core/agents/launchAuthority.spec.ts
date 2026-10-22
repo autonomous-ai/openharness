@@ -23,7 +23,7 @@ describe('launch preparation authority', () => {
     { cwd: '/replacement' }, { engine: 'codex' }, { sessionId: 'replacement' }, { registeredAt: 3 },
     { boundAt: 3 }, { processIdentity: { pid: 42, startMarker: 'replacement' } },
     { runtimes: [{ backend: 'tmux', paneId: '%8' }] }, { codexHome: '/profile' },
-    { dsh: 'fixture/other' }, { dshRuntime: 'other' }, { agent: 'other' },
+    { dsh: 'fixture/other' }, { dshRuntime: 'other' }, { swarmSkill: { role: 'dev', key: 'other' } }, { agent: 'other' },
     { gridLaunch: { model: 'replacement' } }, { scmLaunch: { kind: 'fixture' } },
     { subscriptionModel: 'replacement' }, { permissionMode: 'auto' }, { bypassPermission: true },
     { active: false }, { launch: { state: 'held', service: 'store' } }, { externalResume: { token: 'other' } },

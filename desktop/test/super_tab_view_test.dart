@@ -238,6 +238,7 @@ void main() {
               onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
+              onNewProject: () {},
               machineName: (_) => 'Test Mac',
             ),
           ),
@@ -249,7 +250,7 @@ void main() {
       expect(find.byKey(const ValueKey('super-group-lead')), findsOneWidget);
       expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
       expect(find.text('New group'), findsNothing);
-      expect(find.byKey(const ValueKey('super-new-project')), findsOneWidget);
+      expect(find.byTooltip('New project'), findsOneWidget);
       expect(find.byTooltip('Invite people'), findsOneWidget);
       expect(
         tester.getCenter(find.byTooltip('Invite people')).dx,

@@ -12,6 +12,42 @@ import 'package:harness/super_tabs/workspace.dart';
 import 'support/super_tab_fixture.dart';
 
 void main() {
+  testWidgets(
+    'queued and claimed messages have no queue label; uncertain review remains',
+    (tester) async {
+      final server = ConversationServer();
+      for (final status in ['queued', 'claimed', 'uncertain']) {
+        server.append('$status message');
+        server.messages.last['deliveries'] = [
+          {'id': status, 'agentId': 'lead-agent', 'status': status},
+        ];
+      }
+      final controller = server.controller();
+      addTearDown(controller.dispose);
+      await controller.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabView(
+              controller: controller,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Test Mac',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('queued message'), findsOneWidget);
+      expect(find.text('claimed message'), findsOneWidget);
+      expect(find.text('Queued'), findsNothing);
+      // The uncertain review is now the latest message's receipt and its actions (message_receipt.dart).
+      expect(find.text("Couldn't confirm delivery"), findsOneWidget);
+      expect(find.text('Send again'), findsOneWidget);
+    },
+  );
+
   final capture = Platform.environment['HARNESS_SUPER_TAB_CAPTURE'];
   setUpAll(() async {
     if (capture == null || !Platform.isMacOS) return;
@@ -173,17 +209,13 @@ void main() {
           await tester.sendKeyEvent(LogicalKeyboardKey.escape);
           await tester.pumpAndSettle();
         }
-        await tester.tap(find.text('Check delivery to Lead'));
-        await tester.pumpAndSettle();
         await shot('delivery');
         expect(server.posts, isEmpty);
         await tester.tap(find.text('Open terminal'));
         await tester.pumpAndSettle();
         expect(opened, 'lead-agent');
         expect(server.posts, isEmpty);
-        await tester.tap(find.text('Check delivery to Lead'));
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('Already received'));
+        await tester.tap(find.text('It arrived'));
         await tester.pumpAndSettle();
         expect((server.posts.single['command'] as Map), {
           'type': 'delivery.resolve',
@@ -196,8 +228,6 @@ void main() {
           reason:
               'Confirmation does not submit the original instruction again.',
         );
-        await tester.tap(find.text('Check delivery to Lead'));
-        await tester.pumpAndSettle();
         controller.revokeAccess('Access removed.');
         await tester.pumpAndSettle();
         expect(find.byType(SelectableText), findsNothing);

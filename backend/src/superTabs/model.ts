@@ -24,6 +24,11 @@ export interface Agent {
   name: string
   /** A stable member name; native session and routing names remain in `name`. */
   displayName?: string
+  /** A finished worker stays undecided even when its group receives a new brief. */
+  workDecision?: 'awaiting' | 'keep' | 'stop'
+  releaseId?: string
+  /** Captured from the original Swarm launch, never inferred from a later live session with the same id. */
+  startedSession?: { creationId: string; sessionId: string; createdAt: string }
   configuration: AgentConfiguration
   /** The last configuration operation fences delayed observations, including re-contribution. */
   configurationVersion?: string
@@ -62,7 +67,7 @@ export interface AgentStart {
 }
 /** `needs_human`: the agent needs a person's decision (its result is the question). `blocked`: it cannot go on (its result
  * says why). Both stay active work; the machine running the agent alerts its Harness Pro (cli/src/superTabs/attention.ts). */
-export type WorkStatus = 'planned' | 'working' | 'needs_human' | 'blocked' | 'review' | 'done' | 'stopped' | 'reconciling'
+export type WorkStatus = 'planned' | 'working' | 'needs_human' | 'blocked' | 'review' | 'done' | 'stopped' | 'cancelled' | 'reconciling'
 export interface Check {
   id: string
   description: string
@@ -78,6 +83,17 @@ export interface Assignment {
   execution: { machineId: string; harnessId: string; machineOwnerId: string }
   result: string | null
 }
+export interface WorkTask {
+  goal: string
+  changes: string
+  constraints: string
+  owns: string[]
+}
+
+export function renderWorkTask(task: WorkTask): string {
+  return `Goal:\n${task.goal}\n\nChanges:\n${task.changes}\n\nConstraints:\n${task.constraints}\n\nOwns:\n${task.owns.map(area => `- ${area}`).join('\n')}`
+}
+
 export interface Conversation {
   id: string
   projectId?: string
@@ -88,6 +104,7 @@ export interface Conversation {
   agentIds: string[]
   archived: boolean
   brief: string
+  task?: WorkTask
   checks: Check[]
   assignment: Assignment | null
   lastMessageSequence: number
@@ -120,6 +137,10 @@ export interface SuperTabState {
   invitations: Invitation[]
   starts?: AgentStart[]
   machines?: import('./machines.js').ContributedMachine[]
+  /** Slot claims survive person withdrawal; only host proof for this generation releases them. */
+  harnessReservations?: Array<{ machineId: string; harnessId: string; generation: string; renewed: boolean }>
+  /** Native stop receipts survive late replaceable machine observations. */
+  releasedHarnesses?: Array<{ machineId: string; harnessId: string }>
 }
 export type Actor =
   | { kind: 'person'; userId: string; email: string }
@@ -154,7 +175,26 @@ export function fail(code: string, message: string, status = 409): never { throw
 export const stableId = (...parts: string[]): string => createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 24)
 export const actorKey = (actor: Actor): string => actor.kind === 'person' ? `person:${actor.userId}` : `agent:${actor.agentId}`
 export const activeWork = (group: Conversation): boolean => !!group.assignment &&
-  !['done', 'stopped'].includes(group.assignment.status)
+  !['done', 'stopped', 'cancelled'].includes(group.assignment.status)
+
+/** Old states derive pending decisions from their closed assignments; new states persist them on the worker. */
+export function awaitingWorkers(state: SuperTabState, projectId: string): Agent[] {
+  return state.agents.filter(a => {
+    if (state.conversations.some(c => c.leadId === a.id) || state.conversations.some(c => activeWork(c) && c.assignment?.agentId === a.id)) return false
+    const groups = state.conversations.filter(c => c.assignment?.agentId === a.id)
+    return (a.projectId ?? groups.map(c => groupProject(state, c).id)[0] ?? 'lead') === projectId &&
+      (a.workDecision === 'awaiting' || (!a.workDecision && groups.some(c => !activeWork(c))))
+  })
+}
+export function requireWorkerDecisions(state: SuperTabState, actor: Actor, group: Conversation, reuseId?: string): void {
+  if (actor.kind !== 'agent') return
+  const waiting = awaitingWorkers(state, groupProject(state, group).id).filter(a => a.id !== reuseId)
+  if (waiting.length) fail('WORKER_DECISION_REQUIRED', `Decide what to do with ${waiting.map(a => a.displayName ?? a.name).join(', ')}: reuse, keep or stop. Prefer stop unless more work is coming soon.`)
+}
+export function finishWorker(state: SuperTabState, workerId: string): void {
+  const target = state.agents.find(a => a.id === workerId)
+  if (target && !state.conversations.some(c => c.leadId === workerId)) target.workDecision = 'awaiting'
+}
 
 export function person(state: SuperTabState, id: string): Person {
   return state.people.find(p => p.id === id) ?? fail('FORBIDDEN', 'You no longer have access to this Super Tab.', 403)
@@ -211,6 +251,8 @@ export function visibleState(state: SuperTabState, actor: Actor): SuperTabState 
   const visible = structuredClone(state)
   assignAgentDisplayNames(visible.agents)
   delete visible.sharing
+  delete visible.harnessReservations
+  delete visible.releasedHarnesses
   numberConversations(visible)
   delete visible.retiredConversationNumber
   if (visible.projects) {
@@ -227,9 +269,11 @@ export function visibleState(state: SuperTabState, actor: Actor): SuperTabState 
       if (!pool.observation) continue
       pool.observation.runningHarnessIds = pool.observation.runningHarnessIds.filter(id => harnesses.has(id))
       pool.observation.stoppedHarnessIds = pool.observation.stoppedHarnessIds.filter(id => harnesses.has(id))
+      if (pool.observation.stoppedReservations) pool.observation.stoppedReservations = pool.observation.stoppedReservations.filter(r => harnesses.has(r.harnessId))
     }
     visible.invitations = visible.invitations.filter(i => visible.conversations.some(c => c.id === i.conversationId))
   }
+  for (const project of projectsOf(visible)) for (const target of awaitingWorkers(visible, project.id)) target.workDecision = 'awaiting'
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) visible.invitations = []
   return visible
 }

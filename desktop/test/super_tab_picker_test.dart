@@ -114,13 +114,15 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    if (find.byTooltip('Members and machines').evaluate().isNotEmpty) {
-      await tester.tap(find.byTooltip('Members and machines'));
+    final machine = find.byKey(const ValueKey('super-machine-teammate-machine'));
+    if (machine.evaluate().isEmpty &&
+        find.byTooltip('Conversations').evaluate().isNotEmpty) {
+      await tester.tap(find.byTooltip('Conversations'));
       await tester.pumpAndSettle();
     }
-    await tester.tap(
-      find.byKey(const ValueKey('super-machine-teammate-machine')),
-    );
+    await tester.ensureVisible(machine);
+    await tester.pumpAndSettle();
+    await tester.tap(machine);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Attach running agent'));
     await tester.pumpAndSettle();

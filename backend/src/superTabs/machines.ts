@@ -34,6 +34,7 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
   tools: z.record(z.string().max(80), z.boolean()).refine(v => Object.keys(v).length <= 20),
   quotas: z.array(quota).max(32), runningHarnessIds: z.array(z.string().max(160)).max(1000),
   stoppedHarnessIds: z.array(z.string().max(160)).max(1000),
+  stoppedReservations: z.array(z.object({ harnessId: z.string().min(1).max(160), generation: z.string().min(1).max(160) }).strict()).max(1000).optional(),
 }).strict()
 export type MachineObservation = z.infer<typeof machineObservationSchema>
 
@@ -49,9 +50,18 @@ export function machineContribution(state: SuperTabState, machineId: string) {
 
 /** Pending intents reserve slots too. Only an explicit host stop frees a launched slot. */
 export function machineSlots(state: SuperTabState, pool: ContributedMachine) {
-  const stopped = new Set(pool.observation?.stoppedHarnessIds ?? [])
-  const running = new Set(pool.observation?.runningHarnessIds ?? [])
+  const reservations = (state.harnessReservations ?? []).filter(r => r.machineId === pool.machineId)
+  const live = new Set(reservations.map(r => r.harnessId))
+  const released = (state.releasedHarnesses ?? []).filter(r => r.machineId === pool.machineId && !live.has(r.harnessId)).map(r => r.harnessId)
+  const observed = pool.observation?.stoppedHarnessIds ?? []
+  const stopped = new Set([...observed.filter(id => {
+    const reservation = reservations.find(r => r.harnessId === id)
+    // Older hosts can prove a first launch stopped, but cannot distinguish a resumed runtime from its predecessor.
+    return !reservation || !reservation.renewed || pool.observation?.stoppedReservations?.some(r => r.harnessId === id && r.generation === reservation.generation)
+  }), ...released])
+  const running = new Set((pool.observation?.runningHarnessIds ?? []).filter(id => !stopped.has(id)))
   for (const a of state.agents) if (a.machineId === pool.machineId && !stopped.has(a.harnessId)) running.add(a.harnessId)
+  for (const r of reservations) if (!stopped.has(r.harnessId)) running.add(r.harnessId)
   let pending = 0
   for (const start of state.starts ?? []) {
     if (start.request.machineId !== pool.machineId || start.error) continue
@@ -76,10 +86,13 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   const refused: string[] = []
   if (request.cwd !== cwd) refused.push(`cwd (this project uses ${cwd} on it)`)
   if (!pool.engines.includes(request.engine)) refused.push(`engine (it contributes ${pool.engines.join(', ') || 'no engines'})`)
-  const settings = (['codexHome', 'gridModel', 'gridName', 'permissionMode'] as const).filter(key => request[key])
+  const settings = (['codexHome', 'gridModel', 'gridName'] as const).filter(key => request[key])
   if (settings.length) refused.push(`${settings.join(', ')} (it runs with its own default account settings, so leave ${settings.length > 1 ? 'them' : 'it'} out)`)
+  if (request.permissionMode !== undefined && request.permissionMode !== 'full') {
+    refused.push('permissionMode (only full is accepted; leave it out to use the machine’s default)')
+  }
   if (refused.length) {
-    fail('OUTSIDE_CONTRIBUTION', `${pool.name} accepts only its contributed project folder, engines and default account settings. Refused: ${refused.join('; ')}.`, 403)
+    fail('OUTSIDE_CONTRIBUTION', `${pool.name} accepts only its contributed project folder, engines and default account settings, with full permissions for Swarm agents. Refused: ${refused.join('; ')}.`, 403)
   }
   if (!pool.observation || now - pool.observation.receivedAt > 45_000) {
     fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')

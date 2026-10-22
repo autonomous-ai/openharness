@@ -46,7 +46,7 @@ export async function writeRouteEffects(tx: Tx, tabId: string, effects: RouteDec
   }
 }
 
-export async function closeAssignment(tx: Tx, tabId: string, assignmentId: string, outcome: 'done' | 'stopped', now: number): Promise<void> {
+export async function closeAssignment(tx: Tx, tabId: string, assignmentId: string, outcome: 'done' | 'stopped' | 'cancelled', now: number): Promise<void> {
   // The Lead must stop an assignment before handing the task to the candidate a person chose. That stop is
   // the handover, not the end of the decision: keep it open so the next start or assignment links to it.
   if (outcome === 'stopped') {

@@ -1,10 +1,16 @@
 import 'package:flutter/material.dart';
 
+import '../core/machine_resources.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/appearance_prefs_store.dart';
+import '../state/app_state.dart';
+import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
+import 'machines.dart';
 import 'model.dart';
+import 'section_heading.dart';
 
 class ProjectSidebar extends StatelessWidget {
   const ProjectSidebar({
@@ -12,14 +18,30 @@ class ProjectSidebar extends StatelessWidget {
     required this.controller,
     required this.onSelect,
     required this.needsHuman,
+    required this.onAddAgent,
+    this.app,
     this.onNewProject,
     this.onYourDevices,
+    this.readLocal,
+    this.now = DateTime.now,
   });
   final SuperTabController controller;
   final ValueChanged<String> onSelect;
   final int Function(SuperTabConversation group) needsHuman;
+  final ValueChanged<SuperTabConversation> onAddAgent;
+  final AppNotifier? app;
   final VoidCallback? onNewProject;
   final VoidCallback? onYourDevices;
+
+  /// Forwarded to the embedded [SuperTabMachines]; a test gives it to have
+  /// the Machines group's readings taken without a real machine.
+  @visibleForTesting
+  final Future<MachineResources?> Function(String machineId)? readLocal;
+
+  /// Forwarded to the embedded [SuperTabMachines]; a test gives it to pin
+  /// the clock its readings' ages are counted against.
+  @visibleForTesting
+  final DateTime Function() now;
 
   // Actions, project names and workgroup names share one text column.
   static const _iconColumn = 32.0;
@@ -150,47 +172,6 @@ class ProjectSidebar extends StatelessWidget {
     );
   }
 
-  Widget _action({
-    required String key,
-    required IconData icon,
-    required String label,
-    required VoidCallback? onPressed,
-  }) => TextButton(
-    key: ValueKey(key),
-    onPressed: onPressed,
-    style:
-        TextButton.styleFrom(
-          foregroundColor: DesktopChrome.foreground,
-          backgroundColor: Colors.transparent,
-          disabledBackgroundColor: Colors.transparent,
-          minimumSize: const Size(0, 36),
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          alignment: Alignment.centerLeft,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-          ),
-          textStyle: DesktopChrome.control(),
-        ).copyWith(
-          side: WidgetStateProperty.resolveWith(
-            (states) => states.contains(WidgetState.focused)
-                ? BorderSide(color: DesktopChrome.accent, width: 1.5)
-                : BorderSide.none,
-          ),
-        ),
-    child: Row(
-      children: [
-        SizedBox(
-          width: _iconColumn,
-          child: Icon(icon, size: AppIcons.inlineSize),
-        ),
-        const SizedBox(width: _textGap),
-        Expanded(child: Text(label)),
-        const SizedBox(width: 12),
-      ],
-    ),
-  );
-
   List<Widget> _workgroups(SuperTabProject project) {
     final groups = controller.snapshot!.conversations.where(
       (g) =>
@@ -224,47 +205,55 @@ class ProjectSidebar extends StatelessWidget {
     final snapshot = controller.snapshot;
     return Material(
       color: DesktopChrome.surface,
-      child: Column(
+      child: ListView(
+        padding: const EdgeInsets.all(8),
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
-            child: Column(
-              children: [
-                _action(
-                  key: 'super-new-project',
-                  icon: AppIcons.plus,
-                  label: 'New project',
-                  onPressed: controller.canWrite ? onNewProject : null,
-                ),
-                const SizedBox(height: 2),
-                _action(
-                  key: 'super-your-devices',
-                  icon: AppIcons.circle,
-                  label: 'Your devices',
-                  onPressed: onYourDevices,
-                ),
-              ],
-            ),
+          SuperTabSectionHeading(
+            'Projects',
+            onAdd: controller.canWrite ? onNewProject : null,
+            addTooltip: 'New project',
+            collapsed: !controller.projectsGroupOpen,
+            onToggleCollapsed: controller.toggleProjectsGroup,
           ),
-          const SizedBox(height: 12),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.all(8),
-              children: [
-                for (final project
-                    in snapshot?.projects ?? const <SuperTabProject>[])
-                  if (snapshot?.conversation(project.leadConversationId)
-                      case final lead?)
-                    Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _row(lead, project: project),
-                        if (controller.expandedProjects.contains(project.id))
-                          ..._workgroups(project),
-                      ],
-                    ),
-              ],
-            ),
+          if (controller.projectsGroupOpen)
+            for (final project
+                in snapshot?.projects ?? const <SuperTabProject>[])
+              if (snapshot?.conversation(project.leadConversationId)
+                  case final lead?)
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _row(lead, project: project),
+                    if (controller.expandedProjects.contains(project.id))
+                      ..._workgroups(project),
+                  ],
+                ),
+          const SizedBox(height: 16),
+          // Machine online/offline, unread marks and theme changes do not touch
+          // the controller the rest of this sidebar rebuilds on, so this group
+          // watches them itself — the same sources the roster merged before the
+          // move (roster.dart).
+          ListenableBuilder(
+            listenable: Listenable.merge([
+              controller,
+              if (app != null) ...[app!, app!.agentUnread],
+              terminalThemeStore,
+              appearancePrefsStore,
+            ]),
+            builder: (context, _) {
+              grid.AppTheme.watch(context);
+              return SuperTabMachines(
+                controller: controller,
+                app: app,
+                onAddAgent: onAddAgent,
+                embedded: true,
+                collapsed: !controller.machinesGroupOpen,
+                onToggleCollapsed: controller.toggleMachinesGroup,
+                onYourDevices: onYourDevices,
+                readLocal: readLocal,
+                now: now,
+              );
+            },
           ),
         ],
       ),

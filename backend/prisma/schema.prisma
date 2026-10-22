@@ -1002,6 +1002,14 @@ model SuperTab {
 // A terminal retains its history when removed from a roster. These bindings
 // prevent contributing a private session to another project's audience later.
 model SuperTabSessionScope {
+  /// Administrative retirement belongs only to the Swarm that withdrew this session.
+  releasedTabIds String[] @default([])
+  /// A bounded native close may finish after membership is withdrawn.
+  closeLeaseId String?
+  closeLeaseUntil DateTime?
+  closeLeaseGeneration String?
+  /// Serializes contribution changes with stop intent across public Swarms.
+  stopReleaseId String?
   id           String   @id @map("_id")
   scopeIds     String[]
   privateScope String?
@@ -1088,6 +1096,11 @@ model SuperTabDelivery {
   status                String   @default("queued")
   claimId               String?
   receipt               String?
+  // Optional on older records: backend first, then Desktop's inline receipt.
+  holdReason            String?
+  holdSince             DateTime?
+  deliveredAt           DateTime?
+  answeredAt            DateTime?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 

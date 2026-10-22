@@ -81,6 +81,42 @@ const delivery = (deliveryId: string) => ({ deliveryId }) as unknown as SessionI
 describe('the session input controller\'s dependencies', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it.each(['a1', 'cx'])('types Swarm input into busy %s while retaining the Agent Messages hold', async id => {
+    const t = deps(), wired = sessionInputDeps(t.deps, () => lock(t.calls))
+    t.setPane(id === 'a1' ? 'Working (esc to interrupt)\n' + READY_PANE : '\n\u001b[1m›\u001b[0m \n\n  esc to interrupt')
+    expect(await wired.beforeTeamWrite!(agents.get(id)!, 'team:service:superTabs:busy')).toBeNull()
+    expect(await wired.injectTeam!(id, 'chat follow-up', 'team:service:superTabs:busy')).toBe(ok)
+    expect(await wired.injectTeam!(id, 'peer message', 'team:peer')).toMatchObject({ dispatch: 'not_started', reason: 'team_waiting_idle' })
+  })
+
+  it.each([
+    [null, 'team_waiting_unavailable'],
+    [CLAUDE_PERMISSION, 'team_waiting_user'],
+    ['Working (esc to interrupt)\n────────────\n❯ draft\n────────────', 'team_waiting_draft'],
+    ['Working (esc to interrupt)\n────────────\n❯\n  human second line\n────────────', 'team_waiting_draft'],
+  ])('keeps unsafe busy Swarm panes untouched (%s)', async (pane, reason) => {
+    const t = deps(), wired = sessionInputDeps(t.deps, () => lock(t.calls))
+    t.setPane(pane)
+    expect(await wired.injectTeam!('a1', 'chat follow-up', 'team:service:superTabs:held')).toMatchObject({ dispatch: 'not_started', reason })
+    expect(t.deps.terminal.submitTerminalAction).not.toHaveBeenCalled()
+  })
+
+  it('still checks authority and engine support for Swarm input', async () => {
+    const t = deps(), wired = sessionInputDeps(t.deps, () => lock(t.calls))
+    t.deps.deliveries.canWrite = () => false
+    expect(await wired.injectTeam!('a1', 'chat', 'team:service:superTabs:control')).toMatchObject({ reason: 'team_waiting_control' })
+    t.setPane('Working (esc to interrupt)')
+    expect(await wired.injectTeam!('cc', 'chat', 'team:service:superTabs:unsupported')).toMatchObject({ reason: 'team_waiting_idle' })
+  })
+
+  it('requires a capture even when a screen reader returns its last reading', async () => {
+    const t = deps({ readScreen: async () => screenFor('claude').inspect(READY_PANE) })
+    t.setPane(null)
+    const wired = sessionInputDeps(t.deps, () => lock(t.calls))
+    expect(await wired.injectTeam!('a1', 'chat', 'team:service:superTabs:no-capture'))
+      .toMatchObject({ dispatch: 'not_started', reason: 'team_waiting_unavailable' })
+  })
+
   it('finds a session and checks its pane through what it was given', async () => {
     const { deps: given } = deps()
     const wired = sessionInputDeps(given, () => lock([]))

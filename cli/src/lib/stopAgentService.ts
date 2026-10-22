@@ -37,7 +37,12 @@ export interface StopAgentServiceDeps {
    * signalled: core/engines/nativeControls.ts, the engine's worker speaking its protocol under a grant.
    */
   stopNative(session: RegisteredSession, current: () => boolean, confirmUnusedConversation?: (session: RegisteredSession) => Promise<boolean>): Promise<void>
+  /** The pause between reads of a guest's process while it leaves (tests pass one that returns at once). */
+  wait?(ms: number): Promise<void>
 }
+/** How long a guest's engine has to leave once its pane closed, read every GUEST_EXIT_STEP_MS. */
+const GUEST_EXIT_WAIT_MS = 5_000
+const GUEST_EXIT_STEP_MS = 250
 export class AgentStopError extends Error {
   readonly code = 'STOP_UNCONFIRMED'
 }
@@ -73,6 +78,18 @@ const bindingIdentity = (entry: RegisteredSession) => JSON.stringify([
 export function createStopAgentService(deps: StopAgentServiceDeps) {
   const { registry, stoppedAgents, restartJobs, stopJobs, backendFor, agentReconciler,
     forgetSession, markDeleted, clearDeleted, stopNative } = deps
+  const wait = deps.wait ?? (ms => new Promise<void>(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.() }))
+  /** A guest's engine, its pane closed, has left: read from the process table, which shows every user's processes. An
+   *  unreadable table is not proof that it left. The process is the row's latest: one still starting gains it while its
+   *  screen is saved, and an older copy without one would read as gone at once. */
+  const guestLeft = async (agentId: string, s: RegisteredSession): Promise<boolean> => {
+    const processIdentity = registry.resolve(agentId)?.processIdentity ?? s.processIdentity
+    for (let waited = 0; ; waited += GUEST_EXIT_STEP_MS) {
+      if ((await checkPidRuntime({ engine: s.engine, processIdentity })).state === 'gone') return true
+      if (waited >= GUEST_EXIT_WAIT_MS) return false
+      await wait(GUEST_EXIT_STEP_MS)
+    }
+  }
   return (target: string, options: StopAgentOptions = {}) => {
     const sessionId = registry.resolve(target)?.agentId ?? target
     const existing = stopJobs.get(sessionId)
@@ -101,7 +118,15 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
         return runtimeIdentity(current, !starting) === identity && (!conversation || current!.sessionId === conversation)
           && (binding === undefined || bindingIdentity(current!) === binding)
       }
-      const captured = await captureResumeIdentity({ ...live }).catch((error: unknown) => {
+      // A guest's harness runs as the guest's own OS user (docs/plans/2026-10-19-guest-machine-sharing-plan.md). This
+      // daemon can neither read that process's descriptors (the native control probe exits 75: macOS refuses
+      // proc_pidinfo for another user's process) nor signal it (EPERM), so every Stop of one was refused, "Conversation
+      // identity is held", and the guest could not close it (measured on a Mac sharing with a guest, 2026-10-22). It is
+      // never relaunched (GUEST_HARNESS_REFUSAL), so no native resume identity is kept for it: its screen is saved, and its
+      // pane, which is this daemon's, is closed. sudo hands the hangup to the guest's engine, as closing any terminal
+      // does, and the stop is confirmed only once that process has left.
+      const guest = !!live.guest
+      const captured = guest ? { ...live } : await captureResumeIdentity({ ...live }).catch((error: unknown) => {
         if (!options.withoutConversation || conversation || live.transcriptPath || live.boundAt != null
           || !(error instanceof IdentityReadUnavailable) || error instanceof ObservedConversationUnavailable) throw error
         options.withoutConversation()
@@ -116,7 +141,7 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
       const s = current.sessionId && current.sessionId !== captured.sessionId ? { ...current } : { ...current, sessionId: captured.sessionId,
         transcriptPath: captured.transcriptPath, hermesHome: captured.hermesHome, boundAt: captured.boundAt, source: captured.source }
       binding = bindingIdentity(current)
-      const transcript = s.sessionId && s.transcriptPath && engineKeepsTranscriptFile(s.engine)
+      const transcript = !guest && s.sessionId && s.transcriptPath && engineKeepsTranscriptFile(s.engine)
         ? controlTranscriptEvidence(s.engine, s.sessionId, s.transcriptPath, s.codexHome ?? undefined, s.cwd) : undefined
       let nativeIdentityError: IdentityReadUnavailable | undefined
       const verifyTranscript = () => {
@@ -139,15 +164,18 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
       try {
         markDeleted(sessionId)
         if (s.sessionId) markDeleted(s.sessionId)
-        await stopNative(s, () => {
-          verifyTranscript()
-          return sameTarget() && options.current?.() !== false
-        }, options.confirmUnusedConversation).catch(error => { throw nativeIdentityError ?? error })
+        // (A guest's engine is its own, not this daemon's shared server's.)
+        if (!guest) {
+          await stopNative(s, () => {
+            verifyTranscript()
+            return sameTarget() && options.current?.() !== false
+          }, options.confirmUnusedConversation).catch(error => { throw nativeIdentityError ?? error })
+        }
         if (nativeIdentityError) throw nativeIdentityError
         verifyTranscript()
         // Keep the terminal alive while the engine handles SIGTERM and flushes
         // its native store. Killing tmux in parallel can deliver SIGHUP first.
-        const termination = await (isTerminalEngine(s.engine) ? Promise.resolve('gone' as const)
+        const termination = await (isTerminalEngine(s.engine) || guest ? Promise.resolve('gone' as const)
           : terminateDeletedAgent(s, {
             checkRuntime: checkPidRuntime,
             kill: (pid, signal) => {
@@ -187,7 +215,10 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
         }))
         if (nativeIdentityError) throw nativeIdentityError
         if (panes.some(result => result.status !== 'fulfilled' || result.value.state !== 'succeeded')
-          || (isTerminalEngine(s.engine) && !panes.length)) {
+          || ((isTerminalEngine(s.engine) || guest) && !panes.length)) {
+          throw new AgentStopError('Could not confirm that the harness stopped. Its saved conversation is safe. Try stopping again.')
+        }
+        if (guest && !await guestLeft(sessionId, s)) {
           throw new AgentStopError('Could not confirm that the harness stopped. Its saved conversation is safe. Try stopping again.')
         }
         verifyTranscript()

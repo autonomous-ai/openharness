@@ -26,6 +26,7 @@ import { TERMINAL_LEASE_REFUSED, terminalActionNotStarted, type TerminalActionRe
 import type { TerminalControl } from './terminals/control.js'
 import { launchBound } from './engines/sessionBinding.js'
 import { inputContextIn } from '../lib/nativeTurnObservations.js'
+import { teamHold } from '../engines/kit/screen.js'
 
 type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Record<string, unknown> }
 
@@ -73,7 +74,7 @@ export interface InputDeps {
  * it so.
  */
 export function messageWriter({ readScreen, resolve, terminal: { captureTerminal, validateTerminal, submitTerminalAction }, promptTyped }: Pick<InputDeps, 'resolve' | 'terminal' | 'promptTyped' | 'readScreen'>) {
-  return async (id: string, text: string, hold?: (session: RegisteredSession, screen: ScreenReading | null) => string | null, inputContext?: string): Promise<TerminalActionResult> => {
+  return async (id: string, text: string, hold?: (session: RegisteredSession, screen: ScreenReading | null, capture: string | null) => string | null, inputContext?: string): Promise<TerminalActionResult> => {
     const session = resolve(id)
     if (!session) return terminalActionNotStarted('terminal agent is unavailable')
     // The engine first, then its screen. A check of the engine can wait, seconds, for an answer: a probe
@@ -84,8 +85,8 @@ export function messageWriter({ readScreen, resolve, terminal: { captureTerminal
     if (!await validateTerminal(session)) return terminalActionNotStarted(TERMINAL_LEASE_REFUSED)
     const capture = await captureTerminal(id)
     const screen = await readScreen(session, capture)
-    if (!screen) return terminalActionNotStarted(hold?.(session, null) ?? 'screen_unreadable')
-    const reason = hold?.(session, screen) ?? screen.messageHold
+    if (!screen) return terminalActionNotStarted(hold?.(session, null, capture) ?? 'screen_unreadable')
+    const reason = hold?.(session, screen, capture) ?? screen.messageHold
     if (reason) return terminalActionNotStarted(reason)
     if (inputContext) promptTyped?.(session, capture, screen, inputContext)
     else promptTyped?.(session, capture, screen)
@@ -121,6 +122,13 @@ export function sessionInputDeps(
   const { resolve, terminal, deliveries, device, clients, agentIdFor, commandcode, emit } = deps
   const { captureTerminal, validateTerminal, keyTerminalAction } = terminal
   const writeMessage = messageWriter(deps)
+  // Swarm chat uses the native input queue, while Agent Messages still waits for idle.
+  // Both paths keep the same draft and dialog checks under the pane's writer lock.
+  const deliveryHold = (session: RegisteredSession, screen: ScreenReading | null, capture: string | null, deliveryId?: string): string | null => {
+    if (!screen) return 'team_waiting_unavailable'
+    return deliveryId?.startsWith('team:service:superTabs:') && deps.submission.policy(session.engine)?.typesWhileBusy
+      ? teamHold(session.engine, capture ?? '', screen.pane, screen.question, true) : screen.teamHold
+  }
   return {
     readScreen: deps.readScreen,
     submission: deps.submission,
@@ -129,10 +137,10 @@ export function sessionInputDeps(
       device()?.delivery(event)
       deliveries.settled(event)
     },
-    beforeTeamWrite: async session => {
+    beforeTeamWrite: async (session, deliveryId) => {
       const capture = await captureTerminal(session.agentId)
       const screen = await deps.readScreen(session, capture)
-      return screen ? screen.teamHold : 'team_waiting_unavailable'
+      return deliveryHold(session, screen, capture, deliveryId)
     },
     validateRuntime: validateTerminal,
     // Typed into the pane as it stands, a draft or a running turn included, under the pane's write lock.
@@ -140,7 +148,7 @@ export function sessionInputDeps(
     // An Agent Messages turn waits for a ready composer, and for its mailbox to still want it written.
     injectTeam: (id, text, deliveryId) => deviceInput().legacyWrite(id, async () => {
       if (!resolve(id)) return terminalActionNotStarted('team_waiting_unavailable')
-      return writeMessage(id, text, (session, screen) => (screen ? screen.teamHold : 'team_waiting_unavailable')
+      return writeMessage(id, text, (session, screen, capture) => deliveryHold(session, screen, capture, deliveryId)
         ?? (deliveries.canWrite(deliveryId) ? null : 'team_waiting_control'))
     }),
     sendKey: (id, key) => deviceInput().legacyWrite(id, () => keyTerminalAction(id, key)),

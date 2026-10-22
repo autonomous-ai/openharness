@@ -134,19 +134,25 @@ async function ingestCounters(report: SetupUsageReport & { revision?: number; co
 export type RelayUsageMetric = 'relay_desktop_opens' | 'relay_tui_opens' | 'relay_mobile_opens' | 'relay_web_opens'
   | 'relay_harness-os_opens' | 'relay_harness-os-pi_opens'
   | 'relay_device_connections' | 'relay_machine_connections' | 'relay_remote_sessions' | 'relay_turns_started'
+  // The phone's opens again, apart (`dailyTracking.ts` mobileOpenMetrics): from a debug or simulator build, and by release.
+  | 'relay_mobile_debug_opens' | `breakdown:release:phone:${string}:relay_mobile_opens`
 
 let warnedAt = 0
-/** Older clients still contribute totals. These are events, never distinct users or installations. */
-export async function recordRelayUsage(userId: string, now: Date, metric: RelayUsageMetric): Promise<void> {
+/** Older clients still contribute totals. These are events, never distinct users or installations.
+ *  [also]: more totals the same event adds to, under the one preference read. */
+export async function recordRelayUsage(userId: string, now: Date, metric: RelayUsageMetric,
+  also: readonly RelayUsageMetric[] = []): Promise<void> {
   try {
     if (!(await productUsageChoice(userId)).enabled) return
     const dayUtc = new Date(Math.floor(now.getTime() / DAY) * DAY)
-    const where = { dayUtc_metric: { dayUtc, metric } }
-    try {
-      await prisma.productUsageTotal.upsert({ where, create: { dayUtc, metric, value: 1 }, update: { value: { increment: 1 } } })
-    } catch (error) {
-      if ((error as { code?: string }).code !== 'P2002') throw error
-      await prisma.productUsageTotal.update({ where, data: { value: { increment: 1 } } })
+    for (const name of [metric, ...also]) {
+      const where = { dayUtc_metric: { dayUtc, metric: name } }
+      try {
+        await prisma.productUsageTotal.upsert({ where, create: { dayUtc, metric: name, value: 1 }, update: { value: { increment: 1 } } })
+      } catch (error) {
+        if ((error as { code?: string }).code !== 'P2002') throw error
+        await prisma.productUsageTotal.update({ where, data: { value: { increment: 1 } } })
+      }
     }
   } catch {
     // Do not let analytics break a session or reach callers that log the account/agent and DB error.

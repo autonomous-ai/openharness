@@ -112,11 +112,22 @@ export function deleteProject(state: SuperTabState, actor: Actor, projectId: str
   state.projects = state.projects!.filter(p => p.id !== project.id)
   state.conversations = state.conversations.filter(c => !groupIds.has(c.id))
   state.starts = state.starts?.filter(s => !groupIds.has(s.request.conversationId))
-  state.invitations = state.invitations.filter(i => !groupIds.has(i.conversationId))
+  // A pending invitation is to the Swarm, not to this project: it lands somewhere that is left instead.
+  const landing = inviteLanding(state)
+  state.invitations = state.invitations.flatMap(i => !groupIds.has(i.conversationId) ? [i] : landing ? [{ ...i, conversationId: landing }] : [])
   if (project.id === 'lead') {
     delete state.project
     state.machines = state.machines?.filter(m => m.scope === 'swarm')
   }
+}
+
+/** Where an invited person lands: the asked-for group while it exists, else a remaining project's Lead
+ * conversation, public first. Desktop asks for the original 'lead' group, which is gone once its project is
+ * deleted; on 2026-10-22 that refused every invitation with "This conversation is unavailable". */
+export function inviteLanding(state: SuperTabState, preferred?: string): string | null {
+  if (preferred && state.conversations.some(c => c.id === preferred)) return preferred
+  const projects = projectsOf(state).filter(p => state.conversations.some(c => c.id === p.leadConversationId))
+  return (projects.find(p => p.visibility === 'public') ?? projects[0])?.leadConversationId ?? null
 }
 
 /** Capture current swarm membership so leaving and rejoining does not restore

@@ -266,10 +266,12 @@ class ConversationServer {
       final conversationId = uri.pathSegments[4];
       final after = int.tryParse(uri.queryParameters['after'] ?? '');
       final before = int.tryParse(uri.queryParameters['before'] ?? '');
+      final messageId = uri.queryParameters['messageId'];
       var rows = messages
           .where(
             (m) =>
                 m['conversationId'] == conversationId &&
+                (messageId == null || m['id'] == messageId) &&
                 (after == null || (m['sequence'] as int) > after) &&
                 (before == null || (m['sequence'] as int) < before),
           )

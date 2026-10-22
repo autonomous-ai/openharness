@@ -17,6 +17,7 @@ const HELP = {
   message: 'message GROUP MESSAGE_ID: read one exact message, including an earlier question or result referenced by a reply.',
   post: 'post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]...: reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID. --attach sends a file (a screenshot, a log; up to 10 files of 10 MB each), and TEXT may then be empty.',
   start: 'start OPERATION_ID JSON: create one agent in a conversation on a machine in this Swarm\'s Machines list; to use another machine, a person adds it to the Swarm first. Repeat exactly after an interruption; it follows the same native creation receipt. It does not assign work. With worktree true, the agent starts from the repository\'s default branch, fetched first, unless you set branchRef (refs/heads/BRANCH, or refs/remotes/origin/BRANCH to fetch it first) to start from another branch, such as the one this work builds on.',
+  release: 'When a worker finishes, decide reuse, keep or stop; prefer stop unless more work is coming soon. Reuse assigns new work; agent.release records keep or requests stop. Wait for the execution host to confirm a stop. A person can withdraw a stuck stop; the session cannot receive new work in that Swarm. Its native capacity stays reserved until its host confirms stopping. Other Swarms wait up to two minutes for an in-flight close, then may reuse it.',
   resume: 'resume START_ID: finish a pending start without creating another agent.',
   route: 'route GROUP JSON: before starting or assigning work, choose who does it. JSON: {"difficulty":"low|medium|high","risk":"low|medium|high","size":"small|medium|large","why":"one sentence","needs":{"tools":[],"devices":[],"cwd":"/absolute/repo"}}. size is how long the work runs: small about 20 minutes, medium about an hour, large about three hours. Start or assign the pick with its routeDecisionId; to choose otherwise, pass overrideReason.',
   capacity: 'capacity MACHINE_ID JSON: inspect machine, engine and quota headroom. JSON uses the start request fields below. Unknown allowances are not reported as free tokens.',
@@ -27,9 +28,11 @@ const HELP = {
     { type: 'project.report', projectId: 'PROJECT', throughRevision: 123, text: 'What changed, what is blocked, and what comes next. Use null when nothing merits repeating.' },
     { type: 'project.repository', projectId: 'PROJECT', repositoryUrl: 'https://github.com/OWNER/REPOSITORY' },
     { type: 'message.send', conversationId: 'GROUP', text: 'A message addressed to an agent', replyTo: null, recipientIds: ['AGENT'] },
-    { type: 'conversation.create', title: 'Outcome', brief: 'An independently assignable result', checks: [{ description: 'Observable acceptance evidence', independent: false }] },
+    { type: 'conversation.create', title: 'Outcome', task: { goal: 'An independently assignable result', changes: 'What changes', constraints: 'What must stay true', owns: ['Paths or code areas'] }, checks: [{ description: 'Observable acceptance evidence', independent: false }] },
     { type: 'conversation.agent', conversationId: 'GROUP', agentId: 'AGENT', present: true, lead: false },
-    { type: 'work.define', conversationId: 'GROUP', brief: 'What to deliver', checks: [{ description: 'Observable acceptance evidence', independent: false }] },
+    { type: 'work.define', conversationId: 'GROUP', task: { goal: 'What to deliver', changes: 'What changes', constraints: 'What must stay true', owns: ['Paths or code areas'] }, checks: [{ description: 'Observable acceptance evidence', independent: false }] },
+    { type: 'work.cancel', conversationId: 'GROUP', assignmentId: 'ATTEMPT', reason: 'Lead or tab owner only: why the task is cancelled, in one short sentence' },
+    { type: 'agent.release', agentId: 'AGENT', decision: 'keep|stop' },
     { type: 'work.assign', conversationId: 'GROUP', agentId: 'AGENT', routeDecisionId: 'DECISION' },
     { type: 'work.status', conversationId: 'GROUP', assignmentId: 'ATTEMPT', status: 'working', result: null },
     // Both reach the Lead and alert the Harness Pro on the machine running the agent until the status moves on.
@@ -41,6 +44,26 @@ const HELP = {
 }
 
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
+
+function taskCommand(command: Record<string, unknown>): Record<string, unknown> {
+  if (command.type !== 'conversation.create' && command.type !== 'work.define') return command
+  const task = object(command.task), missing: string[] = []
+  for (const part of ['goal', 'changes', 'constraints']) {
+    if (typeof task[part] !== 'string' || !task[part].trim()) missing.push(part)
+  }
+  if (!Array.isArray(task.owns) || !task.owns.length || task.owns.some(area => typeof area !== 'string' || !area.trim())) missing.push('owns')
+  if (!Array.isArray(command.checks) || !command.checks.length || command.checks.some(check => typeof object(check).description !== 'string' || !String(object(check).description).trim())) missing.push('acceptance checks')
+  if (missing.length) throw new SuperTabHostError('TASK_REQUIRED', `Complete the task: ${missing.join(', ')}.`, 400)
+  const trimmed = { ...task, goal: (task.goal as string).trim(), changes: (task.changes as string).trim(),
+    constraints: (task.constraints as string).trim(), owns: (task.owns as string[]).map(area => area.trim()) }
+  if ([trimmed.goal, trimmed.changes, trimmed.constraints].some(part => part.length > 8000) || trimmed.owns.length > 40 || trimmed.owns.some(area => area.length > 4096)) {
+    throw new SuperTabHostError('INVALID_TASK', 'Task sections may have up to 8,000 characters; owns needs 1–40 paths or areas of up to 4,096 characters each.', 400)
+  }
+  const brief = `Goal:\n${trimmed.goal}\n\nChanges:\n${trimmed.changes}\n\nConstraints:\n${trimmed.constraints}\n\nOwns:\n${trimmed.owns.map(area => `- ${area}`).join('\n')}`
+  const limit = command.type === 'conversation.create' ? 8000 : 32_000
+  if (brief.length > limit) throw new SuperTabHostError('INVALID_TASK', `Keep the rendered task within ${limit.toLocaleString('en-US')} characters.`, 400)
+  return { ...command, task: trimmed, brief }
+}
 
 /** Tell the agent which messages sent to it it has already answered, so it posts once (a Lead answered one question twice on
  * 2026-10-20). A message is answered when a later message of the agent's own replies to it. */
@@ -215,8 +238,25 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           } catch { return { ok: true, value: page } }
         }
         if (payload.action === 'command' && identifier(payload.operationId) && payload.command && typeof payload.command === 'object' && !Array.isArray(payload.command)) {
-          return { ok: true, operationId: payload.operationId, value: await backend(core, 'POST', `${path}/commands`,
-            { operationId: payload.operationId, command: payload.command, asAgentId: agentId }) }
+          const command = taskCommand(object(payload.command))
+          const send = (command: Record<string, unknown>) => backend(core, 'POST', `${path}/commands`,
+            { operationId: payload.operationId, command, asAgentId: agentId })
+          let value: unknown
+          try { value = await send(command) } catch (error) {
+            if (command.type === 'agent.release' && error instanceof SuperTabHostError && error.status === 400 && ['VALIDATION_ERROR', 'INVALID_REQUEST'].includes(error.code)) {
+              return { error: 'RELEASE_UNSUPPORTED', detail: 'This backend does not support releasing workers yet. Update the backend and try again.' }
+            }
+            if (!['conversation.create', 'work.define'].includes(String(command.type)) || !command.task || !(error instanceof SuperTabHostError)) throw error
+            const oldSchema = error.status === 400 && error.code === 'VALIDATION_ERROR'
+              && /^(?:command: )?Unrecognized (?:key: "task"|key\(s\) in object: 'task')$/.test(error.message)
+            // A legacy write may commit before its reply is lost and the backend upgrades. Its receipt checks the exact
+            // legacy content before returning success, so checking that form cannot create a second operation.
+            const legacyReceipt = error.status === 409 && error.code === 'OPERATION_REUSED'
+            if (!oldSchema && !legacyReceipt) throw error
+            const { task: _task, ...legacy } = command
+            value = await send(legacy)
+          }
+          return { ok: true, operationId: payload.operationId, value }
         }
         // `post --attach` asks first whether this post already went out with its files.
         if (payload.action === 'attachment' && identifier(payload.conversationId) && payload.step === 'sent' && identifier(payload.operationId)) {

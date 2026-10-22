@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { startRequirements } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
-import { object, within } from './wire.js'
+import { ENDED_WORK, object, within } from './wire.js'
 import { choose, contextSize, decide, jevQuestion, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, type Assessment, type Attempt, type Commitment, type MemberFrame, type Policy, type Probe, type TaskFolder } from './route.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
@@ -22,7 +22,7 @@ const NO_PROJECT_FOLDER = 'This machine does not have the project folder. Add it
 const OFFLINE = 'Machine is offline or unreachable.'
 const UNKNOWN_QUOTA: Probe['quota'] = { known: false, leftPercent: null, resetsAt: null }
 const UNKNOWN_LOAD: NonNullable<Probe['load']> = { agents: null, freeMemoryBytes: null, hasFolder: null }
-const active = (assignment: unknown) => { const a = object(assignment); return !!a.id && !['done', 'stopped'].includes(String(a.status)) }
+const active = (assignment: unknown) => { const a = object(assignment); return !!a.id && !ENDED_WORK.includes(String(a.status)) }
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
 /** The Lead's machine, for the task's folder; replaced in tests. */
 interface FolderReader { describe: typeof describeScmProject; isDirectory: (path: string) => Promise<boolean> }
@@ -61,7 +61,7 @@ function endedWork(conversations: Json[], agents: Json[], decisions: Json[] | nu
   const nameOf = (id: unknown) => text(agents.find(a => a.id === id)?.name)
   const ended: Ended[] = [...(decisions ?? [])].reverse().flatMap(d => {
     const final = object(d.final)
-    return typeof d.assignmentId === 'string' && ['done', 'stopped'].includes(String(d.outcome)) && final.kind
+    return typeof d.assignmentId === 'string' && ENDED_WORK.includes(String(d.outcome)) && final.kind
       ? [{ assignmentId: d.assignmentId, groupId: String(d.conversationId), group: titleOf(d.conversationId), outcome: String(d.outcome),
           agentId: final.kind === 'member' ? String(final.agentId) : null,
           agent: final.kind === 'member' ? nameOf(final.agentId) ?? 'An agent' : `New agent (${String(final.engine)} ${String(final.model)})` }]

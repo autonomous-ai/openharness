@@ -34,7 +34,7 @@ function setup(messageFields: Record<string, unknown> = {}) {
     return { status: 200, body: { success: true, data } }
   })
   const core = fakeCore({ dataDir: dir,
-    agents: { byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) },
+    agents: { creationStatus: vi.fn(async creationId => ({ creationId, state: 'created' as const, agentId: 'harness' })), byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) },
     account: { backend: call },
     turns: { onDelivery: vi.fn(fn => { listeners.add(fn); return () => { listeners.delete(fn) } }) },
   })
@@ -48,6 +48,11 @@ function setup(messageFields: Record<string, unknown> = {}) {
 }
 
 describe('Super Tab native delivery handoff', () => {
+  it('names all five task parts in the worker delivery header', async () => {
+    const t = setup()
+    await t.open().tick()
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('goal, changes, constraints, owned code and acceptance checks')
+  })
   it('keeps roster members through host failure and restart, releasing only a confirmed removal', async () => {
     const t = setup(), first = t.open()
     await first.tick()
@@ -78,6 +83,8 @@ describe('Super Tab native delivery handoff', () => {
       'In reply to message question-2. Read it before interpreting the answer:'
     ), 'team:service:superTabs:delivery')
     expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Message message from Collaborator:\nYes, keep them.')
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('On Claude Code or Codex, Leads use swarm-lead and workers use swarm-dev.')
+    expect(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).toContain('Leads coordinate: assign multi-part or 15+ minute work to Swarm agent groups; do only answers, lookups and small fixes yourself; your subagents only read/look up.')
   })
 
   it('keeps a slow configuration observation out of the native delivery and lease path', async () => {
@@ -431,7 +438,7 @@ describe('Super Tab waits for the Harness Pro', () => {
     })
     const superTabs = { attention: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
-      agents: { byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
+      agents: { creationStatus: vi.fn(async creationId => ({ creationId, state: 'created' as const, agentId: 'harness' })), byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
     const open = () => { const host = new SuperTabHost(core, 'machine-1', { log: vi.fn() }); hosts.push(host); return host }
     const first = open()
     await first.tick()
@@ -490,4 +497,296 @@ describe('Super Tab waits for the Harness Pro', () => {
     await host.tick()
     expect(superTabs.attention).toHaveBeenCalledTimes(2)
   })
+})
+
+it('stops a requested worker once, confirms removal, and releases retention on the next roster', async () => {
+  const t = setup(), host = t.open()
+  vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0, startedBy: 'agent' } as never)
+  let closed = false, removed = false, acknowledgements = 0
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', startedSession: { creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(0).toISOString() } }
+  t.core.agents.stopped = async () => closed
+  t.core.agents.closeSwarm = async request => { expect(request.agentId).toBe('harness'); expect(request.expiresAt).toBeLessThanOrEqual(Date.now() + 120_000); closed = true; return { closed: true } }
+  t.core.account.backend = async (method, path, body) => {
+    if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 3_600_000, durationMs: 120_000 } } } }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: removed ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }] } }
+    if (method === 'GET') return { status: 200, body: { data: { state: { agents: [target], conversations: [] } } } }
+    acknowledgements++; removed = true
+    return { status: 200, body: { data: {} } }
+  }
+  await host.tick()
+  await vi.waitFor(() => expect(acknowledgements).toBe(1))
+  expect(closed).toBe(true)
+  expect(t.core.turns.deliver).not.toHaveBeenCalled()
+  await host.tick()
+  expect(retainedHarnesses(t.dir).size).toBe(0)
+  expect(acknowledgements).toBe(1)
+})
+
+it('closes the session of a worker whose assignment the Lead cancelled', async () => {
+  const t = setup(), host = t.open()
+  vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0, startedBy: 'agent' } as never)
+  let closed = false, removed = false
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', startedSession: { creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(0).toISOString() } }
+  t.core.agents.stopped = async () => closed
+  t.core.agents.closeSwarm = async () => { closed = true; return { closed: true } }
+  t.core.account.backend = async (method, path, body) => {
+    if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 3_600_000, durationMs: 120_000 } } } }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: removed ? [] : [{ tabId: 'tab', agent: target, stopRequested: true }] } }
+    if (method === 'GET') return { status: 200, body: { data: { state: { agents: [target], conversations: [{ id: 'g', assignment: { id: 'a', agentId: 'agent', status: 'cancelled' } }] } } } }
+    removed = true
+    return { status: 200, body: { data: {} } }
+  }
+  await host.tick()
+  await vi.waitFor(() => expect(removed).toBe(true))
+  expect(closed).toBe(true)
+})
+
+it.each(['active', 'foreign', 'changed', 'missing', 'refused', 'unconfirmed', 'unsupported'])('withholds closure or acknowledgement when stop safety is %s', async kind => {
+  const t = setup(), host = t.open()
+  vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0, startedBy: 'agent' } as never)
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', releaseId: 'release-1', startedSession: { creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(0).toISOString() } }
+  const close = vi.fn(async () => kind === 'refused' ? { error: 'NOT_SWARM_STARTED' } : kind === 'unconfirmed' ? { deferred: true as const } : { closed: true as const })
+  const acknowledge = vi.fn()
+  t.core.agents.closeSwarm = kind === 'unsupported' ? undefined : close
+  t.core.agents.stopped = async () => false
+  t.core.account.backend = async (method, path, body) => {
+    if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 3_600_000, durationMs: 120_000 } } } }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: [{ tabId: 'tab', agent: target, stopRequested: true }] } }
+    if (method === 'GET') return { status: 200, body: { data: { state: {
+      agents: kind === 'missing' ? [] : [{ ...target, machineId: kind === 'foreign' ? 'foreign' : target.machineId, releaseId: kind === 'changed' ? 'release-2' : 'release-1' }],
+      conversations: [{ assignment: { agentId: 'agent', status: kind === 'active' ? 'working' : 'done' } }],
+    } } } }
+    acknowledge(); return { status: 200, body: { data: {} } }
+  }
+  await host.tick()
+  // Finish the asynchronous lifecycle pickup without relying on the delivery poll to wait on it.
+  await new Promise(resolve => setTimeout(resolve, 20))
+  expect(acknowledge).not.toHaveBeenCalled()
+  if (['active', 'foreign', 'changed', 'missing', 'unsupported'].includes(kind)) expect(close).not.toHaveBeenCalled()
+  else expect(close).toHaveBeenCalledOnce()
+  expect(t.core.turns.deliver).not.toHaveBeenCalled()
+})
+
+it('retries a lost removal acknowledgement from native stopped evidence without closing twice', async () => {
+  const t = setup(), host = t.open()
+  vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', sessionId: 'native', registeredAt: 0, startedBy: 'agent' } as never)
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', startedSession: { creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(0).toISOString() } }
+  let stopped = false, attempts = 0
+  const close = vi.fn()
+  t.core.agents.closeSwarm = async () => { if (!stopped) { close(); stopped = true }; return { closed: true } }
+  t.core.agents.stopped = async () => stopped
+  t.core.account.backend = async (method, path, body) => {
+    if ((body as any)?.command?.type === 'agent.stopLease') return { status: 200, body: { data: { result: { expiresAt: Date.now() + 3_600_000, durationMs: 120_000 } } } }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: [{ tabId: 'tab', agent: target, stopRequested: true }] } }
+    if (method === 'GET') return { status: 200, body: { data: { state: { agents: [target], conversations: [] } } } }
+    attempts++
+    if (attempts === 1) throw new Error('Lost acknowledgement')
+    return { status: 200, body: { data: {} } }
+  }
+  await host.tick(); await vi.waitFor(() => expect(attempts).toBe(1))
+  t.wait(5_000); await host.tick(); await vi.waitFor(() => expect(attempts).toBe(2))
+  expect(close).toHaveBeenCalledOnce()
+})
+
+
+function releaseFixture(nativeKind = 'swarm', result: Record<string, unknown> = { error: 'NOT_SWARM_STARTED' }, extra: Record<string, unknown> = {}) {
+  const t = setup(), host = t.open()
+  const identity = { creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(0).toISOString() }
+  const target = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', workDecision: 'stop', releaseId: 'release-1', name: 'Permission builder',
+    ...(['missing-record', 'legacy', 'legacy-personal'].includes(nativeKind) ? {} : { startedSession: identity }) }
+  const native = { agentId: 'harness', sessionId: nativeKind === 'changed' ? 'replacement' : 'native', registeredAt: 0, boundAt: 3_000 as number | null,
+    startedBy: ['personal', 'legacy-personal'].includes(nativeKind) ? undefined : 'agent', processIdentity: { pid: 1, startMarker: 'first', executable: 'codex' } }
+  const lookup = vi.fn(async () => ({ creationId: identity.creationId, state: 'created' as const, agentId: 'harness' }))
+  const close = vi.fn(async () => result), lease = vi.fn(), remove = vi.fn(), sent = vi.fn()
+  t.core.agents.byAgent = vi.fn(() => native as never)
+  t.core.agents.creationStatus = lookup
+  t.core.agents.closeSwarm = close as NonNullable<CoreApi['agents']['closeSwarm']>
+  t.core.account.backend = async (method, path, body) => {
+    const command = (body as any)?.command
+    if (command?.type === 'agent.stopLease') { lease(); return { status: 200, body: { data: { result: { durationMs: 120_000 } } } } }
+    if (command?.type === 'agent.remove') { remove(); return { status: 200, body: { data: {} } } }
+    if (command?.type === 'message.send') { sent(body); return { status: 200, body: { data: {} } } }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: [{ tabId: 'tab', agent: target, stopRequested: true }] } }
+    return { status: 200, body: { data: { state: { agents: [target], conversations: [], ...extra } } } }
+  }
+  const poll = async (advance = 0) => { t.wait(advance); await host.tick(); await new Promise(resolve => setImmediate(resolve)) }
+  return { ...t, host, target, native, lookup, close, lease, remove, sent, poll }
+}
+
+// A Swarm start before #1527 left only its start record and the native creation receipt (super-<startId>).
+const group = { id: 'group', leadId: 'lead', agentIds: ['lead', 'agent'], assignment: { agentId: 'agent', status: 'done' } }
+const legacyStarts = { starts: [{ id: 'start-1', creationId: 'super-start-1', harnessId: 'harness', request: { machineId: 'machine-1', name: 'Permission builder' }, error: null }] }
+
+it('closes a worker a pre-#1527 Swarm start launched, proven by its start record and creation receipt', async () => {
+  const t = releaseFixture('legacy', { closed: true }, legacyStarts)
+  t.lookup.mockResolvedValue({ creationId: 'super-start-1', state: 'created', agentId: 'harness' })
+  await t.poll()
+  await vi.waitFor(() => expect(t.remove).toHaveBeenCalledOnce())
+  expect(t.lookup).toHaveBeenCalledWith('super-start-1')
+  expect(t.close).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'harness', creationId: 'super-start-1', sessionId: 'native', createdAt: new Date(0).toISOString() }))
+  expect(t.sent).not.toHaveBeenCalled()
+})
+
+it.each([
+  ['a person started it', 'legacy-personal', legacyStarts],
+  ['no start record names it', 'legacy', { starts: [{ ...legacyStarts.starts[0], harnessId: 'another-harness' }] }],
+  ['its start record is for another machine', 'legacy', { starts: [{ ...legacyStarts.starts[0], request: { machineId: 'machine-2' } }] }],
+  ['its start failed', 'legacy', { starts: [{ ...legacyStarts.starts[0], error: 'Native creation failed.' }] }],
+  ['its creation id is not the start\'s', 'legacy', { starts: [{ ...legacyStarts.starts[0], creationId: 'person-made-creation' }] }],
+])('never closes a similarly named worker when %s', async (_why, kind, extra) => {
+  const t = releaseFixture(kind, { closed: true }, extra)
+  for (let i = 0; i < 10; i++) await t.poll(130_000)
+  expect(t.lease).not.toHaveBeenCalled()
+  expect(t.close).not.toHaveBeenCalled()
+  expect(t.remove).not.toHaveBeenCalled()
+})
+
+it.each([['/clear', 3_600_000], ['an unknown bind', null], ['a bind before launch', -1]])('refuses, as changed, a pre-#1527 worker whose session moved on (%s)', async (_why, boundAt) => {
+  const t = releaseFixture('legacy', { closed: true }, { ...legacyStarts, conversations: [group] })
+  t.native.boundAt = boundAt
+  for (let i = 0; i < 10; i++) await t.poll(130_000)
+  expect(t.lease).not.toHaveBeenCalled()
+  expect(t.close).not.toHaveBeenCalled()
+  expect(t.sent).toHaveBeenCalledOnce()
+  expect(t.sent).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ text: expect.stringContaining('it now runs a different session than the one the Swarm started') }) }))
+})
+
+it('retries a pre-#1527 stop while its creation receipt is still pending, then closes it', async () => {
+  const t = releaseFixture('legacy', { closed: true }, { ...legacyStarts, conversations: [group] })
+  t.lookup.mockResolvedValue({ creationId: 'super-start-1', state: 'pending' } as never)
+  await t.poll()
+  expect(t.lookup).toHaveBeenCalledOnce()
+  expect(t.lease).not.toHaveBeenCalled()
+  t.lookup.mockResolvedValue({ creationId: 'super-start-1', state: 'created', agentId: 'harness' })
+  await t.poll(5_000)
+  await vi.waitFor(() => expect(t.remove).toHaveBeenCalledOnce())
+  expect(t.lease).toHaveBeenCalledOnce()
+  expect(t.sent).not.toHaveBeenCalled()
+})
+
+it('rejects a pre-#1527 start whose receipt names a different native harness', async () => {
+  const t = releaseFixture('legacy', { closed: true }, legacyStarts)
+  t.lookup.mockResolvedValue({ creationId: 'super-start-1', state: 'created', agentId: 'another-harness' })
+  for (let i = 0; i < 10; i++) await t.poll(130_000)
+  expect(t.lease).not.toHaveBeenCalled()
+  expect(t.close).not.toHaveBeenCalled()
+})
+
+it.each([
+  ['personal', {}, 'it was not started by the Swarm'],
+  ['changed', {}, 'it now runs a different session than the one the Swarm started'],
+  ['swarm', { error: 'NOT_SWARM_STARTED' }, 'it was not started by the Swarm'],
+  ['swarm', { error: 'AGENT_CHANGED' }, 'it now runs a different session than the one the Swarm started'],
+])('tells the Lead once when a %s stop is refused for good (%o)', async (kind, result, why) => {
+  const t = releaseFixture(kind, result, { conversations: [{ id: 'lead-only', leadId: null, agentIds: ['lead'] }, group] })
+  vi.mocked(t.core.machine.name).mockReturnValue('MacbookPro')
+  for (let i = 0; i < 10; i++) await t.poll(130_000)
+  expect(t.sent).toHaveBeenCalledOnce()
+  expect(t.sent).toHaveBeenCalledWith({ operationId: 'stop-refused-release-1', asAgentId: 'agent', command: { type: 'message.send', conversationId: 'group', replyTo: null,
+    recipientIds: ['lead'], text: `Could not stop Permission builder on MacbookPro: ${why}. Close it on that machine.` } })
+})
+
+it('tells the Lead nothing through an archived group, which would refuse the notice', async () => {
+  const t = releaseFixture('personal', {}, { conversations: [{ ...group, archived: true }] })
+  for (let i = 0; i < 3; i++) await t.poll(130_000)
+  expect(t.sent).not.toHaveBeenCalled()
+})
+
+it('says the session changed when one is back after the worker had closed', async () => {
+  const t = releaseFixture('swarm', { closed: true }, { conversations: [group] })
+  t.remove.mockImplementationOnce(() => { throw new Error('Lost acknowledgement') })
+  await t.poll()
+  t.close.mockResolvedValue({ error: 'NOT_SWARM_STARTED' })
+  await t.poll(5_000)
+  await vi.waitFor(() => expect(t.sent).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ text: expect.stringContaining('it now runs a different session') }) })))
+})
+
+it('tells no one of a transient close failure, and logs a notice that cannot be sent', async () => {
+  const quiet = releaseFixture('swarm', { error: 'SERVICE_UNAVAILABLE' }, { conversations: [group] })
+  for (let i = 0; i < 10; i++) await quiet.poll(130_000)
+  expect(quiet.sent).not.toHaveBeenCalled()
+  const lost = releaseFixture('personal', {}, { conversations: [group] })
+  lost.sent.mockImplementation(() => { throw new Error('Backend unavailable') })
+  await lost.poll()
+  await vi.waitFor(() => expect(lost.log).toHaveBeenCalledWith('Backend unavailable'))
+})
+
+it('names the worker by its member name, else plainly, and sends nothing without a Lead in its group', async () => {
+  const named = releaseFixture('personal', {}, { conversations: [group] })
+  Object.assign(named.target, { displayName: 'Wren' })
+  await named.poll()
+  await vi.waitFor(() => expect(named.sent).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ text: expect.stringContaining('Could not stop Wren on') }) })))
+  const unnamed = releaseFixture('personal', {}, { conversations: [group] })
+  Reflect.deleteProperty(unnamed.target, 'name')
+  await unnamed.poll()
+  await vi.waitFor(() => expect(unnamed.sent).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ text: expect.stringContaining('Could not stop this worker on') }) })))
+  const leaderless = releaseFixture('personal', {}, { conversations: [{ ...group, leadId: null }, { ...group, id: 'gone', agentIds: ['agent'] }] })
+  for (let i = 0; i < 3; i++) await leaderless.poll(130_000)
+  expect(leaderless.sent).not.toHaveBeenCalled()
+  expect(leaderless.log).toHaveBeenCalledWith(expect.stringContaining('not the original Swarm launch'))
+})
+
+it.each(['personal', 'missing-record', 'changed'])('requests no close lease for an ineligible %s runtime', async kind => {
+  const t = releaseFixture(kind)
+  for (let i = 0; i < 10; i++) await t.poll(1_000)
+  expect(t.lease).not.toHaveBeenCalled()
+  expect(t.close).not.toHaveBeenCalled()
+})
+
+it('never acquires a lease for a creation receipt naming a different native harness', async () => {
+  const t = releaseFixture()
+  t.lookup.mockResolvedValue({ creationId: 'super-original-creation', state: 'created', agentId: 'another-harness' })
+  for (let i = 0; i < 10; i++) await t.poll(130_000)
+  expect(t.lease).not.toHaveBeenCalled()
+})
+
+it.each(['NOT_SWARM_STARTED', 'AGENT_CHANGED'])('does not keep leasing a runtime refused as %s; still clears it once gone', async error => {
+  const t = releaseFixture('swarm', { error })
+  for (let i = 0; i < 10; i++) await t.poll(130_000)
+  expect(t.lease).toHaveBeenCalledTimes(1)
+  expect(t.close).toHaveBeenCalledTimes(1)
+  vi.mocked(t.core.agents.byAgent).mockReturnValue(undefined)
+  t.close.mockResolvedValue({ closed: true })
+  await t.poll()
+  expect(t.remove).toHaveBeenCalledOnce()
+  expect(t.lease).toHaveBeenCalledTimes(1)
+})
+
+it('backs off transient close failures and caps retries for the same runtime', async () => {
+  const t = releaseFixture('swarm', { error: 'SERVICE_UNAVAILABLE' })
+  await t.poll()
+  for (let i = 0; i < 4; i++) await t.poll(1_000)
+  expect(t.lease).toHaveBeenCalledTimes(1)
+  await t.poll(1_000)
+  expect(t.lease).toHaveBeenCalledTimes(2)
+  await t.poll(14_000)
+  expect(t.lease).toHaveBeenCalledTimes(2)
+  await t.poll(1_000)
+  expect(t.lease).toHaveBeenCalledTimes(3)
+  for (let i = 0; i < 10; i++) await t.poll(130_000)
+  expect(t.lease).toHaveBeenCalledTimes(5)
+  t.native.processIdentity.startMarker = 'new-runtime'
+  await t.poll()
+  expect(t.lease).toHaveBeenCalledTimes(6)
+})
+
+
+it('backs off unavailable launch-receipt reads without writing any close leases', async () => {
+  const t = releaseFixture()
+  t.lookup.mockRejectedValue(new Error('Core temporarily unavailable'))
+  for (let i = 0; i < 10; i++) await t.poll(130_000)
+  expect(t.lookup).toHaveBeenCalledTimes(5)
+  expect(t.lease).not.toHaveBeenCalled()
+})
+
+it('rechecks authoritative native absence before retrying a lost acknowledgement', async () => {
+  const t = releaseFixture('swarm', { closed: true })
+  t.remove.mockImplementationOnce(() => { throw new Error('Lost acknowledgement') })
+  await t.poll()
+  t.close.mockResolvedValue({ error: 'NOT_SWARM_STARTED' })
+  await t.poll(5_000)
+  await t.poll(130_000)
+  expect(t.lease).toHaveBeenCalledOnce()
+  expect(t.remove).toHaveBeenCalledOnce()
+  expect(t.close).toHaveBeenLastCalledWith({ agentId: 'harness' })
 })
