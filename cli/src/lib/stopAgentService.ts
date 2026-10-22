@@ -80,10 +80,12 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
     forgetSession, markDeleted, clearDeleted, stopNative } = deps
   const wait = deps.wait ?? (ms => new Promise<void>(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.() }))
   /** A guest's engine, its pane closed, has left: read from the process table, which shows every user's processes. An
-   *  unreadable table is not proof that it left. */
-  const guestLeft = async (s: RegisteredSession): Promise<boolean> => {
+   *  unreadable table is not proof that it left. The process is the row's latest: one still starting gains it while its
+   *  screen is saved, and an older copy without one would read as gone at once. */
+  const guestLeft = async (agentId: string, s: RegisteredSession): Promise<boolean> => {
+    const processIdentity = registry.resolve(agentId)?.processIdentity ?? s.processIdentity
     for (let waited = 0; ; waited += GUEST_EXIT_STEP_MS) {
-      if ((await checkPidRuntime(s)).state === 'gone') return true
+      if ((await checkPidRuntime({ engine: s.engine, processIdentity })).state === 'gone') return true
       if (waited >= GUEST_EXIT_WAIT_MS) return false
       await wait(GUEST_EXIT_STEP_MS)
     }
@@ -216,7 +218,7 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
           || ((isTerminalEngine(s.engine) || guest) && !panes.length)) {
           throw new AgentStopError('Could not confirm that the harness stopped. Its saved conversation is safe. Try stopping again.')
         }
-        if (guest && !await guestLeft(s)) {
+        if (guest && !await guestLeft(sessionId, s)) {
           throw new AgentStopError('Could not confirm that the harness stopped. Its saved conversation is safe. Try stopping again.')
         }
         verifyTranscript()

@@ -130,6 +130,19 @@ it('keeps a guest harness whose process is still running after its pane closed',
   expect(deps.forgetSession).not.toHaveBeenCalled()
   expect(registry.byAgent(row.agentId)).toBe(row)
 })
+it('waits for the process a starting guest harness gained while it was saved', async () => {
+  // Stopped before its engine was seen, which the pane's watcher binds while the screen is saved: an older copy of the
+  // row has no process, which reads as gone at once.
+  Object.assign(row, { guest: 'kim@example.com', processIdentity: undefined })
+  const engine = { pid: 91, executable: 'claude', startMarker: 'guest' }
+  vi.mocked(checkPidRuntime).mockImplementation(async s => s.processIdentity ? { state: 'alive' } : { state: 'gone', reason: 'none' })
+  deps.wait = vi.fn(async () => {})
+  await expect(createStopAgentService(deps)(row.agentId, { checkpoint: async (_s, phase) => {
+    if (phase === 'before') row.processIdentity = engine
+  } })).rejects.toThrow('Could not confirm that the harness stopped')
+  expect(vi.mocked(checkPidRuntime).mock.calls.every(([s]) => s.processIdentity?.pid === 91)).toBe(true)
+  expect(registry.byAgent(row.agentId)).toBe(row)
+})
 // A close of a harness still starting that waited in vain for its first conversation (closeAgentService.ts).
 it('stops a harness that never bound a conversation without one, only when its close asks', async () => {
   Object.assign(row, { sessionId: '', transcriptPath: null, boundAt: null })
