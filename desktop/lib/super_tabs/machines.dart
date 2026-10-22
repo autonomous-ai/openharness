@@ -723,93 +723,95 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 title: Text(isConfigure ? 'Configure machine' : 'Add machine'),
                 content: SizedBox(
                   width: 360,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (own.isNotEmpty)
-                        _MachinePicker(
-                          value: machineId,
-                          busy: busy,
-                          choices: [
-                            for (final m in own)
-                              _MachineChoice(
-                                id: m.machine.machineId,
-                                label: labelFor(m),
-                                unavailable: unavailable(m),
-                              ),
-                          ],
-                          onChanged: (id) {
-                            if (busy || !canSelect(app.stateOf(id))) return;
-                            update(() {
-                              machineId = id;
-                              setupId = null;
-                              error = null;
-                              // Another machine has its own number: the one it
-                              // already offers, or its own suggestion.
-                              slots = slotsFor(id);
-                              slotsEdited = false;
-                            });
-                            unawaited(suggestSlots());
-                          },
-                        )
-                      else
-                        Text(
-                          'No computer is connected to this account yet.',
-                          style: DesktopChrome.text(),
-                        ),
-                      const SizedBox(height: 16),
-                      if (own.isNotEmpty) ...[
-                        Text(
-                          'Let the product manager run agents here using this machine’s signed-in accounts.',
-                          style: DesktopChrome.text(),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Agents the Swarm starts on this machine run without asking for permission.',
-                          style: DesktopChrome.text(),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          'Harness clones each project into ~/harnesses/swarms and lets '
-                          "the Swarm's agents work in it.",
-                          style: DesktopChrome.text(),
-                        ),
-                      ] else ...[
-                        Text(
-                          'To add another computer, install Harness on it and sign in with '
-                          'this account, or approve a device with no screen from Machines.',
-                          style: DesktopChrome.text(),
-                        ),
-                        const SizedBox(height: 4),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton(
-                            onPressed: () {
-                              Navigator.pop(context);
-                              app.requestMachines();
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (own.isNotEmpty)
+                          _MachinePicker(
+                            value: machineId,
+                            busy: busy,
+                            choices: [
+                              for (final m in own)
+                                _MachineChoice(
+                                  id: m.machine.machineId,
+                                  label: labelFor(m),
+                                  unavailable: unavailable(m),
+                                ),
+                            ],
+                            onChanged: (id) {
+                              if (busy || !canSelect(app.stateOf(id))) return;
+                              update(() {
+                                machineId = id;
+                                setupId = null;
+                                error = null;
+                                // Another machine has its own number: the one it
+                                // already offers, or its own suggestion.
+                                slots = slotsFor(id);
+                                slotsEdited = false;
+                              });
+                              unawaited(suggestSlots());
                             },
-                            child: const Text('Open Machines'),
+                          )
+                        else
+                          Text(
+                            'No computer is connected to this account yet.',
+                            style: DesktopChrome.text(),
                           ),
-                        ),
-                      ],
-                      if (own.isNotEmpty) ...[
                         const SizedBox(height: 16),
-                        _AgentSlots(
-                          value: slots,
-                          busy: busy,
-                          cappedFrom: storedOverRange(machineId),
-                          onChanged: (next) => update(() {
-                            slots = next;
-                            slotsEdited = true;
-                          }),
-                        ),
+                        if (own.isNotEmpty) ...[
+                          Text(
+                            'Let the product manager run agents here using this machine’s signed-in accounts.',
+                            style: DesktopChrome.text(),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Agents the Swarm starts on this machine run without asking for permission.',
+                            style: DesktopChrome.text(),
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'Harness clones each project into ~/harnesses/swarms and lets '
+                            "the Swarm's agents work in it.",
+                            style: DesktopChrome.text(),
+                          ),
+                        ] else ...[
+                          Text(
+                            'To add another computer, install Harness on it and sign in with '
+                            'this account, or approve a device with no screen from Machines.',
+                            style: DesktopChrome.text(),
+                          ),
+                          const SizedBox(height: 4),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton(
+                              onPressed: () {
+                                Navigator.pop(context);
+                                app.requestMachines();
+                              },
+                              child: const Text('Open Machines'),
+                            ),
+                          ),
+                        ],
+                        if (own.isNotEmpty) ...[
+                          const SizedBox(height: 16),
+                          _AgentSlots(
+                            value: slots,
+                            busy: busy,
+                            cappedFrom: storedOverRange(machineId),
+                            onChanged: (next) => update(() {
+                              slots = next;
+                              slotsEdited = true;
+                            }),
+                          ),
+                        ],
+                        if (error != null) ...[
+                          const SizedBox(height: 12),
+                          Text(error!, style: DesktopChrome.metadata()),
+                        ],
                       ],
-                      if (error != null) ...[
-                        const SizedBox(height: 12),
-                        Text(error!, style: DesktopChrome.metadata()),
-                      ],
-                    ],
+                    ),
                   ),
                 ),
                 actions: [
