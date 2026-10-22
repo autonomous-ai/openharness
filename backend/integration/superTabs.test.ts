@@ -8,13 +8,14 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { SuperTabStore } from '../src/superTabs/store.js'
+import { ABANDONED_START_MS, SuperTabStore } from '../src/superTabs/store.js'
 import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { nextMachineShareGrants } from '../src/lib/machineSharePolicy.js'
 import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
+import { stableId } from '../src/superTabs/model.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -1527,4 +1528,60 @@ it.each(['finished', 'expired'] as const)('lets another Swarm reuse after the na
     const later = new SuperTabStore(db, () => Number(leased.result.expiresAt) + 1)
     expect((await later.execute(owner, other.tab, { operationId: randomUUID(), command: reuse })).result.agentId).toBe(worker)
   }
+})
+
+describe('the owner\'s Lead machine joins its Swarm', () => {
+  it('adds the machine once, finishes abandoned starts and keeps in-flight ones and existing settings', async () => {
+    const machineId = `owner-mac-${randomUUID()}`
+    await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    const tab = (await store.create(owner, randomUUID(), 'Own machine')).id
+    await run(tab, { type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true })
+    expect((await store.hostTabs(owner, machineId)).map(r => r.joinSwarm)).toEqual([true])
+    const request = { conversationId: 'lead', machineId, engine: 'codex', name: 'Builder', cwd: '/repo', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    const start = async () => (await run(tab, { type: 'agent.start', request })).result.startId as string
+    const [abandoned, inFlight, dispatched] = [await start(), await start(), await start()]
+    await run(tab, { type: 'agent.startDispatch', startId: dispatched })
+    const age = (ids: string[]) => db.superTabOperation.updateMany({ where: { id: { in: ids.map(id => stableId(tab, `person:${owner.sub}`, id)) } },
+      data: { createdAt: new Date(Date.now() - ABANDONED_START_MS - 1) } })
+    await age([abandoned, dispatched])
+    const join = { type: 'machine.contribute' as const, machineId, name: 'Ken Mac', cwd: '/swarm', scope: 'swarm' as const, engines: ['codex'], maxAgents: 3, ifMissing: true as const }
+    await expect(run(tab, join)).rejects.toMatchObject({ code: 'STARTS_PENDING' })
+    const pending = (await store.read(owner, tab)).state.starts!
+    expect([abandoned, inFlight, dispatched].map(id => pending.find(s => s.id === id)!.error)).toEqual([null, null, null])
+    await run(tab, { type: 'agent.startFailed', startId: inFlight, error: 'Launch refused.' })
+    await run(tab, { type: 'agent.started', startId: dispatched, harnessId: randomUUID(), configuration: config })
+    await run(tab, join)
+    const joined = (await store.read(owner, tab)).state
+    expect(joined.starts!.find(s => s.id === abandoned)!.error).toBe('Abandoned before it started.')
+    expect(joined.starts!.find(s => s.id === inFlight)!.error).toBe('Launch refused.')
+    expect(joined.starts!.find(s => s.id === dispatched)!.error).toBeNull()
+    expect((await store.messages(owner, tab, 'lead', {})).messages.at(-1)!.text).toBe('Builder never started and will not start now. Start it again if still needed.')
+    const added = joined.machines!.find(m => m.machineId === machineId)!
+    expect(added).toMatchObject({ contributorId: owner.sub, maxAgents: 3, scope: 'swarm', cwd: '/swarm' })
+    expect((await store.hostTabs(owner, machineId)).map(r => r.joinSwarm)).toEqual([false, false])
+    await run(tab, { ...join, maxAgents: 8, cwd: '/elsewhere' })
+    expect((await store.read(owner, tab)).state.machines!.find(m => m.machineId === machineId)).toEqual(added)
+  })
+
+  it('never adds another account\'s machine', async () => {
+    const { tab } = await fixture()
+    const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
+    expect((await store.hostTabs(host, 'test-host')).filter(r => r.tabId === tab).map(r => r.joinSwarm)).toEqual([false])
+    const join = { type: 'machine.contribute' as const, machineId: 'test-host', name: 'Host', cwd: '/swarm', scope: 'swarm' as const, engines: ['codex'], maxAgents: 2, ifMissing: true as const }
+    await expect(run(tab, join)).rejects.toMatchObject({ code: 'OWNER_REQUIRED' })
+    await expect(run(tab, join, host)).rejects.toMatchObject({ code: 'OWNER_REQUIRED' })
+    expect((await store.read(owner, tab)).state.machines ?? []).toEqual([])
+  })
+
+  it('never marks the owner\'s machine for a collaborator\'s Lead running on it through a share', async () => {
+    const machineId = `owner-shared-${randomUUID()}`
+    await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    await db.machineShare.create({ data: { machineId, ownerId: owner.sub, autonomousEnv: 'prod', emails: [peer.email] } })
+    const tab = (await store.create(owner, randomUUID(), 'Shared Lead')).id
+    await invite(tab)
+    await run(tab, { type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'Peer Lead', configuration: config, lead: true }, peer)
+    expect((await store.hostTabs(owner, machineId)).map(r => [r.agent.contributorId, r.joinSwarm])).toEqual([[peer.sub, false]])
+  })
 })

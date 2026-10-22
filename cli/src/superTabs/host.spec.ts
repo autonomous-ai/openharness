@@ -824,3 +824,80 @@ it('rechecks authoritative native absence before retrying a lost acknowledgement
   expect(t.remove).toHaveBeenCalledOnce()
   expect(t.close).toHaveBeenLastCalledWith({ agentId: 'harness' })
 })
+
+describe('adding the machine its own Lead runs on to the Swarm', () => {
+  function joining() {
+    const dir = mkdtempSync(join(tmpdir(), 'super-tab-join-')); roots.push(dir)
+    const agent = { id: 'lead', harnessId: 'harness', machineId: 'machine-1' }
+    const rows = [{ tabId: 'own', joinSwarm: true, agent }, { tabId: 'other', joinSwarm: false, agent }, { tabId: 'old', agent }]
+    const commands: unknown[] = [], refusals: string[] = []
+    let clock = 0
+    const call: CoreApi['account']['backend'] = vi.fn(async (method, path, body) => {
+      if (path.endsWith('/commands')) {
+        commands.push({ path, ...(body as object) })
+        const code = refusals.shift()
+        if (code) return { status: 409, body: { success: false, error: { code, message: `Refused: ${code}` } } }
+        return { status: 200, body: { success: true, data: {} } }
+      }
+      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }
+    })
+    const core = fakeCore({ dataDir: dir, account: { backend: call, machineName: vi.fn(() => 'Ken Mac') } })
+    const prepare = vi.fn(async () => ({ ok: true, state: 'ready', cwd: '/data/swarm-projects/own', engines: ['claude', 'codex'], maxAgents: 3, scope: 'swarm' }))
+    const log = vi.fn()
+    const host = new SuperTabHost(core, 'machine-1', { log, now: () => clock, prepareContribution: prepare }); hosts.push(host)
+    /** One roster pass at `at` ms, waiting for the add it may start to finish. */
+    const pass = async (at: number) => {
+      clock = at
+      const tries = prepare.mock.calls.length, heard = commands.length + log.mock.calls.length
+      await host.tick()
+      if (prepare.mock.calls.length > tries) await vi.waitFor(() => expect(commands.length + log.mock.calls.length).toBeGreaterThan(heard))
+    }
+    return { core, rows, commands, refusals, prepare, log, pass }
+  }
+
+  it('adds it once with the prepared slots and leaves unmarked Swarms alone', async () => {
+    const t = joining()
+    await t.pass(0)
+    expect(t.prepare).toHaveBeenCalledExactlyOnceWith(t.core, { tabId: 'own', scope: 'swarm' })
+    expect(t.commands).toEqual([{ path: '/api/super-tabs/own/commands', operationId: expect.any(String), command: { type: 'machine.contribute',
+      machineId: 'machine-1', name: 'Ken Mac', cwd: '/data/swarm-projects/own', scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 3, ifMissing: true } }])
+    await t.pass(59_000)
+    t.rows[0]!.joinSwarm = false
+    await t.pass(120_000)
+    expect(t.prepare).toHaveBeenCalledTimes(1)
+  })
+
+  it('backs off a refusal, doubling up to half an hour, and starts over after an add', async () => {
+    const t = joining()
+    t.refusals.push(...Array(7).fill('STARTS_PENDING'))
+    let at = 0
+    const retriesAfter = async (wait: number) => {
+      const tries = t.prepare.mock.calls.length
+      await t.pass(at + wait - 1)
+      expect(t.prepare).toHaveBeenCalledTimes(tries)
+      await t.pass(at += wait)
+      expect(t.prepare).toHaveBeenCalledTimes(tries + 1)
+    }
+    await t.pass(at)
+    // Seven refusals; the eighth try adds the machine.
+    for (const wait of [60_000, 120_000, 240_000, 480_000, 960_000, 1_800_000, 1_800_000]) await retriesAfter(wait)
+    expect(t.commands).toHaveLength(8)
+    t.refusals.push('STARTS_PENDING')
+    await retriesAfter(60_000)
+    await retriesAfter(60_000)
+    expect(t.log).toHaveBeenCalledWith('Could not add this machine to its Swarm: Refused: STARTS_PENDING')
+  })
+
+  it.each(['MACHINES_FULL', 'OWNER_REQUIRED'])('stops after %s until the roster stops asking', async code => {
+    const t = joining()
+    t.refusals.push(code)
+    await t.pass(0)
+    await t.pass(24 * 60 * 60_000)
+    expect(t.prepare).toHaveBeenCalledTimes(1)
+    t.rows[0]!.joinSwarm = false
+    await t.pass(24 * 60 * 60_000 + 1)
+    t.rows[0]!.joinSwarm = true
+    await t.pass(24 * 60 * 60_000 + 2)
+    expect(t.prepare).toHaveBeenCalledTimes(2)
+  })
+})
