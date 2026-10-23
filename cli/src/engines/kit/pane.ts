@@ -214,19 +214,22 @@ function promptMarker(engine: AgentEngine): RegExp {
 }
 
 const COMPOSER_RULE = /^[─━]{3,}(?:.*[─━]{3,})?\s*$/
+/** A row only Claude Code's own footer draws: its shortcut hint, or its permission mode with the key that cycles it. */
+const CLAUDE_FOOTER = /^\s+(?:\? for shortcuts|.*\(shift\+tab to cycle\))/
 /**
  * The line of Claude Code's composer when it draws `>` for its marker, or -1. In the Harness terminal on Windows it draws
  * `>` and a no-break space where it draws `❯` elsewhere, so the pane never read idle and every Super Tab delivery to it
  * was held (DESKTOP-0TFH0OJ, 2026-10-23). Only the bottom box counts: `>` at the start of the line under its top rule,
- * and nothing under its bottom rule but Claude Code's indented footer. A shell prompt (`PS C:\>`), or a `>` quoted or
- * framed in output above more output, must never read as an idle Claude Code (review of #1649). Mac and Linux are
- * unchanged.
+ * and under its bottom rule Claude Code's own footer, with nothing but indented rows. A shell prompt (`PS C:\>`), or a
+ * `>` quoted or framed in output above more output, indented or not, must never read as an idle Claude Code (review of
+ * #1649). A box whose footer is not drawn reads as no composer: held, never typed into. Mac and Linux are unchanged.
  */
 export function claudeWindowsComposer(lines: string[]): number {
   if (process.platform !== 'win32') return -1
   const visible = lines.map(stripAnsi)
   const bottom = visible.findLastIndex((line) => COMPOSER_RULE.test(line))
-  if (bottom < 2 || visible.slice(bottom + 1).some((line) => line.trim() && !/^\s/.test(line))) return -1
+  const below = visible.slice(bottom + 1)
+  if (bottom < 2 || below.some((line) => line.trim() && !/^\s/.test(line)) || !below.some((line) => CLAUDE_FOOTER.test(line))) return -1
   const top = visible.slice(0, bottom).findLastIndex((line) => COMPOSER_RULE.test(line))
   return top >= 0 && top + 1 < bottom && /^>(?:[\u00a0 ]|$)/.test(visible[top + 1]) ? top + 1 : -1
 }

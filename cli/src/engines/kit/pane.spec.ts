@@ -52,6 +52,13 @@ describe("Claude Code's composer on Windows", () => {
     const shellAfter = ['⏺ Done.', rule, '>\u00a0', rule, '  ⏵⏵ bypass permissions on (shift+tab to cycle)', 'PS C:\\Users\\DELL> ', ''].join('\n')
     expect(read(shellAfter)).toMatchObject({ pane: { idle: false } })
     expect(composerState(shellAfter)).not.toBe('ready')
+    // Re-review: indented output under a framed quote is not a footer; only Claude Code's own footer rows are.
+    const indentedAfter = ['⏺ The pane showed:', rule, '>\u00a0', rule, '  continued output', '  - and a list item', ''].join('\n')
+    expect(read(indentedAfter)).toMatchObject({ pane: { idle: false }, hold: 'team_waiting_idle' })
+    expect(composerState(indentedAfter)).not.toBe('ready')
+    const defaultMode = [rule, '>\u00a0', rule, '  ? for shortcuts', ''].join('\n')
+    expect(read(defaultMode)).toEqual({ pane: { idle: true, plan: false, dialog: false, draft: false }, hold: null })
+    expect(composerState(defaultMode)).toBe('ready')
   })
 
   it('reads Mac and Linux screens as before', () => {
