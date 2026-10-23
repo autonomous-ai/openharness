@@ -55,6 +55,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('machine.contribute'), machineId: id, name: title, cwd: path, scope: z.literal('swarm').optional(), engines: z.array(z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/)).min(1).max(32), maxAgents: z.number().int().min(1).max(16),
     ifMissing: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('machine.pause'), machineId: id, paused: z.boolean() }).strict(),
+  z.object({ type: z.literal('machine.remove'), machineId: id }).strict(),
   z.object({ type: z.literal('tab.rename'), name: title }).strict(),
   z.object({ type: z.literal('tab.project'), machineId: id, project }).strict(),
   z.object({ type: z.literal('tab.pause'), paused: z.boolean() }).strict(),
@@ -427,6 +428,47 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const pool = machineContribution(state, command.machineId) ?? fail('NOT_FOUND', 'This machine has not been contributed.', 404)
       if (actor.kind !== 'person' || actor.userId !== pool.contributorId) fail('OWNER_REQUIRED', 'Only its contributor can change this machine.', 403)
       pool.paused = command.paused
+      break
+    }
+    case 'machine.remove': {
+      // A machine leaves the Swarm with the Swarm's agents on it, the way Remove from Swarm withdraws one agent: their
+      // processes keep running there, nothing is stopped. Withdrawing the contribution alone would leave it listed
+      // wherever an agent still runs (desktop/lib/super_tabs/machines.dart lists both), and the host of an owner's
+      // Lead adds such a machine back by itself (joinSwarm in store.ts).
+      if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person removes a machine from the Swarm.', 403)
+      const pool = state.machines?.find(m => m.machineId === command.machineId)
+      const members = state.agents.filter(a => a.machineId === command.machineId)
+      if (!pool && !members.length) fail('NOT_FOUND', 'This machine is not in the Swarm.', 404)
+      // Its owner may take back what is all theirs; another person's agent on it is the Swarm owner's to remove.
+      const theirs = (!pool || pool.contributorId === actor.userId) && members.every(a => a.contributorId === actor.userId)
+      if (actor.userId !== state.ownerId && !theirs) fail('FORBIDDEN', 'Only the Swarm owner or the machine\'s owner can remove it.', 403)
+      const pending = state.starts?.filter(s => s.request.machineId === command.machineId && !s.harnessId && !s.error) ?? []
+      // A launch already under way would arrive with nowhere to go; it finishes in moments.
+      if (pending.some(s => s.dispatched)) fail('STARTS_PENDING', 'An agent is starting on this machine. Try again in a moment.')
+      for (const start of pending) {
+        start.error = 'Its machine was removed from the Swarm.'
+        effects.messages.push({ id: stableId(operationId, 'start', start.id), conversationId: start.request.conversationId, author: sender,
+          text: `${start.request.name} will not start: its machine was removed from the Swarm.`, replyTo: null, recipients: [], source: SYSTEM_ROW })
+      }
+      const removed = new Set(members.map(a => a.id))
+      const affected = state.conversations.filter(group => group.agentIds.some(a => removed.has(a))
+        || (group.leadId && removed.has(group.leadId)) || (group.assignment && removed.has(group.assignment.agentId)))
+        .map(group => ({ group, names: members.filter(a => group.agentIds.includes(a.id) || group.leadId === a.id || group.assignment?.agentId === a.id)
+          .map(a => a.displayName ?? a.name), task: !!group.assignment && removed.has(group.assignment.agentId) && activeWork(group) }))
+      for (const target of members) removeAgent(target)
+      state.machines = state.machines?.filter(m => m.machineId !== command.machineId)
+      // Its capacity left with it: no slot there is held for anyone now.
+      state.harnessReservations = state.harnessReservations?.filter(r => r.machineId !== command.machineId)
+      state.releasedHarnesses = state.releasedHarnesses?.filter(r => r.machineId !== command.machineId)
+      const machine = pool?.name ?? 'a machine'
+      for (const { group, names, task } of affected) {
+        const lead = group.leadId && group.agentIds.includes(group.leadId) ? group.leadId : null
+        const join = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]
+        effects.messages.push({ id: stableId(operationId, 'machine-removed', group.id), conversationId: group.id, author: sender,
+          text: `${who} removed ${machine} from the Swarm, and ${join} with it.${task ? ` Its task "${group.title}" needs to be assigned again or closed.` : ''}`,
+          replyTo: null, recipients: lead ? [lead] : [], source: SYSTEM_ROW })
+      }
+      result.removedAgents = [...removed]
       break
     }
     case 'tab.rename':

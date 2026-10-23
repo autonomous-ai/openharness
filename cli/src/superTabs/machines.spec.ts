@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import { ContributedMachines } from './machines.js'
+import { SuperTabHostError } from './host.js'
 import { startAgent } from './start.js'
 
 function fixture() {
@@ -15,7 +16,7 @@ function fixture() {
   const request = vi.fn(async () => ({ providers: [{ provider: 'codex', outcome: 'answered', httpStatus: 200,
     body: { account_email: 'private@example.com', secret: 'private-token', rate_limit: { primary_window: { used_percent: 25, reset_at: 1234567890 } } } }] }))
   const close = vi.fn(), open = vi.fn(async () => ({ machineId: 'host', request, close }))
-  const capabilities = vi.fn(async () => ({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 }, tools: { git: true } }))
+  const capabilities = vi.fn(async (_input: { cwd: string; tools: string[]; devices: string[] }) => ({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 }, tools: { git: true } }))
   const start = vi.fn(async () => ({ ok: true }))
   const prepare = vi.fn(async () => {})
   const machine = new ContributedMachines(core, 'host', { backend, open, capabilities, start, prepare, now: () => now } as never)
@@ -44,7 +45,7 @@ describe('contributed machine executor', () => {
     const f = fixture()
     await f.machine.tick()
     expect(f.open).toHaveBeenCalledOnce()
-    expect(f.capabilities).toHaveBeenCalledWith({ cwd: '/repo', tools: ['git'], devices: [] })
+    expect(f.capabilities).toHaveBeenCalledWith({ cwd: '/repo', tools: ['git', 'node', 'npm', 'flutter', 'gh', 'cargo', 'python3'], devices: [] })
     const body = f.backend.mock.calls.find(c => c[1] === 'POST')![3]
     expect(body).toMatchObject({ generation: 'grant', runningHarnessIds: ['running'], stoppedHarnessIds: ['stopped'], quotas: [{ engine: 'codex', known: true }] })
     expect(JSON.stringify(body)).not.toMatch(/private@example|private-token|account_email/)
@@ -58,6 +59,63 @@ describe('contributed machine executor', () => {
     expect(f.open).toHaveBeenCalledOnce()
     f.machine.stop(); f.advance(); await f.machine.tick()
     expect(f.open).toHaveBeenCalledOnce()
+  })
+  it('probes common tools plus pending-start requirements and publishes failures without calling them missing', async () => {
+    const f = fixture()
+    Object.assign(f.pool.starts[0]!, { request: { requirements: { tools: ['docker'] } } })
+    f.capabilities.mockResolvedValueOnce({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 },
+      tools: { git: true, node: true, docker: false }, toolProbeErrors: { flutter: 'interactive shell timed out' } } as never)
+    await f.machine.tick()
+    expect(f.capabilities).toHaveBeenCalledWith({ cwd: '/repo',
+      tools: ['git', 'node', 'npm', 'flutter', 'gh', 'cargo', 'python3', 'docker'], devices: [] })
+    const body = f.backend.mock.calls.find(c => c[1] === 'POST')![3]
+    expect(body).toMatchObject({ tools: { git: true, node: true, docker: false }, toolProbeErrors: { flutter: 'interactive shell timed out' } })
+  })
+  it('reuses tool readings across tabs and heartbeat passes without another shell probe', async () => {
+    const f = fixture()
+    const original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => path.endsWith('/pools')
+      ? [f.pool, { ...f.pool, tabId: 'second-tab' }]
+      : original(core, method, path, body))
+    await f.machine.tick()
+    expect(f.capabilities.mock.calls.map(([input]) => input.tools)).toEqual([
+      ['git', 'node', 'npm', 'flutter', 'gh', 'cargo', 'python3'], []])
+    const observations = f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/'))
+    expect(observations[1]?.[3]).toMatchObject({ tools: { git: true }, toolProbeErrors: { node: 'The tool probe did not complete.' } })
+    f.advance()
+    await f.machine.tick()
+    expect(f.capabilities.mock.calls.slice(2).map(([input]) => input.tools)).toEqual([[], []])
+  })
+  it('probes a newly queued tool immediately and retries an unverified tool after its short cache window', async () => {
+    const f = fixture()
+    f.capabilities.mockResolvedValueOnce({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 },
+      tools: { git: true, node: true, npm: true, gh: true, cargo: true, python3: true },
+      toolProbeErrors: { flutter: 'interactive shell timed out' } } as never)
+    await f.machine.tick()
+    Object.assign(f.pool.starts[0]!, { request: { requirements: { tools: ['docker'] } } })
+    f.capabilities.mockResolvedValueOnce({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 },
+      tools: { docker: true } } as never)
+    f.advance()
+    await f.machine.tick()
+    expect(f.capabilities.mock.lastCall?.[0]).toMatchObject({ tools: ['docker'] })
+    f.step(61_000)
+    await f.machine.tick()
+    expect(f.capabilities.mock.lastCall?.[0]).toMatchObject({ tools: ['flutter'] })
+  })
+  it('retries a probe-failure observation without its new field for an older backend', async () => {
+    const f = fixture()
+    f.capabilities.mockResolvedValueOnce({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 },
+      tools: { git: true }, toolProbeErrors: { flutter: 'interactive shell timed out' } } as never)
+    const original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      if (method === 'POST' && (body as Record<string, unknown>)?.toolProbeErrors) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: toolProbeErrors', 400)
+      return original(core, method, path, body)
+    })
+    await f.machine.tick()
+    const posts = f.backend.mock.calls.filter(c => c[1] === 'POST')
+    expect(posts).toHaveLength(2)
+    expect(posts[0]![3]).toHaveProperty('toolProbeErrors')
+    expect(posts[1]![3]).not.toHaveProperty('toolProbeErrors')
   })
 
   it('binds stopped native proof to the current slot reservation generation', async () => {

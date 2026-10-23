@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:ui' show PointerDeviceKind;
 
+import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -279,9 +280,13 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(AlertDialog), findsOneWidget);
       expect(
-        (tester.widget<AlertDialog>(find.byType(AlertDialog)).title! as Text)
-            .data,
-        'M2',
+        find.descendant(
+          of: find.byWidget(
+            tester.widget<AlertDialog>(find.byType(AlertDialog)).title!,
+          ),
+          matching: find.text('M2'),
+        ),
+        findsOneWidget,
       );
       expect(find.text('Available capacity'), findsNothing);
       expect(find.text('Model allowances'), findsNothing);
@@ -869,6 +874,154 @@ void main() {
       c.dispose();
     },
   );
+
+  group('Remove from Swarm', () {
+    Map<String, dynamic> machine(String contributorId) => {
+      'machineId': 'studio',
+      'name': 'Studio',
+      'contributorId': contributorId,
+      'observation': {'receivedAt': DateTime.now().millisecondsSinceEpoch},
+    };
+    Map<String, dynamic> agent(String id, String contributorId) => {
+      'id': id,
+      'name': id,
+      'displayName': id == 'a1' ? 'Mira' : 'River',
+      'machineId': 'studio',
+      'harnessId': 'h-$id',
+      'contributorId': contributorId,
+      'machineOwnerId': contributorId,
+      'configuration': <String, dynamic>{'engine': 'claude'},
+    };
+    Future<void> mount(WidgetTester tester, dynamic c) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabMachines(controller: c, onAddAgent: (_) {}),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets(
+      'the owner removes a machine and its agents after a yes, from its details',
+      (tester) async {
+        final server = ConversationServer();
+        server.state['machines'] = [machine('owner')];
+        server.state['agents'] = [agent('a1', 'owner'), agent('a2', 'owner')];
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('super-machine-remove')));
+        await tester.pumpAndSettle();
+        expect(find.text('Remove Studio from this Swarm?'), findsOneWidget);
+        expect(
+          find.textContaining(
+            'Mira and River leave the Swarm with it and keep running on Studio.',
+          ),
+          findsOneWidget,
+        );
+        // Cancel sends nothing.
+        await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+        await tester.pumpAndSettle();
+        expect(
+          server.posts.where(
+            (p) => (p['command'] as Map?)?['type'] == 'machine.remove',
+          ),
+          isEmpty,
+        );
+
+        await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('super-machine-remove')));
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const ValueKey('super-machine-remove-confirm')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          server.posts
+              .map((p) => p['command'])
+              .where((cmd) => (cmd as Map)['type'] == 'machine.remove')
+              .single,
+          {'type': 'machine.remove', 'machineId': 'studio'},
+        );
+        expect(find.text('Remove Studio from this Swarm?'), findsNothing);
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      },
+    );
+
+    testWidgets('a right-click offers it to whoever may remove the machine', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      server.state['machines'] = [machine('owner')];
+      final c = server.controller();
+      await c.refresh();
+      await mount(tester, c);
+      await tester.tap(
+        find.byKey(const ValueKey('super-machine-studio')),
+        buttons: kSecondaryMouseButton,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Details'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('super-machine-menu-remove')));
+      await tester.pumpAndSettle();
+      expect(find.text('Remove Studio from this Swarm?'), findsOneWidget);
+      expect(
+        find.text('The Swarm stops using it for new work.'),
+        findsOneWidget,
+      );
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    });
+
+    testWidgets('a collaborator removes only a machine that is all theirs', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      (server.state['people'] as List).add({
+        'id': 'peer',
+        'email': 'peer@example.com',
+        'role': 'collaborator',
+      });
+      // Their machine, running the owner's agent: the Swarm owner's to remove.
+      server.state['machines'] = [machine('peer')];
+      server.state['agents'] = [agent('a1', 'owner')];
+      final c = server.controller(account: 'peer');
+      await c.refresh();
+      await mount(tester, c);
+      await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('super-machine-remove')), findsNothing);
+      await tester.tap(find.widgetWithText(TextButton, 'Close'));
+      await tester.pumpAndSettle();
+
+      // All theirs: theirs to remove.
+      server.state['agents'] = [agent('a1', 'peer')];
+      server.revision++;
+      await c.refresh();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('super-machine-remove')),
+        findsOneWidget,
+      );
+      await tester.tap(find.widgetWithText(TextButton, 'Close'));
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    });
+  });
 
   for (final brightness in [Brightness.dark, Brightness.light]) {
     for (final textScale in [1.0, 2.0]) {
