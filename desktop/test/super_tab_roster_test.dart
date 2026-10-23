@@ -738,6 +738,57 @@ void main() {
     await f.close(tester);
   });
 
+  Future<RosterFixture> fixtureWithPeople(
+    WidgetTester tester,
+    int count,
+  ) async {
+    final f = await fixture(tester);
+    (f.server.state['people'] as List).addAll([
+      for (var i = 1; i < count; i++)
+        {'id': 'p$i', 'email': 'p$i@example.com', 'role': 'collaborator'},
+    ]);
+    await f.controller.refresh();
+    await f.show(tester);
+    return f;
+  }
+
+  Finder person(int i) =>
+      find.byKey(ValueKey('super-person-${i == 0 ? 'owner' : 'p$i'}'));
+
+  testWidgets('three people all show with no More row', (tester) async {
+    final f = await fixtureWithPeople(tester, 3);
+    for (var i = 0; i < 3; i++) {
+      expect(person(i), findsOneWidget);
+    }
+    expect(find.textContaining('Show '), findsNothing);
+    await f.close(tester);
+  });
+
+  testWidgets('eight people show five, then expand and collapse', (
+    tester,
+  ) async {
+    final f = await fixtureWithPeople(tester, 8);
+    for (var i = 0; i < 8; i++) {
+      expect(person(i), i < 5 ? findsOneWidget : findsNothing);
+    }
+    expect(find.text('Show 3 more'), findsOneWidget);
+
+    await tester.tap(find.text('Show 3 more'));
+    await tester.pumpAndSettle();
+    for (var i = 0; i < 8; i++) {
+      expect(person(i), findsOneWidget);
+    }
+    expect(find.text('Show less'), findsOneWidget);
+
+    await tester.tap(find.text('Show less'));
+    await tester.pumpAndSettle();
+    for (var i = 0; i < 8; i++) {
+      expect(person(i), i < 5 ? findsOneWidget : findsNothing);
+    }
+    expect(find.text('Show 3 more'), findsOneWidget);
+    await f.close(tester);
+  });
+
   testWidgets('roster lists only the selected project’s agents', (
     tester,
   ) async {

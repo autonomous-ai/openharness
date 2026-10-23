@@ -38,6 +38,8 @@ class SuperTabRoster extends StatefulWidget {
 }
 
 class _SuperTabRosterState extends State<SuperTabRoster> {
+  static const _peopleShown = 5;
+  bool _allPeople = false;
   SuperTabController get c => widget.controller;
 
   String? _agentProjectId(SuperTabAgent agent) => agent.hasProjectId
@@ -392,14 +394,17 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         const <SuperTabAgent>[];
     final leads = members.where((a) => state!.isLead(a.id)).toList();
     final agents = members.where((a) => !state!.isLead(a.id)).toList();
+    final people = state?.people ?? const <SuperTabPerson>[];
+    final shownPeople = _allPeople ? people : people.take(_peopleShown);
     return [
       SuperTabSectionHeading(
         'Humans',
         onAdd: c.isOwner ? widget.onInvite : null,
         addTooltip: 'Invite people',
       ),
-      for (final person in state?.people ?? const <SuperTabPerson>[])
+      for (final person in shownPeople)
         ListTile(
+          key: ValueKey('super-person-${person.id}'),
           dense: true,
           minTileHeight: 36,
           minVerticalPadding: 6,
@@ -440,6 +445,19 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
               ],
             ),
           ),
+        ),
+      if (people.length > _peopleShown)
+        ListTile(
+          dense: true,
+          minTileHeight: 36,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+          title: Text(
+            _allPeople
+                ? 'Show less'
+                : 'Show ${people.length - _peopleShown} more',
+            style: DesktopChrome.metadata(),
+          ),
+          onTap: () => setState(() => _allPeople = !_allPeople),
         ),
       const SizedBox(height: 16),
       SuperTabSectionHeading(
