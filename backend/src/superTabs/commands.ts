@@ -379,9 +379,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   const who = sender.kind === 'person' ? sender.name.split('@')[0]! : sender.name
   /** A hard rule refuses an agent, unless it carries out what a person chose by hand. A person is not blocked: the
    * command goes through and the group is told. */
+  const machineName = (id: string) => state.machines?.find(m => m.machineId === id)?.name ?? id
   const groupRules = (conversationId: string) => projectRules(state, groupProject(state, conversation(state, conversationId)).id)
   const ruled = (target: RunTarget, conversationId: string, done: string, personChose = false) => {
-    const why = broken(groupRules(conversationId), target)
+    const why = broken(groupRules(conversationId), target, machineName)
     if (!why) return
     if (actor.kind === 'agent' && !personChose) fail('RULE_BROKEN', `${why} Route again.`, 403)
     result.warnings = [why]
@@ -717,9 +718,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       for (const rule of state.rules ?? []) {
         if (rule.rule.kind !== 'machines' || !rule.rule.machineIds.includes(command.machineId)) continue
         rule.rule.machineIds = rule.rule.machineIds.filter(m => m !== command.machineId)
+        // The owner's words stay as they are; the row says what the rule allows now.
         const project = projectsOf(state).find(p => p.id === rule.projectId)
-        if (!rule.rule.machineIds.length && project) effects.messages.push({ id: stableId(operationId, 'rule', rule.id), conversationId: project.leadConversationId,
-          author: sender, text: `Rule removed: ${rule.text} Its only machine, ${machine}, left the Swarm.`, replyTo: null, recipients: [], source: RULE_ROW })
+        if (project) effects.messages.push({ id: stableId(operationId, 'rule', rule.id), conversationId: project.leadConversationId, author: sender,
+          text: rule.rule.machineIds.length ? `Rule changed: ${machine} left the Swarm, so "${rule.text}" now allows only ${rule.rule.machineIds.map(machineName).join(', ')}.`
+            : `Rule removed: ${rule.text} Its only machine, ${machine}, left the Swarm.`, replyTo: null, recipients: [], source: RULE_ROW })
       }
       state.rules = state.rules?.filter(r => r.rule.kind !== 'machines' || r.rule.machineIds.length)
       if (!state.rules?.length) delete state.rules
@@ -914,7 +917,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           fail('SWARM_ENGINE', 'A Swarm agent runs only Claude Code or Codex.', 400)
         }
         // A start recorded before a rule was added is not launched past it, unless a person asked for it by hand.
-        const why = actor.kind === 'agent' && !(start.routeDecisionId && context.routeDecision?.override?.by === 'person') && broken(groupRules(start.request.conversationId), startTarget(start.request))
+        const why = actor.kind === 'agent' && !(start.routeDecisionId && context.routeDecision?.override?.by === 'person') && broken(groupRules(start.request.conversationId), startTarget(start.request), machineName)
         if (why) fail('RULE_BROKEN', `${why} This start was not launched. Route again.`, 403)
         requireWorkerDecisions(state, actor, open(state, start.request.conversationId))
         const grant = context.contribution ?? fail('HOST_REQUIRED', 'The original machine grant is unavailable.', 403)

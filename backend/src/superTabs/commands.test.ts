@@ -1262,7 +1262,7 @@ describe('the owner\'s rules', () => {
     expect(() => startBy(f, f.leadActor, { model: 'sonnet', effort: undefined })).toThrow('rules out Claude at an unnamed effort')
     expect(startBy(f, f.leadActor, { model: 'sonnet', effort: 'max' }).result.startId).toBeTruthy()
     f.run(set({ kind: 'machines', machineIds: ['elsewhere'] }, 'Only elsewhere.'))
-    expect(() => startBy(f, f.leadActor, { model: 'sonnet' })).toThrow('rules out this machine')
+    expect(() => startBy(f, f.leadActor, { model: 'sonnet' })).toThrow('The owner\'s rule "Only elsewhere." rules out this machine (it allows only elsewhere).')
   })
   it('lets a person through with a warning the group sees', () => {
     const f = routed()
@@ -1636,7 +1636,7 @@ describe('machine.remove', () => {
     expect(f.state.machineCleanups).toBeUndefined()
   })
 
-  it('takes the machine out of every project\'s machines rule, and removes a rule left empty with a row in its project\'s chat', () => {
+  it('takes the machine out of every project\'s machines rule, telling each project\'s chat, and removes a rule left empty', () => {
     const f = fixture()
     contribute(f)
     const docs = f.run({ type: 'project.create', name: 'Docs', visibility: 'public', brief: '' }).result as { projectId: string; conversationId: string }
@@ -1647,8 +1647,13 @@ describe('machine.remove', () => {
     const effects = f.run({ type: 'machine.remove', machineId: 'host' })
     expect(f.state.rules!.map(r => [r.id, r.rule])).toEqual([['both', { kind: 'machines', machineIds: ['other'] }],
       ['elsewhere', { kind: 'machines', machineIds: ['other'] }], ['effort', { kind: 'minEffort', effort: 'high' }]])
-    expect(effects.messages).toEqual([expect.objectContaining({ conversationId: docs.conversationId, source: { kind: 'rule' },
-      text: 'Rule removed: Only host. Its only machine, Studio, left the Swarm.' })])
+    // The owner's words stay as they were; the row says what the rule allows now.
+    expect(f.state.rules![0]!.text).toBe('Only host and other.')
+    expect(effects.messages).toEqual([
+      expect.objectContaining({ conversationId: 'lead', source: { kind: 'rule' },
+        text: 'Rule changed: Studio left the Swarm, so "Only host and other." now allows only other.' }),
+      expect.objectContaining({ conversationId: docs.conversationId, source: { kind: 'rule' },
+        text: 'Rule removed: Only host. Its only machine, Studio, left the Swarm.' })])
   })
 
   it('previews what removal does for the machine owner only: its agents and their tasks, sole-source projects, and a Product Manager that blocks it', () => {

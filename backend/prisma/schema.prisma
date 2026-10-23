@@ -989,6 +989,8 @@ model SuperTab {
   memberIds      String[]
   invitedEmails  String[]
   machineIds     String[]
+  /// Machines whose host still has to clean up after their removal: read apart from the 100-Swarm host poll.
+  cleanupMachineIds String[] @default([])
   revision       Int      @default(0)
   state          Json
   createdAt      DateTime @default(now())
@@ -997,6 +999,7 @@ model SuperTab {
   @@index([autonomousEnv, memberIds])
   @@index([autonomousEnv, invitedEmails])
   @@index([autonomousEnv, machineIds])
+  @@index([autonomousEnv, cleanupMachineIds])
 }
 
 // A terminal retains its history when removed from a roster. These bindings

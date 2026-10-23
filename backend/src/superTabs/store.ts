@@ -66,7 +66,18 @@ const indexes = (state: SuperTabState) => ({
   machineIds: [...new Set([...state.agents.map(a => a.machineId), ...(state.machines ?? []).map(m => m.machineId),
     ...state.conversations.filter(activeWork).map(c => c.assignment!.execution.machineId), ...(state.closingSessions ?? []).map(c => c.machineId),
     ...(state.machineCleanups ?? []).map(c => c.machineId)])],
+  cleanupMachineIds: cleanups(state).map(c => c.machineId),
 })
+/** Removed machines whose host has not yet said it cleaned up: still listed (machine.removal), or past the 24 h fallback. */
+const cleanups = (state: SuperTabState) => [
+  ...(state.machines ?? []).flatMap(m => m.removal ? [{ machineId: m.machineId, removalId: m.removal.id, machineOwnerId: m.contributorId }] : []),
+  ...(state.machineCleanups ?? [])]
+
+/** A machine its owner removed: its host deletes the Swarm's folders for this tab, then says so (machine.cleaned).
+ *  The row has no agent, so a host from before removals skips it. */
+const cleanupRows = (tabId: string, state: SuperTabState, machineId: string, ownerId: string) =>
+  cleanups(state).filter(c => c.machineId === machineId && c.machineOwnerId === ownerId)
+    .map(({ removalId }) => ({ tabId, cleanup: { machineId, removalId } }))
 
 /** A host reads its 100 most recently changed Swarms. Unordered, a Swarm just joined could be cut by older ones, such as
  *  Swarms only waiting for this machine to close a removed agent's session. */
@@ -1015,6 +1026,9 @@ export class SuperTabStore {
       const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
       if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
       const rows = await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, machineIds: { has: machineId } }, ...HOST_TABS })
+      // A cleanup is never cut by that limit: a machine in more than 100 Swarms would otherwise keep a removed Swarm's folders.
+      const cleaning = await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, cleanupMachineIds: { has: machineId },
+        id: { notIn: rows.map(r => r.id) } } })
       const result = []
       for (const row of rows) {
         const state = stateOf(row)
@@ -1050,14 +1064,9 @@ export class SuperTabStore {
         for (const { agentId: id, harnessId } of (state.closingSessions ?? []).filter(c => c.machineId === machineId && c.machineOwnerId === user.sub)) {
           result.push({ tabId: row.id, agent: { id, harnessId, machineId }, closeSession: true as const, active: false })
         }
-        // A machine its owner removed: this host deletes the Swarm's folders for this tab, then says so (machine.cleaned).
-        // The row has no agent, so a host from before removals skips it.
-        const cleanups = [...(state.machines ?? []).flatMap(m => m.removal ? [{ machineId: m.machineId, removalId: m.removal.id, machineOwnerId: m.contributorId }] : []),
-          ...(state.machineCleanups ?? [])]
-        for (const { removalId } of cleanups.filter(c => c.machineId === machineId && c.machineOwnerId === user.sub)) {
-          result.push({ tabId: row.id, cleanup: { machineId, removalId } })
-        }
+        result.push(...cleanupRows(row.id, state, machineId, user.sub))
       }
+      for (const row of cleaning) result.push(...cleanupRows(row.id, stateOf(row), machineId, user.sub))
       return result
     })
   }

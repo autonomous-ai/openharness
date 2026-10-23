@@ -2566,6 +2566,17 @@ describe('machine removal', () => {
     expect((await store.read(owner, tab)).state.machines).toEqual([])
   })
 
+  it('lists a pending cleanup to its host even when the machine is in more than the 100 Swarms a host poll reads', async () => {
+    const tab = await contributed()
+    const removalId = (await run(tab, { type: 'machine.remove', machineId: 'test-host' }, host)).result.removalId as string
+    const newer = await Promise.all(Array.from({ length: 101 }, async () => (await store.create(owner, randomUUID(), 'Newer')).id))
+    await db.superTab.updateMany({ where: { id: { in: newer } }, data: { machineIds: ['test-host'] } })
+    try {
+      expect(await cleanups(tab)).toEqual([{ tabId: tab, cleanup: { machineId: 'test-host', removalId } }])
+      expect((await cleaned(tab, removalId)).statusCode).toBe(200)
+    } finally { await db.superTab.deleteMany({ where: { id: { in: newer } } }) }
+  })
+
   it('drops the machine\'s records after 24 hours without an acknowledgement, and still lists the cleanup to its host', async () => {
     const tab = await contributed()
     const removalId = (await run(tab, { type: 'machine.remove', machineId: 'test-host' }, host)).result.removalId as string
