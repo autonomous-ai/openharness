@@ -7914,7 +7914,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
         if (mounted) linuxTitleBarActions.refresh();
       });
     }
-    return _buildWorkspace(context);
+    // Widgets the workspace builds read the host chrome from here.
+    return WorkspaceChromeScope(
+      chrome: widget.chrome,
+      child: _buildWorkspace(context),
+    );
   }
 
   /// Search, notifications and Store, for the right end of the Linux title
