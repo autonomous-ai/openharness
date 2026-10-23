@@ -75,17 +75,25 @@ const HOVERS = [
 const digest = (buffer) => createHash('sha1').update(buffer).digest('hex');
 const clip = ([x0, y0, x1, y1]) => ({ x: x0, y: y0, width: x1 - x0, height: y1 - y0 });
 
+/// A page showing flow [name], or a rejection when the flow is unknown or a
+/// step cannot be clicked; the page is closed before rejecting.
 async function open(context, origin, name, viewport, theme = 'dark') {
   const f = flow(name);
+  if (!f) throw new Error(`no flow "${name}"`);
   const page = await context.newPage();
-  await page.goto(urlFor(origin, f, theme));
-  await settle(page);
-  const compact = viewport.width < 720;
-  for (const step of (compact ? f.compact : f.wide) ?? f.steps ?? []) {
-    await runStep(page, step, Boolean(viewport.device));
-    await page.waitForTimeout(700);
+  try {
+    await page.goto(urlFor(origin, f, theme));
+    await settle(page);
+    const compact = viewport.width < 720;
+    for (const step of (compact ? f.compact : f.wide) ?? f.steps ?? []) {
+      await runStep(page, step, Boolean(viewport.device));
+      await page.waitForTimeout(700);
+    }
+    return page;
+  } catch (error) {
+    await page.close();
+    throw error;
   }
-  return page;
 }
 
 async function tapTargets(browser, origin, blocked) {
@@ -94,9 +102,9 @@ async function tapTargets(browser, origin, blocked) {
     const context = await contextFor(browser, viewport, 'dark', origin, blocked);
     for (const name of TAP_FLOWS) {
       const f = flow(name);
-      if (f.only === 'wide') continue;
+      if (f?.only === 'wide') continue;
       const page = await open(context, origin, name, viewport).catch(() => null);
-      if (!page) continue;
+      if (!page) { out.push({ flow: name, width: viewport.name, small: null, note: 'flow did not open' }); continue; }
       const small = await page.evaluate(() =>
         Array.from(document.querySelectorAll('flt-semantics[flt-tappable], flt-semantics[role="button"], flt-semantics[role="link"], flt-semantics[role="checkbox"], flt-semantics[role="switch"], flt-semantics[role="tab"], flt-semantics[role="radio"]'))
           .map((e) => {
@@ -117,7 +125,8 @@ async function wheels(browser, origin, blocked, dir) {
   const context = await contextFor(browser, COMPUTER, 'dark', origin, blocked);
   const out = [];
   for (const s of SCROLLERS) {
-    const page = await open(context, origin, s.flow, COMPUTER);
+    const page = await open(context, origin, s.flow, COMPUTER).catch(() => null);
+    if (!page) { out.push({ ...s, scrolled: null, note: 'flow did not open' }); continue; }
     const [x0, y0, x1, y1] = s.box;
     await page.mouse.move((x0 + x1) / 2, (y0 + y1) / 2);
     const before = await page.screenshot({ clip: clip(s.box) });
@@ -165,7 +174,8 @@ async function hovers(browser, origin, blocked, dir) {
   const context = await contextFor(browser, COMPUTER, 'dark', origin, blocked);
   const out = [];
   for (const h of HOVERS) {
-    const page = await open(context, origin, h.flow, COMPUTER);
+    const page = await open(context, origin, h.flow, COMPUTER).catch(() => null);
+    if (!page) { out.push({ ...h, changed: null, note: 'flow did not open' }); continue; }
     const target = page.getByRole('button', { name: h.name, exact: Boolean(h.exact) }).first();
     const box = await target.boundingBox().catch(() => null);
     if (!box) { out.push({ ...h, changed: null, note: 'not found' }); await page.close(); continue; }
@@ -191,7 +201,8 @@ async function focus(browser, origin, blocked, dir) {
   const context = await contextFor(browser, COMPUTER, 'dark', origin, blocked);
   const out = [];
   for (const name of ['signin', 'first-machine', 'workspace', 'settings']) {
-    const page = await open(context, origin, name, COMPUTER);
+    const page = await open(context, origin, name, COMPUTER).catch(() => null);
+    if (!page) { out.push({ flow: name, active: null, note: 'flow did not open' }); continue; }
     for (let i = 1; i <= 4; i++) {
       await page.keyboard.press('Tab');
       await page.waitForTimeout(300);

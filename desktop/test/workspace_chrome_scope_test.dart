@@ -9,6 +9,8 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/workspace_chrome.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/web/shell/web_chrome.dart';
+import 'package:harness/web/shell/web_workspace.dart';
+import 'package:harness/widgets/swarm_switcher.dart';
 import 'package:harness/widgets/pane_grid.dart';
 import 'package:harness/widgets/terminal_panel.dart';
 
@@ -130,6 +132,60 @@ void main() {
 
     expect(tester.state(find.byType(TerminalPanel).first), same(terminal));
     expect(WorkspaceChrome.of(_insideWorkspace(tester)), same(next));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('a widget in the search overlay reads the chrome it was given', (
+    tester,
+  ) async {
+    final app = _appWithPane();
+    addTearDown(app.dispose);
+    final chrome = _hostChrome();
+    await _mount(tester, app, chrome: chrome);
+
+    await tester.tap(find.byKey(const ValueKey('swarm-search-button')));
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump();
+
+    final results = find.byType(SwarmSearchResults);
+    expect(results, findsOneWidget);
+    expect(WorkspaceChrome.of(tester.element(results)), same(chrome));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  test('the web chrome is made once per app', () {
+    final app = createApp();
+    final other = createApp();
+    addTearDown(app.dispose);
+    addTearDown(other.dispose);
+
+    expect(webWorkspaceChrome(app), same(webWorkspaceChrome(app)));
+    expect(webWorkspaceChrome(other), isNot(same(webWorkspaceChrome(app))));
+  });
+
+  testWidgets('an app notification does not hand the workspace a new chrome', (
+    tester,
+  ) async {
+    final app = _appWithPane();
+    addTearDown(app.dispose);
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(1280, 800);
+    addTearDown(tester.view.reset);
+    Widget page() => MaterialApp(
+      theme: grid.buildAppTheme(brightness: Brightness.dark),
+      home: WebWorkspace(app: app),
+    );
+    await tester.pumpWidget(page());
+    await tester.pump(const Duration(milliseconds: 100));
+    final before = WorkspaceChrome.of(_insideWorkspace(tester));
+
+    // What RootShell does on every AppNotifier notification: build the
+    // signed-in screen again.
+    app.notifyListeners();
+    await tester.pumpWidget(page());
+    await tester.pump();
+
+    expect(WorkspaceChrome.of(_insideWorkspace(tester)), same(before));
     await tester.pumpWidget(const SizedBox.shrink());
   });
 }

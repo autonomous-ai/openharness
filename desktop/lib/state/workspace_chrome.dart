@@ -78,7 +78,8 @@ class WorkspaceChrome {
   );
 
   /// The chrome the enclosing workspace was given, or the defaults when it
-  /// was given none.
+  /// was given none. For widgets the workspace builds, its overlays included;
+  /// `SwarmScreen`'s own State code reads `widget.chrome` directly.
   static WorkspaceChrome of(BuildContext context) =>
       WorkspaceChromeScope.maybeOf(context) ?? _none;
 

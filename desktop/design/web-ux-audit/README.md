@@ -278,8 +278,9 @@ Every finding is tagged **fixture**, because the live pass did not run.
   and reads "Fix ch… Clau… Anth…".
 - **Fix:** on compact web, put agent and model behind one menu and keep the status word. Between
   720 and ~1000 px, use at most two columns.
-- **Files, size:** `lib/widgets/pane_grid.dart` pane header (shared). Add a header-density seam
-  on `WorkspaceChrome` whose default keeps Desktop as it is. M.
+- **Files, size:** `lib/widgets/pane_grid.dart` pane header (shared), behind
+  `WorkspaceChrome.compactPaneHeader` (read with `compactPaneHeaderAt(width)`): on for web,
+  off for Desktop. M.
 - **Source:** widget code · fixture.
 
 #### S3 · A computer that is connecting or reconnecting shows only a ⊘ icon
@@ -292,8 +293,8 @@ Every finding is tagged **fixture**, because the live pass did not run.
   state gets none.
 - **Fix:** a "Reconnecting…" chip with the same look as "Offline", and dim the input until the
   connection is back.
-- **Files, size:** `lib/widgets/pane_grid.dart` (shared; Desktop would gain it too, so flag it
-  to the owner). S.
+- **Files, size:** `lib/widgets/pane_grid.dart` (shared), behind
+  `WorkspaceChrome.labelsPaneStatus`: web only, Desktop unchanged (plan section 7, call 1). S.
 - **Source:** widget code · fixture.
 
 #### S4 · A view-only terminal does not say it is view only
@@ -387,8 +388,8 @@ Every finding is tagged **fixture**, because the live pass did not run.
   the browser's own menu is not suppressed for it. Renaming is a double-click, which nothing on
   screen suggests except a screen-reader hint. On phones the tab switcher has **Rename this tab**.
 - **Fix:** on web, give every tab a menu with Rename Tab and Close Tab (plus the sharing actions).
-- **Files, size:** `desktop_workspace_tab.dart` (shared; gate on a `WorkspaceChrome` flag),
-  reuse `lib/web/tabs/web_tab_menu.dart` rows (web). S.
+- **Files, size:** `desktop_workspace_tab.dart` (shared), behind
+  `WorkspaceChrome.menuOnEveryTab`; reuse `lib/web/tabs/web_tab_menu.dart` rows (web). S.
 - **Source:** widget code · fixture.
 
 #### S11 · The new-device band cuts off what it is asking about
@@ -502,7 +503,11 @@ Every finding is tagged **fixture**, because the live pass did not run.
 - **Screenshots:** [`screens/settings-account/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/settings-account/1440-dark.png), [`screens/settings-tab-invites/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/settings-tab-invites/390-dark.png),
   [`screens/store-product/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/store-product/1440-dark.png), [`screens/footer-menu/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/footer-menu/390-dark.png)
 - **Fix:** use "this browser" or the computer's name on web, and fix the plural.
-- **Files, size:** as listed (shared; most need a `kIsWeb` wording or the machine name). S.
+- **Files, size:** as listed (shared). Settings sections are outside the workspace: one small
+  web-only branch each, with the Desktop wording byte-for-byte the same. The footer tooltip and
+  `swarm_screen.dart` are inside the workspace: no `kIsWeb` there. Use wording that is right on
+  both, such as the plural fix, or a `WorkspaceChrome` field read with `WorkspaceChrome.of`
+  ([Proposed fix groups](#proposed-fix-groups)). S.
 - **Source:** widget code · fixture. The Tab invites and Routing pages also show "Sign in to use
   Swarm" while signed in. That comes from fixture data (no account id) and needs a live check.
 
@@ -620,16 +625,27 @@ faithfully, so they were not judged.
 
 Seven groups, split by responsibility. No two groups own the same file. Every blocks and slows
 finding is in exactly one group; polish items ride with the group that owns their file. Each
-group says whether it touches shared code (outside `lib/web/`). Where it does, the change goes
-behind a `WorkspaceChrome` seam or a `kIsWeb` wording, and the existing Desktop tests must stay
-green. Each group adds review fixture scenarios or flows for its own states, and re-captures
+group says whether it touches shared code (outside `lib/web/`), and the existing Desktop tests
+must stay green. The rules for shared code (plan section 9):
+
+- **Inside the workspace**, a widget reads the web's switches with `WorkspaceChrome.of(context)`,
+  which works in the workspace's overlays too. The switches are `menuOnEveryTab` (S10),
+  `labelsPaneStatus` (S3, S4) and `compactPaneHeader` (S2), plus the existing `compactBelow`
+  and `showsKeyHints`. Desktop leaves all three off; `lib/web/shell/web_chrome.dart` turns them
+  on. A `kIsWeb` check inside the workspace fails review.
+- **Outside the workspace** (sign-in, the viewer page, the viewer-link branch in
+  `app_shell.dart`, Settings sections, the theme) there is no chrome. Each may use one small
+  web-only branch, with its Desktop path byte-for-byte the same.
+- **S3 and S4 are web only.** Turning the labels on for Desktop later is a separate decision.
+- `lib/state/workspace_chrome.dart` and `web_chrome.dart` belong to the review tooling (group 0);
+  fix groups only read them. Each group adds review fixture scenarios or flows for its own states, and re-captures
 them at 360, 390, 768 and 1440.
 
 | Group | Findings | Owns | Shared code? | Size |
 | --- | --- | --- | --- | --- |
-| 1. Web menus and commands | B2, S1 (web menus), S10, P3 "Rename this tab" | `lib/web/shell/web_app_menu.dart`, `web_menu_items.dart`, `web_dropdown_control.dart`, `lib/web/tabs/*`, `lib/web/footer/web_footer_bar.dart`, `lib/widgets/desktop_workspace_tab.dart` | Yes: `desktop_workspace_tab.dart` (tab menu behind a chrome flag) | M |
+| 1. Web menus and commands | B2, S1 (web menus), S10, P3 "Rename this tab" | `lib/web/shell/web_app_menu.dart`, `web_menu_items.dart`, `web_dropdown_control.dart`, `lib/web/tabs/*`, `lib/web/footer/web_footer_bar.dart`, `lib/widgets/desktop_workspace_tab.dart` | Yes: `desktop_workspace_tab.dart`, behind `menuOnEveryTab` | M |
 | 2. Store on phones | B1, P3 (Store line) | `lib/store/store_screen.dart`, `store_discover.dart`, `store_explore_widgets.dart` | Yes: Store layout below a `compactBelow` passed by web chrome; Desktop default unchanged | M |
-| 3. Pane header and states | S2, S3, S4, S1 (pane header hit size), S8 (Take control banner) | `lib/widgets/pane_grid.dart`, `lib/widgets/terminal_panel.dart`, `lib/state/workspace_chrome.dart` (new seam fields) | Yes. S3 and S4 change Desktop too, unless gated; the owner decides | M |
+| 3. Pane header and states | S2, S3, S4, S1 (pane header hit size), S8 (Take control banner) | `lib/widgets/pane_grid.dart`, `lib/widgets/terminal_panel.dart` | Yes, behind `labelsPaneStatus` and `compactPaneHeader`: web only, Desktop unchanged | M |
 | 4. First computer and the offline workspace | S5, S6, S14, P3 "1 linked machines" | `lib/web/onboarding/web_first_machine.dart`, `web_your_computers.dart`, `_needsFirstConnection` in `lib/screens/swarm_screen.dart` | Yes: one condition in `swarm_screen.dart`, behind the existing `firstMachine` seam | S |
 | 5. Welcome pages, hints and download buttons | S7, S8 (form, shortcuts page), S9, S15, P1, P4, P7 | `lib/widgets/workspace_welcome.dart`, `harness_start_page.dart`, `new_harness_form.dart`, `lib/shortcuts/shortcuts_browser.dart`, `lib/widgets/web_download_button.dart`, `lib/screens/login_screen.dart`, `lib/widgets/login_fleet_map.dart` | Yes: all behind `showsKeyHints` or web-only branches | M |
 | 6. Error states, bands and copy | S11, S12, S13, P2, P3 (the remaining lines), P5, P6, P8 | `lib/widgets/new_device_notice.dart`, `lib/super_tabs/view.dart`, `lib/app_shell.dart` (viewer-link branch), `lib/viewer/viewer_page.dart`, `settings/sections/account_section.dart`, `tab_invites_section.dart`, `usage_section.dart`, `agent_messages/shared_tabs.dart`, `tab_activity.dart`, `widgets/workspace_subscription_usage.dart`, `lib/shared/theme/app_theme.dart` (focus ring, behind a web flag) | Yes: copy, empty states, focus; Desktop wording unchanged where it is right | M |
@@ -657,7 +673,8 @@ by `swarm_screen.dart`, but only group 4 edits that file.
    - At 390 the pane header shows the harness name with at least 16 characters, plus a status
      word for connecting, reconnecting, offline, view only and taken over.
    - At 768 there are at most two pane columns.
-   - Reconnecting and view-only show a labelled chip at 1440.
+   - Reconnecting and view-only show a labelled chip at 1440 on web; the Desktop pane header
+     tests pass unchanged and show no new label.
    - The Desktop pane tests pass with the chrome seam at its default.
 4. **First computer and the offline workspace**
    - `offline-only` keeps the pane, in its Offline state, plus a band naming the computer.

@@ -13,7 +13,17 @@ import 'web_machine_choice.dart';
 /// a browser is not a machine. It also turns on a menu on every tab, worded
 /// pane states and the compact pane header, which the web reads and Desktop
 /// leaves off.
-WorkspaceChrome webWorkspaceChrome(AppNotifier app) => WorkspaceChrome(
+///
+/// Made once per [AppNotifier]: the signed-in screen is rebuilt on every app
+/// notification, and a new chrome each time would rebuild every widget that
+/// reads it ([WorkspaceChromeScope] compares by identity). Nothing in it
+/// depends on more than [app].
+WorkspaceChrome webWorkspaceChrome(AppNotifier app) =>
+    _webChromes[app] ??= _webWorkspaceChrome(app);
+
+final _webChromes = Expando<WorkspaceChrome>('webWorkspaceChrome');
+
+WorkspaceChrome _webWorkspaceChrome(AppNotifier app) => WorkspaceChrome(
   leadingWidth: WebAppMenuButton.widthOf,
   leading: (context, commands) =>
       WebAppMenuButton(app: app, commands: commands),
