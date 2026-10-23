@@ -117,6 +117,10 @@ export const ON_DEMAND_START_MS = 20_000
  *  (its list, an install): this is many windows' worth, and all a service that does not come back can pile up. */
 export const RESTART_HELD_MAX = 100
 
+/** What a failed query threw, on one line of at most 200 characters: its name and message, or the value itself. */
+const describe = (error: unknown): string =>
+  (error instanceof Error ? `${error.name}: ${error.message}` : String(error)).replace(/\s+/g, ' ').slice(0, 200)
+
 /** Who asks when the core itself asks a service (`call`): this machine's owner, on this machine. */
 const THE_CORE: Asker = { local: true, owner: true }
 
@@ -253,7 +257,12 @@ export function createServiceLinks(options: ServiceLinksOptions) {
             const query = typeof payload.query === 'string' ? payload.query : ''
             void Promise.resolve()
               .then(() => links.get(service) === connected ? options.answer(service, query, payload, authority) : unavailable(service))
-              .catch(() => ({ error: 'QUERY_FAILED' }))
+              .catch((error: unknown) => {
+                // The service hears only QUERY_FAILED. What threw is said here, so a failure like the models list's on
+                // 2026-10-23 (CLI e2e, 6 ms after models connected) names its cause in the core's log.
+                log(`[services] ${service}'s query "${query.slice(0, 40)}" could not be answered: ${describe(error)}`)
+                return { error: 'QUERY_FAILED' }
+              })
               .then((result) => { sink.sendFrame({ type: 'service_query_result', payload: { ...result, requestId } }) })
             return
           }
