@@ -1,10 +1,14 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync, chmodSync, fstatSync, statSync, renameSync } from 'node:fs'
+import { constants, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync, chmodSync, fstatSync, statSync, renameSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
 
-const fault = vi.hoisted(() => ({ sync: false, write: false, onSync: undefined as ((fd: number) => void) | undefined, openAs: undefined as string | undefined, onStat: undefined as ((file: unknown, options: unknown) => void) | undefined }))
+const fault = vi.hoisted(() => ({ sync: false, write: false, windows: false, writableOpens: 0, onSync: undefined as ((fd: number) => void) | undefined, openAs: undefined as string | undefined, onStat: undefined as ((file: unknown, options: unknown) => void) | undefined }))
+vi.mock('./windowsFiles.js', async original => {
+  const actual = await original<typeof import('./windowsFiles.js')>()
+  return { ...actual, unchangedFlushFlags: (mode: number) => actual.unchangedFlushFlags(mode, fault.windows ? 'win32' : undefined) }
+})
 vi.mock('node:fs', async original => {
   const fs = await original<typeof import('node:fs')>()
   return { ...fs,
@@ -13,7 +17,11 @@ vi.mock('node:fs', async original => {
       try { if (fault.sync) throw new Error('fixture sync unavailable'); fault.onSync?.(fd); fs.fsync(fd, callback) }
       catch (error) { queueMicrotask(() => callback(error as Error)) }
     },
-    openSync: (...args: Parameters<typeof fs.openSync>) => fs.openSync(fault.openAs ?? args[0], ...args.slice(1) as [number, number?]),
+    openSync: (...args: Parameters<typeof fs.openSync>) => {
+      if (fault.windows && String(args[0]).endsWith('config.json') && typeof args[1] === 'number'
+        && (args[1] & 3) === constants.O_RDWR) fault.writableOpens++
+      return fs.openSync(fault.openAs ?? args[0], ...args.slice(1) as [number, number?])
+    },
     writeFileSync: (...args: Parameters<typeof fs.writeFileSync>) => {
       if (fault.write && typeof args[0] === 'number') throw new Error('fixture disk full')
       return fs.writeFileSync(...args)
@@ -33,7 +41,7 @@ function fixture() {
   roots.push(root)
   return { root, file: join(root, 'config.json') }
 }
-afterEach(() => { fault.sync = false; fault.write = false; fault.onSync = undefined; fault.openAs = undefined; fault.onStat = undefined; vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+afterEach(() => { fault.sync = false; fault.write = false; fault.windows = false; fault.writableOpens = 0; fault.onSync = undefined; fault.openAs = undefined; fault.onStat = undefined; vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 
 it('publishes complete bytes durably, preserves private permissions and leaves no staging file', async () => {
   const { root, file } = fixture()
@@ -136,6 +144,14 @@ it('cannot acknowledge a failed sync even when the desired bytes already exist',
   await expect(prepared(file).replace('already prepared')).rejects.toThrow(/sync unavailable/)
   fault.sync = false
   await expect(prepared(file).replace('already prepared')).resolves.toBeDefined()
+})
+
+it('confirms unchanged Windows settings without a writable reopen that would bump ctime', async () => {
+  const { file } = fixture()
+  writeFileSync(file, 'already prepared')
+  fault.windows = true
+  await expect(prepared(file).replace('already prepared')).resolves.toBeDefined()
+  expect(fault.writableOpens).toBe(0)
 })
 
 it('retains removal uncertainty until a retry can sync the parent directory', async () => {

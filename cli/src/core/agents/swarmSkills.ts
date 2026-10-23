@@ -1,12 +1,12 @@
 /** Older Swarm sessions predate role metadata. Adopt only at restart/resume, from current membership,
  * before native launch authority is captured; changing the live row later would revoke that launch. */
 import type { RegisteredSession, registry } from '../../lib/registry.js'
-import type { SwarmRole } from '../../lib/swarmSkills.js'
+import type { SwarmSkillGrant } from '../../lib/swarmSkills.js'
 
 export type AdoptSwarmSkill = (session: RegisteredSession, current: () => boolean) => Promise<RegisteredSession | null>
 
 export function createSwarmSkillAdoption(deps: {
-  role(harnessId: string): Promise<SwarmRole | null | undefined>
+  role(harnessId: string): Promise<SwarmSkillGrant | null | undefined>
   candidate(harnessId: string): boolean
   authority(agentId: string): () => boolean
   save: typeof registry.setSwarmSkill
@@ -20,16 +20,17 @@ export function createSwarmSkillAdoption(deps: {
     try { if (!deps.candidate(session.agentId)) return session } catch { return session }
     const owns = deps.authority(session.agentId)
     const saved = structuredClone(session)
-    let role: SwarmRole | null | undefined
-    try { role = await deps.role(saved.agentId) } catch { /* An unreadable roster grants no skill. */ }
+    let grant: SwarmSkillGrant | null | undefined
+    try { grant = await deps.role(saved.agentId) } catch { /* An unreadable roster grants no skill. */ }
     if (!current()) return null
-    if (role === undefined) return session
-    if (role === null) {
+    if (grant === undefined) return session
+    if (grant === null) {
       noRole.add(saved.agentId)
       return session
     }
     if (!owns()) return null
-    const swarmSkill = { role, key: saved.agentId }
+    // With its project's mode, so the relaunch writes that text and the host owes it no reload.
+    const swarmSkill = { ...grant, key: saved.agentId }
     // A stopped row is not live yet: resumePendingAgent persists the returned copy when dispatch allocates its pane.
     deps.save(saved.agentId, swarmSkill)
     return { ...saved, swarmSkill }

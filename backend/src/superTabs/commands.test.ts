@@ -106,10 +106,10 @@ describe('person removal notices', () => {
     ])
   })
 
-  it('posts a notice without claiming inactive work stopped or delivering to the removed Lead', () => {
-    const f = fixture(), worker = f.add('lead', 'owner', 'lead', true)
+  it('posts a notice without claiming inactive work stopped or delivering to the removed group lead', () => {
+    const f = fixture(), group = f.group(), worker = f.add('worker', 'owner', group, true)
     const effects = f.run({ type: 'agent.remove', agentId: worker })
-    expect(effects.messages).toEqual([expect.objectContaining({ conversationId: 'lead', recipients: [] })])
+    expect(effects.messages).toEqual([expect.objectContaining({ conversationId: group, recipients: [] })])
     expect(effects.messages[0]!.text).not.toContain('task')
   })
 
@@ -475,6 +475,18 @@ it('starts only in the chosen conversation, captures authority, and never assign
   expect(() => f.run({ type: 'agent.start', request, ...via }, actor, { contribution, ...decisionIn(group) })).toThrow('paused')
 })
 
+it.each(['opencode', 'kilo'])('refuses to dispatch a stored legacy %s start before native launch', engine => {
+  const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+  const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+  const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+  const request = { conversationId: group, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
+    requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
+  const startId = f.run({ type: 'agent.start', request, ...via }, actor, { contribution, ...decisionIn(group) }).result.startId as string
+  f.state.starts![0]!.request.engine = engine // Simulate a start stored before the engine restriction.
+  expect(() => f.run({ type: 'agent.startDispatch', startId }, actor, { contribution })).toThrow('Claude Code or Codex')
+  expect(f.state.starts![0]!.dispatched).toBe(false)
+})
+
 describe('agent.start on the Swarm\'s listed machines', () => {
   const request = (group: string, machineId: string) => ({ conversationId: group, machineId, engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } })
@@ -798,15 +810,18 @@ it('assigns stable workgroup numbers through old snapshots, rename, archive and 
   const third = f.group()
   expect(f.state.conversations.map(c => [c.id, c.number])).toEqual([['lead', undefined], [first, 1], [second, 2], [third, 3]])
 })
-it('records the lead project once and accepts installed engines beyond Claude and Codex', () => {
+it('records the lead project once and accepts only Claude Code and Codex contributions', () => {
   const f = fixture(), project = { cwd: '/repo', repositoryUrl: 'https://github.com/example/project' }
   f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'lead', name: 'Lead', configuration: config, lead: true, project }, owner,
     { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
   expect(f.state.project).toEqual({ machineId: 'host', ...project })
   expect(() => f.run({ type: 'tab.project', machineId: 'host', project })).toThrow('already has a project')
-  const command = commandSchema.parse({ type: 'machine.contribute', machineId: 'host', name: 'Workstation', cwd: '/repo', engines: ['claude', 'codex', 'pi', 'opencode'], maxAgents: 4 })
+  const command = commandSchema.parse({ type: 'machine.contribute', machineId: 'host', name: 'Workstation', cwd: '/repo', engines: ['claude', 'codex'], maxAgents: 4 })
   f.run(command, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
-  expect(f.state.machines![0]!.engines).toEqual(['claude', 'codex', 'pi', 'opencode'])
+  expect(f.state.machines![0]!.engines).toEqual(['claude', 'codex'])
+  for (const engine of ['opencode', 'kilo']) {
+    expect(commandSchema.safeParse({ ...command, engines: ['claude', engine] }).success).toBe(false)
+  }
 })
 it('accepts POSIX, Windows drive and UNC folders and refuses relative, drive-relative and control-character ones', () => {
   const contribute = (cwd: string) => commandSchema.safeParse({ type: 'machine.contribute', machineId: 'host', name: 'PC', cwd, engines: ['claude'], maxAgents: 1 })
@@ -892,6 +907,8 @@ describe('message attachments', () => {
     expect(removed.messages).toEqual([])
     expect(removed.cancelledAgents).toContain(worker)
     expect(f.state.agents.some(a => a.id === worker)).toBe(false)
+    // Its host closed the session before confirming; nothing is left for it to close.
+    expect(f.state.closingSessions).toBeUndefined()
   })
  })
 
@@ -1040,6 +1057,21 @@ describe('Reviewer role', () => {
     expect(() => f.run({ type: 'agent.start', request: request(group, { role: 'reviewer', engine: 'opencode' }) } as Command, owner, { contribution })).toThrow('Claude Code or Codex')
   })
 
+  it.each(['opencode', 'kilo'])('refuses %s for a Builder before a machine can launch it', engine => {
+    const f = fixture(), group = f.group()
+    const start = { type: 'agent.start', request: request(group, { engine }) }
+    expect(commandSchema.safeParse(start).success).toBe(false)
+    expect(() => f.run(start as Command, owner, { contribution })).toThrow('Claude Code or Codex')
+  })
+
+  it('does not add an existing OpenCode session as a Swarm member', () => {
+    const f = fixture()
+    expect(() => f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'open', name: 'Open',
+      configuration: { ...config, engine: 'opencode' }, lead: false }, owner,
+    { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })).toThrow('Claude Code or Codex')
+    expect(f.state.agents).toHaveLength(0)
+  })
+
   it('refuses to assign, route work to or make a Lead of a Reviewer', () => {
     const { f, leadActor, group, reviewer } = reviewed()
     expect(() => f.run({ type: 'work.assign', conversationId: group, agentId: reviewer })).toThrow('Reviewer')
@@ -1178,7 +1210,7 @@ describe('the owner\'s rules', () => {
   it('lets the owner set, list and remove rules, and records who asked', () => {
     const f = routed()
     const added = f.run(set({ kind: 'forbidModel', model: 'haiku' }))
-    expect(f.state.rules).toEqual([{ id: added.result.ruleId, rule: { kind: 'forbidModel', model: 'haiku' }, text: 'No Haiku.', askedBy: 'owner', askedIn: null,
+    expect(f.state.rules).toEqual([{ id: added.result.ruleId, projectId: 'lead', rule: { kind: 'forbidModel', model: 'haiku' }, text: 'No Haiku.', askedBy: 'owner', askedIn: null,
       addedBy: 'person:owner', createdAt: new Date(1000).toISOString() }])
     expect(added.messages[0]).toMatchObject({ conversationId: 'lead', text: 'Rule added: No Haiku.', source: { kind: 'rule' } })
     // Everyone in the Swarm reads the rules with the tab.
@@ -1200,21 +1232,21 @@ describe('the owner\'s rules', () => {
     const added = f.run({ ...set({ kind: 'forbidModel', model: 'haiku' }), ...asked } as Command, f.leadActor, ownerSaid)
     expect(f.state.rules![0]).toMatchObject({ askedBy: 'owner', askedIn: asked.askedIn, addedBy: `agent:${f.lead}` })
     const relay = (messageId: string, context: Partial<CommandContext>) => f.run({ ...set({ kind: 'preferIdle' }), ...quoting(messageId) } as Command, f.leadActor, context)
-    expect(() => f.run(set({ kind: 'preferIdle' }), f.leadActor, ownerSaid)).toThrow('quote a chat message the owner wrote')
-    expect(() => relay('m2', {})).toThrow('quote a chat message the owner wrote')
+    expect(() => f.run(set({ kind: 'preferIdle' }), f.leadActor, ownerSaid)).toThrow('quote a chat message the project owner wrote')
+    expect(() => relay('m2', {})).toThrow('quote a chat message the project owner wrote')
     for (const author of [{ kind: 'person', id: 'peer' }, { kind: 'agent', id: 'owner' }]) {
-      expect(() => relay('m2', said({ author }))).toThrow('quote a chat message the owner wrote')
+      expect(() => relay('m2', said({ author }))).toThrow('quote a chat message the project owner wrote')
     }
     // The owner's own system rows ("Rule added", warnings) and a message older than a day do not count.
-    expect(() => relay('m2', said({ source: true }))).toThrow('quote a chat message the owner wrote')
-    expect(() => relay('m2', said({ createdAt: 1000 - 24 * 3_600_000 - 1 }))).toThrow('quote a chat message the owner wrote')
+    expect(() => relay('m2', said({ source: true }))).toThrow('quote a chat message the project owner wrote')
+    expect(() => relay('m2', said({ createdAt: 1000 - 24 * 3_600_000 - 1 }))).toThrow('quote a chat message the project owner wrote')
     // One message may ask for several rules.
     expect(relay('m1', ownerSaid).result.ruleId).toBeTruthy()
     expect(relay('m2', said({ createdAt: 1000 - 24 * 3_600_000 })).result.ruleId).toBeTruthy()
-    expect(() => f.run({ ...set({ kind: 'preferIdle' }), ...asked } as Command, f.workerActor, ownerSaid)).toThrow('Only the Swarm owner')
+    expect(() => f.run({ ...set({ kind: 'preferIdle' }), ...asked } as Command, f.workerActor, ownerSaid)).toThrow('Only the project owner')
     f.invite()
-    expect(() => f.run(set({ kind: 'preferIdle' }), peer)).toThrow('Only the Swarm owner')
-    expect(() => f.run({ type: 'rule.remove', ruleId: added.result.ruleId as string }, peer)).toThrow('Only the Swarm owner')
+    expect(() => f.run(set({ kind: 'preferIdle' }), peer)).toThrow('Only the project owner')
+    expect(() => f.run({ type: 'rule.remove', ruleId: added.result.ruleId as string }, peer)).toThrow('Only the project owner')
     f.run({ type: 'rule.remove', ruleId: added.result.ruleId as string, ...asked }, f.leadActor, ownerSaid)
     expect(f.state.rules!.map(r => r.text)).toEqual(['No Haiku.', 'No Haiku.'])
   })
@@ -1309,10 +1341,66 @@ describe('the owner\'s rules in a Swarm of projects', () => {
   it('refuses another project\'s Lead, a worker, a collaborator, a system row and an old message', () => {
     const f = projects()
     expect(() => f.run(machines(f.app), f.siteLead, said())).toThrow('unavailable')
-    expect(() => f.run(machines(f.app), f.worker, said())).toThrow('Only the Swarm owner')
-    expect(() => f.run(machines(f.app), peer, said({ author: { kind: 'person', id: 'peer' } }))).toThrow('Only the Swarm owner')
-    expect(() => f.run(machines(f.app), f.lead, said({ source: true }))).toThrow('quote a chat message the owner wrote')
-    expect(() => f.run(machines(f.app), f.lead, said({ createdAt: 1000 - 24 * 3_600_000 - 1 }))).toThrow('quote a chat message the owner wrote')
+    expect(() => f.run(machines(f.app), f.worker, said())).toThrow('Only the project owner')
+    expect(() => f.run(machines(f.app), peer, said({ author: { kind: 'person', id: 'peer' } }))).toThrow('Only the project owner')
+    expect(() => f.run(machines(f.app), f.lead, said({ source: true }))).toThrow('quote a chat message the project owner wrote')
+    expect(() => f.run(machines(f.app), f.lead, said({ createdAt: 1000 - 24 * 3_600_000 - 1 }))).toThrow('quote a chat message the project owner wrote')
+    expect(f.state).not.toHaveProperty('rules')
+  })
+  const projectIdOf = (f: ReturnType<typeof projects>, conversationId: string) => f.state.conversations.find(c => c.id === conversationId)!.projectId!
+  const forbid = (projectId: string, model: string) => ({ type: 'rule.set', projectId, rule: { kind: 'forbidModel', model }, text: `No ${model}.` }) as Command
+
+  it('applies a project\'s rules only to that project\'s groups', () => {
+    // 2026-10-23: one project's rules (three machines, no Haiku, high effort) refused every other project's Lead.
+    const f = projects(), app = projectIdOf(f, f.app)
+    f.run(forbid(app, 'sonnet')); f.run(forbid(app, 'test-model'))
+    expect(f.state.rules!.map(r => r.projectId)).toEqual([app, app])
+    const route = (conversationId: string, actor: Actor) => f.run({ type: 'route.record', conversationId, decision: record({ pick: 'c1' }) } as Command, actor, { recentRoutes: 0 })
+    expect(route(f.site, f.siteLead).result.routeDecisionId).toBeTruthy()
+    expect(() => route(f.app, f.lead)).toThrow('The owner\'s rule "No sonnet." rules out Claude sonnet.')
+    const siteWorker = f.add('site-worker', 'owner', f.site)
+    const assign = (conversationId: string, agentId: string) => {
+      f.run({ type: 'work.define', conversationId, brief: 'Build it.', checks: [{ description: 'Tests pass.', independent: false }] })
+      return f.run({ type: 'work.assign', conversationId, agentId })
+    }
+    expect(assign(f.site, siteWorker).result.warnings).toBeUndefined()
+    expect(assign(f.app, f.worker.kind === 'agent' ? f.worker.agentId : '').result.warnings).toEqual(['The owner\'s rule "No test-model." rules out Codex test-model.'])
+  })
+  it('keeps one machines list and the rule limit per project', () => {
+    const f = projects(), app = projectIdOf(f, f.app), site = projectIdOf(f, f.site)
+    const machinesIn = (projectId: string, machineId: string) => f.run({ type: 'rule.set', projectId, rule: { kind: 'machines', machineIds: [machineId] }, text: `Only ${machineId}.` } as Command)
+    machinesIn(app, 'm1'); machinesIn(site, 'm2'); machinesIn(app, 'm3')
+    expect(f.state.rules!.map(r => [r.projectId, r.text])).toEqual([[site, 'Only m2.'], [app, 'Only m3.']])
+    for (let i = 0; i < 49; i++) f.run({ type: 'rule.set', projectId: app, rule: { kind: 'preferIdle' }, text: `Rule ${i}.` } as Command)
+    expect(() => f.run(forbid(app, 'haiku'))).toThrow('50 rules')
+    expect(f.run(forbid(site, 'haiku')).result.ruleId).toBeTruthy()
+  })
+  it('moves Swarm-level rules to the project they were asked in, else to the Lead chat\'s project', () => {
+    const f = projects(), app = projectIdOf(f, f.app), site = projectIdOf(f, f.site)
+    const old = (id: string, askedIn: { conversationId: string; messageId: string } | null) =>
+      ({ id, rule: { kind: 'preferIdle' } as const, text: id, askedBy: 'owner', askedIn, addedBy: 'person:owner', createdAt: '' })
+    f.state.rules = [old('site', { conversationId: f.site, messageId: 'm1' }), old('direct', null), old('gone', { conversationId: 'deleted', messageId: 'm2' })]
+    expect(visibleState(f.state, owner).rules!.map(r => r.projectId)).toEqual([site, app, app])
+    f.run({ type: 'project.cadence', projectId: app, minutes: 1 })
+    expect(f.state.rules!.map(r => r.projectId)).toEqual([site, app, app])
+    f.run({ type: 'project.delete', projectId: site })
+    expect(f.state.rules!.map(r => r.id)).toEqual(['direct', 'gone'])
+  })
+  it('lets the project owner set its rules directly, and refuses the Swarm owner and Leads for another person\'s project', () => {
+    const f = projects()
+    const mine = f.run({ type: 'project.create', name: 'Peer', visibility: 'private', brief: '' }, peer).result as { projectId: string; conversationId: string }
+    const added = f.run(forbid(mine.projectId, 'haiku'), peer)
+    expect(added.messages).toEqual([expect.objectContaining({ conversationId: mine.conversationId, text: 'Rule added: No haiku.', source: { kind: 'rule' } })])
+    expect(f.state.rules![0]).toMatchObject({ projectId: mine.projectId, askedBy: 'peer', askedIn: null, addedBy: 'person:peer' })
+    expect(visibleState(f.state, owner).rules).toEqual([])
+    expect(() => f.run(forbid(mine.projectId, 'opus'))).toThrow('unavailable')
+    f.run({ type: 'project.sharing', projectId: mine.projectId, visibility: 'public', memberIds: [] }, peer)
+    expect(() => f.run(forbid(mine.projectId, 'opus'))).toThrow('Only the project owner')
+    expect(() => f.run({ type: 'rule.remove', ruleId: added.result.ruleId as string })).toThrow('Only the project owner')
+    expect(() => f.run({ ...forbid(projectIdOf(f, f.app), 'opus'), projectId: undefined, askedIn: { conversationId: f.app, messageId: 'm1' } } as Command,
+      f.lead, said({ author: { kind: 'person', id: 'peer' } }))).toThrow('quote a chat message the project owner wrote')
+    expect(() => f.run({ ...forbid(projectIdOf(f, f.site), 'opus'), askedIn: { conversationId: f.app, messageId: 'm1' } } as Command, f.lead, said())).toThrow('unavailable')
+    f.run({ type: 'rule.remove', ruleId: added.result.ruleId as string }, peer)
     expect(f.state).not.toHaveProperty('rules')
   })
   it('tells each project\'s Lead chat which of its starts were abandoned when the machine joins', () => {
@@ -1411,5 +1499,180 @@ describe('the owner\'s rules, after review', () => {
       expect(broken(rule(model), target('default'))).toBeNull()
       expect(broken(rule(model), target(null))).toBeNull()
     }
+  })
+})
+
+describe('machine.remove', () => {
+  const contribute = (f: ReturnType<typeof fixture>, contributorId = 'owner', machineId = 'host') => {
+    const generation = f.state.people.find(p => p.id === contributorId)!.generation
+    f.state.machines = [...(f.state.machines ?? []), { machineId, name: 'Studio', contributorId, membershipGeneration: generation, generation: 'g1',
+      cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false } as never]
+  }
+  const start = (f: ReturnType<typeof fixture>, group: string, dispatched = false) => {
+    f.state.starts = [...(f.state.starts ?? []), { id: `start-${(f.state.starts ?? []).length}`, creationId: 'creation', actorKey: 'agent:lead', contributorId: 'owner',
+      membershipGeneration: f.state.people[0]!.generation, machineOwnerId: 'host-owner', hostGrant: null, ...(dispatched ? { dispatched: true } : {}),
+      request: { conversationId: group, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
+        requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as never]
+  }
+
+  it('takes the machine out with the Swarm\'s agents on it, and tells each group whose task needs a new worker', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group(), worker = f.add('worker', 'owner', group)
+    f.state.agents.find(a => a.id === lead)!.machineId = 'elsewhere'
+    contribute(f)
+    f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+    f.state.harnessReservations = [{ machineId: 'host', harnessId: 'old', generation: 'g0', renewed: false }, { machineId: 'elsewhere', harnessId: 'x', generation: 'g0', renewed: false }]
+    const named = (id: string) => { const a = f.state.agents.find(x => x.id === id)!; return a.displayName ?? a.name }
+    const workerName = named(worker)
+    const effects = f.run({ type: 'machine.remove', machineId: 'host' })
+
+    expect(f.state.machines).toEqual([])
+    expect(f.state.agents.map(a => a.id)).toEqual([lead])
+    expect(effects.result.removedAgents).toEqual([worker])
+    expect(f.state.harnessReservations).toEqual([expect.objectContaining({ machineId: 'elsewhere' })])
+    expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('reconciling')
+    const notice = effects.messages.find(m => m.conversationId === group)!
+    expect(notice).toMatchObject({ author: { kind: 'person', id: 'owner' }, source: { kind: 'system' } })
+    expect(notice.text).toBe(`owner removed Studio from the Swarm, and ${workerName} with it. Its task "Offline editing" needs to be assigned again or closed.`)
+    expect(notice.recipients).toEqual([lead])
+    expect(effects.messages.map(m => m.conversationId)).toEqual([group])
+    expect(new Set(effects.messages.map(m => m.id)).size).toBe(effects.messages.length)
+  })
+
+  it('removes a machine that only runs agents, so nothing lists it any more', () => {
+    const f = fixture(), worker = f.add('worker')
+    f.run({ type: 'machine.remove', machineId: 'host' })
+    expect(f.state.agents.some(a => a.id === worker)).toBe(false)
+    expect(f.state.machines ?? []).toEqual([])
+  })
+
+  it('fails the starts still waiting for it, and waits for one already launching', () => {
+    const f = fixture(), group = f.group()
+    contribute(f)
+    start(f, group)
+    const effects = f.run({ type: 'machine.remove', machineId: 'host' })
+    expect(f.state.starts![0]!.error).toBe('Its machine was removed from the Swarm.')
+    expect(effects.messages).toEqual([expect.objectContaining({ conversationId: group, text: 'Builder will not start: its machine was removed from the Swarm.' })])
+
+    const g = fixture(), other = g.group()
+    contribute(g)
+    start(g, other, true)
+    expect(() => g.run({ type: 'machine.remove', machineId: 'host' })).toThrow(expect.objectContaining({ code: 'STARTS_PENDING' }))
+    expect(g.state.machines).toHaveLength(1)
+  })
+
+  it('lets the machine\'s owner take back what is all theirs, and leaves anyone else\'s to the Swarm owner', () => {
+    const f = fixture()
+    f.invite()
+    contribute(f, 'peer')
+    f.add('theirs', 'peer')
+    f.run({ type: 'machine.remove', machineId: 'host' }, peer)
+    expect(f.state.machines).toEqual([])
+
+    const g = fixture()
+    g.invite()
+    contribute(g, 'peer')
+    g.add('owners', 'owner')
+    expect(() => g.run({ type: 'machine.remove', machineId: 'host' }, peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN', status: 403 }))
+    g.run({ type: 'machine.remove', machineId: 'host' })
+    expect(g.state.machines).toEqual([])
+  })
+
+  it('is a person\'s to do, and only for a machine in the Swarm', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
+    expect(() => f.run({ type: 'machine.remove', machineId: 'host' }, { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }))
+      .toThrow(expect.objectContaining({ code: 'HUMAN_REQUIRED', status: 403 }))
+    expect(() => f.run({ type: 'machine.remove', machineId: 'nowhere' })).toThrow(expect.objectContaining({ code: 'NOT_FOUND', status: 404 }))
+    expect(commandSchema.safeParse({ type: 'machine.remove', machineId: 'host', extra: true }).success).toBe(false)
+  })
+})
+
+describe('Lead protection', () => {
+  const refused = (project = 'Pilot') => expect.objectContaining({ code: 'LEAD_PROTECTED',
+    message: expect.stringMatching(new RegExp(`is the Product Manager of project ${project}\\. Delete the project first\\.$`)) })
+  const hostOwner: Actor = { kind: 'person', userId: 'host-owner', email: 'host@example.com' }
+  const closing = (agentId: string, harnessId: string) => ({ agentId, machineId: 'host', harnessId, machineOwnerId: 'host-owner' })
+
+  it('refuses removing the Lead as an agent, with its machine, or with the person who contributed it', () => {
+    const f = fixture()
+    f.invite()
+    const lead = f.add('lead', 'peer', 'lead', true)
+    expect(() => f.run({ type: 'agent.remove', agentId: lead })).toThrow(refused())
+    expect(() => f.run({ type: 'machine.remove', machineId: 'host' })).toThrow(refused())
+    expect(() => f.run({ type: 'member.remove', userId: 'peer' })).toThrow(refused())
+    expect(() => f.run({ type: 'member.remove', userId: 'peer' }, peer)).toThrow(refused())
+    expect(f.state.agents.map(a => a.id)).toEqual([lead])
+    expect(f.state.people.map(p => p.id)).toEqual(['owner', 'peer'])
+  })
+
+  it('refuses clearing or replacing the Lead, so it can never be released afterwards', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), other = f.add('other'), group = f.group()
+    expect(() => f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: lead, present: false, lead: false })).toThrow(refused())
+    expect(() => f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: other, present: true, lead: true })).toThrow(refused())
+    expect(() => f.add('other', 'owner', 'lead', true)).toThrow(refused())
+    expect(() => f.run({ type: 'agent.release', agentId: lead, decision: 'stop' })).toThrow(refused())
+    expect(f.state.conversations[0]!.leadId).toBe(lead)
+    // Its other groups and the Lead conversation's other members are not protected.
+    f.run({ type: 'conversation.agent', conversationId: group, agentId: lead, present: false, lead: false })
+    f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: other, present: false, lead: false })
+    expect(f.state.conversations.find(c => c.id === group)!.leadId).toBeNull()
+  })
+
+  it('protects the Lead of a Swarm from before projects', () => {
+    const f = fixture()
+    delete f.state.projects
+    const lead = f.add('lead', 'owner', 'lead', true)
+    expect(() => f.run({ type: 'agent.remove', agentId: lead })).toThrow(refused())
+  })
+
+  it('lets only deleting its project take the Lead, and asks its host to close the session', () => {
+    const f = fixture()
+    const { projectId, conversationId } = f.run({ type: 'project.create', name: 'Docs', visibility: 'public', brief: 'Docs' }).result as { projectId: string; conversationId: string }
+    const lead = f.add('docs-lead', 'owner', conversationId, true)
+    expect(() => f.run({ type: 'agent.remove', agentId: lead })).toThrow(refused('Docs'))
+    const effects = f.run({ type: 'project.delete', projectId })
+    expect(f.state.agents).toEqual([])
+    expect(effects.cancelledAgents).toEqual([lead])
+    expect(f.state.closingSessions).toEqual([closing(lead, 'docs-lead')])
+  })
+
+  it('asks the host to close the session of every agent a person removes, and shows it to nobody else', () => {
+    const f = fixture(), worker = f.add('worker')
+    f.run({ type: 'agent.remove', agentId: worker })
+    expect(f.state.closingSessions).toEqual([closing(worker, 'worker')])
+    expect(visibleState(f.state, owner)).not.toHaveProperty('closingSessions')
+
+    const g = fixture(), other = g.add('other')
+    g.run({ type: 'machine.remove', machineId: 'host' })
+    expect(g.state.closingSessions).toEqual([closing(other, 'other')])
+
+    const h = fixture()
+    h.invite()
+    const theirs = h.add('theirs', 'peer')
+    h.run({ type: 'member.remove', userId: 'peer' }, peer)
+    expect(h.state.closingSessions).toEqual([closing(theirs, 'theirs')])
+  })
+
+  it('drops a close request and the slot held for its session once the machine owner says it closed', () => {
+    const f = fixture(), worker = f.add('worker')
+    f.run({ type: 'agent.remove', agentId: worker })
+    expect(f.state.harnessReservations).toEqual([expect.objectContaining({ machineId: 'host', harnessId: 'worker' })])
+    const closed = { type: 'agent.sessionClosed', agentId: worker, harnessId: 'worker' } as Command
+    const nothing = expect.objectContaining({ code: 'NOT_FOUND', status: 404 })
+    // Another account learns nothing, not even whether a close is pending.
+    expect(() => f.run(closed)).toThrow(nothing)
+    expect(() => f.run({ ...closed, harnessId: 'other' } as Command, hostOwner)).toThrow(nothing)
+    f.run(closed, hostOwner)
+    expect(f.state.closingSessions).toBeUndefined()
+    expect(f.state.harnessReservations).toEqual([])
+    expect(f.state.releasedHarnesses).toEqual([{ machineId: 'host', harnessId: 'worker' }])
+    // Only the store's receipt answers an exact retry; a new confirmation finds nothing to close.
+    expect(() => f.run(closed, hostOwner)).toThrow(nothing)
+  })
+
+  it('forgets a close request when the same session is added back before its host closed it', () => {
+    const f = fixture(), worker = f.add('worker')
+    f.run({ type: 'agent.remove', agentId: worker })
+    f.add('worker')
+    expect(f.state.closingSessions).toBeUndefined()
   })
 })

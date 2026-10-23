@@ -4078,6 +4078,7 @@ class NewHarnessController extends ChangeNotifier {
       model: model,
       dsh: harness,
       swarmRole: integration?.swarmRole,
+      swarmSkillMode: integration?.swarmSkillMode,
       // Sent exactly as written; an agent that cannot take one is never sent it.
       prompt: takesTask && files.isEmpty && launchMessage.isNotEmpty
           ? launchMessage

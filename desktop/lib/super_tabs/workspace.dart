@@ -11,6 +11,7 @@ import 'dialog_scope.dart';
 import 'model.dart';
 import 'pane.dart';
 import 'sharing.dart';
+import 'terminal_unavailable.dart';
 import 'view.dart';
 
 /// Keeps the app's one native canvas alive in the group's middle area.
@@ -75,10 +76,14 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
   }
 
   void _syncTerminal(SuperTabController controller, String swarmId) {
+    final devices =
+        controller.devicesSelected &&
+        app.devicesEnabled &&
+        !controller.accessRevoked;
     final agents = controller.terminalAgents(controller.selectedId);
     final request = (
       swarmId,
-      controller.selectedId,
+      devices ? r'$devices' : controller.selectedId,
       agents.isEmpty
           ? null
           : agents
@@ -87,7 +92,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                   final native = machine?.agents
                       .where((n) => n.id == a.harnessId)
                       .firstOrNull;
-                  return '${a.id}:${native?.isStopped}:${machine?.connectionStatus}:${native != null}';
+                  return '${a.id}:${a.harnessId}:${native?.isStopped}:${machine?.connectionStatus}:${native != null}';
                 })
                 .join(','),
       controller.accountId,
@@ -105,6 +110,10 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
         mounted &&
         _terminalRequest == request &&
         app.activeSwarmId == swarmId &&
+        (controller.devicesSelected &&
+                app.devicesEnabled &&
+                !controller.accessRevoked) ==
+            devices &&
         app.currentUser?.id == controller.accountId &&
         controller.canWrite == request.$5;
     // Native attachment may wait for machine discovery. Serialize replacements
@@ -115,13 +124,28 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
       ) async {
         if (!current()) return;
         final tab = app.swarms.where((s) => s.id == swarmId).firstOrNull;
-        for (final pane in tab?.panes.toList() ?? const <TerminalPane>[]) {
+        // Closing a terminal also removes its owned viewer. Do that first so
+        // navigation never records a web/Finder preview as manually dismissed.
+        final oldPanes = tab?.panes.toList() ?? <TerminalPane>[];
+        oldPanes.sort(
+          (a, b) => (a.isViewer ? 1 : 0).compareTo(b.isViewer ? 1 : 0),
+        );
+        for (final pane in oldPanes) {
+          // Keep only the dashboard when revisiting Devices, also removing
+          // the chat slot or session restored from its former split layout.
+          if (devices && pane.isDevices) continue;
           if (!agents.any(
             (a) => a.machineId == pane.machineId && a.harnessId == pane.agentId,
           )) {
             if (!current()) return;
             await app.closePane(pane.id, swarmId: swarmId);
           }
+        }
+        if (devices) {
+          if (!current()) return;
+          app.prepareSuperTabDevices(swarmId);
+          setState(() => _readyRequest = request);
+          return;
         }
         for (final agent in agents) {
           if (!current()) return;
@@ -176,9 +200,14 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
         machine = app.stateOf(agent.machineId);
       }
       if (machine?.agents.any((a) => a.id == agent.harnessId) != true) {
-        throw const SuperTabFailure(
+        throw SuperTabFailure(
           'TERMINAL_UNAVAILABLE',
-          'The shared terminal is not available yet. Its execution machine must be online.',
+          superTabTerminalUnavailable(
+            snapshot: controller.snapshot,
+            agent: agent,
+            accountId: controller.accountId,
+            machine: machine,
+          ),
         );
       }
       if (!current()) return;
@@ -397,9 +426,13 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
           builder: (context, _) {
             _syncTerminal(controller, tab.id);
             final agents = controller.terminalAgents(controller.selectedId);
+            final devices =
+                controller.devicesSelected &&
+                app.devicesEnabled &&
+                !controller.accessRevoked;
             final showTerminal =
                 _readyRequest == _terminalRequest &&
-                agents.isNotEmpty &&
+                (devices || agents.isNotEmpty) &&
                 tab.panes.isNotEmpty;
             // The terminal canvas is mounted either way; whether a person can see it is this.
             WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -476,7 +509,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                       'Offline machine',
                   terminal: showTerminal
                       ? terminal
-                      : agents.isNotEmpty
+                      : devices || agents.isNotEmpty
                       ? const Center(child: CircularProgressIndicator())
                       : null,
                   onCloseTerminal: () {

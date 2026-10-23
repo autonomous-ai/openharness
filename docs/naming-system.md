@@ -97,18 +97,29 @@ no CLI keeps its maker's name (Fo).
 A pane is a view, so closing a pane or tab closes views. **Stop Harness** ends the
 running harness. Adding harnesses to a tab groups them without a separate team
 setup. A **Swarm** occupies one tab in that same tab bar. A person can belong to several Swarms.
-Its project names open their product manager chats; a separate chevron reveals each project's workgroups.
-An expanded project without workgroups says **No workgroups yet**. **Your devices** opens the
-existing Devices tab. The navigation, conversation and people panes have draggable dividers.
+Its sidebar starts with **New project** and **Your devices**. Projects and Machines have
+section headings with disclosure after the label and an add action at the right. Project rows
+show their project icon at the left, then their name, status and a right-hand disclosure.
+Project names open their product manager chats; disclosure reveals workgroups whose names
+align with the project name. An expanded project without workgroups says **No workgroups yet**.
+**Your devices** opens the Devices dashboard and its existing agent conversation inside the
+current Swarm, preserving project drafts and the selected workgroup. Ordinary tabs retain
+their standalone Devices workspace. The navigation, conversation and people panes have
+draggable dividers; their default side widths are 300 and 280 pixels, respecting saved resizes.
+The right pane is a stable directory of all humans and agents in the current Swarm that the
+viewer can access. Selecting a project, workgroup or Devices does not filter that directory;
+local machine inventory does not add people or agents to it.
 Agents have individual display names and the same avatar treatment as people. Their role badges
-are **PM**, **Dev** and **Rev**; project context appears underneath. Engine names belong in details.
+are **PM**, **Dev** and **Rev**. The name, role badge and compact project tag share the first line;
+the existing status icon and activity or assigned task appear underneath. Shortened names and
+tags retain their full text on hover. Reuse observed status and assignment data; do not generate
+activity summaries or infer a work timer from the session's age. Engine names belong in details.
 Chat headings and quoted replies use the same current agent identity as the roster, including
 older messages. When an agent has left, its recorded author name remains available in history.
-Machine rows are one line: a status dot, the name, a chip for each known model allowance
-(the engine's mark and the share left, amber below 20% and red below 10%) and the agents'
-avatars. The owner and hardware are in the row's tooltip, never the reading's age, and the
-row opens labeled details. Offline machines are listed under **Offline · N**, without chips,
-and omit stale readings from their details.
+Machine rows show a computer icon, name, owner avatar, status and right-hand disclosure.
+Clicking the name opens labeled details; disclosure shows agents with their names, role badges
+and status, followed by known resources and model allowances. Offline machines stay in the
+same list and omit stale readings. Rows share the projects' alignment and full-width highlight.
 The stored `lead` and `builder` routing roles and native harness names remain compatible.
 People, agents and machines belong to the Swarm. A project's **Public** visibility means everyone
 in that Swarm; **Private** means its owner and explicitly invited project members. Swarms are

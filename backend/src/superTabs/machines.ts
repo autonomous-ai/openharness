@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { fail, person, type AgentStart, type AgentStartRequest, type SuperTabState } from './model.js'
+import { fail, person, type Agent, type AgentStart, type AgentStartRequest, type SuperTabState } from './model.js'
 import { groupProject } from './projects.js'
 import { conversation } from './model.js'
 
@@ -17,6 +17,14 @@ export interface ContributedMachine {
   paused: boolean
   observation?: MachineObservation & { receivedAt: number }
 }
+/** Older contributions may name engines that Swarm no longer starts. Their fresh
+ * observation lists the supported engines that are actually installed. */
+export function contributedEngines(pool: ContributedMachine, observation: MachineObservation | undefined = pool.observation): string[] {
+  const supported = (engine: string) => engine === 'claude' || engine === 'codex'
+  return pool.engines.some(engine => !supported(engine))
+    ? (observation?.quotas ?? []).map(quota => quota.engine).filter(supported)
+    : pool.engines.filter(supported)
+}
 const measure = z.number().finite().nonnegative().nullable()
 const percent = z.number().min(0).max(100).nullable()
 const resource = z.object({
@@ -32,11 +40,35 @@ const quota = z.object({ engine: z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), kn
 }).strict()
 export const machineObservationSchema = z.object({ generation: z.string().max(160), resources: resource,
   tools: z.record(z.string().max(80), z.boolean()).refine(v => Object.keys(v).length <= 20),
+  toolProbeErrors: z.record(z.string().max(80), z.string().max(200)).refine(v => Object.keys(v).length <= 20).optional(),
   quotas: z.array(quota).max(32), runningHarnessIds: z.array(z.string().max(160)).max(1000),
   stoppedHarnessIds: z.array(z.string().max(160)).max(1000),
   stoppedReservations: z.array(z.object({ harnessId: z.string().min(1).max(160), generation: z.string().min(1).max(160) }).strict()).max(1000).optional(),
 }).strict()
 export type MachineObservation = z.infer<typeof machineObservationSchema>
+
+/** A machine reports every 15 seconds (cli/src/superTabs/machines.ts); three missed beats is offline. */
+export const MACHINE_FRESH_MS = 45_000
+
+/** Since when an agent has been down: the stored time a reading first showed its session gone or the host confirmed its
+ * stop, or its machine's last reading once that is stale. Nothing is written while a machine is silent, so that case is
+ * read from the reading itself. Undefined while it is up. */
+export function downSince(state: SuperTabState, target: Agent, now: number): string | undefined {
+  const observation = state.machines?.find(m => m.machineId === target.machineId)?.observation
+  const offline = observation && now - observation.receivedAt > MACHINE_FRESH_MS ? new Date(observation.receivedAt).toISOString() : undefined
+  return [target.downSince, offline].filter(Boolean).sort()[0]
+}
+
+/** Before a new reading replaces the last one: a session it lists as running is back; any other agent on the machine
+ * keeps the earliest time it was down, including the time its machine went silent. */
+export function recordAgentPresence(state: SuperTabState, machineId: string, running: string[], now: number): void {
+  for (const target of state.agents.filter(a => a.machineId === machineId)) {
+    if (running.includes(target.harnessId)) {
+      delete target.downSince
+      delete target.downNamed
+    } else target.downSince = downSince(state, target, now) ?? new Date(now).toISOString()
+  }
+}
 
 export function machineContribution(state: SuperTabState, machineId: string) {
   const pool = state.machines?.find(m => m.machineId === machineId)
@@ -85,7 +117,8 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   // setting can be a path or a name of the caller's own.
   const refused: string[] = []
   if (request.cwd !== cwd) refused.push(`cwd (this project uses ${cwd} on it)`)
-  if (!pool.engines.includes(request.engine)) refused.push(`engine (it contributes ${pool.engines.join(', ') || 'no engines'})`)
+  const engines = contributedEngines(pool)
+  if (!engines.includes(request.engine)) refused.push(`engine (it contributes ${engines.join(', ') || 'no engines'})`)
   const settings = (['codexHome', 'gridModel', 'gridName'] as const).filter(key => request[key])
   if (settings.length) refused.push(`${settings.join(', ')} (it runs with its own default account settings, so leave ${settings.length > 1 ? 'them' : 'it'} out)`)
   if (request.permissionMode !== undefined && request.permissionMode !== 'full') {
@@ -94,7 +127,7 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   if (refused.length) {
     fail('OUTSIDE_CONTRIBUTION', `${pool.name} accepts only its contributed project folder, engines and default account settings, with full permissions for Swarm agents. Refused: ${refused.join('; ')}.`, 403)
   }
-  if (!pool.observation || now - pool.observation.receivedAt > 45_000) {
+  if (!pool.observation || now - pool.observation.receivedAt > MACHINE_FRESH_MS) {
     fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')
   }
   if (!start && machineSlots(state, pool) >= pool.maxAgents) fail('MACHINE_FULL', 'This machine has reached its contributed agent limit.')

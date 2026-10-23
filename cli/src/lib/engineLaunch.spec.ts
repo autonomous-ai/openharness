@@ -1136,14 +1136,37 @@ exec ${ZSH} -c "$script" "$@"
 }
 
 describe('commandAvailableInInteractiveShell', () => {
+  it('reports a shell failure as unverified rather than a missing command', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'harness-failed-probe-'))
+    dirs.push(dir)
+    const shell = join(dir, 'bash')
+    writeFileSync(shell, '#!/bin/sh\nexit 9\n')
+    chmodSync(shell, 0o700)
+    const result = await commandAvailableInInteractiveShell('git', shell, undefined, true)
+    expect(result).toMatchObject({ status: 'unverified', detail: expect.stringContaining('9') })
+  })
+  it('bounds a hung shell probe and reports a timeout as unverified', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'harness-slow-probe-'))
+    dirs.push(dir)
+    const shell = join(dir, 'bash')
+    writeFileSync(shell, '#!/bin/sh\nexec /bin/sleep 30\n')
+    chmodSync(shell, 0o700)
+    const started = Date.now()
+    const result = await commandAvailableInInteractiveShell('git', shell, undefined, true)
+    expect(result).toEqual({ status: 'unverified', detail: 'Interactive shell tool probe timed out after 5 seconds.' })
+    expect(Date.now() - started).toBeLessThan(7_000)
+  }, 8_000)
   it('uses the same bash interactive PATH that launches a new engine', async () => {
     const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-bin-'))
     dirs.push(binDir)
     executable(binDir, 'kilo')
     process.env.HARNESS_ENGINE_TEST_PATH = binDir
 
-    await expect(commandAvailableInInteractiveShell('kilo', bashProbeShell())).resolves.toBe(true)
-    await expect(commandAvailableInInteractiveShell('missing-engine', bashProbeShell())).resolves.toBe(false)
+    const shell = bashProbeShell()
+    await expect(commandAvailableInInteractiveShell('kilo', shell)).resolves.toBe(true)
+    await expect(commandAvailableInInteractiveShell('missing-engine', shell)).resolves.toBe(false)
+    await expect(commandAvailableInInteractiveShell('kilo', shell, undefined, true)).resolves.toEqual({ status: 'available' })
+    await expect(commandAvailableInInteractiveShell('missing-engine', shell, undefined, true)).resolves.toEqual({ status: 'missing' })
   })
 
   it('recognizes an installed vendor path before the shell profile has it on PATH', async () => {

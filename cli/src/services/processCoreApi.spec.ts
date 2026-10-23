@@ -227,9 +227,11 @@ describe('the core API a light service runs on in its own process', () => {
     const recap = { tabId: 't1', leadId: 'l1', text: 'Shipped', at: 1, none: false }
     doors.cards([])
     doors.cardRecap(recap)
+    doors.shareObservers()
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(ask).toHaveBeenCalledWith('super_tab_cards', { items: [] })
     expect(ask).toHaveBeenCalledWith('super_tab_card_recap', { recap })
+    expect(ask).toHaveBeenCalledWith('super_tab_observers', {})
   })
 
   it('acts on the core for an experiment: agents made, turns stopped and delivered, windows told, each asked', async () => {

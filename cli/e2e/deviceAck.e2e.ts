@@ -15,11 +15,10 @@ import { signedInDaemon, writeE2ee } from './harness/fleet.js'
 
 type Listing = { pending?: string[]; members: Array<{ pub: string; label: string; confirmed?: { by: string; label: string } }> }
 
-const local = { 'x-adapter-local': '1', 'content-type': 'application/json' }
 const devices = async (daemon: IsolatedDaemon): Promise<Listing> =>
-  (await fetch(`http://127.0.0.1:${daemon.port}/api/devices`, { headers: local })).json() as Promise<Listing>
+  (await fetch(`http://127.0.0.1:${daemon.port}/api/devices`, { headers: daemon.localHeaders({ 'x-adapter-local': '1' }) })).json() as Promise<Listing>
 const dismiss = async (daemon: IsolatedDaemon, body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }> => {
-  const res = await fetch(`http://127.0.0.1:${daemon.port}/api/devices/dismiss`, { method: 'POST', headers: local, body: JSON.stringify(body) })
+  const res = await fetch(`http://127.0.0.1:${daemon.port}/api/devices/dismiss`, { method: 'POST', headers: daemon.localHeaders({ 'x-adapter-local': '1', 'content-type': 'application/json' }), body: JSON.stringify(body) })
   return { status: res.status, body: await res.json() as Record<string, unknown> }
 }
 const pendingOn = async (daemon: IsolatedDaemon): Promise<string[]> => (await devices(daemon)).pending ?? []

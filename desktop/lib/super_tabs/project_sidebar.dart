@@ -4,6 +4,7 @@ import '../core/machine_resources.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
+import '../shared/widgets/app_icon_button.dart';
 import '../state/app_state.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
@@ -22,6 +23,8 @@ class ProjectSidebar extends StatelessWidget {
     this.app,
     this.onNewProject,
     this.onYourDevices,
+    this.devicesSelected = false,
+    this.onOpenAgent,
     this.readLocal,
     this.now = DateTime.now,
   });
@@ -32,6 +35,8 @@ class ProjectSidebar extends StatelessWidget {
   final AppNotifier? app;
   final VoidCallback? onNewProject;
   final VoidCallback? onYourDevices;
+  final bool devicesSelected;
+  final ValueChanged<SuperTabAgent>? onOpenAgent;
 
   /// Forwarded to the embedded [SuperTabMachines]; a test gives it to have
   /// the Machines group's readings taken without a real machine.
@@ -43,23 +48,73 @@ class ProjectSidebar extends StatelessWidget {
   @visibleForTesting
   final DateTime Function() now;
 
-  /// A row's chevron (or the room for one), at its level's indent; its name starts right after.
+  /// Projects and workgroups share a text column. Only projects use its icon.
   static const _iconColumn = SuperTabSectionHeading.actionWidth;
   static const _dotSize = 6.0;
 
-  /// The space after a row's trailing unread dot: it centers the dot on the
-  /// headings' + ([SuperTabSectionHeading.endInset] 0), whatever the width.
-  static const markerInset =
-      SuperTabSectionHeading.actionWidth / 2 - _dotSize / 2;
+  Widget _navigationRow({
+    required String key,
+    required String label,
+    required IconData icon,
+    required VoidCallback? onTap,
+    bool selected = false,
+  }) => Padding(
+    padding: const EdgeInsets.only(bottom: 2),
+    child: Material(
+      color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
+      borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+      clipBehavior: Clip.antiAlias,
+      child: Semantics(
+        button: true,
+        selected: selected,
+        child: InkWell(
+          key: ValueKey(key),
+          onTap: onTap,
+          hoverColor: grid.AppSurface.hoverFill,
+          focusColor: grid.AppSurface.hoverFill,
+          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+          child: Row(
+            children: [
+              SizedBox(width: SuperTabSectionHeading.indentFor(0)),
+              SizedBox(
+                width: _iconColumn,
+                child: Icon(
+                  icon,
+                  size: AppIcons.inlineSize,
+                  color: onTap == null
+                      ? DesktopChrome.muted
+                      : DesktopChrome.foreground,
+                ),
+              ),
+              Expanded(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 36),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(0, 8, 12, 8),
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: DesktopChrome.control(
+                        medium: selected,
+                        color: onTap == null
+                            ? DesktopChrome.muted
+                            : DesktopChrome.foreground,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
 
-  /// A project's lead row (level 1, under the heading) or a workgroup (level 2, under its project).
-  Widget _row(
-    SuperTabConversation group, {
-    SuperTabProject? project,
-    bool closed = false,
-  }) {
-    final level = project != null ? 1 : (closed ? 3 : 2);
-    final selected = controller.selectedId == group.id;
+  /// Project names open their PM chat; only the trailing control expands them.
+  Widget _row(SuperTabConversation group, {SuperTabProject? project}) {
+    final selected = !devicesSelected && controller.selectedId == group.id;
     final groups = project == null
         ? [group]
         : controller.snapshot!.conversations.where(
@@ -83,31 +138,17 @@ class ProjectSidebar extends StatelessWidget {
           borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
           child: Row(
             children: [
-              SizedBox(width: SuperTabSectionHeading.indentFor(level)),
-              if (project != null)
-                IconButton(
-                  key: ValueKey('super-project-expand-${project.id}'),
-                  icon: Icon(
-                    expanded ? AppIcons.chevronDown : AppIcons.chevronRight,
-                    size: AppIcons.inlineSize,
-                  ),
-                  color: DesktopChrome.muted,
-                  // The row owns hover/press feedback. Keep the themed focus
-                  // boundary for this independent disclosure action.
-                  style: const ButtonStyle(
-                    minimumSize: WidgetStatePropertyAll(Size.square(32)),
-                    padding: WidgetStatePropertyAll(EdgeInsets.all(6)),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    visualDensity: VisualDensity.standard,
-                    overlayColor: WidgetStatePropertyAll(Colors.transparent),
-                    backgroundColor: WidgetStatePropertyAll(Colors.transparent),
-                  ),
-                  tooltip:
-                      '${expanded ? 'Collapse' : 'Expand'} ${project.name}',
-                  onPressed: () => controller.toggleProject(project.id),
-                )
-              else
-                const SizedBox(width: _iconColumn),
+              SizedBox(width: SuperTabSectionHeading.indentFor(0)),
+              SizedBox(
+                width: _iconColumn,
+                child: project == null
+                    ? null
+                    : Icon(
+                        expanded ? AppIcons.folderOpen : AppIcons.folder,
+                        size: AppIcons.inlineSize,
+                        color: DesktopChrome.muted,
+                      ),
+              ),
               Expanded(
                 child: Semantics(
                   label: project?.isPrivate == true ? 'Private project' : null,
@@ -117,12 +158,7 @@ class ProjectSidebar extends StatelessWidget {
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(minHeight: 36),
                       child: Padding(
-                        padding: const EdgeInsets.fromLTRB(
-                          0,
-                          8,
-                          markerInset,
-                          8,
-                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
                         child: Row(
                           children: [
                             Expanded(
@@ -149,32 +185,6 @@ class ProjectSidebar extends StatelessWidget {
                                 ),
                               ),
                             ],
-                            if (waiting) ...[
-                              const SizedBox(width: 8),
-                              Tooltip(
-                                message: 'Needs a human',
-                                child: Text(
-                                  '?',
-                                  style: DesktopChrome.control(
-                                    color: grid.AppPalette.warn,
-                                    medium: true,
-                                  ),
-                                ),
-                              ),
-                            ] else if (unread) ...[
-                              const SizedBox(width: 8),
-                              Semantics(
-                                label: 'Unread messages',
-                                child: Container(
-                                  width: _dotSize,
-                                  height: _dotSize,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: DesktopChrome.accent,
-                                  ),
-                                ),
-                              ),
-                            ],
                           ],
                         ),
                       ),
@@ -182,6 +192,52 @@ class ProjectSidebar extends StatelessWidget {
                   ),
                 ),
               ),
+              SizedBox(
+                width: _iconColumn,
+                child: Center(
+                  child: waiting
+                      ? Tooltip(
+                          message: 'Needs a human',
+                          child: Text(
+                            '?',
+                            style: DesktopChrome.control(
+                              color: grid.AppPalette.warn,
+                              medium: true,
+                            ),
+                          ),
+                        )
+                      : unread
+                      ? Semantics(
+                          label: 'Unread messages',
+                          child: Container(
+                            width: _dotSize,
+                            height: _dotSize,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: DesktopChrome.accent,
+                            ),
+                          ),
+                        )
+                      : null,
+                ),
+              ),
+              if (project != null)
+                Semantics(
+                  expanded: expanded,
+                  child: AppIconButton(
+                    key: ValueKey('super-project-expand-${project.id}'),
+                    icon: expanded
+                        ? AppIcons.chevronDown
+                        : AppIcons.chevronRight,
+                    color: DesktopChrome.muted,
+                    hoverFill: Colors.transparent,
+                    tooltip:
+                        '${expanded ? 'Collapse' : 'Expand'} ${project.name}',
+                    onPressed: () => controller.toggleProject(project.id),
+                  ),
+                )
+              else
+                const SizedBox(width: _iconColumn),
             ],
           ),
         ),
@@ -219,15 +275,8 @@ class ProjectSidebar extends StatelessWidget {
               borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
               child: Row(
                 children: [
-                  SizedBox(width: SuperTabSectionHeading.indentFor(2)),
-                  SizedBox(
-                    width: _iconColumn,
-                    child: Icon(
-                      open ? AppIcons.chevronDown : AppIcons.chevronRight,
-                      size: AppIcons.inlineSize,
-                      color: DesktopChrome.muted,
-                    ),
-                  ),
+                  SizedBox(width: SuperTabSectionHeading.indentFor(0)),
+                  const SizedBox(width: _iconColumn),
                   Expanded(
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(minHeight: 36),
@@ -244,6 +293,14 @@ class ProjectSidebar extends StatelessWidget {
                       ),
                     ),
                   ),
+                  SizedBox(
+                    width: _iconColumn,
+                    child: Icon(
+                      open ? AppIcons.chevronDown : AppIcons.chevronRight,
+                      size: AppIcons.inlineSize,
+                      color: DesktopChrome.muted,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -251,7 +308,7 @@ class ProjectSidebar extends StatelessWidget {
         ),
       ),
       if (open)
-        for (final group in groups) _row(group, closed: true),
+        for (final group in groups) _row(group),
     ];
   }
 
@@ -266,7 +323,7 @@ class ProjectSidebar extends StatelessWidget {
         ? [
             Padding(
               padding: EdgeInsets.fromLTRB(
-                SuperTabSectionHeading.indentFor(2) + _iconColumn,
+                SuperTabSectionHeading.indentFor(0) + _iconColumn,
                 8,
                 12,
                 10,
@@ -291,6 +348,23 @@ class ProjectSidebar extends StatelessWidget {
       child: ListView(
         padding: const EdgeInsets.all(8),
         children: [
+          if (onNewProject != null)
+            _navigationRow(
+              key: 'super-new-project',
+              label: 'New project',
+              icon: AppIcons.plus,
+              onTap: controller.canWrite ? onNewProject : null,
+            ),
+          if (onYourDevices != null)
+            _navigationRow(
+              key: 'super-your-devices',
+              label: 'Your devices',
+              icon: AppIcons.circle,
+              onTap: onYourDevices,
+              selected: devicesSelected,
+            ),
+          if (onNewProject != null || onYourDevices != null)
+            const SizedBox(height: 20),
           SuperTabSectionHeading(
             'Projects',
             onAdd: controller.canWrite ? onNewProject : null,
@@ -332,10 +406,10 @@ class ProjectSidebar extends StatelessWidget {
                 controller: controller,
                 app: app,
                 onAddAgent: onAddAgent,
+                onOpenAgent: onOpenAgent,
                 embedded: true,
                 collapsed: !controller.machinesGroupOpen,
                 onToggleCollapsed: controller.toggleMachinesGroup,
-                onYourDevices: onYourDevices,
                 readLocal: readLocal,
                 now: now,
               );

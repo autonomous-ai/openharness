@@ -59,6 +59,17 @@ const recorded = (s: ReturnType<typeof scoped>) => s.mock.calls.find(c => c[0].a
 const labels = (s: ReturnType<typeof scoped>) => (recorded(s).command.decision.candidates as Array<{ label: string }>).map(c => c.label)
 
 describe('routeTask', () => {
+  it('never offers OpenCode or Kilo even if an old policy enables them', async () => {
+    const oldPolicy = { ...policy, models: [...policy.models.map(model => ({ ...model, enabled: false })),
+      { engine: 'opencode', model: 'default', effort: 'default', quality: 3, cost: 1, enabled: true },
+      { engine: 'kilo', model: 'default', effort: 'default', quality: 3, cost: 1, enabled: true }] }
+    const oldTab = tab(); oldTab.state.agents = [agents[1]]
+    const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: oldTab, policy: { policy: oldPolicy },
+      machines: [{ machineId: 'm1', name: 'remote-1' }] } } })
+    const result = await routeTask(input, s, where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [],
+      engines: [{ engine: 'claude', installed: true }, { engine: 'opencode', installed: true }, { engine: 'kilo', installed: true }] })))
+    expect(result).toMatchObject({ error: 'NO_CANDIDATE' })
+  })
   it('offers the same member after Change agent when only its replacement terminal is live', async () => {
     const rebound = tab()
     rebound.state.agents = agents.map(a => a.id === 'a1' ? { ...a, harnessId: 'replacement' } : a)
@@ -102,6 +113,17 @@ describe('routeTask', () => {
     const decision = recorded(s).command.decision
     expect(decision.candidates.every((c: { model: string }) => c.model === 'opus')).toBe(true)
     expect(decision.excluded).toEqual(expect.arrayContaining([{ title: 'Multiply · Claude sonnet medium · remote-1', reason: 'Breaks the owner\'s rule: No Sonnet.' }]))
+  })
+  it('applies only the rules of the group\'s project', async () => {
+    // 2026-10-23: one project's rules (three machines, no Haiku, high effort) left every other project's Lead without candidates.
+    const models = async (projectId: string) => {
+      const ruled = tab(); (ruled.state as Record<string, unknown>).rules = [{ id: 'r1', projectId, rule: { kind: 'forbidModel', model: 'sonnet' }, text: 'No Sonnet.' }]
+      const s = scoped({ tab: ruled })
+      await routeTask(input, s, where as never, opener(), () => 'op')
+      return new Set(recorded(s).command.decision.candidates.map((c: { model: string }) => c.model))
+    }
+    expect(await models('other')).toContain('sonnet')
+    expect(await models('lead')).not.toContain('sonnet')
   })
   it('offers a Reviewer only for a review group, and starts a new one as a Reviewer', async () => {
     const offered = async (reviewer: boolean, reviewGroup: boolean) => {
@@ -199,7 +221,7 @@ describe('routeTask', () => {
     expect(reasonOf('mac').some(r => r.includes('This machine does not have the project folder. Add it to the Swarm so it can clone the project.'))).toBe(true)
     expect(reasonOf('mac').some(r => /Project disk space/.test(r))).toBe(false)
     // Its other reasons stay.
-    expect(reasonOf('mac').some(r => /Required tool unavailable: git/.test(r))).toBe(true)
+    expect(reasonOf('mac').some(r => /Required tool not verified: git/.test(r))).toBe(true)
     // The Lead's own machine keeps the plain reason: its folder was named by the Lead itself.
     expect(reasonOf('remote-1').some(r => r.includes('Project disk space could not be verified.'))).toBe(true)
   })
@@ -380,7 +402,7 @@ describe('routeTask', () => {
     const result = await routeTask({ ...input, assessment: { ...input.assessment, needs } }, s, where as never, open)
     expect(result).toMatchObject({ error: 'NO_CANDIDATE' })
     const reasons = (result.excluded as Array<{ reason: string }>).map(e => e.reason)
-    expect(reasons).toContain('Required tool unavailable: git. Required device unavailable: /dev/ttyUSB0.')
+    expect(reasons).toContain('Required tool missing: git. Required device unavailable: /dev/ttyUSB0.')
     const d = open.mock.results[0] && await open.mock.results[0].value as ReturnType<typeof daemon>
     expect(d.request).toHaveBeenCalledWith('super_tabs', expect.objectContaining({ action: 'capacity', cwd: '/repo', tools: ['git'], devices: ['/dev/ttyUSB0'] }), 20_000)
   })
@@ -398,7 +420,7 @@ describe('routeTask', () => {
     const requirements = { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: ['git'], devices: ['/dev/x'], quotaRequired: false }
     const { reasons } = admission({ resources: {}, tools: {}, devices: {} }, { installed: true, signedIn: true }, quota, requirements)
     expect(reasons).toEqual([
-      'Required tool unavailable: git.', 'Required device unavailable: /dev/x.',
+      'Required tool not verified: git. Ask the machine owner to check it and refresh the machine reading.', 'Required device unavailable: /dev/x.',
       'The subscription has an exhausted usage window. Wait for a fresh allowance reading or choose another account.'])
     const unknown = admission({ resources: {}, tools: {}, devices: {} }, { installed: true, signedIn: true }, quotaOf({}, 'claude', false), { ...requirements, tools: [], devices: [] })
     expect(unknown).toMatchObject({ allowed: true, reasons: [] })
@@ -608,7 +630,7 @@ describe('what the route log says about each candidate', () => {
 describe('routing contributed capacity', () => {
   const healthy = () => ({ machineId: 'm1', name: 'Contributed laptop', cwd: '/owner/project', engines: ['claude'], paused: false,
     observation: { receivedAt: Date.now(), resources: { memoryTotalBytes: 32e9, memoryUsedBytes: 2e9, projectDiskFreeBytes: 200e9 },
-      tools: { git: true }, runningHarnessIds: [], quotas: [{ engine: 'claude', known: true, windows: [{ name: '5-hour', usedPercent: 20, resetsAt: Date.now() + 3600000 }] }] } })
+      tools: { git: true }, runningHarnessIds: ['h1'], quotas: [{ engine: 'claude', known: true, windows: [{ name: '5-hour', usedPercent: 20, resetsAt: Date.now() + 3600000 }] }] } })
   async function runPool(pool: Record<string, any>, members = false, needs: Record<string, unknown> = {}, project?: Record<string, unknown>) {
     const groups = conversations()
     if (project) Object.assign(groups[1]!, { projectId: project.id })
@@ -624,6 +646,61 @@ describe('routing contributed capacity', () => {
     expect(answer.next).toContain('/owner/project')
     const member = await runPool(healthy(), true)
     expect(member.answer.ok).toBe(true)
+  })
+  it('reads an old OpenCode contribution as its installed Claude observation', async () => {
+    const pool = healthy()
+    pool.engines = ['opencode']
+    const { answer, s } = await runPool(pool)
+    expect(answer).toMatchObject({ ok: true, pick: { engine: 'claude' } })
+    expect(recorded(s).command.decision.candidates.every((c: { engine: string }) => c.engine === 'claude')).toBe(true)
+  })
+  it('keeps a healthy contributed member pickable', async () => {
+    const { answer, s } = await runPool(healthy(), true)
+    expect(answer.ok).toBe(true)
+    expect(recorded(s).command.decision.candidates).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply') })]))
+  })
+  it('withholds a contributed member whose engine account has an exhausted usage window', async () => {
+    const pool = healthy(); pool.observation.quotas[0]!.windows[0]!.usedPercent = 100
+    const { answer } = await runPool(pool, true)
+    expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+    expect(answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
+      reason: expect.stringContaining('exhausted usage window') })]))
+  })
+  it('withholds a contributed member when a required tool was reported missing', async () => {
+    const pool = healthy(); pool.observation.tools.git = false
+    const { answer } = await runPool(pool, true)
+    expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+    expect(answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
+      reason: expect.stringContaining('Required tool missing: git.') })]))
+  })
+  it('explains a contributed member tool probe that did not complete', async () => {
+    const pool = healthy()
+    delete (pool.observation.tools as Record<string, unknown>).git
+    Object.assign(pool.observation, { toolProbeErrors: { git: 'interactive shell timed out' } })
+    const { answer } = await runPool(pool, true)
+    expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+    expect(answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
+      reason: expect.stringMatching(/Required tool not verified: git.*interactive shell timed out.*check it/) })]))
+  })
+  it('withholds a contributed member absent from an explicit running-terminal list', async () => {
+    const pool = healthy(); pool.observation.runningHarnessIds = []
+    const { answer, s } = await runPool(pool, true)
+    expect(answer).toMatchObject({ ok: true, pick: { kind: 'new' } })
+    expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
+      reason: 'Its terminal is not running.' })]))
+  })
+  it('keeps a contributed member with no running-terminal list pickable and warns that its terminal is unverified', async () => {
+    const pool = healthy(); delete (pool.observation as Partial<typeof pool.observation>).runningHarnessIds
+    const { answer, s } = await runPool(pool, true)
+    expect(answer.ok).toBe(true)
+    expect(recorded(s).command.decision.candidates).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply') })]))
+    expect(answer.warnings).toEqual(expect.arrayContaining([expect.stringContaining('terminal could not be verified')]))
+  })
+  it('withholds a contributed member when a required device was not reported', async () => {
+    const { answer } = await runPool(healthy(), true, { devices: ['/dev/ttyUSB0'] })
+    expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+    expect(answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
+      reason: expect.stringContaining('Required device unavailable: /dev/ttyUSB0.') })]))
   })
   it('routes each swarm project to its own checkout and never widens an old folder grant', async () => {
     const project = { id: 'project-two', repository: { machineId: 'other', cwd: '/elsewhere', repositoryUrl: 'https://github.com/example/two' } }
@@ -658,5 +735,15 @@ describe('routing contributed capacity', () => {
   })
   it('refuses unobserved tools and devices, without probing arbitrary paths on a teammate computer', async () => {
     expect((await runPool(healthy(), false, { tools: ['docker'], devices: ['/dev/fixture'] })).answer.ok).not.toBe(true)
+  })
+  it('distinguishes reported missing tools from unverified contributed probes in route reasons', async () => {
+    const missing = healthy(); missing.observation.tools.git = false
+    const absent = await runPool(missing)
+    expect(absent.answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringContaining('Required tool missing: git.') })]))
+
+    const unverified = healthy(); delete (unverified.observation.tools as Record<string, unknown>).git
+    Object.assign(unverified.observation, { toolProbeErrors: { git: 'interactive shell timed out' } })
+    const failed = await runPool(unverified)
+    expect(failed.answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringMatching(/Required tool not verified: git.*interactive shell timed out/) })]))
   })
 })

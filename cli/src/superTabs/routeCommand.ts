@@ -4,7 +4,7 @@
  * and records the decision in the tab. */
 import { randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
-import { startRequirements } from './capacity.js'
+import { requiredToolReason, startRequirements } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
 import { choose, decide, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
@@ -22,6 +22,16 @@ const NO_PROJECT_FOLDER = 'This machine does not have the project folder. Add it
 const OFFLINE = 'Machine is offline or unreachable.'
 const UNKNOWN_QUOTA: Probe['quota'] = { known: false, leftPercent: null, resetsAt: null }
 const UNKNOWN_LOAD: NonNullable<Probe['load']> = { agents: null, freeMemoryBytes: null, hasFolder: null }
+const EXHAUSTED_WINDOW = 'The subscription has an exhausted usage window. Wait for a fresh allowance reading or choose another account.'
+/** A running member keeps its engine and memory, but still needs a live terminal, account allowance and the task's tools. */
+function memberRefusals(running: boolean | null, quota: Probe['quota'], tools: string[], devices: string[], reportedTools: Json, reportedDevices: Json, toolProbeErrors: Json): string[] {
+  return [
+    ...(running === false ? ['Its terminal is not running.'] : []),
+    ...tools.map(tool => requiredToolReason(tool, reportedTools[tool], toolProbeErrors[tool])).filter((reason): reason is string => reason !== null),
+    ...devices.filter(device => reportedDevices[device] !== true).map(device => `Required device unavailable: ${device}.`),
+    ...(quota.leftPercent === 0 ? [EXHAUSTED_WINDOW] : []),
+  ]
+}
 const active = (assignment: unknown) => { const a = object(assignment); return !!a.id && !ENDED_WORK.includes(String(a.status)) }
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
 /** The Lead's machine, for the task's folder; replaced in tests. */
@@ -119,8 +129,9 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // A review group is assigned only to a Reviewer, and a Reviewer nothing else.
   const review = typeof group.reviewOf === 'string'
   if (review) assessment = { ...assessment, kind: 'review' }
-  // A backend from before rules keeps none, so routing there is the policy order alone.
-  const rules = list(state.rules).filter(r => r.rule && typeof r.text === 'string') as unknown as SwarmRule[]
+  // A backend from before rules keeps none, so routing there is the policy order alone. Rules bind only their own project's
+  // groups; a backend from before per-project rules gives none a project, and its rules bind every group.
+  const rules = list(state.rules).filter(r => r.rule && typeof r.text === 'string' && (r.projectId === undefined || r.projectId === projectId)) as unknown as SwarmRule[]
   const members = agents.filter(a => !busy.has(String(a.id)) && (a.role === 'reviewer') === review && ENGINES.includes(String(object(a.configuration).engine))).map(a => withLaunchEffort(a, list(state.starts)))
   // A new agent starts only on a machine in the Swarm's Machines list (the backend refuses any other): a contributed machine, or
   // one an agent of the Swarm runs on. The Lead runs here, so its own machine is always listed. Of the account's machines
@@ -144,7 +155,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     }
     machines.set(String(pool.machineId), { name: String(pool.name), status: 'contributed', account: false, pool })
   }
-  const enabled = policy.models.filter(m => m.enabled)
+  const enabled = policy.models.filter(m => m.enabled && ENGINES.includes(m.engine))
 
   // The probes do not wait for the context reads: the machines, the task's folder and the group's talk and log are read
   // together, and each read that is only context gives up after three seconds. What needs several of them (whether a
@@ -183,7 +194,9 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     ok: true, ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : { unrecorded: true }),
     pick: publicOf(verdict.pick), via: verdict.via, p: verdict.p, belowFloor: choice.belowFloor, why: verdict.why,
     alternatives: choice.shown.filter(s => s.id !== verdict.pick.id).slice(0, 2).map(publicOf),
-    warnings: [...(Array.isArray(effective.warnings) ? effective.warnings : []), ...(value.machinesUnreadable === true ? [MACHINES_UNREADABLE] : []), ...(choice.short ? [choice.short] : [])],
+    warnings: [...(Array.isArray(effective.warnings) ? effective.warnings : []), ...(value.machinesUnreadable === true ? [MACHINES_UNREADABLE] : []),
+      ...(choice.shown.some(p => p.kind === 'member' && p.terminalUnverified) ? ["A member's terminal could not be verified from its machine's snapshot. Check it before assignment."] : []),
+      ...(choice.short ? [choice.short] : [])],
     next: verdict.pick.kind === 'member'
       ? `Assign with: command OPERATION_ID {"type":"work.assign","conversationId":"${input.conversationId}","agentId":"${verdict.pick.agentId}"${decision}}`
       : `Start with: start OPERATION_ID ${JSON.stringify({ conversationId: input.conversationId, name: review ? 'Reviewer' : 'Builder', ...(review ? { role: 'reviewer' } : {}), cwd: text(machines.get(verdict.pick.machineId)?.pool?.cwd) ?? assessment.needs.cwd ?? '/absolute/repo/on/that/machine',
@@ -194,35 +207,44 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
 
 async function probeMachine(machineId: string, { name: machineName, status, account, pool }: { name: string; status: string; account: boolean; pool?: Json },
   members: Json[], allModels: Policy['models'], policy: Policy, a: Assessment, where: Where, open: typeof openDaemon): Promise<Probe[]> {
-  const models = pool ? allModels.filter(m => Array.isArray(pool.engines) && pool.engines.includes(m.engine)) : account ? allModels : []
+  const listedEngines = Array.isArray(pool?.engines) ? pool.engines.filter((engine): engine is string => typeof engine === 'string') : []
+  const legacy = listedEngines.some(engine => !ENGINES.includes(engine))
+  const installed = legacy ? list(object(pool?.observation).quotas).map(quota => quota.engine) : listedEngines
+  const models = pool ? allModels.filter(m => installed.includes(m.engine)) : account ? allModels : []
   const engines = [...new Set([...models.map(m => m.engine), ...members.map(m => String(object(m.configuration).engine) as 'claude' | 'codex')])]
-  const memberProbe = (m: Json, refusals: string[] = [], quota = UNKNOWN_QUOTA, frame: MemberFrame | null = null): Probe => {
+  const memberProbe = (m: Json, refusals: string[] = [], quota = UNKNOWN_QUOTA, frame: MemberFrame | null = null, terminalUnverified = false): Probe => {
     const c = object(m.configuration), engine = String(c.engine) as 'claude' | 'codex'
     const model = typeof c.model === 'string' ? c.model : null, effort = typeof c.effort === 'string' ? c.effort : null
     return { kind: 'member', agentId: String(m.id), name: String(m.name ?? 'Member'), machineId, machineName, engine,
       model: model ?? 'default', effort: effort ?? 'default', ...rateFor(policy, engine, model, effort),
-      quota, activity: 'idle', known: quota.known, refusals, frame }
+      quota, activity: 'idle', known: quota.known, refusals, frame, terminalUnverified }
   }
   const newProbe = (m: Policy['models'][number], refusals: string[], quota: Probe['quota'], known: boolean, load: Probe['load'] = UNKNOWN_LOAD): Probe => ({
     kind: 'new', machineId, machineName, engine: m.engine, model: m.model, effort: m.effort, quality: m.quality, cost: m.cost,
     quota, activity: 'new agent', known, refusals, load })
   const offline = () => models.map(m => newProbe(m, [OFFLINE], UNKNOWN_QUOTA, false))
+  const needs = startRequirements(a.needs)
   if (pool) {
     const observed = object(pool.observation), resources = object(observed.resources)
     const fresh = finite(observed.receivedAt) && Date.now() - observed.receivedAt < 45_000
     const quotas = list(observed.quotas)
     const quota = (engine: string) => { const q = quotas.find(q => q.engine === engine); return fresh && q ? quotaOf2({ known: q.known === true, windows: list(q.windows).filter(w => finite(w.usedPercent)).map(w => ({ usedPercent: w.usedPercent as number, resetsAt: w.resetsAt, name: text(w.name) ?? undefined })) }) : UNKNOWN_QUOTA }
     const blocked = [...(!fresh ? [OFFLINE] : []), ...(pool.paused ? ['New work is paused on this machine.'] : [])]
-    const needs = startRequirements(a.needs), tools = object(observed.tools)
+    const tools = object(observed.tools)
     const newReasons = [...blocked,
       ...(pool.projectUnavailable === true ? ['Its owner must add this machine to the swarm again to support other projects.'] : []),
       ...(pool.repositoryUnavailable === true ? ['Share a repository for this project before starting agents on this machine.'] : []),
       ...(pool.availableSlots === 0 ? ['This machine has no available agent slots.'] : []),
       ...(!finite(resources.projectDiskFreeBytes) || resources.projectDiskFreeBytes < needs.diskBytes ? ['The project has insufficient measured free disk.'] : []),
       ...(!finite(resources.memoryTotalBytes) || !finite(resources.memoryUsedBytes) || resources.memoryTotalBytes - resources.memoryUsedBytes < needs.memoryBytes ? ['Insufficient measured free memory.'] : []),
-      ...needs.tools.filter(t => tools[t] !== true).map(t => `Required tool not reported: ${t}.`),
+      ...needs.tools.map(t => requiredToolReason(t, tools[t], object(observed.toolProbeErrors)[t])).filter((reason): reason is string => reason !== null),
       ...(needs.devices.length ? ['Required devices have not been reported.'] : [])]
-    return [...members.map(m => memberProbe(m, fresh ? [] : [OFFLINE], quota(String(object(m.configuration).engine)))),
+    return [...members.map(m => {
+      const allowance = quota(String(object(m.configuration).engine))
+      const running = Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.includes(m.harnessId) : null
+      return memberProbe(m, fresh ? memberRefusals(running, allowance, needs.tools, needs.devices, tools, object(observed.devices), object(observed.toolProbeErrors)) : [OFFLINE],
+        allowance, null, fresh && running === null)
+    }),
       ...models.map(m => newProbe(m, [...newReasons, ...(quota(m.engine).leftPercent === 0 ? ['Subscription exhausted.'] : [])], quota(m.engine), fresh && quota(m.engine).known,
         { agents: Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.length : null,
           freeMemoryBytes: finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes) ? resources.memoryTotalBytes - resources.memoryUsedBytes : null,
@@ -249,13 +271,12 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     const probes: Probe[] = []
     for (const m of members) {
       const inspected = byEngine.get(String(object(m.configuration).engine))!
-      const refusals = [
-        ...(live.has(String(m.harnessId)) ? [] : ['Its terminal is not running.']),
-        // A running member already has its engine, memory and sign-in; only these three can still rule it out.
-        ...inspected.reasons.filter(r => /usage window|Required tool|Required device/.test(r)),
-      ]
+      const allowance = quotaOf2(inspected.quota)
+      const capacity = object(inspected.capacity)
+      const refusals = memberRefusals(live.has(String(m.harnessId)), allowance, needs.tools, needs.devices,
+        object(capacity.tools), object(capacity.devices), object(capacity.toolProbeErrors))
       const frame = frames.find(f => f.id === m.harnessId)
-      probes.push(memberProbe(m, refusals, quotaOf2(inspected.quota), frame ? frameOf(frame) : null))
+      probes.push(memberProbe(m, refusals, allowance, frame ? frameOf(frame) : null))
     }
     for (const m of models) {
       const inspected = byEngine.get(m.engine)!

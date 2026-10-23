@@ -18,6 +18,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { isolatedTmux, type IsolatedTmux } from '../../src/testing/isolatedTmux.js'
+import { localCredentialHeaders } from '../../src/lib/localCredential.js'
 import { artifactLog, artifactsEnabled } from './artifacts.js'
 import { daemonEnvironment } from '../../src/testing/daemonEnvironment.js'
 import { GH_FORBIDDEN_STUB } from '../../src/testing/ghStub.js'
@@ -443,6 +444,11 @@ export class IsolatedDaemon {
 
   hookCredential(): string {
     return readFileSync(join(this.dataDir, 'hook-credential'), 'utf8').trim()
+  }
+
+  /** Credentials for this daemon's loopback TCP API; its Unix socket needs none. */
+  localHeaders(extra: Record<string, string> = {}): Record<string, string> {
+    return { ...extra, ...localCredentialHeaders(this.dataDir) }
   }
 
   /**

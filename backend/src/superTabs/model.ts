@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
-import { canReadAgent, canReadProject, groupProject, projectsOf, type ProjectVisibility, type SwarmProject } from './projects.js'
+import { downSince } from './machines.js'
+import { canReadAgent, canReadProject, groupProject, placeRules, projectsOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
 export interface Person { id: string; email: string; role: Role; generation: string }
@@ -36,6 +37,10 @@ export interface Agent {
   configurationVersion?: string
   /** Fences a repeated Change agent report without rolling back later model observations. */
   replacement?: { previousHarnessId: string; harnessId: string }
+  /** When a reading first showed its session gone or its host confirmed a stop; cleared when it is back (machines.ts). */
+  downSince?: string
+  /** The down time already named in the Lead's scheduled wake-up (projectUpdates.ts), so each time down is named once. */
+  downNamed?: string
 }
 export type AgentRole = 'builder' | 'reviewer'
 export const agentRole = (agent: Pick<Agent, 'role'>): AgentRole => agent.role ?? 'builder'
@@ -89,6 +94,8 @@ export interface Assignment {
   configuration: AgentConfiguration
   execution: { machineId: string; harnessId: string; machineOwnerId: string }
   result: string | null
+  /** Explicit progress fences delayed recording gaps; absent on older backends. */
+  recordingProgress?: { at: number; revision: number }
 }
 export interface WorkTask {
   goal: string
@@ -152,6 +159,8 @@ export interface SuperTabState {
   harnessReservations?: Array<{ machineId: string; harnessId: string; generation: string; renewed: boolean }>
   /** Native stop receipts survive late replaceable machine observations. */
   releasedHarnesses?: Array<{ machineId: string; harnessId: string }>
+  /** Sessions of removed agents their host closes, listed to that host until it says they closed (agent.sessionClosed). */
+  closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string }>
 }
 export type Actor =
   | { kind: 'person'; userId: string; email: string }
@@ -264,20 +273,30 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
     agents: [], invitations: [],
     conversations: [{ id: 'lead', title: 'Lead', leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 }],
   }
-  if (visibility) state.projects = [{ ...projectsOf(state)[0]!, visibility }]
+  // A new Swarm's first project starts in Default; only a project from before skill modes reads as Harness orchestration.
+  state.projects = [{ ...projectsOf(state)[0]!, ...(visibility ? { visibility } : {}), skillMode: 'default' }]
   return state
 }
 
 /** Pending invitations are management data, not part of the shared conversation. */
-export function visibleState(state: SuperTabState, actor: Actor): SuperTabState {
+export function visibleState(state: SuperTabState, actor: Actor, now = Date.now()): SuperTabState {
   author(state, actor)
   const visible = structuredClone(state)
   assignAgentDisplayNames(visible.agents)
+  for (const target of visible.agents) {
+    const since = downSince(state, target, now)
+    if (since) target.downSince = since
+    delete target.downNamed
+  }
   delete visible.sharing
   delete visible.harnessReservations
   delete visible.releasedHarnesses
+  // Only that machine's host roster lists them (store.ts hostTabs); a removed private agent's session is not every member's.
+  delete visible.closingSessions
   numberConversations(visible)
   delete visible.retiredConversationNumber
+  placeRules(visible)
+  if (visible.rules) visible.rules = visible.rules.filter(r => projectsOf(state).some(p => p.id === r.projectId && canReadProject(state, actor, p)))
   if (visible.projects) {
     visible.projects = visible.projects.filter(p => canReadProject(state, actor, p))
     visible.conversations = visible.conversations.filter(c => canReadProject(state, actor, groupProject(state, c)))

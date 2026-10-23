@@ -76,6 +76,15 @@ FLUTTER_TEST=1 flutter test -d macos --no-pub integration_test/native_terminal_e
 FLUTTER_TEST=1 flutter test -d macos --no-pub integration_test/native_workspace_e2e_test.dart
 ```
 
+`integration_test/flutter_test_config.dart` installs the production accessibility guard before
+Flutter's launcher initializes its binding. A fixture launched directly for manual review must
+call `ensureNativeTestBinding()` too; an unguarded fixture can reproduce the engine's known
+disconnected-semantics crash even though the normal app already protects that boundary.
+Pin macOS-only cases with `TargetPlatformVariant({TargetPlatform.macOS})`: Flutter's debug
+`FLUTTER_TEST` default is Android, which bypasses desktop-specific behavior. Native accessibility
+review must also exercise activation after the framework tree exists; retaining a test semantics
+handle while AppKit reconnects requires replaying the complete tree and custom actions.
+
 `integration_test/sign_in_native_test.dart` walks a new computer from the tour to the sign-in page
 and on to the workspace, in the real window. AppKit draws the tab row, so no Flutter test can see
 or press it: run `python3 tool/native_driver.py <dir> <shots> &` beside it and pass

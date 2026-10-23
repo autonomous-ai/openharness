@@ -243,6 +243,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
         // The Swarm cards, whole each time they change, and one Lead's recap (core/superTabCards.ts).
         cards: (items) => { void ask('super_tab_cards', { items }).catch(() => {}) },
         cardRecap: (recap) => { void ask('super_tab_card_recap', { recap }).catch(() => {}) },
+        shareObservers: () => { void ask('super_tab_observers', {}).catch(() => {}) },
       } satisfies SuperTabsCore,
     } : {}),
   }

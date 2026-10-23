@@ -20,9 +20,11 @@ class HarnessLaunchIntegration {
     this.engines,
     this.forcedPermissionMode,
     this.swarmRole,
+    this.swarmSkillMode,
   });
   final String creationId, actionLabel;
   final String? swarmRole;
+  String? swarmSkillMode;
   // Restores the person's original request from a destination launch journal.
   final String? initialTask;
   // The only agents this destination may start, or null for any.
