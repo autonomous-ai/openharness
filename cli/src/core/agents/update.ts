@@ -62,6 +62,11 @@ export function createAgentUpdate({
       try {
         await onRuntimeProfileUpdate(projectId, payload.selectedModel)
       } catch (error) {
+        if (!(error instanceof RuntimeProfileControlError)) {
+          const name = error instanceof Error ? preview(error.name, 80) : 'UnknownError'
+          const message = error instanceof Error ? preview(error.message, 200) : 'non-Error exception'
+          console.error(`[agent_update] model update failed: ${name}: ${message}`)
+        }
         const code: RuntimeProfileErrorCode | 'INTERNAL' = error instanceof RuntimeProfileControlError ? error.code : 'INTERNAL'
         reply({ error: code })
         return

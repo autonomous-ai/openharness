@@ -75,6 +75,22 @@ describe('a model and effort', () => {
     expect(await refused({ onRuntimeProfileUpdate: async () => { throw new RuntimeProfileControlError('BUSY') } }, 'runtime-v1:x')).toEqual([['reply', { error: 'BUSY' }]])
     expect(await refused({ onRuntimeProfileUpdate: async () => { throw new Error('pane gone') } }, 'runtime-v1:x')).toEqual([['reply', { error: 'INTERNAL' }]])
   })
+
+  it('logs the name and message of an unexpected profile failure without request contents', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { heard, ask } = setup({ onRuntimeProfileUpdate: async () => { throw new TypeError('engine state disappeared') } })
+    await ask({ agentId: 'a1', selectedModel: 'runtime-v1:s1:claude:private-model@high' })
+    expect(heard).toEqual([['reply', { error: 'INTERNAL' }]])
+    expect(error).toHaveBeenCalledExactlyOnceWith('[agent_update] model update failed: TypeError: engine state disappeared')
+  })
+
+  it('gives a non-Error exception a safe description', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { heard, ask } = setup({ onRuntimeProfileUpdate: async () => { throw null } })
+    await ask({ agentId: 'a1', selectedModel: 'runtime-v1:s1:claude:private-model@high' })
+    expect(heard).toEqual([['reply', { error: 'INTERNAL' }]])
+    expect(error).toHaveBeenCalledExactlyOnceWith('[agent_update] model update failed: UnknownError: non-Error exception')
+  })
 })
 
 describe('a rename', () => {
