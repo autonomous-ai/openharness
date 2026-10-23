@@ -56,12 +56,6 @@ export function agentSetRole(state: SuperTabState, project: SwarmProject, target
   return roles.find(r => r.id === target.roleId && r.kind === kind) ?? roles.find(r => r.kind === kind) ?? null
 }
 
-/** The role an agent runs now: null when its project is not on its custom set, or when the set has no role of its kind. */
-export function agentCustomRole(state: SuperTabState, target: Agent): ProjectRole | null {
-  const project = projectsOf(state).find(p => p.id === agentProjectId(state, target))
-  return project && skillSetOf(project) === 'custom' ? agentSetRole(state, project, target) : null
-}
-
 /** Existing tabs are one project; their conversation IDs and messages stay intact. */
 export function projectsOf(state: SuperTabState): SwarmProject[] {
   return state.projects ?? [{

@@ -1171,6 +1171,19 @@ model SuperTabStopReceipt {
   @@unique([tabId, assignmentId])
 }
 
+// A custom role's skill text (superTabs/projects.ts ProjectRole), outside the tab snapshot: the snapshot keeps only
+// its version, so tab reads and host rosters stay small. Hosts fetch the text when the version changes.
+model SuperTabRoleText {
+  id        String @id @map("_id")
+  tabId     String
+  projectId String
+  roleId    String
+  version   String
+  text      String
+
+  @@index([tabId, projectId])
+}
+
 // Configuration observations stay outside the tab snapshot so a long-running
 // assignment keeps its complete history without making every tab read grow.
 model SuperTabConfiguration {

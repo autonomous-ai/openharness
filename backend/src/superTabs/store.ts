@@ -10,7 +10,7 @@ import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, MAX_AT
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
-import { canReadAgent, canReadProject, groupProject, ledProject, projectsOf, agentProjectId, readConversation, skillModeOf, type ProjectVisibility } from './projects.js'
+import { agentSetRole, canReadAgent, canReadProject, groupProject, ledProject, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, skillSetOf, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
@@ -607,6 +607,7 @@ export class SuperTabStore {
           stableId(s.request.machineId, s.harnessId) === command.agentId)
         if (start?.routeDecisionId) await closeUnassignedStart(tx, tabId, start.routeDecisionId, start.id, 'stopped', context.now)
       }
+      if (command.type === 'project.delete' || command.type.startsWith('project.role')) await this.writeRoleTexts(tx, tabId, effects.state, command)
       if (effects.terminal) await this.writeTerminal(tx, tabId, effects.terminal, context.now)
       if (command.type === 'work.cancel') {
         await closeAssignment(tx, tabId, command.assignmentId, 'cancelled', context.now)
@@ -709,6 +710,40 @@ export class SuperTabStore {
       }
       if (row.usedBy) fail('ATTACHMENT_USED', 'This file was already sent. Attach it again to send it in another message.')
       return { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) }
+    })
+  }
+
+  /** Keeps the project's stored texts equal to its custom set: the roles the command wrote, nothing for roles it dropped. */
+  private async writeRoleTexts(tx: Transaction, tabId: string, state: SuperTabState, command: Command) {
+    if (!('projectId' in command) || !command.projectId) return
+    const { projectId } = command
+    const kept = projectsOf(state).find(p => p.id === projectId)?.roles?.map(r => r.id) ?? []
+    await tx.superTabRoleText.deleteMany({ where: { tabId, projectId, roleId: { notIn: kept } } })
+    const written = command.type === 'project.role.set' ? [command.role]
+      : command.type === 'project.roles.create' || command.type === 'project.roles.reset' ? command.roles : []
+    for (const role of written) {
+      const id = stableId(tabId, projectId, role.id), data = { version: roleVersion(role.text), text: role.text }
+      await tx.superTabRoleText.upsert({ where: { id }, create: { id, tabId, projectId, roleId: role.id, ...data }, update: data })
+    }
+  }
+
+  /** A custom role's text, for the project's owner, its Lead, and the hosts of its agents (which fetch it when the version
+   *  in their roster changes). Anyone else, like a missing role, reads it as unavailable. */
+  async roleText(user: AuthUser, tabId: string, projectId: string, roleId: string, asAgentId?: string) {
+    return transaction(this.db, async tx => {
+      const state = stateOf(await this.row(tx, user, tabId))
+      const unavailable = () => fail('NOT_FOUND', 'This role is unavailable.', 404)
+      const project = projectsOf(state).find(p => p.id === projectId) ?? unavailable()
+      const role = project.roles?.find(r => r.id === roleId) ?? unavailable()
+      if (asAgentId) {
+        await this.actor(tx, user, state, asAgentId)
+        if (ledProject(state, asAgentId)?.id !== project.id) unavailable()
+      } else if (!(user.sub === project.ownerId && state.people.some(p => p.id === user.sub)) && !state.agents.some(a =>
+        a.machineOwnerId === user.sub && agentProjectId(state, a) === project.id
+        && state.people.some(p => p.id === a.contributorId && p.generation === a.membershipGeneration))) unavailable()
+      const stored = await tx.superTabRoleText.findUnique({ where: { id: stableId(tabId, projectId, roleId) } })
+      if (stored?.version !== role.version) unavailable()
+      return { version: stored!.version, text: stored!.text }
     })
   }
 
@@ -982,7 +1017,9 @@ export class SuperTabStore {
           // whose project is gone reads like one from before skill modes instead of failing the host's whole poll.
           const home = projectsOf(state).find(p => p.id === agentProjectId(state, target))
           const skillMode = home ? skillModeOf(home) : 'orchestration'
-          result.push({ tabId: row.id, tabName: state.name, revision: row.revision, paused: state.paused, active, attention, agent: target, joinSwarm, skillMode,
+          // On Custom, the role it runs and its text's version, never the text (roleText); null when its kind has no role there.
+          const role = home && skillSetOf(home) === 'custom' ? { role: agentSetRole(state, home, target) } : {}
+          result.push({ tabId: row.id, tabName: state.name, revision: row.revision, paused: state.paused, active, attention, agent: target, joinSwarm, skillMode, ...role,
             lead: !!ledProject(state, target.id),
             stopRequested: target.workDecision === 'stop' && !state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id),
             observers: people.filter(p => p.id !== user.sub &&
