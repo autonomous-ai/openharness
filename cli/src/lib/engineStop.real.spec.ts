@@ -183,6 +183,9 @@ real('a stopped engine in a real pane', () => {
       // Ctrl+Z: the whole group stops, the shell continues it, and the engine takes the terminal again.
       await p.keys('C-z')
       await until('the engine to take the terminal again after Ctrl+Z', () => f.count('raw again') === 1)
+      // And the pane says so, as a terminal would: Codex prints nothing of its own, so the shell's report
+      // is all there is. bash 5.3 holds its report back for a prompt the pane never shows (#1612).
+      await until('the pane to report the stopped engine', async () => /suspended|stopped/i.test(await p.screen()) || null)
       await until('the engine to run again', () => !state(pid).startsWith('T'))
       await p.keys('-l', 'k')
       await until('a key to reach it', () => f.count('key "k"') === 1)
