@@ -1493,6 +1493,9 @@ static void swarm_pane_checks(const char *dir) {
     // 2f no message yet: the resting face, no card.
     ui_supertab_recap("s1", "L1", "", 0, true); scene_take();
     { const char *last; assert(!card_lines(&last)); }
+    // With nothing unread the bell leaves the lower arc to the resting face's one line, as in the mockup.
+    for (int i = 0; i < s.notice_count; i++) notice_mark_read(&s.notice[i]);
+    scene_take(); { bool line = false; for (int i = 0; i < scene.count; i++) line |= scene.runs[i].arc == 2 && scene.runs[i].text[0]; assert(line); }
     FOCUS_PAGE("swarm-2f");
     // 2c "docs" needs you, here: its wait's question takes the recap's place, in the asking pose.
     enter_at("s1", "L2");
