@@ -1141,10 +1141,14 @@ describe('built-in skill text after a CLI update', () => {
     const rowRoles: Record<string, unknown> = {}
     const texts: Record<string, { version: string; text: string }> = {}
     const fetched: string[] = []
+    /** A backend call held until the test releases it: the roster may change while the refresh waits on it. */
+    let hold: { match: (path: string, body: any) => boolean; until: Promise<void> } | null = null
     let inFlight = 0
     t.core.agents.byAgent = vi.fn(id => sessions[id] as never)
     t.core.agents.terminalAvailable = vi.fn(() => true)
     t.core.account.backend = vi.fn(async (method, path, body) => {
+      const held = hold?.match(path, body) ? hold : null
+      if (held) { hold = null; await held.until }
       inFlight++
       await Promise.resolve()
       inFlight--
@@ -1172,7 +1176,12 @@ describe('built-in skill text after a CLI update', () => {
       for (let idle = 0; idle < 3;) { await new Promise(resolve => setImmediate(resolve)); idle = inFlight ? 0 : idle + 1 }
       return host
     }
-    return { t, files, sent, pass, rowRoles, texts, fetched, setGroups: (next: typeof groups) => { groups = next }, setMode: (next: typeof mode) => { skillMode = next } }
+    const holdNext = (match: (path: string, body: any) => boolean) => {
+      let release!: () => void
+      hold = { match, until: new Promise<void>(resolve => { release = resolve }) }
+      return release
+    }
+    return { t, files, sent, pass, rowRoles, texts, fetched, holdNext, setGroups: (next: typeof groups) => { groups = next }, setMode: (next: typeof mode) => { skillMode = next } }
   }
 
   // Custom roles and skills per project (spec 2026-10-23): on Custom the roster names each agent's role and its text's
@@ -1227,6 +1236,31 @@ describe('built-in skill text after a CLI update', () => {
       custom(f, 'Plan the work.\n')
       await f.pass(host, 60_000)
       expect(readFileSync(f.files.lead!, 'utf8')).toMatch(/\nPlan the work\.\n$/)
+    })
+    // The review of #1660: a refresh works from the roster it started with, across its fetch and its notice. A role gone
+    // meanwhile must not get its old text installed, nor a re-read notice after the backend's role-gone one.
+    it.each([
+      ['its text is fetched', (path: string) => path.includes('/roles/'), false],
+      ['its notice is about to be sent', (path: string, body: any) => path.includes('?asAgentId=a-lead') && !body, true],
+    ])('drops a refresh whose role is gone while %s', async (_case, match, installed) => {
+      const f = syncFixture(false, 'default')
+      custom(f, 'Plan the work.\n')
+      const before = readFileSync(f.files.lead!, 'utf8')
+      const release = f.holdNext(match)
+      const host = f.t.open()
+      await host.tick()
+      await vi.waitFor(() => expect(vi.mocked(f.t.core.account.backend).mock.calls.some(([, path, body]) => match(path, body))).toBe(true))
+      f.rowRoles['a-lead'] = null
+      await host.tick()
+      release()
+      await f.pass(host, 1_000)
+      expect(f.sent).toEqual([])
+      expect(readFileSync(f.files.lead!, 'utf8') === before).toBe(!installed)
+      // The role back as it was: installed and told after all.
+      custom(f, 'Plan the work.\n')
+      await f.pass(host, 1_000)
+      expect(readFileSync(f.files.lead!, 'utf8')).toMatch(/\nPlan the work\.\n$/)
+      expect(f.sent).toHaveLength(1)
     })
     it('leaves an agent whose role is gone on its file, fetching and telling nothing: the backend tells it', async () => {
       const f = syncFixture(false, 'default')

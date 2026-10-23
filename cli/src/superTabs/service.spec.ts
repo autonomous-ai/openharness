@@ -183,9 +183,9 @@ it('documents how a lead shares its project repository for other machines', asyn
 it('tells the Lead how to switch a project\'s skills on its owner\'s own request', async () => {
   const t = setup()
   const answer = await t.ask({ action: 'help' }, owner) as { help: { command: string; commands: Array<Record<string, unknown>> } }
-  expect(answer.help.commands).toContainEqual({ type: 'project.skills', projectId: 'PROJECT', mode: 'default|orchestration',
+  expect(answer.help.commands).toContainEqual({ type: 'project.skills', projectId: 'PROJECT', mode: 'default|orchestration|custom',
     askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } })
-  expect(answer.help.command).toContain('project.skills switches a project between the Default and Harness orchestration skills: only its project owner does, or its Lead passing on that owner\'s own chat message, with askedIn naming it.')
+  expect(answer.help.command).toContain('project.skills switches a project between the Default, Harness orchestration and Custom skills (Custom once its owner has made the project\'s roles): only its project owner does, or its Lead passing on that owner\'s own chat message, with askedIn naming it.')
 })
 it('tells the Lead that start works only on a machine in the Swarm\'s Machines list', async () => {
   const t = setup()
