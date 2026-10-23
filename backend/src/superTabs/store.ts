@@ -1053,7 +1053,10 @@ export class SuperTabStore {
           const home = projectsOf(state).find(p => p.id === agentProjectId(state, target))
           const skillMode = home ? skillModeOf(home) : 'orchestration'
           // On Custom, the role it runs and its text's version, never the text (roleText); null when its kind has no role there.
-          const role = home && skillSetOf(home) === 'custom' ? { role: agentSetRole(state, home, target) } : {}
+          // The project lets the host fetch that text (roleText).
+          const custom = home && skillSetOf(home) === 'custom' ? home : null
+          const chosen = custom ? agentSetRole(state, custom, target) : null
+          const role = custom ? { role: chosen && { ...chosen, projectId: custom.id } } : {}
           result.push({ tabId: row.id, tabName: state.name, revision: row.revision, paused: state.paused, active, attention, agent: target, joinSwarm, skillMode, ...role,
             lead: !!ledProject(state, target.id),
             stopRequested: target.workDecision === 'stop' && !state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id),

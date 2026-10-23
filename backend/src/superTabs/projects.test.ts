@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { applyCommand, type Command, type CommandContext } from './commands.js'
+import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type MessageDraft } from './model.js'
 import { canReadAgent, projectOf, projectsOf, readConversation, skillModeOf, skillSetOf } from './projects.js'
 
@@ -458,6 +458,28 @@ describe('custom role sets', () => {
     expect(f.state.agents.find(a => a.id === worker)!.roleId).toBe('dev')
     const plain = f.project('public', peer)
     expect(() => f.run({ type: 'agent.start', request: request(plain.conversationId, { roleId: 'dev' }) } as Command)).toThrow('not in this project')
+  })
+
+  it('adds an agent with a role id from the custom set, refusing an unknown id or a role of another kind', () => {
+    const { f, p } = custom()
+    f.run({ type: 'project.role.set', projectId: p.projectId, role: role('abcdefabcdef', 'Docs writer', 'builder') }, peer)
+    let harness = 0
+    const add = (extra: Record<string, unknown> = {}) => {
+      const command = commandSchema.parse({ type: 'agent.add', conversationId: p.conversationId, machineId: 'machine',
+        harnessId: `added-${++harness}`, name: 'Added', configuration, lead: false, ...extra })
+      return String(f.run(command).agentId)
+    }
+    const added = (agentId: string) => f.state.agents.find(a => a.id === agentId)!
+    expect(() => add({ roleId: 'eeeeeeeeeeee' })).toThrow('not in this project')
+    expect(() => add({ roleId: 'lead' })).toThrow('kind')
+    expect(() => add({ roleId: 'review' })).toThrow('kind')
+    expect(() => add({ lead: true, roleId: 'dev' })).toThrow('kind')
+    expect(added(add({ roleId: 'abcdefabcdef' })).roleId).toBe('abcdefabcdef')
+    expect(added(add())).not.toHaveProperty('roleId')
+    expect(added(add({ lead: true, roleId: 'lead' })).roleId).toBe('lead')
+    const plain = f.project('public', peer)
+    expect(() => f.run(commandSchema.parse({ type: 'agent.add', conversationId: plain.conversationId, machineId: 'machine',
+      harnessId: 'plain', name: 'Plain', configuration, lead: false, roleId: 'dev' }))).toThrow('not in this project')
   })
 
   it('tells agents whose kind has no role in the new set, then gives them no new work, and refuses review groups without a reviewer role', () => {

@@ -87,7 +87,7 @@ export const commandSchema = z.discriminatedUnion('type', [
     .refine(c => !c.task || renderWorkTask(c.task).length <= 8000, 'Keep the rendered task within 8,000 characters.'),
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
-  z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), project: project.optional(), initialMessage: text.optional() }).strict(),
+  z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), project: project.optional(), roleId: roleId.optional(), initialMessage: text.optional() }).strict(),
   z.object({ type: z.literal('agent.start'), request: startRequestSchema, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
   z.object({ type: z.literal('agent.started'), startId: id, harnessId: id, configuration,
@@ -837,6 +837,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const agentId = stableId(command.machineId, command.harnessId)
       const existing = state.agents.find(a => a.id === agentId)
       if (existing) sameProject(state, group, existing)
+      // The role a New Harness joins with is chosen here; later changes go through work.assign. An agent already in
+      // the Swarm keeps the role it runs, so a retry is checked against that kind.
+      const kind = existing ? agentKind(state, existing) : command.lead ? 'lead' : 'builder'
+      const chosen = command.roleId ? chosenRole(project, command.roleId, kind) : null
       if (existing?.workDecision === 'stop' && command.lead) fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
       if (existing && agentRole(existing) === 'reviewer' && command.lead) fail('REVIEWER_NOT_LEAD', 'A Reviewer reviews work and cannot lead a group.')
       if (!existing) reserveHarnessSlot(state, command.machineId, command.harnessId, operationId)
@@ -846,7 +850,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         ...(state.projects ? { projectId: project.id } : {}),
         machineOwnerId: grant.machineOwnerId, contributorId: grant.contributorId, membershipGeneration: contributor.generation,
         hostGrant: grant.hostGrant ?? null,
-        name: command.name, configuration: command.configuration, configurationVersion: operationId })
+        name: command.name, configuration: command.configuration, configurationVersion: operationId,
+        ...(chosen ? { roleId: chosen.id } : {}) })
       if (existing && (existing.machineOwnerId !== grant.machineOwnerId || existing.contributorId !== grant.contributorId)) {
         fail('ALREADY_SHARED', 'This session already has a contributor. Use the existing tab agent.')
       }

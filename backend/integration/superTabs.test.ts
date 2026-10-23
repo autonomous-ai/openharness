@@ -1372,8 +1372,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const rowOf = async (id: string) => (await rows()).find(r => r.agent.id === id)!
     expect(await rowOf(worker)).not.toHaveProperty('role')
     await run(tab, { type: 'project.skills', projectId: 'lead', mode: 'custom' })
-    expect(await rowOf(lead)).toMatchObject({ skillMode: 'default', role: { id: 'lead', name: 'Product Manager', kind: 'lead', version: version('LEAD-TEXT') } })
-    expect(await rowOf(worker)).toMatchObject({ skillMode: 'default', role: { id: 'dev', name: 'Engineer', kind: 'builder', version: version('DEV-TEXT') } })
+    expect(await rowOf(lead)).toMatchObject({ skillMode: 'default', role: { id: 'lead', name: 'Product Manager', kind: 'lead', version: version('LEAD-TEXT'), projectId: 'lead' } })
+    expect(await rowOf(worker)).toMatchObject({ skillMode: 'default', role: { id: 'dev', name: 'Engineer', kind: 'builder', version: version('DEV-TEXT'), projectId: 'lead' } })
     const stored = JSON.stringify((await db.superTab.findUniqueOrThrow({ where: { id: tab } })).state)
     for (const text of [JSON.stringify(await rows()), stored, JSON.stringify((await store.read(owner, tab)).state)]) expect(text).not.toMatch(/LEAD-TEXT|DEV-TEXT/)
 
@@ -1399,7 +1399,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await text(host, 'dev')).statusCode).toBe(200)
 
     await run(tab, { type: 'project.role.set', projectId: 'lead', role: { ...roles[1]!, text: 'DEV-TEXT v2' } })
-    expect((await rowOf(worker)).role).toMatchObject({ id: 'dev', version: version('DEV-TEXT v2') })
+    expect((await rowOf(worker)).role).toMatchObject({ id: 'dev', version: version('DEV-TEXT v2'), projectId: 'lead' })
     expect((await text(owner, 'dev')).json().data).toEqual({ version: version('DEV-TEXT v2'), text: 'DEV-TEXT v2' })
     await run(tab, { type: 'project.role.remove', projectId: 'lead', roleId: 'review' })
     expect((await text(owner, 'review')).statusCode).toBe(404)
