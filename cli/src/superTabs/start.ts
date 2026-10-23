@@ -242,12 +242,17 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
     let switching = routedModel && launched === false
     if (routedModel && launched === undefined) {
       // This invocation did not send the create, and the one that did may have launched with the model, fallen back to
-      // the switch, or been cut off before either. Only the agent's frame says which; /model is never typed blind, as
-      // Claude Code would save it as the person's default.
+      // the switch, or been cut off before either. A concrete runtime difference still needs a switch. A temporary
+      // automatic effort is not a difference when the completed native receipt proves that effort was passed at launch.
+      // /model is never typed blind, as Claude Code would save it as the person's default.
       const ran = await ranNow(nativeId, String(request.engine))
       const same = (wanted: string, actual: string) => wanted === 'default' || wanted === 'auto' || wanted === actual
       if (!ran) modelWarning = `Could not confirm that the agent runs ${model} ${effort}; its configuration could not be read, so it was left as it is.`
-      else switching = !same(String(model), ran.model) || !same(String(effort), ran.effort)
+      else {
+        const accepted = object(native.launchModel)
+        const effortStillUnknown = ran.effort === 'auto' && accepted.effort === effort && same(String(model), ran.model)
+        switching = !same(String(model), ran.model) || (!same(String(effort), ran.effort) && !effortStillUnknown)
+      }
     }
     if (switching) {
       const selectedModel = encodeRuntimeProfile({ sessionId: nativeId, engine: String(request.engine) as never, model: String(model), effort: effort as never })

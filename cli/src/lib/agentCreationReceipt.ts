@@ -3,6 +3,7 @@ import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirS
 import { opendir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
+import type { LaunchModel } from './launchModel.js'
 
 export type AgentCreationOutcome =
   | { state: 'created'; agentId: string; level?: 'native' | 'handoff'; resumed?: boolean }
@@ -108,6 +109,19 @@ export class AgentCreationReceipts {
     return receipt.outcome.state === 'pending' && !this.inFlight.has(id)
       ? { state: 'unconfirmed' }
       : receipt.outcome
+  }
+
+  /** The launch flags kept in a completed native intent, absent for legacy or fallback creates. */
+  createdLaunchModel(id: string): LaunchModel | null {
+    const receipt = this.read(id)
+    if (receipt?.version !== 2 || 'cancelled' in receipt || this.intentStatus(id, receipt).state !== 'created') return null
+    const saved = receipt.request
+    if (saved.kind !== 'native-create-v1' || !saved.input || typeof saved.input !== 'object') return null
+    const launchModel = (saved.input as Record<string, unknown>).launchModel
+    if (!launchModel || typeof launchModel !== 'object') return null
+    const { model, effort } = launchModel as Record<string, unknown>
+    return (model === null || typeof model === 'string') && (effort === null || typeof effort === 'string')
+      ? { model, effort } : null
   }
 
   /** Whose launch an id names: a guest's key, or null for the owner's, an intent's and an unknown id (which a

@@ -9,7 +9,7 @@ import type { RegisteredSession } from '../lib/registry.js'
 import type { AgentFrame } from '../lib/agentFrame.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
-function fixture(options: { refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string } } = {}) {
+function fixture(options: { refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; acceptedLaunchModel?: { model: string | null; effort: string | null }; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string } } = {}) {
   const start = { creationId: 'super-native-receipt', error: null as string | null, request: { machineId: 'target', conversationId: 'group', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }, dispatched: false }
   let nativeState = 'missing', lostJoin = false
@@ -25,7 +25,7 @@ function fixture(options: { refuse?: string; loseCancel?: boolean; loseFailure?:
     return { ok: true, value: { result: cmd.type === 'agent.start' ? { startId: 'start' } : { agentId: 'worker' } } }
   })
   const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}, _ms?: number): Promise<Record<string, unknown>> => {
-    if (type === 'agent_create_status') return { creationId: start.creationId, state: nativeState, ...(nativeState === 'created' ? { agent: { id: 'native', engine: 'claude', selectedModel: 'runtime-v1:native:claude:fixture-model@high', ...options.identity } } : {}) }
+    if (type === 'agent_create_status') return { creationId: start.creationId, state: nativeState, ...(nativeState === 'created' ? { agent: { id: 'native', engine: 'claude', selectedModel: 'runtime-v1:native:claude:fixture-model@high', ...options.identity }, ...(options.acceptedLaunchModel ? { launchModel: options.acceptedLaunchModel } : {}) } : {}) }
     if (type === 'agents_list' && options.frame) return { agents: [{ id: 'native', engine: 'claude', selectedModel: options.frame }] }
     if (type === 'engines_probe') return { engines: [{ engine: (payload.engines as string[])[0], installed: true }] }
     if (type === 'usage_read') return { providers: [] }
@@ -708,6 +708,19 @@ describe('a routed Claude start launches with the model instead of switching it 
       expect(result).not.toHaveProperty('modelWarning')
       expect(created(f)).toHaveLength(1)
       expect(switched(f)).toBe(false)
+    })
+
+    it('does not type an effort command when the accepted launch flag precedes runtime effort detection', async () => {
+      const f = fixture({ launchModel: ['claude'], acceptedLaunchModel: { model: 'opus', effort: 'high' }, frame: 'runtime-v1:native:claude:opus@auto' })
+      expect(await resume(f)).toMatchObject({ ok: true })
+      expect(created(f)).toHaveLength(1)
+      expect(switched(f)).toBe(false)
+    })
+
+    it('still switches when runtime settles on a concrete effort different from the launch flag', async () => {
+      const f = fixture({ launchModel: ['claude'], acceptedLaunchModel: { model: 'opus', effort: 'high' }, frame: 'runtime-v1:native:claude:opus@low' })
+      expect(await resume(f)).toMatchObject({ ok: true })
+      expectSwitchTo(f, 'runtime-v1:native:claude:opus@high')
     })
 
     it('does not count default or an automatic effort as a difference', async () => {
