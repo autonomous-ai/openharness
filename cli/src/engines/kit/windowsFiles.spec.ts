@@ -70,10 +70,10 @@ describe('isRoot', () => {
 })
 
 describe('flush flags', () => {
-  it('reopens an unchanged file read-write on Windows, where only a writable handle flushes', () => {
-    expect(unchangedFlushFlags(0o666, 'win32')).toBe(constants.O_RDWR)
+  it('does not reopen an unchanged file on Windows, where a writable open changes ctime', () => {
+    expect(unchangedFlushFlags(0o666, 'win32')).toBeNull()
     expect(unchangedFlushFlags(0o444, 'win32')).toBeNull()
-    expect(journalFlushFlags('win32')).toBe(constants.O_RDWR)
+    expect(journalFlushFlags('win32')).toBeNull()
   })
 
   it('keeps the POSIX read-only, no-follow open', () => {
