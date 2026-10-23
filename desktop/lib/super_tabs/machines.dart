@@ -1906,11 +1906,13 @@ class _MachineReadings extends StatelessWidget {
           ),
       ],
     );
+    // Model names are long and full of dashes: a quiet dot between them keeps two from reading as one.
     Widget models(List<_ServedModel> models, String kind) => Wrap(
-      spacing: 10,
+      spacing: 6,
       runSpacing: 2,
       children: [
-        for (final model in models)
+        for (final (index, model) in models.indexed) ...[
+          if (index > 0) Text('·', style: label),
           Tooltip(
             message: model.tip,
             child: Text(
@@ -1919,6 +1921,7 @@ class _MachineReadings extends StatelessWidget {
               style: style,
             ),
           ),
+        ],
       ],
     );
     final hardware = [...usage, ...capacity];

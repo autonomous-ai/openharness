@@ -15,7 +15,6 @@ import '../widgets/swarm_resource_preview.dart';
 import '../widgets/swarm_switcher.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
-import 'identity.dart';
 import 'model.dart';
 
 /// The Swarm's Local models (docs/plans/2026-10-23-swarm-local-models.md): the owner's switch for the add-on, off until
@@ -57,16 +56,6 @@ class _SwarmModelsWindow extends StatelessWidget {
         final local = c.snapshot?.localModels;
         final on = local?.enabled == true;
         final picker = on && local?.ready == true && app != null;
-        final served = [
-          if (local != null)
-            for (final pool in c.snapshot?.machines ?? const [])
-              for (final m in superTabServedModels(
-                pool,
-                local.grid,
-                now: now(),
-              ))
-                '${m.name} on ${superTabMachineName(pool['name'] as String? ?? 'a machine')}',
-        ];
         final header = Padding(
           padding: const EdgeInsets.fromLTRB(24, 20, 16, 12),
           child: Column(
@@ -77,7 +66,7 @@ class _SwarmModelsWindow extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      'Local models',
+                      'Manage models',
                       style: DesktopChrome.text(size: 15, medium: true),
                     ),
                   ),
@@ -120,14 +109,6 @@ class _SwarmModelsWindow extends StatelessWidget {
                       : null,
                 ),
               ),
-              if (on && served.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Text(
-                  key: const ValueKey('super-local-models-running'),
-                  'Running now: ${served.join(', ')}',
-                  style: DesktopChrome.metadata(),
-                ),
-              ],
             ],
           ),
         );
@@ -253,8 +234,16 @@ class _SwarmModelsPickerState extends State<_SwarmModelsPicker> {
                     _choose(_search.submit());
                     _focus.requestFocus();
                   },
-                  decoration: const InputDecoration.collapsed(
+                  // As ⌘I's search field: no box of its own, the panel's divider is its edge.
+                  decoration: InputDecoration(
                     hintText: 'Search models',
+                    hintStyle: DesktopChrome.text(color: DesktopChrome.muted),
+                    isDense: true,
+                    contentPadding: EdgeInsets.zero,
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    filled: false,
                   ),
                   style: DesktopChrome.text(),
                 ),
