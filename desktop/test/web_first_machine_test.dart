@@ -315,4 +315,28 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Retry'), findsOneWidget);
     expect(find.text('Finding your computers…'), findsNothing);
   });
+
+  group('on a phone, every button takes a 44 px tap', () {
+    double tapHeight(WidgetTester tester, String label) =>
+        tester.getSize(find.widgetWithText(FilledButton, label)).height;
+
+    testWidgets('Download app and Connect', (tester) async {
+      addComputer('mac', online: true);
+
+      await mount(tester, width: 390);
+
+      expect(tapHeight(tester, 'Download app'), greaterThanOrEqualTo(44));
+      expect(tapHeight(tester, 'Connect'), greaterThanOrEqualTo(44));
+    });
+
+    testWidgets('Retry', (tester) async {
+      app = _Account()
+        ..loaded = false
+        ..listError = 'Could not load machines: the server did not answer.';
+
+      await mount(tester, width: 390);
+
+      expect(tapHeight(tester, 'Retry'), greaterThanOrEqualTo(44));
+    });
+  });
 }

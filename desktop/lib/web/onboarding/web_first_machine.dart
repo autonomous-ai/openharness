@@ -89,6 +89,7 @@ class _WebFirstMachineState extends State<WebFirstMachine> {
         detail: 'On a Mac or Linux desktop. Open it and sign in as $account.',
         children: [
           FilledButton.icon(
+            style: webOnboardingButton,
             onPressed: () => widget.openPage(WebDownloadButton.uri),
             icon: const Icon(AppIcons.download, size: 16),
             label: const Text('Download app'),
@@ -241,6 +242,7 @@ class _ListFailed extends StatelessWidget {
       ),
       const SizedBox(height: 20),
       FilledButton.icon(
+        style: webOnboardingButton,
         onPressed: () => unawaited(onRetry()),
         icon: const Icon(AppIcons.rotateCw, size: 16),
         label: const Text('Retry'),
