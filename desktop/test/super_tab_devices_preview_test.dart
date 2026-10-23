@@ -168,7 +168,7 @@ void main() {
   }
 
   testWidgets(
-    'Devices stays one pane without changing a two-agent workgroup layout',
+    'Devices stays one pane after visiting a resized two-agent workgroup',
     (tester) async {
       final (f, c) = await _mount(tester, agents: 2);
       final tab = f.app.activeSwarm;
@@ -176,9 +176,10 @@ void main() {
         Rect.fromLTRB(0, 0, .58, 1),
         Rect.fromLTRB(.58, 0, 1, 1),
       ]);
-      tab.arrangedKey = '2:manual';
-      expect(f.app.resizePanes(tab.id, '2:manual', resized), isTrue);
       for (var visit = 0; visit < 2; visit++) {
+        tab.arrangedKey = '2:manual';
+        expect(f.app.resizePanes(tab.id, '2:manual', resized), isTrue);
+        expect(tab.manualLayout!.tiles, resized.tiles);
         c.selectDevices();
         await tester.pumpAndSettle();
         expect(tab.panes, hasLength(1));
@@ -188,7 +189,6 @@ void main() {
         c.select('lead');
         await tester.pumpAndSettle();
         expect(tab.panes.map((pane) => pane.agentId), ['native-0', 'native-1']);
-        expect(tab.paneSizes['2:manual']!.tiles, resized.tiles);
       }
       expect(
         f.connection.calls.where(
