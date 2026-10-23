@@ -1,7 +1,0 @@
-FROM ubuntu:26.04
-ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
-RUN apt-get update -q && apt-get install -y -q --no-install-recommends tmux zsh tcsh dash lsof git python3 ca-certificates curl xz-utils procps sudo make g++ && rm -rf /var/lib/apt/lists/*
-RUN curl -fsSL https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-arm64.tar.xz | tar -xJ -C /usr/local --strip-components=1
-RUN useradd -m -u 1001 -s /bin/bash runner && echo 'runner ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/runner
-USER runner
-WORKDIR /home/runner
