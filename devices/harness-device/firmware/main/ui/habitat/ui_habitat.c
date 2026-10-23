@@ -4626,7 +4626,7 @@ void ui_notif_replace(const cable_notif_t *rows, int count)
     if (!rows || count < 0) count = 0;
     if (count > NOTICES) count = NOTICES;
     // The desktop's snapshot replaces its own rows only: the dial's Swarm entries go back in after it, first.
-    static cable_notif_t own[NOTICES];   // static: off the reader task's stack
+    static EXT_RAM_BSS_ATTR cable_notif_t own[NOTICES];   // static: off the reader task's stack
     int own_count = 0;
     for (int i = 0; i < s.notice_count; i++) if (s.notice[i].swarm) own[own_count++] = s.notice[i];
     s.notice_count = 0;
@@ -4805,7 +4805,7 @@ void ui_service_model_picker(void)
     display_unlock();
 }
 // The last `swarms` list as it came, so a Swarm's link arriving later can still list its desk tab.
-static cable_swarm_t desk_rows[SWARMS_MAX];
+static EXT_RAM_BSS_ATTR cable_swarm_t desk_rows[SWARMS_MAX];
 static int desk_row_count;
 static char desk_selected[ID_MAX];
 static void swarms_apply(void)
@@ -4933,7 +4933,7 @@ static void swarm_tabs_changed(void)
 }
 void ui_supertabs_ids(const char ids[][ID_MAX], int n)
 {
-    static ht_lead_event_t ev[HT_SUPERTABS_MAX * HT_SUPERTAB_LEADS_MAX];   // static: off the reader task's stack
+    static EXT_RAM_BSS_ATTR ht_lead_event_t ev[HT_SUPERTABS_MAX * HT_SUPERTAB_LEADS_MAX];   // static: off the reader task's stack
     display_lock();
     int count = ht_supertabs_ids(&swarm, ids, n, ev, (int)(sizeof ev / sizeof ev[0]));
     swarm_events(ev, count);
@@ -4950,7 +4950,7 @@ void ui_supertabs_ids(const char ids[][ID_MAX], int n)
 }
 bool ui_supertab(const ht_supertab_t *in)
 {
-    static ht_lead_event_t ev[HT_SUPERTAB_LEADS_MAX * 2];
+    static EXT_RAM_BSS_ATTR ht_lead_event_t ev[HT_SUPERTAB_LEADS_MAX * 2];
     if (!in) return false;
     display_lock();
     bool linked = in->tab[0] && !ht_supertabs_for_desk(&swarm, in->tab);
