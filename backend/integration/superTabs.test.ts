@@ -2215,7 +2215,12 @@ describe('Leads conversation', () => {
     delete stored.leadsConversationId
     stored.conversations = stored.conversations.filter(c => c.kind !== 'leads')
     await db.superTab.update({ where: { id: tab }, data: { state: stored as never } })
-    expect((await store.read(owner, tab)).state.leadsConversationId).toBe(leads)
+    // Clients find it without a project: by the tab's id for it and its kind.
+    const read = (await store.read(owner, tab)).state
+    expect(read.leadsConversationId).toBe(leads)
+    const found = read.conversations.find(c => c.id === leads)!
+    expect(found.kind).toBe('leads')
+    expect(found).not.toHaveProperty('projectId')
     expect((await store.messages(owner, tab, leads, {})).messages).toEqual([])
 
     const docs = String((await run(tab, { type: 'project.create', name: 'Docs', visibility: 'public', brief: '' })).result.conversationId)

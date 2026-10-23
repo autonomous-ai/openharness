@@ -1707,6 +1707,8 @@ describe('Leads conversation', () => {
     const { f, lead, worker, docsLead, leads } = swarm()
     expect(f.run(send(leads, 'Who goes first?')).messages[0]!.recipients.sort()).toEqual([lead, docsLead].sort())
     expect(f.run(send(leads, 'Docs waits for Pilot.'), as(docsLead)).messages[0]!.recipients).toEqual([lead])
+    // Naming a Lead adds emphasis; every other Lead still hears it.
+    expect(f.run(send(leads, 'Pilot, can you go first?', [lead])).messages[0]!.recipients.sort()).toEqual([lead, docsLead].sort())
     expect(() => f.run(send(leads, 'Me too'), as(worker))).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
     expect(() => f.run(send(leads, 'Hi', [worker]))).toThrow()
     expect(visibleState(f.state, as(lead)).conversations.map(c => c.id)).toContain(leads)

@@ -1018,9 +1018,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         && group.leadId && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? group.leadId : null
       const agentRecipient = leadToWorker ?? workerToLead
       const automatic = actor.kind === 'person' ? (replyAgent && group.agentIds.includes(replyAgent) ? replyAgent : group.leadId) : agentRecipient
-      // In the Leads conversation everything posted reaches every other Lead.
-      const everyLead = isLeads(group) ? group.agentIds.filter(id => actor.kind !== 'agent' || id !== actor.agentId) : null
-      const recipients = [...new Set(command.recipientIds.length ? command.recipientIds : everyLead ?? (automatic ? [automatic] : []))]
+      // In the Leads conversation everything posted reaches every other Lead; naming some only adds emphasis.
+      const everyLead = isLeads(group) ? group.agentIds.filter(id => actor.kind !== 'agent' || id !== actor.agentId) : []
+      const recipients = [...new Set([...command.recipientIds, ...everyLead,
+        ...(command.recipientIds.length || everyLead.length || !automatic ? [] : [automatic])])]
       for (const id of recipients) {
         agent(state, id)
         if (!group.agentIds.includes(id)) fail('INVALID_RECIPIENT', 'Choose an agent in this conversation.', 400)
