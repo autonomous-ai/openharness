@@ -6,6 +6,11 @@
 static void carousel(void)
 {
     ht_tab_carousel_t c={0};
+    // 24 desk tabs and 16 Swarms page as one list; more than that is cut.
+    ht_tab_carousel_reset(&c,40,39);
+    assert(c.count==40 && ht_tab_carousel_index(&c)==39);
+    ht_tab_carousel_reset(&c,41,40);
+    assert(c.count==40 && ht_tab_carousel_index(&c)==39);
     ht_tab_carousel_reset(&c,0,0);
     ht_tab_carousel_begin(&c,233,100);
     assert(!c.touching && !ht_tab_carousel_end(&c,233,false,175));
@@ -63,7 +68,7 @@ static void carousel(void)
     ht_tab_carousel_tick(&c,3000);
     assert(ht_tab_carousel_index(&c)==10);
     ht_tab_carousel_reset(&c,100,999);
-    assert(c.count==24 && ht_tab_carousel_index(&c)==23);
+    assert(c.count==40 && ht_tab_carousel_index(&c)==39);
     puts("tab carousel: short slow swipes, 2:1 tracking, bounded flicks, soft edges, settled taps, brake, cancel and clock wrap PASS");
 }
 
