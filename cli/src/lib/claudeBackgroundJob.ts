@@ -28,9 +28,14 @@ export interface ClaudeAgentListEntry {
 /** `null` means the call did not answer (missing subcommand, non-zero exit, timeout) — never thrown. */
 export type ClaudeAgentsExec = (bin: string, args: readonly string[], timeoutMs: number, env?: NodeJS.ProcessEnv) => Promise<string | null>
 
+// A spawn that throws synchronously (EMFILE, a bad binary path) is a failed call too, not a rejected resume.
 const defaultExec: ClaudeAgentsExec = (bin, args, timeoutMs, env) => new Promise(resolve => {
-  patientExec(execFile)(bin, args, { timeout: timeoutMs, ...(env ? { env } : {}) },
-    (error, stdout) => resolve(error ? null : stdout))
+  try {
+    patientExec(execFile)(bin, args, { timeout: timeoutMs, ...(env ? { env } : {}) },
+      (error, stdout) => resolve(error ? null : stdout))
+  } catch {
+    resolve(null)
+  }
 })
 
 /** The one live background job (if any) holding the exact session Harness is about to resume. Never a
