@@ -58,10 +58,12 @@ const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
 const OTHER_WORK_FIELDS = ['conversationId', 'projectName', 'title', 'owns', 'status', 'agentName', 'pr'] as const
 
 /** Leads see each other's work and talk (spec 2026-10-23): a Lead reads other projects' active work in the backend's
- *  fields alone; an agent that leads no group reads neither it nor the Leads conversation, even from a server that sent it. */
+ *  fields alone; any other agent reads neither it nor the Leads conversation, even from a server that sent it. */
 function statusView(answer: Record<string, unknown>, agentId: string): Record<string, unknown> {
   const { otherProjectsWork, leadsConversationId, ...state } = object(answer.state)
-  if (list(state.conversations).some(c => c.leadId === agentId && c.archived !== true)) {
+  // A project's Lead is its Lead conversation's, as the backend reads it; a Swarm from before projects has one, 'lead'.
+  const leads = Array.isArray(state.projects) ? list(state.projects).map(p => p.leadConversationId) : ['lead']
+  if (list(state.conversations).some(c => leads.includes(c.id) && c.leadId === agentId)) {
     return { ...answer, state: { ...state, ...(leadsConversationId !== undefined ? { leadsConversationId } : {}),
       ...(Array.isArray(otherProjectsWork) ? { otherProjectsWork: list(otherProjectsWork).map(work =>
         Object.fromEntries(OTHER_WORK_FIELDS.filter(key => key in work).map(key => [key, work[key]]))) } : {}) } }

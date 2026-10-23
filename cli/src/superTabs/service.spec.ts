@@ -220,9 +220,11 @@ it('resolves a native caller to its exact contribution and rechecks it before ev
 describe('other projects\' work in status', () => {
   const work = { conversationId: 'docs-roster', projectName: 'Docs', title: 'Roster', owns: ['desktop/lib/super_tabs'], status: 'review',
     agentName: 'Builder', pr: 'https://github.com/example/project/pull/12' }
-  const swarm = (t: ReturnType<typeof setup>, leadId: string | null) => {
-    const state = { agents: [t.agent], leadsConversationId: 'leads',
-      conversations: [{ id: 'pilot', leadId, agentIds: [t.agentId] }, { id: 'leads', kind: 'leads', title: 'Leads', leadId: null, agentIds: [t.agentId] }],
+  /** A Swarm whose project Pilot is led, through its Lead conversation, by [leadId]; [groups] are further conversations. */
+  const swarm = (t: ReturnType<typeof setup>, leadId: string | null, groups: Record<string, unknown>[] = [], legacy = false) => {
+    const lead = legacy ? 'lead' : 'pilot'
+    const state = { agents: [t.agent], leadsConversationId: 'leads', ...(legacy ? {} : { projects: [{ id: 'pilot', name: 'Pilot', leadConversationId: 'pilot' }] }),
+      conversations: [{ id: lead, leadId, agentIds: [t.agentId] }, ...groups, { id: 'leads', kind: 'leads', title: 'Leads', leadId: null, agentIds: [t.agentId] }],
       otherProjectsWork: [{ ...work, assignmentId: 'internal', brief: 'The whole brief' }] }
     t.call.mockImplementation(async () => ({ status: 200, body: { success: true, data: { revision: 7, state } } }))
   }
@@ -235,6 +237,23 @@ describe('other projects\' work in status', () => {
     expect(state.otherProjectsWork).toEqual([work])
     expect(state.leadsConversationId).toBe('leads')
     expect(list(state.conversations).map(c => c.id)).toEqual(['pilot', 'leads'])
+  })
+
+  it('shows the Lead of a Swarm from before projects that work too', async () => {
+    const t = setup()
+    swarm(t, t.agentId, [], true)
+    expect((await status(t)).otherProjectsWork).toEqual([work])
+  })
+
+  // The review of #1657: the backend's Lead is its project's Lead conversation's. A former Lead still named on an older
+  // work group is not one.
+  it('shows a former Lead that still leads an older work group neither that work nor the Leads conversation', async () => {
+    const t = setup()
+    swarm(t, 'new-lead', [{ id: 'older-work', projectId: 'pilot', leadId: t.agentId, agentIds: [t.agentId] }])
+    const state = await status(t)
+    expect(state).not.toHaveProperty('otherProjectsWork')
+    expect(state).not.toHaveProperty('leadsConversationId')
+    expect(list(state.conversations).map(c => c.id)).toEqual(['pilot', 'older-work'])
   })
 
   it('shows an agent that leads nothing neither that work nor the Leads conversation, whatever the server sends', async () => {

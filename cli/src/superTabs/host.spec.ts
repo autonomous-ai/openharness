@@ -148,6 +148,20 @@ describe('Super Tab native delivery handoff', () => {
     await host.tick()
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
   })
+  // The review of #1657: a Leads message held for a busy Lead must not be typed once that agent no longer leads.
+  it('rechecks a held Leads conversation message after its agent stops being a Lead', async () => {
+    const t = setup(), host = t.open()
+    t.row.lead = true
+    t.from('leads')
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    t.event('rejected', 'team_waiting_busy')
+    expect(t.saved().entries.delivery.stage).toBe('prepared')
+    t.row.lead = false
+    for (let i = 0; i < 3; i++) await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.saved().entries.delivery.stage).toBe('prepared')
+  })
   it('reads an agent\'s view once for its own conversation, and never for a Lead', async () => {
     const t = setup(), host = t.open()
     await host.tick()

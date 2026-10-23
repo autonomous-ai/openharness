@@ -540,8 +540,10 @@ export class SuperTabHost {
           const delivery = object(item)
           if (!identifier(delivery.id)) continue
           seen.add(delivery.id)
-          // A claimed one is never typed again without its journal: it is only reported, as uncertain.
-          if (!this.journal.entries[delivery.id] && !delivery.claimId && !await this.mayRead(target, delivery)) continue
+          // Checked before anything is typed: a new delivery, or one held while its agent may since have stopped leading. A
+          // claimed one with no journal is never typed, only reported as uncertain; a delivered one only acknowledged.
+          const entry = this.journal.entries[delivery.id]
+          if ((entry ? entry.stage === 'prepared' : !delivery.claimId) && !await this.mayRead(target, delivery)) continue
           try { await this.accept(target, delivery, path) } catch (error) {
             // Answered (or resolved by a person) between the roster read and this call: nothing is owed, and the
             // agent's other deliveries go on.
