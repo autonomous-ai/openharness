@@ -96,6 +96,7 @@ typedef struct {
     // The Swarm cards' Lead view (see pod_ui_take_supertab): the Lead the daemon was last told is open (empty: none), the frames waiting to go, and when a
     // supertab.focus began waiting for its Swarm list.
     char sup_tab[ID_MAX], sup_lead[ID_MAX];
+    char sup_close[ID_MAX];      // a "closed" frame the link dropped, owed for this Swarm until sent (empty: none), unless a Lead opens first
     pod_supertab_out_t sup_q[POD_SUPERTAB_OUT_MAX];
     uint8_t sup_qn;
     uint32_t sup_at;             // when the open Lead was last (re)sent to the daemon, at the model's clock
@@ -153,8 +154,9 @@ pod_out_t pod_ui_focus(pod_ui_t *, const char *agent_id, uint32_t now_ms);
 // the list not back yet) nothing is sent; a link drop forgets what was open, so the view re-sends open and get when its Lead is back.
 // Returns how many frames were written to out (at most max).
 int pod_ui_take_supertab(pod_ui_t *, pod_supertab_out_t out[], int max);
-// A frame taken by pod_ui_take_supertab that could not be sent (the link was busy): open / recap.get count as not sent, so the retry comes again (a failed retry is not counted).
-void pod_ui_supertab_unsent(pod_ui_t *, const char *t);
+// A frame taken by pod_ui_take_supertab that could not be sent (the link was busy): open / recap.get count as not sent, so the retry comes again (a failed retry is not counted);
+// the closing open (no lead) is owed until it is sent, unless a Lead opened since.
+void pod_ui_supertab_unsent(pod_ui_t *, const pod_supertab_out_t *frame);
 
 // The start, armed by a real link down -> up (pod_ui_link): once swarms of this link have arrived, if the stack is at the
 // root (TABS) and tab 0 has agents, enter tab 0 on its first agent (POD_A_ENTER_TAB). It is device-local: no AGENT_OPEN

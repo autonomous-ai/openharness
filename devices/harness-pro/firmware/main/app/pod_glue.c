@@ -973,7 +973,7 @@ static void apply_lead_focus(pod_ui_t *u)
 static void sup_sync(pod_ui_t *u)
 {
     pod_model_t *m = &u->model;
-    if (!m->linked) { u->sup_tab[0] = u->sup_lead[0] = 0; return; }
+    if (!m->linked) { u->sup_tab[0] = u->sup_lead[0] = u->sup_close[0] = 0; return; }   // the daemon forgets an unplugged device's open Lead
     const pod_frame_t *f = top(u);
     const bool on = f && f->swarm[0] && (f->view == POD_V_LEAD || f->view == POD_V_TALK);
     const pod_swarm_t *sw = NULL;
@@ -981,7 +981,10 @@ static void sup_sync(pod_ui_t *u)
     if (on && !l) return;   // its Lead is not in the model (yet): neither open nor closed, wait for it
     const char *lead = l ? l->id : "";
     if (!strcmp(u->sup_lead, lead) && (!l || !strcmp(u->sup_tab, sw->id))) {   // already what the daemon was told: a frame that may have been lost is re-sent
-        if (!l) return;
+        if (!l) {   // nothing open: a close the link dropped goes again
+            if (u->sup_close[0] && sup_push(u, "supertab.open", u->sup_close, "")) u->sup_close[0] = 0;
+            return;
+        }
         const uint32_t now_ms = m->clock_ms;
         if ((uint32_t)(now_ms - u->sup_at) < POD_SUPERTAB_RETRY_MS || u->sup_qn + 2 > POD_SUPERTAB_OUT_MAX) return;
         if (l->recap == POD_RECAP_LOADING) {   // no reply yet: ask again, a few times; then the "…" stays and nothing more is sent
@@ -1014,6 +1017,7 @@ static void sup_sync(pod_ui_t *u)
     }
     pod_copy_str(u->sup_tab, sizeof u->sup_tab, tab);
     pod_copy_str(u->sup_lead, sizeof u->sup_lead, lead);
+    u->sup_close[0] = 0;   // the open replaces any close still owed
     u->sup_at = m->clock_ms;
     u->sup_tries = 0;
     u->sup_reopened = false;
@@ -1029,9 +1033,15 @@ int pod_ui_take_supertab(pod_ui_t *u, pod_supertab_out_t out[], int max)
     return n;
 }
 
-void pod_ui_supertab_unsent(pod_ui_t *u, const char *t)
+void pod_ui_supertab_unsent(pod_ui_t *u, const pod_supertab_out_t *frame)
 {
-    if (!t || !u->sup_lead[0]) return;
+    if (!frame || !frame->t) return;
+    const char *t = frame->t;
+    if (!strcmp(t, "supertab.open") && !frame->lead[0]) {   // the close: the daemon would keep the Lead open and send every later drag to its chat
+        if (!u->sup_lead[0]) pod_copy_str(u->sup_close, sizeof u->sup_close, frame->tab);
+        return;
+    }
+    if (!u->sup_lead[0]) return;
     if (!strcmp(t, "supertab.recap.get")) {
         if (u->sup_tries) u->sup_tries--;   // a failed retry does not use one up
         u->sup_at = u->model.clock_ms;      // and the next waits the usual 3 s
