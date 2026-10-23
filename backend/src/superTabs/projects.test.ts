@@ -460,23 +460,24 @@ describe('custom role sets', () => {
     expect(() => f.run({ type: 'agent.start', request: request(plain.conversationId, { roleId: 'dev' }) } as Command)).toThrow('not in this project')
   })
 
-  it('adds an agent with a role id from the custom set, refusing an unknown id or a role of another kind', () => {
+  it('joins an agent with the role the New Harness form sends, and a reviewer role makes it a Reviewer', () => {
     const { f, p } = custom()
-    f.run({ type: 'project.role.set', projectId: p.projectId, role: role('abcdefabcdef', 'Docs writer', 'builder') }, peer)
     let harness = 0
-    const add = (extra: Record<string, unknown> = {}) => {
-      const command = commandSchema.parse({ type: 'agent.add', conversationId: p.conversationId, machineId: 'machine',
-        harnessId: `added-${++harness}`, name: 'Added', configuration, lead: false, ...extra })
-      return String(f.run(command).agentId)
-    }
+    /** Exactly what Desktop's New Harness form sends (PR #1659): lead, the chosen role id, its configuration. */
+    const add = (lead: boolean, roleId?: string) => commandSchema.parse({ type: 'agent.add', conversationId: p.conversationId,
+      machineId: 'machine', harnessId: `added-${++harness}`, name: lead ? 'Lead' : 'Added', lead, ...(roleId ? { roleId } : {}), configuration })
     const added = (agentId: string) => f.state.agents.find(a => a.id === agentId)!
-    expect(() => add({ roleId: 'eeeeeeeeeeee' })).toThrow('not in this project')
-    expect(() => add({ roleId: 'lead' })).toThrow('kind')
-    expect(() => add({ roleId: 'review' })).toThrow('kind')
-    expect(() => add({ lead: true, roleId: 'dev' })).toThrow('kind')
-    expect(added(add({ roleId: 'abcdefabcdef' })).roleId).toBe('abcdefabcdef')
-    expect(added(add())).not.toHaveProperty('roleId')
-    expect(added(add({ lead: true, roleId: 'lead' })).roleId).toBe('lead')
+    const engineer = added(String(f.run(add(false, 'dev')).agentId))
+    expect(engineer).toMatchObject({ roleId: 'dev' })
+    expect(engineer).not.toHaveProperty('role')
+    expect(added(String(f.run(add(false, 'review')).agentId))).toMatchObject({ roleId: 'review', role: 'reviewer' })
+    const lead = added(String(f.run(add(true, 'lead')).agentId))
+    expect(lead).toMatchObject({ roleId: 'lead' })
+    expect(lead).not.toHaveProperty('role')
+    expect(added(String(f.run(add(false)).agentId))).not.toHaveProperty('roleId')
+    // A lead role joins only as the Lead, a lead cannot take a builder or reviewer role, and unknown ids are refused.
+    for (const [isLead, roleId, why] of [[false, 'lead', 'kind'], [true, 'dev', 'kind'], [true, 'review', 'kind'],
+      [false, 'eeeeeeeeeeee', 'not in this project']] as const) expect(() => f.run(add(isLead, roleId))).toThrow(why)
     const plain = f.project('public', peer)
     expect(() => f.run(commandSchema.parse({ type: 'agent.add', conversationId: plain.conversationId, machineId: 'machine',
       harnessId: 'plain', name: 'Plain', configuration, lead: false, roleId: 'dev' }))).toThrow('not in this project')

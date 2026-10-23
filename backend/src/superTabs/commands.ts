@@ -837,9 +837,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const agentId = stableId(command.machineId, command.harnessId)
       const existing = state.agents.find(a => a.id === agentId)
       if (existing) sameProject(state, group, existing)
-      // The role a New Harness joins with is chosen here; later changes go through work.assign. An agent already in
-      // the Swarm keeps the role it runs, so a retry is checked against that kind.
-      const kind = existing ? agentKind(state, existing) : command.lead ? 'lead' : 'builder'
+      // A New Harness chooses its role here: a reviewer role joins it as a Reviewer, a builder role as an Engineer,
+      // and a lead role only as the Lead. Later changes go through work.assign. An agent already in the Swarm keeps
+      // the kind it runs, so a retry is checked against that.
+      const roleKind = command.roleId ? project.roles?.find(r => r.id === command.roleId)?.kind : undefined
+      const kind = existing ? agentKind(state, existing) : command.lead ? 'lead' : roleKind === 'reviewer' ? 'reviewer' : 'builder'
       const chosen = command.roleId ? chosenRole(project, command.roleId, kind) : null
       if (existing?.workDecision === 'stop' && command.lead) fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
       if (existing && agentRole(existing) === 'reviewer' && command.lead) fail('REVIEWER_NOT_LEAD', 'A Reviewer reviews work and cannot lead a group.')
@@ -851,7 +853,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         machineOwnerId: grant.machineOwnerId, contributorId: grant.contributorId, membershipGeneration: contributor.generation,
         hostGrant: grant.hostGrant ?? null,
         name: command.name, configuration: command.configuration, configurationVersion: operationId,
-        ...(chosen ? { roleId: chosen.id } : {}) })
+        ...(chosen?.kind === 'reviewer' ? { role: 'reviewer' as const } : {}), ...(chosen ? { roleId: chosen.id } : {}) })
       if (existing && (existing.machineOwnerId !== grant.machineOwnerId || existing.contributorId !== grant.contributorId)) {
         fail('ALREADY_SHARED', 'This session already has a contributor. Use the existing tab agent.')
       }
