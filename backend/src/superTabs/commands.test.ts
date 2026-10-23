@@ -1469,3 +1469,87 @@ describe('the owner\'s rules, after review', () => {
     }
   })
 })
+
+describe('machine.remove', () => {
+  const contribute = (f: ReturnType<typeof fixture>, contributorId = 'owner', machineId = 'host') => {
+    const generation = f.state.people.find(p => p.id === contributorId)!.generation
+    f.state.machines = [...(f.state.machines ?? []), { machineId, name: 'Studio', contributorId, membershipGeneration: generation, generation: 'g1',
+      cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false } as never]
+  }
+  const start = (f: ReturnType<typeof fixture>, group: string, dispatched = false) => {
+    f.state.starts = [...(f.state.starts ?? []), { id: `start-${(f.state.starts ?? []).length}`, creationId: 'creation', actorKey: 'agent:lead', contributorId: 'owner',
+      membershipGeneration: f.state.people[0]!.generation, machineOwnerId: 'host-owner', hostGrant: null, ...(dispatched ? { dispatched: true } : {}),
+      request: { conversationId: group, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
+        requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as never]
+  }
+
+  it('takes the machine out with the Swarm\'s agents on it, and tells each group whose task needs a new worker', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group(), worker = f.add('worker', 'owner', group)
+    contribute(f)
+    f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+    f.state.harnessReservations = [{ machineId: 'host', harnessId: 'old', generation: 'g0', renewed: false }, { machineId: 'elsewhere', harnessId: 'x', generation: 'g0', renewed: false }]
+    const named = (id: string) => { const a = f.state.agents.find(x => x.id === id)!; return a.displayName ?? a.name }
+    const workerName = named(worker), leadName = named(lead)
+    const effects = f.run({ type: 'machine.remove', machineId: 'host' })
+
+    expect(f.state.machines).toEqual([])
+    expect(f.state.agents).toEqual([])
+    expect(effects.result.removedAgents).toEqual([lead, worker])
+    expect(f.state.harnessReservations).toEqual([expect.objectContaining({ machineId: 'elsewhere' })])
+    expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('reconciling')
+    const notice = effects.messages.find(m => m.conversationId === group)!
+    expect(notice).toMatchObject({ author: { kind: 'person', id: 'owner' }, source: { kind: 'system' } })
+    // The group's Lead left with the machine too.
+    expect(notice.text).toBe(`owner removed Studio from the Swarm, and ${leadName} and ${workerName} with it. Its task "Offline editing" needs to be assigned again or closed.`)
+    expect(notice.recipients).toEqual([])
+    expect(effects.messages.find(m => m.conversationId === 'lead')!.text).toBe(`owner removed Studio from the Swarm, and ${leadName} with it.`)
+    expect(new Set(effects.messages.map(m => m.id)).size).toBe(effects.messages.length)
+  })
+
+  it('removes a machine that only runs agents, so nothing lists it any more', () => {
+    const f = fixture(), worker = f.add('worker')
+    f.run({ type: 'machine.remove', machineId: 'host' })
+    expect(f.state.agents.some(a => a.id === worker)).toBe(false)
+    expect(f.state.machines ?? []).toEqual([])
+  })
+
+  it('fails the starts still waiting for it, and waits for one already launching', () => {
+    const f = fixture(), group = f.group()
+    contribute(f)
+    start(f, group)
+    const effects = f.run({ type: 'machine.remove', machineId: 'host' })
+    expect(f.state.starts![0]!.error).toBe('Its machine was removed from the Swarm.')
+    expect(effects.messages).toEqual([expect.objectContaining({ conversationId: group, text: 'Builder will not start: its machine was removed from the Swarm.' })])
+
+    const g = fixture(), other = g.group()
+    contribute(g)
+    start(g, other, true)
+    expect(() => g.run({ type: 'machine.remove', machineId: 'host' })).toThrow(expect.objectContaining({ code: 'STARTS_PENDING' }))
+    expect(g.state.machines).toHaveLength(1)
+  })
+
+  it('lets the machine\'s owner take back what is all theirs, and leaves anyone else\'s to the Swarm owner', () => {
+    const f = fixture()
+    f.invite()
+    contribute(f, 'peer')
+    f.add('theirs', 'peer')
+    f.run({ type: 'machine.remove', machineId: 'host' }, peer)
+    expect(f.state.machines).toEqual([])
+
+    const g = fixture()
+    g.invite()
+    contribute(g, 'peer')
+    g.add('owners', 'owner')
+    expect(() => g.run({ type: 'machine.remove', machineId: 'host' }, peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN', status: 403 }))
+    g.run({ type: 'machine.remove', machineId: 'host' })
+    expect(g.state.machines).toEqual([])
+  })
+
+  it('is a person\'s to do, and only for a machine in the Swarm', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
+    expect(() => f.run({ type: 'machine.remove', machineId: 'host' }, { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }))
+      .toThrow(expect.objectContaining({ code: 'HUMAN_REQUIRED', status: 403 }))
+    expect(() => f.run({ type: 'machine.remove', machineId: 'nowhere' })).toThrow(expect.objectContaining({ code: 'NOT_FOUND', status: 404 }))
+    expect(commandSchema.safeParse({ type: 'machine.remove', machineId: 'host', extra: true }).success).toBe(false)
+  })
+})

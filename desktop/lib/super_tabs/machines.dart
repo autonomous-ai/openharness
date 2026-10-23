@@ -1072,6 +1072,154 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     );
   }
 
+  /// Every agent of the Swarm on [machineId]: removing the machine takes them all with it.
+  List<SuperTabAgent> _agentsOn(String machineId) => [
+    for (final a in c.snapshot?.agents ?? const <SuperTabAgent>[])
+      if (a.machineId == machineId) a,
+  ];
+
+  /// The Swarm owner removes any machine; anyone else, one that is all theirs: their contribution and
+  /// only their agents (backend `machine.remove`).
+  bool _canRemove(String machineId) {
+    if (!c.canWrite) return false;
+    if (c.isOwner) return true;
+    final pool = c.snapshot?.machines
+        .where((m) => m['machineId'] == machineId)
+        .firstOrNull;
+    final contributor = pool?['contributorId'] as String?;
+    return (contributor == null || contributor == c.accountId) &&
+        _agentsOn(machineId).every((a) => a.contributorId == c.accountId);
+  }
+
+  /// Takes a machine out of this Swarm, and the Swarm's agents on it with it, after a yes. Their sessions keep
+  /// running on the machine, as Remove from Swarm leaves one agent's (roster.dart).
+  Future<void> _remove(_MachineView v) async {
+    final id = v.id, name = superTabMachineName(v.name);
+    var busy = false, attempted = false;
+    await showAppDialog<void>(
+      context: context,
+      builder: (context) => SuperTabDialogScope(
+        controller: c,
+        child: StatefulBuilder(
+          builder: (context, update) => ListenableBuilder(
+            listenable: c,
+            builder: (context, _) {
+              final pending = c.pendingCommand;
+              final checking =
+                  pending?['type'] == 'machine.remove' &&
+                  pending?['machineId'] == id;
+              final available = _ids.contains(id) || checking || busy;
+              final permitted = _canRemove(id) || checking;
+              final enabled =
+                  permitted &&
+                  !busy &&
+                  !c.saving &&
+                  (checking || !c.hasPendingAction);
+              final names = [
+                for (final a in _agentsOn(id)) c.snapshot!.agentName(a.id),
+              ];
+              final shown = names.length > 4
+                  ? '${names.take(3).join(', ')} and ${names.length - 3} more'
+                  : names.length > 1
+                  ? '${names.take(names.length - 1).join(', ')} and ${names.last}'
+                  : names.firstOrNull;
+              return PopScope(
+                canPop: !busy,
+                child: AlertDialog(
+                  title: Text(
+                    available
+                        ? 'Remove $name from this Swarm?'
+                        : 'Machine unavailable',
+                  ),
+                  content: SizedBox(
+                    width: 400,
+                    child: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            !available || !permitted
+                                ? 'This action is no longer available.'
+                                : shown == null
+                                ? 'The Swarm stops using it for new work.'
+                                : '$shown ${names.length == 1 ? 'leaves' : 'leave'} the Swarm with it and keep running on $name. '
+                                      'Any open task needs to be assigned again or closed.',
+                          ),
+                          if (attempted && c.operationError != null) ...[
+                            const SizedBox(height: 12),
+                            Text(c.operationError!),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                  actions: [
+                    TextButton(
+                      autofocus: true,
+                      onPressed: busy ? null : () => Navigator.pop(context),
+                      child: Text(
+                        checking || !available || !permitted
+                            ? 'Close'
+                            : 'Cancel',
+                      ),
+                    ),
+                    if (available && permitted)
+                      FilledButton(
+                        key: const ValueKey('super-machine-remove-confirm'),
+                        style: grid.dangerButtonStyle(),
+                        onPressed: !enabled
+                            ? null
+                            : () async {
+                                update(() {
+                                  busy = true;
+                                  attempted = true;
+                                });
+                                final result = checking
+                                    ? await c.retry()
+                                    : await c.command({
+                                        'type': 'machine.remove',
+                                        'machineId': id,
+                                      });
+                                if (!context.mounted) return;
+                                if (result != null) {
+                                  Navigator.pop(context);
+                                } else {
+                                  update(() => busy = false);
+                                }
+                              },
+                        child: Text(checking ? 'Retry' : 'Remove from Swarm'),
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// A machine row's right-click: its details, and Remove from Swarm for whoever may.
+  Future<void> _menu(_MachineView view, Offset at) async {
+    final choice = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
+      items: [
+        const PopupMenuItem(value: 'details', child: Text('Details')),
+        if (_canRemove(view.id))
+          const PopupMenuItem(
+            key: ValueKey('super-machine-menu-remove'),
+            value: 'remove',
+            child: Text('Remove from Swarm'),
+          ),
+      ],
+    );
+    if (!mounted) return;
+    if (choice == 'details') await _openDetails(view);
+    if (choice == 'remove' && _canRemove(view.id)) await _remove(view);
+  }
+
   Future<void> _details(_MachineView v) {
     final id = v.id, name = v.name, person = v.owner, shared = v.shared;
     final contributor = v.contributor, paused = v.paused, dim = v.dim;
@@ -1083,7 +1231,26 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         controller: c,
         requireWrite: false,
         child: AlertDialog(
-          title: Text(superTabMachineName(name)),
+          title: Row(
+            children: [
+              Expanded(child: Text(superTabMachineName(name))),
+              // Out of the way of the everyday actions below: a quiet mark that turns red when pointed at.
+              if (_canRemove(id))
+                AppIconButton(
+                  key: const ValueKey('super-machine-remove'),
+                  icon: AppIcons.trash2,
+                  tooltip: 'Remove from Swarm',
+                  color: DesktopChrome.muted,
+                  destructive: true,
+                  onPressed: () {
+                    Navigator.pop(context);
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) unawaited(_remove(v));
+                    });
+                  },
+                ),
+            ],
+          ),
           content: SuperTabMachineDetails(
             name: name,
             owner: person?.email,
@@ -1158,6 +1325,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       child: InkWell(
         key: ValueKey('super-machine-${view.id}'),
         onTap: () => unawaited(_openDetails(view)),
+        onSecondaryTapUp: (event) =>
+            unawaited(_menu(view, event.globalPosition)),
         hoverColor: grid.AppSurface.hoverFill,
         focusColor: grid.AppSurface.hoverFill,
         borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
