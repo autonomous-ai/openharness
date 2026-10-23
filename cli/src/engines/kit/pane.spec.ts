@@ -42,6 +42,18 @@ describe("Claude Code's composer on Windows", () => {
     expect(read(quoted)).toMatchObject({ pane: { idle: false }, hold: 'team_waiting_idle' })
   })
 
+  // Review of #1649: a framed `>` in output (a quoted screen) above more output is not the input box. Only the last box,
+  // with nothing under it but Claude Code's indented footer, is.
+  it('reads only the bottom box with its footer as the composer, never a framed `>` in output', () => {
+    on('win32')
+    const quoted = ['⏺ The pane showed:', rule, '>\u00a0', rule, '⏺ and then it stopped.', ''].join('\n')
+    expect(read(quoted)).toMatchObject({ pane: { idle: false }, hold: 'team_waiting_idle' })
+    expect(composerState(quoted)).not.toBe('ready')
+    const shellAfter = ['⏺ Done.', rule, '>\u00a0', rule, '  ⏵⏵ bypass permissions on (shift+tab to cycle)', 'PS C:\\Users\\DELL> ', ''].join('\n')
+    expect(read(shellAfter)).toMatchObject({ pane: { idle: false } })
+    expect(composerState(shellAfter)).not.toBe('ready')
+  })
+
   it('reads Mac and Linux screens as before', () => {
     on('darwin')
     expect(read(claudeScreen('>'))).toMatchObject({ pane: { idle: false }, hold: 'team_waiting_idle' })

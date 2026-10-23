@@ -213,18 +213,22 @@ function promptMarker(engine: AgentEngine): RegExp {
   return /[›❯]/u
 }
 
-const COMPOSER_RULE = /^[─━]{8,}\s*$/
+const COMPOSER_RULE = /^[─━]{3,}(?:.*[─━]{3,})?\s*$/
 /**
  * The line of Claude Code's composer when it draws `>` for its marker, or -1. In the Harness terminal on Windows it draws
  * `>` and a no-break space where it draws `❯` elsewhere, so the pane never read idle and every Super Tab delivery to it
- * was held (DESKTOP-0TFH0OJ, 2026-10-23). Only at the start of a line between its two rules: a shell prompt
- * (`PS C:\>`) or a `>` quoted in the transcript must never read as an idle Claude Code. Mac and Linux are unchanged.
+ * was held (DESKTOP-0TFH0OJ, 2026-10-23). Only the bottom box counts: `>` at the start of the line under its top rule,
+ * and nothing under its bottom rule but Claude Code's indented footer. A shell prompt (`PS C:\>`), or a `>` quoted or
+ * framed in output above more output, must never read as an idle Claude Code (review of #1649). Mac and Linux are
+ * unchanged.
  */
 export function claudeWindowsComposer(lines: string[]): number {
   if (process.platform !== 'win32') return -1
   const visible = lines.map(stripAnsi)
-  const index = visible.findLastIndex((line, i) => /^>(?:[\u00a0 ]|$)/.test(line) && i > 0 && COMPOSER_RULE.test(visible[i - 1]))
-  return index >= 0 && visible.slice(index + 1).some((line) => COMPOSER_RULE.test(line)) ? index : -1
+  const bottom = visible.findLastIndex((line) => COMPOSER_RULE.test(line))
+  if (bottom < 2 || visible.slice(bottom + 1).some((line) => line.trim() && !/^\s/.test(line))) return -1
+  const top = visible.slice(0, bottom).findLastIndex((line) => COMPOSER_RULE.test(line))
+  return top >= 0 && top + 1 < bottom && /^>(?:[\u00a0 ]|$)/.test(visible[top + 1]) ? top + 1 : -1
 }
 
 export function inspectPane(engine: AgentEngine, capture: string, takeover: Takeover = () => null, planPattern = /\bplan mode on\b/i): PaneInspection {
