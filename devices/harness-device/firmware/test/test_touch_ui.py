@@ -1601,12 +1601,124 @@ static void swarm_pane_checks(const char *dir) {
     s.stop_agent[0] = 0; enter_at("s1", "L4"); ui_boot_pressed(); assert(s.view == HOME && !s.stop_agent[0]);
     puts("Swarm panes: project order, faces 2a-2h (time, recap card and cut, resting, wait text, stuck without red, remote read-only), swipe with wrap and no focus, one recap retry, PANES 3a-3c, follow the desktop, Lead gone, Swarm gone, side button PASS");
 }
+
+// The dial's own entry for a Lead, its index in the inbox, or -1.
+static int swarm_entry(const char *lead) {
+    for (int i = 0; i < s.notice_count; i++) if (s.notice[i].swarm && !strcmp(s.notice[i].agent_id, lead)) return i;
+    return -1;
+}
+static void inbox_at(const char *lead) {
+    ui_notif_open(); s.offset = swarm_entry(lead); assert(s.offset >= 0); scene_take();
+}
+// One run's ink and face, by its text.
+static const ht_run_t *run_of(const char *text) {
+    for (int i = 0; i < scene.count; i++) if (!strcmp(scene.runs[i].text, text)) return &scene.runs[i];
+    return NULL;
+}
+// openharness with every Lead working, so a test raises exactly the Leads it means to.
+static void calm_card(const char *backend, const char *docs) {
+    card_begin("s1", "t1", "openharness");
+    card_lead("L0", "mobile", "claude", "h0", "work", 0, 134); card_lead("L1", "Round dial firmware release candidate", "claude", "h1", "done", 1, -1);
+    card_lead("L2", "docs", "claude", "h2", docs, 2, -1); card_lead("L3", "firmware", "codex", "h3", "work", 3, -1);
+    card_lead("L4", "backend", "cursor", "", backend, 4, -1);
+}
+static void swarm_inbox_checks(const char *dir) {
+    // The fixture's card raised docs (ask) and firmware (stuck), each once, with the approved fixed lines.
+    swarm_setup();
+    assert(swarm_entry("L2") >= 0 && swarm_entry("L3") >= 0 && swarm_entry("L0") < 0 && swarm_entry("L4") < 0);
+    assert(!strcmp(s.notice[swarm_entry("L2")].summary, "Needs you. Answer on the desktop."));
+    assert(!strcmp(s.notice[swarm_entry("L3")].summary, "Stuck. See the desktop."));
+    assert(s.notice[swarm_entry("L2")].question && s.notice[swarm_entry("L2")].swarm == 1 && s.notice[swarm_entry("L3")].swarm == 2);
+    // 4e a Lead on someone else's machine, done/work -> ask: one entry and one beep; the Swarm's name grey, the
+    // project green. Asking again raises nothing; stuck changes the line and beeps; back to work removes it.
+    calm_card("work", "ask"); assert(!card_send());
+    calm_card("ask", "ask"); assert(card_send());
+    int e = swarm_entry("L4"); assert(e >= 0 && !strcmp(s.notice[e].summary, "Needs you. Answer on the desktop."));
+    calm_card("ask", "ask"); assert(!card_send());
+    inbox_at("L4");
+    {
+        const ht_run_t *grey = run_of("openharness"), *green = run_of("backend");
+        assert(grey && grey->font == &ht_lv_inter_25.base && grey->fg == color(0x8a8a99));
+        assert(green && green->font == &ht_lv_inter_25.base && green->fg == color(0x04fe08));
+        assert(scene_says("Needs you."));
+    }
+    FOCUS_PAGE("swarm-4e");
+    calm_card("stuck", "ask"); assert(card_send());
+    assert(!strcmp(s.notice[swarm_entry("L4")].summary, "Stuck. See the desktop."));
+    calm_card("work", "ask"); assert(!card_send()); assert(swarm_entry("L4") < 0);
+    // 4c, 4d the local Leads' waits: their questions take the fixed lines' place, with no second beep.
+    swarm_setup();
+    assert(!ui_supertab_wait("h2", "supertab:w1", "openharness", false, "Publish the docs today?"));
+    assert(!ui_supertab_wait("h3", "supertab:w2", "openharness", true, "Stuck: the release key is missing."));
+    assert(!strcmp(s.notice[swarm_entry("L2")].summary, "Publish the docs today?"));
+    assert(!strcmp(s.notice[swarm_entry("L3")].summary, "Stuck: the release key is missing."));
+    // A Super Tab wait never opens the question screen, whatever the dial shows.
+    assert(s.view == HOME);
+    { cable_notif_t desk = {.agent_id = "a", .name = "Payments refactor", .machine = "MacBook", .summary = "Hero and pricing are in."};
+      ui_notif_replace(&desk, 1); }
+    inbox_at("L2"); assert(scene_says("Publish the docs") && run_of("openharness") && run_of("docs"));
+    FOCUS_PAGE("swarm-4c");
+    inbox_at("L3"); assert(scene_says("Stuck: the release key"));
+    FOCUS_PAGE("swarm-4d");
+    // question.close: the fixed line again while the Lead still asks, and no beep.
+    ui_supertab_wait_close("h2", "supertab:other"); assert(!strcmp(s.notice[swarm_entry("L2")].summary, "Publish the docs today?"));
+    ui_supertab_wait_close("h2", "supertab:w1"); assert(!strcmp(s.notice[swarm_entry("L2")].summary, "Needs you. Answer on the desktop."));
+    // The wait first, then the Lead's state: one entry, one beep. The state first, then the wait: the same.
+    {
+        reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); fake_ms = 100000;
+        const char ids[1][ID_MAX] = {"s1"}; ui_supertabs_ids(ids, 1);
+        calm_card("work", "work"); assert(!card_send());
+        int before = s.notice_count;
+        assert(ui_supertab_wait("h2", "supertab:w1", "openharness", false, "Publish the docs today?"));   // the wait beeps
+        calm_card("work", "ask"); assert(!card_send());                                                // the state does not
+        assert(s.notice_count == before + 1 && !strcmp(s.notice[swarm_entry("L2")].summary, "Publish the docs today?"));
+        calm_card("work", "ask"); assert(!card_send());
+        ui_supertab_wait_close("h2", "supertab:w1"); calm_card("work", "work"); assert(!card_send()); assert(swarm_entry("L2") < 0);
+        calm_card("work", "ask"); assert(card_send());
+        assert(!ui_supertab_wait("h2", "supertab:w3", "openharness", false, "Ship it?"));
+        int count = 0; for (int i = 0; i < s.notice_count; i++) count += !strcmp(s.notice[i].agent_id, "L2");
+        assert(count == 1 && !strcmp(s.notice[swarm_entry("L2")].summary, "Ship it?"));
+    }
+    // A wait from a harness that is no Lead's: nothing.
+    { int before = s.notice_count; assert(!ui_supertab_wait("h99", "supertab:w9", "openharness", false, "Worker question"));
+      assert(s.notice_count == before && !scene_says("Worker question")); }
+    // The desktop's snapshot replaces its own rows only: every Swarm entry stays, after it and before it.
+    swarm_setup();
+    { cable_notif_t desk[2] = {{.agent_id = "a", .name = "Payments refactor", .summary = "Shipped."}, {.agent_id = "b", .name = "Agent B", .summary = "Done."}};
+      ui_notif_replace(desk, 2); assert(swarm_entry("L2") >= 0 && swarm_entry("L3") >= 0 && s.notice_count == 4);
+      ui_notif_replace(desk, 0); assert(swarm_entry("L2") >= 0 && swarm_entry("L3") >= 0 && s.notice_count == 2); }
+    // An entry for the Lead on the face is read at once, with no beep.
+    swarm_setup(); enter_at("s1", "L4");
+    calm_card("ask", "ask"); assert(!card_send()); assert(swarm_entry("L4") >= 0 && s.notice[swarm_entry("L4")].read_on_dial);
+    // 4a in a desk tab, the bell pill at y 400 counts the Swarm entries; 4b on a working Clawd, its bubble instead.
+    swarm_setup(); scene_take();
+    { bool pill = false; for (int i = 0; i < scene.count; i++) pill |= scene.runs[i].box.h == 32 && scene.runs[i].y == 400;
+      assert(pill && action_enabled(A_INBOX) && run_of("2")); }
+    FOCUS_PAGE("swarm-4a");
+    enter_at("s1", "L0"); fake_ms += 2000; scene_take();   // the bubble has popped in
+    { bool pill = false; for (int i = 0; i < scene.count; i++) pill |= scene.runs[i].box.h == 32 && scene.runs[i].y == 400;
+      assert(!pill && action_enabled(A_INBOX)); }
+    FOCUS_PAGE("swarm-4b");
+    // Pull down from the face opens the inbox; a tap on a Swarm entry enters that Swarm at that Lead.
+    swarm_setup(); inbox_at("L3"); tap(fake_ms, 233, 233);
+    assert(swarm_mode() && !strcmp(sw.tab, "s1") && !strcmp(sw.lead, "L3") && s.view == HOME && !desktop_opens);
+    // Link lost: the Swarms and their entries go; the desktop's rows stay.
+    swarm_setup();
+    { cable_notif_t desk = {.agent_id = "a", .name = "Payments refactor", .summary = "Shipped."}; ui_notif_replace(&desk, 1); }
+    enter_at("s1", "L0"); ui_supertabs_clear();
+    assert(!swarm_mode() && swarm_entry("L2") < 0 && swarm_entry("L3") < 0 && s.notice_count == 1 && tabs_total() == 2);
+    // 4f nothing left: the existing empty inbox.
+    ui_notif_replace(NULL, 0); assert(!s.notice_count); view(INBOX); scene_take(); assert(scene_says("No notification"));
+    FOCUS_PAGE("swarm-4f");
+    puts("Swarm inbox: one entry per Lead, fixed lines, one beep (raise, stuck, either order with a wait), wait text and its close, never a question screen, no worker entries, kept across notif.replace, read on the face, bell pill and bubble, tap enters the Swarm, cleared on link loss PASS");
+}
 int main(int argc, char **argv) {
     test_character = getenv("HABITAT_TEST_TUX") ? HT_CHARACTER_TUX : HT_CHARACTER_TIM;
     notification_read_checks(argc>1 ? argv[1] : NULL);
     bell_checks(argc>1 ? argv[1] : NULL);
     swarm_tabs_checks(argc>1 ? argv[1] : NULL);
     swarm_pane_checks(argc>1 ? argv[1] : NULL);
+    swarm_inbox_checks(argc>1 ? argv[1] : NULL);
     // The companion screen is gone: character, edge text and still-character are the app's now
     // (Settings > Autonomous robots). What the glass kept is actions, and Nap is the one that moved
     // off that screen into the controls list.
