@@ -1,0 +1,182 @@
+[
+  {
+    "profile": "computer, cable",
+    "splashMs": 159,
+    "firstFrameMs": 1247,
+    "settledMs": 1259,
+    "transferredMB": 5.78,
+    "runs": [
+      {
+        "splash": 461,
+        "firstFrame": 1432,
+        "signIn": 1626,
+        "megabytes": 5.78,
+        "fonts": [
+          "assets/assets/fonts/roboto-mono/RobotoMono-Italic.ttf",
+          "assets/assets/fonts/roboto-mono/RobotoMono.ttf",
+          "assets/fonts/MaterialIcons-Regular.otf",
+          "assets/fonts/fallback/Roboto-Regular.ttf",
+          "assets/packages/cupertino_icons/assets/CupertinoIcons.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf"
+        ],
+        "failed": [],
+        "consoleErrors": [],
+        "splashRemoved": true
+      },
+      {
+        "splash": 144,
+        "firstFrame": 1247,
+        "signIn": 1259,
+        "megabytes": 5.78,
+        "fonts": [
+          "assets/assets/fonts/roboto-mono/RobotoMono-Italic.ttf",
+          "assets/assets/fonts/roboto-mono/RobotoMono.ttf",
+          "assets/fonts/MaterialIcons-Regular.otf",
+          "assets/fonts/fallback/Roboto-Regular.ttf",
+          "assets/packages/cupertino_icons/assets/CupertinoIcons.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf"
+        ],
+        "failed": [],
+        "consoleErrors": [],
+        "splashRemoved": true
+      },
+      {
+        "splash": 159,
+        "firstFrame": 1203,
+        "signIn": 1213,
+        "megabytes": 5.78,
+        "fonts": [
+          "assets/assets/fonts/roboto-mono/RobotoMono-Italic.ttf",
+          "assets/assets/fonts/roboto-mono/RobotoMono.ttf",
+          "assets/fonts/MaterialIcons-Regular.otf",
+          "assets/fonts/fallback/Roboto-Regular.ttf",
+          "assets/packages/cupertino_icons/assets/CupertinoIcons.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf"
+        ],
+        "failed": [],
+        "consoleErrors": [],
+        "splashRemoved": true
+      }
+    ]
+  },
+  {
+    "profile": "phone, slow 4G",
+    "splashMs": 311,
+    "firstFrameMs": 31587,
+    "settledMs": 32913,
+    "transferredMB": 5.78,
+    "runs": [
+      {
+        "splash": 325,
+        "firstFrame": 31558,
+        "signIn": 32909,
+        "megabytes": 5.78,
+        "fonts": [
+          "assets/assets/fonts/roboto-mono/RobotoMono-Italic.ttf",
+          "assets/assets/fonts/roboto-mono/RobotoMono.ttf",
+          "assets/fonts/MaterialIcons-Regular.otf",
+          "assets/fonts/fallback/Roboto-Regular.ttf",
+          "assets/packages/cupertino_icons/assets/CupertinoIcons.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf"
+        ],
+        "failed": [],
+        "consoleErrors": [],
+        "splashRemoved": true
+      },
+      {
+        "splash": 295,
+        "firstFrame": 32058,
+        "signIn": 33054,
+        "megabytes": 5.78,
+        "fonts": [
+          "assets/assets/fonts/roboto-mono/RobotoMono-Italic.ttf",
+          "assets/assets/fonts/roboto-mono/RobotoMono.ttf",
+          "assets/fonts/MaterialIcons-Regular.otf",
+          "assets/fonts/fallback/Roboto-Regular.ttf",
+          "assets/packages/cupertino_icons/assets/CupertinoIcons.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf"
+        ],
+        "failed": [],
+        "consoleErrors": [],
+        "splashRemoved": true
+      },
+      {
+        "splash": 311,
+        "firstFrame": 31587,
+        "signIn": 32913,
+        "megabytes": 5.78,
+        "fonts": [
+          "assets/assets/fonts/roboto-mono/RobotoMono-Italic.ttf",
+          "assets/assets/fonts/roboto-mono/RobotoMono.ttf",
+          "assets/fonts/MaterialIcons-Regular.otf",
+          "assets/fonts/fallback/Roboto-Regular.ttf",
+          "assets/packages/cupertino_icons/assets/CupertinoIcons.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf"
+        ],
+        "failed": [],
+        "consoleErrors": [],
+        "splashRemoved": true
+      }
+    ]
+  },
+  {
+    "profile": "phone, fast 4G",
+    "splashMs": 178,
+    "firstFrameMs": 6726,
+    "settledMs": 7030,
+    "transferredMB": 5.78,
+    "runs": [
+      {
+        "splash": 177,
+        "firstFrame": 6747,
+        "signIn": 7030,
+        "megabytes": 5.78,
+        "fonts": [
+          "assets/assets/fonts/roboto-mono/RobotoMono-Italic.ttf",
+          "assets/assets/fonts/roboto-mono/RobotoMono.ttf",
+          "assets/fonts/MaterialIcons-Regular.otf",
+          "assets/fonts/fallback/Roboto-Regular.ttf",
+          "assets/packages/cupertino_icons/assets/CupertinoIcons.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf"
+        ],
+        "failed": [],
+        "consoleErrors": [],
+        "splashRemoved": true
+      },
+      {
+        "splash": 179,
+        "firstFrame": 6657,
+        "signIn": 6910,
+        "megabytes": 5.78,
+        "fonts": [
+          "assets/assets/fonts/roboto-mono/RobotoMono-Italic.ttf",
+          "assets/assets/fonts/roboto-mono/RobotoMono.ttf",
+          "assets/fonts/MaterialIcons-Regular.otf",
+          "assets/fonts/fallback/Roboto-Regular.ttf",
+          "assets/packages/cupertino_icons/assets/CupertinoIcons.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf"
+        ],
+        "failed": [],
+        "consoleErrors": [],
+        "splashRemoved": true
+      },
+      {
+        "splash": 178,
+        "firstFrame": 6726,
+        "signIn": 7037,
+        "megabytes": 5.78,
+        "fonts": [
+          "assets/assets/fonts/roboto-mono/RobotoMono-Italic.ttf",
+          "assets/assets/fonts/roboto-mono/RobotoMono.ttf",
+          "assets/fonts/MaterialIcons-Regular.otf",
+          "assets/fonts/fallback/Roboto-Regular.ttf",
+          "assets/packages/cupertino_icons/assets/CupertinoIcons.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf"
+        ],
+        "failed": [],
+        "consoleErrors": [],
+        "splashRemoved": true
+      }
+    ]
+  }
+]

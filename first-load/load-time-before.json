@@ -1,0 +1,236 @@
+[
+  {
+    "profile": "computer, cable",
+    "splashMs": null,
+    "firstFrameMs": 1244,
+    "settledMs": 1270,
+    "transferredMB": 7.3,
+    "runs": [
+      {
+        "splash": null,
+        "firstFrame": 1529,
+        "signIn": 1541,
+        "megabytes": 7.3,
+        "fonts": [
+          "assets/assets/fonts/roboto-mono/RobotoMono-Italic.ttf",
+          "assets/assets/fonts/roboto-mono/RobotoMono.ttf",
+          "assets/fonts/MaterialIcons-Regular.otf",
+          "assets/fonts/fallback/Roboto-Regular.ttf",
+          "assets/packages/cupertino_icons/assets/CupertinoIcons.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w100.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w200.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w300.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w500.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w600.ttf",
+          "assets/packages/lucide_icons_flutter/assets/lucide.ttf"
+        ],
+        "failed": [],
+        "consoleErrors": [],
+        "splashRemoved": true
+      },
+      {
+        "splash": null,
+        "firstFrame": 1193,
+        "signIn": 1206,
+        "megabytes": 7.3,
+        "fonts": [
+          "assets/assets/fonts/roboto-mono/RobotoMono-Italic.ttf",
+          "assets/assets/fonts/roboto-mono/RobotoMono.ttf",
+          "assets/fonts/MaterialIcons-Regular.otf",
+          "assets/fonts/fallback/Roboto-Regular.ttf",
+          "assets/packages/cupertino_icons/assets/CupertinoIcons.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w100.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w200.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w300.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w500.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w600.ttf",
+          "assets/packages/lucide_icons_flutter/assets/lucide.ttf"
+        ],
+        "failed": [],
+        "consoleErrors": [],
+        "splashRemoved": true
+      },
+      {
+        "splash": null,
+        "firstFrame": 1244,
+        "signIn": 1270,
+        "megabytes": 7.3,
+        "fonts": [
+          "assets/assets/fonts/roboto-mono/RobotoMono-Italic.ttf",
+          "assets/assets/fonts/roboto-mono/RobotoMono.ttf",
+          "assets/fonts/MaterialIcons-Regular.otf",
+          "assets/fonts/fallback/Roboto-Regular.ttf",
+          "assets/packages/cupertino_icons/assets/CupertinoIcons.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w100.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w200.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w300.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w500.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w600.ttf",
+          "assets/packages/lucide_icons_flutter/assets/lucide.ttf"
+        ],
+        "failed": [],
+        "consoleErrors": [],
+        "splashRemoved": true
+      }
+    ]
+  },
+  {
+    "profile": "phone, slow 4G",
+    "splashMs": null,
+    "firstFrameMs": 39679,
+    "settledMs": 40644,
+    "transferredMB": 7.3,
+    "runs": [
+      {
+        "splash": null,
+        "firstFrame": 39679,
+        "signIn": 40644,
+        "megabytes": 7.3,
+        "fonts": [
+          "assets/assets/fonts/roboto-mono/RobotoMono-Italic.ttf",
+          "assets/assets/fonts/roboto-mono/RobotoMono.ttf",
+          "assets/fonts/MaterialIcons-Regular.otf",
+          "assets/fonts/fallback/Roboto-Regular.ttf",
+          "assets/packages/cupertino_icons/assets/CupertinoIcons.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w100.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w200.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w300.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w500.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w600.ttf",
+          "assets/packages/lucide_icons_flutter/assets/lucide.ttf"
+        ],
+        "failed": [],
+        "consoleErrors": [],
+        "splashRemoved": true
+      },
+      {
+        "splash": null,
+        "firstFrame": 39925,
+        "signIn": 40922,
+        "megabytes": 7.3,
+        "fonts": [
+          "assets/assets/fonts/roboto-mono/RobotoMono-Italic.ttf",
+          "assets/assets/fonts/roboto-mono/RobotoMono.ttf",
+          "assets/fonts/MaterialIcons-Regular.otf",
+          "assets/fonts/fallback/Roboto-Regular.ttf",
+          "assets/packages/cupertino_icons/assets/CupertinoIcons.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w100.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w200.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w300.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w500.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w600.ttf",
+          "assets/packages/lucide_icons_flutter/assets/lucide.ttf"
+        ],
+        "failed": [],
+        "consoleErrors": [],
+        "splashRemoved": true
+      },
+      {
+        "splash": null,
+        "firstFrame": 39489,
+        "signIn": 40435,
+        "megabytes": 7.3,
+        "fonts": [
+          "assets/assets/fonts/roboto-mono/RobotoMono-Italic.ttf",
+          "assets/assets/fonts/roboto-mono/RobotoMono.ttf",
+          "assets/fonts/MaterialIcons-Regular.otf",
+          "assets/fonts/fallback/Roboto-Regular.ttf",
+          "assets/packages/cupertino_icons/assets/CupertinoIcons.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w100.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w200.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w300.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w500.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w600.ttf",
+          "assets/packages/lucide_icons_flutter/assets/lucide.ttf"
+        ],
+        "failed": [],
+        "consoleErrors": [],
+        "splashRemoved": true
+      }
+    ]
+  },
+  {
+    "profile": "phone, fast 4G",
+    "splashMs": null,
+    "firstFrameMs": 7821,
+    "settledMs": 8271,
+    "transferredMB": 7.3,
+    "runs": [
+      {
+        "splash": null,
+        "firstFrame": 7821,
+        "signIn": 8271,
+        "megabytes": 7.3,
+        "fonts": [
+          "assets/assets/fonts/roboto-mono/RobotoMono-Italic.ttf",
+          "assets/assets/fonts/roboto-mono/RobotoMono.ttf",
+          "assets/fonts/MaterialIcons-Regular.otf",
+          "assets/fonts/fallback/Roboto-Regular.ttf",
+          "assets/packages/cupertino_icons/assets/CupertinoIcons.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w100.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w200.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w300.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w500.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w600.ttf",
+          "assets/packages/lucide_icons_flutter/assets/lucide.ttf"
+        ],
+        "failed": [],
+        "consoleErrors": [],
+        "splashRemoved": true
+      },
+      {
+        "splash": null,
+        "firstFrame": 7790,
+        "signIn": 8239,
+        "megabytes": 7.3,
+        "fonts": [
+          "assets/assets/fonts/roboto-mono/RobotoMono-Italic.ttf",
+          "assets/assets/fonts/roboto-mono/RobotoMono.ttf",
+          "assets/fonts/MaterialIcons-Regular.otf",
+          "assets/fonts/fallback/Roboto-Regular.ttf",
+          "assets/packages/cupertino_icons/assets/CupertinoIcons.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w100.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w200.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w300.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w500.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w600.ttf",
+          "assets/packages/lucide_icons_flutter/assets/lucide.ttf"
+        ],
+        "failed": [],
+        "consoleErrors": [],
+        "splashRemoved": true
+      },
+      {
+        "splash": null,
+        "firstFrame": 8131,
+        "signIn": 8384,
+        "megabytes": 7.3,
+        "fonts": [
+          "assets/assets/fonts/roboto-mono/RobotoMono-Italic.ttf",
+          "assets/assets/fonts/roboto-mono/RobotoMono.ttf",
+          "assets/fonts/MaterialIcons-Regular.otf",
+          "assets/fonts/fallback/Roboto-Regular.ttf",
+          "assets/packages/cupertino_icons/assets/CupertinoIcons.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w100.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w200.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w300.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w400.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w500.ttf",
+          "assets/packages/lucide_icons_flutter/assets/build_font/LucideVariable-w600.ttf",
+          "assets/packages/lucide_icons_flutter/assets/lucide.ttf"
+        ],
+        "failed": [],
+        "consoleErrors": [],
+        "splashRemoved": true
+      }
+    ]
+  }
+]
