@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -1136,6 +1137,10 @@ describe('built-in skill text after a CLI update', () => {
     ]
     const sent: Array<{ operationId: string; asAgentId: string; command: Record<string, any> }> = []
     const receipts = new Map<string, string>()
+    /** On Custom, each agent's roster role (absent on a built-in set), and the role texts the backend serves. */
+    const rowRoles: Record<string, unknown> = {}
+    const texts: Record<string, { version: string; text: string }> = {}
+    const fetched: string[] = []
     let inFlight = 0
     t.core.agents.byAgent = vi.fn(id => sessions[id] as never)
     t.core.agents.terminalAvailable = vi.fn(() => true)
@@ -1144,7 +1149,13 @@ describe('built-in skill text after a CLI update', () => {
       await Promise.resolve()
       inFlight--
       const request = body as any
-      if (path.includes('/hosts/')) return { status: 200, body: { data: agents.map(agent => ({ tabId: 'tab', agent, ...(skillMode ? { skillMode } : {}) })) } }
+      if (path.includes('/hosts/')) return { status: 200, body: { data: agents.map(agent => ({ tabId: 'tab', agent, ...(skillMode ? { skillMode } : {}),
+        ...(agent.id in rowRoles ? { role: rowRoles[agent.id] } : {}) })) } }
+      const role = /^\/api\/super-tabs\/tab\/projects\/pilot\/roles\/([a-z0-9]+)$/.exec(path)?.[1]
+      if (role) {
+        fetched.push(role)
+        return texts[role] ? { status: 200, body: { data: texts[role] } } : { status: 404, body: { success: false, error: { code: 'NOT_FOUND', message: 'This role is unavailable.' } } }
+      }
       if (path.endsWith('/deliveries')) return { status: 200, body: { data: [] } }
       if (request?.command?.type === 'message.send') {
         // As the backend does: a repeated operation gets its first receipt; the same id for a different request is refused.
@@ -1161,8 +1172,63 @@ describe('built-in skill text after a CLI update', () => {
       for (let idle = 0; idle < 3;) { await new Promise(resolve => setImmediate(resolve)); idle = inFlight ? 0 : idle + 1 }
       return host
     }
-    return { t, files, sent, pass, setGroups: (next: typeof groups) => { groups = next }, setMode: (next: typeof mode) => { skillMode = next } }
+    return { t, files, sent, pass, rowRoles, texts, fetched, setGroups: (next: typeof groups) => { groups = next }, setMode: (next: typeof mode) => { skillMode = next } }
   }
+
+  // Custom roles and skills per project (spec 2026-10-23): on Custom the roster names each agent's role and its text's
+  // version, never the text; the host fetches the text only when that version changes, installs it as the skill of the
+  // agent's kind, and tells the agent as any skill update.
+  describe('a project on its Custom skills', () => {
+    const version = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16)
+    const custom = (f: ReturnType<typeof syncFixture>, text: string, name = 'Planner') => {
+      f.texts.lead = { version: version(text), text }
+      f.rowRoles['a-lead'] = { id: 'lead', name, kind: 'lead', version: version(text), projectId: 'pilot' }
+    }
+    it('installs the Lead\'s role under swarm-lead, fetches its text once while the version holds, and tells it once', async () => {
+      const f = syncFixture(false, 'default')
+      custom(f, '---\nname: swarm-lead\n---\nPlan the work.\n')
+      const host = await f.pass()
+      expect(readFileSync(f.files.lead!, 'utf8')).toBe(`---\nname: swarm-lead\ndescription: "The Planner role of this project's Custom skills."\n---\nPlan the work.\n`)
+      expect(f.files.lead!.endsWith(join('swarm-lead', 'SKILL.md'))).toBe(true)
+      expect(f.sent.map(s => [s.asAgentId, s.command.text])).toEqual([['a-lead', expect.stringMatching(/^This project now uses its Custom skills, as Planner\./)]])
+      for (let i = 1; i <= 3; i++) await f.pass(host, i * 120_000)
+      expect(f.fetched).toEqual(['lead'])
+      expect(f.sent).toHaveLength(1)
+    })
+    it('fetches again when the version changes, overwrites the file and tells the agent to re-read it', async () => {
+      const f = syncFixture(false, 'default')
+      custom(f, 'Plan the work.\n')
+      const host = await f.pass()
+      custom(f, 'Plan the work, then ship it.\n')
+      await f.pass(host, 1_000)
+      expect(f.fetched).toEqual(['lead', 'lead'])
+      expect(readFileSync(f.files.lead!, 'utf8')).toMatch(/\n---\nPlan the work, then ship it\.\n$/)
+      expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^This project now uses its Custom skills/),
+        `The project owner updated your Planner role. Before your next step, read ${JSON.stringify(f.files.lead)} again with your file or shell tool and follow the new version.`])
+    })
+    it('keeps the file and installs nothing when the text read back is not the roster\'s version, and tries again later', async () => {
+      const f = syncFixture(false, 'default')
+      custom(f, 'Plan the work.\n')
+      f.texts.lead = { version: 'another-version0', text: 'Something else.\n' }
+      const before = readFileSync(f.files.lead!, 'utf8')
+      const host = await f.pass()
+      expect(readFileSync(f.files.lead!, 'utf8')).toBe(before)
+      expect(f.sent).toEqual([])
+      expect(f.t.log).toHaveBeenCalledWith(expect.stringContaining('Planner'))
+      custom(f, 'Plan the work.\n')
+      await f.pass(host, 60_000)
+      expect(readFileSync(f.files.lead!, 'utf8')).toMatch(/\nPlan the work\.\n$/)
+    })
+    it('leaves an agent whose role is gone on its file, fetching and telling nothing: the backend tells it', async () => {
+      const f = syncFixture(false, 'default')
+      f.rowRoles['a-builder'] = null
+      const before = readFileSync(f.files.builder!, 'utf8')
+      await f.pass()
+      expect(readFileSync(f.files.builder!, 'utf8')).toBe(before)
+      expect(f.fetched).toEqual([])
+      expect(f.sent).toEqual([])
+    })
+  })
 
   it('rewrites each running Lead, Builder and Reviewer skill once and tells each agent once, never a personal session', async () => {
     const f = syncFixture()

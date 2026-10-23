@@ -83,7 +83,7 @@ interface Entry {
 }
 interface Journal { version: 1; machineId: string; entries: Record<string, Entry> }
 /** `skillMode` is the agent's project's skills; a row without it (an older backend, a project from before modes) is orchestration. */
-interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string }; skillMode?: unknown; lead?: unknown }
+interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string }; skillMode?: unknown; lead?: unknown; role?: unknown }
 export interface SuperTabHostOptions {
   now?: () => number
   write?: (file: string, journal: Journal) => void
@@ -106,6 +106,8 @@ export const hostJournalFile = (dataDir: string, machineId: string) => join(data
 const JOIN_RETRY_MS = 60_000
 /** How long a skill re-read notice that could not be sent (no open group yet, or the backend failed) waits to retry. */
 const SKILL_RETRY_MS = 60_000
+/** Which skill each kind of Custom role is installed as. */
+const KIND_SKILLS: Record<string, string> = { lead: 'lead', builder: 'dev', reviewer: 'review' }
 const JOIN_RETRY_MAX_MS = 30 * 60_000
 /** Refusals no retry can change while this host runs: the Swarm has all its machines, or this account does not own it. */
 const JOIN_FINAL = new Set(['MACHINES_FULL', 'OWNER_REQUIRED'])
@@ -190,8 +192,11 @@ export class SuperTabHost {
   /** When each running Swarm session's skill is next compared with the built-in text: once per host, and again while
    *  its re-read notice is still owed. */
   private readonly skillChecks = new Map<string, number>()
-  /** The mode each session's skill was last compared with: a change makes it due again at once. */
-  private readonly skillModes = new Map<string, SwarmSkillMode>()
+  /** The set each session's skill was last compared with (a mode, or a Custom role's version): a change makes it due again
+   *  at once. */
+  private readonly skillModes = new Map<string, string>()
+  /** Per session, the Custom role text last fetched and the roster version it is: fetched again only when that changes. */
+  private readonly roleTexts = new Map<string, { version: string; text: string }>()
   private skillsRunning: Promise<void> | null = null
   private missing = new Map<string, number>()
   /** Per Lead harness here: a reopen in progress, its failures, when the next may run, and the reason last logged. */
@@ -646,16 +651,37 @@ export class SuperTabHost {
     const session = this.core.agents.byAgent(target.agent.harnessId)
     const skill = session?.swarmSkill
     const mode: SwarmSkillMode = target.skillMode === 'default' ? 'default' : 'orchestration'
+    // Custom roles and skills per project (spec 2026-10-23): on Custom the roster names the agent's role and its text's
+    // version. A role that is gone (null) keeps its file; the backend tells the agent to finish its current work.
+    const role = 'role' in target ? object(target.role) : null
+    if (role && !Object.keys(role).length) return
+    const custom = role && ['id', 'name', 'version', 'projectId'].every(key => typeof role[key] === 'string' && role[key])
+      && KIND_SKILLS[String(role.kind)] === skill?.role ? role as { id: string; name: string; version: string; projectId: string } : null
+    if (role && !custom) return
+    const set = custom ? `custom:${custom.projectId}:${custom.id}:${custom.version}` : mode
     // A checked session waits for the next host (Infinity); the project's owner switching its skills must reach it now.
-    if (this.skillModes.get(target.agent.harnessId) !== mode) {
-      this.skillModes.set(target.agent.harnessId, mode)
+    if (this.skillModes.get(target.agent.harnessId) !== set) {
+      this.skillModes.set(target.agent.harnessId, set)
       this.skillChecks.delete(target.agent.harnessId)
     }
     const due = this.skillChecks.get(target.agent.harnessId) ?? 0
     if (!skill || !session.cwd || this.now() < due) return
     this.skillChecks.set(target.agent.harnessId, Infinity)
     try {
-      const refresh = refreshSwarmSkill(session.cwd, skill, mode)
+      let text: { name: string; text: string } | undefined
+      if (custom) {
+        let held = this.roleTexts.get(target.agent.harnessId)
+        if (held?.version !== custom.version) {
+          const answer = object(await backend(this.core, 'GET', `/api/super-tabs/${target.tabId}/projects/${custom.projectId}/roles/${custom.id}`))
+          if (answer.version !== custom.version || typeof answer.text !== 'string') {
+            throw new Error(`The ${custom.name} role's text is not the version this machine was told to install. Trying again later.`)
+          }
+          held = { version: custom.version, text: answer.text }
+          this.roleTexts.set(target.agent.harnessId, held)
+        }
+        text = { name: custom.name, text: held.text }
+      }
+      const refresh = refreshSwarmSkill(session.cwd, skill, mode, text)
       if (!refresh?.owed) return
       if (await this.tellSkill(target, refresh)) recordSwarmSkillNotice(session.cwd, skill, refresh)
       else this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
