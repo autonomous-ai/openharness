@@ -401,6 +401,10 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                 _readyRequest == _terminalRequest &&
                 agents.isNotEmpty &&
                 tab.panes.isNotEmpty;
+            // The terminal canvas is mounted either way; whether a person can see it is this.
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) app.setSuperTabTerminalsShown(tab.id, showTerminal);
+            });
             final lead = controller.snapshot?.agents
                 .where((a) => controller.snapshot!.isLead(a.id))
                 .firstOrNull;

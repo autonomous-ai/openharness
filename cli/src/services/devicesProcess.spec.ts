@@ -21,7 +21,7 @@ function devicesPort() {
   const calls: Array<[string, unknown[]]> = []
   const record = (name: string) => (...args: unknown[]) => { calls.push([name, args]) }
   const port = {
-    card: record('card'), desk: record('desk'), swarms: record('swarms'), unread: record('unread'), appFocus: record('appFocus'),
+    card: record('card'), desk: record('desk'), swarms: record('swarms'), swarmCards: record('swarmCards'), swarmCardRecap: record('swarmCardRecap'), unread: record('unread'), appFocus: record('appFocus'),
     seen: record('seen'), settings: record('settings'), windowFocus: record('windowFocus'), windowReply: record('windowReply'),
     voiceReply: record('voiceReply'), windowGone: record('windowGone'), scroll: record('scroll'), engines: record('engines'),
     commanders: record('commanders'),
@@ -101,6 +101,16 @@ describe('the devices in their own process', () => {
       if (was === undefined) delete process.env.HARNESSD_TEST_DIAL_PORT
       else process.env.HARNESSD_TEST_DIAL_PORT = was
     }
+  })
+
+  it('run what the devices registered for a core that connects, each time one does', () => {
+    const f = setup()
+    const again = vi.fn()
+    f.deps().onCoreConnected!(again)
+    expect(again).not.toHaveBeenCalled()
+    f.connect()
+    f.connect()
+    expect(again).toHaveBeenCalledTimes(2)
   })
 
   it('run the devices and their link as the master starts them', () => {
@@ -224,6 +234,12 @@ describe('the core\'s doors, across the link', () => {
     expect(await api.account.machines()).toEqual({ status: 200, body: { data: { machines: [] } } })
     f.answer('machines', { body: 'broken' })
     expect(await api.account.machines()).toEqual({ status: 502, body: {} })
+    // The Swarm cards' requests, asked of the core as its own `super_tabs` query; a core that cannot answer is unavailable.
+    f.answer('super_tabs', { ok: true })
+    expect(await api.superTabRequest!({ action: 'cardsWanted', on: true })).toEqual({ ok: true })
+    expect(f.queries.at(-1)).toEqual(['super_tabs', { action: 'cardsWanted', on: true }])
+    f.answer('super_tabs', new Error('the core went away'))
+    expect(await api.superTabRequest!({ action: 'cardsWanted', on: false })).toEqual({ error: 'SERVICE_UNAVAILABLE' })
     api.agents.setRuntime('a1', 'opus', 'high')
     api.turns.send('a1', 'hello')
     api.turns.stop('a1')
@@ -288,6 +304,10 @@ describe('what the core tells the devices, reaching their port', () => {
       { kind: 'desk', agentIds: 'nonsense' },
       { kind: 'swarms', swarms: { active: 't1', swarms: [], tiles: [] } },
       { kind: 'swarms', swarms: null },
+      { kind: 'swarmCards', items: [{ id: 't1' }] },
+      { kind: 'swarmCards', items: 'nonsense' },
+      { kind: 'swarmCardRecap', recap: { tabId: 't1' } },
+      { kind: 'swarmCardRecap', recap: 'nonsense' },
       { kind: 'unread', items: [{ agentId: 'a1' }] },
       { kind: 'unread', items: 'nonsense' },
       { kind: 'appFocus', machineId: 'm1', agentId: 'a1' },
@@ -316,6 +336,10 @@ describe('what the core tells the devices, reaching their port', () => {
       ['desk', [[], true]],
       ['swarms', [{ active: 't1', swarms: [], tiles: [] }]],
       ['swarms', [null]],
+      ['swarmCards', [[{ id: 't1' }]]],
+      ['swarmCards', [[]]],
+      ['swarmCardRecap', [{ tabId: 't1' }]],
+      ['swarmCardRecap', [{}]],
       ['unread', [[{ agentId: 'a1' }]]],
       ['unread', [[]]],
       ['appFocus', ['m1', 'a1']],

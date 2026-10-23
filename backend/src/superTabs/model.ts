@@ -24,6 +24,8 @@ export interface Agent {
   name: string
   /** A stable member name; native session and routing names remain in `name`. */
   displayName?: string
+  /** Chosen at start and kept for the session. Absent reads as builder (agentRole); the Lead is derived from leadId. */
+  role?: AgentRole
   /** A finished worker stays undecided even when its group receives a new brief. */
   workDecision?: 'awaiting' | 'keep' | 'stop'
   releaseId?: string
@@ -32,9 +34,14 @@ export interface Agent {
   configuration: AgentConfiguration
   /** The last configuration operation fences delayed observations, including re-contribution. */
   configurationVersion?: string
+  /** Fences a repeated Change agent report without rolling back later model observations. */
+  replacement?: { previousHarnessId: string; harnessId: string }
 }
+export type AgentRole = 'builder' | 'reviewer'
+export const agentRole = (agent: Pick<Agent, 'role'>): AgentRole => agent.role ?? 'builder'
 export interface AgentStartRequest {
   conversationId: string
+  role?: AgentRole
   machineId: string
   engine: string
   model?: string
@@ -105,6 +112,8 @@ export interface Conversation {
   archived: boolean
   brief: string
   task?: WorkTask
+  /** A review group names the group whose work it reviews; only a Reviewer is assigned it, and a Reviewer nothing else. */
+  reviewOf?: string
   checks: Check[]
   assignment: Assignment | null
   lastMessageSequence: number
@@ -126,6 +135,8 @@ export interface SuperTabState {
   environment: string
   /** Fields this tab overrides from its owner's account routing policy (routingPolicy.ts). */
   routingPolicy?: import('./routingPolicy.js').RoutingOverride
+  /** The owner's routing rules (rules.ts); absent until the first is set. */
+  rules?: import('./rules.js').SwarmRule[]
   /** Owner-only sharing configuration; visibleState always removes it. */
   sharing?: import('./sharing.js').SwarmSharing
   paused: boolean
@@ -180,7 +191,8 @@ export const activeWork = (group: Conversation): boolean => !!group.assignment &
 /** Old states derive pending decisions from their closed assignments; new states persist them on the worker. */
 export function awaitingWorkers(state: SuperTabState, projectId: string): Agent[] {
   return state.agents.filter(a => {
-    if (state.conversations.some(c => c.leadId === a.id) || state.conversations.some(c => activeWork(c) && c.assignment?.agentId === a.id)) return false
+    if (state.conversations.some(c => c.leadId === a.id) || state.conversations.some(c => activeWork(c) && c.assignment?.agentId === a.id)
+      || reviewing(state, a.id)) return false
     const groups = state.conversations.filter(c => c.assignment?.agentId === a.id)
     return (a.projectId ?? groups.map(c => groupProject(state, c).id)[0] ?? 'lead') === projectId &&
       (a.workDecision === 'awaiting' || (!a.workDecision && groups.some(c => !activeWork(c))))
@@ -188,12 +200,23 @@ export function awaitingWorkers(state: SuperTabState, projectId: string): Agent[
 }
 export function requireWorkerDecisions(state: SuperTabState, actor: Actor, group: Conversation, reuseId?: string): void {
   if (actor.kind !== 'agent') return
-  const waiting = awaitingWorkers(state, groupProject(state, group).id).filter(a => a.id !== reuseId)
+  // A Reviewer that stays in the group being started or assigned is reused for it.
+  const waiting = awaitingWorkers(state, groupProject(state, group).id)
+    .filter(a => a.id !== reuseId && !(agentRole(a) === 'reviewer' && group.agentIds.includes(a.id)))
   if (waiting.length) fail('WORKER_DECISION_REQUIRED', `Decide what to do with ${waiting.map(a => a.displayName ?? a.name).join(', ')}: reuse, keep or stop. Prefer stop unless more work is coming soon.`)
 }
-export function finishWorker(state: SuperTabState, workerId: string): void {
-  const target = state.agents.find(a => a.id === workerId)
-  if (target && !state.conversations.some(c => c.leadId === workerId)) target.workDecision = 'awaiting'
+/** A group's work ended: its worker, and each of its Reviewers not reviewing other active work, await the Lead's decision. */
+export function finishWorker(state: SuperTabState, workerId: string, group?: Conversation): void {
+  const ids = [workerId, ...(group?.agentIds ?? []).filter(id => id !== workerId &&
+    state.agents.some(a => a.id === id && agentRole(a) === 'reviewer') && !reviewing(state, id))]
+  for (const target of state.agents.filter(a => ids.includes(a.id))) {
+    if (!state.conversations.some(c => c.leadId === target.id) && target.workDecision !== 'stop') target.workDecision = 'awaiting'
+  }
+}
+/** A Reviewer is busy while any group it is in has active work. */
+export function reviewing(state: SuperTabState, agentId: string): boolean {
+  return state.agents.some(a => a.id === agentId && agentRole(a) === 'reviewer') &&
+    state.conversations.some(c => activeWork(c) && c.agentIds.includes(agentId))
 }
 
 export function person(state: SuperTabState, id: string): Person {

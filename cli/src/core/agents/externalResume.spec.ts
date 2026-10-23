@@ -10,6 +10,7 @@ import type { ProcessView, RunningProcess } from '../../lib/sessionSearch/extern
 import { createExternalSessions } from '../../services/externalSessions.js'
 import { createExternalResumes, type ExternalResumeDeps } from './externalResume.js'
 import { stopExternalOwner } from './externalOwner.js'
+import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
 vi.mock('./externalOwner.js', () => ({ stopExternalOwner: vi.fn(async () => false) }))
 
 const cwd = mkdtempSync(join(tmpdir(), 'external-resume-'))
@@ -84,6 +85,20 @@ function setup() {
   }
   return { deps, registry, rows, panes, inspect, create, killHeld, controller, stage, cancelWork: () => { cancelled = true } }
 }
+
+it('opens no conversation of an agent a stopped move may still run beside, by its id or an alias the search names', async () => {
+  for (const [asked, aliases] of [['conversation', []], ['other', ['conversation']]] as const) {
+    const test = setup()
+    test.deps.heldConversation = (sessionId) => sessionId === 'conversation' ? 'a1' : null
+    test.inspect.mockImplementation(async (request) => ({ ...free(request), session: { ...fact, sessionId: request.sessionId, aliases: [...aliases] } }) as ExternalSessionAnswer)
+    const warn = vi.mocked(console.warn)
+    warn.mockClear()
+    expect(await test.controller.create(input({ resumeSessionId: asked }))).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
+    expect(test.create).not.toHaveBeenCalled()
+    expect(test.rows.size).toBe(0)
+    expect(warn).toHaveBeenCalledWith(moveHeldLine('a1'))
+  }
+})
 
 it('persists an inert held intent during search outage, then admits and launches the exact conversation', async () => {
   const test = setup(); test.inspect.mockResolvedValue(externalUnavailable('Reader unavailable.'))

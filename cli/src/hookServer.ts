@@ -30,6 +30,7 @@ import type { HookTerminalHint } from './lib/terminalTypes.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import { isTrustedLocal, listenLocalSocket, type LocalSocketServer } from './lib/localSocket.js'
+import { PTY_HOST_INSTANCE } from './lib/ptyHost/instance.js'
 
 /**
  * Which agent does a hook belong to, given the two grades of evidence?
@@ -269,7 +270,7 @@ function validHookBody(value: unknown): value is BoundHookBody {
         // A Harness pty host pane, as its shell names itself (`HARNESS_PANE=<instance>:%N`, hook/notify.mjs): the
         // instance and the pane, nothing else.
         if (Object.keys(hint).some((field) => !['backend', 'instance', 'paneId'].includes(field))
-          || typeof hint.instance !== 'string' || !/^p\d{1,4}$/.test(hint.instance)
+          || typeof hint.instance !== 'string' || !PTY_HOST_INSTANCE.test(hint.instance)
           || typeof hint.paneId !== 'string' || !/^%\d{1,9}$/.test(hint.paneId)) return false
       } else if (hint.backend === 'herdr') {
         // A hook script installed by an earlier build still sends these from inside a Herdr pane. The
@@ -306,7 +307,7 @@ function normalizedRuntimeHints(body: RegisterInput): HookTerminalHint[] {
   if (Array.isArray(body.runtimeHints) && body.runtimeHints.length <= 4) {
     for (const hint of body.runtimeHints) {
       if (hint?.backend === 'tmux' && /^%\d+$/.test(hint.paneId)) hints.push({ backend: 'tmux', paneId: hint.paneId })
-      else if (hint?.backend === 'ptyhost' && /^p\d{1,4}$/.test(hint.instance) && /^%\d{1,9}$/.test(hint.paneId)) {
+      else if (hint?.backend === 'ptyhost' && PTY_HOST_INSTANCE.test(hint.instance) && /^%\d{1,9}$/.test(hint.paneId)) {
         hints.push({ backend: 'ptyhost', instance: hint.instance, paneId: hint.paneId })
       }
     }

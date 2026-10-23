@@ -271,50 +271,76 @@ class FromPhone(unittest.TestCase):
                 as_user.assert_called_once()
 
 
+class Account:
+    pw_uid, pw_gid = 1000, 1000
+
+
 class FactoryReset(unittest.TestCase):
     def home(self, folder):
-        home = Path(folder)
-        for path in ['.harness/computer-id', '.harness/cli/data/e2e/identity.json', '.harness/cli/data/registry.json',
-                     '.harness/auth/session.json', '.harness/tui/state.json', '.local/state/harness-os/onboarded',
-                     '.claude/settings.json', 'projects/AGENTS.md']:
+        home = Path(folder) / 'me'
+        for path in ['.harness/computer-id', '.harness/cli/data/e2e/identity.json', '.harness/auth/session.json',
+                     '.harness/tui/state.json', '.local/state/harness-os/updates/builds/x/cli.mjs',
+                     '.claude/settings.json', 'projects/site/index.html', '.bashrc']:
             (home / path).parent.mkdir(parents=True, exist_ok=True)
             (home / path).write_text('x')
         return home
 
-    def run_reset(self, home, keep_wifi, keep_workspace=False):
-        users, wifi = [], []
-        self.desk = []
-        state = home / 'state'
+    def run_reset(self, home, **flags):
+        self.steps, wifi, commands = [], [], []
+        state = home.parent / 'state'
         state.mkdir()
         (state / 'r.json').write_text('{}')
         (state / 'from-phone').touch()
+        def step(name):
+            return lambda *a, **k: self.steps.append(name)
+        def user(*command, timeout=30):
+            self.steps.append(' '.join(command[-2:]))
+            return result()
+        def run(command, **_):
+            commands.append(command)
+            self.steps.append(' '.join(command[:3]))
+            return result()
         with patch.object(setup, 'HOME', home), patch.object(setup, 'RESULT', state / 'r.json'), \
-             patch.object(setup, 'FROM_PHONE', state / 'from-phone'), patch.object(setup, 'NOW', state / 'now'), \
-             patch.object(setup, 'as_user', side_effect=lambda *c, timeout=30: users.append(c) or result(output='2\n1\n')), \
-             patch.object(setup.subprocess, 'run', return_value=result()), \
+             patch.object(setup, 'FROM_PHONE', state / 'from-phone'), patch.object(setup, 'NOW', state / 'now'), patch.object(setup, 'PHONE_SETS_UP', state / 'phone'), \
+             patch.object(setup, 'SCREEN', state / 'screen'), patch.object(setup, 'as_user', side_effect=user), \
+             patch.object(setup.subprocess, 'run', side_effect=run), patch.object(setup.time, 'sleep'), \
+             patch.object(setup.pwd, 'getpwnam', return_value=Account()), \
              patch.object(setup, 'rows', return_value=[['u-home', '802-11-wireless'], ['u-lo', 'loopback']]), \
              patch.object(setup, 'nmcli', side_effect=lambda *a, **k: wifi.append(a) or result()), \
-             patch.object(setup, 'forget_desk', side_effect=lambda: users.append(('forget-desk',))):
-            setup.factory_reset(keep_wifi=keep_wifi, keep_workspace=keep_workspace)
-        return users, wifi, state
+             patch.object(setup, 'forget_desk', side_effect=step('forget-desk')), \
+             patch.object(setup, 'remove_from_account', side_effect=step('remove-from-account')), \
+             patch.object(setup, 'restore_initial_password', side_effect=step('restore-password')):
+            setup.factory_reset(**flags)
+        return wifi, commands, state
 
-    def test_its_tabs_leave_the_desk_before_the_sign_out_and_hn_before_its_files(self):
-        with tempfile.TemporaryDirectory() as folder:
-            users, _, _ = self.run_reset(self.home(folder), keep_wifi=False)
-            logout = next(i for i, c in enumerate(users) if 'logout' in c)
-            self.assertLess(users.index(('forget-desk',)), logout)
-            # hn ends before the files go: it writes its tabs out as it ends.
-            kill = next(i for i, c in enumerate(users) if 'kill-server' in c and setup.HN in c)
-            self.assertLess(logout, kill)
-
-    def test_keep_workspace_keeps_hn_and_the_desk(self):
+    def test_it_is_as_just_installed(self):
         with tempfile.TemporaryDirectory() as folder:
             home = self.home(folder)
-            users, _, _ = self.run_reset(home, keep_wifi=False, keep_workspace=True)
-            self.assertTrue((home / '.harness/tui/state.json').exists())
-            self.assertFalse((home / '.harness/auth/session.json').exists())
-            self.assertNotIn(('forget-desk',), users)
-            self.assertFalse([c for c in users if 'kill-window' in c])
+            wifi, commands, state = self.run_reset(home)
+            # Everything of the person: projects, sign-ins, the downloaded hn/CLI, the computer's id
+            # and device key (a new computer to its next account). The skeleton is copied back.
+            self.assertEqual(sorted(str(p.relative_to(home)) for p in home.rglob('*')), ['projects'])
+            self.assertIn(['cp', '-a', '/etc/skel/.', str(home)], commands)
+            self.assertIn(['chown', '-R', '1000:1000', str(home)], commands)
+            self.assertFalse((state / 'r.json').exists() or (state / 'from-phone').exists())
+            self.assertIn(['systemctl', 'disable', '--now', 'sshd.service'], commands)
+            self.assertEqual(wifi, [('connection', 'delete', 'uuid', 'u-home')])
+            self.assertTrue((state / 'now').exists() and (state / 'phone').exists())
+
+    def test_off_its_account_while_signed_in_then_every_process_before_the_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.run_reset(self.home(folder))
+            order = [self.steps.index(s) for s in ['forget-desk', 'remove-from-account', '/usr/bin/harness logout',
+                                                    'loginctl terminate-user me', 'cp -a /etc/skel/.',
+                                                    'restore-password', 'systemctl start user@1000.service',
+                                                    'systemctl restart getty@tty1.service']]
+            self.assertEqual(order, sorted(order))
+
+    def test_a_test_machine_keeps_its_wifi_and_ssh(self):
+        with tempfile.TemporaryDirectory() as folder:
+            wifi, commands, _ = self.run_reset(self.home(folder), keep_wifi=True, keep_ssh=True)
+            self.assertEqual(wifi, [])
+            self.assertNotIn(['systemctl', 'disable', '--now', 'sshd.service'], commands)
 
     def test_the_desk_forgets_this_computer_alone(self):
         tabs = [{'id': 'own', 'panes': [{'machineId': 'me', 'agentId': 'a'}]},
@@ -327,39 +353,109 @@ class FactoryReset(unittest.TestCase):
         self.assertEqual(written[-1], [{'op': 'tab.close', 'id': 'own'},
                                        {'op': 'pane.remove', 'tabId': 'shared', 'machineId': 'me', 'agentId': 'b'}])
 
-    def test_it_is_as_just_flashed_but_the_same_computer(self):
+    def test_the_commands_run_in_units_of_their_own(self):
+        for argv, unit, tail in [(['reset', '--keep-wifi'], 'harness-factory-reset', ['reset', '--here', '--keep-wifi']),
+                                 (['sign-out'], 'harness-sign-out', ['sign-out', '--here'])]:
+            with self.subTest(argv=argv), patch.object(setup.subprocess, 'run', return_value=result()) as run, \
+                 patch.object(setup.sys, 'argv', ['setup.py', *argv]), patch('builtins.print'):
+                setup.main()
+            command = run.call_args.args[0]
+            self.assertEqual(command[:2], ['/usr/bin/systemd-run', '--unit=' + unit])
+            self.assertEqual(command[-len(tail):], tail)
+
+
+class SignOut(unittest.TestCase):
+    def test_it_signs_out_and_opens_the_hotspot_keeping_everything_of_the_person(self):
+        users, wifi = [], []
         with tempfile.TemporaryDirectory() as folder:
-            home = self.home(folder)
-            users, wifi, state = self.run_reset(home, keep_wifi=False)
-            left = sorted(str(p.relative_to(home)) for p in home.rglob('*') if p.is_file())
-            self.assertIn('.harness/computer-id', left)
-            self.assertIn('.harness/cli/data/e2e/identity.json', left)
-            for gone in ['.harness/cli/data/registry.json', '.harness/auth/session.json', '.harness/tui/state.json',
-                         '.local/state/harness-os/onboarded', 'state/r.json', 'state/from-phone']:
-                self.assertNotIn(gone, left)
-            # The person's own: the engines' sign-ins and their projects.
-            self.assertIn('.claude/settings.json', left)
-            self.assertIn('projects/AGENTS.md', left)
-            # The account's tabs closed while still signed in, highest first, then the sign-out.
-            closes = [c for c in users if 'kill-window' in c]
-            self.assertEqual([c[-1] for c in closes], [':2', ':1'])
-            self.assertLess(users.index(closes[-1]), next(i for i, c in enumerate(users) if 'logout' in c))
+            state = Path(folder)
+            (state / 'from-phone').touch()
+            with patch.object(setup, 'as_user', side_effect=lambda *c, timeout=30: users.append(c) or result()), \
+                 patch.object(setup, 'FROM_PHONE', state / 'from-phone'), patch.object(setup, 'NOW', state / 'now'), patch.object(setup, 'PHONE_SETS_UP', state / 'phone'), \
+                 patch.object(setup, 'rows', return_value=[['u-home', '802-11-wireless']]), \
+                 patch.object(setup, 'nmcli', side_effect=lambda *a, **k: wifi.append(a) or result()):
+                setup.sign_out()
+            self.assertEqual(users, [('/usr/bin/harness', 'logout')])
             self.assertEqual(wifi, [('connection', 'delete', 'uuid', 'u-home')])
-            self.assertTrue((state / 'now').exists())
+            self.assertTrue((state / 'now').exists() and (state / 'phone').exists())
 
-    def test_keep_wifi_keeps_it(self):
-        with tempfile.TemporaryDirectory() as folder:
-            _, wifi, _ = self.run_reset(self.home(folder), keep_wifi=True)
-            self.assertEqual(wifi, [])
 
-    def test_the_command_runs_it_in_a_unit_of_its_own(self):
-        with patch.object(setup.subprocess, 'run', return_value=result()) as run, \
-             patch.object(setup.sys, 'argv', ['setup.py', 'reset', '--keep-wifi']), \
-             patch('builtins.print'):
-            setup.main()
-        command = run.call_args.args[0]
-        self.assertEqual(command[:2], ['/usr/bin/systemd-run', '--unit=harness-factory-reset'])
-        self.assertEqual(command[-3:], ['reset', '--here', '--keep-wifi'])
+class Password(unittest.TestCase):
+    def change(self, request, device=Path('/dev/disk/by-uuid/u'), opens=True, record=None):
+        saved, replaced, runs = [], [], []
+        with patch.object(setup, 'luks_device', return_value=device), \
+             patch.object(setup, 'opens_disk', return_value=opens), patch.object(setup, 'opens_account', return_value=opens), \
+             patch.object(setup, 'replace_disk_key', side_effect=lambda *a: replaced.append(a)), \
+             patch.object(setup, 'account_record', return_value=dict(record or {})), \
+             patch.object(setup, 'save_account_record', side_effect=saved.append), \
+             patch.object(setup.subprocess, 'run', side_effect=lambda c, **k: runs.append((c, k.get('input'))) or result()), \
+             patch.object(setup, 'log'):
+            answer = setup.change_password(request)
+        return answer, replaced, saved, runs
+
+    def test_the_disk_and_the_account_change_together(self):
+        answer, replaced, saved, runs = self.change({'current': '1234', 'new': 'abcd'}, record={'initial': '1234'})
+        self.assertEqual(answer, {'ok': True, 'disk': True})
+        self.assertEqual(replaced, [(Path('/dev/disk/by-uuid/u'), '1234', 'abcd')])
+        self.assertEqual(saved, [{'initial': '1234', 'current': 'abcd'}])
+        self.assertEqual(runs, [(['chpasswd'], b'me:abcd\n')])
+
+    def test_unencrypted_it_is_the_account_alone(self):
+        answer, replaced, saved, runs = self.change({'current': '1234', 'new': 'abcd'}, device=None)
+        self.assertEqual(answer, {'ok': True, 'disk': False})
+        self.assertEqual((replaced, saved), ([], []))
+        self.assertEqual(runs, [(['chpasswd'], b'me:abcd\n')])
+
+    def test_a_wrong_or_unusable_one_changes_nothing(self):
+        for request, error in [({'current': 'nope', 'new': 'abcd'}, 'WRONG_PASSWORD'),
+                               ({'current': '1234', 'new': '1234'}, 'SAME'),
+                               ({'current': '1234', 'new': ''}, 'BAD_REQUEST'),
+                               ({'current': '1234', 'new': 'a\nb'}, 'BAD_REQUEST'), (None, 'BAD_REQUEST')]:
+            with self.subTest(request=request):
+                answer, replaced, saved, runs = self.change(request, opens=request is None or request.get('current') == '1234')
+                self.assertEqual(answer['error'], error)
+                self.assertEqual((replaced, saved, runs), ([], [], []))
+
+    def test_a_reset_puts_back_the_installation_password(self):
+        saved, replaced, runs = [], [], []
+        record = {'shadow': '$y$j9T$old', 'initial': '1234', 'current': 'abcd'}
+        with patch.object(setup, 'account_record', return_value=dict(record)), \
+             patch.object(setup, 'luks_device', return_value=Path('/dev/x')), \
+             patch.object(setup, 'opens_disk', side_effect=lambda d, s: s == 'abcd'), \
+             patch.object(setup, 'replace_disk_key', side_effect=lambda *a: replaced.append(a)), \
+             patch.object(setup, 'save_account_record', side_effect=saved.append), \
+             patch.object(setup.subprocess, 'run', side_effect=lambda c, **k: runs.append(c) or result()), \
+             patch.object(setup, 'log'):
+            setup.restore_initial_password()
+        self.assertEqual(runs, [['usermod', '-p', '$y$j9T$old', 'me']])
+        self.assertEqual(replaced, [(Path('/dev/x'), 'abcd', '1234')])
+        self.assertEqual(saved[-1]['current'], '1234')
+
+    def test_a_computer_installed_before_keeps_its_password(self):
+        with patch.object(setup, 'account_record', return_value={}), \
+             patch.object(setup, 'luks_device', return_value=Path('/dev/x')), \
+             patch.object(setup, 'replace_disk_key') as replace, \
+             patch.object(setup.subprocess, 'run') as run, patch.object(setup, 'log'):
+            setup.restore_initial_password()
+        replace.assert_not_called()
+        run.assert_not_called()
+
+
+class Ssh(unittest.TestCase):
+    def test_on_off_and_the_private_addresses(self):
+        links = [{'ifname': 'wlo1', 'addr_info': [{'local': '172.168.21.13'}]},
+                 {'ifname': 'harness-setup', 'addr_info': [{'local': '10.42.0.1'}]}]
+        calls = []
+        def run(command, **_):
+            calls.append(command)
+            if command[0] == 'ip':
+                return result(output=json.dumps(links))
+            return result(output='enabled' if command[1] == 'is-enabled' else 'active')
+        with patch.object(setup.subprocess, 'run', side_effect=run):
+            answer = setup.ssh('on')
+        self.assertEqual(calls[0], ['systemctl', 'enable', '--now', 'sshd.service'])
+        self.assertEqual(answer, {'enabled': True, 'active': True, 'user': 'me',
+                                  'addresses': [{'interface': 'wlo1', 'address': '172.168.21.13'}]})
 
 
 class Server:

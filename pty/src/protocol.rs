@@ -2,15 +2,19 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 
-/// The wire protocol this host speaks, fixed at build time. Each value is its own host instance
-/// (`p<PROTOCOL>`: its discovery file, endpoint, lock and pane ids), so a host of the next protocol
-/// starts beside a running one and the old one drains: the daemon lists, streams and controls its
+/// The wire protocol this host speaks, fixed at build time. Each (protocol, version) is its own
+/// instance (`p<PROTOCOL>-<tag>`, `instance.rs`: its discovery file, endpoint, lock and pane ids), so a
+/// host of another build starts beside a running one and the old one drains: the daemon lists, streams and controls its
 /// panes, makes new ones on the new host, and shuts the old one down once it has none
 /// (cli/src/lib/ptyHost/drain.ts).
 ///
 /// - 2: the `shutdown` op.
 /// - 1: the first.
 pub const PROTOCOL: u32 = 2;
+
+/// Optional protocol-2 abilities this host has, told in the hello reply and the `version` line. A host built
+/// before the list sends none, which a client reads as none: protocol 2 itself never changes for these.
+pub const FEATURES: &[&str] = &["seed"];
 pub const MAX_FRAME: u32 = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,6 +180,13 @@ pub enum Op {
         /// What `env` sets is still set.
         #[serde(rename = "clearInherited", default)]
         clear_inherited: Vec<String>,
+        /// Another pane's scrollback (`capture`/`history` style: SGR-only ANSI, lines separated by `\n` or
+        /// `\r\n`; one break at the very end is not a row) that the new pane starts with, wholly in its history
+        /// above a blank screen. Only a host that lists `seed` in `FEATURES` knows the field; an older one
+        /// ignores it and the pane starts with no history, so a client sends `seed` only to a host that lists
+        /// the `seed` feature.
+        #[serde(default)]
+        seed: Option<String>,
     },
     Kill {
         pane: String,

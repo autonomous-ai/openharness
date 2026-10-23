@@ -136,6 +136,7 @@ abstract final class AppIcons {
   static const minus = LucideIcons.minus400;
   static const monitor = LucideIcons.monitor400;
   static const monitorOff = LucideIcons.monitorOff400;
+  static const monitorSmartphone = LucideIcons.monitorSmartphone400;
   static const music = LucideIcons.music400;
   static const packageCheck = LucideIcons.packageCheck400;
   static const packageOpen = LucideIcons.packageOpen400;

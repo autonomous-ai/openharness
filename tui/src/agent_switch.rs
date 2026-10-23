@@ -21,7 +21,7 @@ impl Selection {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Stage { Handoff, Recent, Stop, Create, Check, Terminal, Failed }
+enum Stage { Handoff, Recent, Stop, Create, Check, Terminal, Report, Failed }
 
 #[derive(Clone)]
 struct Change {
@@ -38,6 +38,7 @@ struct Change {
     closed: bool,
     creation_sent: bool,
     creation_finished: bool,
+    replacement_reported: bool,
     next: Option<String>,
     next_row: Option<Value>,
     error: String,
@@ -416,7 +417,7 @@ pub fn choose(app: &mut App, mut picker: Picker, selected: &str) {
     let context_loaded = retained.is_some();
     let handoff = retained.filter(|_| crate::agent_handoff::supported(engine)).and_then(|c| c.handoff.clone());
     app.agent_switch.changes.insert(id.clone(), Change { id: id.clone(), source, identity: selection.identity, engine: engine.into(), stage: Stage::Handoff,
-        handoff, context_loaded, handoff_failed: retained.is_some_and(|c| c.handoff_failed), handoff_conflict: false, preserving: closed, closed, creation_sent: false, creation_finished: false, next: None, next_row: None, error: String::new(), since: Instant::now() });
+        handoff, context_loaded, handoff_failed: retained.is_some_and(|c| c.handoff_failed), handoff_conflict: false, preserving: closed, closed, creation_sent: false, creation_finished: false, replacement_reported: false, next: None, next_row: None, error: String::new(), since: Instant::now() });
     app.modal = Some(Modal::Picker { kind: PickerKind::AgentSwitch, picker });
     if closed && context_loaded { create(app, &id); } else { prepare(app, &id); }
 }
@@ -626,6 +627,12 @@ fn attach(app: &mut App, id: &str) {
         }
         return;
     }
+    if !c.replacement_reported {
+        let payload = json!({"agentId":c.source.id, "replacementId":next, "changeId":id, "targetEngine":c.engine});
+        app.agent_switch.changes.get_mut(id).unwrap().stage = Stage::Report;
+        request(app, id, "agent_handoff_complete", payload, 5, reported);
+        return;
+    }
     let machine = c.source.machine_id.clone(); let old = c.source.id.clone(); let next = next.clone();
     let target = theme::engine_label(&c.engine).to_string();
     let no_history = c.context_loaded && c.handoff.is_none();
@@ -644,6 +651,18 @@ fn attach(app: &mut App, id: &str) {
         else if no_history { format!("Switched to {target}. No earlier conversation was found to hand off.") }
         else { format!("Switched to {target}") };
     app.say(message, theme::ONLINE);
+}
+
+fn reported(app: &mut App, id: &str, reply: Reply) {
+    if !valid(app, id) { return }
+    // Older daemons recover supported handoffs on their next host startup. A transient failure
+    // on a new daemon keeps this same launch intent, so retry can finish without another launch.
+    let accepted = reply.as_ref().ok().is_some_and(|r| r["ok"] == true || r["error"] == "UNSUPPORTED")
+        || reply.as_ref().err().is_some_and(|e| e.code == "UNSUPPORTED");
+    if !accepted { fail(app, id, "The new agent started. Choose it again to finish the switch."); return }
+    let c = app.agent_switch.changes.get_mut(id).unwrap();
+    c.replacement_reported = true; c.stage = Stage::Terminal;
+    attach(app, id);
 }
 
 /// Keep a view while its source has stopped and the replacement is being checked, including
@@ -707,6 +726,43 @@ mod tests {
     }
 
     fn sent(app: &App, ty: &str) -> Vec<Value> { app.agent_switch.sent.iter().filter(|(_, t, _)| t == ty).map(|(_, _, p)| p.clone()).collect() }
+
+    // Existing view/layout fixtures acknowledge the newly added report just as their daemon
+    // acknowledges creation. The report-specific fixtures below control that reply explicitly.
+    fn acknowledge_reports(app: &mut App) {
+        let ids: Vec<_> = app.agent_switch.changes.iter().filter(|(_, c)| c.stage == Stage::Report).map(|(id, _)| id.clone()).collect();
+        for id in ids { reported(app, &id, Ok(json!({"ok":true}))); }
+    }
+    fn created(app: &mut App, id: &str, reply: Reply) { super::created(app, id, reply); acknowledge_reports(app); }
+    fn checked(app: &mut App, id: &str, reply: Reply) { super::checked(app, id, reply); acknowledge_reports(app); }
+    fn tick(app: &mut App) { super::tick(app); acknowledge_reports(app); }
+
+    #[tokio::test]
+    async fn completed_change_reports_the_native_replacement_before_moving_views() {
+        let mut app = app();
+        let id = start(&mut app, "claude"); handoff(&mut app, &id);
+        stopped(&mut app, &id, Ok(json!({"closed":true})));
+        super::created(&mut app, &id, Ok(ready(&id, true)));
+        assert_eq!(sent(&app, "agent_handoff_complete"), vec![json!({"agentId":"a1", "replacementId":"replacement", "changeId":id, "targetEngine":"claude"})]);
+        assert_eq!(app.panes[&1].agent_id, "a1");
+        reported(&mut app, &id, Ok(json!({"ok":true})));
+        assert_eq!(app.panes[&1].agent_id, "replacement");
+    }
+
+    #[tokio::test]
+    async fn a_lost_replacement_report_retries_the_same_launch_without_another_stop() {
+        let mut app = app(); let id = start(&mut app, "claude"); handoff(&mut app, &id);
+        stopped(&mut app, &id, Ok(json!({"closed":true})));
+        super::created(&mut app, &id, Ok(ready(&id, true)));
+        reported(&mut app, &id, Err(RpcError::new("TIMEOUT", "")));
+        assert_eq!(app.panes[&1].agent_id, "a1");
+        select(&mut app, "claude");
+        checked(&mut app, &id, Ok(ready(&id, true)));
+        assert_eq!(app.panes[&1].agent_id, "replacement");
+        assert_eq!(sent(&app, "agent_create").len(), 1);
+        assert_eq!(sent(&app, "agent_close").len(), 1);
+        assert_eq!(sent(&app, "agent_handoff_complete").len(), 2);
+    }
 
     #[tokio::test]
     async fn replacement_keeps_its_view_until_workspace_ack_and_retry_does_not_launch_again() {

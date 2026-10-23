@@ -663,6 +663,8 @@ class WsConn {
     // Conversation-derived: file names and the project folder.
     'agent_handoff_prepare',
     'agent_handoff_prepare_result',
+    'agent_handoff_complete',
+    'agent_handoff_complete_result',
     'project_preview',
     'project_preview_result',
     // A name made from the panes' titles, asked again every few seconds
@@ -671,6 +673,8 @@ class WsConn {
     'window_name_result',
     'git_project_info',
     'git_project_info_result',
+    'git_pull_requests_status',
+    'git_pull_requests_status_result',
     'terminal_output',
     'terminal_input',
     'terminal_resize',

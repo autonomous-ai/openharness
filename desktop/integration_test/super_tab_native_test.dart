@@ -90,6 +90,12 @@ void main() {
         ...conversationFixture('design-lead', 'Lead'),
         'projectId': 'design',
       });
+      // A workgroup under Lamp OS, so the sidebar's tree shows a second level.
+      (server.state['conversations'] as List).add({
+        ...conversationFixture('polish', 'Sidebar polish'),
+        'projectId': 'lead',
+        'number': 20,
+      });
       server.state['machines'] = [
         {
           'machineId': 'm',
@@ -131,6 +137,45 @@ void main() {
                 },
             ],
             'runningHarnessIds': [f.connection.native!['id']],
+          },
+        },
+        // A second Studio Mac, owned by someone else, and one long offline, under its
+        // closed "Offline · 1".
+        {
+          'machineId': 'm-twin',
+          'name': 'Studio Mac',
+          'contributorId': 'person-0',
+          'observation': {
+            'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            'resources': {'cpuPercent': 40},
+          },
+        },
+        // A Codex-only machine: its Claude slot stays blank, so its Codex % lines up with the others'.
+        {
+          'machineId': 'm-codex',
+          'name': 'Build Box',
+          'contributorId': 'person-1',
+          'observation': {
+            'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            'quotas': [
+              {
+                'engine': 'codex',
+                'known': true,
+                'windows': [
+                  {'name': '5-hour', 'usedPercent': 30},
+                ],
+              },
+            ],
+          },
+        },
+        {
+          'machineId': 'm-old',
+          'name': 'Old Mini',
+          'contributorId': 'person-1',
+          'observation': {
+            'receivedAt': DateTime.now()
+                .subtract(const Duration(minutes: 20))
+                .millisecondsSinceEpoch,
           },
         },
       ];
@@ -241,15 +286,109 @@ void main() {
       expect(find.text('CHATS'), findsNothing);
       expect(find.text('New group'), findsNothing);
       expect(find.byTooltip('New project'), findsOneWidget);
-      // Left sidebar: both Projects and Machines groups start open.
-      expect(find.text('Studio Mac'), findsOneWidget);
+      // Left sidebar: both Projects and Machines groups start open, one line a machine: its name, its Claude and
+      // Codex allowances and its agents, never its owner, and the offline machine under its closed disclosure.
+      // Both Studio Macs are online rows. A busy one's name may be shortened to
+      // keep its allowance on the line; it then carries its whole name on hover.
+      for (final id in ['m', 'm-twin']) {
+        final row = find.byKey(ValueKey('super-machine-$id'));
+        expect(row, findsOneWidget, reason: id);
+        final shown = tester
+            .widget<RichText>(
+              find.descendant(of: row, matching: find.byType(RichText)).first,
+            )
+            .text
+            .toPlainText();
+        expect(
+          shown == 'Studio Mac' ||
+              (shown.endsWith('…') &&
+                  'Studio Mac'.startsWith(
+                    shown.substring(0, shown.length - 1),
+                  ) &&
+                  find
+                      .descendant(
+                        of: row,
+                        matching: find.byTooltip('Studio Mac'),
+                      )
+                      .evaluate()
+                      .isNotEmpty),
+          isTrue,
+          reason: '$id shows "$shown"',
+        );
+        // Never its owner.
+        for (final who in ['owner', 'person0']) {
+          expect(
+            find.descendant(of: row, matching: find.textContaining(who)),
+            findsNothing,
+            reason: '$id names $who',
+          );
+        }
+      }
+      // Claude's chip always shows here; Codex's is the first to give way when the sidebar is narrow.
+      Finder chip(String engine, String figure) => find.descendant(
+        of: find.byKey(ValueKey('super-machine-allowance-m-$engine')),
+        matching: find.text(figure),
+      );
+      expect(chip('claude', '50%'), findsOneWidget);
+      if (find
+          .byKey(const ValueKey('super-machine-allowance-m-codex'))
+          .evaluate()
+          .isNotEmpty) {
+        expect(chip('codex', '88%'), findsOneWidget);
+        // The Codex-only machine's figure lines up with Studio Mac's.
+        double figureLeft(String id) => tester
+            .getTopLeft(find.byKey(ValueKey('super-machine-figure-$id-codex')))
+            .dx;
+        expect(figureLeft('m-codex'), closeTo(figureLeft('m'), .01));
+      }
+      expect(
+        find.byKey(const ValueKey('super-machine-figure-m-codex-claude')),
+        findsNothing,
+      );
+      expect(find.text('Offline · 1'), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-machine-m-old')), findsNothing);
+      expect(find.textContaining('CPU'), findsNothing);
       await shot('sidebar-groups');
+      debugPrint(
+        'Swarm fixture: open the tree: a workgroup and the offline machines',
+      );
+      final leadWasOpen = c!.expandedProjects.contains('lead');
+      if (!leadWasOpen) {
+        await tester.tap(
+          find.byKey(const ValueKey('super-project-expand-lead')),
+        );
+      }
+      await tester.tap(find.byKey(const ValueKey('super-machines-offline')));
+      await tester.pumpAndSettle();
+      expect(find.text('#20 Sidebar polish'), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-machine-m-old')), findsOneWidget);
+      // Each level one step further in than the one above it.
+      double textX(String row, String label) => tester
+          .getTopLeft(
+            find.descendant(
+              of: find.byKey(ValueKey(row)),
+              matching: find.text(label),
+            ),
+          )
+          .dx;
+      expect(
+        textX('super-group-polish', '#20 Sidebar polish'),
+        greaterThan(textX('super-group-lead', 'Lamp OS')),
+      );
+      await shot('sidebar-tree');
+      if (!leadWasOpen) {
+        await tester.tap(
+          find.byKey(const ValueKey('super-project-expand-lead')),
+        );
+      }
+      await tester.tap(find.byKey(const ValueKey('super-machines-offline')));
+      await tester.pumpAndSettle();
       debugPrint('Swarm fixture: empty project disclosure');
       await tester.tap(
         find.byKey(const ValueKey('super-project-expand-design')),
       );
       await tester.pumpAndSettle();
-      expect(c!.selectedId, 'lead');
+      expect(c.selectedId, 'lead');
       expect(c.expandedProjects.contains('design'), isTrue);
       expect(find.text('No workgroups yet'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('super-group-lead')));
@@ -319,7 +458,7 @@ void main() {
       await tester.tap(find.byTooltip('Collapse Machines'));
       await tester.pumpAndSettle();
       expect(find.text('Design'), findsNothing);
-      expect(find.text('Studio Mac'), findsNothing);
+      expect(find.textContaining('Studio Mac'), findsNothing);
       await shot('sidebar-collapsed');
       await tester.tap(find.byTooltip('Expand Projects'));
       await tester.pumpAndSettle();

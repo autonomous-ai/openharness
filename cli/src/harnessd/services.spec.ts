@@ -41,10 +41,10 @@ describe('ServiceSupervisor', () => {
   let children: FakeService[]
   let lines: string[]
   const latest = (name = 'search') => children.filter((child) => child.spec.name === name).at(-1)!
-  const staged: string[] = []
+  const staged: Array<{ version?: string; ptyVersion?: string }> = []
   const make = (specs: ServiceSpec[] = [search], overrides: Partial<ServiceSupervisorOptions> = {}, env: Record<string, string> = {}, tell = true, more: Partial<ServiceSupervisorDeps> = {}) =>
     new ServiceSupervisor(specs, {
-      ...(tell ? { staged: (version: string) => { staged.push(version) } } : {}),
+      ...(tell ? { staged: (what: { version?: string; ptyVersion?: string }) => { staged.push(what) } } : {}),
       spawnService: (spec, extra) => {
         const child = new FakeService(2000 + children.length, spec, extra)
         children.push(child)
@@ -99,8 +99,15 @@ describe('ServiceSupervisor', () => {
     supervisor.start()
     latest('updater').beat()
     latest('updater').say({ type: 'harnessd:staged', version: '9.9.9' })
-    expect(staged).toEqual(['9.9.9'])
+    expect(staged).toEqual([{ version: '9.9.9' }])
     expect(lines).toContain('[harnessd] service updater staged 9.9.9')
+    // A terminal host (Windows), alone or with a build.
+    latest('updater').say({ type: 'harnessd:staged', ptyVersion: '0.11.0' })
+    latest('updater').say({ type: 'harnessd:staged', version: '9.9.9', ptyVersion: '0.11.0' })
+    expect(staged.slice(1)).toEqual([{ ptyVersion: '0.11.0' }, { version: '9.9.9', ptyVersion: '0.11.0' }])
+    expect(lines).toContain('[harnessd] service updater staged terminal host 0.11.0')
+    expect(lines).toContain('[harnessd] service updater staged 9.9.9 and terminal host 0.11.0')
+    staged.length = 1
     for (let i = 0; i < 3; i++) {
       latest('updater').exit(75)
       vi.advanceTimersByTime(0)
@@ -117,7 +124,7 @@ describe('ServiceSupervisor', () => {
     const quiet = make([updater], {}, {}, false)
     quiet.start()
     latest('updater').say({ type: 'harnessd:staged', version: '9.9.10' })
-    expect(staged).toEqual(['9.9.9'])
+    expect(staged).toEqual([{ version: '9.9.9' }])
   })
 
   it('takes a staged build, or a request to start again at once, from the updater alone', () => {

@@ -10,7 +10,10 @@ import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { processLaunchArgs } from '../../lib/processTable.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import { createAgentRestarter, type RestartDeps } from './restart.js'
+import { createLaunchAuthority } from './launchAuthority.js'
+import { createSwarmSkillAdoption } from './swarmSkills.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
+import { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 
 vi.mock('../../lib/engineBin.js', async (real) => ({ ...await real<object>(), enginePathOverride: vi.fn(() => undefined) }))
 vi.mock('../../lib/engineLaunch.js', async (real) => ({
@@ -58,7 +61,7 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RestartDep
     pinnedControls: new Set(),
     terminals: { backendFor: vi.fn((runtime: { backend: string }) => runtime.backend === 'tmux' ? tmuxBackend : undefined) } as unknown as RestartDeps['terminals'],
     sameRestartTarget: vi.fn(() => true),
-    agentReconciler: { holdRoute: vi.fn(), releaseRoute: vi.fn() },
+    agentReconciler: { holdRoute: vi.fn((key: string) => () => deps.agentReconciler.releaseRoute(key)), releaseRoute: vi.fn() },
     terminalHintMachineName: () => 'studio',
     announceSession: vi.fn(),
     refreshGridAssignment: vi.fn(),
@@ -78,6 +81,91 @@ const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness change
 describe('restarting an agent', () => {
   beforeEach(() => { vi.spyOn(console, 'log').mockImplementation(() => {}) })
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
+
+  it.each(['terminal', 'claude'] as const)('keeps a slow %s restart hidden from discovery until publication', async engine => {
+    vi.useFakeTimers()
+    const onDiscovered = vi.fn()
+    const reconciler = new TerminalAgentReconciler({ current: () => [], backends: [], backendOrder: ['tmux'],
+      onDiscovered, onObserved: vi.fn(), onDormant: vi.fn(), onRemoved: vi.fn(),
+      probe: async () => ({ processTableAvailable: true, ambiguousPlacements: new Set(),
+        targets: [{ instanceId: 'tmux:default', result: { state: 'available', roots: [{ runtime, rootPid: 1, cwd: '/work' }] } }],
+        agents: [{ engine: 'claude', cwd: '/work', processIdentity: newProcess,
+          args: 'claude', resumeSessionId: null, runtimes: [runtime], primaryRuntimeKey: routeKey }],
+      }),
+    })
+    let finish!: () => void
+    const run = setup(engine === 'terminal' ? terminal() : agent(), { agentReconciler: reconciler })
+    if (engine === 'terminal') run.tmuxBackend.respawn.mockImplementationOnce(() => new Promise(done => {
+      finish = () => done({ state: 'succeeded' })
+    }))
+    else vi.mocked(restartAgent).mockImplementationOnce(() => new Promise(done => {
+      finish = () => done({ ok: true, resumed: true, processIdentity: newProcess })
+    }))
+    const pending = run.restart('a1')
+    try {
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+      await vi.advanceTimersByTimeAsync(30_001)
+      await reconciler.trigger()
+      expect(onDiscovered).not.toHaveBeenCalled()
+      finish()
+      expect(await pending).toMatchObject({ ok: true })
+      expect(run.deps.announceSession).toHaveBeenCalled()
+      await reconciler.trigger()
+      expect(onDiscovered).toHaveBeenCalledOnce()
+    } finally { finish?.(); await pending; vi.useRealTimers() }
+  })
+
+  it.each(['terminal', 'claude'] as const)('a cancelled %s restart cannot release a newer Stop hold', async engine => {
+    const onDiscovered = vi.fn()
+    const reconciler = new TerminalAgentReconciler({ current: () => [], backends: [], backendOrder: ['tmux'],
+      onDiscovered, onObserved: vi.fn(), onDormant: vi.fn(), onRemoved: vi.fn(),
+      probe: async () => ({ processTableAvailable: true, ambiguousPlacements: new Set(),
+        targets: [{ instanceId: 'tmux:default', result: { state: 'available', roots: [{ runtime, rootPid: 1, cwd: '/work' }] } }],
+        agents: [{ engine: 'claude', cwd: '/work', processIdentity: newProcess,
+          args: 'claude', resumeSessionId: null, runtimes: [runtime], primaryRuntimeKey: routeKey }],
+      }),
+    })
+    const run = setup(engine === 'terminal' ? terminal() : agent(), { agentReconciler: reconciler })
+    let releaseStop!: () => void
+    const stop = () => { run.state.live = false; releaseStop = reconciler.holdRoute(routeKey) }
+    if (engine === 'terminal') run.tmuxBackend.respawn.mockImplementationOnce(async () => { stop(); return { state: 'succeeded' } })
+    else vi.mocked(restartAgent).mockImplementationOnce(async () => { stop(); return { ok: false, detail: 'cancelled' } })
+    try {
+      expect(await run.restart('a1')).toMatchObject({ error: 'AGENT_CHANGED' })
+      await reconciler.trigger()
+      expect(onDiscovered).not.toHaveBeenCalled()
+      releaseStop()
+      await reconciler.trigger()
+      expect(onDiscovered).toHaveBeenCalledOnce()
+    } finally { releaseStop?.() }
+  })
+
+  it('adopts an old role before native inspection and relaunch', async () => {
+    const skill = { role: 'lead' as const, key: 'a1' }
+    const run = setup(agent(), { adoptSwarmSkill: async row => ({ ...row, swarmSkill: skill }) })
+    expect(await run.restart('a1')).toMatchObject({ ok: true })
+    expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.objectContaining({ swarmSkill: skill }),
+      expect.objectContaining({ swarmSkill: skill }), expect.any(Function), undefined)
+  })
+
+  it('does not restart if role adoption loses the session binding', async () => {
+    const run = setup(agent(), { adoptSwarmSkill: async () => null })
+    expect(await run.restart('a1')).toMatchObject({ error: 'AGENT_CHANGED' })
+    expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
+    expect(restartAgent).not.toHaveBeenCalled()
+  })
+
+  it('restarts when an unrelated registry field changes during a no-role lookup', async () => {
+    const session = agent({ registeredAt: 1 })
+    const authority = createLaunchAuthority({ byAgent: () => session, revision: () => 0, cancelled: () => false })
+    const adoptSwarmSkill = createSwarmSkillAdoption({
+      authority, save: vi.fn(), candidate: () => true,
+      role: async () => { session.dsh = 'changed-during-lookup'; return null },
+    })
+    const run = setup(session, { adoptSwarmSkill })
+    expect(await run.restart('a1')).toMatchObject({ ok: true })
+    expect(restartAgent).toHaveBeenCalledOnce()
+  })
 
   it.each(['starting', 'held'] as const)('does not replace an unbound native %s launch with a generic fresh restart', async state => {
     const run = setup(agent({ sessionId: '', launch: state === 'starting' ? { state, nativeToken: 'original' }
@@ -150,6 +238,18 @@ describe('restarting an agent', () => {
       expect(await setup(agent(), { stopJobs: new Map([['a1', Promise.resolve()]]) }).restart('a1')).toEqual({ ok: false, error: 'AGENT_BUSY' })
       expect(await setup(agent(), { pinnedControls: new Set(['a1']) }).restart('a1')).toEqual({ ok: false, error: 'AGENT_BUSY' })
       expect(await setup(null).restart('a1')).toEqual({ ok: false, error: 'AGENT_NOT_FOUND' })
+    })
+
+    it('for an agent a stopped move may still run beside, held this start, with the move\'s line', async () => {
+      const log = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const held = vi.fn(() => ({ ok: false, error: 'HELD' }))
+      const run = setup(agent(), { moveHeld: (id) => id === 'a1', restartHeld: held as never })
+      expect(await run.restart('a1')).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
+      // Neither a swap nor a held agent's launch runs: either would start a second engine on the conversation.
+      expect(held).not.toHaveBeenCalled()
+      expect(restartAgent).not.toHaveBeenCalled()
+      expect(log).toHaveBeenCalledWith('[terminal] move a1: held until the next start: a pane its stopped move left was not confirmed closed')
+      log.mockRestore()
     })
 
     it('for a guest\'s harness, which a relaunch would run as the owner', async () => {
@@ -284,7 +384,7 @@ describe('restarting an agent', () => {
       expect(backend.releaseHold).toHaveBeenCalledWith(pty)
       expect(run.tmuxBackend.respawn).not.toHaveBeenCalled()
       expect(releaseHold).not.toHaveBeenCalled()
-      expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalledWith(terminalRouteKey(pty))
+      expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalledWith(terminalRouteKey(pty), null)
     })
 
     it('swaps an engine in that pane and hands it back to that backend', async () => {
@@ -305,7 +405,7 @@ describe('restarting an agent', () => {
       const run = setup(terminal({ runtimes: [{ backend: 'ptyhost', instance: 'p1', paneId: '%4' }, tmux5] }))
       expect(await run.restart('a1')).toMatchObject({ ok: true })
       expect(run.tmuxBackend.respawn).toHaveBeenCalledExactlyOnceWith(tmux5, expect.anything())
-      expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalledWith(terminalRouteKey(tmux5))
+      expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalledWith(terminalRouteKey(tmux5), null)
     })
 
     it('restarts as a fresh shell in the same pane, opened like a new terminal tile', async () => {
@@ -317,7 +417,7 @@ describe('restarting an agent', () => {
       expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', true)
       expect(run.deps.announceSession).toHaveBeenCalledWith(terminal())
       expect(console.log).toHaveBeenCalledWith('[restart] a1 terminal · fresh shell')
-      expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalledWith(routeKey)
+      expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalledWith(routeKey, null)
       expect(run.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(routeKey)
       expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
     })
@@ -387,7 +487,7 @@ describe('restarting an agent', () => {
       expect(run.deps.announceSession).toHaveBeenCalledWith(agent())
       expect(run.deps.refreshGridAssignment).toHaveBeenCalledWith(agent())
       expect(console.log).toHaveBeenCalledWith('[restart] a1 claude · resumed')
-      expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalledWith(routeKey)
+      expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalledWith(routeKey, null)
       expect(run.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(routeKey)
     })
 

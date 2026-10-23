@@ -1,11 +1,11 @@
-//! The host's log: `<home>/logs/pty-host.log`, the owner's alone, kept to a size.
+//! The host's log: `<home>/logs/pty-host-<instance>.log`, the owner's alone, kept to a size.
 //!
 //! The daemon starts the host with no stdio, so `log` records (and the host's own diagnostics) would
 //! go nowhere without this. Each line goes to the file and to stderr, so a host run by hand in a
-//! terminal still shows them. Past [`MAX_BYTES`] the file is moved to `pty-host.log.1` (one older
+//! terminal still shows them. Past [`MAX_BYTES`] the file is moved to `pty-host-<instance>.log.1` (one older
 //! file is kept) and a new one is started.
 //!
-//! One host per home holds the home's lock (`host_lock`), but a host that lost the race for it, or the
+//! One host per home and instance holds the home's lock (`host_lock`), but a host that lost the race for it, or the
 //! Windows copy that left a job (`breakaway`), may append a line or two before it exits. Only the
 //! lock's holder rotates (`own_rotation`, called once the lock is taken): a loser that rotated would
 //! leave the winner writing to `.log.1`, and the winner's next rotation would replace those lines.
@@ -28,12 +28,14 @@ pub fn log_dir(home: &Path) -> PathBuf {
 }
 
 pub fn log_path(home: &Path) -> PathBuf {
-    log_dir(home).join("pty-host.log")
+    crate::instance::log_path(home, &crate::instance::current())
 }
 
-/// The rotated file: `pty-host.log.1`.
+/// The rotated file: `pty-host-<instance>.log.1`.
 pub fn rotated_path(home: &Path) -> PathBuf {
-    log_dir(home).join("pty-host.log.1")
+    let mut rotated = log_path(home).into_os_string();
+    rotated.push(".1");
+    PathBuf::from(rotated)
 }
 
 pub struct FileLog {
@@ -114,9 +116,9 @@ impl FileLog {
 }
 
 impl State {
-    /// `pty-host.log` → `pty-host.log.1` (replacing it), then a new, empty `pty-host.log`. When the
-    /// rename fails the same file is reopened, and its size counted from zero: the next try is
-    /// another cap's worth of lines away.
+    /// `pty-host-<instance>.log` → `pty-host-<instance>.log.1` (replacing it), then a new, empty
+    /// `pty-host-<instance>.log`. When the rename fails the same file is reopened, and its size
+    /// counted from zero: the next try is another cap's worth of lines away.
     fn rotate(&mut self) {
         self.file = None;
         let renamed = crate::files::rename(&self.path, &self.rotated).is_ok();

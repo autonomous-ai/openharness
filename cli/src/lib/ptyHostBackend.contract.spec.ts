@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { PtyHostBackend } from './ptyHostBackend.js'
-import { readDiscovery } from './ptyHost/launch.js'
+import { PTY_HOST_INSTANCE, PTY_HOST_INSTANCE_SOURCE } from './ptyHost/instance.js'
+import { listDiscoveries } from './ptyHost/launch.js'
 import { PTY_PROTOCOL } from './ptyHost/protocol.js'
 import { removeTree, runTerminalBackendContract, SHELL } from './terminalBackend.contract.js'
 import type { TerminalInventoryResult } from './terminalTypes.js'
@@ -19,7 +20,7 @@ const freshHome = (prefix: string) => mkdtempSync(join(tmpdir(), prefix))
 
 /** Stop the host serving [home] (its panes go with it) and remove the home. */
 async function stopHost(home: string): Promise<void> {
-  const pid = readDiscovery(home, PTY_PROTOCOL)?.pid
+  const pid = listDiscoveries(home).findLast((found) => found.protocol === PTY_PROTOCOL)?.pid
   if (pid) {
     try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
   }
@@ -66,7 +67,7 @@ async function readyBackend(home: string): Promise<PtyHostBackend> {
       backend.onHostReplaced = () => replaced.push(Date.now())
       const created = await backend.create({ command: SHELL })
       if (created.state !== 'succeeded') throw new Error(`create failed: ${JSON.stringify(created)}`)
-      const before = readDiscovery(home, PTY_PROTOCOL)!
+      const before = listDiscoveries(home).findLast((found) => found.protocol === PTY_PROTOCOL)!
       process.kill(before.pid, 'SIGKILL')
       await new Promise((resolve) => setTimeout(resolve, 300))
       // Disconnected: unavailable, never an empty listing (which would read as every pane gone).
@@ -74,12 +75,16 @@ async function readyBackend(home: string): Promise<PtyHostBackend> {
       // The reconnect, 1 s after the loss, starts a new host: it has no panes.
       const inventory = await until<TerminalInventoryResult>(() => backend.inventory(), (inv) => inv.state === 'available')
       expect(inventory).toEqual({ state: 'available', roots: [] })
-      const after = readDiscovery(home, PTY_PROTOCOL)!
+      const after = listDiscoveries(home).findLast((found) => found.protocol === PTY_PROTOCOL)!
       expect(after.pid).not.toBe(before.pid)
       // A Windows host draws a new pipe name each start; the reconnect followed the discovery file to it.
       if (process.platform === 'win32') {
         expect(after.endpoint).not.toBe(before.endpoint)
-        expect(after.endpoint).toMatch(/^\\\\\.\\pipe\\harness-pty-[0-9a-f]{16}-[0-9a-f]{16}-p\d+$/)
+        // `harness-pty-<16 hex of the user and home>-<16 random hex>-<instance>` (pty/src/transport/windows.rs): the
+        // instance is the host's own, `p<protocol>-<version>`, dashes and all.
+        expect(after.instance).toMatch(PTY_HOST_INSTANCE)
+        expect(after.endpoint).toMatch(new RegExp(String.raw`^\\\\\.\\pipe\\harness-pty-[0-9a-f]{16}-[0-9a-f]{16}-${PTY_HOST_INSTANCE_SOURCE}$`))
+        expect(after.endpoint.endsWith(`-${after.instance}`)).toBe(true)
       }
       expect(replaced).toHaveLength(1)
       expect(await backend.paneState(created.runtime)).toBe('gone')

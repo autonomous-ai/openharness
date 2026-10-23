@@ -1,5 +1,5 @@
 [
-  {"id": 1, "op": "create", "command": ["sh", "-l"], "cwd": "/tmp", "env": {"A": "1"}, "cols": 120, "rows": 40, "owner": "harness:o", "label": "agent", "hold": true, "afterExit": {"command": ["pwsh.exe", "-NoLogo"], "env": {"N": "codex"}}, "clearInherited": ["ANTHROPIC_API_KEY"]},
+  {"id": 1, "op": "create", "command": ["sh", "-l"], "cwd": "/tmp", "env": {"A": "1"}, "cols": 120, "rows": 40, "owner": "harness:o", "label": "agent", "hold": true, "afterExit": {"command": ["pwsh.exe", "-NoLogo"], "env": {"N": "codex"}}, "clearInherited": ["ANTHROPIC_API_KEY"], "seed": "a\r\nb"},
   {"id": 2, "op": "kill", "pane": "%1", "graceMs": 1500},
   {"id": 3, "op": "inventory"},
   {"id": 4, "op": "titles"},

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { conversationKey, createConversationOwners, type ConversationOwnersDeps } from './conversationOwners.js'
+import { env } from '../../config/env.js'
 
 const row = (agentId: string, sessionId: string, extra: Partial<RegisteredSession> = {}): RegisteredSession => ({
   agentId, sessionId, engine: 'claude', codexHome: null, hermesHome: null, boundAt: 1000, registeredAt: 500, touchedAt: 2000,
@@ -46,6 +47,15 @@ describe('one owner per conversation, stopped harnesses included', () => {
     expect([...records.keys()]).toEqual([])
     expect(sent).toContainEqual({ type: 'agent_deleted', payload: { agentId: 'old', retained: false, successor: 'new' } })
     expect(commander).toContainEqual({ type: 'agent_deleted', payload: { agentId: 'old' } })
+  })
+
+  it.each([true, false])('hands over a Codex conversation across explicit and implicit default profiles, archived explicit=%s', explicit => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const saved = row('builder-3', 'conversation', { engine: 'codex', codexHome: explicit ? env.CODEX_HOME : null })
+    const running = row('replacement', 'conversation', { engine: 'codex', codexHome: explicit ? null : env.CODEX_HOME })
+    const { owners, sent } = setup([saved], [running])
+    expect(owners.settle()).toEqual(['builder-3'])
+    expect(sent).toContainEqual({ type: 'agent_deleted', payload: { agentId: 'builder-3', retained: false, successor: 'replacement' } })
   })
 
   it('among stopped records the newest binding wins, then the newest record, then the id', () => {

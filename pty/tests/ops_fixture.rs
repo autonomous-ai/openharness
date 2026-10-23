@@ -31,7 +31,8 @@ fn str_of(v: &Value) -> Option<String> {
 /// as its default: compare every optional or defaulted field with the fixture.
 fn assert_every_field_read(op: &Op, v: &Value) {
     match op {
-        Op::Create { cwd, env: e, label, after_exit: after, clear_inherited, .. } => {
+        Op::Create { cwd, env: e, label, after_exit: after, clear_inherited, seed, .. } => {
+            assert_eq!(seed.clone(), str_of(&v["seed"]));
             assert_eq!(*after, after_exit(&v["afterExit"]));
             let cleared: Vec<String> = serde_json::from_value(v["clearInherited"].clone()).unwrap();
             assert_eq!(*clear_inherited, cleared);

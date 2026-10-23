@@ -51,6 +51,20 @@ async function transaction<T>(db: PrismaClient, body: (tx: Transaction) => Promi
   }
 }
 
+/** A Lead's start dispatches within seconds of being recorded; one still undispatched after this long was given up. */
+export const ABANDONED_START_MS = 15 * 60_000
+
+/** Starts on a not-yet-contributed machine that never dispatched, dated by their own operation receipt (starts carry no
+ *  time of their own). A dispatched start may have a native session coming, so it is never counted. */
+async function abandonedStarts(tx: Transaction, tabId: string, state: SuperTabState, machineId: string, now: number) {
+  const candidates = (state.starts ?? []).filter(s => s.request.machineId === machineId && !s.poolGeneration && !s.dispatched && !s.harnessId && !s.error)
+  if (!candidates.length) return []
+  const receipts = await tx.superTabOperation.findMany({ where: { id: { in: candidates.map(s => stableId(tabId, s.actorKey, s.id)) } },
+    select: { id: true, createdAt: true } })
+  const recorded = new Map(receipts.map(r => [r.id, r.createdAt.getTime()]))
+  return candidates.filter(s => (recorded.get(stableId(tabId, s.actorKey, s.id)) ?? 0) <= now - ABANDONED_START_MS).map(s => s.id)
+}
+
 /** Persistent coordination. Host adapters own execution and must confirm their local session grants. */
 export class SuperTabStore {
   readonly native: SuperTabNativeStore
@@ -375,6 +389,7 @@ export class SuperTabStore {
       if (command.type === 'machine.contribute' || command.type === 'agent.add' || command.type === 'tab.project') {
         context.contribution = await this.contribution(tx, original, actor, command)
       }
+      if (command.type === 'machine.contribute') context.abandonedStartIds = await abandonedStarts(tx, tabId, original, command.machineId, context.now)
       if (command.type === 'agent.start') context.contribution = await this.contribution(tx, original, actor, command.request, true)
       if (command.type === 'agent.started' || command.type === 'agent.startDispatch') {
         const start = original.starts?.find(s => s.id === command.startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
@@ -383,6 +398,10 @@ export class SuperTabStore {
       if (command.type === 'message.send' && command.replyTo) {
         const reply = await tx.superTabMessage.findFirst({ where: { id: command.replyTo, tabId, conversationId: command.conversationId } })
         if (reply) context.reply = { id: reply.id, conversationId: reply.conversationId, author: reply.author as unknown as Author }
+      }
+      if ((command.type === 'rule.set' || command.type === 'rule.remove') && command.askedIn) {
+        const asked = await tx.superTabMessage.findFirst({ where: { id: command.askedIn.messageId, tabId, conversationId: command.askedIn.conversationId } })
+        if (asked) context.askedIn = { author: asked.author as unknown as Author, source: !!asked.source, createdAt: asked.createdAt.getTime() }
       }
       if (command.type === 'message.send' && actor.kind === 'agent') {
         const recent = await tx.superTabMessage.findMany({ where: { tabId, conversationId: command.conversationId },
@@ -400,7 +419,27 @@ export class SuperTabStore {
       const decisionId = command.type === 'route.override' || command.type === 'route.modelResult' ? command.decisionId
         : command.type === 'work.assign' || command.type === 'agent.start' ? command.routeDecisionId : undefined
       if (decisionId) context.routeDecision = await readDecision(tx, tabId, decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
+      // A dispatch reads its start's decision only to see whether a person chose this start by hand (rules.ts).
+      const dispatched = command.type === 'agent.startDispatch' ? original.starts?.find(s => s.id === command.startId)?.routeDecisionId : undefined
+      if (dispatched) context.routeDecision = await readDecision(tx, tabId, dispatched) ?? undefined
       const effects = applyCommand(original, actor, command, context)
+      if (command.type === 'agent.rebind') {
+        const target = agent(effects.state, command.agentId)
+        // A terminal can already belong to a different project or Swarm on this host. The pure
+        // transition checks this tab; inspect the other registrations inside the same transaction.
+        const registrations = await tx.superTab.findMany({ where: { autonomousEnv: original.environment,
+          machineIds: { has: target.machineId } } })
+        if (registrations.some(row => stateOf(row).agents.some(a => a.machineId === target.machineId
+          && a.harnessId === command.harnessId && a.id !== target.id))) {
+          fail('SESSION_CONTRIBUTED', 'The replacement terminal already belongs to another member.')
+        }
+        if (target.harnessId !== agent(original, target.id).harnessId) {
+          // Preserve the stable member's scope and also reserve the new native identity's scope.
+          await bindSession(tx, effects.state, { ...target, id: stableId(target.machineId, target.harnessId) }, context.now)
+          await tx.superTabRun.updateMany({ where: { id: target.id, tabId, machineId: target.machineId,
+            harnessId: command.previousHarnessId }, data: { harnessId: target.harnessId } })
+        }
+      }
       if (command.type === 'agent.add' || command.type === 'agent.started') {
         const target = agent(effects.state, effects.result.agentId as string)
         await bindSession(tx, effects.state, target, context.now)
@@ -417,7 +456,7 @@ export class SuperTabStore {
           status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled', holdReason: null, holdSince: null } })
       }
       const revision = row.revision + 1
-      if (command.type === 'agent.add' || command.type === 'agent.started' || command.type === 'agent.configuration') {
+      if (command.type === 'agent.add' || command.type === 'agent.started' || command.type === 'agent.configuration' || command.type === 'agent.rebind') {
         for (const target of effects.state.agents) {
           if (target.configurationVersion !== receiptId) continue
           const previous = original.agents.find(a => a.id === target.id)
@@ -758,7 +797,11 @@ export class SuperTabStore {
           const waiting = state.conversations.find(c => activeWork(c) && c.assignment!.agentId === target.id &&
             c.assignment!.execution.machineId === machineId && ['needs_human', 'blocked'].includes(c.assignment!.status))?.assignment
           const attention = waiting ? { assignmentId: waiting.id, status: waiting.status, result: waiting.result?.slice(0, 500) ?? null } : null
-          result.push({ tabId: row.id, tabName: state.name, revision: row.revision, paused: state.paused, active, attention, agent: target,
+          // The owner's own machine runs the owner's own Lead of this Swarm but is not one of its machines: the host adds it
+          // (cli/src/superTabs/host.ts). A collaborator's Lead on a machine shared with them must not open it to every member.
+          const joinSwarm = state.ownerId === user.sub && target.contributorId === user.sub && !state.machines?.some(m => m.machineId === machineId)
+            && state.conversations.some(c => !c.archived && c.leadId === target.id)
+          result.push({ tabId: row.id, tabName: state.name, revision: row.revision, paused: state.paused, active, attention, agent: target, joinSwarm,
             stopRequested: target.workDecision === 'stop' && !state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id),
             observers: people.filter(p => p.id !== user.sub &&
               canReadAgent(state, { kind: 'person', userId: p.id, email: p.email }, target))
@@ -955,7 +998,7 @@ export class SuperTabStore {
       const notices: MessageDraft[] = []
       if (group && activeWork(group)) {
         assignment.status = 'stopped'
-        finishWorker(state, assignment.agentId)
+        finishWorker(state, assignment.agentId, group)
         assignment.result = 'The execution host confirmed that this harness stopped.'
         await tx.superTabRun.deleteMany({ where: { tabId, assignmentId } })
         await tx.superTabDelivery.updateMany({ where: { tabId, assignmentId,

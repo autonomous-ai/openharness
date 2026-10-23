@@ -17,6 +17,16 @@ describe('the Windows release workflows', () => {
     expect(pty).toContain('HARNESS_EXE_BIN:')
   })
 
+  it('runs the rollover and payload-install specs against two real builds of the host', () => {
+    const pty = read('windows.yml')
+    // The previous build: a numeric version, as an install's folder under runtime\pty\ is named.
+    expect(pty).toMatch(/- name: Build the previous host\n\s+if: \$\{\{ !inputs\.release \}\}\n[\s\S]*?HARNESS_PTY_VERSION: '0\.0\.1'\n/)
+    expect(pty).toContain('HARNESS_PTY_BIN_PREV: ${{ github.workspace }}\\pty\\target\\${{ matrix.target }}\\previous\\harness-pty.exe')
+    // The Rust two-build test runs on that build too: without HARNESS_PTY_BIN_OLD it returns at once.
+    expect(pty).toMatch(/- name: 'Rust: two versions side by side'\n\s+if: \$\{\{ !inputs\.release \}\}\n[\s\S]*?HARNESS_PTY_BIN_OLD: \$\{\{ github\.workspace \}\}\\pty\\target\\\$\{\{ matrix\.target \}\}\\previous\\harness-pty\.exe\n\s+run: cargo test --locked --target \$\{\{ matrix\.target \}\} --test control two_versions_serve_side_by_side -- --nocapture\n/)
+    for (const spec of ['src/lib/hostMove/hostMove.real.spec.ts', 'src/lib/ptyHost/drain.spec.ts', 'src/lib/windows/ptyInstall.windows.real.spec.ts']) expect(pty).toContain(spec)
+  })
+
   it('publishes the Windows bits to staging only, beside a CLI publish that never waits for them', () => {
     const release = read('release.yml')
     expect(release).toContain('uses: ./.github/workflows/windows.yml')

@@ -20,7 +20,7 @@ import { baseNode, namedNode } from './harnessd/processName.js'
 import { PROBE_ANSWER, PROBE_TIMEOUT_MS } from './harnessd/reexec.js'
 import { dropAgentSessionEnv } from './lib/agentSessionEnv.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
-import { acquireSpawnLock } from './lib/daemonSpawnLock.js'
+import { acquireSpawnLock, tryAcquireSpawnLockSync } from './lib/daemonSpawnLock.js'
 import { DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, PID_FILE } from './lib/daemonState.js'
 import { isInstalledCopy } from './lib/installedCopy.js'
 import { unixSocketPath } from './lib/localSocket.js'
@@ -28,7 +28,8 @@ import { currentCli, harnessLaunchPath } from './lib/windows/installLayout.js'
 import { launchDetached } from './lib/windows/launcher.js'
 import { leanFingerprint, readLeanBundle, releaseLeanClaim, writeLeanBundle, type LeanBundle } from './harnessd/leanBundle.js'
 import { ts } from './lib/log.js'
-import { confirm as confirmUpdate, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
+import { confirm as confirmUpdate, pendingVersion, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
+import { keepStaged, ptyUnjudged, rollBackStaged } from './lib/windows/ptyUpdate.js'
 import { VERSION } from './version.js'
 
 /** Where a master re-executing on a new bundle leaves word of it, until that master's core is up. */
@@ -241,6 +242,12 @@ export function startMaster(
   // Windows, before the master says anything: harness-launch.exe gave it no output, and its console is the daemon's log
   // from here on, `masterEnv`'s line among the rest.
   const windowsConfig = platform === 'win32' ? windows() : {}
+  // The install root a terminal host payload is installed in (lib/windows/ptyInstall.ts); none elsewhere.
+  const ptyRoot = platform === 'win32' ? dirname(env.ADAPTER_CLI_DIR) : null
+  // What the master does to the host, it does under the daemon spawn lock: the updater sweeps bin\'s aside files under it,
+  // and an aside file may hold the only copy of a path a rollback puts back. Taken only while a host is on probation.
+  const lock = () => tryAcquireSpawnLockSync('update')
+  const masterLog = (line: string) => console.log(`${ts()} ${line}`)
   return runMaster({
     env: masterEnv(process.env, unixSocketPath(env.ADAPTER_DATA_DIR, env.PORT), undefined, platform),
     nodePath: baseNode(process.execPath),
@@ -251,11 +258,19 @@ export function startMaster(
     pidFile: PID_FILE,
     statusFile: HARNESSD_STATUS_FILE,
     logFile: DAEMON_LOG_FILE,
-    restoreUpdate: () => restoreUpdate(env.ADAPTER_CLI_DIR),
-    confirmUpdate: () => confirmUpdate(env.ADAPTER_CLI_DIR),
+    // One probation for whatever the updater staged: the CLI build, the terminal host (Windows), or both.
+    restoreUpdate: () => rollBackStaged({
+      cliPending: () => pendingVersion(env.ADAPTER_CLI_DIR) !== null, restoreCli: () => restoreUpdate(env.ADAPTER_CLI_DIR),
+      ptyRoot, log: masterLog, lock,
+    }),
+    confirmUpdate: () => keepStaged({ confirmCli: () => confirmUpdate(env.ADAPTER_CLI_DIR), ptyRoot, log: masterLog, lock }),
     version: VERSION,
     reexecMarkerFile: HARNESSD_REEXEC_FILE,
-    unjudgedUpdate: (bundle) => unjudgedUpdate(env.ADAPTER_CLI_DIR, bundle),
+    // A host still on probation when the master judging it died (a power cut) is judged by the first core too: left
+    // unjudged, its marker would hold every later host update back. One of a protocol this build cannot speak, with no
+    // CLI build pending, is a paired host whose build never went in: taken back out instead (`ptyUnjudged`).
+    unjudgedUpdate: (bundle) => unjudgedUpdate(env.ADAPTER_CLI_DIR, bundle)
+      ?? (ptyRoot === null ? null : ptyUnjudged(ptyRoot, { cliPending: pendingVersion(env.ADAPTER_CLI_DIR) !== null, log: masterLog, lock })),
     // The updater runs for the installed copy alone (lib/installedCopy.ts), beside the core, never in it.
     updater: !env.ADAPTER_UPDATE_DISABLE && isInstalledCopy(start.scriptPath, env.ADAPTER_CLI_DIR),
     // A master that ends cleanly gives up its claim on its lean bundle, so the next one to start can

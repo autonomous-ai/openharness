@@ -327,6 +327,41 @@ describe('discovery', () => {
     run.handlers.onTerminalAvailability(row(), false)
     expect(run.deps.announceSession).toHaveBeenCalledTimes(1)
   })
+
+  describe('a shell row whose pane is live', () => {
+    const shell = (over: Partial<RegisteredSession> = {}) => row({ engine: 'terminal', active: false, ...over } as Partial<RegisteredSession>)
+
+    // A shell has no engine process, so no observation ever reactivates it after the core's start marks every row dormant:
+    // its live pane, on whichever pty host serves it, is the only evidence there is.
+    it('is active again, and announced as such', () => {
+      const run = setup()
+      const dormant = shell()
+      run.rows.set(dormant.agentId, dormant)
+      vi.mocked(run.deps.registry.terminalAvailable).mockReturnValue(true)
+      run.handlers.onTerminalAvailability(dormant, true)
+      expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', true)
+      expect(run.deps.announceSession).toHaveBeenCalledTimes(1)
+    })
+
+    it('is left alone when already active, held or failed, or when its pane is not live', () => {
+      const run = setup()
+      for (const over of [{ active: true }, { launch: { state: 'held' } }, { launch: { state: 'failed' } }]) {
+        const r = shell(over as Partial<RegisteredSession>)
+        run.rows.set(r.agentId, r)
+        run.handlers.onTerminalAvailability(r, true)
+      }
+      run.handlers.onTerminalAvailability(shell(), false)
+      expect(run.deps.registry.setActive).not.toHaveBeenCalled()
+    })
+
+    it('is not reactivated for an engine row, which its process observation owns', () => {
+      const run = setup()
+      const engine = row({ active: false })
+      run.rows.set(engine.agentId, engine)
+      run.handlers.onTerminalAvailability(engine, true)
+      expect(run.deps.registry.setActive).not.toHaveBeenCalled()
+    })
+  })
 })
 
 it('cannot promote an unadmitted external waiting pane into a live engine', async () => {

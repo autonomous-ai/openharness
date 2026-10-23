@@ -291,6 +291,10 @@ describe('USB dial fleet', () => {
       expect(f.host.onDialAttached).toHaveBeenCalledTimes(1)
       await f.fleet.turnStarted('a', 'Working')
       for (const port of f.ports) expect(port.sent).toContainEqual({ t: 'turn.started', agentId: 'a', text: 'Working' })
+      // The Swarm cards reach every session; a dial that did not name them is sent nothing.
+      await f.fleet.syncSwarmCards(true)
+      await f.fleet.swarmCardRecap({ tabId: 'st1', leadId: 'l1', text: 'x', at: 1, none: false })
+      for (const port of f.ports) expect(port.sent.some(m => String(m.t).startsWith('supertab'))).toBe(false)
       f.setPorts([device('/dev/tux', 'BB:02')]); await f.fleet['scan']()
       expect(f.ports[0].isOpen).toBe(false)
       expect(f.ports[1].isOpen).toBe(true)
@@ -503,6 +507,21 @@ describe('a board that is not a dial', () => {
       for (let i = 0; i < 3; i++) await second.scan()
       expect(second.opens()).not.toContain('/dev/other')
     } finally { await second.fleet.stop() }
+  })
+
+  it('remembers a board that greeted as a dial, so a later silent probe never marks it foreign', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'fleet-verdicts-')), 'dial-ports.json')
+    const s = scenario({ file })
+    try {
+      s.fleet.start()
+      await vi.waitFor(() => expect(s.f.ports.map(p => p.path)).toContain('/dev/tim'))
+      await s.f.greet(s.f.ports.filter(p => p.path === '/dev/tim'))
+      await vi.waitFor(() => expect(s.fleet.isConnected).toBe(true))
+    } finally { await s.fleet.stop() }
+    const dial = { ...device('/dev/tim', 'AA:01'), session: '201' }
+    const verdicts = new DialVerdicts(file)
+    verdicts.markForeign(dial)
+    expect(verdicts.isForeign(dial)).toBe(false)
   })
 
   it('is never opened while another program has it, and only then once that program is done', async () => {

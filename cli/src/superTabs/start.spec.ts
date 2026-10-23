@@ -215,6 +215,16 @@ it.each(['claude', 'codex', 'opencode'])('only tells supported %s workers to use
   }
 })
 
+it.each(['claude', 'codex'])('starts a %s Reviewer with the built-in swarm-review skill', async engine => {
+  const f = fixture()
+  f.start.request = { ...f.start.request, engine, role: 'reviewer' } as typeof f.start.request
+  await startAgent({ action: 'start', tabId: 'tab', operationId: 'reviewer-prompt', request: f.start.request }, f.scoped, where, f.open)
+  const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+  expect(payload.swarmRole).toBe('review')
+  expect(payload.prompt).toContain('swarm-review skill')
+  expect(payload.prompt).not.toContain('swarm-dev')
+})
+
 it('asks for an owner contribution instead of widening a guest machine connection', async () => {
   const f = fixture({ guest: true })
   expect(await startAgent({ action: 'start', tabId: 'tab', operationId: 'guest-start', request: f.start.request }, f.scoped, where, f.open))

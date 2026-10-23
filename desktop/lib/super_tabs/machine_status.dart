@@ -56,7 +56,7 @@ SuperTabMachineStatus superTabMachineStatus({
       : SuperTabMachineStatus.live;
 }
 
-/// How long ago, as the end of a machine's metrics line says it: "just now", "4s ago", "3 min ago", "2 h ago".
+/// How long ago: "just now", "4s ago", "3 min ago", "2 h ago".
 String superTabAgo(Duration age) {
   final seconds = age.inSeconds;
   if (seconds < 1) return 'just now';
@@ -74,21 +74,14 @@ String superTabAgoShort(Duration age) {
   return '${age.inDays}d';
 }
 
-/// What hovering or focusing a machine's row says.
-String superTabMachineTip(SuperTabMachineStatus status, Duration? age) {
-  final ago = age == null ? null : superTabAgo(age);
-  return switch (status) {
-    SuperTabMachineStatus.refreshing => 'Refreshing…',
-    SuperTabMachineStatus.unknown =>
-      ago == null
-          ? "Can't reach Harness"
-          : "Can't reach Harness · data from $ago",
-    SuperTabMachineStatus.offline =>
-      ago == null ? 'Offline' : 'Offline · last seen $ago',
-    SuperTabMachineStatus.live ||
-    SuperTabMachineStatus.late => ago == null ? 'Updated' : 'Updated $ago',
-  };
-}
+/// What hovering or focusing a machine's row says of its state, before its owner and hardware: nothing while
+/// it is online (the dot says so), and never how old the reading is.
+String? superTabMachineTip(SuperTabMachineStatus status) => switch (status) {
+  SuperTabMachineStatus.refreshing => 'Refreshing…',
+  SuperTabMachineStatus.unknown => "Can't reach Harness",
+  SuperTabMachineStatus.offline => 'Offline',
+  SuperTabMachineStatus.live || SuperTabMachineStatus.late => null,
+};
 
 /// The state in words, so that colour is never the only signal.
 String superTabMachineStateLabel(SuperTabMachineStatus status) =>
@@ -100,24 +93,10 @@ String superTabMachineStateLabel(SuperTabMachineStatus status) =>
       SuperTabMachineStatus.refreshing => 'Refreshing',
     };
 
-/// The tabular figures the ages and the heading's pill count in.
+/// The tabular figures the heading's pill counts in.
 const _tabular = [FontFeature.tabularFigures()];
 
-TextStyle superTabAgeStyle(SuperTabMachineStatus status) {
-  final base = DesktopChrome.metadata().copyWith(fontFeatures: _tabular);
-  return switch (status) {
-    SuperTabMachineStatus.late => base.copyWith(
-      color: grid.AppPalette.warn,
-      fontWeight: FontWeight.w500,
-    ),
-    SuperTabMachineStatus.refreshing => base.copyWith(
-      fontStyle: FontStyle.italic,
-    ),
-    _ => base,
-  };
-}
-
-/// The 8 px mark before a machine's name: green when live (with one short ping as each new reading arrives),
+/// The 8 px mark in a machine row's icon column: green when live (with one short ping as each new reading arrives),
 /// amber when late, a hollow ring when offline, a dashed ring when unknown, a breathing grey when refreshing.
 /// Motion stops when the platform asks for reduced motion.
 class SuperTabMachineDot extends StatefulWidget {
@@ -299,57 +278,72 @@ class _DotPainter extends CustomPainter {
       old.quiet != quiet;
 }
 
-/// The pill beside the Machines heading: "Live", or "Reconnecting · 1m" while the Swarm cannot be read.
+/// The pill beside the Machines heading while the Swarm cannot be read: "Reconnecting · 1m". A live
+/// Swarm shows no pill. Where the heading leaves too little room for the words (the minimum pane), it is
+/// only its dot, which says the same on hover.
 class SuperTabMachinesPill extends StatelessWidget {
-  const SuperTabMachinesPill({super.key, this.reconnectingFor});
+  const SuperTabMachinesPill({super.key, required this.reconnectingFor});
 
-  /// How long the Swarm has failed to be read; null while it reads.
-  final Duration? reconnectingFor;
+  /// How long the Swarm has failed to be read.
+  final Duration reconnectingFor;
+
+  /// Below this width the words would ellipsize to almost nothing.
+  static const _minWordsWidth = 56.0;
 
   @override
   Widget build(BuildContext context) {
-    final failing = reconnectingFor != null;
-    final text = failing
-        ? 'Reconnecting · ${superTabAgoShort(reconnectingFor!)}'
-        : 'Live';
+    final failingFor = superTabAgoShort(reconnectingFor);
+    final text = 'Reconnecting · $failingFor';
+    final dot = DecoratedBox(
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: grid.AppPalette.warn,
+      ),
+      child: const SizedBox.square(dimension: 6),
+    );
     return Semantics(
-      label: failing
-          ? 'Machines: reconnecting, for ${superTabAgoShort(reconnectingFor!)}'
-          : 'Machines: live',
+      label: 'Machines: reconnecting, for $failingFor',
       excludeSemantics: true,
-      child: DecoratedBox(
-        decoration: ShapeDecoration(
-          shape: StadiumBorder(side: BorderSide(color: DesktopChrome.rim)),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: failing
-                      ? grid.AppPalette.warn
-                      : grid.AppPalette.online,
+      child: LayoutBuilder(
+        builder: (context, constraints) => constraints.maxWidth < _minWordsWidth
+            ? Tooltip(
+                message: text,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: dot,
                 ),
-                child: const SizedBox.square(dimension: 6),
-              ),
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  text,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: DesktopChrome.metadata().copyWith(
-                    fontSize: 11,
-                    fontFeatures: _tabular,
+              )
+            : DecoratedBox(
+                decoration: ShapeDecoration(
+                  shape: StadiumBorder(
+                    side: BorderSide(color: DesktopChrome.rim),
+                  ),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      dot,
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          text,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: DesktopChrome.metadata().copyWith(
+                            fontSize: 11,
+                            fontFeatures: _tabular,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
-            ],
-          ),
-        ),
       ),
     );
   }

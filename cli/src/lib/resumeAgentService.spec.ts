@@ -149,6 +149,20 @@ describe('production resume handler', () => {
     expect(create).toHaveBeenCalledOnce()
   })
 
+  it('persists an adopted old worker role in the resumed registry row', async () => {
+    const swarmSkill = { role: 'dev' as const, key: saved.agentId }
+    deps.adoptSwarmSkill = async row => ({ ...row, swarmSkill })
+    expect(await start()).toMatchObject({ ok: true, session: { swarmSkill } })
+    registry.load()
+    expect(registry.byAgent(saved.agentId)?.swarmSkill).toEqual(swarmSkill)
+  })
+
+  it('does not resume a session that changed during role adoption', async () => {
+    deps.adoptSwarmSkill = async () => null
+    expect(await start()).toMatchObject({ error: 'AGENT_CHANGED' })
+    expect(create).not.toHaveBeenCalled()
+  })
+
   it.each(['auto', 'ask'])('resumes the same conversation with an explicit %s permission choice', async permissionMode => {
     rewrite({ engine: 'opencode', permissionMode: permissionMode === 'auto' ? 'ask' : 'auto' })
     vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: true, overrides: {

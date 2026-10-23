@@ -6,6 +6,9 @@ import { FAIL, readFallback } from './serviceHost.js'
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
 describe('the core API services stand on', () => {
+  it('allows a bounded batch of GitHub reads to finish outside the core', () => {
+    expect(LONG_ANSWERS.projects).toEqual({ git_pull_requests_status: 120_000 })
+  })
   it('closes only the original Swarm-started native session and treats an absent session as gone', async () => {
     const request = { agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', expiresAt: Date.now() + 120_000, createdAt: new Date(1000).toISOString() }
     const session = { ...row('worker'), sessionId: 'native', registeredAt: 1000, startedBy: 'agent' as const }
@@ -193,8 +196,12 @@ describe('the core API services stand on', () => {
     expect(createCoreApi({ ...deps, cloud }).cloud).toBe(cloud)
     // The Super Tab service's door, the same way.
     expect(core.superTabs).toBeUndefined()
-    const superTabs = { attention: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn() }
     expect(createCoreApi({ ...deps, superTabs }).superTabs).toBe(superTabs)
+    // The devices' way to its card requests, the same way.
+    expect(core.superTabRequest).toBeUndefined()
+    const superTabRequest = vi.fn()
+    expect(createCoreApi({ ...deps, superTabRequest }).superTabRequest).toBe(superTabRequest)
     expect(core.agents.cloud).toBeUndefined()
     const rows = [{ agentId: 'cloud_1' }] as RegisteredSession[]
     expect(createCoreApi({ ...deps, cloudRows: () => rows }).agents.cloud!()).toBe(rows)
@@ -362,7 +369,7 @@ describe('the core API services stand on', () => {
     expect(readFallback(DEVICES_FALLBACKS.routeSend)).toEqual({ deferred: true, value: { ok: false, machine: '', reason } })
     // The Wi-Fi device finds no desk to walk; the dial and the window bridges hear nothing.
     expect(readFallback(DEVICES_FALLBACKS.stepFocus).value).toBe('no_agents')
-    for (const member of ['card', 'desk', 'swarms', 'unread', 'appFocus', 'seen', 'settings', 'windowFocus', 'windowReply', 'voiceReply', 'windowGone', 'scroll', 'engines', 'commanders'] as const) {
+    for (const member of ['card', 'desk', 'swarms', 'swarmCards', 'swarmCardRecap', 'unread', 'appFocus', 'seen', 'settings', 'windowFocus', 'windowReply', 'voiceReply', 'windowGone', 'scroll', 'engines', 'commanders'] as const) {
       expect(DEVICES_FALLBACKS[member], member).toBeUndefined()
     }
     expect(readFallback(DEVICES_FALLBACKS.stop)).toEqual({ deferred: true, value: undefined })

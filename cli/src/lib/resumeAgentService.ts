@@ -1,4 +1,5 @@
 /** Exact-resume lifecycle shared by the daemon and its isolated acceptance tests. */
+import type { AdoptSwarmSkill } from '../core/agents/swarmSkills.js'
 import { transcriptSize, type RelaunchMarks } from '../core/transcripts/relaunch.js'
 import { isTerminalEngine } from '../engines/types.js'
 import { installedDsh } from '../dsh/installed.js'
@@ -25,6 +26,7 @@ import type { TerminalRuntimeRef } from './terminalTypes.js'
 import { harnessPermissionEnvironment } from './harnessDefaults.js'
 
 export interface ResumeAgentServiceDeps {
+  adoptSwarmSkill?: AdoptSwarmSkill
   registry: Pick<typeof liveRegistry, 'byAgent' | 'bySession' | 'resumePendingAgent' | 'setLaunch' | 'updateProcessIdentity'>
   stoppedAgents: StoppedAgentStore
   /** Where a resumed harness's new pane is made (main.ts `createBackend`); null with no backend ready. */
@@ -53,7 +55,7 @@ export interface ResumeAgentServiceDeps {
 
 export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
   const { registry, stoppedAgents, createBackend, noBackendCode = 'TMUX_UNAVAILABLE', backendFor, restartJobs, stopJobs, pinnedControls,
-    retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume,
+    retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume, adoptSwarmSkill,
     refreshGridWebSearch, clearDeleted, attachDsh, attachSession, relaunchMarks } = deps
   const resumeConversations = new Set<string>()
   /** Same short form every other `[…]` line in the daemon logs uses. */
@@ -220,6 +222,11 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       // a resume that works — after the harness had already been paused.
       if (resumeSessionId && engineKeepsTranscriptFile(saved.engine) && !saved.transcriptPath) {
         return { ok: false, error: 'RESUME_UNAVAILABLE', detail: 'The saved conversation file is unavailable. Start a new conversation separately.' }
+      }
+      if (adoptSwarmSkill) {
+        const adopted = await adoptSwarmSkill(saved, current)
+        if (!adopted || !current()) return resumeChanged
+        saved = adopted
       }
       const sourceEvidence = () => resumeSessionId && engineKeepsTranscriptFile(saved.engine)
         ? controlTranscriptEvidence(saved.engine, resumeSessionId, saved.transcriptPath!, saved.codexHome ?? undefined, saved.cwd) : undefined

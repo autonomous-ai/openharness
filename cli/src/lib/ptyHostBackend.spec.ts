@@ -1,7 +1,12 @@
+import { once } from 'node:events'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import net from 'node:net'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PtyEvent, PtyOp } from './ptyHost/protocol.js'
 import type { PtyHostClient } from './ptyHost/client.js'
-import type { EnsurePtyHostResult } from './ptyHost/launch.js'
+import type { EnsurePtyHostResult, PtyHostTarget } from './ptyHost/launch.js'
 import type { PtyRuntimeRef } from './terminalTypes.js'
 
 // validate's branches, not the process table: the same narrow mock tmuxBackendValidate.spec.ts uses.
@@ -25,6 +30,8 @@ const { PtyHostBackend } = await import('./ptyHostBackend.js')
 const { defaultWindowsShell } = await import('./windows/shell.js')
 const { processRows, setProcessTableSource } = await import('./processTable.js')
 const { setAgentSignaller, signalAgentProcess } = await import('./processSignals.js')
+const { helloProof, PTY_PROTOCOL } = await import('./ptyHost/protocol.js')
+const { discoveryFileName } = await import('./ptyHost/instance.js')
 
 type Reply = unknown | ((op: PtyOp) => unknown)
 
@@ -33,6 +40,7 @@ interface BackendOptions {
   owner?: string
   stream?: () => Promise<unknown>
   platform?: NodeJS.Platform
+  features?: string[]
   endTree?: (pid: number) => Promise<'sent' | 'gone' | 'failed'>
 }
 
@@ -41,6 +49,7 @@ function backendWith(replies: Record<string, Reply>, options: BackendOptions = {
   const listeners = new Set<(event: PtyEvent) => void>()
   const client = {
     instance: 'p1',
+    features: options.features ?? [],
     call: async (op: PtyOp) => {
       calls.push(op)
       const reply = replies[op.op]
@@ -90,6 +99,7 @@ describe('PtyHostBackend prepare', () => {
     expect(await backend.prepare({ ownedPanes: new Map() }))
       .toEqual({ state: 'unavailable', code: 'PTY_HOST_UNAVAILABLE', reason: 'harness-pty is not installed' })
     expect(await backend.inventory()).toEqual({ state: 'unavailable', reason: 'pty host is unavailable' })
+    expect(backend.attached).toBe(false)
     expect(await backend.create({ command: ['/bin/sh'] })).toMatchObject({ state: 'failed', dispatch: 'not_started' })
   })
 
@@ -102,6 +112,26 @@ describe('PtyHostBackend prepare', () => {
 })
 
 describe('PtyHostBackend create', () => {
+  it('create passes the seed to a host with the seed feature', async () => {
+    const { backend, calls } = await ready({ create: { state: 'ok', value: { pane: '%4' } } }, { features: ['seed'] })
+    expect(backend.canSeed).toBe(true)
+    // Attached to its host, until the connection is let go.
+    expect(backend.attached).toBe(true)
+    await backend.create({ command: ['claude'], seed: 'a\r\nb' })
+    expect(calls[0]).toMatchObject({ op: 'create', seed: 'a\r\nb' })
+    backend.dispose()
+    expect(backend.attached).toBe(false)
+  })
+
+  it('create refuses a seed for a host without it', async () => {
+    const { backend, calls } = await ready({ create: { state: 'ok', value: { pane: '%4' } } })
+    expect(backend.canSeed).toBe(false)
+    expect(await backend.create({ command: ['claude'], seed: 'a' })).toMatchObject({ state: 'failed', dispatch: 'not_started', reason: 'this host cannot seed a pane' })
+    expect(calls.some((call) => call.op === 'create')).toBe(false)
+    // No seed: a pre-G host still creates.
+    expect(await backend.create({ command: ['claude'] })).toMatchObject({ state: 'succeeded' })
+  })
+
   it('asks for a held 200x50 pane owned by this daemon', async () => {
     const { backend, calls } = await ready({ create: { state: 'ok', value: { pane: '%4' } } })
     const result = await backend.create({ command: ['claude'], cwd: '/w', label: 'harness-claude-1', env: { K: 'v' } })
@@ -256,6 +286,20 @@ describe('PtyHostBackend inventory and titles', () => {
     })
   })
 
+  it('lists the label a pane was created with, which tells a move pane (hostMove/moveAgent.ts)', async () => {
+    const row = (pane: string, label: string | null) => ({ pane, rootPid: 11, cwd: '/w', title: '', dead: false, owner: 'me', label })
+    const { backend } = await ready({
+      inventory: { state: 'ok', value: { panes: [row('%1', 'HARNESS_MOVE_OF=a1'), row('%2', null)] } },
+    })
+    expect(await backend.inventory()).toEqual({
+      state: 'available',
+      roots: [
+        { runtime: { backend: 'ptyhost', instance: 'p1', paneId: '%1' }, rootPid: 11, cwd: '/w', label: 'HARNESS_MOVE_OF=a1' },
+        { runtime: { backend: 'ptyhost', instance: 'p1', paneId: '%2' }, rootPid: 11, cwd: '/w' },
+      ],
+    })
+  })
+
   it('keys titles by route', async () => {
     const { backend } = await ready({ titles: { state: 'ok', value: { titles: { '%1': 'one' } } } })
     const titles = await backend.titles()
@@ -348,6 +392,18 @@ describe('PtyHostBackend input', () => {
     const { backend, calls } = await ready()
     expect(await backend.typeLiteral(PANE, 'héllo')).toEqual({ state: 'succeeded', dispatch: 'executed' })
     expect(calls).toEqual([{ op: 'paste', pane: '%1', text: 'héllo', bracketed: false }])
+  })
+
+  it('writeInput sends the bytes as they are, through the host\'s raw write', async () => {
+    const { backend, calls } = await ready()
+    expect(await backend.writeInput(PANE, Uint8Array.of(0x1b, 0x5b, 0x41, 0x0d))).toEqual({ state: 'succeeded', dispatch: 'executed' })
+    expect(calls).toEqual([{ op: 'write', pane: '%1', data: Buffer.from([0x1b, 0x5b, 0x41, 0x0d]).toString('base64') }])
+  })
+
+  it('pasteInput pastes as a stream\'s paste frame does', async () => {
+    const { backend, calls } = await ready()
+    expect(await backend.pasteInput(PANE, 'a\nb')).toEqual({ state: 'succeeded', dispatch: 'executed' })
+    expect(calls).toEqual([{ op: 'paste', pane: '%1', text: 'a\nb', bracketed: true }])
   })
 
   it('sendKey sends the tmux name of the key', async () => {
@@ -963,4 +1019,243 @@ describe('PtyHostBackend host connection', () => {
     expect(connected.closed).toBe(true)
     expect(connected.events.size + connected.closes.size).toBe(0)
   })
+})
+
+describe('PtyHostBackend hosts by instance', () => {
+  const P = PTY_PROTOCOL
+  const homes: string[] = []
+  const servers: Array<{ stop(): Promise<void> }> = []
+  afterEach(async () => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+    for (const server of servers.splice(0)) await server.stop()
+    for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true })
+  })
+
+  const tmpHome = () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'pty-backend-'))
+    homes.push(home)
+    return home
+  }
+
+  /**
+   * A stand-in host of [instance] in [home], in this process: its discovery file, a hello that proves its token, and
+   * `ok` to every op (a `create` makes `%9`). `stop` ends it and every connection to it; `start` serves again. [pid]
+   * is the one its file and hello name (this process's by default).
+   */
+  async function hostIn(home: string, instance: string, version: string, pid = process.pid) {
+    const endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\pty-backend-${path.basename(home)}-${instance}` : path.join(home, `${instance}.sock`)
+    const token = `tok-${instance}`
+    const hellos: string[] = []
+    const ops: string[] = []
+    const sockets = new Set<net.Socket>()
+    let server: net.Server | null = null
+    const serve = (socket: net.Socket) => {
+      sockets.add(socket)
+      socket.on('close', () => sockets.delete(socket))
+      socket.on('error', () => {})
+      let pending = ''
+      let said = false
+      socket.on('data', (chunk) => {
+        pending += chunk
+        let at
+        while ((at = pending.indexOf('\n')) >= 0) {
+          const value = JSON.parse(pending.slice(0, at))
+          pending = pending.slice(at + 1)
+          if (said) {
+            ops.push(value.op)
+            socket.write(`${JSON.stringify(value.op === 'inventory' ? { id: value.id, ok: true, panes: [] } : value.op === 'create' ? { id: value.id, ok: true, pane: '%9' } : { id: value.id, ok: true })}\n`)
+            continue
+          }
+          said = true
+          hellos.push(instance)
+          socket.write(`${JSON.stringify({ hello: { ok: true, instance, version, pid, proof: helloProof(token, value.hello.nonce) } })}\n`)
+        }
+      })
+    }
+    const host = {
+      hellos,
+      ops,
+      async start() {
+        server = net.createServer(serve)
+        server.listen(endpoint)
+        await once(server, 'listening')
+      },
+      async stop() {
+        const closing = server
+        server = null
+        if (!closing) return
+        for (const socket of sockets) socket.destroy()
+        await new Promise((resolve) => closing.close(resolve))
+      },
+    }
+    await host.start()
+    servers.push(host)
+    mkdirSync(path.join(home, 'run'), { recursive: true })
+    writeFileSync(path.join(home, 'run', discoveryFileName(instance)!), JSON.stringify({ protocol: P, instance, endpoint, pid, version, token }))
+    return host
+  }
+
+  const target = (version: string): PtyHostTarget => ({ protocol: P, version, instance: `p${P}-${version}`, features: ['seed'], source: 'installed' })
+  const quiet = () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+  }
+
+  it('the create backend never makes a pane on a non-target host', async () => {
+    quiet()
+    // No host binary to start: a missing target's host is not made, and nothing else stands in for it.
+    vi.stubEnv('HARNESS_PTY_BIN', path.join(tmpdir(), 'no-such-harness-pty'))
+    const home = tmpHome()
+    const other = await hostIn(home, `p${P}-0.1.0`, '0.1.0')
+    const lonely = new PtyHostBackend({ home, target: target('0.2.0'), owner: () => 'me', platform: 'linux' })
+    expect(await lonely.prepare({ ownedPanes: new Map() })).toMatchObject({ state: 'unavailable' })
+    expect(await lonely.create({ command: ['sh'] })).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    lonely.dispose()
+    // With the target's host running too, panes go there alone.
+    const own = await hostIn(home, `p${P}-0.2.0`, '0.2.0')
+    const backend = new PtyHostBackend({ home, target: target('0.2.0'), owner: () => 'me', platform: 'linux' })
+    expect(await backend.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
+    expect(await backend.create({ command: ['sh'] })).toMatchObject({ state: 'succeeded', runtime: { instance: `p${P}-0.2.0`, paneId: '%9' } })
+    backend.dispose()
+    expect([other.hellos, other.ops, own.ops.filter((op) => op === 'create')]).toEqual([[], [], ['create']])
+    expect(backend.mayShutDown).toBe(false)
+  })
+
+  it('a drain backend refuses create', async () => {
+    const calls: string[] = []
+    const client = {
+      instance: `p${P}-0.1.0`, pid: 10, protocol: P,
+      call: async (op: PtyOp) => { calls.push(op.op); return op.op === 'inventory' ? { state: 'ok', value: { panes: [] } } : { state: 'ok', value: {} } },
+      onEvent: () => () => {}, onClose: () => () => {}, close() {},
+    }
+    const backend = new PtyHostBackend({
+      home: '/tmp/h', instance: `p${P}-0.1.0`, target: target('0.2.0'), owner: () => 'me', platform: 'linux',
+      launch: async () => ({ client: client as unknown as PtyHostClient }), hostProcess: { alive: () => true, rows: async () => null },
+    })
+    // Its instance is known before its host is reached: rows name it.
+    expect([backend.instanceId, backend.draining]).toEqual([`ptyhost:p${P}-0.1.0`, true])
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    expect(await backend.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
+    expect(await backend.create({ command: ['sh'] })).toMatchObject({ state: 'failed', dispatch: 'not_started', reason: expect.stringContaining('draining') })
+    expect(calls).not.toContain('create')
+    backend.dispose()
+  })
+
+  it('with no target, a reconnect stays on the instance it was attached to', async () => {
+    quiet()
+    vi.stubEnv('HARNESS_PTY_BIN', path.join(tmpdir(), 'no-such-harness-pty'))
+    const home = tmpHome()
+    const older = await hostIn(home, `p${P}-0.1.0`, '0.1.0')
+    const newer = await hostIn(home, `p${P}-0.2.0`, '0.2.0')
+    const backend = new PtyHostBackend({ home, target: null, owner: () => 'me', platform: 'linux' })
+    const replaced = vi.fn()
+    backend.onHostReplaced = replaced
+    expect(await backend.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
+    expect(backend.instanceId).toBe(`ptyhost:p${P}-0.2.0`)
+    // The newest host stops answering for a while: the older one is never taken in its place.
+    await newer.stop()
+    await vi.waitFor(async () => expect(await backend.inventory()).toMatchObject({ state: 'unavailable' }))
+    await new Promise((resolve) => setTimeout(resolve, 1_500))
+    expect(older.hellos).toEqual([])
+    await newer.start()
+    await vi.waitFor(async () => expect(await backend.inventory()).toEqual({ state: 'available', roots: [] }), { timeout: 5_000, interval: 100 })
+    expect(backend.instanceId).toBe(`ptyhost:p${P}-0.2.0`)
+    expect(older.hellos).toEqual([])
+    expect(replaced).not.toHaveBeenCalled()
+    backend.dispose()
+  }, 15_000)
+
+  /** A pid no host has: the stand-in host given it is dead once the test says so (`hostProcess`). */
+  const GONE_PID = 2_000_000_001
+
+  it('with no target, a host proven dead gives way to the newest one that answers', async () => {
+    quiet()
+    vi.stubEnv('HARNESS_PTY_BIN', path.join(tmpdir(), 'no-such-harness-pty'))
+    const home = tmpHome()
+    const older = await hostIn(home, `p${P}-0.1.0`, '0.1.0')
+    const newer = await hostIn(home, `p${P}-0.2.0`, '0.2.0', GONE_PID)
+    let dead = false
+    const hostProcess = { alive: (pid: number) => pid !== GONE_PID || !dead, rows: async () => null }
+    const backend = new PtyHostBackend({ home, target: null, owner: () => 'me', platform: 'linux', hostProcess })
+    const replaced = vi.fn()
+    backend.onHostReplaced = replaced
+    expect(await backend.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
+    expect(backend.instanceId).toBe(`ptyhost:p${P}-0.2.0`)
+    // The newest host exits for good: its panes are gone, and new ones go to the host that answers.
+    dead = true
+    await newer.stop()
+    await vi.waitFor(() => expect(replaced).toHaveBeenCalledTimes(1), { timeout: 5_000, interval: 50 })
+    expect(backend.instanceId).toBe(`ptyhost:p${P}-0.1.0`)
+    expect(await backend.create({ command: ['sh'] })).toMatchObject({ state: 'succeeded', runtime: { instance: `p${P}-0.1.0` } })
+    expect(older.ops).toContain('create')
+    backend.dispose()
+  }, 15_000)
+
+  // A stand-in binary is a script run by its shebang: not on Windows.
+  it.runIf(process.platform !== 'win32')('with a target, a dead host is started again from the binary, and only the target\'s instance is waited on', async () => {
+    quiet()
+    const home = tmpHome()
+    const instance = `p${P}-0.2.0`
+    const binary = path.join(home, 'harness-pty-stub')
+    // `serve --home <home>`: says how it was started, then serves as [instance] (hello, `ok` to every op) and
+    // publishes its discovery file. It ends itself after 30 s if nothing kills it.
+    writeFileSync(binary, `#!${process.execPath}
+const { createHash } = require('node:crypto')
+const fs = require('node:fs')
+const net = require('node:net')
+const path = require('node:path')
+const home = process.argv[process.argv.indexOf('--home') + 1]
+fs.appendFileSync(path.join(home, 'started'), process.argv.slice(2).join(' ') + '\\n')
+const endpoint = path.join(home, 'stub.sock')
+const token = 'stub-token'
+const proof = (nonce) => createHash('sha256').update(token).update('\\0').update(nonce).digest('hex')
+const server = net.createServer((socket) => {
+  socket.on('error', () => {})
+  let pending = ''
+  let said = false
+  socket.on('data', (chunk) => {
+    pending += chunk
+    let at
+    while ((at = pending.indexOf('\\n')) >= 0) {
+      const value = JSON.parse(pending.slice(0, at))
+      pending = pending.slice(at + 1)
+      if (said) {
+        socket.write(JSON.stringify(value.op === 'inventory' ? { id: value.id, ok: true, panes: [] } : value.op === 'create' ? { id: value.id, ok: true, pane: '%5' } : { id: value.id, ok: true }) + '\\n')
+        continue
+      }
+      said = true
+      socket.write(JSON.stringify({ hello: { ok: true, instance: ${JSON.stringify(instance)}, version: '0.2.0', pid: process.pid, proof: proof(value.hello.nonce) } }) + '\\n')
+    }
+  })
+})
+server.listen(endpoint, () => {
+  fs.writeFileSync(path.join(home, 'run', ${JSON.stringify(discoveryFileName(instance))}), JSON.stringify({ protocol: ${P}, instance: ${JSON.stringify(instance)}, endpoint, pid: process.pid, version: '0.2.0', token }))
+})
+setTimeout(() => process.exit(0), 30000)
+`, { mode: 0o755 })
+    vi.stubEnv('HARNESS_PTY_BIN', binary)
+    const own = await hostIn(home, instance, '0.2.0', GONE_PID)
+    const other = await hostIn(home, `p${P}-0.3.0`, '0.3.0')
+    let dead = false
+    const hostProcess = { alive: (pid: number) => pid !== GONE_PID || !dead, rows: async () => null }
+    const backend = new PtyHostBackend({ home, target: target('0.2.0'), owner: () => 'me', platform: 'linux', hostProcess })
+    const replaced = vi.fn()
+    backend.onHostReplaced = replaced
+    expect(await backend.prepare({ ownedPanes: new Map() })).toEqual({ state: 'ready' })
+    dead = true
+    await own.stop()
+    try {
+      await vi.waitFor(() => expect(replaced).toHaveBeenCalledTimes(1), { timeout: 8_000, interval: 50 })
+      expect(readFileSync(path.join(home, 'started'), 'utf8')).toBe(`serve --home ${home}\n`)
+      expect(backend.instanceId).toBe(`ptyhost:${instance}`)
+      expect(await backend.create({ command: ['sh'] })).toMatchObject({ state: 'succeeded', runtime: { instance, paneId: '%5' } })
+      // Another build's host, though it answers, is never taken.
+      expect(other.hellos).toEqual([])
+    } finally {
+      backend.dispose()
+      const stub = JSON.parse(readFileSync(path.join(home, 'run', discoveryFileName(instance)!), 'utf8')) as { pid: number }
+      if (stub.pid !== GONE_PID) try { process.kill(stub.pid, 'SIGKILL') } catch { /* already gone */ }
+    }
+  }, 20_000)
 })

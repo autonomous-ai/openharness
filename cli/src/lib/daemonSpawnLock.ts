@@ -342,6 +342,41 @@ export async function acquireSpawnLock(
   }
 }
 
+/** How long `tryAcquireSpawnLockSync` waits by default: a sweep, an install or a stage holds the lock for moments. */
+export const SPAWN_LOCK_SYNC_WAIT_MS = 5_000
+
+/**
+ * `acquireSpawnLock` for the one caller that cannot wait asynchronously: harnessd's master, whose probation verdicts are
+ * synchronous (harnessd/supervisor.ts `restoreUpdate`, `confirmUpdate`), the next core started right after. Re-entrant
+ * as it is, and a dead holder's lock reclaimed as it is, but the wait blocks this process's event loop (`Atomics.wait`)
+ * for at most [waitMs], so it stays short. The release, or null when a live holder keeps the lock that long or
+ * something that is not a lock sits at its path: the caller decides whether to go on without it.
+ */
+export function tryAcquireSpawnLockSync(purpose: SpawnLockPurpose, waitMs: number = SPAWN_LOCK_SYNC_WAIT_MS): (() => void) | null {
+  if (held) {
+    held.depth += 1
+    return release
+  }
+  const deadline = Date.now() + waitMs
+  const pause = new Int32Array(new SharedArrayBuffer(4))
+  for (;;) {
+    try {
+      const token = tryCreate(purpose)
+      if (token) {
+        held = { token, purpose, depth: 1 }
+        installExitHook()
+        return release
+      }
+      const owner = readSpawnLockOwner()
+      if (owner ? reclaimIfStale(owner) : reclaimIfOwnerless()) continue
+    } catch {
+      return null
+    }
+    if (Date.now() >= deadline) return null
+    Atomics.wait(pause, 0, 0, POLL_MS)
+  }
+}
+
 function release(): void {
   if (!held) return
   held.depth -= 1

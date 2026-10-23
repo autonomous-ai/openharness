@@ -21,7 +21,7 @@ import 'swarm_state_test.dart' show createApp, MemoryStore;
 const tabId = '0123456789abcdef01234567';
 
 class SuperTabFixtureConnection extends WsConn {
-  SuperTabFixtureConnection(this.store)
+  SuperTabFixtureConnection(this.store, {bool local = false})
     : super(
         wsBaseUrl: 'ws://fixture.invalid',
         autonomousEnv: 'test',
@@ -30,6 +30,10 @@ class SuperTabFixtureConnection extends WsConn {
         onAuthFailure: (_) {},
         onEvent: (_) {},
         onStatus: (_) {},
+        transportKind: local
+            ? WsTransportKind.localPlaintext
+            : WsTransportKind.cloudE2ee,
+        localWsUri: local ? Uri.parse('ws://127.0.0.1:1/ws') : null,
       ) {
     server.state['id'] = tabId;
   }
@@ -38,6 +42,12 @@ class SuperTabFixtureConnection extends WsConn {
   final calls = <(String, Map<String, dynamic>)>[];
   final extraEngines = <String>[];
   final joins = <Map<String, dynamic>>[];
+
+  /// Preparation operations this fixture has already answered: the daemon
+  /// answers a new one with `preparing` and is ready only when it is read
+  /// again (`cli/src/superTabs/contribution.ts`), so a client that gives up
+  /// after one answer never sees anything ready.
+  final prepared = <Object?>{};
   bool loseCreate = false, loseJoin = false;
   bool failNative = false;
   WsRequestFailure? backendFailure;
@@ -139,6 +149,9 @@ class SuperTabFixtureConnection extends WsConn {
       }
       if (payload['action'] == 'wake') return {'ok': true};
       if (payload['action'] == 'prepareContribution') {
+        if (prepared.add(payload['operationId'])) {
+          return {'ok': true, 'state': 'preparing'};
+        }
         return {
           'ok': true,
           'state': 'ready',
@@ -322,8 +335,8 @@ class SuperTabFixtureConnection extends WsConn {
 }
 
 class SuperTabLaunchFixture {
-  SuperTabLaunchFixture() {
-    connection = SuperTabFixtureConnection(store);
+  SuperTabLaunchFixture({bool local = false}) {
+    connection = SuperTabFixtureConnection(store, local: local);
     app = createApp(
       store: store,
       connectionForTest: (_) => connection,
@@ -869,6 +882,10 @@ void main() {
                 .firstWhere((c) => c.$1 == 'agent_create')
                 .$2['prompt']
             as String;
+    expect(
+      prompt,
+      contains('Route only to start an agent or assign work, never your own'),
+    );
     expect(prompt, contains('route GROUP'));
     expect(prompt, contains('size (small, medium or large)'));
     expect(prompt, contains('routeDecisionId'));

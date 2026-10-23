@@ -22,6 +22,7 @@ class SuperTabClient {
     required this.storage,
     this.onSnapshot,
     this.onTabs,
+    this.onSelection,
     this.upload = refuseUpload,
     this.discoveryInterval = const Duration(seconds: 15),
   });
@@ -29,6 +30,9 @@ class SuperTabClient {
   final LocalKeyValueStore storage;
   final void Function(SuperTabController)? onSnapshot;
   final void Function(List<SuperTabListing>, Set<String> hidden)? onTabs;
+
+  /// A tab's selected conversation changed, by a click here or by a device.
+  final void Function(SuperTabController)? onSelection;
   final SuperTabUpload upload;
   final Duration discoveryInterval;
   String? _account;
@@ -244,7 +248,12 @@ class SuperTabClient {
       upload: upload,
     );
     var seenRevision = -1;
+    var seenSelected = controller.selectedId;
     controller.addListener(() {
+      if (controller.selectedId != seenSelected) {
+        seenSelected = controller.selectedId;
+        onSelection?.call(controller);
+      }
       if (controller.snapshot != null && controller.revision != seenRevision) {
         seenRevision = controller.revision;
         onSnapshot?.call(controller);

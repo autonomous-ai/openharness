@@ -18,8 +18,10 @@ SETUP_SCREEN = '/run/harness-os/setup-screen'
 # Untouched this long, the page lets the hotspot back for a phone; a key takes the radio again.
 SCREEN_IDLE = 300
 # Written by the startup's unlock hotspot (unlock/http) when a phone opened the disk: the session at
-# the screen then started by itself (autologin), with nobody there. The first Wi-Fi page leaves the
-# radio to setup.py's hotspot, for that phone to choose the Wi-Fi, until a key here.
+# the screen then started by itself (autologin), with nobody there. Written too by a sign-out from a
+# phone and a factory reset (setup.py PHONE_SETS_UP): the computer waits for a phone to set it up.
+# The Wi-Fi page opened then, first or offline, leaves the radio to setup.py's hotspot, for that phone
+# to choose the Wi-Fi, until a key here.
 UNLOCKED_BY_PHONE = '/run/harness-os/unlocked-by-phone'
 
 
@@ -384,7 +386,7 @@ class NetworkPage:
         # Someone who typed this computer's password is here: the phone's hotspot goes first, and the
         # list is the radio's own, scanned now.
         touched = time.monotonic()
-        if self.first_use and phone_unlocked():
+        if (self.first_use or not online) and phone_unlocked():
             # A phone unlocked this computer and is setting it up: its hotspot stays. A key here
             # still takes the radio, as below.
             self.held = False

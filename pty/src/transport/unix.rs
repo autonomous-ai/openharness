@@ -1,4 +1,4 @@
-//! The Unix socket `<home>/run/pty-host-<protocol>.sock`, readable and writable by its owner only.
+//! The Unix socket `<home>/run/pty-host-<instance>.sock`, readable and writable by its owner only.
 
 use std::io;
 use std::os::unix::fs::PermissionsExt;
@@ -7,10 +7,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::{Bound, Connection, Listener};
-use crate::protocol::PROTOCOL;
 
 pub fn socket_path(run_dir: &Path) -> PathBuf {
-    run_dir.join(format!("pty-host-{PROTOCOL}.sock"))
+    crate::instance::socket_path(run_dir, &crate::instance::current())
 }
 
 pub struct UnixTransport {

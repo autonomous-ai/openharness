@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
 import { listDir } from '../lib/fsBrowse.js'
 import { readGitProject } from '../lib/gitProject.js'
 import { MediaPreviewError, readMediaPreviewChunk } from '../lib/mediaPreview.js'
@@ -9,6 +10,8 @@ import { detectScmProject } from '../scm/scmProjects.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { PROJECTS_REQUESTS, startProjects } from './projects.js'
 
+const readPullRequests = vi.hoisted(() => vi.fn(async (_urls: unknown) => ({ rows: [] })))
+vi.mock('../lib/pullRequestsStatus.js', () => ({ createPullRequestsStatusReader: vi.fn(() => readPullRequests) }))
 vi.mock('../lib/fsBrowse.js', () => ({ listDir: vi.fn(async () => ({ path: '/home/me', entries: [], truncated: false })) }))
 vi.mock('../lib/gitProject.js', () => ({ readGitProject: vi.fn(async () => ({ path: '/work/app', branch: 'main' })) }))
 vi.mock('../scm/scmProjects.js', () => ({ detectScmProject: vi.fn(async () => ({ kind: 'git', git: { isGit: true } })) }))
@@ -30,6 +33,19 @@ function setup() {
 }
 
 describe('the project and folder readers', () => {
+  it('reads linked PRs with the local reader, without an agent or folder', async () => {
+    const { requests } = setup()
+    const urls = ['https://github.com/o/r/pull/12']
+    expect(await requests.git_pull_requests_status!({ urls }, { local: true, owner: true })).toEqual({ rows: [] })
+    expect(createPullRequestsStatusReader).toHaveBeenCalled()
+    expect(readPullRequests).toHaveBeenLastCalledWith(urls)
+    expect(await requests.git_pull_requests_status!({ urls }, { local: false, owner: true, accountOwner: true })).toEqual({ rows: [] })
+    for (const asker of [{ local: true, owner: false }, { local: false, owner: true }, { local: false, owner: true, accountOwner: false }]) {
+      expect(await requests.git_pull_requests_status!({ urls }, asker)).toEqual({ error: 'OWNER_REQUIRED' })
+    }
+    expect(readPullRequests).toHaveBeenCalledTimes(2)
+  })
+
   it('asks core for aggregate work evidence, and falls back to unknown', async () => {
     const { core, ask } = setup()
     await ask('git_pull_request', { agentId: 'a1' })

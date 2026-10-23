@@ -8,6 +8,7 @@
  * terminal streams' and never reach the RPC switch.)
  */
 
+import { PTY_HOST_INSTANCE_SOURCE } from './ptyHost/instance.js'
 import { sessionForPaneId } from './terminalRuntime.js'
 import type { TerminalRuntimeRef } from './terminalTypes.js'
 
@@ -22,7 +23,7 @@ export interface TerminalHandoffRequest {
 
 export const TMUX_PANE_RE = /^%\d{1,9}$/
 /** What the daemon accepts as the handoff's pane: tmux's `%N`, or a pty host pane's `<instance>:%N`. */
-const HANDOFF_PANE_RE = /^(?:p\d{1,4}:)?%\d{1,9}$/
+const HANDOFF_PANE_RE = new RegExp(`^(?:${PTY_HOST_INSTANCE_SOURCE}:)?%\\d{1,9}$`)
 const ID_RE = /^[A-Za-z0-9_-]{1,128}$/
 
 /** The request as the wire may carry it — bounded, printable ids, a real pane id — or null. */

@@ -59,6 +59,8 @@ import { mergeTerminalRuntimes, primaryRuntime, processIdentityKey, sameProcessI
 import type { HookTerminalHint, ProcessIdentity, TerminalRuntimeRef } from './terminalTypes.js'
 import { externalReservations, externalResumePending, externalResumeIds, parseExternalResume, type ExternalResumeIntent } from './externalResume.js'
 import type { StartedBy } from './agentAttribution.js'
+import { PTY_HOST_INSTANCE } from './ptyHost/instance.js'
+import { isKittyGraphicsCommand } from './terminalTitle.js'
 
 export type { ProcessIdentity } from './terminalTypes.js'
 
@@ -359,8 +361,8 @@ const PRE_V2_BACKUP_FILE = join(env.ADAPTER_DATA_DIR, 'registry.pre-v2.json')
 const NAME_OVERRIDES = new Map<string, string>()
 
 const PANE_RE = /^%\d+$/
-/** A pty host instance: `p` and its protocol version (`PtyRuntimeRef.instance`). */
-const PTY_INSTANCE_RE = /^p\d{1,4}$/
+/** A pty host instance (`PtyRuntimeRef.instance`): `p<protocol>`, or `p<protocol>-<build>` (ptyHost/instance.ts). */
+const PTY_INSTANCE_RE = PTY_HOST_INSTANCE
 const GROK_SESSION_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const AGENT_ENGINES: ReadonlySet<string> = new Set(ENGINES)
 
@@ -2462,6 +2464,16 @@ class Registry {
     return true
   }
 
+  /** Older Swarm members adopt a role at restart, once; later roster reads cannot replace a saved role. */
+  setSwarmSkill(agentId: string, skill: SwarmSkill): boolean {
+    const session = this.agents.get(agentId)
+    if (!session || session.swarmSkill || (session.engine !== 'claude' && session.engine !== 'codex')) return false
+    session.swarmSkill = { ...skill }
+    session.touchedAt = Date.now()
+    this.save()
+    return true
+  }
+
   /** Fill in the DSH a row did not know (discovery read `HARNESS_DSH` off the live process). Never
    *  replaces one it already has — the harness is chosen once, at creation. */
   setDsh(agentId: string, dsh: string): boolean {
@@ -2979,6 +2991,8 @@ function defaultProjectDisplayName(s: RegisteredSession): string {
  * its network, and a pane keeps the name it was made under.
  */
 export function titleDisplayName(title: string | null | undefined): string | null {
+  // (A graphics query tmux took as a pane title, one a registry stored before tmux.ts stopped reading it included.)
+  if (title && isKittyGraphicsCommand(title)) return null
   const cleaned = title
     ?.trim()
     .replace(/^[\s\p{Mark}\p{Punctuation}\p{Symbol}]+/u, '')

@@ -59,6 +59,7 @@ import { cleanSummary } from '../lib/activitySummary.js'
 import { VERSION } from '../version.js'
 import { createTaskReader, type TaskReader, type TaskResult } from './tasks.js'
 import { MessageStore, type Entry, type LocalDelivery, type Outgoing } from './store.js'
+import { PTY_HOST_INSTANCE_SOURCE } from '../lib/ptyHost/instance.js'
 
 export interface MessagesOptions {
   /** Where its history and waiting deliveries are kept; an isolated fixture's own. */
@@ -140,7 +141,7 @@ export const MESSAGES_OFF_TEXT = 'Agent Messages are off. The person turns on "A
 /** How long the windows' `shared_tabs_changed` waits for more of the same change. */
 export const SHARES_COALESCE_MS = 250
 /** `harness send`'s pane: `$TMUX_PANE` (`%N`, a tmux pane only) or a pty host pane's `<instance>:%N` (`$HARNESS_PANE`). */
-const PANE = /^(?:p\d{1,4}:)?%\d{1,9}$/
+const PANE = new RegExp(`^(?:${PTY_HOST_INSTANCE_SOURCE}:)?%\\d{1,9}$`)
 /** The most messages `harness send` alone gives an agent at once, unread ones first. */
 const UNREAD_MAX = 20
 /** Whether `wanted` is the whole of a name the engine cut short: Codex titles its terminal with the folder cut to fit
