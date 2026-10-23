@@ -601,10 +601,10 @@ describe('private swarm projects on the real control API', () => {
 })
 
 describe('since when a worker is down', () => {
-  async function downFixture() {
+  async function downFixture({ legacy = false } = {}) {
     let now = 1_000_000
     const timed = new SuperTabStore(db, () => now)
-    const tab = (await timed.create(owner, randomUUID(), 'Down since', 'public')).id
+    const tab = (await timed.create(owner, randomUUID(), 'Down since', legacy ? undefined : 'public')).id
     const execute = (command: Command, user = owner, asAgentId?: string) =>
       timed.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
     const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
@@ -716,6 +716,24 @@ describe('since when a worker is down', () => {
     expect(await poll()).toHaveLength(1)
     expect((await wakeUps()).at(-1)!.text).toContain(`Worker (down since ${iso(again)}`)
     expect(await wakeUps()).toHaveLength(4)
+  })
+
+  it('wakes the Lead of an older Swarm without stored projects', async () => {
+    const f = await downFixture({ legacy: true })
+    expect((await f.timed.read(owner, f.tab)).state.projects).toBeUndefined()
+    const poll = async () => (await f.timed.deliveries(host, f.tab, f.lead)).filter(d => d.conversationId === 'lead')
+    const down = f.clock.now
+    await f.observe([f.leadHarness, f.workerHarness])
+    await f.observe([f.leadHarness])
+    f.clock.now = down + 2 * 3_600_000 - 1
+    expect(await poll()).toEqual([])
+    f.clock.now++
+    const polls = [...await poll(), ...await poll()]
+    expect(new Set(polls.map(d => d.id)).size).toBe(1)
+    const wakeUps = (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: 'lead' } }))
+      .filter(m => (m.source as Record<string, unknown>)?.kind === 'update-request')
+    expect(wakeUps).toHaveLength(1)
+    expect(wakeUps[0]!.text).toContain(`Worker (down since ${iso(down)}; task "Ship the parser")`)
   })
 })
 

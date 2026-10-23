@@ -31,7 +31,9 @@ function downWorkers(state: SuperTabState, projectId: string, now: number) {
 }
 
 export function projectUpdateRequest(state: SuperTabState, target: Agent, now: number): MessageDraft | null {
-  if (!state.projects || state.paused) return null
+  // An older Swarm without stored projects is one synthesized project. It keeps no report progress (noteProjectReports),
+  // so its Lead is woken only for down workers.
+  if (state.paused) return null
   const project = projectOf(state, agentProjectId(state, target))
   const group = conversation(state, project.leadConversationId), progress = project.progress
   if (group.leadId !== target.id || group.archived) return null
