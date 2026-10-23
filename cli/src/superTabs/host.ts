@@ -92,6 +92,8 @@ export interface SuperTabHostOptions {
   prepareContribution?: typeof prepareContribution
   /** The `… super-tab` prefix agents are told to run (superTabs/shortCommand.ts), for a spec. */
   agentCommand?: (core: CoreApi, machineId: string) => Promise<string>
+  /** The Swarm start this machine made of a harness (superTabs/reservations.ts), or null. */
+  startReceipt?: (harnessId: string) => string | null
 }
 
 const defaultAgentCommand = (core: CoreApi, machineId: string) => agentCommandPrefix(core.daemon, machineId,
@@ -169,6 +171,7 @@ export class SuperTabHost {
   private nextReceiptsAt = 0
   private receiptCursor = 0
   private readonly agentCommand: (core: CoreApi, machineId: string) => Promise<string>
+  private readonly startReceipt: (harnessId: string) => string | null
   /** Asked once, on the first delivery: the answer cannot change while this daemon runs (superTabs/shortCommand.ts). */
   private prefix: Promise<string> | null = null
   private configurationsRunning: Promise<void> | null = null
@@ -202,6 +205,7 @@ export class SuperTabHost {
     this.attachedFiles = options.attachedFiles ?? attachedFiles
     this.prepareContribution = options.prepareContribution ?? prepareContribution
     this.agentCommand = options.agentCommand ?? defaultAgentCommand
+    this.startReceipt = options.startReceipt ?? (() => null)
     this.now = options.now ?? Date.now
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
@@ -600,10 +604,12 @@ export class SuperTabHost {
     state.running = true
     void (async () => {
       if (!state.closed) {
-        // The core closes only a member the retention names, or one the Swarm's start receipt proves its own: an agent
-        // removed before this host wrote its first roster was never a member here (the review of #1635).
-        const started = object(object(agent).startedSession).creationId
-        const result = await close(agent.harnessId, identifier(started) ? started : undefined)
+        // The core closes only a member the retention names, or one this machine's Swarm start proves its own: an agent
+        // removed before this host wrote its first roster was never a member here, and the backend's row names only the
+        // harness (the review of #1635). An unreadable start record still lets the retention decide.
+        let started: string | null = null
+        try { started = this.startReceipt(agent.harnessId) } catch (error) { this.log(error instanceof Error ? error.message : String(error)) }
+        const result = await close(agent.harnessId, started ?? undefined)
         if (!result.closed) throw new Error(`Could not close a session the Swarm ended (${result.error ?? 'unknown'}${result.detail ? `: ${result.detail}` : ''}).`)
         state.closed = true
       }

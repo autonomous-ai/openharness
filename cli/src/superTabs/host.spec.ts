@@ -5,7 +5,7 @@ import { prepareSwarmSkill } from '../lib/swarmSkills.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { backend, swarmRoleFor, hostJournalFile, SuperTabHost } from './host.js'
+import { backend, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
 import { retainedHarnesses, retentionFile } from './retention.js'
 import { observerSource } from './observers.js'
 
@@ -41,7 +41,7 @@ function setup(messageFields: Record<string, unknown> = {}) {
     turns: { onDelivery: vi.fn(fn => { listeners.add(fn); return () => { listeners.delete(fn) } }) },
   })
   const log = vi.fn()
-  const open = () => { const host = new SuperTabHost(core, 'machine-1', { log, now: () => clock }); hosts.push(host); return host }
+  const open = (options: SuperTabHostOptions = {}) => { const host = new SuperTabHost(core, 'machine-1', { log, now: () => clock, ...options }); hosts.push(host); return host }
   const event = (state: TurnDelivery['state'], reason?: string) => {
     for (const fn of listeners) fn({ deliveryId: 'team:service:superTabs:delivery', sessionId: 'harness', state, reason })
   }
@@ -1188,8 +1188,8 @@ describe('built-in skill text after a CLI update', () => {
 })
 
 /** A host on this machine whose roster is [rows] (changeable), with the core's keep-alive and member close mocked. */
-function lifeFixture(rows: Record<string, unknown>[]) {
-  const t = setup(), host = t.open()
+function lifeFixture(rows: Record<string, unknown>[], options: SuperTabHostOptions = {}) {
+  const t = setup(), host = t.open(options)
   const commands: Record<string, unknown>[] = []
   let live = false
   const keepLeadAlive = vi.fn(async () => ({ ok: false as const, error: 'AGENT_BUSY' } as { ok: true } | { ok: false; error: string }))
@@ -1321,13 +1321,20 @@ describe('closing the sessions the backend ends', () => {
   })
 
   // The review of #1635: an agent removed before this host wrote its first roster was never a member here, so it was never
-  // closed nor acknowledged, and its row stayed for good. The Swarm's start receipt proves it is the Swarm's to close.
-  it('closes an agent removed before any roster named it, proven by its start receipt', async () => {
-    const started = { creationId: 'super-0123456789abcdef', sessionId: 'native', createdAt: new Date(0).toISOString() }
-    const t = lifeFixture([ended({ agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', startedSession: started } })])
+  // closed nor acknowledged, and its row stayed for good. The released backend's row names only the harness; this host's
+  // own record of the Swarm start that created it is the proof, which the core checks against its receipt.
+  it('closes an agent removed before any roster named it, proven by this host\'s start of it', async () => {
+    const t = lifeFixture([ended()], { startReceipt: harnessId => harnessId === 'harness' ? 'super-0123456789abcdef' : null })
     await t.poll()
     await vi.waitFor(() => expect(t.commands).toHaveLength(1))
     expect(t.closeMember).toHaveBeenCalledWith('harness', 'super-0123456789abcdef')
+  })
+
+  it('still closes a known member when this host\'s start record cannot be read', async () => {
+    const t = lifeFixture([ended()], { startReceipt: () => { throw new Error('The capacity ledger is unreadable.') } })
+    await t.poll()
+    await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+    expect(t.closeMember).toHaveBeenCalledWith('harness', undefined)
   })
 
   it('backs off a close the core refuses, and acknowledges nothing until it closes', async () => {

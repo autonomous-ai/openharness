@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { CoreApi } from '../core/api.js'
 import { superTabService } from './service.js'
-import { SuperTabHostError, type SuperTabHost } from './host.js'
+import { SuperTabHostError, type SuperTabHost, type SuperTabHostOptions } from './host.js'
 
 const owner = { local: true, owner: true }, visitor = { local: false, owner: false }
 function setup(options: { prepareContribution?: typeof import('./contribution.js').prepareContribution } = {}) {
@@ -229,7 +229,7 @@ it('keeps host capacity separate from account authority and closes it on disconn
   const core = fakeCore()
   const reserve = vi.fn(async () => ({ ok: true, reservationId: 'native-creation-id' }))
   const observe = vi.fn(async () => ({ ok: true, released: true }))
-  const stop = vi.fn(), factory = vi.fn(() => ({ reserve, observe, stop }))
+  const stop = vi.fn(), factory = vi.fn(() => ({ reserve, observe, creationOf: vi.fn(() => null), stop }))
   const service = superTabService(core, { reservations: factory })
   const closed = new AbortController().signal
   expect(factory).not.toHaveBeenCalled()
@@ -245,6 +245,21 @@ it('keeps host capacity separate from account authority and closes it on disconn
   expect(stop).toHaveBeenCalledTimes(2)
   expect(factory).toHaveBeenLastCalledWith(core, 'changed-machine')
   service.port.stop(); expect(stop).toHaveBeenCalledTimes(3)
+})
+
+it('gives the host this machine\'s record of the Swarm starts, to close a session the backend ends', async () => {
+  const core = fakeCore()
+  const creationOf = vi.fn((harnessId: string) => harnessId === 'harness' ? 'super-0123456789abcdef' : null)
+  const factory = vi.fn(() => ({ reserve: vi.fn(), observe: vi.fn(), creationOf, stop: vi.fn() }))
+  let options: SuperTabHostOptions = {}
+  const host = vi.fn((_core: unknown, _machine: string, given: SuperTabHostOptions) => {
+    options = given
+    return { machineId: 'machine-1', start: vi.fn(), stop: vi.fn() } as unknown as SuperTabHost
+  })
+  const service = superTabService(core, { reservations: factory, host })
+  expect(await service.requests.super_tabs({ action: 'wake' }, owner)).toEqual({ ok: true })
+  expect(options.startReceipt?.('harness')).toBe('super-0123456789abcdef')
+  expect(options.startReceipt?.('another')).toBeNull()
 })
 
 it('lets a machine client prepare only a backend-verified terminal context', async () => {

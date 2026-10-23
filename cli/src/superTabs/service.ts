@@ -2,7 +2,7 @@ import { readCapabilities } from './capacity.js'
 import { existsSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import type { CoreApi, ServiceRequests, SuperTabsPort } from '../core/api.js'
-import { backend, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHost, SuperTabHostError } from './host.js'
+import { backend, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHost, SuperTabHostError, type SuperTabHostOptions } from './host.js'
 import { within } from './wire.js'
 import { machineChoices } from '../lib/newCommand.js'
 import { START_REQUIREMENTS } from './capacity.js'
@@ -88,7 +88,7 @@ function markAnswered(page: unknown, later: unknown[], agentId: string): unknown
 export interface SuperTabServiceOptions {
   prepareContribution?: typeof prepareContribution
   capacity?: typeof readCapabilities
-  host?: (core: CoreApi, machineId: string) => SuperTabHost
+  host?: (core: CoreApi, machineId: string, options: SuperTabHostOptions) => SuperTabHost
   reservations?: (core: CoreApi, machineId: string) => ReservationBook
   /** The Swarm cards' reader (superTabs/cards.ts), for a spec. */
   cards?: (core: CoreApi, machineId: string) => SwarmCards
@@ -106,7 +106,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   const wake = () => {
     const machine = core.daemon.machineId()
     if (host?.machineId !== machine) { host?.stop(); host = null }
-    host ??= (options.host ?? ((api, id) => new SuperTabHost(api, id)))(core, machine)
+    host ??= (options.host ?? ((api, id, given) => new SuperTabHost(api, id, given)))(core, machine,
+      { startReceipt: harnessId => reservations().creationOf(harnessId) })
     host.start()
     return host
   }
