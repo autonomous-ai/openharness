@@ -213,20 +213,36 @@ function promptMarker(engine: AgentEngine): RegExp {
   return /[›❯]/u
 }
 
+const COMPOSER_RULE = /^[─━]{8,}\s*$/
+/**
+ * The line of Claude Code's composer when it draws `>` for its marker, or -1. In the Harness terminal on Windows it draws
+ * `>` and a no-break space where it draws `❯` elsewhere, so the pane never read idle and every Super Tab delivery to it
+ * was held (DESKTOP-0TFH0OJ, 2026-10-23). Only at the start of a line between its two rules: a shell prompt
+ * (`PS C:\>`) or a `>` quoted in the transcript must never read as an idle Claude Code. Mac and Linux are unchanged.
+ */
+export function claudeWindowsComposer(lines: string[]): number {
+  if (process.platform !== 'win32') return -1
+  const visible = lines.map(stripAnsi)
+  const index = visible.findLastIndex((line, i) => /^>(?:[\u00a0 ]|$)/.test(line) && i > 0 && COMPOSER_RULE.test(visible[i - 1]))
+  return index >= 0 && visible.slice(index + 1).some((line) => COMPOSER_RULE.test(line)) ? index : -1
+}
+
 export function inspectPane(engine: AgentEngine, capture: string, takeover: Takeover = () => null, planPattern = /\bplan mode on\b/i): PaneInspection {
   if (engine === 'opencode') return inspectGutterBoxPane(capture, true)
   if (engine === 'copilot') return inspectGutterBoxPane(capture, false)
   if (engine === 'grok') return inspectGrokPane(capture)
   const rawLines = capture.split('\n')
-  const marks = promptMarker(engine)
-  const promptIndex = latestPromptLine(rawLines, marks)
+  const boxed = engine === 'claude' ? claudeWindowsComposer(rawLines) : -1
+  const promptIndex = Math.max(latestPromptLine(rawLines, promptMarker(engine)), boxed)
+  // ANSI before a boxed `>` is not text, so the raw line is searched for the first `>`.
+  const [marks, rawMarks] = promptIndex === boxed && boxed >= 0 ? [/^>/, />/] : [promptMarker(engine), promptMarker(engine)]
   const prompt = promptIndex >= 0 ? rawLines[promptIndex] : ''
   const currentUi = currentPaneUi(rawLines, promptIndex)
   const dialog = DIALOG_UI.test(currentUi) || takeover(capture, currentUi) !== null
   const plan = planPattern.test(currentUi)
   const marker = stripAnsi(prompt).search(marks)
   let visible = marker >= 0 ? stripAnsi(prompt).slice(marker + 1).replace(/\u00a0/g, ' ').trim() : ''
-  const rawMarker = prompt.search(marks)
+  const rawMarker = prompt.search(rawMarks)
   const rawTail = rawMarker >= 0 ? prompt.slice(rawMarker + 1) : ''
   const placeholder = hasPlaceholderSgr(rawTail)
   if (placeholder || IDE_CONTEXT_CHIPS.test(visible)) visible = ''
