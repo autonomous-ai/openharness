@@ -86,10 +86,14 @@ class WebFooterBar extends StatelessWidget {
             onTap: () => close(item),
             child: KeyedSubtree(
               key: ValueKey('web-footer:${item.title}'),
-              child: PaneMenuRow(
-                selected: false,
-                title: item.title,
-                status: item.detail.isEmpty ? null : item.detail,
+              // The footer is a phone's: its rows are a finger's size.
+              child: webMenuRowTarget(
+                compact: true,
+                PaneMenuRow(
+                  selected: false,
+                  title: item.title,
+                  status: item.detail.isEmpty ? null : item.detail,
+                ),
               ),
             ),
           ),

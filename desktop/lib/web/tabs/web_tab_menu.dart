@@ -8,6 +8,7 @@ import '../../state/workspace_chrome.dart';
 import '../../state/workspace_status.dart';
 import '../../widgets/pane_grid.dart' show soloPaneId;
 import '../../widgets/pane_menu.dart';
+import '../shell/web_dropdown_control.dart';
 
 /// What a row of the tab menu asks for, carried out once the menu is gone.
 sealed class WebTabChoice {
@@ -66,7 +67,8 @@ const _tabSharingRows = [
 
 /// The menu's rows: this tab's harnesses (a phone draws one at a time), then
 /// every tab, then this tab's sharing and Agent Messages, then rename.
-/// Harnesses and tabs both close from their row.
+/// Harnesses and tabs both close from their row. It opens from the phone's tab
+/// switcher only, so its rows and closes are a finger's size.
 List<Widget> webTabMenuRows(
   AppNotifier app,
   WorkspaceCommands commands,
@@ -77,7 +79,10 @@ List<Widget> webTabMenuRows(
   Widget row(String key, WebTabChoice choice, PaneMenuRow content) =>
       paneMenuItem(
         onTap: () => close(choice),
-        child: KeyedSubtree(key: ValueKey(key), child: content),
+        child: KeyedSubtree(
+          key: ValueKey(key),
+          child: webMenuRowTarget(content, compact: true),
+        ),
       );
   Widget closable({
     required String key,
@@ -95,7 +100,10 @@ List<Widget> webTabMenuRows(
         IconButton(
           key: ValueKey('$key:close'),
           tooltip: closeTooltip,
-          visualDensity: VisualDensity.compact,
+          constraints: const BoxConstraints.tightFor(
+            width: kWebFingerTarget,
+            height: kWebFingerTarget,
+          ),
           iconSize: 16,
           onPressed: () => close(closeChoice),
           icon: const Icon(AppIcons.close),

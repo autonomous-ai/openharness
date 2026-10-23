@@ -6,9 +6,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/state/workspace_chrome.dart';
 import 'package:harness/web/shell/web_app_menu.dart';
 import 'package:harness/web/shell/web_chrome.dart';
@@ -34,9 +36,30 @@ void _size(WidgetTester tester, Size size) {
   addTearDown(tester.view.reset);
 }
 
-/// The web workspace, as the browser build composes it.
-Future<AppNotifier> _workspace(WidgetTester tester, Size size) async {
+/// The web workspace, as the browser build composes it. With [harness], the
+/// tab holds one on a connected machine, so the footer has a menu to open.
+Future<AppNotifier> _workspace(
+  WidgetTester tester,
+  Size size, {
+  bool harness = false,
+}) async {
   final app = _app();
+  if (harness) {
+    const machine = Machine(
+      machineId: 'm',
+      name: 'box',
+      authMode: MachineAuthMode.remote,
+    );
+    app.machines.add(machine);
+    app.machineStates['m'] = MachineState(machine)
+      ..nodeOnline = true
+      ..connectionStatus = ConnectionStatus.connected
+      ..agents = [const Agent(id: 'a0', name: 'Agent 0')];
+    app.newSwarm(newTabPage: true);
+    app.activeSwarm.panes.add(
+      TerminalPane(id: 100, machineId: 'm', agentId: 'a0'),
+    );
+  }
   _size(tester, size);
   await tester.pumpWidget(
     MaterialApp(
@@ -97,6 +120,19 @@ Future<void> _rightClick(WidgetTester tester, Finder target) async {
 }
 
 const _tabLabel = ValueKey('tab-label:docs');
+
+/// What a finger or the mouse hits for the control at [key]: its button.
+Size _target(WidgetTester tester, Key key) {
+  final control = find.byKey(key);
+  final button = find.ancestor(
+    of: control,
+    matching: find.byWidgetPredicate((w) => w is ButtonStyleButton),
+  );
+  return tester.getSize(button.evaluate().isEmpty ? control : button.first);
+}
+
+/// A phone's target is at least this big both ways (S1).
+const _finger = 44.0;
 
 void main() {
   late WorkspaceChrome web;
@@ -208,6 +244,74 @@ void main() {
     expect((chosen! as WebRunCommand).command, 'swarm.rename');
     expect(find.text('Rename this tab'), findsNothing);
     await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('a phone app menu has rows a finger can hit', (tester) async {
+    await _workspace(tester, _phone);
+    await _openAppMenu(tester);
+
+    for (final row in ['super_tab.new', 'machines.list', 'web.sign_out']) {
+      expect(
+        _target(tester, ValueKey('web-menu:$row')).height,
+        greaterThanOrEqualTo(_finger),
+        reason: row,
+      );
+    }
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('a mouse keeps the app menu rows as they were', (tester) async {
+    await _workspace(tester, _computer);
+    await _openAppMenu(tester);
+
+    expect(
+      _target(tester, const ValueKey('web-menu:machines.list')).height,
+      32,
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('a phone tab menu has rows and closes a finger can hit', (
+    tester,
+  ) async {
+    final app = await _workspace(tester, _phone);
+    app.newSwarm(newTabPage: true);
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byKey(const ValueKey('web-tab-switcher')));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final tab = app.swarms.first.id;
+    for (final key in [
+      ValueKey('web-tab:$tab'),
+      ValueKey('web-tab-run:swarm.rename'),
+    ]) {
+      expect(
+        _target(tester, key).height,
+        greaterThanOrEqualTo(_finger),
+        reason: '$key',
+      );
+    }
+    final close = _target(tester, ValueKey('web-tab:$tab:close'));
+    expect(close.width, greaterThanOrEqualTo(_finger));
+    expect(close.height, greaterThanOrEqualTo(_finger));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('a phone footer menu has rows a finger can hit', (tester) async {
+    final app = await _workspace(tester, _phone, harness: true);
+    app.focusPane(100);
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byKey(const ValueKey('web-footer-menu-button')));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    for (final row in ['Machine', 'Subscriptions']) {
+      expect(
+        _target(tester, ValueKey('web-footer:$row')).height,
+        greaterThanOrEqualTo(_finger),
+        reason: row,
+      );
+    }
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 
   for (final size in [_phone, _computer]) {
