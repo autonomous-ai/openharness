@@ -671,6 +671,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       controls(state, actor, start.request.conversationId)
       if (command.type === 'agent.startDispatch') {
         if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
+        if (!['claude', 'codex'].includes(start.request.engine)) {
+          fail('SWARM_ENGINE', 'A Swarm agent runs only Claude Code or Codex.', 400)
+        }
         // A start recorded before a rule was added is not launched past it, unless a person asked for it by hand.
         const why = actor.kind === 'agent' && !(start.routeDecisionId && context.routeDecision?.override?.by === 'person') && broken(groupRules(start.request.conversationId), startTarget(start.request))
         if (why) fail('RULE_BROKEN', `${why} This start was not launched. Route again.`, 403)

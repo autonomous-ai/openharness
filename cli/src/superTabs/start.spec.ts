@@ -80,6 +80,33 @@ describe('Swarm permission mode', () => {
     expect(f.open).not.toHaveBeenCalled()
   })
 
+  it.each(['opencode', 'kilo'])('keeps a dispatched legacy %s start uncertain without marking it failed', async engine => {
+    const f = fixture()
+    Object.assign(f.start.request, { engine })
+    f.start.dispatched = true
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open))
+      .toMatchObject({ error: 'START_UNCERTAIN', creationId: f.start.creationId })
+    expect(f.start.error).toBeNull()
+    expect(f.scoped.mock.calls.some(c => (c[0].command as any)?.type === 'agent.startFailed')).toBe(false)
+    expect(f.request.mock.calls.map(c => c[0])).toEqual(['agent_create_status'])
+  })
+
+  it('reconciles an already-created legacy OpenCode agent instead of orphaning it', async () => {
+    const f = fixture(), request = f.request.getMockImplementation()!
+    Object.assign(f.start.request, { engine: 'opencode' })
+    f.start.dispatched = true
+    f.request.mockImplementation(async (type, payload, ms) => type === 'agent_create_status'
+      ? { creationId: f.start.creationId, state: 'created', agent: { id: 'native', engine: 'opencode' } }
+      : request(type, payload, ms))
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open))
+      .toMatchObject({ ok: true, harnessId: 'native' })
+    expect(f.start.error).toBeNull()
+    const commands = f.scoped.mock.calls.map(c => c[0].command as Record<string, any> | undefined)
+    expect(commands.find(c => c?.type === 'agent.started')).toMatchObject({ configuration: { engine: 'opencode' } })
+    expect(commands.some(c => c?.type === 'agent.startFailed')).toBe(false)
+    expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
+  })
+
   it('recovers the same legacy start after its accepted reply is lost', async () => {
     const f = fixture(), scoped = f.scoped.getMockImplementation()!
     Object.assign(f.start, { poolGeneration: 'pool' })

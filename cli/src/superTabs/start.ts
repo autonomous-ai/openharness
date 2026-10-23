@@ -98,7 +98,7 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
   const request = object(start.request), creationId = start.creationId
   if (!identifier(request.machineId) || !identifier(creationId)) throw new Error('This start receipt is invalid.')
   if (start.error) return { error: 'START_FAILED', startId, detail: start.error }
-  if (!start.harnessId && request.engine !== 'claude' && request.engine !== 'codex') {
+  if (!start.dispatched && !start.harnessId && request.engine !== 'claude' && request.engine !== 'codex') {
     const detail = 'A Swarm agent runs only Claude Code or Codex.'
     requireSuccess(await scoped({ action: 'command', operationId: `unsupported-${randomUUID()}`,
       command: { type: 'agent.startFailed', startId, error: detail } }))

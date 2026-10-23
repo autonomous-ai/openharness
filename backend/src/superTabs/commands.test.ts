@@ -475,6 +475,18 @@ it('starts only in the chosen conversation, captures authority, and never assign
   expect(() => f.run({ type: 'agent.start', request, ...via }, actor, { contribution, ...decisionIn(group) })).toThrow('paused')
 })
 
+it.each(['opencode', 'kilo'])('refuses to dispatch a stored legacy %s start before native launch', engine => {
+  const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+  const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+  const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+  const request = { conversationId: group, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
+    requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
+  const startId = f.run({ type: 'agent.start', request, ...via }, actor, { contribution, ...decisionIn(group) }).result.startId as string
+  f.state.starts![0]!.request.engine = engine // Simulate a start stored before the engine restriction.
+  expect(() => f.run({ type: 'agent.startDispatch', startId }, actor, { contribution })).toThrow('Claude Code or Codex')
+  expect(f.state.starts![0]!.dispatched).toBe(false)
+})
+
 describe('agent.start on the Swarm\'s listed machines', () => {
   const request = (group: string, machineId: string) => ({ conversationId: group, machineId, engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } })
