@@ -1859,6 +1859,13 @@ class _QuietLinkState extends State<_QuietLink> {
       ),
     );
     if (tap == null) return content;
+    if (storeIsCompact(context)) {
+      return StoreHitArea(
+        onTap: tap,
+        onHover: (hovering) => setState(() => _hovering = hovering),
+        child: content,
+      );
+    }
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hovering = true),

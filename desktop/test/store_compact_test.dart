@@ -217,6 +217,12 @@ Future<void> _openEnginesOnlyDiscover(
   ),
 );
 
+void _expectHitArea(WidgetTester tester, Finder target) {
+  final rect = tester.getSemantics(target).rect;
+  expect(rect.width, greaterThanOrEqualTo(44), reason: '$target');
+  expect(rect.height, greaterThanOrEqualTo(44), reason: '$target');
+}
+
 final _thisComputer = find.textContaining(
   RegExp('this computer', caseSensitive: false),
 );
@@ -326,10 +332,37 @@ void main() {
       find.byKey(const ValueKey('store-forward-hit')),
       find.byKey(const ValueKey('store-create-hit')),
     ]) {
-      final rect = tester.getSemantics(target).rect;
-      expect(rect.width, greaterThanOrEqualTo(44), reason: '$target');
-      expect(rect.height, greaterThanOrEqualTo(44), reason: '$target');
+      _expectHitArea(tester, target);
     }
+  });
+
+  testWidgets('on a phone a heading\'s text button has a 44 px hit area', (
+    tester,
+  ) async {
+    await _open(tester, size: _phone, web: true);
+    final engines = find.text('All coding agents');
+    await tester.ensureVisible(engines);
+
+    _expectHitArea(tester, engines);
+  });
+
+  testWidgets('on a phone a product page\'s links have a 44 px hit area', (
+    tester,
+  ) async {
+    await _open(tester, size: _phone, web: true, initialHarness: 'claude');
+
+    _expectHitArea(tester, find.text('Website'));
+  });
+
+  testWidgets('Desktop keeps its text links as they are', (tester) async {
+    await _open(
+      tester,
+      size: _narrowDesktop,
+      web: false,
+      initialHarness: 'claude',
+    );
+
+    expect(tester.getSemantics(find.text('Website')).rect.height, lessThan(44));
   });
 
   testWidgets('the outer edge of a phone Back hit area goes back', (
