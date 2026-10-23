@@ -195,6 +195,7 @@ class _SuperTabViewState extends State<SuperTabView>
     if (_selected != id) {
       _scrollRequest++;
       _jumpingToEnd = false;
+      _dial.cancel(); // a fling from the last conversation never scrolls this one
     }
     if (_selected != id || _composer.text != draft) {
       _composer.value = TextEditingValue(

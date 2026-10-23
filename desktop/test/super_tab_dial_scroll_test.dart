@@ -74,4 +74,64 @@ void main() {
       await dial(app, {'phase': 'move', 'dy': 20, 'superTabId': 'tab'});
     },
   );
+
+  // A Lead swipe on the device selects another conversation: a fling still running from the last one stops, it never scrolls the new chat.
+  testWidgets(
+    'a running fling stops when the Swarm selects another conversation',
+    (tester) async {
+      final app = createApp(connected: true);
+      addTearDown(app.dispose);
+      final server = ConversationServer();
+      for (var i = 0; i < 60; i++) {
+        server.append('lead $i');
+        server.append('offline $i', conversationId: 'offline');
+      }
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SuperTabView(
+              controller: c,
+              app: app,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Team Mac',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      Future<void> dial(Map<String, dynamic> p) => app.handleEventForTest('m', {
+        'type': 'dial_scroll',
+        'payload': {...p, 'superTabId': 'tab'},
+      });
+      await dial({'phase': 'down', 'dy': 0});
+      await dial({'phase': 'move', 'dy': 20});
+      await dial({'phase': 'up', 'dy': 0, 'velocity': 2000});
+      c.select('offline');
+      await tester.pumpAndSettle();
+      ScrollPosition position() => tester
+          .widget<ListView>(
+            find.byKey(const PageStorageKey('super-messages-tab-offline')),
+          )
+          .controller!
+          .position;
+      final shown = position().pixels;
+      expect(shown, position().maxScrollExtent);
+      // Inertia reads the wall clock: let it pass, then pump the timers a fling would run on.
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(
+        position().pixels,
+        shown,
+        reason: 'the old fling does not move the new chat',
+      );
+    },
+  );
 }
