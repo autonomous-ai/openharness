@@ -1,0 +1,907 @@
+{
+  "light": [
+    {
+      "flow": "store",
+      "width": "360",
+      "failed": null
+    },
+    {
+      "flow": "store-product",
+      "width": "360",
+      "failed": null
+    },
+    {
+      "flow": "store-all",
+      "width": "360",
+      "failed": null
+    },
+    {
+      "flow": "store-viewers",
+      "width": "360",
+      "failed": null
+    },
+    {
+      "flow": "store",
+      "width": "768",
+      "failed": null
+    },
+    {
+      "flow": "store-product",
+      "width": "768",
+      "failed": null
+    },
+    {
+      "flow": "store-all",
+      "width": "768",
+      "failed": null
+    },
+    {
+      "flow": "store-viewers",
+      "width": "768",
+      "failed": null
+    }
+  ],
+  "wheel": [
+    {
+      "width": "360",
+      "row": {
+        "x": 0,
+        "y": 173,
+        "width": 360,
+        "height": 44
+      },
+      "scrolled": true,
+      "images": "checks/store-chips-wheel-360-{before,after}.png"
+    },
+    {
+      "width": "390",
+      "row": {
+        "x": 0,
+        "y": 160,
+        "width": 390,
+        "height": 44
+      },
+      "scrolled": true,
+      "images": "checks/store-chips-wheel-390-{before,after}.png"
+    },
+    {
+      "width": "390-mouse",
+      "row": {
+        "x": 0,
+        "y": 104,
+        "width": 390,
+        "height": 44
+      },
+      "scrolled": true,
+      "images": "checks/store-chips-wheel-390-mouse-{before,after}.png"
+    }
+  ],
+  "hover": [
+    {
+      "name": "All harnesses",
+      "changed": true,
+      "cursor": "pointer"
+    }
+  ],
+  "tapTargets": [
+    {
+      "flow": "store",
+      "width": "360",
+      "small": [
+        {
+          "label": "Menu",
+          "w": 31,
+          "h": 28,
+          "x": 8,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 8,
+          "y": 75
+        },
+        {
+          "label": "Tabs: 2:store",
+          "w": 84,
+          "h": 28,
+          "x": 39,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 84,
+          "h": 28,
+          "x": 39,
+          "y": 75
+        },
+        {
+          "label": "New Tab",
+          "w": 23,
+          "h": 28,
+          "x": 123,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 23,
+          "h": 28,
+          "x": 123,
+          "y": 75
+        },
+        {
+          "label": "Open Harness",
+          "w": 31,
+          "h": 28,
+          "x": 290,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 290,
+          "y": 75
+        },
+        {
+          "label": "Notifications",
+          "w": 31,
+          "h": 28,
+          "x": 321,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 321,
+          "y": 75
+        },
+        {
+          "label": "Status: Claude Code —   Codex —",
+          "w": 209,
+          "h": 28,
+          "x": 8,
+          "y": 707
+        },
+        {
+          "label": "",
+          "w": 209,
+          "h": 28,
+          "x": 8,
+          "y": 707
+        },
+        {
+          "label": "",
+          "w": 109,
+          "h": 28,
+          "x": 243,
+          "y": 707
+        }
+      ]
+    },
+    {
+      "flow": "store-product",
+      "width": "360",
+      "small": [
+        {
+          "label": "Menu",
+          "w": 31,
+          "h": 28,
+          "x": 8,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 8,
+          "y": 75
+        },
+        {
+          "label": "Tabs: 2:store",
+          "w": 84,
+          "h": 28,
+          "x": 39,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 84,
+          "h": 28,
+          "x": 39,
+          "y": 75
+        },
+        {
+          "label": "New Tab",
+          "w": 23,
+          "h": 28,
+          "x": 123,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 23,
+          "h": 28,
+          "x": 123,
+          "y": 75
+        },
+        {
+          "label": "Open Harness",
+          "w": 31,
+          "h": 28,
+          "x": 290,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 290,
+          "y": 75
+        },
+        {
+          "label": "Notifications",
+          "w": 31,
+          "h": 28,
+          "x": 321,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 321,
+          "y": 75
+        },
+        {
+          "label": "Viewers",
+          "w": 26,
+          "h": 44,
+          "x": 334,
+          "y": 173
+        },
+        {
+          "label": "Status: Claude Code —   Codex —",
+          "w": 209,
+          "h": 28,
+          "x": 8,
+          "y": 707
+        },
+        {
+          "label": "",
+          "w": 209,
+          "h": 28,
+          "x": 8,
+          "y": 707
+        },
+        {
+          "label": "",
+          "w": 109,
+          "h": 28,
+          "x": 243,
+          "y": 707
+        }
+      ]
+    },
+    {
+      "flow": "store-all",
+      "width": "360",
+      "small": [
+        {
+          "label": "Menu",
+          "w": 31,
+          "h": 28,
+          "x": 8,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 8,
+          "y": 75
+        },
+        {
+          "label": "Tabs: 2:store",
+          "w": 84,
+          "h": 28,
+          "x": 39,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 84,
+          "h": 28,
+          "x": 39,
+          "y": 75
+        },
+        {
+          "label": "New Tab",
+          "w": 23,
+          "h": 28,
+          "x": 123,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 23,
+          "h": 28,
+          "x": 123,
+          "y": 75
+        },
+        {
+          "label": "Open Harness",
+          "w": 31,
+          "h": 28,
+          "x": 290,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 290,
+          "y": 75
+        },
+        {
+          "label": "Notifications",
+          "w": 31,
+          "h": 28,
+          "x": 321,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 321,
+          "y": 75
+        },
+        {
+          "label": "Status: Claude Code —   Codex —",
+          "w": 209,
+          "h": 28,
+          "x": 8,
+          "y": 707
+        },
+        {
+          "label": "",
+          "w": 209,
+          "h": 28,
+          "x": 8,
+          "y": 707
+        },
+        {
+          "label": "",
+          "w": 109,
+          "h": 28,
+          "x": 243,
+          "y": 707
+        }
+      ]
+    },
+    {
+      "flow": "store-viewers",
+      "width": "360",
+      "small": [
+        {
+          "label": "Menu",
+          "w": 31,
+          "h": 28,
+          "x": 8,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 8,
+          "y": 75
+        },
+        {
+          "label": "Tabs: 2:store",
+          "w": 84,
+          "h": 28,
+          "x": 39,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 84,
+          "h": 28,
+          "x": 39,
+          "y": 75
+        },
+        {
+          "label": "New Tab",
+          "w": 23,
+          "h": 28,
+          "x": 123,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 23,
+          "h": 28,
+          "x": 123,
+          "y": 75
+        },
+        {
+          "label": "Open Harness",
+          "w": 31,
+          "h": 28,
+          "x": 290,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 290,
+          "y": 75
+        },
+        {
+          "label": "Notifications",
+          "w": 31,
+          "h": 28,
+          "x": 321,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 321,
+          "y": 75
+        },
+        {
+          "label": "Status: Claude Code —   Codex —",
+          "w": 209,
+          "h": 28,
+          "x": 8,
+          "y": 707
+        },
+        {
+          "label": "",
+          "w": 209,
+          "h": 28,
+          "x": 8,
+          "y": 707
+        },
+        {
+          "label": "",
+          "w": 109,
+          "h": 28,
+          "x": 243,
+          "y": 707
+        }
+      ]
+    },
+    {
+      "flow": "store",
+      "width": "390",
+      "small": [
+        {
+          "label": "Menu",
+          "w": 31,
+          "h": 28,
+          "x": 8,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 8,
+          "y": 62
+        },
+        {
+          "label": "Tabs: 2:store",
+          "w": 84,
+          "h": 28,
+          "x": 39,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 84,
+          "h": 28,
+          "x": 39,
+          "y": 62
+        },
+        {
+          "label": "New Tab",
+          "w": 23,
+          "h": 28,
+          "x": 123,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 23,
+          "h": 28,
+          "x": 123,
+          "y": 62
+        },
+        {
+          "label": "Open Harness",
+          "w": 31,
+          "h": 28,
+          "x": 320,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 320,
+          "y": 62
+        },
+        {
+          "label": "Notifications",
+          "w": 31,
+          "h": 28,
+          "x": 351,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 351,
+          "y": 62
+        },
+        {
+          "label": "Viewers",
+          "w": 21,
+          "h": 44,
+          "x": 369,
+          "y": 160
+        },
+        {
+          "label": "Status: Claude Code —   Codex —",
+          "w": 209,
+          "h": 28,
+          "x": 8,
+          "y": 811
+        },
+        {
+          "label": "",
+          "w": 209,
+          "h": 28,
+          "x": 8,
+          "y": 811
+        },
+        {
+          "label": "",
+          "w": 109,
+          "h": 28,
+          "x": 273,
+          "y": 811
+        }
+      ]
+    },
+    {
+      "flow": "store-product",
+      "width": "390",
+      "small": [
+        {
+          "label": "Menu",
+          "w": 31,
+          "h": 28,
+          "x": 8,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 8,
+          "y": 62
+        },
+        {
+          "label": "Tabs: 2:store",
+          "w": 84,
+          "h": 28,
+          "x": 39,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 84,
+          "h": 28,
+          "x": 39,
+          "y": 62
+        },
+        {
+          "label": "New Tab",
+          "w": 23,
+          "h": 28,
+          "x": 123,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 23,
+          "h": 28,
+          "x": 123,
+          "y": 62
+        },
+        {
+          "label": "Open Harness",
+          "w": 31,
+          "h": 28,
+          "x": 320,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 320,
+          "y": 62
+        },
+        {
+          "label": "Notifications",
+          "w": 31,
+          "h": 28,
+          "x": 351,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 351,
+          "y": 62
+        },
+        {
+          "label": "Viewers",
+          "w": 26,
+          "h": 44,
+          "x": 364,
+          "y": 160
+        },
+        {
+          "label": "Status: Claude Code —   Codex —",
+          "w": 209,
+          "h": 28,
+          "x": 8,
+          "y": 811
+        },
+        {
+          "label": "",
+          "w": 209,
+          "h": 28,
+          "x": 8,
+          "y": 811
+        },
+        {
+          "label": "",
+          "w": 109,
+          "h": 28,
+          "x": 273,
+          "y": 811
+        }
+      ]
+    },
+    {
+      "flow": "store-all",
+      "width": "390",
+      "small": [
+        {
+          "label": "Menu",
+          "w": 31,
+          "h": 28,
+          "x": 8,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 8,
+          "y": 62
+        },
+        {
+          "label": "Tabs: 2:store",
+          "w": 84,
+          "h": 28,
+          "x": 39,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 84,
+          "h": 28,
+          "x": 39,
+          "y": 62
+        },
+        {
+          "label": "New Tab",
+          "w": 23,
+          "h": 28,
+          "x": 123,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 23,
+          "h": 28,
+          "x": 123,
+          "y": 62
+        },
+        {
+          "label": "Open Harness",
+          "w": 31,
+          "h": 28,
+          "x": 320,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 320,
+          "y": 62
+        },
+        {
+          "label": "Notifications",
+          "w": 31,
+          "h": 28,
+          "x": 351,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 351,
+          "y": 62
+        },
+        {
+          "label": "Viewers",
+          "w": 21,
+          "h": 44,
+          "x": 369,
+          "y": 160
+        },
+        {
+          "label": "Copilot",
+          "w": 334,
+          "h": 14,
+          "x": 28,
+          "y": 793
+        },
+        {
+          "label": "Status: Claude Code —   Codex —",
+          "w": 209,
+          "h": 28,
+          "x": 8,
+          "y": 811
+        },
+        {
+          "label": "",
+          "w": 209,
+          "h": 28,
+          "x": 8,
+          "y": 811
+        },
+        {
+          "label": "",
+          "w": 109,
+          "h": 28,
+          "x": 273,
+          "y": 811
+        }
+      ]
+    },
+    {
+      "flow": "store-viewers",
+      "width": "390",
+      "small": [
+        {
+          "label": "Menu",
+          "w": 31,
+          "h": 28,
+          "x": 8,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 8,
+          "y": 62
+        },
+        {
+          "label": "Tabs: 2:store",
+          "w": 84,
+          "h": 28,
+          "x": 39,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 84,
+          "h": 28,
+          "x": 39,
+          "y": 62
+        },
+        {
+          "label": "New Tab",
+          "w": 23,
+          "h": 28,
+          "x": 123,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 23,
+          "h": 28,
+          "x": 123,
+          "y": 62
+        },
+        {
+          "label": "Open Harness",
+          "w": 31,
+          "h": 28,
+          "x": 320,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 320,
+          "y": 62
+        },
+        {
+          "label": "Notifications",
+          "w": 31,
+          "h": 28,
+          "x": 351,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 351,
+          "y": 62
+        },
+        {
+          "label": "Discover",
+          "w": 25,
+          "h": 44,
+          "x": 0,
+          "y": 160
+        },
+        {
+          "label": "Status: Claude Code —   Codex —",
+          "w": 209,
+          "h": 28,
+          "x": 8,
+          "y": 811
+        },
+        {
+          "label": "",
+          "w": 209,
+          "h": 28,
+          "x": 8,
+          "y": 811
+        },
+        {
+          "label": "",
+          "w": 109,
+          "h": 28,
+          "x": 273,
+          "y": 811
+        }
+      ]
+    }
+  ],
+  "blocked": []
+}
