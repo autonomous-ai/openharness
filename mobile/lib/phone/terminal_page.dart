@@ -1108,21 +1108,26 @@ class _TerminalPageState extends State<TerminalPage>
     if (_firstSessionLine() case final line?) {
       final session = _facts?.session;
       final fresh = line == OnboardingCopy.micSayWhat;
-      final preTyped = line == OnboardingCopy.micSendIt;
-      final typed = preTyped && session?.engineId == 'opencode'
-          ? openCodePromptText(session!.terminal.buffer)
-          : null;
+      final typed = _preTypedStarter(session);
       if ((fresh || typed != null) &&
           session != null &&
-          const ['claude', 'codex', 'opencode'].contains(session.engineId) &&
-          !VoiceLine.shows(widget.voice)) {
-        return _FirstSessionChips(
+          const ['claude', 'codex', 'opencode'].contains(session.engineId)) {
+        // A take is on: the mic's own face speaks, and the suggestion waits with its line — a line
+        // left over an empty row would point at nothing. Both are back if the take is dropped.
+        if (VoiceLine.shows(widget.voice)) return null;
+        final suggestion = typed ?? firstTaskIdeas.first;
+        return _FirstSessionSuggestion(
           line: line,
-          ideas: <String>{?typed, ...firstTaskIdeas}.toList(),
-          onTap: session.acceptsInput
-              ? (idea) => unawaited(
-                  widget.voice.submitText(idea, session.sendFirstTask),
-                )
+          suggestion: suggestion,
+          onSend: session.acceptsInput
+              ? () {
+                  // Read at the tap, not at the last frame: a send that landed since has spent the
+                  // line, and the button is still on screen until the next frame draws that.
+                  if (_firstSessionLine() == null) return;
+                  unawaited(
+                    widget.voice.submitText(suggestion, session.sendFirstTask),
+                  );
+                }
               : null,
         );
       }
@@ -1130,6 +1135,14 @@ class _TerminalPageState extends State<TerminalPage>
     }
     return null;
   }
+
+  /// The task Desktop typed into OpenCode's box and did not send, while the first session's line is
+  /// still up. Null for any other pane, line or empty box.
+  String? _preTypedStarter(TerminalSession? session) =>
+      _firstSessionLine() == OnboardingCopy.micSendIt &&
+          session?.engineId == 'opencode'
+      ? openCodePromptText(session!.terminal.buffer)
+      : null;
 
   /// The onboarding's line by the mic, when this page is the session it opened on: "Send it, or say
   /// anything." Null on every other page, and once spent.
@@ -1351,7 +1364,10 @@ class _TerminalPageState extends State<TerminalPage>
     final session = await _sessionForInput();
     if (session == null) return false;
     if (_questionWatcher?.view != null) return _answerByVoice(session, text);
-    final sent = await session.sendComposerText(text);
+    // Words spoken over a starter Desktop typed replace it, as Send does: never joined to it.
+    final sent = _preTypedStarter(session) != null
+        ? await session.sendFirstTask(text)
+        : await session.sendComposerText(text);
     // After the send is acknowledged, never before: a tap felt first would be a promise.
     if (sent && mounted) HapticFeedback.lightImpact();
     return sent;
@@ -2726,9 +2742,9 @@ class _TerminalPageState extends State<TerminalPage>
                           builder: (context, _) {
                             final line = _statusLine();
                             if (line == null) return const SizedBox.shrink();
-                            // Only the first session's chips take taps; every other line
+                            // Only the first session's suggestion takes taps; every other line
                             // lies over the terminal and lets them through.
-                            return line is _FirstSessionChips
+                            return line is _FirstSessionSuggestion
                                 ? line
                                 : IgnorePointer(child: line);
                           },
@@ -4517,20 +4533,20 @@ class _AnchoredTerminalState extends State<_AnchoredTerminal> {
   );
 }
 
-/// The first session's line with the first tasks to tap under it (owner, 2026-10-22). The only
+/// The first session's line with one suggestion and its Send under it (owner, 2026-10-22). The only
 /// status line that takes taps: [TerminalPage] lets the others through to the terminal.
-class _FirstSessionChips extends StatelessWidget {
-  const _FirstSessionChips({
+class _FirstSessionSuggestion extends StatelessWidget {
+  const _FirstSessionSuggestion({
     required this.line,
-    required this.ideas,
-    required this.onTap,
+    required this.suggestion,
+    required this.onSend,
   });
 
   final String line;
-  final List<String> ideas;
+  final String suggestion;
 
-  /// Null while the terminal is not taking input: the chips show, and wait.
-  final void Function(String idea)? onTap;
+  /// Null while the terminal is not taking input: Send shows disabled, and waits.
+  final VoidCallback? onSend;
 
   @override
   Widget build(BuildContext context) {
@@ -4545,18 +4561,7 @@ class _FirstSessionChips extends StatelessWidget {
             _StatusLine(key: const ValueKey('first-session-line'), text: line),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                alignment: WrapAlignment.center,
-                children: [
-                  for (final idea in ideas)
-                    FirstTaskSuggestion(
-                      text: idea,
-                      onTap: onTap == null ? null : () => onTap!(idea),
-                    ),
-                ],
-              ),
+              child: FirstSessionSuggestion(text: suggestion, onSend: onSend),
             ),
           ],
         ),
