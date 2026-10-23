@@ -255,11 +255,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     result.warnings = [why]
     effects.messages.push({ id: stableId(operationId, 'rule'), conversationId, author: sender, text: `${done} anyway. ${why}`, replyTo: null, recipients: [], source: RULE_ROW })
   }
-  /** Only the owner changes rules, or the tab's Lead quoting a chat message the owner wrote in the last day (review of
-   * #1586: any owner row, a rule row included, could otherwise be quoted at any time). One message may ask for several rules. */
-  const ruleChange = (askedIn: { conversationId: string; messageId: string } | undefined) => {
-    if (actor.kind === 'person' && actor.userId === state.ownerId) return
-    if (actor.kind !== 'agent' || conversation(state, 'lead').leadId !== actor.agentId) {
+  /** Only the owner changes rules, or the Lead of the quoted chat's project quoting a message the owner wrote there in the
+   * last day (review of #1586: any owner row, a rule row included, could otherwise be quoted at any time). One message may
+   * ask for several rules. Returns the Lead chat that hears the change: the quoted project's, else a remaining one. A Swarm
+   * of projects has no 'lead' chat; on backend v1.3.14 looking for it refused every Lead's rule. */
+  const ruleChange = (askedIn: { conversationId: string; messageId: string } | undefined): string | null => {
+    const leadChat = askedIn ? groupProject(state, conversation(state, askedIn.conversationId)).leadConversationId : inviteLanding(state)
+    if (actor.kind === 'person' && actor.userId === state.ownerId) return leadChat
+    if (actor.kind !== 'agent' || !leadChat || conversation(state, leadChat).leadId !== actor.agentId) {
       fail('OWNER_REQUIRED', 'Only the Swarm owner, or the Lead passing on the owner\'s request, changes rules.', 403)
     }
     const asked = askedIn && context.askedIn
@@ -267,6 +270,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       || context.now - asked.createdAt > RULE_MESSAGE_MS) {
       fail('OWNER_MESSAGE_REQUIRED', 'Only the Swarm owner sets rules; quote a chat message the owner wrote in the last day asking for this change.', 403)
     }
+    return leadChat
   }
   const openDecision = (): RouteDecision => {
     const decision = context.routeDecision ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
@@ -388,10 +392,16 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // Mac that day) and refused every contribution. Those finish as failed; a dispatched or recent start still blocks.
       const abandoned = (state.starts ?? []).filter(s => context.abandonedStartIds?.includes(s.id))
       for (const start of abandoned) start.error = 'Abandoned before it started.'
-      // One command records one message, so the Lead's conversation hears it once, whichever groups asked.
-      const names = [...new Set(abandoned.map(s => s.request.name))]
-      if (names.length && state.conversations.some(c => c.id === 'lead')) {
-        message('lead', `${names.join(', ')} never started and will not start now. Start ${names.length > 1 ? 'them' : 'it'} again if still needed.`)
+      // Each project's Lead chat hears once about its own starts, whichever of its groups asked.
+      const byLeadChat = new Map<string, Set<string>>()
+      for (const start of abandoned) {
+        const group = state.conversations.find(c => c.id === start.request.conversationId)
+        const leadChat = group && groupProject(state, group).leadConversationId
+        if (leadChat && state.conversations.some(c => c.id === leadChat)) byLeadChat.set(leadChat, (byLeadChat.get(leadChat) ?? new Set()).add(start.request.name))
+      }
+      for (const [leadChat, names] of byLeadChat) {
+        effects.messages.push({ id: stableId(operationId, leadChat), conversationId: leadChat, author: sender, replyTo: null, recipients: [],
+          text: `${[...names].join(', ')} never started and will not start now. Start ${names.size > 1 ? 'them' : 'it'} again if still needed.` })
       }
       if (state.starts?.some(s => s.request.machineId === command.machineId && (!s.harnessId || (s.poolGeneration && !s.poolSettled)) && !s.error)) fail('STARTS_PENDING', 'Reconcile pending starts before changing this contribution.')
       state.machines = state.machines.filter(m => m.machineId !== command.machineId)
@@ -422,22 +432,22 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       else delete state.routingPolicy
       break
     case 'rule.set': {
-      ruleChange(command.askedIn)
+      const leadChat = ruleChange(command.askedIn)
       // There is one machines list; a new one replaces it.
       const rules = (state.rules ?? []).filter(r => command.rule.kind !== 'machines' || r.rule.kind !== 'machines')
       if (rules.length >= MAX_RULES) fail('RULES_FULL', `This Swarm has ${MAX_RULES} rules. Remove one first.`)
       state.rules = [...rules, { id: operationId, rule: command.rule, text: command.text, askedBy: state.ownerId,
         askedIn: command.askedIn ?? null, addedBy: actorKey(actor), createdAt: new Date(context.now).toISOString() }]
       result.ruleId = operationId
-      message('lead', `Rule added: ${command.text}`, [], null, RULE_ROW)
+      if (leadChat) message(leadChat, `Rule added: ${command.text}`, [], null, RULE_ROW)
       break
     }
     case 'rule.remove': {
-      ruleChange(command.askedIn)
+      const leadChat = ruleChange(command.askedIn)
       const rule = state.rules?.find(r => r.id === command.ruleId) ?? fail('NOT_FOUND', 'This Swarm has no such rule.', 404)
       state.rules = state.rules!.filter(r => r.id !== rule.id)
       if (!state.rules.length) delete state.rules
-      message('lead', `Rule removed: ${rule.text}`, [], null, RULE_ROW)
+      if (leadChat) message(leadChat, `Rule removed: ${rule.text}`, [], null, RULE_ROW)
       break
     }
     case 'conversation.create': {

@@ -794,6 +794,23 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const ownRow = await run(tab, { type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Reuse idle agents.' })
     await expect(run(tab, rule(ownRow.result.messageId as string), host, lead)).rejects.toMatchObject({ code: 'OWNER_MESSAGE_REQUIRED' })
   })
+  it('lets a project\'s Lead record and remove a rule from the owner\'s message in that project\'s chat', async () => {
+    // Backend v1.3.14 refused it: a Swarm of projects has no 'lead' chat.
+    const tab = (await store.create(owner, randomUUID(), 'Projects')).id
+    const { projectId, conversationId: chat } = (await run(tab, { type: 'project.create', name: 'App', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
+    await run(tab, { type: 'project.delete', projectId: 'lead' })
+    const lead = (await run(tab, { type: 'agent.add', conversationId: chat, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Lead', configuration: config, lead: true })).result.agentId as string
+    const said = (await run(tab, { ...message('Only use this Mac.'), conversationId: chat } as Command)).result.messageId as string
+    const askedIn = { conversationId: chat, messageId: said }
+    const ruleId = (await run(tab, { type: 'rule.set', rule: { kind: 'machines', machineIds: ['test-host'] }, text: 'Only this Mac.', askedIn }, host, lead)).result.ruleId as string
+    expect((await store.read(owner, tab)).state.rules).toEqual([expect.objectContaining({ text: 'Only this Mac.', askedIn, addedBy: `agent:${lead}` })])
+    await run(tab, { type: 'rule.remove', ruleId, askedIn }, host, lead)
+    expect((await store.read(owner, tab)).state).not.toHaveProperty('rules')
+    const rows = (await store.messages(owner, tab, chat, {})).messages.filter(m => m.source).map(m => m.text)
+    expect(rows).toEqual(['Rule added: Only this Mac.', 'Rule removed: Only this Mac.'])
+    expect((await store.read(owner, tab)).state.projects!.map(p => p.id)).toEqual([projectId])
+  })
   it('closes the replying agent\'s own deliveries of a message as answered, and nobody else\'s', async () => {
     const { tab, lead } = await fixture()
     const helper = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
