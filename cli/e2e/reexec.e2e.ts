@@ -43,7 +43,7 @@ describe('the master re-executing itself on an update', () => {
   const rejected = () => JSON.parse(readFileSync(join(cliDir(), 'update-rejected.json'), 'utf8')) as string[]
   const marker = () => join(daemon!.dataDir, 'harnessd-reexec.json')
   const status = async (): Promise<Record<string, any> | null> =>
-    fetch(`http://127.0.0.1:${daemon!.port}/api/status`).then((response) => response.json()).catch(() => null)
+    fetch(`http://127.0.0.1:${daemon!.port}/api/status`, { headers: daemon!.localHeaders() }).then((response) => response.json()).catch(() => null)
   /** The build the core runs, and the one the master runs, as the daemon reports them. */
   const builds = async (): Promise<{ core: string | null; master: string | null; masterPid: number | null; reexecs: number | null }> => {
     const now = await status()
@@ -270,7 +270,7 @@ describe.skipIf(!RELEASED)('a released master and this one, each over the other\
   let newest = NEXT
   const cliDir = () => join(scratch, 'cli')
   const status = async (): Promise<Record<string, any> | null> =>
-    fetch(`http://127.0.0.1:${daemon!.port}/api/status`).then((response) => response.json()).catch(() => null)
+    fetch(`http://127.0.0.1:${daemon!.port}/api/status`, { headers: daemon!.localHeaders() }).then((response) => response.json()).catch(() => null)
 
   beforeAll(async () => {
     scratch = mkdtempSync(join(tmpdir(), 'harnessd-reexec-compat-'))
