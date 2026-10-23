@@ -129,8 +129,9 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // A review group is assigned only to a Reviewer, and a Reviewer nothing else.
   const review = typeof group.reviewOf === 'string'
   if (review) assessment = { ...assessment, kind: 'review' }
-  // A backend from before rules keeps none, so routing there is the policy order alone.
-  const rules = list(state.rules).filter(r => r.rule && typeof r.text === 'string') as unknown as SwarmRule[]
+  // A backend from before rules keeps none, so routing there is the policy order alone. Rules bind only their own project's
+  // groups; a backend from before per-project rules gives none a project, and its rules bind every group.
+  const rules = list(state.rules).filter(r => r.rule && typeof r.text === 'string' && (r.projectId === undefined || r.projectId === projectId)) as unknown as SwarmRule[]
   const members = agents.filter(a => !busy.has(String(a.id)) && (a.role === 'reviewer') === review && ENGINES.includes(String(object(a.configuration).engine))).map(a => withLaunchEffort(a, list(state.starts)))
   // A new agent starts only on a machine in the Swarm's Machines list (the backend refuses any other): a contributed machine, or
   // one an agent of the Swarm runs on. The Lead runs here, so its own machine is always listed. Of the account's machines

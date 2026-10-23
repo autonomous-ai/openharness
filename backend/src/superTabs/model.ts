@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
-import { canReadAgent, canReadProject, groupProject, projectsOf, type ProjectVisibility, type SwarmProject } from './projects.js'
+import { canReadAgent, canReadProject, groupProject, placeRules, projectsOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
 export interface Person { id: string; email: string; role: Role; generation: string }
@@ -278,6 +278,8 @@ export function visibleState(state: SuperTabState, actor: Actor): SuperTabState 
   delete visible.releasedHarnesses
   numberConversations(visible)
   delete visible.retiredConversationNumber
+  placeRules(visible)
+  if (visible.rules) visible.rules = visible.rules.filter(r => projectsOf(state).some(p => p.id === r.projectId && canReadProject(state, actor, p)))
   if (visible.projects) {
     visible.projects = visible.projects.filter(p => canReadProject(state, actor, p))
     visible.conversations = visible.conversations.filter(c => canReadProject(state, actor, groupProject(state, c)))
