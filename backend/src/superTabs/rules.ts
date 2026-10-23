@@ -17,12 +17,15 @@ export const ruleSchema = z.discriminatedUnion('kind', [
 ])
 export const ruleTextSchema = z.string().trim().min(1).max(200)
 export const askedInSchema = z.object({ conversationId: id, messageId: id }).strict()
+/** Per project. */
 export const MAX_RULES = 50
 /** How long an owner's message can back the rule changes the Lead passes on. */
 export const RULE_MESSAGE_MS = 24 * 3_600_000
 
 export interface SwarmRule {
   id: string
+  /** The project whose agents the rule binds. Absent only on a rule from before rules were per project, until placeRules. */
+  projectId?: string
   rule: z.infer<typeof ruleSchema>
   /** The owner's words, shown when the rules are listed and quoted when one refuses. */
   text: string

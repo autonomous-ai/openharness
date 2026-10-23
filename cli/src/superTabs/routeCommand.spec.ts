@@ -103,6 +103,17 @@ describe('routeTask', () => {
     expect(decision.candidates.every((c: { model: string }) => c.model === 'opus')).toBe(true)
     expect(decision.excluded).toEqual(expect.arrayContaining([{ title: 'Multiply · Claude sonnet medium · remote-1', reason: 'Breaks the owner\'s rule: No Sonnet.' }]))
   })
+  it('applies only the rules of the group\'s project', async () => {
+    // 2026-10-23: one project's rules (three machines, no Haiku, high effort) left every other project's Lead without candidates.
+    const models = async (projectId: string) => {
+      const ruled = tab(); (ruled.state as Record<string, unknown>).rules = [{ id: 'r1', projectId, rule: { kind: 'forbidModel', model: 'sonnet' }, text: 'No Sonnet.' }]
+      const s = scoped({ tab: ruled })
+      await routeTask(input, s, where as never, opener(), () => 'op')
+      return new Set(recorded(s).command.decision.candidates.map((c: { model: string }) => c.model))
+    }
+    expect(await models('other')).toContain('sonnet')
+    expect(await models('lead')).not.toContain('sonnet')
+  })
   it('offers a Reviewer only for a review group, and starts a new one as a Reviewer', async () => {
     const offered = async (reviewer: boolean, reviewGroup: boolean) => {
       const t = tab(); t.state.agents = agents.map(a => a.id === 'a1' && reviewer ? { ...a, role: 'reviewer' } : a)

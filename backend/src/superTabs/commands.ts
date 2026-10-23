@@ -10,7 +10,7 @@ import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type Rou
 import { routingOverrideSchema } from './routingPolicy.js'
 import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
-import { agentProjectId, deleteProject, groupProject, inviteLanding, manageProject, mutableProjects, projectMembers, projectOf, readAgent, readConversation, readProject, sameProject } from './projects.js'
+import { agentProjectId, deleteProject, groupProject, inviteLanding, manageProject, mutableProjects, placeRules, projectMembers, projectOf, projectRules, readAgent, readConversation, readProject, sameProject, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -59,8 +59,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('tab.project'), machineId: id, project }).strict(),
   z.object({ type: z.literal('tab.pause'), paused: z.boolean() }).strict(),
   z.object({ type: z.literal('tab.routingPolicy'), policy: routingOverrideSchema.nullable() }).strict(),
-  z.object({ type: z.literal('rule.set'), rule: ruleSchema, text: ruleTextSchema, askedIn: askedInSchema.optional() }).strict(),
-  z.object({ type: z.literal('rule.remove'), ruleId: id, askedIn: askedInSchema.optional() }).strict(),
+  z.object({ type: z.literal('rule.set'), projectId: id.optional(), rule: ruleSchema, text: ruleTextSchema, askedIn: askedInSchema.optional() }).strict(),
+  z.object({ type: z.literal('rule.remove'), projectId: id.optional(), ruleId: id, askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('project.create'), name: title, visibility: z.enum(['public', 'private']), brief: z.string().trim().max(8000).default('') }).strict(),
   z.object({ type: z.literal('project.rename'), projectId: id, name: title }).strict(),
   z.object({ type: z.literal('project.delete'), projectId: id }).strict(),
@@ -210,6 +210,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   const command = commandSchema.parse(input)
   const state = structuredClone(original)
   numberConversations(state)
+  placeRules(state)
   assignAgentDisplayNames(state.agents)
   const result: Record<string, unknown> = {}
   const effects: CommandEffects = { state, messages: [], cancelledAgents: [], previousAttempts: [], routeDecisions: [], result }
@@ -254,29 +255,35 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   const who = sender.kind === 'person' ? sender.name.split('@')[0]! : sender.name
   /** A hard rule refuses an agent, unless it carries out what a person chose by hand. A person is not blocked: the
    * command goes through and the group is told. */
+  const groupRules = (conversationId: string) => projectRules(state, groupProject(state, conversation(state, conversationId)).id)
   const ruled = (target: RunTarget, conversationId: string, done: string, personChose = false) => {
-    const why = broken(state.rules, target)
+    const why = broken(groupRules(conversationId), target)
     if (!why) return
     if (actor.kind === 'agent' && !personChose) fail('RULE_BROKEN', `${why} Route again.`, 403)
     result.warnings = [why]
     effects.messages.push({ id: stableId(operationId, 'rule'), conversationId, author: sender, text: `${done} anyway. ${why}`, replyTo: null, recipients: [], source: RULE_ROW })
   }
-  /** Only the owner changes rules, or the Lead of the quoted chat's project quoting a message the owner wrote there in the
-   * last day (review of #1586: any owner row, a rule row included, could otherwise be quoted at any time). One message may
-   * ask for several rules. Returns the Lead chat that hears the change: the quoted project's, else a remaining one. A Swarm
-   * of projects has no 'lead' chat; on backend v1.3.14 looking for it refused every Lead's rule. */
-  const ruleChange = (askedIn: { conversationId: string; messageId: string } | undefined): string | null => {
-    const leadChat = askedIn ? groupProject(state, conversation(state, askedIn.conversationId)).leadConversationId : inviteLanding(state)
-    if (actor.kind === 'person' && actor.userId === state.ownerId) return leadChat
-    if (actor.kind !== 'agent' || !leadChat || conversation(state, leadChat).leadId !== actor.agentId) {
-      fail('OWNER_REQUIRED', 'Only the Swarm owner, or the Lead passing on the owner\'s request, changes rules.', 403)
+  /** Rules are per project. Only its owner changes them, or its Lead quoting a message the project owner wrote in its chat in
+   * the last day (review of #1586: any owner row, a rule row included, could otherwise be quoted at any time). One message
+   * may ask for several rules. The project is the one named, else the quoted chat's, else the actor's: the person's remaining
+   * Lead chat (a Swarm of projects has no 'lead' chat; on backend v1.3.14 looking for it refused every Lead's rule) or the
+   * agent's own project. */
+  const ruleChange = (askedIn: { conversationId: string; messageId: string } | undefined, projectId?: string): SwarmProject => {
+    const quoted = askedIn && groupProject(state, conversation(state, askedIn.conversationId))
+    const landing = actor.kind === 'agent' ? agentProjectId(state, agent(state, actor.agentId)) : inviteLanding(state)
+    const project = projectId ? projectOf(state, projectId) : quoted ? quoted
+      : actor.kind === 'agent' ? projectOf(state, landing!) : landing ? groupProject(state, conversation(state, landing)) : fail('NOT_FOUND', 'This Swarm has no project.', 404)
+    readProject(state, actor, project.id)
+    if (actor.kind === 'person' && actor.userId === project.ownerId) return project
+    if (actor.kind !== 'agent' || conversation(state, project.leadConversationId).leadId !== actor.agentId) {
+      fail('OWNER_REQUIRED', 'Only the project owner, or its Lead passing on the owner\'s request, changes its rules.', 403)
     }
     const asked = askedIn && context.askedIn
-    if (!asked || asked.author.kind !== 'person' || asked.author.id !== state.ownerId || asked.source
+    if (!asked || quoted!.id !== project.id || asked.author.kind !== 'person' || asked.author.id !== project.ownerId || asked.source
       || context.now - asked.createdAt > RULE_MESSAGE_MS) {
-      fail('OWNER_MESSAGE_REQUIRED', 'Only the Swarm owner sets rules; quote a chat message the owner wrote in the last day asking for this change.', 403)
+      fail('OWNER_MESSAGE_REQUIRED', 'Only the project owner sets its rules; quote a chat message the project owner wrote in its chat in the last day asking for this change.', 403)
     }
-    return leadChat
+    return project
   }
   const openDecision = (): RouteDecision => {
     const decision = context.routeDecision ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
@@ -438,22 +445,23 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       else delete state.routingPolicy
       break
     case 'rule.set': {
-      const leadChat = ruleChange(command.askedIn)
-      // There is one machines list; a new one replaces it.
-      const rules = (state.rules ?? []).filter(r => command.rule.kind !== 'machines' || r.rule.kind !== 'machines')
-      if (rules.length >= MAX_RULES) fail('RULES_FULL', `This Swarm has ${MAX_RULES} rules. Remove one first.`)
-      state.rules = [...rules, { id: operationId, rule: command.rule, text: command.text, askedBy: state.ownerId,
+      const project = ruleChange(command.askedIn, command.projectId)
+      // A project has one machines list; a new one replaces it.
+      const rules = (state.rules ?? []).filter(r => r.projectId !== project.id || command.rule.kind !== 'machines' || r.rule.kind !== 'machines')
+      if (rules.filter(r => r.projectId === project.id).length >= MAX_RULES) fail('RULES_FULL', `This project has ${MAX_RULES} rules. Remove one first.`)
+      state.rules = [...rules, { id: operationId, projectId: project.id, rule: command.rule, text: command.text, askedBy: project.ownerId,
         askedIn: command.askedIn ?? null, addedBy: actorKey(actor), createdAt: new Date(context.now).toISOString() }]
       result.ruleId = operationId
-      if (leadChat) message(leadChat, `Rule added: ${command.text}`, [], null, RULE_ROW)
+      message(project.leadConversationId, `Rule added: ${command.text}`, [], null, RULE_ROW)
       break
     }
     case 'rule.remove': {
-      const leadChat = ruleChange(command.askedIn)
-      const rule = state.rules?.find(r => r.id === command.ruleId) ?? fail('NOT_FOUND', 'This Swarm has no such rule.', 404)
+      const found = state.rules?.find(r => r.id === command.ruleId)
+      const project = ruleChange(command.askedIn, command.projectId ?? found?.projectId)
+      const rule = found?.projectId === project.id ? found : fail('NOT_FOUND', 'This project has no such rule.', 404)
       state.rules = state.rules!.filter(r => r.id !== rule.id)
       if (!state.rules.length) delete state.rules
-      if (leadChat) message(leadChat, `Rule removed: ${rule.text}`, [], null, RULE_ROW)
+      message(project.leadConversationId, `Rule removed: ${rule.text}`, [], null, RULE_ROW)
       break
     }
     case 'conversation.create': {
@@ -591,7 +599,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.type === 'agent.startDispatch') {
         if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
         // A start recorded before a rule was added is not launched past it, unless a person asked for it by hand.
-        const why = actor.kind === 'agent' && !(start.routeDecisionId && context.routeDecision?.override?.by === 'person') && broken(state.rules, startTarget(start.request))
+        const why = actor.kind === 'agent' && !(start.routeDecisionId && context.routeDecision?.override?.by === 'person') && broken(groupRules(start.request.conversationId), startTarget(start.request))
         if (why) fail('RULE_BROKEN', `${why} This start was not launched. Route again.`, 403)
         requireWorkerDecisions(state, actor, open(state, start.request.conversationId))
         const grant = context.contribution ?? fail('HOST_REQUIRED', 'The original machine grant is unavailable.', 403)

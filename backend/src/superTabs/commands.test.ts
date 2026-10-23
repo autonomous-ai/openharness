@@ -1178,7 +1178,7 @@ describe('the owner\'s rules', () => {
   it('lets the owner set, list and remove rules, and records who asked', () => {
     const f = routed()
     const added = f.run(set({ kind: 'forbidModel', model: 'haiku' }))
-    expect(f.state.rules).toEqual([{ id: added.result.ruleId, rule: { kind: 'forbidModel', model: 'haiku' }, text: 'No Haiku.', askedBy: 'owner', askedIn: null,
+    expect(f.state.rules).toEqual([{ id: added.result.ruleId, projectId: 'lead', rule: { kind: 'forbidModel', model: 'haiku' }, text: 'No Haiku.', askedBy: 'owner', askedIn: null,
       addedBy: 'person:owner', createdAt: new Date(1000).toISOString() }])
     expect(added.messages[0]).toMatchObject({ conversationId: 'lead', text: 'Rule added: No Haiku.', source: { kind: 'rule' } })
     // Everyone in the Swarm reads the rules with the tab.
@@ -1200,21 +1200,21 @@ describe('the owner\'s rules', () => {
     const added = f.run({ ...set({ kind: 'forbidModel', model: 'haiku' }), ...asked } as Command, f.leadActor, ownerSaid)
     expect(f.state.rules![0]).toMatchObject({ askedBy: 'owner', askedIn: asked.askedIn, addedBy: `agent:${f.lead}` })
     const relay = (messageId: string, context: Partial<CommandContext>) => f.run({ ...set({ kind: 'preferIdle' }), ...quoting(messageId) } as Command, f.leadActor, context)
-    expect(() => f.run(set({ kind: 'preferIdle' }), f.leadActor, ownerSaid)).toThrow('quote a chat message the owner wrote')
-    expect(() => relay('m2', {})).toThrow('quote a chat message the owner wrote')
+    expect(() => f.run(set({ kind: 'preferIdle' }), f.leadActor, ownerSaid)).toThrow('quote a chat message the project owner wrote')
+    expect(() => relay('m2', {})).toThrow('quote a chat message the project owner wrote')
     for (const author of [{ kind: 'person', id: 'peer' }, { kind: 'agent', id: 'owner' }]) {
-      expect(() => relay('m2', said({ author }))).toThrow('quote a chat message the owner wrote')
+      expect(() => relay('m2', said({ author }))).toThrow('quote a chat message the project owner wrote')
     }
     // The owner's own system rows ("Rule added", warnings) and a message older than a day do not count.
-    expect(() => relay('m2', said({ source: true }))).toThrow('quote a chat message the owner wrote')
-    expect(() => relay('m2', said({ createdAt: 1000 - 24 * 3_600_000 - 1 }))).toThrow('quote a chat message the owner wrote')
+    expect(() => relay('m2', said({ source: true }))).toThrow('quote a chat message the project owner wrote')
+    expect(() => relay('m2', said({ createdAt: 1000 - 24 * 3_600_000 - 1 }))).toThrow('quote a chat message the project owner wrote')
     // One message may ask for several rules.
     expect(relay('m1', ownerSaid).result.ruleId).toBeTruthy()
     expect(relay('m2', said({ createdAt: 1000 - 24 * 3_600_000 })).result.ruleId).toBeTruthy()
-    expect(() => f.run({ ...set({ kind: 'preferIdle' }), ...asked } as Command, f.workerActor, ownerSaid)).toThrow('Only the Swarm owner')
+    expect(() => f.run({ ...set({ kind: 'preferIdle' }), ...asked } as Command, f.workerActor, ownerSaid)).toThrow('Only the project owner')
     f.invite()
-    expect(() => f.run(set({ kind: 'preferIdle' }), peer)).toThrow('Only the Swarm owner')
-    expect(() => f.run({ type: 'rule.remove', ruleId: added.result.ruleId as string }, peer)).toThrow('Only the Swarm owner')
+    expect(() => f.run(set({ kind: 'preferIdle' }), peer)).toThrow('Only the project owner')
+    expect(() => f.run({ type: 'rule.remove', ruleId: added.result.ruleId as string }, peer)).toThrow('Only the project owner')
     f.run({ type: 'rule.remove', ruleId: added.result.ruleId as string, ...asked }, f.leadActor, ownerSaid)
     expect(f.state.rules!.map(r => r.text)).toEqual(['No Haiku.', 'No Haiku.'])
   })
@@ -1309,10 +1309,66 @@ describe('the owner\'s rules in a Swarm of projects', () => {
   it('refuses another project\'s Lead, a worker, a collaborator, a system row and an old message', () => {
     const f = projects()
     expect(() => f.run(machines(f.app), f.siteLead, said())).toThrow('unavailable')
-    expect(() => f.run(machines(f.app), f.worker, said())).toThrow('Only the Swarm owner')
-    expect(() => f.run(machines(f.app), peer, said({ author: { kind: 'person', id: 'peer' } }))).toThrow('Only the Swarm owner')
-    expect(() => f.run(machines(f.app), f.lead, said({ source: true }))).toThrow('quote a chat message the owner wrote')
-    expect(() => f.run(machines(f.app), f.lead, said({ createdAt: 1000 - 24 * 3_600_000 - 1 }))).toThrow('quote a chat message the owner wrote')
+    expect(() => f.run(machines(f.app), f.worker, said())).toThrow('Only the project owner')
+    expect(() => f.run(machines(f.app), peer, said({ author: { kind: 'person', id: 'peer' } }))).toThrow('Only the project owner')
+    expect(() => f.run(machines(f.app), f.lead, said({ source: true }))).toThrow('quote a chat message the project owner wrote')
+    expect(() => f.run(machines(f.app), f.lead, said({ createdAt: 1000 - 24 * 3_600_000 - 1 }))).toThrow('quote a chat message the project owner wrote')
+    expect(f.state).not.toHaveProperty('rules')
+  })
+  const projectIdOf = (f: ReturnType<typeof projects>, conversationId: string) => f.state.conversations.find(c => c.id === conversationId)!.projectId!
+  const forbid = (projectId: string, model: string) => ({ type: 'rule.set', projectId, rule: { kind: 'forbidModel', model }, text: `No ${model}.` }) as Command
+
+  it('applies a project\'s rules only to that project\'s groups', () => {
+    // 2026-10-23: one project's rules (three machines, no Haiku, high effort) refused every other project's Lead.
+    const f = projects(), app = projectIdOf(f, f.app)
+    f.run(forbid(app, 'sonnet')); f.run(forbid(app, 'test-model'))
+    expect(f.state.rules!.map(r => r.projectId)).toEqual([app, app])
+    const route = (conversationId: string, actor: Actor) => f.run({ type: 'route.record', conversationId, decision: record({ pick: 'c1' }) } as Command, actor, { recentRoutes: 0 })
+    expect(route(f.site, f.siteLead).result.routeDecisionId).toBeTruthy()
+    expect(() => route(f.app, f.lead)).toThrow('The owner\'s rule "No sonnet." rules out Claude sonnet.')
+    const siteWorker = f.add('site-worker', 'owner', f.site)
+    const assign = (conversationId: string, agentId: string) => {
+      f.run({ type: 'work.define', conversationId, brief: 'Build it.', checks: [{ description: 'Tests pass.', independent: false }] })
+      return f.run({ type: 'work.assign', conversationId, agentId })
+    }
+    expect(assign(f.site, siteWorker).result.warnings).toBeUndefined()
+    expect(assign(f.app, f.worker.kind === 'agent' ? f.worker.agentId : '').result.warnings).toEqual(['The owner\'s rule "No test-model." rules out Codex test-model.'])
+  })
+  it('keeps one machines list and the rule limit per project', () => {
+    const f = projects(), app = projectIdOf(f, f.app), site = projectIdOf(f, f.site)
+    const machinesIn = (projectId: string, machineId: string) => f.run({ type: 'rule.set', projectId, rule: { kind: 'machines', machineIds: [machineId] }, text: `Only ${machineId}.` } as Command)
+    machinesIn(app, 'm1'); machinesIn(site, 'm2'); machinesIn(app, 'm3')
+    expect(f.state.rules!.map(r => [r.projectId, r.text])).toEqual([[site, 'Only m2.'], [app, 'Only m3.']])
+    for (let i = 0; i < 49; i++) f.run({ type: 'rule.set', projectId: app, rule: { kind: 'preferIdle' }, text: `Rule ${i}.` } as Command)
+    expect(() => f.run(forbid(app, 'haiku'))).toThrow('50 rules')
+    expect(f.run(forbid(site, 'haiku')).result.ruleId).toBeTruthy()
+  })
+  it('moves Swarm-level rules to the project they were asked in, else to the Lead chat\'s project', () => {
+    const f = projects(), app = projectIdOf(f, f.app), site = projectIdOf(f, f.site)
+    const old = (id: string, askedIn: { conversationId: string; messageId: string } | null) =>
+      ({ id, rule: { kind: 'preferIdle' } as const, text: id, askedBy: 'owner', askedIn, addedBy: 'person:owner', createdAt: '' })
+    f.state.rules = [old('site', { conversationId: f.site, messageId: 'm1' }), old('direct', null), old('gone', { conversationId: 'deleted', messageId: 'm2' })]
+    expect(visibleState(f.state, owner).rules!.map(r => r.projectId)).toEqual([site, app, app])
+    f.run({ type: 'project.cadence', projectId: app, minutes: 1 })
+    expect(f.state.rules!.map(r => r.projectId)).toEqual([site, app, app])
+    f.run({ type: 'project.delete', projectId: site })
+    expect(f.state.rules!.map(r => r.id)).toEqual(['direct', 'gone'])
+  })
+  it('lets the project owner set its rules directly, and refuses the Swarm owner and Leads for another person\'s project', () => {
+    const f = projects()
+    const mine = f.run({ type: 'project.create', name: 'Peer', visibility: 'private', brief: '' }, peer).result as { projectId: string; conversationId: string }
+    const added = f.run(forbid(mine.projectId, 'haiku'), peer)
+    expect(added.messages).toEqual([expect.objectContaining({ conversationId: mine.conversationId, text: 'Rule added: No haiku.', source: { kind: 'rule' } })])
+    expect(f.state.rules![0]).toMatchObject({ projectId: mine.projectId, askedBy: 'peer', askedIn: null, addedBy: 'person:peer' })
+    expect(visibleState(f.state, owner).rules).toEqual([])
+    expect(() => f.run(forbid(mine.projectId, 'opus'))).toThrow('unavailable')
+    f.run({ type: 'project.sharing', projectId: mine.projectId, visibility: 'public', memberIds: [] }, peer)
+    expect(() => f.run(forbid(mine.projectId, 'opus'))).toThrow('Only the project owner')
+    expect(() => f.run({ type: 'rule.remove', ruleId: added.result.ruleId as string })).toThrow('Only the project owner')
+    expect(() => f.run({ ...forbid(projectIdOf(f, f.app), 'opus'), projectId: undefined, askedIn: { conversationId: f.app, messageId: 'm1' } } as Command,
+      f.lead, said({ author: { kind: 'person', id: 'peer' } }))).toThrow('quote a chat message the project owner wrote')
+    expect(() => f.run({ ...forbid(projectIdOf(f, f.site), 'opus'), askedIn: { conversationId: f.app, messageId: 'm1' } } as Command, f.lead, said())).toThrow('unavailable')
+    f.run({ type: 'rule.remove', ruleId: added.result.ruleId as string }, peer)
     expect(f.state).not.toHaveProperty('rules')
   })
   it('tells each project\'s Lead chat which of its starts were abandoned when the machine joins', () => {
