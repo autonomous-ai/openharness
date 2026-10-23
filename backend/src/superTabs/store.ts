@@ -738,13 +738,22 @@ export class SuperTabStore {
       if (asAgentId) {
         await this.actor(tx, user, state, asAgentId)
         if (ledProject(state, asAgentId)?.id !== project.id) unavailable()
-      } else if (!(user.sub === project.ownerId && state.people.some(p => p.id === user.sub)) && !state.agents.some(a =>
-        a.machineOwnerId === user.sub && agentProjectId(state, a) === project.id
-        && state.people.some(p => p.id === a.contributorId && p.generation === a.membershipGeneration))) unavailable()
+      } else if (!(user.sub === project.ownerId && state.people.some(p => p.id === user.sub)) && !await this.hostsProject(tx, state, user, project.id)) {
+        unavailable()
+      }
       const stored = await tx.superTabRoleText.findUnique({ where: { id: stableId(tabId, projectId, roleId) } })
       if (stored?.version !== role.version) unavailable()
       return { version: stored!.version, text: stored!.text }
     })
+  }
+
+  /** Whether this account could host one of the project's agents now, by the same live grant as its host reads. */
+  private async hostsProject(tx: Transaction, state: SuperTabState, user: AuthUser, projectId: string): Promise<boolean> {
+    for (const target of state.agents.filter(a => a.machineOwnerId === user.sub && agentProjectId(state, a) === projectId)) {
+      try { agent(state, target.id); await this.agentGrant(tx, state, target); return true }
+      catch (error) { if (!(error instanceof SuperTabError)) throw error }
+    }
+    return false
   }
 
   private async writeTerminal(tx: Transaction, tabId: string, effect: TerminalEffect, now: number) {

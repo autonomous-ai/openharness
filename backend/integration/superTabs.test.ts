@@ -1385,6 +1385,17 @@ describe('Super Tabs on a real Mongo replica set', () => {
     }
     for (const [user, as] of [[peer], [host, worker]] as Array<[AuthUser, string?]>) expect((await text(user, 'dev', as)).statusCode).toBe(404)
     expect((await text(owner, 'aaaaaaaaaaaa')).statusCode).toBe(404)
+    // A host reads a text only while it could host the agent now: its machine active and the contributor's share grant live.
+    const share = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'test-host' } })
+    await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [] } })
+    try { expect((await text(host, 'dev')).statusCode).toBe(404) } finally {
+      await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: share.emails } })
+    }
+    await db.machine.update({ where: { machineId: 'test-host' }, data: { deletedAt: new Date() } })
+    try { expect((await text(host, 'dev')).statusCode).toBe(404) } finally {
+      await db.machine.update({ where: { machineId: 'test-host' }, data: { deletedAt: null } })
+    }
+    expect((await text(host, 'dev')).statusCode).toBe(200)
 
     await run(tab, { type: 'project.role.set', projectId: 'lead', role: { ...roles[1]!, text: 'DEV-TEXT v2' } })
     expect((await rowOf(worker)).role).toMatchObject({ id: 'dev', version: version('DEV-TEXT v2') })
