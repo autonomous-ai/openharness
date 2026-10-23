@@ -142,7 +142,8 @@ class SuperTabSnapshot {
       invitations = _list(
         row['invitations'],
         (row) => Map<String, dynamic>.unmodifiable(row),
-      ) {
+      ),
+      localModels = SuperTabLocalModels.read(row['localModels']) {
     if (row['version'] != 1) {
       throw const FormatException('Update Harness to open this Swarm.');
     }
@@ -172,6 +173,9 @@ class SuperTabSnapshot {
   final List<SuperTabConversation> conversations;
   late final List<SuperTabProject> projects;
   final List<Map<String, dynamic>> invitations;
+
+  /// The Local models add-on, once the owner has turned it on; null before.
+  final SuperTabLocalModels? localModels;
   SuperTabConversation? conversation(String id) =>
       conversations.where((c) => c.id == id).firstOrNull;
   SuperTabAgent? agent(String id) =>
@@ -203,6 +207,66 @@ class SuperTabSnapshot {
   String authorName(SuperTabMessage message) => message.fromAgent
       ? agentName(message.authorId, fallback: message.authorName)
       : message.authorName;
+}
+
+/// The Swarm's Local models add-on (docs/plans/2026-10-23-swarm-local-models.md): its grid, whether it is on, and what the
+/// owner's computer last reported about setting the grid up (`ready` null until it has).
+class SuperTabLocalModels {
+  const SuperTabLocalModels({
+    required this.grid,
+    required this.enabled,
+    this.ready,
+    this.error,
+  });
+
+  static SuperTabLocalModels? read(Object? value) {
+    if (value is! Map || value['grid'] is! String) return null;
+    return SuperTabLocalModels(
+      grid: value['grid'] as String,
+      enabled: value['enabled'] == true,
+      ready: value['ready'] is bool ? value['ready'] as bool : null,
+      error: value['error'] is String ? value['error'] as String : null,
+    );
+  }
+
+  final String grid;
+  final bool enabled;
+  final bool? ready;
+  final String? error;
+}
+
+/// One model a machine serves on the Swarm's grid, as its last reading says.
+typedef SuperTabServedModel = ({String model, String name});
+
+/// The models [pool]'s reading says it serves on [grid]. A reading older than [freshFor] says nothing (backend
+/// `MACHINE_FRESH_MS`), as the route reads it.
+List<SuperTabServedModel> superTabServedModels(
+  Map<String, dynamic>? pool,
+  String grid, {
+  required DateTime now,
+  Duration freshFor = const Duration(seconds: 45),
+}) {
+  final observation = pool?['observation'];
+  if (observation is! Map) return const [];
+  final at = observation['receivedAt'];
+  if (at is! num ||
+      now.difference(DateTime.fromMillisecondsSinceEpoch(at.toInt())) >
+          freshFor) {
+    return const [];
+  }
+  return [
+    for (final m
+        in observation['localModels'] is List
+            ? observation['localModels'] as List
+            : const [])
+      if (m is Map && m['grid'] == grid && m['model'] is String)
+        (
+          model: m['model'] as String,
+          name: m['name'] is String
+              ? m['name'] as String
+              : m['model'] as String,
+        ),
+  ];
 }
 
 class SuperTabRouteChoice {

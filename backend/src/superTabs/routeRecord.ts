@@ -31,6 +31,9 @@ export const routeCandidateSchema = z.object({
   /** The criterion line Jev was shown. */
   label: z.string().trim().min(1).max(640),
   fit: fit.optional(),
+  /** A new agent on a model served on the Swarm's grid: its model and effort are `default`. */
+  gridModel: z.string().min(1).max(200).optional(),
+  gridName: z.string().min(1).max(160).optional(),
 }).strict().refine(c => (c.kind === 'member') === !!c.agentId, 'Members name their agent; new agents do not.')
 export const routeRecordSchema = z.object({
   assessment: z.object({ difficulty: level, risk: level, why: z.string().trim().min(1).max(300),
@@ -58,7 +61,8 @@ export const routeRecordSchema = z.object({
  */
 export const startedAs = (candidate: RouteCandidate, final: Extract<RouteFinal, { kind: 'new' }>): boolean =>
   final.machineId === candidate.machineId && final.engine === candidate.engine &&
-  (final.requested?.model ?? final.model) === candidate.model && (final.requested?.effort ?? final.effort) === candidate.effort
+  (final.requested?.model ?? final.model) === candidate.model && (final.requested?.effort ?? final.effort) === candidate.effort &&
+  (final.gridModel ?? null) === (candidate.gridModel ?? null) && (final.gridName ?? null) === (candidate.gridName ?? null)
 
 /** Whether a decision's final names this candidate: the same agent, or the same start. */
 export const finalMatches = (candidate: RouteCandidate, final: RouteFinal | null): boolean => !!final && (candidate.kind === 'member'
@@ -70,7 +74,8 @@ export type RouteRecord = z.infer<typeof routeRecordSchema>
 export type RouteFinal =
   | { kind: 'member'; agentId: string; machineId: string }
   /** After a failed model switch, `model` and `effort` are what ran and `requested` is what routing asked for. */
-  | { kind: 'new'; startId: string; machineId: string; engine: string; model: string; effort: string; requested?: { model: string; effort: string } }
+  | { kind: 'new'; startId: string; machineId: string; engine: string; model: string; effort: string; requested?: { model: string; effort: string };
+      gridModel?: string; gridName?: string }
 export interface RouteOverride { by: 'lead' | 'person'; actorKey: string; candidateId?: string; reason: string }
 export interface RouteDecision {
   id: string; conversationId: string; record: RouteRecord

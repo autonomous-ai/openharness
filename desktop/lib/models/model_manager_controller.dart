@@ -719,7 +719,8 @@ class ModelManagerController extends ChangeNotifier {
     }
   }
 
-  Future<void> control(LocalModel model, String action) async {
+  /// [grid]: start or stop it on that Swarm's grid instead of the account's own (docs/plans/2026-10-23-swarm-local-models.md).
+  Future<void> control(LocalModel model, String action, {String? grid}) async {
     final owner = machine;
     if (owner == null ||
         owner.connectionStatus != ConnectionStatus.connected ||
@@ -740,7 +741,8 @@ class ModelManagerController extends ChangeNotifier {
       if (!supportsDownload || current.downloaded || !current.canStart) return;
     } else if (startModel) {
       if (!current.canStart) return;
-    } else if (action != 'stop' || !current.canStop) {
+    } else if (action != 'stop' ||
+        !(grid == null ? current.canStop : current.servedOn(grid))) {
       return;
     }
     pendingId = model.id;
@@ -758,6 +760,7 @@ class ModelManagerController extends ChangeNotifier {
               owner.machine.machineId,
               model.id,
               start: startModel,
+              grid: grid,
             );
       if (!_current(owner)) return;
       error = answer['error'] as String?;

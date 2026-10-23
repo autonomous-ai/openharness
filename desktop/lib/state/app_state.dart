@@ -11273,14 +11273,44 @@ class AppNotifier extends ChangeNotifier {
     return connection.request('connectors', payload: payload, timeout: timeout);
   }
 
+  /// Starts or stops a local model; with [grid], on that Swarm's grid instead of the account's own
+  /// (docs/plans/2026-10-23-swarm-local-models.md).
   Future<Map<String, dynamic>> controlLocalModel(
     String machineId,
     String modelId, {
     required bool start,
+    String? grid,
   }) => _conn(machineId).request(
     start ? 'grid_fleet_model_start' : 'grid_fleet_model_stop',
-    payload: {'modelId': modelId},
+    payload: {'modelId': modelId, 'grid': ?grid},
     timeout: const Duration(seconds: 12),
+  );
+
+  /// The saved APIs [machineId] shares with the Swarm whose grid is [grid] (CLI `lib/swarmApiShares.ts`).
+  Future<Map<String, dynamic>> swarmApiShares(String machineId, String grid) =>
+      _conn(machineId).request(
+        'grid_swarm_api_shares',
+        payload: {'grid': grid},
+        timeout: const Duration(seconds: 10),
+      );
+
+  /// Shares [model] of the saved API [connectionId] with the Swarm whose grid is [grid], or stops: every Builder in
+  /// the Swarm may then run on it, on this computer's key and credits.
+  Future<Map<String, dynamic>> swarmApiShare(
+    String machineId, {
+    required String grid,
+    required String connectionId,
+    required String model,
+    required bool start,
+  }) => _conn(machineId).request(
+    'grid_swarm_api_share',
+    payload: {
+      'grid': grid,
+      'connectionId': connectionId,
+      'model': model,
+      'action': start ? 'start' : 'stop',
+    },
+    timeout: const Duration(minutes: 2),
   );
 
   Future<Map<String, dynamic>> downloadLocalModel(

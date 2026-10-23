@@ -642,6 +642,11 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
       // An empty section still says it is there, so there is somewhere to add to — except the
       // downloads, which a machine with the whole catalog, or none, has nothing under, and what is
       // shared with you while Grid is not set up: the Set up row under Your models stands for it.
+      // A Swarm's Local models have no Subscriptions: nothing in one can be given to a Swarm.
+      if (search.swarmModels != null &&
+          section == ModelSearchSection.subscriptions) {
+        continue;
+      }
       if (indices.isEmpty &&
           (search.matchQuery.trim().isNotEmpty ||
               section == ModelSearchSection.catalog ||
@@ -846,6 +851,15 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
   }
 
   void _submit([SwarmDestination? row]) {
+    // In a Swarm's Local models a click chooses a model to read about: what it does to the Swarm (an API shared on
+    // the person's key and credits) is the preview's button, or Return, once its preview has been seen.
+    if (row != null &&
+        search.swarmModels != null &&
+        search.swarmModelAction(row) != null) {
+      _focusResult(row.id);
+      widget.onRefocus();
+      return;
+    }
     final choice = search.submit(row);
     if (choice != null) {
       widget.onChoose(choice);

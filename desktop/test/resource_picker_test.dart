@@ -174,6 +174,7 @@ class _ModelSelectionApp extends ModelManagerTestApp {
     String machineId,
     String modelId, {
     required bool start,
+    String? grid,
   }) async {
     final answer = await super.controlLocalModel(
       machineId,

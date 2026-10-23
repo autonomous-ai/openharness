@@ -39,6 +39,16 @@ export class ContributedMachines {
   private readonly published = new Map<string, { at: number; signature: string }>()
   /** Shell tool availability belongs to this machine, not a tab. Resource readings still refresh every heartbeat. */
   private readonly toolCache = new Map<string, { value: boolean | null; detail?: string; until: number }>()
+  /** The grids this machine reads, at most once a minute: every Swarm's reading shares it. */
+  private gridModelsRead: { at: number; answer: unknown } | null = null
+  private async gridModels(local: { request: (type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown> }): Promise<unknown> {
+    const now = this.deps.now()
+    if (this.gridModelsRead && now - this.gridModelsRead.at < GRID_MODELS_MS) return this.gridModelsRead.answer
+    const answer = await local.request('grid_models_list', { rowState: true }, 20_000).catch(() => ({}))
+    // A failed read is asked again next time, not held for a minute as "nothing shared".
+    if (Array.isArray(object(answer).grids)) this.gridModelsRead = { at: now, answer }
+    return answer
+  }
   constructor(private readonly core: CoreApi, private readonly machineId: string,
     private readonly deps: { backend: typeof backend; open: typeof openDaemon; capabilities: typeof readCapabilities;
       start: typeof startAgent; now: () => number; prepare?: typeof prepareSwarmProject } =
@@ -105,7 +115,14 @@ export class ContributedMachines {
           if (result?.value !== null && result?.value !== undefined) reportedTools[name] = result.value
           else toolProbeErrors[name] = result?.detail ?? 'The tool probe did not complete.'
         }
-        const observation = { generation: pool.generation, tools: reportedTools,
+        // Only while the owner has the Local models add-on on: the models this machine serves on the Swarm's grid (its own
+        // engines, the APIs it shares), then the ones it may use on other grids (shared with its owner, usable here alone).
+        const localModels = typeof row.localGrid === 'string' ? [
+          ...servedOn(await local.request('grid_fleet_models_list', {}, 20_000).catch(() => ({})), row.localGrid),
+          ...apisOn(await local.request('grid_swarm_api_shares', { grid: row.localGrid }, 10_000).catch(() => ({})), row.localGrid),
+          ...sharedWith(await this.gridModels(local), row.localGrid),
+        ].slice(0, MAX_LOCAL_MODELS) : null
+        const observation = { generation: pool.generation, tools: reportedTools, ...(localModels ? { localModels } : {}),
           ...(Object.keys(toolProbeErrors).length ? { toolProbeErrors } : {}),
           resources: { cpuPercent: finite(resources.cpuPercent), memoryUsedBytes: finite(resources.memoryUsedBytes), memoryTotalBytes: finite(resources.memoryTotalBytes),
             diskFreeBytes: finite(resources.diskFreeBytes), diskTotalBytes: finite(resources.diskTotalBytes), projectDiskFreeBytes: finite(resources.projectDiskFreeBytes), projectDiskTotalBytes: finite(resources.projectDiskTotalBytes),
@@ -122,9 +139,9 @@ export class ContributedMachines {
           const path = `/api/super-tabs/${row.tabId}/machines/${this.machineId}`
           try { await this.deps.backend(this.core, 'POST', path, observation) }
           catch (error) {
-            if (!(error instanceof SuperTabHostError) || error.status !== 400 || error.code !== 'VALIDATION_ERROR' || !('toolProbeErrors' in observation)) throw error
-            // Older backends reject the additive field. Their boolean-only view still safely refuses an unverified tool.
-            const { toolProbeErrors: _probeErrors, ...legacy } = observation
+            if (!(error instanceof SuperTabHostError) || error.status !== 400 || error.code !== 'VALIDATION_ERROR' || !('toolProbeErrors' in observation || 'localModels' in observation)) throw error
+            // Older backends reject the additive fields. Their boolean-only view still safely refuses an unverified tool.
+            const { toolProbeErrors: _probeErrors, localModels: _served, ...legacy } = observation
             await this.deps.backend(this.core, 'POST', path, legacy)
           }
           this.published.set(String(row.tabId), { at: began, signature })
@@ -165,4 +182,47 @@ export class ContributedMachines {
       }
     } finally { local?.close() }
   }
+}
+
+/** The backend's limit on one machine's local models (`machineObservationSchema`). */
+const MAX_LOCAL_MODELS = 64
+/** How often the grids this machine may use are read again for its Swarms. */
+const GRID_MODELS_MS = 60_000
+/** Every Swarm's grid, as the backend mints its name: their models belong to their own Swarm. */
+const SWARM_GRID = /^swarm-[0-9a-f]{12}$/
+
+type LocalModelReading = { grid: string; model: string; name?: string; contextWindow?: number; kind: 'local' | 'api' | 'shared' }
+
+/** The APIs a `grid_swarm_api_shares` answer says this machine shares on [grid] (`lib/swarmApiShares.ts`). */
+export function apisOn(answer: unknown, grid: string): LocalModelReading[] {
+  return list(object(answer).shares).filter(s => s.grid === grid && typeof s.model === 'string' && s.model.length > 0 && s.model.length <= 200)
+    .map(s => ({ grid, model: String(s.model), ...(typeof s.name === 'string' ? { name: `${String(s.model)} · ${s.name}`.slice(0, 200) } : {}), kind: 'api' as const }))
+}
+
+/** The live models a `grid_models_list` answer says this machine may use on grids other than Swarms' (owner, 2026-10-23:
+ *  Builders may use local models shared with their machine's owner). Each Swarm's grid is left to its own Swarm. */
+export function sharedWith(answer: unknown, swarmGrid: string): LocalModelReading[] {
+  const out: LocalModelReading[] = []
+  for (const section of list(object(answer).grids)) {
+    const grid = typeof section.name === 'string' ? section.name : ''
+    if (!grid || grid.length > 160 || grid === swarmGrid || SWARM_GRID.test(grid)) continue
+    for (const model of list(section.models)) {
+      if (typeof model.id !== 'string' || !model.id || model.id.length > 200 || model.unavailable) continue
+      if (!out.some(m => m.grid === grid && m.model === model.id)) out.push({ grid, model: model.id, kind: 'shared' })
+    }
+  }
+  return out
+}
+
+/** The models a `grid_fleet_models_list` answer says this machine serves on [grid], by the name grid lists each under. */
+export function servedOn(answer: unknown, grid: string): LocalModelReading[] {
+  const out: LocalModelReading[] = []
+  for (const model of list(object(answer).models)) {
+    const on = list(model.servedOn).find(s => s.grid === grid)
+    const served = Array.isArray(on?.servedAs) ? on.servedAs.find((n): n is string => typeof n === 'string' && n.length > 0 && n.length <= 200) : undefined
+    if (!served || out.length >= 16) continue
+    out.push({ grid, model: served, ...(typeof model.name === 'string' ? { name: model.name.slice(0, 200) } : {}),
+      ...(typeof model.contextWindow === 'number' && Number.isInteger(model.contextWindow) && model.contextWindow > 0 ? { contextWindow: model.contextWindow } : {}), kind: 'local' })
+  }
+  return out
 }

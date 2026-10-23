@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
-import { ContributedMachines } from './machines.js'
+import { apisOn, ContributedMachines, servedOn, sharedWith } from './machines.js'
 import { SuperTabHostError } from './host.js'
 import { startAgent } from './start.js'
 
@@ -116,6 +116,76 @@ describe('contributed machine executor', () => {
     expect(posts).toHaveLength(2)
     expect(posts[0]![3]).toHaveProperty('toolProbeErrors')
     expect(posts[1]![3]).not.toHaveProperty('toolProbeErrors')
+  })
+
+  it('lists the models it serves on the Swarm\'s grid only while the add-on is on, and drops them for an older backend', async () => {
+    const GRID = 'swarm-0123456789ab'
+    const f = fixture()
+    await f.machine.tick()
+    const local = (await f.open.mock.results[0]!.value) as { request: ReturnType<typeof vi.fn> }
+    expect(local.request.mock.calls.some(c => c[0] === 'grid_fleet_models_list')).toBe(false)
+    expect(f.backend.mock.calls.find(c => c[1] === 'POST')![3]).not.toHaveProperty('localModels')
+    Object.assign(f.pool, { localGrid: GRID })
+    local.request.mockImplementation((async (type: string) => type === 'grid_fleet_models_list'
+      ? { models: [{ name: 'Qwen 3', contextWindow: 32768, servedOn: [{ grid: GRID, servedAs: ['qwen3'] }] }] } : { providers: [] }) as never)
+    f.advance(); await f.machine.tick()
+    expect(f.backend.mock.calls.filter(c => c[1] === 'POST').at(-1)![3]).toMatchObject({ localModels: [{ grid: GRID, model: 'qwen3', name: 'Qwen 3', contextWindow: 32768, kind: 'local' }] })
+    // A failed read serves nothing; an older backend that refuses the field gets the observation without it.
+    local.request.mockImplementation((async (type: string) => { if (type === 'grid_fleet_models_list') throw new Error('timeout'); return { providers: [] } }) as never)
+    const original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      if (method === 'POST' && (body as Record<string, unknown>)?.localModels) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: localModels', 400)
+      return original(core, method, path, body)
+    })
+    f.advance(); await f.machine.tick()
+    const posts = f.backend.mock.calls.filter(c => c[1] === 'POST')
+    expect(posts.at(-2)![3]).toMatchObject({ localModels: [] })
+    expect(posts.at(-1)![3]).not.toHaveProperty('localModels')
+  })
+  it('adds the APIs it shares on the Swarm\'s grid and the models shared with its owner, and reads other grids once a minute', async () => {
+    const GRID = 'swarm-0123456789ab'
+    const f = fixture()
+    Object.assign(f.pool, { localGrid: GRID })
+    await f.machine.tick()
+    const local = (await f.open.mock.results[0]!.value) as { request: ReturnType<typeof vi.fn> }
+    local.request.mockImplementation((async (type: string) => type === 'grid_swarm_api_shares'
+      ? { shares: [{ grid: GRID, connectionId: 'c1', model: 'deepseek/deepseek-chat', name: 'OpenRouter' }] }
+      : type === 'grid_models_list' ? { grids: [{ name: 'team-grid', models: [{ id: 'qwen3-30b' }] }] } : { providers: [] }) as never)
+    f.advance(); await f.machine.tick()
+    expect(f.backend.mock.calls.filter(c => c[1] === 'POST').at(-1)![3]).toMatchObject({ localModels: [
+      { grid: GRID, model: 'deepseek/deepseek-chat', name: 'deepseek/deepseek-chat · OpenRouter', kind: 'api' },
+      { grid: 'team-grid', model: 'qwen3-30b', kind: 'shared' },
+    ] })
+    const reads = () => local.request.mock.calls.filter(c => c[0] === 'grid_models_list').length
+    const before = reads()
+    f.advance(); await f.machine.tick()
+    expect(reads()).toBe(before)
+    f.step(60_000); await f.machine.tick()
+    expect(reads()).toBe(before + 1)
+  })
+  it('reads only live models of grids other than Swarms\', once each, and shared APIs of this Swarm alone', () => {
+    const GRID = 'swarm-0123456789ab'
+    expect(sharedWith(null, GRID)).toEqual([])
+    expect(sharedWith({ grids: [
+      { name: GRID, models: [{ id: 'mine' }] }, { name: 'swarm-ffffffffffff', models: [{ id: 'theirs' }] },
+      { name: 'team', models: [{ id: 'a' }, { id: 'a' }, { id: 'down', unavailable: { reason: 'offline' } }, { id: 7 }, { id: '' }] },
+      { name: 7, models: [{ id: 'b' }] }, { name: 'x'.repeat(161), models: [{ id: 'c' }] },
+    ] }, GRID)).toEqual([{ grid: 'team', model: 'a', kind: 'shared' }])
+    expect(apisOn({ shares: [{ grid: GRID, model: 'm' }, { grid: 'other', model: 'n' }, { grid: GRID, model: '' }, { grid: GRID, model: 'x'.repeat(201) }] }, GRID))
+      .toEqual([{ grid: GRID, model: 'm', kind: 'api' }])
+    expect(apisOn(null, GRID)).toEqual([])
+  })
+  it('reads a served model by the first name grid lists it under, and keeps sixteen at most', () => {
+    const GRID = 'swarm-0123456789ab'
+    expect(servedOn(null, GRID)).toEqual([])
+    expect(servedOn({ models: [
+      { name: 7, contextWindow: 1.5, servedOn: [{ grid: 'other', servedAs: ['elsewhere'] }, { grid: GRID, servedAs: ['', 9, 'qwen3'] }] },
+      { servedOn: [{ grid: GRID, servedAs: 'qwen3' }] }, { servedOn: [{ grid: GRID, servedAs: ['x'.repeat(201)] }] }, { contextWindow: -1, servedOn: [{ grid: GRID }] },
+    ] }, GRID)).toEqual([{ grid: GRID, model: 'qwen3', kind: 'local' }])
+    const many = { models: Array.from({ length: 20 }, (_, i) => ({ name: 'n'.repeat(300), servedOn: [{ grid: GRID, servedAs: [`m${i}`] }] })) }
+    const read = servedOn(many, GRID)
+    expect(read).toHaveLength(16)
+    expect(read[0]!.name).toHaveLength(200)
   })
 
   it('binds stopped native proof to the current slot reservation generation', async () => {

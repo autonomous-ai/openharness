@@ -35,6 +35,7 @@ class LocalModel {
     this.paramsB,
     this.app,
     this.servedAs = const [],
+    this.servedOnGrids = const [],
   });
   final String id, name, state;
 
@@ -42,6 +43,13 @@ class LocalModel {
   /// daemon). A catalog model runs under its file's name (`Qwen3.8-27B-UD-Q4_K_M`), not the catalog's
   /// (`Qwen3.8-27B`), so its grid listing is matched to it by these.
   final List<String> servedAs;
+
+  /// Every grid this machine serves it on now (`servedOn`'s names; empty from an older daemon): the account's own,
+  /// and a Swarm's that it runs for (docs/plans/2026-10-23-swarm-local-models.md).
+  final List<String> servedOnGrids;
+
+  /// Whether it runs for the Swarm whose grid is [grid].
+  bool servedOn(String grid) => servedOnGrids.contains(grid);
 
   /// Whether the grid's [modelId] is this model: its id, its name, or a name it is served under.
   bool answersTo(String modelId) {
@@ -122,6 +130,13 @@ class LocalModel {
     },
     servedAs: switch (data['servedAs']) {
       final List<dynamic> names => names.whereType<String>().toList(),
+      _ => const [],
+    },
+    servedOnGrids: switch (data['servedOn']) {
+      final List<dynamic> grids => [
+        for (final grid in grids)
+          if (grid is Map && grid['grid'] is String) grid['grid'] as String,
+      ],
       _ => const [],
     },
   );

@@ -1664,6 +1664,30 @@ describe('models other apps downloaded, started in their own app', () => {
     expect(JSON.parse(await readFile(join(stateDir, 'app-engines.json'), 'utf8'))).toEqual([])
   })
 
+  it('says a model is served on a Swarm\'s grid while its engine runs there, and keeps it from starting twice', async () => {
+    const swarm = 'swarm-0123456789ab'
+    const models = appService()
+    await models.act(swarm, ollama.id, 'start'); await models.settled()
+    let row = (await models.list('home', true)).models.find(m => m.id === ollama.id)!
+    expect(row).toMatchObject({ state: 'downloaded', canStart: false, servedOn: [{ grid: swarm, servedAs: ['llama3.2:3b'] }] })
+    // Its engine gone: nothing is served there, and it starts again.
+    up.clear()
+    row = (await models.list('home', true)).models.find(m => m.id === ollama.id)!
+    expect(row).toMatchObject({ canStart: true })
+    expect(row).not.toHaveProperty('servedOn')
+  })
+
+  it('lists the own grid beside a Swarm\'s when one model is served on both, and reads none without its app\'s engines', async () => {
+    const record = (grid: string) => ({ spec: 1, modelId: ollama.id, grid, name: 'llama3.2:3b', engine: 'ollama', served: 'llama3.2:3b',
+      alias: 'llama3.2:3b', port: 41000, binary: '/usr/local/bin/ollama', pid: 4242 })
+    await mkdir(stateDir, { recursive: true })
+    await writeFile(join(stateDir, 'app-engines.json'), JSON.stringify([record('home'), record('swarm-0123456789ab')]))
+    up.add(ollama.id); joinedAliases.add('llama3.2:3b')
+    const row = (await appService().list('home', true)).models.find(m => m.id === ollama.id)!
+    expect(row.servedOn).toEqual([{ grid: 'home', servedAs: ['llama3.2:3b'] }, { grid: 'swarm-0123456789ab', servedAs: ['llama3.2:3b'] }])
+    expect((await appService({ appEngines: undefined }).list('home', true)).models.find(m => m.id === ollama.id)).not.toHaveProperty('servedOn')
+  })
+
   it('keeps an engine it started stoppable when a later scan reads the model differently', async () => {
     const models = appService()
     await models.act('home', ollama.id, 'start'); await models.settled()

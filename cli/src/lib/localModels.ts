@@ -809,7 +809,11 @@ export class LocalModels {
     const elsewhere = this.elsewhere?.grid !== grid ? this.elsewhere?.operation : undefined
     const operation = this.active?.operation ?? elsewhere ?? (this.receipt?.grid === grid ? this.receipt.operation : undefined)
     const apps = await this.apps(force)
-    const records = (await this.records()).filter(record => record.grid === grid)
+    const allRecords = await this.records()
+    const records = allRecords.filter(record => record.grid === grid)
+    // An app's engine this daemon started on another grid — a Swarm's (docs/plans/2026-10-23-swarm-local-models.md):
+    // its model is served there, so the row says so and cannot start a second engine beside it.
+    const away = allRecords.filter(record => record.grid !== grid)
     // An engine this daemon started is read from its record, whatever a later scan makes of the model: a
     // scan that missed the person's llama-server (busy serving, it answered `--version` late) once listed
     // a running engine as Grid's, and Stop then had nothing to stop.
@@ -877,8 +881,13 @@ export class LocalModels {
       const alive = record && this.options.appEngines ? await this.options.appEngines.alive(record) : false
       const listed = !!record && listedHere(record.alias)
       const running = alive && (listed || asleep)
+      const elsewhere: ServedOn[] = []
+      for (const there of away.filter(r => r.modelId === id)) {
+        if (this.options.appEngines && await this.options.appEngines.alive(there)) elsewhere.push({ grid: there.grid, servedAs: [there.alias] })
+      }
       return { id, name, app: APP_LABEL[app], state: running ? 'running' : 'downloaded', ...extra, ...(record ? { servedAs: [record.alias] } : {}),
-        canStart: !inventoryError && !record, canStop: !inventoryError && !!record,
+        ...(elsewhere.length ? { servedOn: [...(running && record ? [{ grid, servedAs: [record.alias] }] : []), ...elsewhere] } : {}),
+        canStart: !inventoryError && !record && !elsewhere.length, canStop: !inventoryError && !!record,
         operation: operation?.modelId === id ? operation : undefined, ...(running && !listed ? { gridAsleep: true } : {}) }
     }
     for (const app of apps.filter(a => a.engine !== 'grid' || recorded(a.id))) {

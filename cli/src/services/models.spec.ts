@@ -25,7 +25,10 @@ import { ApiConnections, apiConnectionsRequest } from '../lib/apiConnections.js'
 import { apiModelsRequest, apiTargetAnswer, refreshApiFor, rememberSavedApis } from '../lib/apiModels.js'
 import { linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { compactRuntimePickerModels, launchTarget, MODELS_REQUESTS, startModels } from './models.js'
+import { compactRuntimePickerModels, launchTarget, MODELS_REQUESTS, startModels, swarmLaunchTarget } from './models.js'
+import { gridExec } from '../lib/gridExec.js'
+import { syncSwarmGrid } from '../lib/swarmGrid.js'
+import { SwarmApiShares } from '../lib/swarmApiShares.js'
 
 const access = vi.hoisted(() => ({ ensure: vi.fn(async (_request?: { ownGrid?: boolean }): Promise<GridAttachResult> => ({ status: 'converged', name: 'grid-1', detail: 'ok' })) }))
 vi.mock('../lib/gridAttach.js', () => ({
@@ -35,7 +38,14 @@ vi.mock('../lib/gridAttach.js', () => ({
 }))
 vi.mock('../lib/gridDerive.js', () => ({ deriveHarnessGridName: vi.fn(async () => null), resetGridDeriveMemo: vi.fn(), signedInGridEmail: vi.fn(() => 'me@example.com') }))
 vi.mock('../lib/gridEnsure.js', () => ({ ensureHarnessGrid: vi.fn(async () => 'converged') }))
-vi.mock('../lib/gridExec.js', () => ({ gridAvailable: vi.fn(() => true), gridCliPresence: vi.fn(() => 'managed'), managedGridPath: vi.fn(() => null) }))
+vi.mock('../lib/gridExec.js', () => ({ gridAvailable: vi.fn(() => true), gridCliPresence: vi.fn(() => 'managed'), managedGridPath: vi.fn(() => null), gridExec: vi.fn(async () => ({ code: 'OK' })) }))
+const apiShares = vi.hoisted(() => ({
+  share: vi.fn(async () => ({ ok: true })), stop: vi.fn(async () => ({ ok: true })),
+  list: vi.fn((_grid?: string) => [{ grid: 'swarm-0123456789ab', connectionId: 'c1', model: 'm', name: 'OpenRouter' }]),
+  restore: vi.fn(async (): Promise<void> => {}),
+}))
+vi.mock('../lib/swarmApiShares.js', () => ({ SwarmApiShares: vi.fn(function () { return apiShares }) }))
+vi.mock('../lib/swarmGrid.js', () => ({ syncSwarmGrid: vi.fn(async () => ({ ready: true, added: ['b@example.com'], removed: [] })) }))
 /** The Model Manager's grid commands: what each job was run as, and what it answers. */
 const fleet = vi.hoisted(() => ({ run: vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({ ok: true, code: 0, stdout: '[]', stderr: '', error: null })), cancel: vi.fn((..._args: unknown[]) => true) }))
 vi.mock('../lib/gridFleetRpc.js', async (real) => ({
@@ -64,7 +74,8 @@ vi.mock('../lib/runtimeInstall.js', () => ({ ensureManagedGrid: vi.fn(async () =
 /** The saved APIs and the Codex profiles: their files and folders are the lib's, never this machine's here. */
 const apis = vi.hoisted(() => ({ stores: [] as string[], bases: vi.fn(() => [] as string[]) }))
 vi.mock('../lib/apiConnections.js', () => ({
-  ApiConnections: class { constructor(dataDir: string) { apis.stores.push(dataDir) } recognizedBases = apis.bases },
+  ApiConnections: class { constructor(dataDir: string) { apis.stores.push(dataDir) } recognizedBases = apis.bases
+    modelAccess(id: string) { return { connection: { id }, apiKey: 'fixture' } } },
   apiConnectionsRequest: vi.fn((_store: unknown, payload: Record<string, unknown>) => ({ connections: [], presets: [], action: payload.action })),
 }))
 vi.mock('../lib/apiModels.js', () => ({
@@ -345,6 +356,20 @@ describe('the models service', () => {
         }
       })
 
+      it('a new agent on a Swarm\'s grid signs grid in and pulls the account\'s grids first, and starts nothing when grid cannot be set up', async () => {
+        vi.mocked(listGridModels).mockResolvedValueOnce([{ id: 'qwen3', node: 'Mac Studio' }])
+        vi.mocked(resolveGridTarget).mockResolvedValueOnce(target)
+        const { port } = setup()
+        expect(await port.launchTarget({ model: 'qwen3', grid: 'swarm-0123456789ab' })).toEqual(target)
+        expect(access.ensure).toHaveBeenCalledWith({ ownGrid: false })
+        expect(gridExec).toHaveBeenCalledWith(['--remote', 'sync'])
+        expect(resolveGridTarget).toHaveBeenCalledWith('swarm-0123456789ab', 'qwen3')
+        const sync = vi.fn(async () => {})
+        access.ensure.mockResolvedValueOnce({ status: 'handoff-failed', name: null, detail: 'signed out' })
+        expect(await swarmLaunchTarget(access as never, { model: 'qwen3', grid: 'swarm-0123456789ab' }, sync)).toBeNull()
+        expect(sync).not.toHaveBeenCalled()
+      })
+
       it('a move grid cannot be set up for says why and reads no grid; one whose endpoint cannot be read says so', async () => {
         const { port } = setup()
         access.ensure.mockResolvedValueOnce({ status: 'handoff-failed', name: null, detail: 'no grid on this computer' })
@@ -365,6 +390,50 @@ describe('the models service', () => {
       expect(fleet.run).toHaveBeenCalledWith('local:grid', 'cmd-1', { args: COMMAND.args, timeoutMs: 5_000 })
       expect(access.ensure).not.toHaveBeenCalled()
       expect(GridFleetRpc).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps a Swarm\'s grid in step for its owner only, with the Swarm\'s grid name and real addresses', async () => {
+      const { requests } = setup()
+      const sync = requests.grid_swarm_sync!
+      expect(await sync({ grid: 'swarm-0123456789ab', members: ['b@example.com', 'not an address', 7] }, asker)).toEqual({ ready: true, added: ['b@example.com'], removed: [] })
+      expect(syncSwarmGrid).toHaveBeenCalledWith('swarm-0123456789ab', ['b@example.com'])
+      expect(await sync({ grid: 'swarm-0123456789ab', members: [] }, { ...asker, owner: false })).toEqual({ error: 'OWNER_REQUIRED' })
+      expect(await sync({ grid: 'my-grid', members: [] }, asker)).toEqual({ error: 'INVALID_REQUEST' })
+      expect(await sync({ grid: 7, members: [] }, asker)).toEqual({ error: 'INVALID_REQUEST' })
+      expect(await sync({ grid: 'swarm-0123456789ab' }, asker)).toEqual({ error: 'INVALID_REQUEST' })
+      expect(await sync({ grid: 'swarm-0123456789ab', members: Array.from({ length: 201 }, (_, i) => `p${i}@example.com`) }, asker)).toEqual({ error: 'INVALID_REQUEST' })
+      access.ensure.mockResolvedValueOnce({ status: 'handoff-failed', name: null, detail: 'signed out' })
+      expect(await sync({ grid: 'swarm-0123456789ab', members: [] }, asker)).toEqual({ ready: false, error: 'signed out', added: [], removed: [] })
+      expect(syncSwarmGrid).toHaveBeenCalledTimes(1)
+    })
+
+    it('shares a saved API with a Swarm\'s grid for this computer\'s own person, signed in to grid first', async () => {
+      // Clearing what an earlier process left never holds the service up, even when it fails.
+      apiShares.restore.mockRejectedValueOnce(new Error('grid gone'))
+      const { requests } = setup()
+      const share = requests.grid_swarm_api_share!
+      const ask = { grid: 'swarm-0123456789ab', connectionId: 'c1', model: 'm', action: 'start' }
+      expect(await share(ask, asker)).toEqual({ ok: true })
+      expect(apiShares.share).toHaveBeenCalledWith('swarm-0123456789ab', 'c1', 'm')
+      expect(await share({ ...ask, action: 'stop' }, asker)).toEqual({ ok: true })
+      expect(apiShares.stop).toHaveBeenCalledWith('swarm-0123456789ab', 'c1', 'm')
+      expect(await share(ask, { ...asker, local: false })).toEqual({ error: 'OWNER_REQUIRED' })
+      expect(await share(ask, { ...asker, owner: false })).toEqual({ error: 'OWNER_REQUIRED' })
+      for (const bad of [{ grid: 'team' }, { connectionId: 7 }, { model: '' }, { model: 'x'.repeat(201) }, { model: 7 }, { action: 'pause' }]) {
+        expect(await share({ ...ask, ...bad }, asker)).toEqual({ error: 'INVALID_REQUEST' })
+      }
+      access.ensure.mockResolvedValueOnce({ status: 'handoff-failed', name: null, detail: 'signed out' })
+      expect(await share(ask, asker)).toEqual({ error: 'signed out' })
+      expect(apiShares.share).toHaveBeenCalledTimes(1)
+      expect(requests.grid_swarm_api_shares!({ grid: 'swarm-0123456789ab' }, asker)).toEqual({ shares: [expect.objectContaining({ model: 'm' })] })
+      expect(apiShares.list).toHaveBeenLastCalledWith('swarm-0123456789ab')
+      requests.grid_swarm_api_shares!({}, asker)
+      expect(apiShares.list).toHaveBeenLastCalledWith(undefined)
+      // Its endpoint reads the saved API afresh and runs this computer's grid.
+      const deps = (vi.mocked(SwarmApiShares).mock.calls.at(-1) as unknown as [{ access: (id: string) => unknown; exec: (args: string[]) => Promise<unknown> }])[0]
+      expect(deps.access('c1')).toEqual({ connection: { id: 'c1' }, apiKey: 'fixture' })
+      await deps.exec(['--remote', 'ls'])
+      expect(gridExec).toHaveBeenLastCalledWith(['--remote', 'ls'])
     })
 
     it('refuses a command it cannot read, or one with no connection or request to belong to', async () => {
@@ -604,6 +673,19 @@ describe('the models service', () => {
         local.act.mockClear()
         expect(await ask('grid_fleet_model_start', { modelId: 'org/Model-GGUF', community: true })).toEqual({ error: 'This computer is in no community grid.' })
         expect(local.act).not.toHaveBeenCalled()
+      })
+
+      it('a start or stop with a Swarm `grid` runs on that grid; a download, or a name that is not a Swarm grid, does not', async () => {
+        const { ask } = setup([], named)
+        local.act.mockClear()
+        await ask('grid_fleet_model_start', { modelId: 'org/Model-GGUF', grid: 'swarm-0123456789ab' })
+        await ask('grid_fleet_model_stop', { modelId: 'org/Model-GGUF', grid: 'swarm-0123456789ab' })
+        await ask('grid_fleet_model_download', { modelId: 'org/Model-GGUF', grid: 'swarm-0123456789ab' })
+        await ask('grid_fleet_model_start', { modelId: 'org/Model-GGUF', grid: 'someone-elses-grid' })
+        expect(local.act.mock.calls).toEqual([
+          ['swarm-0123456789ab', 'org/Model-GGUF', 'start'], ['swarm-0123456789ab', 'org/Model-GGUF', 'stop'],
+          ['kelvin-1a2b3c4d', 'org/Model-GGUF', 'download'], ['kelvin-1a2b3c4d', 'org/Model-GGUF', 'start'],
+        ])
       })
 
       it('answers what the act answers, as it is', async () => {

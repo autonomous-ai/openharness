@@ -874,6 +874,156 @@ void main() {
     },
   );
 
+  group('Local models', () {
+    const swarmGrid = 'swarm-0123456789ab';
+    Map<String, dynamic> machine({
+      List<Map<String, dynamic>> served = const [],
+    }) => {
+      'machineId': 'studio',
+      'name': 'Studio',
+      'contributorId': 'owner',
+      'observation': {
+        'receivedAt': DateTime.now().millisecondsSinceEpoch,
+        'localModels': served,
+      },
+    };
+    Future<void> mount(WidgetTester tester, dynamic c) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          // As the sidebar does: the section is rebuilt whenever the Swarm changes.
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: c,
+              builder: (context, _) =>
+                  SuperTabMachines(controller: c, onAddAgent: (_) {}),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    final open = find.byKey(const ValueKey('super-local-models'));
+    final toggle = find.byKey(const ValueKey('super-local-models-switch'));
+
+    testWidgets('the owner turns them on from Machines; it is off until then', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      server.state['machines'] = [machine()];
+      final c = server.controller();
+      await c.refresh();
+      await mount(tester, c);
+      await tester.tap(open);
+      await tester.pumpAndSettle();
+      expect(tester.widget<Switch>(toggle).value, isFalse);
+      expect(find.text('Off. Only you can turn it on.'), findsOneWidget);
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      expect(
+        server.posts
+            .map((p) => p['command'])
+            .where((cmd) => (cmd as Map)['type'] == 'localModels.set')
+            .single,
+        {'type': 'localModels.set', 'enabled': true},
+      );
+      await tester.tap(find.byKey(const ValueKey('super-local-models-close')));
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    });
+
+    testWidgets(
+      'others see them only once on, cannot switch them, and see what each machine runs',
+      (tester) async {
+        final server = ConversationServer();
+        (server.state['people'] as List).add({
+          'id': 'peer',
+          'email': 'peer@example.com',
+          'role': 'collaborator',
+        });
+        server.state['machines'] = [machine()];
+        final c = server.controller(account: 'peer');
+        await c.refresh();
+        await mount(tester, c);
+        expect(open, findsNothing);
+
+        server.state['localModels'] = {
+          'grid': swarmGrid,
+          'enabled': true,
+          'ready': true,
+        };
+        server.state['machines'] = [
+          machine(
+            served: [
+              {'grid': swarmGrid, 'model': 'qwen3', 'name': 'Qwen 3'},
+              {'grid': 'swarm-ffffffffffff', 'model': 'other'},
+            ],
+          ),
+        ];
+        server.revision++;
+        await c.refresh();
+        await tester.pumpAndSettle();
+        await tester.tap(open);
+        await tester.pumpAndSettle();
+        expect(tester.widget<Switch>(toggle).onChanged, isNull);
+        expect(find.text('Running now: Qwen 3 on Studio'), findsOneWidget);
+        await tester.tap(find.byKey(const ValueKey('super-local-models-close')));
+        await tester.pumpAndSettle();
+
+        // The machine's details say what it runs; Run is for the machine's own person, in their window.
+        await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
+        await tester.pumpAndSettle();
+        expect(find.text('Running Qwen 3 for this Swarm.'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('super-machine-local-models-run')),
+          findsNothing,
+        );
+        await tester.tap(find.widgetWithText(TextButton, 'Close'));
+        await tester.pumpAndSettle();
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      },
+    );
+
+    test(
+      'a reading serves models on the Swarm grid only while it is fresh',
+      () {
+        final now = DateTime.fromMillisecondsSinceEpoch(1000000);
+        Map<String, dynamic> pool(int at) => {
+          'observation': {
+            'receivedAt': at,
+            'localModels': [
+              {'grid': swarmGrid, 'model': 'qwen3'},
+              {'grid': swarmGrid, 'model': 7},
+              'junk',
+            ],
+          },
+        };
+        expect(superTabServedModels(pool(990000), swarmGrid, now: now), [
+          (model: 'qwen3', name: 'qwen3'),
+        ]);
+        expect(
+          superTabServedModels(pool(900000), swarmGrid, now: now),
+          isEmpty,
+        );
+        expect(superTabServedModels(null, swarmGrid, now: now), isEmpty);
+        expect(SuperTabLocalModels.read({'enabled': true}), isNull);
+        expect(
+          SuperTabLocalModels.read({
+            'grid': swarmGrid,
+            'enabled': true,
+            'ready': false,
+            'error': 'plan limit',
+          })!.error,
+          'plan limit',
+        );
+      },
+    );
+  });
+
   group('Remove from Swarm', () {
     Map<String, dynamic> machine(String contributorId) => {
       'machineId': 'studio',

@@ -26,6 +26,7 @@ import 'agent_details.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
+import 'local_models.dart';
 import 'machine_details.dart';
 import 'machine_status.dart';
 import 'model.dart';
@@ -1254,6 +1255,19 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             cwd: shared?['cwd'] as String?,
             engines: allowed,
             accounts: dim ? const [] : accounts,
+            footer: ListenableBuilder(
+              listenable: c,
+              builder: (context, _) => SuperTabMachineLocalModels(
+                controller: c,
+                machineId: id,
+                // Only on a machine of the viewer's own that this window reaches does Run start anything.
+                mine:
+                    (person?.id ?? contributor) == c.accountId &&
+                    widget.app?.stateOf(id) != null,
+                app: widget.app,
+                now: widget.now,
+              ),
+            ),
           ),
           actions: [
             if (shared != null && contributor == c.accountId)
@@ -1573,6 +1587,26 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             ? () => unawaited(_contribute())
             : null,
         addTooltip: 'Add machine',
+        // The Local models add-on: the owner turns it on here; everyone else sees it once it is on.
+        actions: [
+          if (c.isOwner || c.snapshot?.localModels?.enabled == true)
+            AppIconButton(
+              key: const ValueKey('super-local-models'),
+              icon: AppIcons.cpu,
+              tooltip: 'Local models',
+              color: c.snapshot?.localModels?.enabled == true
+                  ? DesktopChrome.accent
+                  : DesktopChrome.muted,
+              onPressed: () => unawaited(
+                showSwarmLocalModels(
+                  context,
+                  c,
+                  app: widget.app,
+                  now: widget.now,
+                ),
+              ),
+            ),
+        ],
         // Only a Swarm that can't be read is news; a live one says nothing.
         trailing: c.backendUnreachable
             ? SuperTabMachinesPill(

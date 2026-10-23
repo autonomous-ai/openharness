@@ -925,6 +925,32 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
       final local = model?.local;
       final api = model?.api;
       final owner = model?.controller ?? catalog.manager;
+      // A Swarm's Local models: each model's one action is for the Swarm (SwarmSearchController.swarmModelAction).
+      if (search.swarmModels != null &&
+          !(local != null && owner.downloading(local))) {
+        final swarm = search.swarmModelAction(selected);
+        if (swarm != null) {
+          final run = swarm.run;
+          return [
+            _ResourceAction(
+              swarm.label,
+              !busy && run != null ? () => unawaited(_run(run)) : null,
+              command: swarm.command,
+            ),
+          ];
+        }
+        if (api != null && model?.apiModel == null) {
+          return [
+            if (search.canExpandApi(selected))
+              _ResourceAction(
+                search.actionLabel(selected),
+                _open,
+                command: 'picker.accept',
+              ),
+          ];
+        }
+        return const [];
+      }
       if (local != null && owner.downloading(local)) {
         // A download under way: cancelling it is the one action open while it runs.
         return [
@@ -1452,6 +1478,15 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
             widget.search.modelUseError != null)
           errorLine(widget.search.modelUseError!),
         SizedBox(height: cell.height),
+        if (widget.search.swarmModels case final swarm?)
+          labelValue(
+            'Swarm',
+            local == null
+                ? 'Usable by agents on your machines'
+                : local.servedOn(swarm.grid)
+                ? 'Running for this Swarm'
+                : 'Run for Swarm lets agents on any machine in the Swarm use it',
+          ),
         if (local != null) ...[
           // A model another app downloaded starts in that app, joined to the grid from there.
           if (local.app case final app?) labelValue('Runs in', app),
@@ -1627,7 +1662,13 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         if (model.name case final name?) ('Name', name),
         ('Via', '${api.name} · ${api.host}'),
         '',
-        if (reason == null)
+        if (widget.search.swarmModels case final swarm?) ...[
+          swarm.shared(api.id, model.id)
+              ? 'Shared with this Swarm.'
+              : 'Share with Swarm lets agents on any machine in this Swarm run on it.',
+          'They use the key saved on ${widget.search.models!.manager.apis.hostLabel}, '
+              'and every request they send is charged to that key.',
+        ] else if (reason == null)
           'Use runs this harness on it, with the key saved on '
               '${widget.search.models!.manager.apis.hostLabel}.'
         else if (reason == 'Other machine')

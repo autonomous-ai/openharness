@@ -167,6 +167,7 @@ class _LocalApp extends ModelManagerTestApp {
     String machineId,
     String modelId, {
     required bool start,
+    String? grid,
   }) async {
     if (!start) await stopGate?.future;
     final answer = await super.controlLocalModel(

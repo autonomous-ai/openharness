@@ -1,6 +1,6 @@
 // cli/src/superTabs/route.spec.ts
 import { describe, expect, it } from 'vitest'
-import { breaks, choose, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { LOCAL_NONE, breaks, choose, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 
 const object = (v: unknown) => v as Record<string, unknown>
 
@@ -459,5 +459,57 @@ describe('the owner\'s rules', () => {
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', kind: 'ui' })).toMatchObject({ kind: 'ui' })
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', kind: 'UI work' })).toContain('kind')
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x' })).not.toHaveProperty('kind')
+  })
+})
+
+describe('local models on the Swarm\'s grid', () => {
+  const local = (patch: Partial<Probe> = {}) => probe({ model: 'default', effort: 'default', quality: 1, cost: 1, quota: { known: false, leftPercent: null, resetsAt: null },
+    gridModel: 'qwen3', gridName: 'swarm-0123456789ab', gridLabel: 'Qwen 3', ...patch })
+  it('reads local only as true, and leaves it out otherwise', () => {
+    expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', local: true })).toMatchObject({ local: true })
+    expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', local: false })).not.toHaveProperty('local')
+    expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', local: 'yes' })).toContain('local')
+  })
+  it('fits a local model on no subscription, names it as local and records where it is served', () => {
+    const r = ok(choose([local()], policy, a({ difficulty: 'low' }), NOW))
+    expect(r.shown[0]).toMatchObject({ title: 'New agent · Claude on Qwen 3 (local) · remote-1', fit: { status: 'fits', account: 'local:swarm-0123456789ab:qwen3' } })
+    expect(r.shown[0]!.label).toContain('Claude on Qwen 3 (local)')
+    expect((recordOf(r, decide(r), a(), policy) as { candidates: unknown[] }).candidates[0]).toMatchObject({ gridModel: 'qwen3', gridName: 'swarm-0123456789ab' })
+    // Without a name or a label: the model stands for both, and nothing about the grid is recorded without a grid.
+    const bare = ok(choose([local({ gridName: undefined, gridLabel: undefined })], policy, a({ difficulty: 'low' }), NOW))
+    expect(bare.shown[0]).toMatchObject({ title: 'New agent · Claude on qwen3 (local) · remote-1', fit: { account: 'local::qwen3' } })
+    expect((recordOf(bare, decide(bare), a(), policy) as { candidates: unknown[] }).candidates[0]).not.toHaveProperty('gridModel')
+  })
+  it('keeps a local model under the floor of a harder task, and keeps it beside a subscription row of the same name', () => {
+    const r = ok(choose([probe(), local()], policy, a(), NOW))
+    expect(r.shown.map(s => s.gridModel)).toEqual([undefined])
+    // Same machine, engine, model and effort as a subscription `default` row: both stay, being different models.
+    const both = ok(choose([probe({ model: 'default', effort: 'default', quality: 1, cost: 1, quota: windows([80, 3 * H], [90, 5 * D]) }), local()], policy, a({ difficulty: 'low' }), NOW))
+    expect(both.shown).toHaveLength(2)
+  })
+  it('considers only local models when a person asked for one, whatever the floor, and says when none is served', () => {
+    const r = ok(choose([probe({ model: 'opus', effort: 'high', quality: 3, cost: 3 }), local()], policy, a({ difficulty: 'high', local: true }), NOW))
+    expect(r.shown.map(s => s.gridModel)).toEqual(['qwen3'])
+    expect(r.belowFloor).toBe(false)
+    expect(choose([probe()], policy, a({ local: true }), NOW)).toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: 'Local models', reason: LOCAL_NONE }] })
+  })
+
+  it('offers only the model a person named, whatever its strength, and says when nothing runs it', () => {
+    const api = local({ gridModel: 'deepseek/deepseek-v4.1-flash-1017', gridLabel: 'deepseek/deepseek-v4.1-flash-1017 · OpenRouter', gridKind: 'api' })
+    const older = local({ gridModel: 'DeepSeek-V4-Flash-0731', gridLabel: undefined, gridKind: 'shared' })
+    const opus = probe({ model: 'opus', effort: 'high', quality: 3, cost: 3, quota: windows([80, 3 * H], [90, 5 * D]) })
+    const r = ok(choose([opus, older, api], policy, a({ difficulty: 'high', model: 'deepseek 4.1 flash' }), NOW))
+    expect(r.shown.map(s => s.gridModel)).toEqual(['deepseek/deepseek-v4.1-flash-1017'])
+    expect(r.shown[0]!.title).toBe('New agent · Claude on deepseek/deepseek-v4.1-flash-1017 · OpenRouter (API) · remote-1')
+    expect(r.belowFloor).toBe(false)
+    // A subscription model by name, and the engine's name counts as one of its words.
+    expect(ok(choose([opus, api], policy, a({ model: 'Claude Opus' }), NOW)).shown.map(s => s.model)).toEqual(['opus'])
+    expect(ok(choose([older], policy, a({ difficulty: 'low' }), NOW)).shown[0]!.title).toContain('(shared)')
+    expect(choose([opus], policy, a({ model: 'gpt 9' }), NOW)).toEqual({ error: 'NO_CANDIDATE',
+      excluded: [{ title: 'Named model', reason: 'No candidate runs "gpt 9". Share it with the Swarm (Local models), or check its name.' }] })
+    expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', model: ' deepseek 4.1 flash ' })).toMatchObject({ model: 'deepseek 4.1 flash' })
+    expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', model: '...' })).toContain('model')
+    expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', model: 7 })).toContain('model')
+    expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', model: 'x'.repeat(201) })).toContain('model')
   })
 })

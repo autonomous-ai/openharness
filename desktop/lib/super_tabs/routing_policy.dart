@@ -56,6 +56,7 @@ class RoutingPolicy {
     required this.floor,
     required this.quotaReserve,
     required this.notes,
+    this.localModels,
   });
 
   factory RoutingPolicy.fromJson(Map<String, dynamic> j) {
@@ -71,6 +72,9 @@ class RoutingPolicy {
       },
       quotaReserve: (j['quotaReserve'] as num).toInt(),
       notes: j['notes'] as String? ?? '',
+      localModels: j['localModels'] is Map
+          ? Map<String, dynamic>.unmodifiable(j['localModels'] as Map)
+          : null,
     );
   }
 
@@ -78,6 +82,10 @@ class RoutingPolicy {
   final Map<String, int> floor;
   final int quotaReserve;
   final String notes;
+
+  /// How the route weighs models served on a Swarm's grid (`{quality, enabled}`). Not edited here; kept so that
+  /// saving the rest does not reset it to the backend's default.
+  final Map<String, dynamic>? localModels;
 
   RoutingPolicy copyWith({
     List<RoutingModel>? models,
@@ -89,6 +97,7 @@ class RoutingPolicy {
     floor: floor ?? this.floor,
     quotaReserve: quotaReserve ?? this.quotaReserve,
     notes: notes ?? this.notes,
+    localModels: localModels,
   );
 
   Map<String, dynamic> toJson() => {
@@ -97,6 +106,7 @@ class RoutingPolicy {
     'quotaReserve': quotaReserve,
     'notes': notes,
     'models': [for (final m in models) m.toJson()],
+    if (localModels != null) 'localModels': localModels,
   };
 
   /// This policy with one field taken from [other], for a field that goes back

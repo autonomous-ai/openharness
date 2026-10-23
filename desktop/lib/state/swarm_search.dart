@@ -9,6 +9,7 @@ import '../models/api_connections_controller.dart'
     show ApiConnection, ApiModel, agentOnApiModel;
 import '../models/local_model.dart';
 import '../models/model_search_catalog.dart';
+import '../models/swarm_models_target.dart';
 import '../usage/models_menu_controller.dart' show subscriptionSearchId;
 import '../core/dsh_catalog.dart';
 import '../store/experimental_harnesses.dart';
@@ -99,6 +100,7 @@ class SwarmSearchController extends ChangeNotifier {
     this.resultsFromBottom = false,
     this.noteFor,
     this.additionalDestinations = const [],
+    this.swarmModels,
     this.harnessContext,
     this._placement,
     this._split,
@@ -136,6 +138,10 @@ class SwarmSearchController extends ChangeNotifier {
   final HarnessPickerContext? harnessContext;
   final SwarmProjectStore? projects;
   final ModelSearchCatalog? models;
+
+  /// Set when these Models are a Swarm's Local models ([SwarmModelsTarget]): no Subscriptions, and a model's action
+  /// puts it on the Swarm's grid ([swarmModelAction]) rather than starting a harness on it.
+  final SwarmModelsTarget? swarmModels;
   bool modelDownloadsVisible = false;
   bool isModelDownloadsRow(SwarmDestination? row) =>
       isModelMode && row?.id == 'model:downloads';
@@ -306,6 +312,21 @@ class SwarmSearchController extends ChangeNotifier {
     final catalog = models;
     final entry = catalog?.entries[row.modelId];
     if (entry == null || catalog == null) return null;
+    // A Swarm's Local models say what each row is to the Swarm.
+    if (swarmModels case final swarm?) {
+      final local = entry.local;
+      final owner = entry.controller ?? catalog.manager;
+      if (local != null &&
+          (owner.operationFor(local)?.active == true ||
+              owner.pendingId == local.id)) {
+        return catalog.localStatusWord(local, controller: owner);
+      }
+      if (local?.servedOn(swarm.grid) == true) return 'In Swarm';
+      if (entry.apiModel case final model?) {
+        return swarm.shared(entry.api!.id, model.id) ? 'Shared' : null;
+      }
+      if (local == null && entry.api == null) return 'Usable';
+    }
     if (modelRowInUse(row)) return inUseWord;
     // An API's model says what Enter does on it — Use, when this pane can run on it, else nothing.
     // Its entry's status is only the API's name, which the row it sits under already shows.
@@ -439,6 +460,63 @@ class SwarmSearchController extends ChangeNotifier {
         owner.machine?.connectionStatus == ConnectionStatus.connected &&
         owner.machine?.needsLink == false &&
         (owner.targetMachineId == null || owner.machine?.isOffline == false);
+  }
+
+  /// What a model row does in a Swarm's Local models ([swarmModels]): a model of this person's machines runs for the
+  /// Swarm or stops (Get first, when it is not downloaded); an API's model is shared with the Swarm or no longer. Null
+  /// outside a Swarm, and for a row with nothing to do: an API's own row (it opens its models), a model shared with the
+  /// person (agents on their machines use it as it is), a download under way (the preview's Cancel).
+  ({String label, String command, Future<String?> Function()? run})?
+  swarmModelAction(SwarmDestination? row) {
+    final swarm = swarmModels;
+    final entry = models?.entries[row?.modelId];
+    if (swarm == null || entry == null) return null;
+    if (entry.local case final local?) {
+      final owner = entry.controller ?? models!.manager;
+      if (owner.downloading(local)) return null;
+      final ready =
+          !owner.busy &&
+          owner.inventoryAvailable &&
+          owner.machine?.connectionStatus == ConnectionStatus.connected &&
+          owner.machine?.needsLink == false &&
+          (owner.targetMachineId == null || owner.machine?.isOffline == false);
+      Future<String?> Function() act(String action, {String? grid}) =>
+          () async {
+            await owner.control(local, action, grid: grid);
+            return owner.error;
+          };
+      if (local.servedOn(swarm.grid)) {
+        return (
+          label: 'Stop for Swarm',
+          command: 'picker.model_stop',
+          run: ready ? act('stop', grid: swarm.grid) : null,
+        );
+      }
+      if (!local.downloaded && !local.canStop) {
+        return (
+          label: 'Get',
+          command: 'picker.model_download',
+          run: ready && local.canStart && owner.supportsDownload
+              ? act('download')
+              : null,
+        );
+      }
+      return (
+        label: 'Run for Swarm',
+        command: 'picker.model_start',
+        run: ready && local.canStart ? act('start', grid: swarm.grid) : null,
+      );
+    }
+    if (entry.apiModel case final model?) {
+      final api = entry.api!;
+      final on = swarm.shared(api.id, model.id);
+      return (
+        label: on ? 'Stop sharing' : 'Share with Swarm',
+        command: 'picker.accept',
+        run: () => swarm.share(api.id, model.id, start: !on),
+      );
+    }
+    return null;
   }
 
   Future<String?> getModel(SwarmDestination row) async {
@@ -2141,6 +2219,17 @@ class SwarmSearchController extends ChangeNotifier {
           : [...found, ?create];
     }
     if (isModelMode) {
+      // A subscription is one person's own: nothing in it can be given to a Swarm. And what the Swarm's own grid serves
+      // is the Swarm's already, not shared with the person: its models are listed where they come from.
+      if (swarmModels case final swarm?) {
+        rows = rows.where((row) {
+          if (modelSection(row) == ModelSearchSection.subscriptions) {
+            return false;
+          }
+          final entry = models?.entries[row.modelId];
+          return entry?.local != null || entry?.gridModel?.grid != swarm.grid;
+        }).toList();
+      }
       if (matchQuery.trim().isEmpty && _downloadCount > shownDownloads) {
         rows = [...rows, _downloadsRow];
       }
@@ -2387,6 +2476,12 @@ class SwarmSearchController extends ChangeNotifier {
         }
       }
       notifyListeners();
+      return null;
+    }
+    if (swarmModels != null && destination.isModel) {
+      // Return does what the preview's button does, for the Swarm.
+      final run = swarmModelAction(destination)?.run;
+      if (run != null) unawaited(run());
       return null;
     }
     if (destination.isModel &&

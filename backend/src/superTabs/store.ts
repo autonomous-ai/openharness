@@ -1,4 +1,4 @@
-import { machineContribution, machineObservationSchema, machineSlots, recordAgentPresence, type MachineObservation } from './machines.js'
+import { hostLocalGrid, machineContribution, machineObservationSchema, machineSlots, recordAgentPresence, swarmGridRow, type MachineObservation } from './machines.js'
 import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient, SuperTab, SuperTabDelivery } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
@@ -755,10 +755,19 @@ export class SuperTabStore {
             groupProject(state, conversation(state, s.request.conversationId)).id === p.id))
             .map(p => ({ id: p.id, leadConversationId: p.leadConversationId, repository: p.repository,
               conversationIds: state.conversations.filter(c => groupProject(state, c).id === p.id).map(c => c.id) })) } : {}),
+          // The Swarm's grid while the Local models add-on is on: the host reports the models it serves there, and asks grid
+          // nothing while it is off.
+          ...hostLocalGrid(state),
           reservations: (state.harnessReservations ?? []).filter(r => r.machineId === machineId).map(({ harnessId, generation }) => ({ harnessId, generation })),
           harnessIds: [...new Set([...state.agents.filter(a => a.machineId === machineId).map(a => a.harnessId), ...(state.harnessReservations ?? []).filter(r => r.machineId === machineId).map(r => r.harnessId), ...(state.starts ?? []).filter(s => s.request.machineId === machineId && s.harnessId).map(s => s.harnessId!)])] }]
       })
     })
+  }
+
+  /** The owner's Swarms with the Local models add-on: what the owner's computer creates on grid and keeps in step. */
+  async hostGrids(user: AuthUser) {
+    const rows = await this.db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, ownerId: user.sub }, take: 100 })
+    return rows.flatMap(row => swarmGridRow(row.id, stateOf(row)) ?? [])
   }
 
   async observeMachine(user: AuthUser, tabId: string, machineId: string, input: MachineObservation) {
