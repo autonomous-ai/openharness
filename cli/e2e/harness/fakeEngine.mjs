@@ -185,6 +185,12 @@ export async function run(engine, config = {}, { native = false } = {}) {
       : `error: unexpected argument '${refused}' found\n\nUsage: codex [OPTIONS] [PROMPT]\n\nFor more information, try '--help'.\n`)
     process.exit(engine === 'claude' ? 1 : 2)
   }
+  // Resume checks for a live background job before opening a pane. This is a
+  // CLI query, not an agent launch: keep it out of the launch-argv ledger.
+  if (engine === 'claude' && args.length === 2 && args[0] === 'agents' && args[1] === '--json') {
+    process.stdout.write('[]\n')
+    return
+  }
   // Every launch's argv, for a test to read what an agent was started with.
   if (config.root) appendFileSync(join(config.root, 'launch-argv'), `${JSON.stringify({ engine, args })}\n`)
   // The process table shows it as it shows the real CLI: named `claude` or `codex`, with the command line
