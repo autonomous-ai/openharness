@@ -1,4 +1,4 @@
-import { publishObservers } from './observers.js'
+import { OBSERVER_VALID_MS, publishObservers } from './observers.js'
 import { ContributedMachines } from './machines.js'
 import { retainContributions } from './retention.js'
 import { configurationObservation } from './configuration.js'
@@ -127,6 +127,8 @@ export class SuperTabHost {
   private readonly log: (message: string) => void
   private retentionError: string | null = null
   private readonly observers: typeof publishObservers
+  /** Share was asked to run once a roster here first named someone to show an agent to. */
+  private shareWoken = false
   private readonly attachedFiles: typeof attachedFiles
   private readonly prepareContribution: typeof prepareContribution
   /** Per tab the roster marks, the add in progress or when the next may run. */
@@ -226,7 +228,9 @@ export class SuperTabHost {
     this.native?.stop()
     this.machines?.stop()
     this.authorized.clear()
-    try { this.observers(this.core.dataDir, this.machineId, [], 0) } catch { /* The old snapshot expires. */ }
+    // An empty roster in force, which Share reads as everyone gone and withdraws their invitations; a lapsed one
+    // would only pause their views (superTabs/observers.ts `known`).
+    try { this.observers(this.core.dataDir, this.machineId, [], this.now() + OBSERVER_VALID_MS) } catch { /* The old snapshot expires. */ }
     // Signed out or another machine: this host's alerts are no longer anyone's. A core that is gone heard nothing, and
     // the next host's first roster replaces them anyway.
     if (this.attention !== null && this.attention !== '[]') {
@@ -426,7 +430,6 @@ export class SuperTabHost {
     return this.core.turns.leaseDeliveries('superTabs', Object.fromEntries(this.authorized))
   }
   private async poll(): Promise<void> {
-    const requestedAt = this.now()
     const data = await backend(this.core, 'GET', `/api/super-tabs/hosts/${this.machineId}`)
     if (this.stopped) return
     if (!Array.isArray(data)) throw new Error('Invalid Super Tab host roster.')
@@ -441,7 +444,9 @@ export class SuperTabHost {
       if (message !== this.retentionError) this.log(message)
       this.retentionError = message
     }
-    this.observers(this.core.dataDir, this.machineId, data, requestedAt + 2500)
+    // Valid from this answer until the next is due, slow reads included, so it never lapses between two reads.
+    this.observers(this.core.dataDir, this.machineId, data, this.now() + OBSERVER_VALID_MS)
+    this.wakeShare(data)
     this.publishAttention(data)
     this.joinSwarms(data)
     // Recovery can wait on a native receipt. Run it beside leases, so another worker's input
@@ -585,6 +590,12 @@ export class SuperTabHost {
 
   /** Hands the core this roster's waits when they changed (or on the first roster). A failed roster read changes
    *  nothing: a network blip does not close an alert. */
+  private wakeShare(rows: unknown[]): void {
+    if (this.shareWoken || !rows.some(row => Array.isArray((row as { observers?: unknown }).observers)
+      && ((row as { observers: unknown[] }).observers.length > 0))) return
+    this.shareWoken = true
+    this.core.superTabs?.shareObservers()
+  }
   private publishAttention(rows: unknown[]): void {
     // A harness the core's live list misses for a moment (a process-side snapshot between reads, a restart of its
     // terminal) keeps its wait for 3 s: closing and raising it again would alert twice for the same wait.

@@ -1182,6 +1182,10 @@ export interface SuperTabsCore {
   cards(items: SwarmCard[]): void
   /** What one Lead last said, pushed when the recap on a Harness Pro's screen moved on. */
   cardRecap(recap: LeadRecap): void
+  /** Members may watch an agent of this machine's: Share must run to invite them (superTabs/observers.ts). Its saved
+   *  state wakes it only as the core starts, so a machine that joined a Swarm while running never invited anyone and
+   *  each member's pane read "must be online" (River on a contributed machine, 2026-10-23). */
+  shareObservers(): void
 }
 
 /** What the cloud service answers the core: done, or why not, in words a person reads. */

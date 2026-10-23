@@ -494,7 +494,7 @@ it('documents finished worker decisions and explains an older backend without re
 describe('the Swarm cards the devices ask for', () => {
   function withCards() {
     const cards = { want: vi.fn(), open: vi.fn(), recap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped', at: 5, none: false })), onCards: undefined as unknown, onRecap: undefined as unknown }
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() }
     const core = fakeCore({ superTabs })
     const make = vi.fn(() => cards as never)
     const service = superTabService(core, { cards: make })
