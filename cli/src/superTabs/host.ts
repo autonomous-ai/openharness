@@ -1,6 +1,6 @@
 import { OBSERVER_VALID_MS, publishObservers } from './observers.js'
 import { ContributedMachines } from './machines.js'
-import { retainContributions } from './retention.js'
+import { retainContributions, retainedHarnesses } from './retention.js'
 import { configurationObservation } from './configuration.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
 import { attachedFiles } from './attachments.js'
@@ -106,9 +106,18 @@ const SKILL_RETRY_MS = 60_000
 const JOIN_RETRY_MAX_MS = 30 * 60_000
 /** Refusals no retry can change while this host runs: the Swarm has all its machines, or this account does not own it. */
 const JOIN_FINAL = new Set(['MACHINES_FULL', 'OWNER_REQUIRED'])
+/** A Lead's reopen that failed (an engine that cannot start, a busy pane) waits this long, doubling up to half an hour, so a
+ *  crash loop never spins; one the core took waits a minute for its session to show before it is asked again. */
+const LEAD_RETRY_MS = 5_000
+const LEAD_RETRY_MAX_MS = 30 * 60_000
+const LEAD_REOPEN_WAIT_MS = 60_000
+/** The first wait after a session the backend ended could not be closed or acknowledged, doubling up to ten minutes. */
+const END_RETRY_MS = 5_000
+const END_RETRY_MAX_MS = 10 * 60_000
 /** How long after a pre-#1527 Swarm launch its engine may first bind a session and still be the Swarm's own. */
 const LEGACY_FIRST_BIND_MS = 120_000
 const typedId = (entry: Entry) => `team:service:superTabs:${entry.deliveryId}`
+const endingKey = (target: HostAgent) => `${target.tabId}:${target.agent.id}:${target.agent.harnessId}`
 const writeJournal = (file: string, journal: Journal) => {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
   const temporary = `${file}.next`
@@ -181,6 +190,10 @@ export class SuperTabHost {
   private readonly skillModes = new Map<string, SwarmSkillMode>()
   private skillsRunning: Promise<void> | null = null
   private missing = new Map<string, number>()
+  /** Per Lead harness here: a reopen in progress, its failures, when the next may run, and the reason last logged. */
+  private readonly keepAlives = new Map<string, { running: boolean; failures: number; retryAt: number; reason?: string }>()
+  /** Per session the backend ends: a close or acknowledgement in progress, how far it got, and when the next try may run. */
+  private readonly endings = new Map<string, { running: boolean; closed: boolean; acked: boolean; failures: number; retryAt: number }>()
 
   constructor(private readonly core: CoreApi, readonly machineId: string, options: SuperTabHostOptions = {}) {
     if (!identifier(machineId)) throw new SuperTabHostError('MACHINE_UNAVAILABLE', 'This machine is not signed in.')
@@ -457,6 +470,9 @@ export class SuperTabHost {
       if (message !== this.retentionError) this.log(message)
       this.retentionError = message
     }
+    // What the retention names is what this host may close: a member it kept before the backend ended it.
+    let kept = new Set<string>()
+    try { kept = retainedHarnesses(this.core.dataDir) } catch { /* A file that cannot be read closes nothing; the next roster rewrites it. */ }
     // Valid from this answer until the next is due, slow reads included, so it never lapses between two reads.
     this.observers(this.core.dataDir, this.machineId, data, this.now() + OBSERVER_VALID_MS)
     this.wakeShare(data)
@@ -482,14 +498,25 @@ export class SuperTabHost {
     for (const key of this.releaseAttempts.keys()) if (!stopKeys.has(key)) this.releaseAttempts.delete(key)
     const seen = new Set<string>()
     const running: HostAgent[] = []
+    const leads = new Set<string>(), ended = new Set<string>()
     for (const item of data) {
       const row = object(item), agent = object(row.agent)
       if (!identifier(row.tabId) || !identifier(agent.id) || !identifier(agent.harnessId) || agent.machineId !== this.machineId) continue
       const target = row as unknown as HostAgent
+      // A row still marked Lead is never closed (owner, 2026-10-23); one marked both is neither closed nor reopened.
+      if (row.closeSession === true) {
+        ended.add(endingKey(target))
+        if (row.lead !== true && kept.has(target.agent.harnessId)) this.endSession(target)
+        continue
+      }
       if (row.stopRequested === true) {
         // Native close may wait on disk or the engine; it must not delay other workers' input leases.
         void this.releaseWorker(target)
         continue
+      }
+      if (row.lead === true) {
+        leads.add(target.agent.harnessId)
+        this.keepAlive(target.agent.harnessId)
       }
       // Never adopt another live session as a replacement for the recorded harness.
       if (!this.core.agents.byAgent(target.agent.harnessId) || !this.core.agents.terminalAvailable(target.agent.harnessId)) continue
@@ -516,6 +543,9 @@ export class SuperTabHost {
       }
     }
     if (this.stopped) return
+    // A Lead the roster no longer marks (its project deleted) is never reopened again.
+    for (const [harnessId, state] of this.keepAlives) if (!leads.has(harnessId) && !state.running) this.keepAlives.delete(harnessId)
+    for (const [key, state] of this.endings) if (!ended.has(key) && !state.running) this.endings.delete(key)
     for (const deliveryId of this.files.keys()) if (!this.journal.entries[deliveryId]) this.files.delete(deliveryId)
     for (const entry of Object.values(this.journal.entries)) {
       const id = typedId(entry)
@@ -533,6 +563,58 @@ export class SuperTabHost {
     // Off the poll, so the backend calls of a notice never delay the next lease renewal. Owed at most once per text release.
     this.skillsRunning ??= (async () => { for (const target of running) await this.refreshSkill(target) })()
       .finally(() => { this.skillsRunning = null })
+  }
+
+  /** The owner, 2026-10-23: the Lead of an active project stays alive. One whose session is gone (a machine restart, a
+   *  kill) is reopened on its own conversation; nothing is typed into it, so no old input is replayed. A failure backs
+   *  off, so an engine that cannot start never spins. */
+  private keepAlive(harnessId: string): void {
+    const reopen = this.core.agents.keepLeadAlive
+    if (!reopen) return
+    const state = this.keepAlives.get(harnessId) ?? { running: false, failures: 0, retryAt: 0 }
+    this.keepAlives.set(harnessId, state)
+    if (state.running) return
+    if (this.core.agents.byAgent(harnessId)) { state.failures = 0; state.retryAt = 0; delete state.reason; return }
+    if (this.now() < state.retryAt) return
+    state.running = true
+    const failed = (reason: string) => {
+      state.retryAt = this.now() + Math.min(LEAD_RETRY_MAX_MS, LEAD_RETRY_MS * 2 ** state.failures++)
+      if (reason !== state.reason) this.log(`Could not reopen the Product Manager ${harnessId.slice(0, 8)}: ${reason}. Trying again with backoff.`)
+      state.reason = reason
+    }
+    void reopen(harnessId).then(result => {
+      if (!result.ok) return failed(result.detail ?? result.error)
+      state.failures = 0
+      state.retryAt = this.now() + LEAD_REOPEN_WAIT_MS
+      delete state.reason
+    }, error => failed(error instanceof Error ? error.message : String(error))).finally(() => { state.running = false })
+  }
+
+  /** Deleting a project left its Lead's session running, and removing an agent left its session behind (owner, 2026-10-23:
+   *  no zombie agents). The backend marks the session; this closes it, keeping its conversation, and says so once. */
+  private endSession(target: HostAgent): void {
+    const close = this.core.agents.closeMember
+    if (!close || this.stopped) return
+    const { tabId, agent } = target
+    const key = endingKey(target)
+    const state = this.endings.get(key) ?? { running: false, closed: false, acked: false, failures: 0, retryAt: 0 }
+    this.endings.set(key, state)
+    if (state.running || state.acked || this.now() < state.retryAt) return
+    state.running = true
+    void (async () => {
+      if (!state.closed) {
+        const result = await close(agent.harnessId)
+        if (!result.closed) throw new Error(`Could not close a session the Swarm ended (${result.error ?? 'unknown'}${result.detail ? `: ${result.detail}` : ''}).`)
+        state.closed = true
+      }
+      if (this.stopped) return
+      await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `session-closed-${agent.id}-${agent.harnessId}`,
+        command: { type: 'agent.sessionClosed', agentId: agent.id, harnessId: agent.harnessId } })
+      state.acked = true
+    })().catch(error => {
+      state.retryAt = this.now() + Math.min(END_RETRY_MAX_MS, END_RETRY_MS * 2 ** state.failures++)
+      this.log(error instanceof Error ? error.message : String(error))
+    }).finally(() => { state.running = false })
   }
 
   /** A CLI update can ship new built-in skill text while Swarm sessions run; until now a running agent kept the text it

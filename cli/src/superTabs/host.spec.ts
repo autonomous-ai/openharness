@@ -1186,3 +1186,162 @@ describe('built-in skill text after a CLI update', () => {
     expect(f.sent).toHaveLength(3)
   })
 })
+
+/** A host on this machine whose roster is [rows] (changeable), with the core's keep-alive and member close mocked. */
+function lifeFixture(rows: Record<string, unknown>[]) {
+  const t = setup(), host = t.open()
+  const commands: Record<string, unknown>[] = []
+  let live = false
+  const keepLeadAlive = vi.fn(async () => ({ ok: false as const, error: 'AGENT_BUSY' } as { ok: true } | { ok: false; error: string }))
+  const closeMember = vi.fn(async () => ({ closed: true as const } as { closed?: true; error?: string }))
+  t.core.agents.byAgent = vi.fn(() => (live ? { agentId: 'harness' } : undefined) as never)
+  t.core.agents.keepLeadAlive = keepLeadAlive
+  t.core.agents.closeMember = closeMember
+  t.core.account.backend = async (_method, path, body) => {
+    if ((body as any)?.command) { commands.push(body as Record<string, unknown>); return { status: 200, body: { data: {} } } }
+    if (path.includes('/hosts/')) return { status: 200, body: { data: rows } }
+    return { status: 200, body: { data: [] } }
+  }
+  const poll = async (advance = 0) => { t.wait(advance); await host.tick(); for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)) }
+  return { ...t, host, rows, commands, keepLeadAlive, closeMember, poll, live: (value: boolean) => { live = value } }
+}
+const leadRow = (extra: Record<string, unknown> = {}) => ({ tabId: 'tab', lead: true, active: true, agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }, ...extra })
+
+describe('keeping a Swarm Lead alive', () => {
+  // The owner, 2026-10-23: a Lead whose session died (a machine restart, a kill) stalls its whole project until someone
+  // reopens it by hand. Its host reopens it on its own conversation; a crash loop must not spin.
+  it('reopens a Lead whose session is gone, backing off while it cannot, and leaves a live one alone', async () => {
+    const t = lifeFixture([leadRow()])
+    await t.poll()
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
+    await t.poll(4_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+    await t.poll(1_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(2)
+    await t.poll(9_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(2)
+    await t.poll(1_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(3)
+    // The wait doubles, up to half an hour.
+    for (let i = 0; i < 20; i++) await t.poll(30 * 60_000)
+    const calls = t.keepLeadAlive.mock.calls.length
+    await t.poll(30 * 60_000 - 1)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(calls)
+    await t.poll(1)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(calls + 1)
+    expect(t.log).toHaveBeenCalledWith(expect.stringContaining('Could not reopen the Product Manager'))
+    t.keepLeadAlive.mockResolvedValue({ ok: true })
+    await t.poll(30 * 60_000)
+    t.live(true)
+    for (let i = 0; i < 3; i++) await t.poll(60 * 60_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(calls + 2)
+    // Gone again later: reopened at once, its backoff started over.
+    t.live(false)
+    await t.poll()
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(calls + 3)
+  })
+
+  it('waits a minute after a reopen it asked for before asking again', async () => {
+    const t = lifeFixture([leadRow()])
+    t.keepLeadAlive.mockResolvedValue({ ok: true })
+    await t.poll()
+    await t.poll(59_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+    await t.poll(1_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(2)
+  })
+
+  it('reopens no agent the roster does not mark Lead: once its project is deleted, or while it is being stopped', async () => {
+    const t = lifeFixture([leadRow()])
+    await t.poll()
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+    t.rows.splice(0, 1, leadRow({ lead: false }))
+    for (let i = 0; i < 3; i++) await t.poll(30 * 60_000)
+    t.rows.splice(0, 1, leadRow({ stopRequested: true }), leadRow({ closeSession: true, agent: { id: 'other', harnessId: 'other', machineId: 'machine-1' } }))
+    for (let i = 0; i < 3; i++) await t.poll(30 * 60_000)
+    t.rows.splice(0, 2)
+    for (let i = 0; i < 3; i++) await t.poll(30 * 60_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+  })
+
+  it('reopens nothing on a core that cannot', async () => {
+    const t = lifeFixture([leadRow()])
+    t.core.agents.keepLeadAlive = undefined
+    await t.poll()
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+  })
+})
+
+describe('closing the sessions the backend ends', () => {
+  const ended = (extra: Record<string, unknown> = {}) => ({ tabId: 'tab', closeSession: true, agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }, ...extra })
+
+  // Deleting a project left its Lead's session running, and removing an ordinary agent left its session behind (owner,
+  // 2026-10-23: no zombie agents). The backend marks the session; this host closes it and says so.
+  it('closes a member it knew, says it closed once, and never closes it again', async () => {
+    const t = lifeFixture([leadRow({ lead: false })])
+    await t.poll()
+    t.rows.splice(0, 1, ended())
+    await t.poll()
+    await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+    expect(t.closeMember).toHaveBeenCalledWith('harness')
+    expect(t.commands[0]).toEqual({ operationId: 'session-closed-agent-harness', command: { type: 'agent.sessionClosed', agentId: 'agent', harnessId: 'harness' } })
+    for (let i = 0; i < 3; i++) await t.poll(60_000)
+    expect(t.closeMember).toHaveBeenCalledTimes(1)
+    expect(t.commands).toHaveLength(1)
+  })
+
+  it('closes after a host restart a member the last roster named, and retries a lost acknowledgement without closing twice', async () => {
+    const t = lifeFixture([leadRow({ lead: false })])
+    await t.poll()
+    t.host.stop()
+    t.rows.splice(0, 1, ended())
+    let refused = 1
+    const backend = t.core.account.backend
+    t.core.account.backend = async (method, path, body) => (body as any)?.command?.type === 'agent.sessionClosed' && refused-- > 0
+      ? { status: 503, body: { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'down' } } } : backend(method, path, body)
+    const restarted = t.open()
+    const poll = async (advance = 0) => { t.wait(advance); await restarted.tick(); for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)) }
+    await poll()
+    expect(t.log).toHaveBeenCalledWith('down')
+    await poll(5_000)
+    await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+    expect(t.closeMember).toHaveBeenCalledTimes(1)
+  })
+
+  it('never closes a session it never saw as a member, nor a Lead', async () => {
+    const t = lifeFixture([ended()])
+    for (let i = 0; i < 3; i++) await t.poll(60_000)
+    t.rows.splice(0, 1, leadRow())
+    await t.poll()
+    t.rows.splice(0, 1, ended({ lead: true }))
+    for (let i = 0; i < 3; i++) await t.poll(60_000)
+    expect(t.closeMember).not.toHaveBeenCalled()
+    expect(t.commands).toHaveLength(0)
+  })
+
+  it('backs off a close the core refuses, and acknowledges nothing until it closes', async () => {
+    const t = lifeFixture([leadRow({ lead: false })])
+    await t.poll()
+    t.rows.splice(0, 1, ended())
+    t.closeMember.mockResolvedValue({ error: 'LEAD_PROTECTED' })
+    await t.poll()
+    await t.poll(4_000)
+    expect(t.closeMember).toHaveBeenCalledTimes(1)
+    await t.poll(1_000)
+    expect(t.closeMember).toHaveBeenCalledTimes(2)
+    expect(t.log).toHaveBeenCalledWith(expect.stringContaining('LEAD_PROTECTED'))
+    t.closeMember.mockResolvedValue({ closed: true })
+    await t.poll(10_000)
+    await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+  })
+
+  it('closes nothing on a core that cannot', async () => {
+    const t = lifeFixture([leadRow({ lead: false })])
+    await t.poll()
+    t.core.agents.closeMember = undefined
+    t.rows.splice(0, 1, ended())
+    await t.poll()
+    expect(t.commands).toHaveLength(0)
+  })
+})

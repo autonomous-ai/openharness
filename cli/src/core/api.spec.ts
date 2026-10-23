@@ -59,6 +59,45 @@ describe('the core API services stand on', () => {
     expect(closeAgent).not.toHaveBeenCalled()
   })
 
+  // The Super Tab host keeps a Swarm Lead alive and closes the sessions its backend ends (owner, 2026-10-23). The core
+  // decides what a service may do: reopen only a stopped Lead the host's retention names, close only a member it names.
+  it('reopens only a stopped Swarm Lead, and says a live one is up', async () => {
+    const deps = coreDeps(), resumeAgent = vi.fn(async () => ({ ok: true as const, session: row('stopped'), resumed: true }))
+    const leads = vi.fn(() => new Set(['stopped', 'live']))
+    const core = createCoreApi({ ...deps, resumeAgent, swarmMembers: { leads, harnesses: () => new Set() } })
+    expect(await core.agents.keepLeadAlive!('stopped')).toEqual({ ok: true })
+    expect(resumeAgent).toHaveBeenCalledWith('stopped')
+    expect(await core.agents.keepLeadAlive!('live')).toEqual({ ok: true })
+    leads.mockReturnValue(new Set(['live']))
+    expect(await core.agents.keepLeadAlive!('stopped')).toEqual({ ok: false, error: 'NOT_A_LEAD', detail: 'Only a stopped Product Manager of a Swarm project is reopened.' })
+    leads.mockReturnValue(new Set(['gone']))
+    expect(await core.agents.keepLeadAlive!('gone')).toMatchObject({ ok: false, error: 'NOT_A_LEAD' })
+    expect(resumeAgent).toHaveBeenCalledTimes(1)
+    leads.mockReturnValue(new Set(['stopped']))
+    resumeAgent.mockResolvedValueOnce({ ok: false, error: 'AGENT_BUSY', detail: 'busy' } as never)
+    expect(await core.agents.keepLeadAlive!('stopped')).toEqual({ ok: false, error: 'AGENT_BUSY', detail: 'busy' })
+    resumeAgent.mockResolvedValueOnce({ ok: false, error: 'RESUME_FAILED' } as never)
+    expect(await core.agents.keepLeadAlive!('stopped')).toEqual({ ok: false, error: 'RESUME_FAILED' })
+    expect(await createCoreApi(deps).agents.keepLeadAlive!('stopped')).toEqual({ ok: false, error: 'UNSUPPORTED' })
+  })
+
+  it('closes now only a Super Tab member the host retains, and treats an absent one as closed', async () => {
+    const base = coreDeps(), closeAgent = vi.fn(async () => ({ closed: true as const }))
+    const deps = { ...base, registry: { ...base.registry, byAgent: (id: string) => id === 'live' ? { ...row('live'), registeredAt: 1000 } : undefined } as CoreApiDeps['registry'] }
+    const harnesses = vi.fn(() => new Set(['live']))
+    const core = createCoreApi({ ...deps, closeAgent, swarmMembers: { leads: () => new Set(), harnesses } })
+    expect(await core.agents.closeMember!('live')).toEqual({ closed: true })
+    expect(closeAgent).toHaveBeenCalledWith({ agentId: 'live', sessionId: 's-live', createdAt: new Date(1000).toISOString(), mode: 'now' })
+    expect(await core.agents.closeMember!('absent')).toEqual({ closed: true })
+    harnesses.mockReturnValue(new Set())
+    expect(await core.agents.closeMember!('live')).toEqual({ error: 'NOT_A_MEMBER' })
+    harnesses.mockImplementation(() => { throw new Error('Super Tab retention is unreadable.') })
+    expect(await core.agents.closeMember!('live')).toEqual({ error: 'NOT_A_MEMBER' })
+    expect(closeAgent).toHaveBeenCalledTimes(1)
+    expect(await createCoreApi({ ...deps, closeAgent }).agents.closeMember!('live')).toEqual({ error: 'UNSUPPORTED' })
+    expect(await createCoreApi({ ...deps, swarmMembers: { leads: () => new Set(), harnesses: () => new Set(['live']) } }).agents.closeMember!('live')).toEqual({ error: 'UNSUPPORTED' })
+  })
+
   it('refuses missing or expired close leases, including expiry during the creation lookup', async () => {
     let now = 1000
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)

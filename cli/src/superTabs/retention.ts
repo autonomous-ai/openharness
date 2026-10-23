@@ -43,20 +43,26 @@ export function retainedLeads(dataDir: string): Set<string> {
 
 export function retainContributions(dataDir: string, machineId: string, rows: unknown[], now = Date.now()): void {
   if (!identifier(machineId)) throw new Error('Invalid Super Tab retention machine.')
-  const ids = new Set<string>(), leads = new Set<string>()
-  for (const item of rows) {
-    const row = object(item), agent = object(row.agent)
-    if (!identifier(row.tabId) || !identifier(agent.harnessId) || agent.machineId !== machineId) continue
-    if (row.lead === true) leads.add(agent.harnessId)
-    else if (row.active === false) continue
-    ids.add(agent.harnessId)
-  }
   const file = retentionFile(dataDir)
-  const next: Retention = { version: 2, machineId, harnesses: [...ids].sort(), leads: [...leads].sort() }
   // This machine's confirmed roster is authoritative: it replaces an unreadable
   // file and another identity's entry. Unchanged rosters only refresh the lapse clock.
   let previous: Retention | null = null
   try { if (existsSync(file)) previous = read(file) } catch { /* rebuilt below */ }
+  const ids = new Set<string>(), leads = new Set<string>()
+  for (const item of rows) {
+    const row = object(item), agent = object(row.agent)
+    if (!identifier(row.tabId) || !identifier(agent.harnessId) || agent.machineId !== machineId) continue
+    // A session the backend ends (its project deleted, the agent removed) stays kept until the host has closed it, and
+    // only if it was a member here before: the host and the core close nothing this file did not already name.
+    if (row.closeSession === true && row.lead !== true) {
+      if (previous?.machineId === machineId && previous.harnesses.includes(agent.harnessId)) ids.add(agent.harnessId)
+      continue
+    }
+    if (row.lead === true) leads.add(agent.harnessId)
+    else if (row.active === false) continue
+    ids.add(agent.harnessId)
+  }
+  const next: Retention = { version: 2, machineId, harnesses: [...ids].sort(), leads: [...leads].sort() }
   if (previous && JSON.stringify(previous) === JSON.stringify(next)) {
     if (now - statSync(file).mtimeMs > REFRESH_MS) utimesSync(file, new Date(now), new Date(now))
     return

@@ -78,3 +78,18 @@ it('reads no Lead from a missing or unreadable file rather than failing a close'
   writeFileSync(retentionFile(dir), '{')
   expect([...retainedLeads(dir)]).toEqual([])
 })
+
+// A session the backend ends is closed by the host, and only one it already kept as a member: the retention is that proof,
+// across host restarts, for the host and for the core's close alike.
+it('keeps a session the backend ends only while it was already a member', () => {
+  const dir = root(), now = Date.now()
+  retainContributions(dir, 'machine', [row('stranger', { closeSession: true, active: false })], now)
+  expect([...retainedHarnesses(dir, now)]).toEqual([])
+  retainContributions(dir, 'machine', [row('member')], now)
+  retainContributions(dir, 'machine', [row('member', { closeSession: true, active: false }), row('stranger', { closeSession: true })], now)
+  expect([...retainedHarnesses(dir, now)]).toEqual(['member'])
+  retainContributions(dir, 'machine', [row('member', { closeSession: true })], now)
+  expect([...retainedHarnesses(dir, now)]).toEqual(['member'])
+  retainContributions(dir, 'machine', [], now)
+  expect([...retainedHarnesses(dir, now)]).toEqual([])
+})

@@ -982,6 +982,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // a harness another agent started. Read when it closes one, never now: the close service is built further down.
     closeAgent: (request) => backendRef?.closeAgentService?.request(request) ?? Promise.resolve({ error: 'UNSUPPORTED' }),
     activityAt: (session) => transcriptActivityAt(session.transcriptPath, session.engine),
+    // The Super Tab host keeps its Leads alive and closes the sessions its backend ends (superTabs/host.ts). Read when it
+    // asks, never now: the lifecycle is built further down, and one asked before then is refused, and asked again later.
+    resumeAgent: async (agentId) => lifecycle.resumeAgent(agentId),
+    swarmMembers: { leads: () => retainedLeads(env.ADAPTER_DATA_DIR), harnesses: () => retainedHarnesses(env.ADAPTER_DATA_DIR) },
     dsh: (session) => backendRef?.dshFrameProvider?.(session) ?? null,
     windows: (frame) => backendRef?.sendLocal(frame),
     daemon: { command: daemonCommand(), port: env.PORT, machineId: () => backendRef?.machineId ?? '', autonomousEnv: session?.autonomousEnv ?? env.AUTONOMOUS_ENV },
