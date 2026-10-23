@@ -2,7 +2,6 @@
 /// `?scenario=` name a review script passes.
 library;
 
-import 'package:flutter/widgets.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/account_devices.dart';
 import 'package:harness/state/app_state.dart';
@@ -14,13 +13,11 @@ import 'web_ux_seed.dart';
 export '../test/support/web_ux_app.dart' show WebUxApp;
 
 class WebUxScenario {
-  const WebUxScenario(this.seed, {this.after});
+  const WebUxScenario(this.seed);
 
-  /// The app in the state this scenario reviews.
+  /// The app in the state this scenario reviews. Dialogs and panels are
+  /// opened by clicking, in `design/web-ux-audit/flows.mjs`.
   final WebUxApp Function() seed;
-
-  /// What to open once the first frame is up, such as a dialog.
-  final void Function(WebUxApp app)? after;
 }
 
 final Map<String, WebUxScenario> webUxScenarios = {
@@ -40,6 +37,18 @@ final Map<String, WebUxScenario> webUxScenarios = {
       ..status = AppStatus.unauthenticated
       ..expired = true,
   ),
+  'signin-qr': WebUxScenario(
+    () => WebUxApp()
+      ..status = AppStatus.bootstrapping
+      ..signingIn = true
+      ..pendingQrLink = 'https://harness.autonomous.ai/pair#fixture',
+  ),
+  'signin-confirm': WebUxScenario(
+    () => WebUxApp()
+      ..status = AppStatus.bootstrapping
+      ..signingIn = true
+      ..pendingConfirmEmail = 'jamie@example.test',
+  ),
   'booting': WebUxScenario(() => WebUxApp()..status = AppStatus.bootstrapping),
   'first-machine': WebUxScenario(() => signedIn()),
   'first-machine-loading': WebUxScenario(
@@ -51,7 +60,7 @@ final Map<String, WebUxScenario> webUxScenarios = {
   'computers': WebUxScenario(() => withComputers(signedIn())),
   'workspace': WebUxScenario(() => withPanes(signedIn(), 3)),
   'empty-tab': WebUxScenario(() => withPanes(signedIn(), 0)),
-  'many-tabs': WebUxScenario(() => withTabs(signedIn(), 9)),
+  'many-tabs': WebUxScenario(() => withTabs(signedIn(), 16)),
   'error-banner': WebUxScenario(
     () => withPanes(signedIn(), 2)
       ..error = 'Could not start Claude Code on Studio Mac: the folder no longer exists.',
@@ -69,9 +78,19 @@ final Map<String, WebUxScenario> webUxScenarios = {
   'reconnecting': WebUxScenario(
     () => withPanes(signedIn(), 1, status: ConnectionStatus.reconnecting),
   ),
-  'offline': WebUxScenario(
+  // The only computer offline: the workspace gives way to "Connect your
+  // computer". A second, connected computer keeps it, so the pane shows.
+  'offline-only': WebUxScenario(
     () => withPanes(
       signedIn(),
+      1,
+      status: ConnectionStatus.disconnected,
+      online: false,
+    ),
+  ),
+  'offline': WebUxScenario(
+    () => withPanes(
+      signedIn()..addMachine('m2', 'Build server'),
       1,
       status: ConnectionStatus.disconnected,
       online: false,
@@ -90,19 +109,3 @@ final Map<String, WebUxScenario> webUxScenarios = {
     () => withPanes(signedIn(), 1, session: TerminalSessionStatus.error),
   ),
 };
-
-/// Finds the element of the first [T] mounted, to open a route from it.
-BuildContext? contextOf<T extends Widget>() {
-  BuildContext? found;
-  void visit(Element element) {
-    if (found != null) return;
-    if (element.widget is T) {
-      found = element;
-      return;
-    }
-    element.visitChildren(visit);
-  }
-
-  WidgetsBinding.instance.rootElement?.visitChildren(visit);
-  return found;
-}

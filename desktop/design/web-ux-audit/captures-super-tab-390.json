@@ -1,0 +1,162 @@
+[
+  {
+    "flow": "super-tab",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/super-tab/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-group",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/super-tab-group/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-one",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/super-tab-one/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-empty",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/super-tab-empty/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-viewer",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/super-tab-viewer/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-offline",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/super-tab-offline/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-roster",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/super-tab-roster/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-conversations",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/super-tab-conversations/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-terminals",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/super-tab-terminals/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-pull-requests",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/super-tab-pull-requests/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/super-tab/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-group",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/super-tab-group/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-one",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/super-tab-one/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-empty",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/super-tab-empty/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-viewer",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/super-tab-viewer/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-offline",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/super-tab-offline/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-roster",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/super-tab-roster/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-conversations",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/super-tab-conversations/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-terminals",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/super-tab-terminals/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-pull-requests",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/super-tab-pull-requests/390-light.png",
+    "failed": null,
+    "errors": []
+  }
+]

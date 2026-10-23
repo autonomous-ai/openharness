@@ -39,7 +39,4 @@ Future<void> main() async {
       ),
     ),
   );
-  if (scenario?.after != null) {
-    WidgetsBinding.instance.addPostFrameCallback((_) => scenario!.after!(app));
-  }
 }

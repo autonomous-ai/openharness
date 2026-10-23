@@ -1,0 +1,146 @@
+[
+  {
+    "flow": "super-tab",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/super-tab/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-group",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/super-tab-group/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-one",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/super-tab-one/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-empty",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/super-tab-empty/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-viewer",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/super-tab-viewer/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-offline",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/super-tab-offline/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-roster",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/super-tab-roster/1440-dark.png",
+    "failed": "TimeoutError: locator.click: Timeout 5000ms exceeded.",
+    "errors": []
+  },
+  {
+    "flow": "super-tab-terminals",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/super-tab-terminals/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-pull-requests",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/super-tab-pull-requests/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/super-tab/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-group",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/super-tab-group/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-one",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/super-tab-one/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-empty",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/super-tab-empty/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-viewer",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/super-tab-viewer/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-offline",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/super-tab-offline/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-roster",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/super-tab-roster/1440-light.png",
+    "failed": "TimeoutError: locator.click: Timeout 5000ms exceeded.",
+    "errors": []
+  },
+  {
+    "flow": "super-tab-terminals",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/super-tab-terminals/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-pull-requests",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/super-tab-pull-requests/1440-light.png",
+    "failed": null,
+    "errors": []
+  }
+]

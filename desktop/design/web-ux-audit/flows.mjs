@@ -22,6 +22,8 @@ export const FLOWS = [
   { name: 'signin-waiting', scenario: 'signin-waiting' },
   { name: 'signin-error', scenario: 'signin-error' },
   { name: 'signin-expired', scenario: 'signin-expired' },
+  { name: 'signin-qr', scenario: 'signin-qr' },
+  { name: 'signin-confirm', scenario: 'signin-confirm' },
   { name: 'booting', scenario: 'booting' },
   // First computer
   { name: 'first-machine', scenario: 'first-machine' },
@@ -69,6 +71,7 @@ export const FLOWS = [
   { name: 'connecting', scenario: 'connecting' },
   { name: 'reconnecting', scenario: 'reconnecting' },
   { name: 'offline', scenario: 'offline' },
+  { name: 'offline-only', scenario: 'offline-only' },
   { name: 'view-only', scenario: 'view-only' },
   { name: 'opening', scenario: 'opening' },
   { name: 'taken-over', scenario: 'taken-over' },

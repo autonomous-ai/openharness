@@ -1,0 +1,82 @@
+[
+  {
+    "flow": "super-tab",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/super-tab/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-group",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/super-tab-group/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-one",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/super-tab-one/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-empty",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/super-tab-empty/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-viewer",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/super-tab-viewer/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-offline",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/super-tab-offline/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-roster",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/super-tab-roster/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-conversations",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/super-tab-conversations/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-terminals",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/super-tab-terminals/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "super-tab-pull-requests",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/super-tab-pull-requests/360-dark.png",
+    "failed": null,
+    "errors": []
+  }
+]

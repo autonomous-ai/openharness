@@ -12,11 +12,11 @@
 // fixture can never reach a backend; only Google's font CDN, which the engine
 // falls back to for missing glyphs in production too, is let through.
 // Set CHROME_PATH to use an already-installed Chromium, and WIDTHS=360,1440
-// to capture only some widths (separate runs can go in parallel).
+// to capture only some widths (separate runs can go in parallel). FLOWS names
+// another flow list, such as ./super-tab-flows.mjs for the Super Tab fixture.
 import { chromium, devices } from 'playwright';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { FLOWS } from './flows.mjs';
 import { serve } from './serve.mjs';
 
 export const VIEWPORTS = [
@@ -113,6 +113,7 @@ async function shoot(context, origin, flow, viewport, theme, outDir) {
 
 async function main() {
   const [buildDir, outDir, ...only] = process.argv.slice(2);
+  const { FLOWS, THEMES } = await import(process.env.FLOWS ?? './flows.mjs');
   const flows = only.length ? FLOWS.filter((f) => only.includes(f.name)) : FLOWS;
   const server = await serve(buildDir);
   const origin = server.origin;
@@ -121,7 +122,7 @@ async function main() {
   const results = [];
   const widths = process.env.WIDTHS?.split(',');
   for (const viewport of VIEWPORTS.filter((v) => !widths || widths.includes(v.name))) {
-    for (const theme of viewport.themes) {
+    for (const theme of THEMES ?? viewport.themes) {
       const context = await contextFor(browser, viewport, theme, origin, blocked);
       for (const flow of flows) {
         const result = await shoot(context, origin, flow, viewport, theme, outDir);
