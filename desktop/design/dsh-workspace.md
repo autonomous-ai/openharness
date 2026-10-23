@@ -6,6 +6,11 @@ native utility harnesses such as Devices and companions, not just Store web
 viewers. The chat is the real agent terminal, with its existing input, approval,
 session, and resume behavior. Do not build a second chat implementation.
 
+In a Swarm, **Your devices** hosts this same workspace in the center area of the
+current tab. It keeps the Swarm sidebar and roster; returning to a project restores
+its draft and conversation choice. Starting or retrying Devices must not add a
+top-level tab or attach a late reply over a project selected in the meantime.
+
 Use the shared `PaneGrid` and `PaneArrangement.viewerBesideTerminal`. Reserve
 both slots before asynchronous setup starts. Keep the chat slot visible while
 loading, when its package or engine is missing, when launch fails, and while

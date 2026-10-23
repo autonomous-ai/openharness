@@ -2861,9 +2861,38 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// One utility tab for physical devices.
+  /// Devices stays inside an active Swarm; ordinary workspaces keep their
+  /// existing utility tab. Opening it never changes the Swarm's membership.
   void openDevices() {
     if (!devicesEnabled) return;
+    final swarm = activeSwarm;
+    if (swarm.isSuperTab && swarm.superTabId != null) {
+      final account = currentUser?.id;
+      final controller = superTabs.peek(swarm.superTabId!);
+      if (controller != null) {
+        controller.selectDevices();
+      } else {
+        unawaited(
+          superTabs
+              .open(swarm.superTabId!)
+              .then((controller) {
+                if (!_disposed &&
+                    currentUser?.id == account &&
+                    identical(activeSwarm, swarm)) {
+                  controller.selectDevices();
+                }
+              })
+              .catchError((Object error) {
+                if (!_disposed &&
+                    currentUser?.id == account &&
+                    identical(activeSwarm, swarm)) {
+                  debugPrint('Could not open Devices in the Swarm: $error');
+                }
+              }),
+        );
+      }
+      return;
+    }
     final existing = swarms.where((s) => s.isDevices).firstOrNull;
     if (existing != null) {
       _ensureDevicesViewer(existing);
@@ -2898,7 +2927,8 @@ class AppNotifier extends ChangeNotifier {
 
   void _ensureDevicesViewer(Swarm tab) {
     if (!devicesEnabled) return;
-    if (!tab.panes.any((pane) => pane.isDevices)) {
+    final opening = !tab.panes.any((pane) => pane.isDevices);
+    if (opening) {
       final pane = TerminalPane(
         id: _nextPaneId++,
         machineId: '',
@@ -2912,15 +2942,45 @@ class AppNotifier extends ChangeNotifier {
     if (!tab.panes.any((pane) => !pane.isViewer)) {
       tab.panes.add(TerminalPane(id: _nextPaneId++, machineId: ''));
     }
-    tab.paneSizes.putIfAbsent(
-      '2:manual',
-      () => PaneArrangement.viewerBesideTerminal,
-    );
+    if (opening && tab.isSuperTab && tab.superTabId != null) {
+      tab.paneSizes['2:manual'] =
+          superTabs.peek(tab.superTabId!)?.devicesLayout ??
+          PaneArrangement.viewerBesideTerminal;
+    } else {
+      tab.paneSizes.putIfAbsent(
+        '2:manual',
+        () => PaneArrangement.viewerBesideTerminal,
+      );
+    }
   }
 
-  Future<void> showDevicesTerminal(String machineId, String agentId) async {
+  bool isDevicesWorkspace(Swarm tab) =>
+      tab.isDevices ||
+      (tab.isSuperTab &&
+          tab.superTabId != null &&
+          superTabs.peek(tab.superTabId!)?.devicesSelected == true);
+
+  /// Called only after the Swarm has detached its previous group's views.
+  void prepareSuperTabDevices(String swarmId) {
+    final tab = swarms.where((tab) => tab.id == swarmId).firstOrNull;
+    if (tab == null || !tab.isSuperTab || !isDevicesWorkspace(tab)) return;
+    _ensureDevicesViewer(tab);
+    notifyListeners();
+  }
+
+  Future<void> showDevicesTerminal(
+    String machineId,
+    String agentId, {
+    String? swarmId,
+  }) async {
     if (!devicesEnabled) return;
-    final tab = swarms.where((tab) => tab.isDevices).firstOrNull;
+    final tab = swarms
+        .where(
+          (tab) =>
+              (swarmId == null ? tab.isDevices : tab.id == swarmId) &&
+              isDevicesWorkspace(tab),
+        )
+        .firstOrNull;
     if (tab == null) return;
     _ensureDevicesViewer(tab);
     final viewer = tab.panes.firstWhere((pane) => pane.isDevices);
@@ -4116,6 +4176,13 @@ class AppNotifier extends ChangeNotifier {
         arrangement.tiles.length != panes.length ||
         activeSwarm.arrangedKey != layoutKey) {
       return false;
+    }
+    if (persist &&
+        activeSwarm.superTabId != null &&
+        isDevicesWorkspace(activeSwarm)) {
+      superTabs
+          .peek(activeSwarm.superTabId!)
+          ?.rememberDevicesLayout(arrangement);
     }
     if (identical(activeSwarm.paneSizes[layoutKey], arrangement)) {
       if (persist) _persistLayout();

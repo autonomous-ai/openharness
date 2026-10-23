@@ -75,10 +75,14 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
   }
 
   void _syncTerminal(SuperTabController controller, String swarmId) {
+    final devices =
+        controller.devicesSelected &&
+        app.devicesEnabled &&
+        !controller.accessRevoked;
     final agents = controller.terminalAgents(controller.selectedId);
     final request = (
       swarmId,
-      controller.selectedId,
+      devices ? r'$devices' : controller.selectedId,
       agents.isEmpty
           ? null
           : agents
@@ -105,6 +109,10 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
         mounted &&
         _terminalRequest == request &&
         app.activeSwarmId == swarmId &&
+        (controller.devicesSelected &&
+                app.devicesEnabled &&
+                !controller.accessRevoked) ==
+            devices &&
         app.currentUser?.id == controller.accountId &&
         controller.canWrite == request.$5;
     // Native attachment may wait for machine discovery. Serialize replacements
@@ -115,13 +123,27 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
       ) async {
         if (!current()) return;
         final tab = app.swarms.where((s) => s.id == swarmId).firstOrNull;
-        for (final pane in tab?.panes.toList() ?? const <TerminalPane>[]) {
+        final alreadyDevices = tab?.panes.any((pane) => pane.isDevices) == true;
+        // Closing a terminal also removes its owned viewer. Do that first so
+        // navigation never records a web/Finder preview as manually dismissed.
+        final oldPanes = tab?.panes.toList() ?? <TerminalPane>[];
+        oldPanes.sort(
+          (a, b) => (a.isViewer ? 1 : 0).compareTo(b.isViewer ? 1 : 0),
+        );
+        for (final pane in oldPanes) {
+          if (devices && alreadyDevices) continue;
           if (!agents.any(
             (a) => a.machineId == pane.machineId && a.harnessId == pane.agentId,
           )) {
             if (!current()) return;
             await app.closePane(pane.id, swarmId: swarmId);
           }
+        }
+        if (devices) {
+          if (!current()) return;
+          app.prepareSuperTabDevices(swarmId);
+          setState(() => _readyRequest = request);
+          return;
         }
         for (final agent in agents) {
           if (!current()) return;
@@ -397,9 +419,13 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
           builder: (context, _) {
             _syncTerminal(controller, tab.id);
             final agents = controller.terminalAgents(controller.selectedId);
+            final devices =
+                controller.devicesSelected &&
+                app.devicesEnabled &&
+                !controller.accessRevoked;
             final showTerminal =
                 _readyRequest == _terminalRequest &&
-                agents.isNotEmpty &&
+                (devices || agents.isNotEmpty) &&
                 tab.panes.isNotEmpty;
             // The terminal canvas is mounted either way; whether a person can see it is this.
             WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -476,7 +502,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                       'Offline machine',
                   terminal: showTerminal
                       ? terminal
-                      : agents.isNotEmpty
+                      : devices || agents.isNotEmpty
                       ? const Center(child: CircularProgressIndicator())
                       : null,
                   onCloseTerminal: () {

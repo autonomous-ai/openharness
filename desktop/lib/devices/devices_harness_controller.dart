@@ -16,11 +16,34 @@ class DevicesHarnessController extends ChangeNotifier {
   AgentCreationAttempt? _creation;
   ProjectFolderRequest? _folder;
   bool _disposed = false;
+  String? _workspaceId;
+  String? _openingAccount;
   String? error;
   bool get opening => _opening != null;
 
-  Future<void> open() {
-    if (_opening != null) return _opening!;
+  Future<void> open({String? swarmId}) {
+    final workspaceId =
+        swarmId ?? app.swarms.where((tab) => tab.isDevices).firstOrNull?.id;
+    final account = app.currentUser?.id;
+    if (_opening case final pending?) {
+      if (_workspaceId == workspaceId && _openingAccount == account) {
+        return pending;
+      }
+      // Finish the existing creation receipt before handling a new account or
+      // destination. Its result must never be retargeted halfway through.
+      return pending.then<void>((_) async {
+        if (_disposed ||
+            app.currentUser?.id != account ||
+            !app.swarms.any(
+              (tab) => tab.id == workspaceId && app.isDevicesWorkspace(tab),
+            )) {
+          return;
+        }
+        await open(swarmId: workspaceId);
+      });
+    }
+    _workspaceId = workspaceId;
+    _openingAccount = account;
     error = null;
     _opening = _open().whenComplete(() {
       _opening = null;
@@ -35,10 +58,12 @@ class DevicesHarnessController extends ChangeNotifier {
       app.devicesEnabled &&
       app.currentUser?.id == _account &&
       identical(app.stateOf(owner.machine.machineId), owner) &&
-      app.swarms.any((tab) => tab.isDevices);
+      app.swarms.any(
+        (tab) => tab.id == _workspaceId && app.isDevicesWorkspace(tab),
+      );
 
   Future<void> _open() async {
-    if (!app.devicesEnabled) return;
+    if (!app.devicesEnabled || _workspaceId == null) return;
     final owner = app.machineStates.values
         .where((machine) => machine.isLocalMachine && !machine.machine.isShared)
         .firstOrNull;
@@ -131,7 +156,7 @@ class DevicesHarnessController extends ChangeNotifier {
         }
       }
       if (!_current(owner)) return;
-      await app.showDevicesTerminal(machineId, agent.id);
+      await app.showDevicesTerminal(machineId, agent.id, swarmId: _workspaceId);
     } catch (_) {
       if (_current(owner)) error = 'Couldn’t open Devices. Update Harness on this computer and try again.';
     }

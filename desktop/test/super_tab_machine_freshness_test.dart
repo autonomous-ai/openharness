@@ -15,10 +15,8 @@ import 'package:harness/widgets/desktop_chrome.dart';
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'support/super_tab_fixture.dart';
 
-/// The Machines list's freshness (first approved at https://claude.ai/artifact/3b4f1ZqbxwSDqL7QKq39S2, since
-/// calmed to one line a machine): a status dot in each row's icon column, the age and old numbers in the row's
-/// tooltip and label, a pill by the heading while the Swarm cannot be read — and the readings behind them: how
-/// old each is, what the Swarm not being readable does to them, and what this computer reads itself.
+/// Machine connection freshness stays independent of disclosure state. Offline,
+/// unknown and refreshing rows keep their identity but do not expose old readings.
 void main() {
   final base = DateTime.utc(2026, 10, 22, 12);
   DateTime now = base;
@@ -102,8 +100,7 @@ void main() {
       )
       .message!;
   Color? nameInkOf(WidgetTester tester, String id) => tester
-      .widget<RichText>(inRow(id, find.byType(RichText)).first)
-      .text
+      .widget<Text>(find.byKey(ValueKey('super-machine-name-$id')))
       .style
       ?.color;
 
@@ -114,8 +111,8 @@ void main() {
   /// The list's own text, which never carries a number or an age.
   Iterable<String> textsOf(String id) => inRow(
     id,
-    find.byType(RichText),
-  ).evaluate().map((e) => (e.widget as RichText).text.toPlainText());
+    find.byType(Text),
+  ).evaluate().map((e) => (e.widget as Text).data!);
   Finder pill(String text) => find.descendant(
     of: find.byType(SuperTabMachinesPill),
     matching: find.text(text),
@@ -223,38 +220,35 @@ void main() {
   });
 
   group('a machine that contributes', () {
-    testWidgets(
-      'live: a green dot, and a tooltip and label that say "4s ago" and the numbers',
-      (tester) async {
-        final server = ConversationServer();
-        server.state['machines'] = [
-          contributed('m', const Duration(seconds: 4)),
-        ];
-        final c = server.controller();
-        await c.refresh();
-        final semantics = tester.ensureSemantics();
-        await show(tester, c);
+    testWidgets('live: a green dot and current numbers in the tooltip', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      server.state['machines'] = [contributed('m', const Duration(seconds: 4))];
+      final c = server.controller();
+      await c.refresh();
+      final semantics = tester.ensureSemantics();
+      await show(tester, c);
 
-        expect(statusOf(tester, 'm'), SuperTabMachineStatus.live);
-        expect(
-          find.byKey(const ValueKey('super-machine-state-m-live')),
-          findsOneWidget,
-        );
-        const tip =
-            'Owned by owner · CPU 80% free · RAM 16 GB free · SSD 500 GB free';
-        expect(tipOf(tester, 'm'), tip);
-        expect(labelOf(tester, 'm'), 'Studio Mac, Live, $tip');
-        // One line: the name and its Codex allowance; no hardware number, no age.
-        expect(textsOf('m'), ['Studio Mac', '90%']);
-        expect(nameInkOf(tester, 'm'), isNot(DesktopChrome.muted));
-        expect(find.byType(SuperTabMachinesPill), findsNothing);
+      expect(statusOf(tester, 'm'), SuperTabMachineStatus.live);
+      expect(
+        find.byKey(const ValueKey('super-machine-state-m-live')),
+        findsOneWidget,
+      );
+      const tip =
+          'Owned by owner · CPU 80% free · RAM 16 GB free · SSD 500 GB free';
+      expect(tipOf(tester, 'm'), tip);
+      expect(labelOf(tester, 'm'), 'Studio Mac, Live, $tip');
+      // Collapsed: name and owner avatar, with readings reserved for disclosure.
+      expect(textsOf('m'), ['Studio Mac', 'O']);
+      expect(nameInkOf(tester, 'm'), isNot(DesktopChrome.muted));
+      expect(find.byType(SuperTabMachinesPill), findsNothing);
 
-        semantics.dispose();
-        await tester.pumpWidget(const SizedBox());
-      },
-    );
+      semantics.dispose();
+      await tester.pumpWidget(const SizedBox());
+    });
 
-    testWidgets('late: an amber dot, and "28s ago" on hover', (tester) async {
+    testWidgets('late: an amber dot with current readings', (tester) async {
       final server = ConversationServer();
       server.state['machines'] = [
         contributed('m', const Duration(seconds: 28)),
@@ -270,7 +264,7 @@ void main() {
         labelOf(tester, 'm'),
         startsWith('Studio Mac, Late, Owned by owner'),
       );
-      expect(textsOf('m'), ['Studio Mac', '90%']);
+      expect(textsOf('m'), ['Studio Mac', 'O']);
 
       semantics.dispose();
       await tester.pumpWidget(const SizedBox());
@@ -283,7 +277,6 @@ void main() {
         server.state['machines'] = [contributed('m', Duration.zero)];
         final c = server.controller();
         await c.refresh();
-        c.offlineMachinesOpen = true;
         for (final (seconds, status) in [
           (0, SuperTabMachineStatus.live),
           (19, SuperTabMachineStatus.live),
@@ -301,7 +294,7 @@ void main() {
     );
 
     testWidgets(
-      'offline: under the closed "Offline · 1", a hollow ring, a muted name, and its last numbers kept in its tooltip',
+      'offline: a direct row with a hollow ring, muted name, and no stale readings',
       (tester) async {
         final server = ConversationServer();
         server.state['machines'] = [
@@ -311,24 +304,28 @@ void main() {
         await c.refresh();
         final semantics = tester.ensureSemantics();
         await show(tester, c);
-        expect(rowOf('m'), findsNothing);
-        expect(find.text('Offline · 1'), findsOneWidget);
-        await tester.tap(find.byKey(const ValueKey('super-machines-offline')));
+        expect(rowOf('m'), findsOneWidget);
+        await tester.tap(find.byKey(const ValueKey('super-machine-toggle-m')));
         await tester.pump();
+        expect(
+          find.byKey(const ValueKey('super-machine-readings-m')),
+          findsNothing,
+        );
 
         expect(statusOf(tester, 'm'), SuperTabMachineStatus.offline);
         expect(nameInkOf(tester, 'm'), DesktopChrome.muted);
-        // Never blanked: its last numbers stay. Its allowance is old, so it has no chip.
-        const tip =
-            'Offline · Owned by owner · CPU 80% free · RAM 16 GB free · SSD 500 GB free';
+        // Old capacity and allowances are absent while offline.
+        const tip = 'Offline · Owned by owner';
         expect(tipOf(tester, 'm'), tip);
         expect(labelOf(tester, 'm'), 'Studio Mac, Offline, $tip');
-        expect(textsOf('m'), ['Studio Mac']);
+        expect(textsOf('m'), ['Studio Mac', 'O']);
         expect(find.byType(SuperTabMachinesPill), findsNothing);
 
         // Opened, it stays open: saved with the Swarm's other sidebar state.
         await c.flush();
-        expect(server.saved!['offlineMachinesOpen'], isTrue);
+        final reopened = server.controller(initial: server.saved!);
+        expect(reopened.isMachineExpanded('m'), isTrue);
+        reopened.dispose();
 
         semantics.dispose();
         await tester.pumpWidget(const SizedBox());
@@ -336,7 +333,7 @@ void main() {
     );
 
     testWidgets(
-      'unknown while the Swarm cannot be read: not offline, its last numbers kept in its tooltip',
+      'unknown while the Swarm cannot be read: not offline, without stale capacity',
       (tester) async {
         final server = ConversationServer();
         server.state['machines'] = [
@@ -361,15 +358,13 @@ void main() {
           find.byKey(const ValueKey('super-machines-offline')),
           findsNothing,
         );
-        const tip =
-            "Can't reach Harness · Owned by owner · CPU 80% free · RAM 16 GB free · SSD 500 GB free";
+        const tip = "Can't reach Harness · Owned by owner";
         expect(tipOf(tester, 'm'), tip);
         expect(labelOf(tester, 'm'), 'Studio Mac, Status unknown, $tip');
 
         // Read again, what the machine reports decides again: this one was silent.
         server.failReads = false;
         await c.refresh();
-        c.offlineMachinesOpen = true;
         await show(tester, c);
         expect(statusOf(tester, 'm'), SuperTabMachineStatus.offline);
 
@@ -401,7 +396,7 @@ void main() {
     );
 
     testWidgets(
-      'refreshing back from the background: grey, "Refreshing…" with the old numbers — until the Swarm is read',
+      'refreshing back from the background hides old numbers until the Swarm is read',
       (tester) async {
         final f = SuperTabLaunchFixture();
         f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
@@ -431,11 +426,10 @@ void main() {
         await tester.pump();
         await show(tester, c, app: f.app, readLocal: (_) async => null);
         expect(statusOf(tester, 'far'), SuperTabMachineStatus.refreshing);
-        const tip =
-            'Refreshing… · Owned by owner · CPU 80% free · RAM 16 GB free · SSD 500 GB free';
+        const tip = 'Refreshing… · Owned by owner';
         expect(tipOf(tester, 'far'), tip);
         expect(labelOf(tester, 'far'), 'Far Mac, Refreshing, $tip');
-        expect(textsOf('far'), ['Far Mac', '90%']);
+        expect(textsOf('far'), ['Far Mac', 'O']);
 
         gate.complete();
         await landed(tester);
@@ -511,14 +505,14 @@ void main() {
       server.state['machines'] = [contributed('m', const Duration(minutes: 3))];
       final c = server.controller();
       await c.refresh();
-      c.offlineMachinesOpen = true;
       await show(tester, c);
-      const tip =
-          'Offline · Owned by owner · CPU 80% free · RAM 16 GB free · SSD 500 GB free';
+      const tip = 'Offline · Owned by owner';
       expect(find.text(tip), findsNothing);
-      // The disclosure first, then the machine under it.
-      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
-      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      // Focus the machine name; the independent disclosure is next.
+      Focus.of(
+        tester.element(find.byKey(const ValueKey('super-machine-name-m'))),
+      ).requestFocus();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 800));
       expect(find.text(tip), findsOneWidget);
@@ -670,7 +664,7 @@ void main() {
     }
 
     testWidgets(
-      'keeps its last sample on coming back, as refreshing and dimmed, until the new read lands',
+      'hides its last sample on coming back until the new read lands',
       (tester) async {
         final (f, c) = await local(['m']);
         final reads = <Completer<MachineResources?>>[];
@@ -689,7 +683,7 @@ void main() {
         );
         expect(statusOf(tester, 'm'), SuperTabMachineStatus.live);
 
-        // Away for a while, then back: the numbers stay, and the row says it is refreshing.
+        // Away for a while, then back: hide old numbers while the row is refreshing.
         now = base.add(const Duration(seconds: 50));
         f.app.foreground.value = false;
         await tester.pump();
@@ -697,10 +691,7 @@ void main() {
         await tester.pump();
         expect(reads, hasLength(2));
         expect(statusOf(tester, 'm'), SuperTabMachineStatus.refreshing);
-        expect(
-          tipOf(tester, 'm'),
-          'Refreshing… · Owned by owner · CPU 70% free · RAM 0 MB free',
-        );
+        expect(tipOf(tester, 'm'), 'Refreshing… · Owned by owner');
 
         reads.last.complete(cpu(90));
         await landed(tester);
@@ -748,7 +739,7 @@ void main() {
     });
 
     testWidgets(
-      'is offline, its numbers kept in its tooltip, when its connection is down',
+      'is offline without stale numbers when its connection is down',
       (tester) async {
         final (f, c) = await local(['m']);
         Future<MachineResources?> read(String id) async => cpu(30);
@@ -757,13 +748,9 @@ void main() {
         expect(statusOf(tester, 'm'), SuperTabMachineStatus.live);
 
         f.app.stateOf('m')!.connectionStatus = ConnectionStatus.disconnected;
-        c.offlineMachinesOpen = true;
         await show(tester, c, app: f.app, readLocal: read);
         expect(statusOf(tester, 'm'), SuperTabMachineStatus.offline);
-        expect(
-          tipOf(tester, 'm'),
-          'Offline · Owned by owner · CPU 70% free · RAM 0 MB free',
-        );
+        expect(tipOf(tester, 'm'), 'Offline · Owned by owner');
 
         await done(tester, f, c);
       },
@@ -773,8 +760,7 @@ void main() {
       tester,
     ) async {
       final (f, c) = await local(['m', 'second']);
-      // Unread, a machine is offline: open the disclosure it waits under.
-      c.offlineMachinesOpen = true;
+      // Each machine is visible before its own first sample arrives.
       final reads = <String, Completer<MachineResources?>>{};
       Future<MachineResources?> read(String id) =>
           (reads[id] = Completer<MachineResources?>()).future;

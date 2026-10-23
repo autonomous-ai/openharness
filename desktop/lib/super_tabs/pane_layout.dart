@@ -22,7 +22,8 @@ class SuperTabPaneLayout extends StatefulWidget {
   });
 
   static const storageKey = 'super-tab-pane-widths';
-  static const rightWidth = 380.0;
+  static const leftWidth = 300.0;
+  static const rightWidth = 280.0;
   final Widget? left, right;
   final Widget center;
   final VoidCallback onLeave;
@@ -33,7 +34,8 @@ class SuperTabPaneLayout extends StatefulWidget {
 }
 
 class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
-  double _left = 220, _right = SuperTabPaneLayout.rightWidth;
+  double _left = SuperTabPaneLayout.leftWidth,
+      _right = SuperTabPaneLayout.rightWidth;
   int _edit = 0;
   Future<void> _writing = Future.value();
 
