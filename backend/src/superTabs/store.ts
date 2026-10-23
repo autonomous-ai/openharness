@@ -16,7 +16,7 @@ import { noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import {
   activeWork, actorKey, agent, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
-  SuperTabError, isLeads, syncLeads, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
+  SuperTabError, isLeads, parkLaterConversations, syncLeads, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
 } from './model.js'
 import { holdNoticeText, type HoldReason } from './holdNotice.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, type TerminalEffect } from './terminal.js'
@@ -34,6 +34,7 @@ const hash = (value: unknown): string => createHash('sha256').update(JSON.string
 const stateOf = (row: SuperTab): SuperTabState => {
   const state = row.state as unknown as SuperTabState
   if (state.version !== 1) fail('UPDATE_REQUIRED', 'Update Harness to open this Super Tab.', 409)
+  parkLaterConversations(state)
   syncLeads(state)
   return state
 }
