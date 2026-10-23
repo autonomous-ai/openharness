@@ -248,11 +248,12 @@ static bool scrolls(const pod_ui_t *u)
     // Home pages sideways; the Inbox and a long Lead message scroll by rows; on a room or a recap a drag scrolls the host's pane
     return f->view == POD_V_INBOX || f->view == POD_V_LEAD || f->view == POD_V_AGENT || f->view == POD_V_RECAP;
 }
-// Whether a vertical drag on this screen scrolls the host's terminal pane (the scroll sink): Agent and Recap. The top band and the bottom zone keep their swipes (u->bar, u->edge).
+// Whether a vertical drag on this screen also goes to the host (the scroll sink): Agent and Recap scroll the agent's pane, a Lead's view the Swarm chat
+// the desktop has open (its own rows move too). The top band and the bottom zone keep their swipes (u->bar, u->edge).
 static bool host_scrolls(const pod_ui_t *u)
 {
     const pod_frame_t *f = top(u);
-    return f && (f->view == POD_V_AGENT || f->view == POD_V_RECAP);
+    return f && (f->view == POD_V_AGENT || f->view == POD_V_RECAP || f->view == POD_V_LEAD);
 }
 // A horizontal swipe on the Agent, Recap and Talking screens steps panes, as on the round dial (swipe left = next, right =
 // previous): travel >= POD_SW_MIN_PX, |dx| > 1.5 |dy|, released within POD_SW_MS or leaving at POD_SW_FLICK px/s.

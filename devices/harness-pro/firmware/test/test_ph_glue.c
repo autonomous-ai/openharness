@@ -1897,7 +1897,8 @@ static void lead_scrolls(void) {
     render(3500);
     CHECK(pod_scroll_max(&U.nav, &U.model) > 1 && top()->scroll == 0);
     t_(true, 360, 500, 4000); t_(true, 360, 400, 4100); t_(true, 360, 300, 4200); t_(false, 360, 300, 4250);
-    CHECK(top()->view == POD_V_LEAD && top()->scroll >= 1 && top()->lead == 0 && sc_events == 0 && take() == 0);   // the drag moved the text, not the host's pane, and sent nothing
+    CHECK(top()->view == POD_V_LEAD && top()->scroll >= 1 && top()->lead == 0 && take() == 0);   // the drag moved the text and sent no Swarm frame
+    CHECK(sc_down == 1 && sc_move > 0 && sc_up == 1);   // and the desktop's chat follows it, as an agent screen's drag scrolls its pane
     t_(true, 360, 300, 5000); t_(true, 360, 500, 5100); t_(true, 360, 700, 5200); t_(false, 360, 700, 5250);
     CHECK(top()->scroll == 0);
 }
