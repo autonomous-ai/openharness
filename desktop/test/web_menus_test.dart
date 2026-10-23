@@ -24,12 +24,22 @@ import 'package:harness/widgets/swarm_switcher.dart';
 const _phone = Size(390, 844);
 const _computer = Size(1440, 900);
 
+/// An account whose machine list has answered, as it has once the app is in
+/// use: the workspace shows, not a page still looking for computers.
+class _Account extends AppNotifier {
+  _Account()
+    : super(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+      );
+
+  @override
+  bool get machineInventoryLoaded => true;
+}
+
 AppNotifier _app() {
-  final app = AppNotifier(
-    config: AppConfig.dev,
-    authSession: AuthSession(),
-    configStore: null,
-  )..newSwarm(newTabPage: true);
+  final app = _Account()..newSwarm(newTabPage: true);
   addTearDown(app.dispose);
   return app;
 }
@@ -41,8 +51,10 @@ void _size(WidgetTester tester, Size size) {
 }
 
 /// The web workspace, as the browser build composes it (or Desktop's, when
-/// [desktop]). With [harness], the tab holds one on a connected machine, so
-/// the footer has a menu to open and Machines a machine to show.
+/// [desktop]), for an account with one connected machine — so the workspace
+/// shows, not the page for connecting a first computer. With [harness], a
+/// tab holds a harness on it, so the footer has a menu to open and Machines a
+/// machine to show.
 Future<AppNotifier> _workspace(
   WidgetTester tester,
   Size size, {
@@ -50,17 +62,17 @@ Future<AppNotifier> _workspace(
   bool desktop = false,
 }) async {
   final app = _app();
+  const machine = Machine(
+    machineId: 'm',
+    name: 'box',
+    authMode: MachineAuthMode.remote,
+  );
+  app.machines.add(machine);
+  app.machineStates['m'] = MachineState(machine)
+    ..nodeOnline = true
+    ..connectionStatus = ConnectionStatus.connected
+    ..agents = [const Agent(id: 'a0', name: 'Agent 0')];
   if (harness) {
-    const machine = Machine(
-      machineId: 'm',
-      name: 'box',
-      authMode: MachineAuthMode.remote,
-    );
-    app.machines.add(machine);
-    app.machineStates['m'] = MachineState(machine)
-      ..nodeOnline = true
-      ..connectionStatus = ConnectionStatus.connected
-      ..agents = [const Agent(id: 'a0', name: 'Agent 0')];
     app.newSwarm(newTabPage: true);
     app.activeSwarm.panes.add(
       TerminalPane(id: 100, machineId: 'm', agentId: 'a0'),
