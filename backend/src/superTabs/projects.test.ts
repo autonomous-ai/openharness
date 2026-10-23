@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { applyCommand, type Command, type CommandContext } from './commands.js'
+import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type MessageDraft } from './model.js'
 import { canReadAgent, projectOf, projectsOf, readConversation, skillModeOf, skillSetOf } from './projects.js'
 
@@ -458,6 +458,29 @@ describe('custom role sets', () => {
     expect(f.state.agents.find(a => a.id === worker)!.roleId).toBe('dev')
     const plain = f.project('public', peer)
     expect(() => f.run({ type: 'agent.start', request: request(plain.conversationId, { roleId: 'dev' }) } as Command)).toThrow('not in this project')
+  })
+
+  it('joins an agent with the role the New Harness form sends, and a reviewer role makes it a Reviewer', () => {
+    const { f, p } = custom()
+    let harness = 0
+    /** Exactly what Desktop's New Harness form sends (PR #1659): lead, the chosen role id, its configuration. */
+    const add = (lead: boolean, roleId?: string) => commandSchema.parse({ type: 'agent.add', conversationId: p.conversationId,
+      machineId: 'machine', harnessId: `added-${++harness}`, name: lead ? 'Lead' : 'Added', lead, ...(roleId ? { roleId } : {}), configuration })
+    const added = (agentId: string) => f.state.agents.find(a => a.id === agentId)!
+    const engineer = added(String(f.run(add(false, 'dev')).agentId))
+    expect(engineer).toMatchObject({ roleId: 'dev' })
+    expect(engineer).not.toHaveProperty('role')
+    expect(added(String(f.run(add(false, 'review')).agentId))).toMatchObject({ roleId: 'review', role: 'reviewer' })
+    const lead = added(String(f.run(add(true, 'lead')).agentId))
+    expect(lead).toMatchObject({ roleId: 'lead' })
+    expect(lead).not.toHaveProperty('role')
+    expect(added(String(f.run(add(false)).agentId))).not.toHaveProperty('roleId')
+    // A lead role joins only as the Lead, a lead cannot take a builder or reviewer role, and unknown ids are refused.
+    for (const [isLead, roleId, why] of [[false, 'lead', 'kind'], [true, 'dev', 'kind'], [true, 'review', 'kind'],
+      [false, 'eeeeeeeeeeee', 'not in this project']] as const) expect(() => f.run(add(isLead, roleId))).toThrow(why)
+    const plain = f.project('public', peer)
+    expect(() => f.run(commandSchema.parse({ type: 'agent.add', conversationId: plain.conversationId, machineId: 'machine',
+      harnessId: 'plain', name: 'Plain', configuration, lead: false, roleId: 'dev' }))).toThrow('not in this project')
   })
 
   it('tells agents whose kind has no role in the new set, then gives them no new work, and refuses review groups without a reviewer role', () => {

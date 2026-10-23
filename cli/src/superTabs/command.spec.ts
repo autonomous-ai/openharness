@@ -176,3 +176,39 @@ it('gives up after three pending reads, and passes on a refused request without 
   expect(request).toHaveBeenCalledOnce()
   expect(JSON.parse(print.mock.calls.at(-1)![0])).toMatchObject({ error: 'LEAD_REQUIRED' })
 })
+it('lets a machine owner preview and then remove their machine, as the person, without a participating harness', async () => {
+  const print = vi.fn(), close = vi.fn()
+  const request = vi.fn(async (_type: string, payload?: Record<string, unknown>) => payload?.method === 'GET'
+    ? { ok: true, value: { blockedBy: null, agents: [{ id: 'a1', name: 'Builder', projectName: 'App' }], soleSourceProjects: [] } }
+    : { ok: true, value: { revision: 2 } })
+  const deps = { where: () => where, open: async () => ({ request, close, machineId: 'machine' }), print, pane: '%99', env: {} }
+  expect(await superTabCommand(['--tab', 'tab', 'remove-machine', 'box'], deps)).toBe(0)
+  expect(request.mock.calls.filter(c => c[0] === 'super_tabs')).toHaveLength(1)
+  expect(request).toHaveBeenLastCalledWith('super_tabs', expect.objectContaining({ action: 'backend', method: 'GET', path: '/api/super-tabs/tab/machines/box/removal' }), 30_000)
+  expect(print.mock.calls.at(-1)![0]).toContain('Builder')
+  expect(await superTabCommand(['--tab', 'tab', 'remove-machine', 'box', '--yes'], deps)).toBe(0)
+  const sent = request.mock.calls.at(-1)![1]!
+  expect(sent).toMatchObject({ action: 'backend', method: 'POST', path: '/api/super-tabs/tab/commands', body: { command: { type: 'machine.remove', machineId: 'box' } } })
+  expect(String((sent.body as Record<string, unknown>).operationId)).toMatch(/^machine-remove-/)
+  request.mockImplementation(async (type: string) => (type === 'super_tabs'
+    ? { error: 'LEAD_PROTECTED', detail: 'This machine runs the Product Manager of App.' } : { agents: [] }) as never)
+  expect(await superTabCommand(['--tab', 'tab', 'remove-machine', 'box', '--yes'], deps)).toBe(1)
+  expect(print.mock.calls.at(-1)![0]).toContain('Product Manager of App')
+  for (const argv of [['--tab', 'tab', 'remove-machine'], ['--tab', 'tab', 'remove-machine', '../x'], ['--tab', 'tab', 'remove-machine', 'box', '--force']]) {
+    expect(() => parseSuperTabArgs(argv, where)).toThrow('harness super-tab')
+  }
+})
+it('refuses to remove a machine for an agent: a Swarm agent\'s pane, an outside agent\'s shell, or --agent', async () => {
+  const print = vi.fn(), close = vi.fn()
+  const request = vi.fn(async (type: string) => type === 'agents_list' ? { agents: [{ id: 'worker', engine: 'claude', tmuxPane: '%7', status: 'active' }] } : { ok: true })
+  const deps = { where: () => where, open: async () => ({ request, close, machineId: 'machine' }), print }
+  for (const [argv, extra] of [
+    [['--tab', 'tab', 'remove-machine', 'box', '--yes'], { pane: '%7', env: {} }],
+    [['--tab', 'tab', 'remove-machine', 'box', '--yes'], { pane: '%99', env: { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'session' } }],
+    [['--tab', 'tab', '--agent', 'agent', 'remove-machine', 'box', '--yes'], { pane: '%99', env: {} }],
+  ] as const) {
+    expect(await superTabCommand(argv, { ...deps, ...extra })).toBe(1)
+    expect(print.mock.calls.at(-1)![0]).toContain('your own terminal')
+  }
+  expect(request.mock.calls.some(c => c[0] === 'super_tabs')).toBe(false)
+})

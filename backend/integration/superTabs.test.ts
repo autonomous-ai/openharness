@@ -656,7 +656,7 @@ describe('private swarm projects on the real control API', () => {
     await expect(store.messages(peer, tab, conversationId, {})).rejects.toMatchObject({ code: 'NOT_FOUND' })
     await expect(store.native.open(peer, tab, { operationId: randomUUID(), conversationId, agentId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
     expect(await store.mayObserve(peer, tab, 'test-host', harnessId, host.sub)).toBe(false)
-    expect((await store.hostTabs(host, 'test-host')).find(t => t.agent.id === agentId)!.observers.map(p => p.userId)).not.toContain(peer.sub)
+    expect((await store.hostTabs(host, 'test-host')).find(t => t.agent?.id === agentId)!.observers.map(p => p.userId)).not.toContain(peer.sub)
     await expect(store.messages(host, tab, 'lead', {}, agentId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
 
     await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [peer.sub] })
@@ -910,7 +910,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await store.read(owner, tab)).state.agents[0]).toMatchObject({ contributorId: host.sub, machineOwnerId: host.sub, harnessId: 'pool-builder' })
     await run(tab, { type: 'member.remove', userId: host.sub })
     expect(await store.hostPools(host, 'pool-host')).toEqual([])
-    await expect(store.observeMachine(host, tab, 'pool-host', observation)).rejects.toMatchObject({ code: 'CONTRIBUTION_REVOKED' })
+    // The machine stays listed while its host cleans up, but its owner left: a reading is refused as theirs no longer.
+    await expect(store.observeMachine(host, tab, 'pool-host', observation)).rejects.toMatchObject({ code: 'FORBIDDEN' })
     await expect(store.start(host, tab, startId, undefined, 'pool-host')).rejects.toMatchObject({ code: 'FORBIDDEN' })
   })
 
@@ -1338,7 +1339,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
       name: 'Lead', configuration: config, lead: true }, peer)).result.agentId as string
     const legacyLead = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
       name: 'Old', configuration: config, lead: true })).result.agentId as string
-    const modes = async () => Object.fromEntries((await store.hostTabs(host, 'test-host')).filter(r => r.tabId === tab).map(r => [r.agent.id, r.skillMode]))
+    const modes = async () => Object.fromEntries((await store.hostTabs(host, 'test-host')).filter(r => r.tabId === tab).map(r => [r.agent?.id, r.skillMode]))
     expect(await modes()).toEqual({ [lead]: 'default', [legacyLead]: 'default' })
     const say = async (text: string, user = peer) => (await run(tab, { ...message(text), conversationId: chat } as Command, user)).result.messageId as string
     const skills = (messageId: string): Command => ({ type: 'project.skills', projectId, mode: 'orchestration', askedIn: { conversationId: chat, messageId } })
@@ -1371,8 +1372,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const rowOf = async (id: string) => (await rows()).find(r => r.agent.id === id)!
     expect(await rowOf(worker)).not.toHaveProperty('role')
     await run(tab, { type: 'project.skills', projectId: 'lead', mode: 'custom' })
-    expect(await rowOf(lead)).toMatchObject({ skillMode: 'default', role: { id: 'lead', name: 'Product Manager', kind: 'lead', version: version('LEAD-TEXT') } })
-    expect(await rowOf(worker)).toMatchObject({ skillMode: 'default', role: { id: 'dev', name: 'Engineer', kind: 'builder', version: version('DEV-TEXT') } })
+    expect(await rowOf(lead)).toMatchObject({ skillMode: 'default', role: { id: 'lead', name: 'Product Manager', kind: 'lead', version: version('LEAD-TEXT'), projectId: 'lead' } })
+    expect(await rowOf(worker)).toMatchObject({ skillMode: 'default', role: { id: 'dev', name: 'Engineer', kind: 'builder', version: version('DEV-TEXT'), projectId: 'lead' } })
     const stored = JSON.stringify((await db.superTab.findUniqueOrThrow({ where: { id: tab } })).state)
     for (const text of [JSON.stringify(await rows()), stored, JSON.stringify((await store.read(owner, tab)).state)]) expect(text).not.toMatch(/LEAD-TEXT|DEV-TEXT/)
 
@@ -1398,7 +1399,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await text(host, 'dev')).statusCode).toBe(200)
 
     await run(tab, { type: 'project.role.set', projectId: 'lead', role: { ...roles[1]!, text: 'DEV-TEXT v2' } })
-    expect((await rowOf(worker)).role).toMatchObject({ id: 'dev', version: version('DEV-TEXT v2') })
+    expect((await rowOf(worker)).role).toMatchObject({ id: 'dev', version: version('DEV-TEXT v2'), projectId: 'lead' })
     expect((await text(owner, 'dev')).json().data).toEqual({ version: version('DEV-TEXT v2'), text: 'DEV-TEXT v2' })
     await run(tab, { type: 'project.role.remove', projectId: 'lead', roleId: 'review' })
     expect((await text(owner, 'review')).statusCode).toBe(404)
@@ -1830,7 +1831,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBe('failed')
   })
 
-  it('releases every queued route hold when its machine is removed', async () => {
+  it.each(['its owner removes it', 'its owner leaves the Swarm'] as const)('releases every queued route hold when its machine leaves because %s', async how => {
     // The Lead runs elsewhere: a machine that hosts a project's Lead cannot leave the Swarm.
     const tab = (await store.create(owner, randomUUID(), 'Pilot')).id
     const leadMachineId = `lead-${randomUUID()}`
@@ -1849,7 +1850,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const starts = [await routedStart(tab, lead), await routedStart(tab, lead)]
     for (const { routeDecisionId } of starts) expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBeNull()
 
-    await run(tab, { type: 'machine.remove', machineId: 'test-host' })
+    await run(tab, how === 'its owner removes it' ? { type: 'machine.remove', machineId: 'test-host' } : { type: 'member.remove', userId: host.sub }, host)
 
     const state = (await store.read(owner, tab)).state
     for (const { routeDecisionId, startId } of starts) {
@@ -2092,7 +2093,7 @@ it('releases a finished worker through its execution host, cancels deliveries an
   const { machineSlots } = await import('../src/superTabs/machines.js')
   expect(machineSlots(before, before.machines![0]!)).toBe(2)
   await run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' }, host, lead)
-  expect((await store.hostTabs(host, 'test-host')).find(r => r.agent.id === worker)).toMatchObject({ stopRequested: true })
+  expect((await store.hostTabs(host, 'test-host')).find(r => r.agent?.id === worker)).toMatchObject({ stopRequested: true })
   await expect(run(tab, { type: 'agent.remove', agentId: worker }, owner, worker)).rejects.toMatchObject({ code: 'FORBIDDEN' })
   const operation = randomUUID()
   const releaseId = (await store.read(owner, tab)).state.agents.find(a => a.id === worker)!.releaseId!
@@ -2107,7 +2108,7 @@ it('releases a finished worker through its execution host, cancels deliveries an
   const delayed = (await store.read(owner, tab)).state
   expect(delayed.machines![0]!.availableSlots).toBe(3)
   expect(await db.superTabDelivery.count({ where: { tabId: tab, agentId: worker, status: { in: ['queued', 'claimed', 'uncertain'] } } })).toBe(0)
-  expect((await store.hostTabs(host, 'test-host')).some(r => r.agent.id === worker)).toBe(false)
+  expect((await store.hostTabs(host, 'test-host')).some(r => r.agent?.id === worker)).toBe(false)
   // Re-contribution reserves a new runtime; ordinary removal must not reuse its old stop proof.
   await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Renewed worker', configuration: config, lead: false })
   await run(tab, { type: 'agent.remove', agentId: worker })
@@ -2525,5 +2526,83 @@ describe('a Swarm written by a later release', () => {
     await db.superTab.update({ where: { id: tab }, data: { state: stored as never } })
     const created = String((await run(tab, { type: 'conversation.create', title: 'New work', brief: '', checks: [] })).result.conversationId)
     expect((await store.read(owner, tab)).state.conversations.find(c => c.id === created)!.number).toBe(8)
+  })
+})
+
+describe('machine removal', () => {
+  const day = 24 * 3_600_000
+  async function contributed() {
+    const tab = (await store.create(owner, randomUUID(), 'Remove')).id
+    const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
+    await run(tab, { type: 'machine.contribute', machineId: 'test-host', name: 'Host', cwd: '/fixture/repo', engines: ['codex'], maxAgents: 4 }, host)
+    return tab
+  }
+  const cleanups = async (tab: string, from = store) => (await from.hostTabs(host, 'test-host')).filter(r => r.tabId === tab && 'cleanup' in r)
+  const cleaned = (tab: string, removalId: string) => app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`, headers: { authorization: `Bearer ${host.sub}` },
+    payload: { operationId: randomUUID(), command: { type: 'machine.cleaned', machineId: 'test-host', removalId } } })
+
+  it('previews the removal for the machine owner only, then lists a cleanup to its host until the host says it cleaned up', async () => {
+    const tab = await contributed()
+    const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Worker', configuration: config, lead: false }, host)).result.agentId as string
+    const preview = (user: AuthUser) => app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/machines/test-host/removal`, headers: { authorization: `Bearer ${user.sub}` } })
+    const shown = await preview(host)
+    expect(shown.statusCode, shown.body).toBe(200)
+    expect(shown.json().data).toEqual({ blockedBy: null, agents: [{ id: worker, name: 'Worker', projectName: 'Remove' }], soleSourceProjects: [] })
+    expect((await preview(owner)).statusCode).toBe(403)
+    await expect(run(tab, { type: 'machine.remove', machineId: 'test-host' })).rejects.toMatchObject({ code: 'FORBIDDEN' })
+
+    const removalId = (await run(tab, { type: 'machine.remove', machineId: 'test-host' }, host)).result.removalId as string
+    expect((await store.read(owner, tab)).state.machines!.map(m => [m.removal?.state, m.paused])).toEqual([['cleaning', true]])
+    expect(await cleanups(tab)).toEqual([{ tabId: tab, cleanup: { machineId: 'test-host', removalId } }])
+    expect((await store.hostTabs(host, 'test-host')).filter(r => r.tabId === tab && r.agent?.id === worker && 'closeSession' in r)).toHaveLength(1)
+    expect((await store.hostTabs(owner, 'test-host').catch(() => []))).toEqual([])
+    // The machine owner's host acknowledges even after leaving the Swarm.
+    await run(tab, { type: 'member.remove', userId: host.sub }, host)
+    expect((await cleaned(tab, 'not-this-one')).statusCode).toBe(404)
+    const ack = await cleaned(tab, removalId)
+    expect(ack.statusCode, ack.body).toBe(200)
+    expect(await cleanups(tab)).toEqual([])
+    expect((await store.read(owner, tab)).state.machines).toEqual([])
+  })
+
+  it('lists a pending cleanup to its host even when the machine is in more than the 100 Swarms a host poll reads', async () => {
+    const tab = await contributed()
+    const removalId = (await run(tab, { type: 'machine.remove', machineId: 'test-host' }, host)).result.removalId as string
+    const newer = await Promise.all(Array.from({ length: 101 }, async () => (await store.create(owner, randomUUID(), 'Newer')).id))
+    await db.superTab.updateMany({ where: { id: { in: newer } }, data: { machineIds: ['test-host'] } })
+    try {
+      expect(await cleanups(tab)).toEqual([{ tabId: tab, cleanup: { machineId: 'test-host', removalId } }])
+      expect((await cleaned(tab, removalId)).statusCode).toBe(200)
+    } finally { await db.superTab.deleteMany({ where: { id: { in: newer } } }) }
+  })
+
+  it('cleans up the machines of a person who leaves the Swarm, the same way as removing one', async () => {
+    const tab = await contributed()
+    const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Worker', configuration: config, lead: false }, host)).result.agentId as string
+    await run(tab, { type: 'member.remove', userId: host.sub }, host)
+    const [row] = await cleanups(tab)
+    expect(row).toEqual({ tabId: tab, cleanup: { machineId: 'test-host', removalId: expect.any(String) } })
+    expect((await store.hostTabs(host, 'test-host')).filter(r => r.tabId === tab && r.agent?.id === worker && 'closeSession' in r)).toHaveLength(1)
+    expect((await store.read(owner, tab)).state.machines!.map(m => m.removal?.state)).toEqual(['cleaning'])
+    expect((await cleaned(tab, (row as { cleanup: { removalId: string } }).cleanup.removalId)).statusCode).toBe(200)
+    expect(await cleanups(tab)).toEqual([])
+    expect((await store.read(owner, tab)).state.machines).toEqual([])
+  })
+
+  it('drops the machine\'s records after 24 hours without an acknowledgement, and still lists the cleanup to its host', async () => {
+    const tab = await contributed()
+    const removalId = (await run(tab, { type: 'machine.remove', machineId: 'test-host' }, host)).result.removalId as string
+    const later = new SuperTabStore(db, () => Date.now() + day)
+    expect((await later.read(owner, tab)).state.machines).toEqual([])
+    await later.execute(owner, tab, { operationId: randomUUID(), command: { type: 'tab.rename', name: 'A day later' } })
+    const stored = (await db.superTab.findUniqueOrThrow({ where: { id: tab } })).state as unknown as SuperTabState
+    expect([stored.machines, stored.machineCleanups]).toEqual([[], [{ machineId: 'test-host', removalId, machineOwnerId: host.sub }]])
+    expect(await cleanups(tab, later)).toEqual([{ tabId: tab, cleanup: { machineId: 'test-host', removalId } }])
+    await later.execute(host, tab, { operationId: randomUUID(), command: { type: 'machine.cleaned', machineId: 'test-host', removalId } })
+    expect(await cleanups(tab, later)).toEqual([])
+    expect(((await db.superTab.findUniqueOrThrow({ where: { id: tab } })).state as unknown as SuperTabState).machineCleanups).toBeUndefined()
   })
 })
