@@ -17,7 +17,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
-import { MODEL_MANAGER_ID } from '../src/dsh/builtinIds.js'
+import { BUNDLED_HARNESSES } from '../src/dsh/builtinIds.js'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 
@@ -30,6 +30,11 @@ const viewerScript = (d: IsolatedDaemon) => join(d.env.DSH_DIR!, 'e2e', 'sketch'
 const installedFile = (d: IsolatedDaemon) => join(d.env.DSH_DIR!, 'installed.json')
 const installed = (d: IsolatedDaemon): Array<Record<string, unknown>> => {
   try { return JSON.parse(readFileSync(installedFile(d), 'utf8')) } catch { return [] }
+}
+const bundledInstalled = (d: IsolatedDaemon): boolean => {
+  const records = installed(d)
+  return BUNDLED_HARNESSES.every((harness) => records.some((record) =>
+    record.id === harness.id && record.source === harness.source && typeof record.revision === 'string'))
 }
 
 /** A harness with a viewer of its own (a small web server on the port the daemon hands it), added to what is
@@ -95,7 +100,7 @@ describe('the viewers\' process, once something needs it', () => {
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
     await d.start()
     if (BUNDLED) {
-      await until('the release\'s harnesses in place', () => installed(d).some((record) => record.id === MODEL_MANAGER_ID) || null, 60_000, 250)
+      await until('the release\'s harnesses in place', () => bundledInstalled(d) || null, 60_000, 250)
       await d.restart()
     }
     const from = d.log().lastIndexOf('[harnessd] core started')
@@ -187,7 +192,7 @@ describe('the viewers\' process, once something needs it', () => {
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
     await d.start()
     expect(d.log()).toContain(`[viewers] Model Manager to put in place: ${ASKING}`)
-    await until('the release\'s harnesses in place', () => installed(d).some((record) => record.id === MODEL_MANAGER_ID) || null, 60_000, 250)
+    await until('the release\'s harnesses in place', () => bundledInstalled(d) || null, 60_000, 250)
     await d.restart()
     const from = d.log().lastIndexOf('[harnessd] core started')
     await until('the services to connect', () => since(d, from).includes('[services] search connected') || null, 30_000, 200)

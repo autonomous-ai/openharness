@@ -200,11 +200,11 @@ describe('Super Tab collaboration policy', () => {
     const lead = f.add('lead', 'owner', 'lead', true)
     const group = f.group()
     const worker = f.add('worker', 'owner', group)
-    expect(f.state.conversations.map(c => c.title)).toEqual(['Lead', 'Offline editing'])
+    expect(f.state.conversations.map(c => c.title)).toEqual(['Lead', 'Offline editing', 'Leads'])
     expect(f.state.conversations[1]).toMatchObject({ leadId: lead, agentIds: [lead, worker], assignment: null })
     f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: worker, present: true, lead: false })
     expect(f.state.agents).toHaveLength(2)
-    expect(f.state.conversations).toHaveLength(2)
+    expect(f.state.conversations).toHaveLength(3) // Lead, the group and Leads
   })
 
   it('routes a human reply to its author, and does not create agent chatter loops', () => {
@@ -463,7 +463,7 @@ it('starts only in the chosen conversation, captures authority, and never assign
   const startId = f.run({ type: 'agent.start', request, ...via }, actor, { contribution, ...decisionIn(group) }).result.startId as string
   expect(f.state.starts![0]).toMatchObject({ request, hostGrant: 'grant-1', dispatched: false })
   expect(f.state.agents).toHaveLength(1)
-  expect(f.state.conversations).toHaveLength(2)
+  expect(f.state.conversations).toHaveLength(3) // Lead, the group and Leads
   expect(() => f.run({ type: 'agent.startDispatch', startId }, actor, { contribution: { ...contribution, hostGrant: 'new-grant' } })).toThrow('revoked')
   f.run({ type: 'agent.startDispatch', startId }, actor, { contribution })
   expect(() => f.run({ type: 'agent.startDispatch', startId }, actor, { contribution })).toThrow('already requested')
@@ -800,15 +800,16 @@ describe('agents route before they start or assign', () => {
 
 it('assigns stable workgroup numbers through old snapshots, rename, archive and new groups', () => {
   const f = fixture(), first = f.group(), second = f.group()
-  expect(f.state.conversations.map(c => c.number)).toEqual([undefined, 1, 2])
+  // The Lead and Leads conversations have no number.
+  expect(f.state.conversations.map(c => c.number)).toEqual([undefined, 1, 2, undefined])
   delete f.state.conversations[1]!.number
   delete f.state.conversations[2]!.number
-  expect(visibleState(f.state, owner).conversations.map(c => c.number)).toEqual([undefined, 1, 2])
+  expect(visibleState(f.state, owner).conversations.map(c => c.number)).toEqual([undefined, 1, 2, undefined])
   expect(f.state.conversations[1]!.number).toBeUndefined()
   f.run({ type: 'conversation.rename', conversationId: first, title: 'Renamed' })
   f.run({ type: 'conversation.archive', conversationId: second, archived: true })
   const third = f.group()
-  expect(f.state.conversations.map(c => [c.id, c.number])).toEqual([['lead', undefined], [first, 1], [second, 2], [third, 3]])
+  expect(f.state.conversations.map(c => [c.id, c.number])).toEqual([['lead', undefined], [first, 1], [second, 2], [third, 3], [f.state.leadsConversationId, undefined]])
 })
 it('records the lead project once and accepts only Claude Code and Codex contributions', () => {
   const f = fixture(), project = { cwd: '/repo', repositoryUrl: 'https://github.com/example/project' }
@@ -1674,5 +1675,138 @@ describe('Lead protection', () => {
     f.run({ type: 'agent.remove', agentId: worker })
     f.add('worker')
     expect(f.state.closingSessions).toBeUndefined()
+  })
+})
+
+describe('Leads conversation', () => {
+  const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+  const send = (conversationId: string, text: string, recipientIds: string[] = []): Command =>
+    ({ type: 'message.send', conversationId, text, replyTo: null, recipientIds })
+  const swarm = () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), worker = f.add('worker')
+    const docs = f.run({ type: 'project.create', name: 'Docs', visibility: 'public', brief: 'Docs' }).result as { projectId: string; conversationId: string }
+    const docsLead = f.add('docs-lead', 'owner', docs.conversationId, true)
+    return { f, lead, worker, docs, docsLead, leads: f.state.leadsConversationId! }
+  }
+
+  it('gives every Swarm one, an old one too, outside every project', () => {
+    const f = fixture(), id = f.state.leadsConversationId!
+    expect(f.state.conversations.find(c => c.id === id)).toMatchObject({ kind: 'leads', title: 'Leads', archived: false, leadId: null })
+    expect(f.state.conversations.find(c => c.id === id)).not.toHaveProperty('number')
+
+    const old = fixture()
+    delete old.state.leadsConversationId
+    old.state.conversations = old.state.conversations.filter(c => c.id !== id)
+    expect(visibleState(old.state, owner).leadsConversationId).toBe(id)
+    old.run({ type: 'tab.rename', name: 'Renamed' })
+    expect(old.state.leadsConversationId).toBe(id)
+    expect(old.state.conversations.filter(c => c.kind === 'leads')).toHaveLength(1)
+  })
+
+  it('lets people and Leads post, delivers to every other Lead, and keeps it from other agents', () => {
+    const { f, lead, worker, docsLead, leads } = swarm()
+    expect(f.run(send(leads, 'Who goes first?')).messages[0]!.recipients.sort()).toEqual([lead, docsLead].sort())
+    expect(f.run(send(leads, 'Docs waits for Pilot.'), as(docsLead)).messages[0]!.recipients).toEqual([lead])
+    // Naming a Lead adds emphasis; every other Lead still hears it.
+    expect(f.run(send(leads, 'Pilot, can you go first?', [lead])).messages[0]!.recipients.sort()).toEqual([lead, docsLead].sort())
+    expect(() => f.run(send(leads, 'Me too'), as(worker))).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
+    expect(() => f.run(send(leads, 'Hi', [worker]))).toThrow()
+    expect(visibleState(f.state, as(lead)).conversations.map(c => c.id)).toContain(leads)
+    const workerView = visibleState(f.state, as(worker))
+    expect(workerView.conversations.map(c => c.id)).not.toContain(leads)
+    expect(workerView).not.toHaveProperty('leadsConversationId')
+
+    f.invite('viewer')
+    expect(visibleState(f.state, peer).conversations.map(c => c.id)).toContain(leads)
+    expect(() => f.run(send(leads, 'Viewer here'), peer)).toThrow(expect.objectContaining({ code: 'READ_ONLY' }))
+  })
+
+  it('takes no work, members or archiving, and outlives every project', () => {
+    const { f, worker, docs, leads } = swarm()
+    const checks = [{ description: 'Done', independent: false }]
+    for (const command of [
+      { type: 'conversation.archive', conversationId: leads, archived: true },
+      { type: 'conversation.rename', conversationId: leads, title: 'Chat' },
+      { type: 'work.define', conversationId: leads, brief: 'Work', checks },
+      { type: 'conversation.agent', conversationId: leads, agentId: worker, present: true, lead: false },
+      { type: 'conversation.create', title: 'Review', reviewOf: leads, brief: 'Review', checks },
+    ] as Command[]) expect(() => f.run(command)).toThrow(expect.objectContaining({ code: 'LEADS_CONVERSATION' }))
+    f.run({ type: 'project.delete', projectId: docs.projectId })
+    expect(f.state.conversations.some(c => c.id === leads)).toBe(true)
+  })
+})
+
+describe('other projects\' work for Leads', () => {
+  const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+  const checks = [{ description: 'Done', independent: false }]
+  const task = (owns: string[]) => ({ goal: 'Polish', changes: 'The roster', constraints: 'None', owns })
+  const swarm = () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
+    const project = (name: string, visibility: 'public' | 'private') => {
+      const created = f.run({ type: 'project.create', name, visibility, brief: name }).result as { projectId: string; conversationId: string }
+      return { ...created, lead: f.add(`${name}-lead`, 'owner', created.conversationId, true) }
+    }
+    /** A task in that project, assigned to a new worker. */
+    const work = (projectId: string, title: string, owns: string[]) => {
+      const group = f.run({ type: 'conversation.create', projectId, title, task: task(owns), checks }).result.conversationId as string
+      const worker = f.add(`${title}-worker`, 'owner', group)
+      const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
+      return { group, worker, assignmentId }
+    }
+    return { f, lead, project, work }
+  }
+
+  it('shows a Lead the active work of every other shared project, and nobody else', () => {
+    const { f, lead, project, work } = swarm()
+    const docs = project('Docs', 'public'), secret = project('Secret', 'private')
+    const roster = work(docs.projectId, 'Roster', ['desktop/lib/super_tabs'])
+    f.run({ type: 'work.status', conversationId: roster.group, assignmentId: roster.assignmentId, status: 'review',
+      result: 'Ready: https://github.com/example/project/pull/12 head abc.' }, as(roster.worker))
+    const finished = work(docs.projectId, 'Finished', ['docs'])
+    f.run({ type: 'work.cancel', conversationId: finished.group, assignmentId: finished.assignmentId, reason: 'Not needed.' })
+    work(secret.projectId, 'Hidden', ['backend'])
+    const own = work('lead', 'Own', ['cli'])
+    const workerName = f.state.agents.find(a => a.id === roster.worker)!.displayName
+
+    expect(visibleState(f.state, as(lead)).otherProjectsWork).toEqual([{ conversationId: roster.group, projectName: 'Docs',
+      title: 'Roster', owns: ['desktop/lib/super_tabs'], status: 'review', agentName: workerName, pr: 'https://github.com/example/project/pull/12' }])
+    expect(visibleState(f.state, as(docs.lead)).otherProjectsWork).toEqual([expect.objectContaining({ conversationId: own.group,
+      projectName: 'Pilot', status: 'working', pr: null })])
+    expect(visibleState(f.state, as(roster.worker))).not.toHaveProperty('otherProjectsWork')
+    expect(visibleState(f.state, owner)).not.toHaveProperty('otherProjectsWork')
+  })
+
+  it('tells both Leads once when a task\'s owned code overlaps another project\'s active task', () => {
+    const { f, lead, project, work } = swarm()
+    const docs = project('Docs', 'public')
+    const roster = work(docs.projectId, 'Roster', ['desktop/lib/super_tabs'])
+    const alerts = () => f.state.leadsConversationId
+    const name = (id: string) => f.state.agents.find(a => a.id === id)!.displayName
+    const created = f.run({ type: 'conversation.create', title: 'Agents filter', task: task([' ./desktop/lib/super_tabs/roster.dart ', 'cli']), checks }, as(lead))
+    const group = created.result.conversationId as string
+    const alert = created.messages.find(m => m.conversationId === alerts())!
+    expect(alert).toMatchObject({ author: { id: lead }, recipients: [docs.lead],
+      source: { kind: 'overlap', conversationIds: [group, roster.group] } })
+    expect(alert.text).toBe(`"Agents filter" (Pilot, ${name(lead)}) and "Roster" (Docs, ${name(docs.lead)}) both change `
+      + 'desktop/lib/super_tabs/roster.dart. Agree an order or a split here, then each tell your own project.')
+    // The same pair is not alerted again.
+    f.run({ type: 'work.define', conversationId: group, task: task(['desktop/lib/super_tabs/roster.dart']), checks }, as(lead))
+    const worker = f.add('pilot-worker', 'owner', group)
+    expect(f.run({ type: 'work.assign', conversationId: group, agentId: worker }).messages.some(m => m.conversationId === alerts())).toBe(false)
+    expect(visibleState(f.state, owner)).not.toHaveProperty('overlapAlerts')
+  })
+
+  it('stays silent within one project, for owned code that is not a path, and for private projects', () => {
+    const { f, project, work } = swarm()
+    const secret = project('Secret', 'private'), docs = project('Docs', 'public')
+    work('lead', 'Own', ['desktop/lib'])
+    work(secret.projectId, 'Hidden', ['desktop/lib'])
+    work(docs.projectId, 'Phrase', ['The Desktop roster'])
+    for (const owns of [['desktop/lib/super_tabs'], ['The Desktop roster']]) {
+      const effects = f.run({ type: 'conversation.create', title: 'More', task: task(owns), checks })
+      expect(effects.messages.filter(m => m.conversationId === f.state.leadsConversationId)).toEqual([])
+    }
+    expect(f.run({ type: 'conversation.create', projectId: secret.projectId, title: 'Secret too', task: task(['desktop/lib']), checks })
+      .messages.filter(m => m.conversationId === f.state.leadsConversationId)).toEqual([])
   })
 })

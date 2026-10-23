@@ -21,8 +21,13 @@ void main() {
   const answers = {
     'engines_probe': {
       'engines': [
-        {'engine': 'claude', 'installed': true},
-        {'engine': 'codex', 'installed': true, 'supportsCodexHome': true},
+        {'engine': 'claude', 'installed': true, 'signedIn': true},
+        {
+          'engine': 'codex',
+          'installed': true,
+          'signedIn': true,
+          'supportsCodexHome': true,
+        },
         {'engine': 'opencode', 'installed': false, 'installable': false},
       ],
     },
@@ -455,7 +460,11 @@ void main() {
     await close(tester, app);
   });
 
-  testWidgets('agents are offered in most recently used order', (tester) async {
+  // Desktop's order (new_harness.dart `_agentOptions`): the selected agent, then the most recently
+  // used, then the rest as the catalog lists them.
+  testWidgets('agents are offered selected first, then most recently used', (
+    tester,
+  ) async {
     final (:app, conn: _) = await openNew(tester);
     await app.agentPreference.select('claude');
     await app.agentPreference.select('opencode');
@@ -466,7 +475,7 @@ void main() {
         .widgetList<FindRow>(find.byType(FindRow))
         .map((row) => row.title)
         .toList();
-    expect(titles.take(3), ['Codex', 'OpenCode', 'Claude Code']);
+    expect(titles.take(3), ['Claude Code', 'Codex', 'OpenCode']);
     expect(find.text('more'), findsNothing);
     await close(tester, app);
   });

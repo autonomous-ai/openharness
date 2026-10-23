@@ -16,7 +16,7 @@ import { noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import {
   activeWork, actorKey, agent, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
-  SuperTabError, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
+  SuperTabError, isLeads, syncLeads, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
 } from './model.js'
 import { holdNoticeText, type HoldReason } from './holdNotice.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, type TerminalEffect } from './terminal.js'
@@ -34,6 +34,7 @@ const hash = (value: unknown): string => createHash('sha256').update(JSON.string
 const stateOf = (row: SuperTab): SuperTabState => {
   const state = row.state as unknown as SuperTabState
   if (state.version !== 1) fail('UPDATE_REQUIRED', 'Update Harness to open this Super Tab.', 409)
+  syncLeads(state)
   return state
 }
 const indexes = (state: SuperTabState) => ({
@@ -866,7 +867,7 @@ export class SuperTabStore {
           ...(pool.scope === 'swarm' ? { projects: projectsOf(state).filter(p => starts.some(s =>
             groupProject(state, conversation(state, s.request.conversationId)).id === p.id))
             .map(p => ({ id: p.id, leadConversationId: p.leadConversationId, repository: p.repository,
-              conversationIds: state.conversations.filter(c => groupProject(state, c).id === p.id).map(c => c.id) })) } : {}),
+              conversationIds: state.conversations.filter(c => !isLeads(c) && groupProject(state, c).id === p.id).map(c => c.id) })) } : {}),
           reservations: (state.harnessReservations ?? []).filter(r => r.machineId === machineId).map(({ harnessId, generation }) => ({ harnessId, generation })),
           harnessIds: [...new Set([...state.agents.filter(a => a.machineId === machineId).map(a => a.harnessId), ...(state.harnessReservations ?? []).filter(r => r.machineId === machineId).map(r => r.harnessId), ...(state.starts ?? []).filter(s => s.request.machineId === machineId && s.harnessId).map(s => s.harnessId!)])] }]
       })
@@ -982,8 +983,9 @@ export class SuperTabStore {
     const actor: Actor = delivery.authorKind === 'person'
       ? { kind: 'person', userId: delivery.authorId, email: '' }
       : { kind: 'agent', agentId: delivery.authorId, machineOwnerId: (sender as Agent).machineOwnerId }
-    if (!canReadProject(state, actor, groupProject(state, group))) return false
-    if (!canReadAgent(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, target) ||
+    // The Leads conversation belongs to no project: its members are the Leads, and an agent posts there only as a Lead.
+    if (isLeads(group) ? actor.kind === 'agent' && !ledProject(state, actor.agentId) : !canReadProject(state, actor, groupProject(state, group))) return false
+    if (!canReadAgent(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, target) || !isLeads(group) &&
       !canReadProject(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, groupProject(state, group))) return false
     const generation = 'generation' in sender ? sender.generation : sender.membershipGeneration
     return generation === delivery.authorGeneration && (!('role' in sender) || sender.role !== 'viewer')

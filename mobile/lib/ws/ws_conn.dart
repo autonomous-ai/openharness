@@ -10,6 +10,7 @@ import '../logging/app_log.dart';
 import '../logging/redact.dart';
 import '../logging/startup_trace.dart';
 import '../logging/typing_trace.dart';
+import '../core/client_build.dart';
 import '../core/models.dart';
 import '../core/test_run.dart';
 import 'relay_codec.dart';
@@ -112,6 +113,11 @@ class WsConn {
   /// machine), built per connect once the codec exists. Null — the desktop, the
   /// local transport, the dev fixture — means every frame rides the socket.
   final TerminalTransportPluginFactory? transportPlugins;
+
+  /// What this build says of itself in the socket's query ([ClientBuild]): its release, and whether it is a
+  /// debug or simulator build, so the backend's count of the phone's opens can tell them apart. Asked at
+  /// every dial, with the credential; null: nothing is said, as an older app.
+  final Future<ClientBuild> Function()? clientBuild;
 
   Future<Map<String, dynamic>> Function(
     String type,
@@ -246,7 +252,19 @@ class WsConn {
     required this.onStatus,
     this.relayCodecs,
     this.transportPlugins,
+    this.clientBuild,
   });
+
+  /// [clientBuild], bounded and never failing: a dial does not wait on its own bookkeeping.
+  Future<ClientBuild?> _clientBuild() async {
+    final ask = clientBuild;
+    if (ask == null) return null;
+    try {
+      return await ask().timeout(const Duration(milliseconds: 500));
+    } catch (_) {
+      return null;
+    }
+  }
 
   Future<void> connect() async {
     if (_closing || _connecting) return;
@@ -308,10 +326,14 @@ class WsConn {
       // What the codec said while the credential was being fetched, if it has said it yet.
       ({RelayCodec? codec, Object? error})? codecAnswered;
       unawaited(pendingCodec?.then((result) => codecAnswered = result));
+      // Asked with the credential and the codec, so it adds no wait of its own: once the app has read
+      // its version (at launch) the answer is already there. Never a reason not to dial.
+      final pendingBuild = _clientBuild();
       final token = await pendingToken;
       if (token.isEmpty) {
         throw StateError('WebSocket credential is missing');
       }
+      final build = await pendingBuild;
       if (_closing) return;
       // The codec's "no link" comes from links held in memory, a handful of microtasks behind its
       // start — and the credential, also from memory, often lands in the same turn, just ahead of
@@ -345,6 +367,8 @@ class WsConn {
           'autonomousEnv': autonomousEnv,
           // Counts this person as on the mobile app today (backend user_daily_client_presence).
           'client': 'mobile',
+          // And which release, and whether a debug or simulator build (backend relay_mobile_opens).
+          ...?build?.query,
         },
       );
       // ⚠️ **Dialled BEFORE the codec is awaited (owner, 2026-10-01).** The socket needs only the
