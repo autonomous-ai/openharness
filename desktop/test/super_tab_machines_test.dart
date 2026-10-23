@@ -918,7 +918,7 @@ void main() {
         expect(find.text('Remove Studio from this Swarm?'), findsOneWidget);
         expect(
           find.textContaining(
-            'Mira and River leave the Swarm with it and keep running on Studio.',
+            'Mira and River leave the Swarm with it and stop on Studio.',
           ),
           findsOneWidget,
         );
@@ -977,6 +977,56 @@ void main() {
       );
       await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
       await tester.pumpAndSettle();
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    });
+
+    testWidgets('machine with a Product Manager cannot be removed', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      server.state['machines'] = [machine('owner')];
+      server.state['agents'] = [agent('a1', 'owner')];
+      (server.state['conversations'] as List)[0]['leadId'] = 'a1';
+      final c = server.controller();
+      await c.refresh();
+      await mount(tester, c);
+      await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
+      await tester.pumpAndSettle();
+      final remove = find.byKey(const ValueKey('super-machine-remove'));
+      expect(remove, findsOneWidget);
+      expect(
+        find.text(
+          'Mira is the Product Manager of project Pilot. Delete the project first.',
+        ),
+        findsOneWidget,
+      );
+      expect(server.posts, isEmpty);
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    });
+
+    testWidgets('machine details disable Remove when its agent becomes Product Manager', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      server.state['machines'] = [machine('owner')];
+      server.state['agents'] = [agent('a1', 'owner')];
+      final c = server.controller();
+      await c.refresh();
+      await mount(tester, c);
+      await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
+      await tester.pumpAndSettle();
+      (server.state['conversations'] as List)[0]['leadId'] = 'a1';
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Product Manager of project Pilot'), findsOneWidget);
+      final remove = tester.widget<AppIconButton>(
+        find.byKey(const ValueKey('super-machine-remove')),
+      );
+      expect(remove.onPressed, isNull);
       await tester.pumpWidget(const SizedBox());
       await c.flush();
       c.dispose();

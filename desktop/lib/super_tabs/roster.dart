@@ -56,6 +56,9 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
   bool _canRemove(SuperTabAgent agent) =>
       c.canWrite && (c.isOwner || agent.contributorId == c.accountId);
 
+  String? _removeReason(SuperTabAgent agent) =>
+      c.snapshot?.leadProtectionReason(agent.id);
+
   Future<void> _remove(SuperTabAgent agent) async {
     var busy = false, attempted = false;
     final name = c.snapshot!.agentName(agent.id);
@@ -81,8 +84,10 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
                   pending?['agentId'] == agent.id;
               final available = current != null || checking || busy;
               final permitted = _canRemove(current ?? agent);
+              final reason = _removeReason(current ?? agent);
               final enabled =
                   permitted &&
+                  reason == null &&
                   !busy &&
                   !c.saving &&
                   (checking || !c.hasPendingAction);
@@ -102,9 +107,10 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            available && permitted
-                                ? 'Any open task needs to be assigned again or closed. Its session on $machine is left to its owner.'
-                                : 'This action is no longer available.',
+                            reason ??
+                                (available && permitted
+                                ? 'Any open task needs to be assigned again or closed. Its session on $machine will stop.'
+                                : 'This action is no longer available.'),
                           ),
                           if (attempted && c.operationError != null) ...[
                             const SizedBox(height: 12),
@@ -301,16 +307,27 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             items: [
               const PopupMenuItem(value: 'details', child: Text('Details')),
               if (_canRemove(c.snapshot?.agent(agent.id) ?? agent))
-                const PopupMenuItem(
+                PopupMenuItem(
                   value: 'remove',
-                  child: Text('Remove from Swarm'),
+                  enabled: _removeReason(agent) == null,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Remove from Swarm'),
+                      if (_removeReason(agent) case final reason?) Text(reason),
+                    ],
+                  ),
                 ),
             ],
           );
           if (choice == 'details' && mounted) await _details(agent);
           if (choice == 'remove' && mounted) {
             final current = c.snapshot?.agent(agent.id);
-            if (current != null && _canRemove(current)) await _remove(current);
+            if (current != null &&
+                _canRemove(current) &&
+                _removeReason(current) == null) {
+              await _remove(current);
+            }
           }
         },
         child: ListTile(

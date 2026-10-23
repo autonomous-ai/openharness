@@ -60,7 +60,7 @@ void main() {
     expect(server.posts, isEmpty);
     expect(
       find.text(
-        '“Pilot” and all of its conversations will be permanently deleted. This can’t be undone.',
+        '“Pilot” and all of its conversations will be permanently deleted. Its Product Manager’s session will close too. This can’t be undone.',
       ),
       findsOneWidget,
     );

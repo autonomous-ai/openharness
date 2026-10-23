@@ -1095,6 +1095,17 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       if (a.machineId == machineId) a,
   ];
 
+  String? _removeReason(String machineId) {
+    final snapshot = c.snapshot;
+    if (snapshot == null) return null;
+    for (final agent in _agentsOn(machineId)) {
+      if (snapshot.leadProtectionReason(agent.id) case final reason?) {
+        return reason;
+      }
+    }
+    return null;
+  }
+
   /// The Swarm owner removes any machine; anyone else, one that is all theirs: their contribution and
   /// only their agents (backend `machine.remove`).
   bool _canRemove(String machineId) {
@@ -1108,8 +1119,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         _agentsOn(machineId).every((a) => a.contributorId == c.accountId);
   }
 
-  /// Takes a machine out of this Swarm, and the Swarm's agents on it with it, after a yes. Their sessions keep
-  /// running on the machine, as Remove from Swarm leaves one agent's (roster.dart).
+  /// Takes a machine out of this Swarm, and stops its ordinary agents after confirmation.
   Future<void> _remove(_MachineView v) async {
     final id = v.id, name = superTabMachineName(v.name);
     var busy = false, attempted = false;
@@ -1127,8 +1137,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   pending?['machineId'] == id;
               final available = _ids.contains(id) || checking || busy;
               final permitted = _canRemove(id) || checking;
+              final reason = _removeReason(id);
               final enabled =
                   permitted &&
+                  reason == null &&
                   !busy &&
                   !c.saving &&
                   (checking || !c.hasPendingAction);
@@ -1156,12 +1168,13 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            !available || !permitted
-                                ? 'This action is no longer available.'
-                                : shown == null
-                                ? 'The Swarm stops using it for new work.'
-                                : '$shown ${names.length == 1 ? 'leaves' : 'leave'} the Swarm with it and keep running on $name. '
-                                      'Any open task needs to be assigned again or closed.',
+                            reason ??
+                                (!available || !permitted
+                                    ? 'This action is no longer available.'
+                                    : shown == null
+                                    ? 'The Swarm stops using it for new work.'
+                                    : '$shown ${names.length == 1 ? 'leaves' : 'leave'} the Swarm with it and ${names.length == 1 ? 'stops' : 'stop'} on $name. '
+                                          'Any open task needs to be assigned again or closed.'),
                           ),
                           if (attempted && c.operationError != null) ...[
                             const SizedBox(height: 12),
@@ -1225,16 +1238,27 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       items: [
         const PopupMenuItem(value: 'details', child: Text('Details')),
         if (_canRemove(view.id))
-          const PopupMenuItem(
+          PopupMenuItem(
             key: ValueKey('super-machine-menu-remove'),
             value: 'remove',
-            child: Text('Remove from Swarm'),
+            enabled: _removeReason(view.id) == null,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Remove from Swarm'),
+                if (_removeReason(view.id) case final reason?) Text(reason),
+              ],
+            ),
           ),
       ],
     );
     if (!mounted) return;
     if (choice == 'details') await _openDetails(view);
-    if (choice == 'remove' && _canRemove(view.id)) await _remove(view);
+    if (choice == 'remove' &&
+        _canRemove(view.id) &&
+        _removeReason(view.id) == null) {
+      await _remove(view);
+    }
   }
 
   Future<void> _details(_MachineView v) {
@@ -1247,76 +1271,97 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       builder: (context) => SuperTabDialogScope(
         controller: c,
         requireWrite: false,
-        child: AlertDialog(
-          title: Row(
-            children: [
-              Expanded(child: Text(superTabMachineName(name))),
-              // Out of the way of the everyday actions below: a quiet mark that turns red when pointed at.
-              if (_canRemove(id))
-                AppIconButton(
-                  key: const ValueKey('super-machine-remove'),
-                  icon: AppIcons.trash2,
-                  tooltip: 'Remove from Swarm',
-                  color: DesktopChrome.muted,
-                  destructive: true,
-                  onPressed: () {
-                    Navigator.pop(context);
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                      if (mounted) unawaited(_remove(v));
-                    });
-                  },
+        child: ListenableBuilder(
+          listenable: c,
+          builder: (context, _) {
+            final removeReason = _removeReason(id);
+            return AlertDialog(
+              title: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(child: Text(superTabMachineName(name))),
+                      // Out of the way of the everyday actions below: a quiet mark that turns red when pointed at.
+                      if (_canRemove(id))
+                        AppIconButton(
+                          key: const ValueKey('super-machine-remove'),
+                          icon: AppIcons.trash2,
+                          tooltip: removeReason ?? 'Remove from Swarm',
+                          color: DesktopChrome.muted,
+                          destructive: true,
+                          onPressed: removeReason != null
+                              ? null
+                              : () {
+                                  if (_removeReason(id) != null) return;
+                                  Navigator.pop(context);
+                                  WidgetsBinding.instance.addPostFrameCallback((
+                                    _,
+                                  ) {
+                                    if (mounted) unawaited(_remove(v));
+                                  });
+                                },
+                        ),
+                    ],
+                  ),
+                  if (_canRemove(id) && removeReason != null)
+                    Text(removeReason, style: DesktopChrome.metadata()),
+                ],
+              ),
+              content: SuperTabMachineDetails(
+                name: name,
+                owner: person?.email,
+                status: details,
+                // Details follow the same freshness rule as the row and its disclosure.
+                resources: dim ? null : value,
+                cwd: shared?['cwd'] as String?,
+                engines: allowed,
+                accounts: dim ? const [] : accounts,
+              ),
+              actions: [
+                if (shared != null && contributor == c.accountId)
+                  TextButton(
+                    onPressed: () async {
+                      final result = await c.command({
+                        'type': 'machine.pause',
+                        'machineId': id,
+                        'paused': !paused,
+                      });
+                      if (context.mounted && result != null) {
+                        Navigator.pop(context);
+                      }
+                    },
+                    child: Text(paused ? 'Resume new work' : 'Pause new work'),
+                  ),
+                if (contributor == c.accountId)
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      unawaited(
+                        _contribute(existing: shared ?? {'machineId': id}),
+                      );
+                    },
+                    child: const Text('Configure'),
+                  ),
+                if (c.canWrite && c.selected != null)
+                  TextButton(
+                    onPressed: () {
+                      final group = c.selected!;
+                      Navigator.pop(context);
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (mounted) widget.onAddAgent(group);
+                      });
+                    },
+                    child: const Text('Attach running agent'),
+                  ),
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Close'),
                 ),
-            ],
-          ),
-          content: SuperTabMachineDetails(
-            name: name,
-            owner: person?.email,
-            status: details,
-            // Details follow the same freshness rule as the row and its disclosure.
-            resources: dim ? null : value,
-            cwd: shared?['cwd'] as String?,
-            engines: allowed,
-            accounts: dim ? const [] : accounts,
-          ),
-          actions: [
-            if (shared != null && contributor == c.accountId)
-              TextButton(
-                onPressed: () async {
-                  final result = await c.command({
-                    'type': 'machine.pause',
-                    'machineId': id,
-                    'paused': !paused,
-                  });
-                  if (context.mounted && result != null) {
-                    Navigator.pop(context);
-                  }
-                },
-                child: Text(paused ? 'Resume new work' : 'Pause new work'),
-              ),
-            if (contributor == c.accountId)
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  unawaited(_contribute(existing: shared ?? {'machineId': id}));
-                },
-                child: const Text('Configure'),
-              ),
-            if (c.canWrite && c.selected != null)
-              TextButton(
-                onPressed: () {
-                  final group = c.selected!;
-                  Navigator.pop(context);
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (mounted) widget.onAddAgent(group);
-                  });
-                },
-                child: const Text('Attach running agent'),
-              ),
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close'),
-            ),
-          ],
+              ],
+            );
+          },
         ),
       ),
     );

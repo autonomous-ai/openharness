@@ -192,9 +192,17 @@ class SuperTabSnapshot {
   bool isProjectLead(String conversationId) =>
       projects.any((p) => p.leadConversationId == conversationId);
 
-  bool isLead(String agentId) => projects.any(
-    (p) => conversation(p.leadConversationId)?.leadId == agentId,
-  );
+  SuperTabProject? leadProjectForAgent(String agentId) => projects
+      .where((p) => conversation(p.leadConversationId)?.leadId == agentId)
+      .firstOrNull;
+
+  bool isLead(String agentId) => leadProjectForAgent(agentId) != null;
+
+  String? leadProtectionReason(String agentId) {
+    final project = leadProjectForAgent(agentId);
+    if (project == null) return null;
+    return '${agentName(agentId)} is the Product Manager of project ${project.name}. Delete the project first.';
+  }
 
   /// The agents of a workgroup whose role is Reviewer.
   List<SuperTabAgent> reviewers(SuperTabConversation group) => [

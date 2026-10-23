@@ -47,6 +47,7 @@ class SuperTabClient {
   final _controllers = <String, Future<SuperTabController>>{};
   final _loaded = <String, SuperTabController>{};
   SuperTabController? peek(String id) => _loaded[id];
+  Iterable<SuperTabController> get loadedControllers => _loaded.values;
 
   /// The tabs closed on this computer. Only discovery says which of them the
   /// account still belongs to.

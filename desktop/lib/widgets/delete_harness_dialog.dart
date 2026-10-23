@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 
 import '../shortcuts/app_keymap.dart';
 import '../state/app_state.dart';
+import '../super_tabs/lead_guard.dart';
+import '../super_tabs/controller.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import 'desktop_chrome.dart';
 import 'desktop_prompt_surface.dart';
@@ -45,17 +47,31 @@ class _DeleteHarnessPrompt extends StatefulWidget {
 }
 
 class _DeleteHarnessPromptState extends State<_DeleteHarnessPrompt> {
+  String? get _protectionReason => superTabLeadProtectionReason(
+    widget.notifier,
+    widget.machineId,
+    widget.agentId,
+  );
   final _cancel = FocusNode(debugLabel: 'Cancel delete');
   final _promptFocus = FocusNode(debugLabel: 'Pending delete');
   final _body = ScrollController();
   final _announcer = BoxAnnouncer();
+  final _observedTabs = <SuperTabController>[];
   bool _deleting = false;
   String? _error;
 
   @override
   void initState() {
     super.initState();
+    _observedTabs.addAll(widget.notifier.superTabs.loadedControllers);
+    for (final tab in _observedTabs) {
+      tab.addListener(_onTabChanged);
+    }
     _focusCancel();
+  }
+
+  void _onTabChanged() {
+    if (mounted) setState(() {});
   }
 
   void _focusCancel() => WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -66,6 +82,9 @@ class _DeleteHarnessPromptState extends State<_DeleteHarnessPrompt> {
 
   @override
   void dispose() {
+    for (final tab in _observedTabs) {
+      tab.removeListener(_onTabChanged);
+    }
     _cancel.dispose();
     _promptFocus.dispose();
     _body.dispose();
@@ -85,7 +104,7 @@ class _DeleteHarnessPromptState extends State<_DeleteHarnessPrompt> {
   }
 
   Future<void> _delete() async {
-    if (_deleting) return;
+    if (_deleting || _protectionReason != null) return;
     _promptFocus.requestFocus();
     setState(() {
       _deleting = true;
@@ -135,25 +154,28 @@ class _DeleteHarnessPromptState extends State<_DeleteHarnessPrompt> {
                 widget.name,
                 style: DesktopChrome.text(size: 14, medium: true),
               ),
-              if (widget.notifier
-                      .stateOf(widget.machineId)
-                      ?.machine
-                      .displayName
+              if (widget.notifier.stateOf(widget.machineId)?.machine.displayName
                   case final machine?) ...[
                 const SizedBox(height: 4),
                 Text(machine, style: DesktopChrome.metadata()),
               ],
               const SizedBox(height: DesktopChrome.groupGap),
               Text(
-                'Delete this harness and its saved conversation? It stops if '
-                'running, and it cannot be opened again. Project files are kept.',
+                _protectionReason ??
+                    'Delete this harness and its saved conversation? It stops if '
+                        'running, and it cannot be opened again. Project files are kept.',
                 style: DesktopChrome.text(size: 13),
               ),
-              const SizedBox(height: 8),
-              Text(
-                'To keep the conversation to reopen later, use Stop Harness instead.',
-                style: DesktopChrome.text(size: 13, color: DesktopChrome.muted),
-              ),
+              if (_protectionReason == null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'To keep the conversation to reopen later, use Stop Harness instead.',
+                  style: DesktopChrome.text(
+                    size: 13,
+                    color: DesktopChrome.muted,
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -179,10 +201,13 @@ class _DeleteHarnessPromptState extends State<_DeleteHarnessPrompt> {
           if (!_deleting)
             Tooltip(
               message:
+                  _protectionReason ??
                   'Delete · ${terminalPromptHint(context, 'picker.accept', 'enter')}',
               child: FilledButton(
                 key: const Key('agent-delete-confirm'),
-                onPressed: () => unawaited(_delete()),
+                onPressed: _protectionReason == null
+                    ? () => unawaited(_delete())
+                    : null,
                 style: grid.dangerButtonStyle(),
                 child: const Text('Delete'),
               ),

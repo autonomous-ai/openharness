@@ -561,28 +561,27 @@ void main() {
     },
   );
 
-  testWidgets(
-    'a replaced member keeps its identity and shows its new engine',
-    (tester) async {
-      final f = await fixture(tester);
-      await f.show(tester);
-      final agents = f.server.state['agents'] as List;
-      agents[0]['harnessId'] = 'replacement';
-      agents[0]['configuration'] = {'engine': 'claude', 'model': 'sonnet'};
-      await f.controller.refresh();
-      await tester.pumpAndSettle();
-      expect(f.controller.snapshot!.agents.first.id, 'agent-0');
-      expect(f.controller.snapshot!.agents.first.harnessId, 'replacement');
-      expect(f.controller.snapshot!.agents.first.engine, 'claude');
-      await tester.tap(f.row(0));
-      await tester.pumpAndSettle();
-      expect(find.text('Claude'), findsOneWidget);
-      expect(find.text('sonnet'), findsOneWidget);
-      await tester.tap(find.widgetWithText(TextButton, 'Close'));
-      await tester.pumpAndSettle();
-      await f.close(tester);
-    },
-  );
+  testWidgets('a replaced member keeps its identity and shows its new engine', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    await f.show(tester);
+    final agents = f.server.state['agents'] as List;
+    agents[0]['harnessId'] = 'replacement';
+    agents[0]['configuration'] = {'engine': 'claude', 'model': 'sonnet'};
+    await f.controller.refresh();
+    await tester.pumpAndSettle();
+    expect(f.controller.snapshot!.agents.first.id, 'agent-0');
+    expect(f.controller.snapshot!.agents.first.harnessId, 'replacement');
+    expect(f.controller.snapshot!.agents.first.engine, 'claude');
+    await tester.tap(f.row(0));
+    await tester.pumpAndSettle();
+    expect(find.text('Claude'), findsOneWidget);
+    expect(find.text('sonnet'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Close'));
+    await tester.pumpAndSettle();
+    await f.close(tester);
+  });
 
   testWidgets(
     'owner confirms Remove from Swarm without stopping the native session',
@@ -628,6 +627,29 @@ void main() {
     await tester.pumpAndSettle();
     expect(f.server.posts, isEmpty);
     expect(find.byType(AlertDialog), findsNothing);
+    await f.close(tester);
+  });
+
+  testWidgets('project Product Manager cannot be removed from the roster', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    await f.show(tester);
+    await tester.tap(f.row(0), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    final remove = find.widgetWithText(
+      PopupMenuItem<String>,
+      'Remove from Swarm',
+    );
+    expect(remove, findsOneWidget);
+    expect(tester.widget<PopupMenuItem<String>>(remove).enabled, isFalse);
+    expect(
+      find.text(
+        'Atlas is the Product Manager of project openharness. Delete the project first.',
+      ),
+      findsOneWidget,
+    );
+    expect(f.server.posts, isEmpty);
     await f.close(tester);
   });
 

@@ -35,6 +35,7 @@ import '../models/model_search_catalog.dart';
 import '../widgets/resting_section.dart'
     show confirmStopInUse, confirmSwitchAnyway;
 import '../widgets/session_close_dialog.dart';
+import '../super_tabs/lead_guard.dart';
 import '../notify/system_notifications.dart';
 import '../widgets/account_device_detail.dart';
 import '../widgets/approve_device_code.dart';
@@ -2882,6 +2883,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 SessionCloseItem(
                   name: targets[i].$2.displayName,
                   activity: activities[i],
+                  protectionReason: superTabLeadProtectionReason(
+                    app,
+                    targets[i].$1,
+                    targets[i].$2.id,
+                  ),
                   machineName: showMachines
                       ? app.stateOf(targets[i].$1)?.machine.displayName ??
                             targets[i].$1
@@ -2902,6 +2908,23 @@ class _SwarmScreenState extends State<SwarmScreen> {
       // treats a lost reply as proof that the session stopped. A replaced
       // session must not inherit a choice made for the old one; one that
       // only bound its first conversation since the review is not replaced.
+      return targets.every((target) {
+        final current = app
+            .stateOf(target.$1)
+            ?.agents
+            .where((agent) => agent.id == target.$2.id)
+            .firstOrNull;
+        return current == null || current.continuesSession(target.$2);
+      });
+    }
+
+    // A native session may also be shown in an ordinary tab. Closing that view
+    // must not turn its Product Manager into a stoppable session.
+    if (targets.any(
+      (target) =>
+          superTabLeadProtectionReason(app, target.$1, target.$2.id) != null,
+    )) {
+      if (await choose() != 'close_view' || !mounted) return false;
       return targets.every((target) {
         final current = app
             .stateOf(target.$1)
