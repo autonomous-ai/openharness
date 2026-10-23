@@ -1673,7 +1673,13 @@ describe('Super Tabs on a real Mongo replica set', () => {
   })
 
   it('releases every queued route hold when its machine is removed', async () => {
-    const { tab, lead } = await fixture()
+    // The Lead runs elsewhere: a machine that hosts a project's Lead cannot leave the Swarm.
+    const tab = (await store.create(owner, randomUUID(), 'Pilot')).id
+    const leadMachineId = `lead-${randomUUID()}`
+    await db.machine.create({ data: { machineId: leadMachineId, userId: host.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    await db.machineShare.create({ data: { machineId: leadMachineId, ownerId: host.sub, autonomousEnv: 'prod', emails: [owner.email] } })
+    const lead = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: leadMachineId, harnessId: randomUUID(),
+      name: 'Lead', configuration: config, lead: true })).result.agentId as string
     const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
     await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
     await run(tab, { type: 'machine.contribute', machineId: 'test-host', name: 'Host', cwd: '/fixture/repo', engines: ['codex'], maxAgents: 4 }, host)
