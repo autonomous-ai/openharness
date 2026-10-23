@@ -192,7 +192,7 @@ uint32_t ph_lead_next_ms(const pod_nav_t *nav, const pod_model_t *m, uint32_t no
     if (!l) return POD_PET_STEP_MS;
     uint32_t ms = pod_pet_next_beat_ms(l->engine, l->recap == POD_RECAP_EMPTY ? POD_SCENE_REST : ph_lead_scene(l->state), now_ms, 0);
     if (ms < POD_PH_ANIM_MS) ms = POD_PH_ANIM_MS - now_ms % POD_PH_ANIM_MS;   // a pet redraws a lot: no faster than the Pets beat
-    if (l->state == POD_LEAD_WORK && (l->local[0] || l->since_s)) {   // the status line's clock: when its seconds next change
+    if (l->state == POD_LEAD_WORK && l->since_s) {   // the status line's clock: when its seconds next change
         const uint32_t into = (int32_t)(now_ms - l->since_at_ms) > 0 ? now_ms - l->since_at_ms : 0, t = 1000 - into % 1000;
         if (ms > t) ms = t;
     }

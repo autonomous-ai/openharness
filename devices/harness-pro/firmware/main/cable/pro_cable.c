@@ -554,8 +554,10 @@ static pod_lead_state_t lead_state(const char *s)
     return POD_LEAD_DONE;
 }
 
+// The Leads in the Swarm's order (each Lead's `order`, the project's index in the app), whatever their urgency; a Lead without one keeps its place as it came.
 static void read_leads(const cJSON *it, pod_swarm_t *sw)
 {
+    double order[SWARM_LEADS_MAX];
     const cJSON *l = NULL;
     cJSON_ArrayForEach(l, cJSON_GetObjectItemCaseSensitive(it, "leads")) {
         if (sw->lead_n >= SWARM_LEADS_MAX) break;
@@ -564,7 +566,15 @@ static void read_leads(const cJSON *it, pod_swarm_t *sw)
         bool duplicate = false;
         for (int i = 0; i < sw->lead_n; i++) if (!strcmp(sw->leads[i].id, id)) duplicate = true;
         if (duplicate) continue;
-        pod_lead_t *ld = &sw->leads[sw->lead_n++];
+        const cJSON *o = cJSON_GetObjectItemCaseSensitive(l, "order");
+        const double key = cJSON_IsNumber(o) ? o->valuedouble : sw->lead_n;
+        int at = sw->lead_n;
+        while (at > 0 && order[at - 1] > key) at--;   // after every equal one: ties keep their arrival order
+        memmove(&sw->leads[at + 1], &sw->leads[at], (size_t)(sw->lead_n - at) * sizeof sw->leads[0]);
+        memmove(&order[at + 1], &order[at], (size_t)(sw->lead_n - at) * sizeof order[0]);
+        order[at] = key;
+        sw->lead_n++;
+        pod_lead_t *ld = &sw->leads[at];
         memset(ld, 0, sizeof *ld);
         snprintf(ld->id, sizeof ld->id, "%s", id);
         const char *pid = str_of(l, "projectId");

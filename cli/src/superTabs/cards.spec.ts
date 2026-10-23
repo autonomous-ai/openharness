@@ -48,6 +48,39 @@ describe('leadsOf', () => {
     expect(leadsOf(swarm({ conversations: [...swarm().conversations, work('web', 'review')] }), 'm1', idle).leads[0].state).toBe('work')
   })
 
+  // The app's working mark is each agent's own live turn (the Lead's and every worker's); the card says a project works when any of its agents is in a turn
+  // here, and goes by its open assignments for agents this machine cannot see.
+  it('reads a project as work when any of its agents is in a turn here, whatever its Lead and assignments say', () => {
+    const inTurn = (...ids: string[]) => (h: string) => ({ inTurn: ids.includes(h) })
+    const withWorkers = (over: Record<string, unknown> = {}) => swarm({
+      agents: [agent('a1'), agent('a2'), agent('b1', { projectId: 'web' }), agent('b2', { projectId: 'mobile' })],
+      conversations: [...swarm().conversations, work('web', 'done'), conv('w-old', null, { projectId: 'mobile', agentIds: ['b2'], assignment: { status: 'done' } })],
+      ...over,
+    })
+    // Lead idle, its worker in a turn
+    expect(leadsOf(withWorkers(), 'm1', inTurn('h-b1')).leads.map(l => [l.project, l.state])).toEqual([['web', 'work'], ['mobile', 'done']])
+    // every assignment done, a worker still in a turn (one known only through its group, as the app's roster finds it)
+    const noProjectId = withWorkers({ agents: [agent('a1'), agent('a2'), agent('b2')] })
+    expect(Object.fromEntries(leadsOf(noProjectId, 'm1', inTurn('h-b2')).leads.map(l => [l.project, l.state]))).toEqual({ web: 'done', mobile: 'work' })
+    // the clock is the project's earliest turn here: the worker's when only it works, else whichever began first
+    const since = (map: Record<string, number>) => (h: string) => h in map ? { inTurn: true, since: map[h] } : { inTurn: false }
+    expect(leadsOf(withWorkers(), 'm1', since({ 'h-b1': 40 })).leads[0]).toMatchObject({ project: 'web', state: 'work', since: 40 })
+    expect(leadsOf(withWorkers(), 'm1', since({ 'h-a1': 5, 'h-b1': 40 })).leads[0]).toMatchObject({ project: 'web', state: 'work', since: 40 })
+    expect(leadsOf(withWorkers(), 'm1', since({ 'h-a1': 90, 'h-b1': 40 })).leads[0]).toMatchObject({ project: 'web', state: 'work', since: 90 })
+    // nobody in a turn and nothing open: done
+    expect(leadsOf(withWorkers(), 'm1', idle).leads.map(l => l.state)).toEqual(['done', 'done'])
+    // a worker on another machine has no turn here: its project goes by its assignment
+    const remoteWorker = withWorkers({ agents: [agent('a1'), agent('a2'), agent('b1', { projectId: 'web', machineId: 'm2' })] })
+    expect(leadsOf(remoteWorker, 'm1', inTurn('h-b1')).leads[0].state).toBe('done')
+    // a Lead on another machine: its local worker's turn counts, otherwise its assignments
+    const remoteLead = withWorkers({ agents: [agent('a1', { machineId: 'm2', machineOwnerId: 'sam' }), agent('a2'), agent('b1', { projectId: 'web' })] })
+    expect(leadsOf(remoteLead, 'm1', inTurn('h-b1')).leads[0]).toMatchObject({ id: 'a1', state: 'work', local: '' })
+    expect(leadsOf(remoteLead, 'm1', idle).leads[0].state).toBe('done')
+    // ask and stuck still come first
+    const asks = withWorkers({ conversations: [...withWorkers().conversations as unknown[], work('web', 'needs_human')] })
+    expect(leadsOf(asks, 'm1', inTurn('h-b1')).leads[0].state).toBe('ask')
+  })
+
   it('calls a harness local only on this machine and live here; names an owner only when it is not the signed-in person', () => {
     const remote = swarm({ agents: [agent('a1', { machineId: 'm2', machineOwnerId: 'sam' }), agent('a2', { machineOwnerId: 'sam' })] })
     const byId = Object.fromEntries(leadsOf(remote, 'm1', idle, 'me').leads.map(l => [l.id, l]))
@@ -231,6 +264,34 @@ describe('SwarmCards.tick', () => {
     await t.cards.tick()
     expect(t.seen).toHaveLength(2)
     expect(t.seen[1][0].leads[0].state).toBe('done')
+  })
+
+  it('re-sends when the clock\'s turn changes (the Lead\'s ends, a worker\'s goes on), not while the same turn runs', async () => {
+    const state = swarm({ agents: [agent('a1'), agent('a2'), agent('b1', { projectId: 'web' })] })
+    const t = setup({ t1: { revision: 1, state } }, { activity: { 'h-a1': 'working' }, elapsed: 90 })
+    await t.cards.tick()
+    expect(t.seen[0][0].leads[0]).toMatchObject({ project: 'web', state: 'work', since: 90 })
+    // the worker starts too: the Lead's earlier turn is still the clock, nothing to send
+    vi.mocked(t.core.agents.activity).mockResolvedValue({ 'h-a1': 'working', 'h-b1': 'working' })
+    vi.mocked(t.core.agents.activitySnapshot!).mockResolvedValue({ text: '', elapsedSeconds: 10 })
+    t.advance(5000)
+    await t.cards.tick()
+    expect(t.seen).toHaveLength(1)
+    // the Lead's turn ends, the worker's goes on: same state, another start, so the Pro is told
+    vi.mocked(t.core.agents.activity).mockResolvedValue({ 'h-b1': 'working' })
+    t.advance(5000)
+    await t.cards.tick()
+    expect(t.seen).toHaveLength(2)
+    expect(t.seen[1][0].leads[0]).toMatchObject({ project: 'web', state: 'work', since: 15 })
+    t.advance(5000)
+    await t.cards.tick()
+    expect(t.seen).toHaveLength(2)
+  })
+
+  it('sends a turn that just began as 1 s in, never 0 (the Pro shows no clock for 0)', async () => {
+    const t = setup({ t1: { revision: 1, state: swarm() } }, { activity: { 'h-a1': 'working' }, elapsed: 0 })
+    await t.cards.tick()
+    expect(t.seen[0][0].leads[0]).toMatchObject({ id: 'a1', state: 'work', since: 1 })
   })
 
   it('names a remote Lead\'s owner using the signed-in account', async () => {
