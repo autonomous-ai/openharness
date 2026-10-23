@@ -250,6 +250,7 @@ if [[ -n "${IDF_PATH:-}" ]]; then
     python3 "$here/test_cable_json_parse.py"
     python3 "$here/test_companion_protocol.py"
     python3 "$here/test_cable_identity.py"
+    python3 "$here/test_cable_supertab.py"
     python3 "$here/test_cable_models.py"
     python3 "$here/test_cable_outbound.py"
 fi

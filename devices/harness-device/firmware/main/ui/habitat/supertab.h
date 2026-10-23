@@ -40,7 +40,7 @@ typedef struct { ht_lead_event_kind_t kind; char tab[ID_MAX], lead[ID_MAX]; } ht
 typedef struct { const char *id, *project_id, *project, *engine, *owner, *local, *state; int order; long since; } ht_lead_in_t;
 // false: an empty or overlong id or tab. Names are cut on a UTF-8 boundary.
 bool ht_supertab_init(ht_supertab_t *, const char *id, const char *tab, const char *name, int count);
-// false: the Lead is malformed (skipped, not the frame) or the record already holds 12.
+// false: the Lead is malformed or repeats an id (skipped, not the frame), or the record already holds 12.
 bool ht_supertab_lead_add(ht_supertab_t *, const ht_lead_in_t *);
 
 void ht_supertabs_reset(ht_supertabs_t *);

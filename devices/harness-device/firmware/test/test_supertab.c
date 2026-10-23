@@ -67,6 +67,8 @@ static void order_and_limits(void)
     assert(!ht_supertab_lead_add(&t, &bad));
     bad = lead("", "work", 0); assert(!ht_supertab_lead_add(&t, &bad));
     bad = lead(NULL, "work", 0); assert(!ht_supertab_lead_add(&t, &bad));
+    bad = lead("L0", "work", 0); assert(ht_supertab_lead_add(&t, &bad) && !ht_supertab_lead_add(&t, &bad));
+    assert(ht_supertab_init(&t, "s1", "", "n", 3));
     bad = lead("L9", NULL, 0); bad.project = NULL; bad.local = NULL;   // optional fields may be absent
     assert(ht_supertab_lead_add(&t, &bad) && t.lead_n == 1);
     // Unknown state reads as done; `since` absent stays absent.
