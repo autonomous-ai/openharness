@@ -403,8 +403,9 @@ export interface CableHost {
    * that took a morning to explain. Optional, so a host that cannot answer simply says nothing.
    */
   knows?(agentId: string): boolean
-  /** A finger moving on the dial's glass, on its way to whatever window is open on this computer. */
-  scrolled(phase: 'down' | 'move' | 'up', dy: number, velocity: number): void
+  /** A finger moving on the dial's glass, on its way to whatever window is open on this computer. `superTabId`: the device has a Lead
+   *  of that Swarm open (a Pro's Lead view), so the window scrolls that Swarm's chat rather than a pane. */
+  scrolled(phase: 'down' | 'move' | 'up', dy: number, velocity: number, superTabId?: string): void
   updateAgent(agentId: string, model?: string, effort?: string): void
   /** PCM is 16-bit mono at `sampleRate`; the daemon owns the credential this needs. */
   transcribe(pcm: Buffer, sampleRate: number, lang: string): Promise<string>
@@ -1459,7 +1460,8 @@ export class CableSession {
         if (phase !== 'down' && phase !== 'move' && phase !== 'up') return
         const dy = typeof msg.dy === 'number' ? msg.dy : 0
         const v = typeof msg.v === 'number' ? msg.v : 0
-        this.host.scrolled(phase, dy, v)
+        if (this.openLead) this.host.scrolled(phase, dy, v, this.openLead.tabId)
+        else this.host.scrolled(phase, dy, v)
         return
       }
       case 'selection': {

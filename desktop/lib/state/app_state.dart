@@ -4722,6 +4722,24 @@ class AppNotifier extends ChangeNotifier {
     };
   }
 
+  /// Dial scroll handlers of the mounted Swarm chats, by Super Tab: a device with
+  /// one of that Swarm's Leads open (a Pro's Lead view) scrolls its chat.
+  final _superTabScrollHandlers =
+      <String, void Function(int phase, int dy, int velocity)>{};
+
+  /// Called by a Swarm's chat while mounted; returns how to withdraw it.
+  VoidCallback registerSuperTabScroll(
+    String superTabId,
+    void Function(int phase, int dy, int velocity) handler,
+  ) {
+    _superTabScrollHandlers[superTabId] = handler;
+    return () {
+      if (identical(_superTabScrollHandlers[superTabId], handler)) {
+        _superTabScrollHandlers.remove(superTabId);
+      }
+    };
+  }
+
   bool get canAddPane => panes.length < maxPanes;
 
   Iterable<TerminalPane> panesFor(String machineId) =>
@@ -20516,6 +20534,11 @@ class AppNotifier extends ChangeNotifier {
         if (phase == 0) _requestDeviceWindow(machine);
         final dy = (payload['dy'] as num?)?.round() ?? 0;
         final velocity = (payload['velocity'] as num?)?.round() ?? 0;
+        // A Lead's view on the device: that Swarm's chat scrolls, never a pane.
+        if (payload['superTabId'] case final String superTabId) {
+          _superTabScrollHandlers[superTabId]?.call(phase, dy, velocity);
+          return;
+        }
         final pane = focusedPane;
         final cloudScroll = pane?.agentId == null
             ? null

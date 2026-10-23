@@ -3913,6 +3913,23 @@ describe('swarm cards', () => {
     } finally { await session.stop() }
   })
 
+  it('names the Swarm of the open Lead on a scroll, so the window scrolls that Swarm\'s chat; none once it closed', async () => {
+    const host = cardHost({ cards: [card('st1')] })
+    const { session, port } = await connect(host)
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+      port.say({ t: 'scroll', phase: 'move', dy: 5 }); await settle()
+      expect(host.scrolled).toHaveBeenLastCalledWith('move', 5, 0)
+      port.say({ t: 'supertab.open', tab: 'st1', lead: 'lead1' }); await settle()
+      port.say({ t: 'scroll', phase: 'move', dy: -12 }); await settle()
+      expect(host.scrolled).toHaveBeenLastCalledWith('move', -12, 0, 'st1')
+      port.say({ t: 'supertab.open', tab: 'st1', lead: '' }); await settle()
+      port.say({ t: 'scroll', phase: 'up', dy: 0, v: 300 }); await settle()
+      expect(host.scrolled).toHaveBeenLastCalledWith('up', 0, 300)
+    } finally { await session.stop() }
+  })
+
   it('an unplugged Pro with a recap open closes it for the core', async () => {
     const host = cardHost({ cards: [card('st1')] })
     const { session, port } = await connect(host)

@@ -5,7 +5,7 @@
 // ("working . m:ss" green, "needs you" orange, "stuck" red, "done" grey), a remote Lead adding its owner in a smaller muted line.
 // A Lead that needs you has an 8 px orange inner left edge on the bubble (stuck: red). States of the text: LOADING draws "..." in a bubble of its own; EMPTY draws no
 // bubble, "No message yet" muted in the middle and the pet resting; LOADED the text. A long message shows 7 rows at a time and scrolls by rows (the frame's
-// scroll; a vertical drag, pod_scroll_pitch / pod_scroll_max), the last visible row lighter while more follows. No hit: a tap anywhere talks to a local Lead's
+// scroll; a vertical drag, pod_scroll_pitch / pod_scroll_max; the same drag scrolls the desktop's Swarm chat), the last visible row lighter while more follows. No hit: a tap anywhere talks to a local Lead's
 // harness (the glue), a horizontal swipe steps to the previous / next Lead (pod_nav_act PREV / NEXT). No page dots.
 #include <stdio.h>
 #include <string.h>

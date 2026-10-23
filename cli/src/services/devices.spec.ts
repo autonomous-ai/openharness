@@ -292,6 +292,7 @@ describe('the dial\'s host, wired to the core', () => {
     w.focused!('m1', 'a1')
     w.swarmSelected!('t2')
     w.scrolled!('move', 4, 120)
+    w.scrolled!('move', -6, 0, 'st1')
     w.dialStatus!({ attached: true, fw: '1.2.3' })
     w.dialStatus!({ attached: false })
     expect(vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame)).toEqual([
@@ -302,6 +303,7 @@ describe('the dial\'s host, wired to the core', () => {
       { type: 'dial_focus', payload: { machineId: 'm1', agentId: 'a1' } },
       { type: 'dial_swarm', payload: { swarmId: 't2' } },
       { type: 'dial_scroll', payload: { phase: 'move', dy: 4, velocity: 120 } },
+      { type: 'dial_scroll', payload: { phase: 'move', dy: -6, velocity: 0, superTabId: 'st1' } },
       { type: 'dial_status', payload: { attached: true, fw: '1.2.3' } },
       { type: 'dial_status', payload: { attached: false } },
     ])

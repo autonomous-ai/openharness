@@ -28,6 +28,7 @@ import 'work_details.dart';
 import 'project_sidebar.dart';
 import 'project_options.dart';
 import 'pane_layout.dart';
+import '../widgets/dial_list_scroll.dart';
 
 typedef _ComposerChoice = ({String label, String? detail, VoidCallback choose});
 
@@ -93,6 +94,15 @@ class _SuperTabViewState extends State<SuperTabView>
   String? _completionPrefix;
   final _completionKeys = List.generate(6, (_) => GlobalKey());
   SuperTabController get c => widget.controller;
+
+  /// A device with a Lead of this Swarm open scrolls the chat on screen.
+  late final _dial = DialListScroll(() => _scroll[c.selectedId]);
+  VoidCallback? _unregisterDial;
+  void _registerDial() {
+    _unregisterDial?.call();
+    _unregisterDial = widget.app?.registerSuperTabScroll(c.tabId, _dial.handle);
+  }
+
   bool get _devicesVisible =>
       c.devicesSelected &&
       widget.app?.devicesEnabled == true &&
@@ -116,6 +126,7 @@ class _SuperTabViewState extends State<SuperTabView>
     WidgetsBinding.instance.addObserver(this);
     _composer.addListener(_composerMoved);
     c.addListener(_changed);
+    _registerDial();
     _changed();
   }
 
@@ -136,6 +147,10 @@ class _SuperTabViewState extends State<SuperTabView>
   @override
   void didUpdateWidget(SuperTabView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != c || oldWidget.app != widget.app) {
+      _dial.cancel();
+      _registerDial();
+    }
     if (oldWidget.controller != c) {
       oldWidget.controller.removeListener(_changed);
       c.addListener(_changed);
@@ -301,6 +316,8 @@ class _SuperTabViewState extends State<SuperTabView>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     c.removeListener(_changed);
+    _unregisterDial?.call();
+    _dial.cancel();
     _composer.dispose();
     _focus.dispose();
     _pullRequestsFocus.dispose();
