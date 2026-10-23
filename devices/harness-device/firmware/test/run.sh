@@ -127,6 +127,10 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bou
 "$out/test_workspace"
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
+   -o "$out/test_supertab" "$here/test_supertab.c" "$here/../main/ui/habitat/supertab.c"
+"$out/test_supertab"
+
+cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
    -o "$out/test_tim" "$here/test_tim.c" "$here/../main/ui/habitat/tim.c" "$here/../main/ui/habitat/character_motion.c" "$here/../main/ui/habitat/character_layout.c" \
    "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
 "$out/test_tim"
