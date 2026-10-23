@@ -1805,8 +1805,8 @@ static void lead_retry(void) {
     CHECK(take() == 3);
     render(6000);
     CHECK(take() == 2);
-    pod_ui_supertab_unsent(&U, Q[0].t);
-    pod_ui_supertab_unsent(&U, Q[1].t);
+    pod_ui_supertab_unsent(&U, &Q[0]);
+    pod_ui_supertab_unsent(&U, &Q[1]);
     render(8999);
     CHECK(take() == 0);
     render(9000);
@@ -1825,7 +1825,7 @@ static void lead_retry(void) {
     CHECK(take() == 2);
     render(6000);
     CHECK(take() == 1);
-    pod_ui_supertab_unsent(&U, Q[0].t);
+    pod_ui_supertab_unsent(&U, &Q[0]);
     render(9000);
     CHECK(take() == 1 && is_q(0, "supertab.open", "sw1", "l2"));
     // a full queue records nothing: the next sync sends the whole of it
