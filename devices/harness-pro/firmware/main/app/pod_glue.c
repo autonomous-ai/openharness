@@ -360,6 +360,25 @@ static bool sup_push(pod_ui_t *u, const char *t, const char *tab, const char *le
     return true;
 }
 
+// A Notices row whose harness is a Swarm's local Lead: read the entry and open that Lead's view the way supertab.focus does (over Home, on the Swarm's card), the
+// desktop told to select it. Not the plain agent: agent.open would make the desktop open the Lead's harness in a new tab. False when no Swarm leads from it.
+static bool notice_lead(pod_ui_t *u, const char *agent_id)
+{
+    pod_model_t *m = &u->model;
+    for (int i = 0; i < m->swarm_n; i++)
+        for (int j = 0; j < m->swarms[i].lead_n; j++) {
+            const pod_lead_t *l = &m->swarms[i].leads[j];
+            if (!l->local[0] || strcmp(l->local, agent_id)) continue;
+            pod_model_unread_read(m, agent_id);
+            if (pod_nav_follow_lead(&u->nav, m, m->swarms[i].id, l->id)) {
+                sup_push(u, "supertab.select", m->swarms[i].id, l->id);
+                u->scroll_px = 0;
+            }
+            return true;
+        }
+    return false;
+}
+
 // PREV / NEXT on the Lead view; when it landed on another Lead the daemon is told to select it.
 static void lead_step(pod_ui_t *u, int dir, uint32_t now_ms)
 {
@@ -579,6 +598,7 @@ pod_out_t pod_ui_touch(pod_ui_t *u, bool down, int x, int y, uint32_t now_ms, bo
         }
     }
     if (arg == -1 && u->hit.id[0]) { *changed = true; return none; }   // what it named is gone: redraw, open nothing
+    if (u->hit.action == POD_A_OPEN_NOTIF && arg >= 0 && arg < u->model.unread_count && notice_lead(u, u->model.unread[arg].agent)) { *changed = true; return none; }
     if (u->hit.action == POD_A_TALK && u->nav.depth) {   // an agent of an offline machine cannot be talked to: say why
         const pod_agent_t *ag = pod_model_find(&u->model, top(u)->agent);
         if (ag && ag->state == POD_OFFLINE) {
