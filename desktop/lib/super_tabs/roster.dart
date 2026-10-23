@@ -10,6 +10,7 @@ import '../state/harness_activity.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
 import 'agent_details.dart';
 import 'controller.dart';
@@ -196,7 +197,6 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     String name,
     String role,
     String badge,
-    String? project,
   ) => LayoutBuilder(
     builder: (context, constraints) {
       final nameStyle = DesktopChrome.control();
@@ -222,15 +222,6 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         0.0,
         (constraints.maxWidth - badgeWidth - 6).clamp(0.0, double.infinity),
       );
-      final projectWidth = project == null
-          ? 0.0
-          : (measure(project, tagStyle) + 10).clamp(
-              0.0,
-              (constraints.maxWidth - nameWidth - badgeWidth - 12).clamp(
-                0.0,
-                double.infinity,
-              ),
-            );
       Widget tag(String text) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
         decoration: BoxDecoration(
@@ -263,12 +254,6 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             excludeSemantics: true,
             child: SizedBox(width: badgeWidth, child: tag(badge)),
           ),
-          // Give the name and role their space first. The full project remains
-          // in the row's tooltip when a narrow pane cannot fit a readable tag.
-          if (project != null && projectWidth >= scale.scale(24) + 10) ...[
-            const SizedBox(width: 6),
-            SizedBox(width: projectWidth, child: tag(project)),
-          ],
         ],
       );
     },
@@ -342,7 +327,9 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
                 size: 24,
               ),
               const SizedBox(width: 8),
-              Expanded(child: _agentIdentity(name, role, badge, project?.name)),
+              Expanded(child: _agentIdentity(name, role, badge)),
+              const SizedBox(width: 8),
+              EngineMark(engine: agent.engine, size: 14),
             ],
           ),
           subtitle: Padding(
