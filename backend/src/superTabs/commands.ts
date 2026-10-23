@@ -10,6 +10,7 @@ import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type Rou
 import { routingOverrideSchema } from './routingPolicy.js'
 import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
+import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, type TerminalRequest } from './terminal.js'
 import { agentProjectId, deleteProject, groupProject, inviteLanding, ledProject, manageProject, mutableProjects, placeRules, projectMembers, projectOf, projectRules, readAgent, readConversation, readProject, sameProject, SKILL_MODE_NAMES, skillModeOf, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
@@ -110,6 +111,14 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('route.record'), conversationId: id, decision: routeRecordSchema }).strict(),
   z.object({ type: z.literal('route.override'), decisionId: id, candidateId: z.string().regex(/^c\d{1,2}$/), reason }).strict(),
   z.object({ type: z.literal('route.modelResult'), decisionId: id, startId: id, model: z.string().min(1).max(200), effort: z.string().min(1).max(80) }).strict(),
+  z.object({ type: z.literal('agent.screen'), agentId: id, scrollback: z.number().int().min(1).max(200).optional() }).strict(),
+  // Text is typed as is, so it carries no control characters; Enter, Esc and the rest are named keys.
+  z.object({ type: z.literal('agent.input'), agentId: id, text: z.string().min(1).max(4000).regex(/^[^\x00-\x1f\x7f]*$/, 'Send Enter and other keys as named keys.').optional(),
+    keys: z.array(z.enum(TERMINAL_KEYS)).min(1).max(32).optional() }).strict().refine(c => c.text !== undefined || c.keys !== undefined, 'Type text or keys.'),
+  ...(['agent.screenResult', 'agent.inputResult'] as const).map(type => z.object({ type: z.literal(type), requestId: id, ok: z.boolean(),
+    text: z.string().refine(value => Buffer.byteLength(value) <= 65_536, 'A screen is at most 64 KB.').optional(),
+    error: z.string().trim().min(1).max(500).optional() }).strict().refine(c => c.ok || c.error !== undefined, 'Say why the request failed.')),
+  z.object({ type: z.literal('agent.alert'), agentId: id, alert: z.enum(['prompt', 'limit']), active: z.boolean(), resetAt: z.iso.datetime().optional() }).strict(),
   z.object({ type: z.literal('work.check'), conversationId: id, assignmentId: id, checkId: id, passed: z.boolean(), evidence: text }).strict(),
 ])
 export type Command = z.infer<typeof commandSchema>
@@ -139,6 +148,8 @@ export interface CommandContext {
   /** Starts on the machine being contributed that the store found abandoned: never contributed, never dispatched,
    *  and older than ABANDONED_START_MS by their operation receipt. */
   abandonedStartIds?: string[]
+  /** The request an `agent.screenResult` / `agent.inputResult` answers, read from SuperTabTerminalRequest by the store. */
+  terminalRequest?: TerminalRequest
 }
 
 /** Messages in a row between the Lead and its worker after which the Lead's message is no longer delivered automatically. */
@@ -367,6 +378,23 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   }
 
   switch (command.type) {
+    case 'agent.screen':
+    case 'agent.input': {
+      const { effect, message } = terminalRequest(state, actor, sender, operationId, context.now, command)
+      effects.terminal = effect
+      result.requestId = operationId
+      if (message) effects.messages.push(message)
+      break
+    }
+    case 'agent.screenResult':
+    case 'agent.inputResult':
+      effects.terminal = terminalResult(state, actor, context.terminalRequest, command)
+      break
+    case 'agent.alert': {
+      const row = terminalAlert(state, actor, sender, operationId, context.now, command)
+      if (row) effects.messages.push(row)
+      break
+    }
     case 'project.report': {
       const project = readProject(state, actor, command.projectId)
       const group = conversation(state, project.leadConversationId)
