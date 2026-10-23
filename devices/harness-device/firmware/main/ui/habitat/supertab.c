@@ -44,6 +44,7 @@ bool ht_supertab_init(ht_supertab_t *t, const char *id, const char *tab, const c
 bool ht_supertab_lead_add(ht_supertab_t *t, const ht_lead_in_t *in)
 {
     if (t->lead_n >= HT_SUPERTAB_LEADS_MAX) return false;
+    for (int i = 0; in->id && i < t->lead_n; i++) if (!strcmp(t->leads[i].id, in->id)) return false;   // a repeated id
     ht_lead_t *l = &t->leads[t->lead_n];
     memset(l, 0, sizeof *l);
     if (!put_id(l->id, in->id, true) || !put_id(l->project_id, in->project_id, false) ||

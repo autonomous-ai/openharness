@@ -24,6 +24,8 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "ui/ui_screens.h"
+#include "ui/habitat/supertab.h"
+#include "esp_attr.h"
 
 static const char *TAG = "cable_client";
 
@@ -315,6 +317,10 @@ static void send_hello(void)
     // Named before anything else about this dial is believed. See CABLE_PRODUCT.
     msg_string(&root, "product", CABLE_PRODUCT);
     msg_number(&root, "proto", CABLE_PROTO_VERSION);
+    // The Swarms (handle_supertab) and their Super Tab waits (handle_question). Without the second the daemon holds
+    // a wait back from this dial, which once had to: a wait is never an answer screen here.
+    msg_string(&root, "swarmCard", "v1");
+    msg_string(&root, "superTab", "wait-v1");
     // Which of the two dials this is (board.h) — informational, so a log or a bug report can say. A
     // daemon that predates the field ignores it.
     msg_string(&root, "hw", board()->name);
@@ -370,6 +376,18 @@ void cable_client_select_swarm(const char *swarm_id)
 void cable_client_list_swarms(void)
 {
     send_json(msg("swarms.list"));
+}
+
+void cable_client_supertab_send(const char *t, const char *tab, const char *lead)
+{
+    if (!t || (strcmp(t, "supertab.recap.get") && strcmp(t, "supertab.open") && strcmp(t, "supertab.select"))) return;
+    // Only an open may name no Lead: it says the dial left the Swarm.
+    if (!tab || !tab[0] || strlen(tab) >= ID_MAX || !lead || strlen(lead) >= ID_MAX ||
+        (!lead[0] && strcmp(t, "supertab.open"))) return;
+    cJSON *root = msg(t);
+    msg_string(&root, "tab", tab);
+    msg_string(&root, "lead", lead);
+    send_json(root);
 }
 
 
@@ -895,6 +913,106 @@ static void handle_swarms(const cJSON *p)
  * app's own shape and needs every one of them. */
 }
 
+// ── the Swarms ──────────────────────────────────────────────────────────────────────────────────────
+// Two frames, as for the Pro, so each stays under the JSON guard: `supertabs` {ids} is the set and its order,
+// `supertab` one Swarm with at most 12 Leads. A Swarm without a usable id is dropped; a Lead that is not an
+// object, has no usable id or repeats one is skipped and the frame survives.
+static bool id_fits(const char *s)
+{
+    return s && s[0] && strlen(s) < ID_MAX;
+}
+static void handle_supertabs(const cJSON *p)
+{
+    const cJSON *ids = cJSON_GetObjectItemCaseSensitive(p, "ids");
+    if (!cJSON_IsArray(ids)) return;
+    static char rows[HT_SUPERTABS_MAX][ID_MAX];
+    int n = 0;
+    const cJSON *it = NULL;
+    cJSON_ArrayForEach(it, ids) {
+        if (n >= HT_SUPERTABS_MAX) break;
+        if (!cJSON_IsString(it) || !id_fits(it->valuestring)) continue;
+        bool duplicate = false;
+        for (int i = 0; i < n; i++) if (!strcmp(rows[i], it->valuestring)) duplicate = true;
+        if (!duplicate) snprintf(rows[n++], ID_MAX, "%s", it->valuestring);
+    }
+    ESP_LOGI(TAG, "supertabs: %d", n);
+    ui_supertabs_ids((const char (*)[ID_MAX])rows, n);
+}
+static void handle_supertab(const cJSON *p)
+{
+    static EXT_RAM_BSS_ATTR ht_supertab_t card;   // 3.4 KB: too large for the reader task's stack
+    const char *tab = str_of(p, "tab");
+    if (tab && strlen(tab) >= ID_MAX) tab = "";   // a desk tab id that cannot be held links to nothing
+    if (!ht_supertab_init(&card, str_of(p, "id"), tab, str_of(p, "name"), 0)) return;
+    const cJSON *l = NULL;
+    cJSON_ArrayForEach(l, cJSON_GetObjectItemCaseSensitive(p, "leads")) {
+        if (card.lead_n >= HT_SUPERTAB_LEADS_MAX) break;
+        if (!cJSON_IsObject(l)) continue;
+        const cJSON *order = cJSON_GetObjectItemCaseSensitive(l, "order"), *since = cJSON_GetObjectItemCaseSensitive(l, "since");
+        ht_lead_in_t in = {
+            .id = str_of(l, "id"), .project_id = str_of(l, "projectId"), .project = str_of(l, "project"),
+            .engine = str_of(l, "engine"), .owner = str_of(l, "owner"), .local = str_of(l, "local"), .state = str_of(l, "state"),
+            // Absent from a daemon before `order`: the frame's own order stands.
+            .order = cJSON_IsNumber(order) && order->valuedouble >= 0 && order->valuedouble < 65536 ? (int)order->valuedouble : -1,
+            .since = cJSON_IsNumber(since) && since->valuedouble >= 0 ? (since->valuedouble > 2592000 ? 2592000 : (long)since->valuedouble) : -1,
+        };
+        ht_supertab_lead_add(&card, &in);
+    }
+    const cJSON *count = cJSON_GetObjectItemCaseSensitive(p, "count");   // absent: the Leads listed
+    card.count = cJSON_IsNumber(count) ? (count->valuedouble > 0 ? (count->valuedouble > 65535 ? 65535 : (uint16_t)count->valuedouble) : 0)
+                                       : card.lead_n;
+    // A Lead that starts needing a person, off the face: the same coalesced beep as a question.
+    if (ui_supertab(&card)) audio_notify_done();
+}
+// `supertab.recap`: one Lead's last message. The model cuts it to 1,500 bytes; `none` is "no message yet".
+static void handle_supertab_recap(const cJSON *p)
+{
+    const char *tab = str_of(p, "tab"), *lead = str_of(p, "lead"), *text = str_of(p, "text");
+    if (!id_fits(tab) || !id_fits(lead)) return;
+    const cJSON *at = cJSON_GetObjectItemCaseSensitive(p, "at");
+    const double secs = cJSON_IsNumber(at) && at->valuedouble > 0 ? at->valuedouble : 0;
+    const bool none = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "none"));
+    ui_supertab_recap(tab, lead, none || !text ? "" : text, secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs, none);
+}
+static void handle_supertab_focus(const cJSON *p)
+{
+    const char *tab = str_of(p, "tab"), *lead = str_of(p, "lead");
+    if (id_fits(tab) && id_fits(lead)) ui_supertab_focus(tab, lead);
+}
+
+// `question` {agentId, id, questions, superTab?, attention?}. With a non-empty `superTab` it is a Super Tab wait: the
+// dial cannot load its answer screen, so it only changes the asking Lead's inbox entry and face (ui_supertab_wait).
+static void handle_question(const cJSON *p, const char *agent_id)
+{
+    const cJSON *questions = cJSON_GetObjectItemCaseSensitive(p, "questions");
+    const char *swarm = str_of(p, "superTab");
+    if (agent_id && swarm && swarm[0]) {
+        const char *request = str_of(p, "id"), *attention = str_of(p, "attention");
+        if (!request || !request[0] || strlen(request) >= 64) return;
+        if (ui_supertab_wait(agent_id, request, swarm, attention && !strcmp(attention, "stuck"),
+                             str_of(cJSON_GetArrayItem(questions, 0), "q")))
+            audio_notify_done();
+        return;
+    }
+    // The name rides on the frame for the same reason as on `summary`: the asker may be off this tab.
+    if (agent_id && questions) {
+        // A question is an alert: pinned row, wake and a (coalesced) beep, all but the beep inside
+        // ui_question_show, which stays quiet for the pane already on the glass.
+        if (ui_question_show(agent_id, str_of(p, "name"), str_of(p, "machine"), str_of(p, "id"), questions))
+            audio_notify_done();
+    }
+}
+// Somebody else answered it. A question is a dialog in a tmux pane, not a shared object, so this is
+// the ONLY way the dial learns that the thing it is waiting on has already been dealt with — without
+// it the screen sits there offering options that no longer key into anything.
+static void handle_question_close(const cJSON *p, const char *agent_id)
+{
+    const char *request = str_of(p, "id");
+    if (!agent_id) return;
+    if (request && !strncmp(request, "supertab:", 9)) ui_supertab_wait_close(agent_id, request);
+    else ui_question_close(agent_id, request);
+}
+
 static void session_up(const cJSON *p)
 {
     atomic_store(&s_features, cable_features_parse(p));
@@ -960,6 +1078,8 @@ static void session_down(const char *why)
     // alone deliberately: a session that comes back on the same computer should land where it was.
     cable_machines_clear(&s_machines);
     ui_machines_clear();
+    // The Swarms too, with their inbox entries: on attach the daemon resends every card and every open wait.
+    ui_supertabs_clear();
     s_machine_name[0] = '\0';
     s_machine_id[0] = '\0';
     // Restore the plain console FIRST: whatever follows this point should be readable by a developer with
@@ -1248,6 +1368,10 @@ static void handle_message(const cJSON *root)
     if (strcmp(t, "settings.set") == 0) { handle_settings_set(p); return; }
     if (strcmp(t, "models") == 0) { handle_models(p); return; }
     if (strcmp(t, "swarms") == 0) { handle_swarms(p); return; }
+    if (strcmp(t, "supertabs") == 0) { handle_supertabs(p); return; }
+    if (strcmp(t, "supertab") == 0) { handle_supertab(p); return; }
+    if (strcmp(t, "supertab.recap") == 0) { handle_supertab_recap(p); return; }
+    if (strcmp(t, "supertab.focus") == 0) { handle_supertab_focus(p); return; }
 
     if (strcmp(t, "agent.updated") == 0) {
         // One agent changed. Cheapest correct answer is to re-ask: the daemon is on the other end of a
@@ -1341,24 +1465,8 @@ static void handle_message(const cJSON *root)
     }
     if (strcmp(t,"question.state")==0) { ui_question_state(p); return; }
     if (strcmp(t,"answer.receipt")==0) { ui_answer_receipt(p); return; }
-    if (strcmp(t, "question") == 0) {
-        const cJSON *questions = cJSON_GetObjectItemCaseSensitive(p, "questions");
-        // The name rides on the frame for the same reason as on `summary`: the asker may be off this tab.
-        if (agent_id && questions) {
-            // A question is an alert: pinned row, wake and a (coalesced) beep, all but the beep inside
-            // ui_question_show, which stays quiet for the pane already on the glass.
-            if (ui_question_show(agent_id, str_of(p, "name"), str_of(p, "machine"), str_of(p, "id"), questions))
-                audio_notify_done();
-        }
-        return;
-    }
-    // Somebody else answered it. A question is a dialog in a tmux pane, not a shared object, so this is
-    // the ONLY way the dial learns that the thing it is waiting on has already been dealt with — without
-    // it the screen sits there offering options that no longer key into anything.
-    if (strcmp(t, "question.close") == 0) {
-        if (agent_id) ui_question_close(agent_id, str_of(p, "id"));
-        return;
-    }
+    if (strcmp(t, "question") == 0) { handle_question(p, agent_id); return; }
+    if (strcmp(t, "question.close") == 0) { handle_question_close(p, agent_id); return; }
 
     if (strcmp(t,"draft.state")==0) { ui_draft_state(p);return; }
     if (strcmp(t,"voice.draft")==0) {
