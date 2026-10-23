@@ -34,7 +34,7 @@ describe('contributing a Windows machine to a swarm', () => {
   ])('$name', async ({ existing, cwd }) => {
     const { core, deps, close } = fixture(existing)
     const result = await prepareContribution(core, { tabId: 'tab', scope: 'swarm' }, deps as never)
-    expect(result).toEqual({ ok: true, state: 'ready', scope: 'swarm', cwd, engines: ['claude'], maxAgents: 4 })
+    expect(result).toEqual({ ok: true, state: 'ready', scope: 'swarm', cwd, engines: ['claude'], maxAgents: 2, maxAvailableAgents: 4 })
     expect(mkdir).toHaveBeenCalledExactlyOnceWith(cwd, { recursive: true })
     expect(deps.capacity).toHaveBeenCalledExactlyOnceWith({ cwd, tools: ['git'], devices: [] })
     expect(deps.prepare).not.toHaveBeenCalled()
