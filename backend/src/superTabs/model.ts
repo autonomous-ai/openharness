@@ -89,6 +89,8 @@ export interface Assignment {
   configuration: AgentConfiguration
   execution: { machineId: string; harnessId: string; machineOwnerId: string }
   result: string | null
+  /** Explicit progress fences delayed recording gaps; absent on older backends. */
+  recordingProgress?: { at: number; revision: number }
 }
 export interface WorkTask {
   goal: string

@@ -71,6 +71,153 @@ afterAll(async () => {
   await replica?.stop()
 })
 
+describe('native recording restart recovery', () => {
+  async function recoveryFixture(status: 'working' | 'review' = 'working') {
+    const { tab, lead } = await fixture()
+    const group = (await run(tab, { type: 'conversation.create', title: 'Recover interrupted work', brief: 'Finish the saved task',
+      checks: [{ description: 'Task has a checkpoint', independent: false }] })).result.conversationId as string
+    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Recovery Engineer', configuration: config, lead: false })).result.agentId as string
+    const assigned = await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })
+    const assignmentId = assigned.result.assignmentId as string
+    if (status === 'review') await run(tab, { type: 'work.status', conversationId: group, assignmentId, status, result: 'Checkpoint ready' }, host, worker)
+    const { contextId } = await store.native.open(owner, tab, { operationId: randomUUID(), conversationId: group, agentId: worker })
+    const prompt = { turnId: 'saved_turn', kind: 'prompt' as const, previousEventId: null,
+      text: 'Continue from the saved commit', truncated: false, interrupted: false }
+    const checkpoint = await store.native.append(host, tab, contextId, prompt) as { eventId: string }
+    const checkpointRow = await db.superTabMessage.findUniqueOrThrow({ where: { id: checkpoint.eventId } })
+    const gap = { turnId: 'restart_observation', kind: 'gap' as const, previousEventId: checkpoint.eventId,
+      text: '', truncated: false, interrupted: false }
+    const state = async () => (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!
+    const gapDeliveries = async () => {
+      const rows = await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: group } })
+      const ids = rows.filter(m => (m.source as { phase?: string } | null)?.phase === 'gap').map(m => m.id)
+      return db.superTabDelivery.findMany({ where: { tabId: tab, messageId: { in: ids } } })
+    }
+    const append = async (body: Record<string, unknown>, context = contextId) => {
+      const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/native/${context}`,
+        headers: { authorization: `Bearer ${host.sub}` }, payload: body })
+      expect(response.statusCode, response.body).toBe(200)
+      return response.json().data as { eventId: string }
+    }
+    return { tab, lead, group, worker, assignmentId, contextId, checkpoint, checkpointRow, gap, state, gapDeliveries, append }
+  }
+
+  it.each(['working', 'review'] as const)('wakes only the Lead and blocks %s work with a recorded checkpoint for an older daemon', async status => {
+    const f = await recoveryFixture(status)
+    const result = await store.native.append(host, f.tab, f.contextId, f.gap) as { eventId: string }
+    expect(await f.state()).toMatchObject({ id: f.assignmentId, status: 'blocked', result: expect.stringContaining('restart') })
+    const message = await db.superTabMessage.findUniqueOrThrow({ where: { id: result.eventId } })
+    expect(message.text).toContain('Recovery Engineer')
+    expect(message.text).toContain('Recover interrupted work')
+    expect(message.text).toContain(f.checkpoint.eventId)
+    expect(message.text).toContain(f.checkpointRow.createdAt.toISOString())
+    expect(message.source).toMatchObject({ kind: 'native', phase: 'gap', recovery: {
+      assignmentId: f.assignmentId, checkpoint: { eventId: f.checkpoint.eventId, turnId: 'saved_turn', recordedAt: f.checkpointRow.createdAt.toISOString() } } })
+    expect(await f.gapDeliveries()).toMatchObject([{ agentId: f.lead, messageId: result.eventId }])
+    expect(await f.gapDeliveries()).toHaveLength(1)
+    expect(await store.native.append(host, f.tab, f.contextId, f.gap)).toEqual(result)
+    expect(await f.gapDeliveries()).toHaveLength(1)
+  })
+
+  it('advertises recovery metadata without requiring it from older recorders', async () => {
+    const f = await recoveryFixture()
+    expect(await store.native.read(host, f.tab, f.contextId)).toMatchObject({ recovery: { version: 1, serverTime: expect.any(Number) } })
+  })
+
+  it('names the newer progress checkpoint when a later restart interrupts the task again', async () => {
+    const f = await recoveryFixture(), detectedAt = Date.now() + 1000
+    const first = await f.append({ ...f.gap, gap: { incidentId: 'first_restart', reason: 'recording_restarted', detectedAt } })
+    const later = new SuperTabStore(db, () => detectedAt + 1)
+    const progress = await later.execute(host, f.tab, { operationId: randomUUID(), command: {
+      type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Saved the next checkpoint' } }, f.worker)
+    const checkpoint = await db.superTabMessage.findUniqueOrThrow({ where: { id: progress.result.messageId as string } })
+    const second = await f.append({ ...f.gap, turnId: 'new_restart_observation', previousEventId: first.eventId,
+      gap: { incidentId: 'second_restart', reason: 'recording_restarted', detectedAt: detectedAt + 2 } })
+    expect(await f.state()).toMatchObject({ status: 'blocked' })
+    const message = await db.superTabMessage.findUniqueOrThrow({ where: { id: second.eventId } })
+    expect(message.text).toContain(checkpoint.id)
+    expect(message.source).toMatchObject({ recovery: { checkpoint: { eventId: checkpoint.id, recordedAt: checkpoint.createdAt.toISOString() } } })
+    expect(await f.gapDeliveries()).toHaveLength(2)
+  })
+
+  it('wakes once for the same restart across contexts and does not re-block after the Lead clears it', async () => {
+    const f = await recoveryFixture(), detectedAt = Date.now() + 1000
+    const metadata = { incidentId: 'same_restart', reason: 'recording_restarted', detectedAt }
+    const first = await f.append({ ...f.gap, gap: metadata })
+    expect(await f.state()).toMatchObject({ status: 'blocked' })
+    const later = new SuperTabStore(db, () => detectedAt + 1)
+    await later.execute(host, f.tab, { operationId: randomUUID(), command: {
+      type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Continuing from the checkpoint' } }, f.lead)
+    const { contextId } = await store.native.open(owner, f.tab, { operationId: randomUUID(), conversationId: f.group, agentId: f.worker })
+    await f.append({ ...f.gap, turnId: 'second_gap', previousEventId: null, gap: metadata }, contextId)
+    await f.append({ ...f.gap, turnId: 'third_gap', previousEventId: first.eventId, gap: metadata })
+    expect(await f.state()).toMatchObject({ status: 'working', result: 'Continuing from the checkpoint' })
+    expect(await f.gapDeliveries()).toHaveLength(1)
+  })
+
+  it.each(['worker', 'lead'] as const)('lets the %s resume a recovery block without a person, including a delayed legacy gap', async who => {
+    const f = await recoveryFixture()
+    const first = await store.native.append(host, f.tab, f.contextId, f.gap) as { eventId: string }
+    expect(await f.state()).toMatchObject({ status: 'blocked' })
+    await run(f.tab, { type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId,
+      status: 'working', result: 'Session checked; work continued' }, host, who === 'worker' ? f.worker : f.lead)
+    await store.native.append(host, f.tab, f.contextId, { ...f.gap, turnId: 'late_legacy_gap', previousEventId: first.eventId })
+    expect(await f.state()).toMatchObject({ status: 'working', result: 'Session checked; work continued' })
+    expect(await f.gapDeliveries()).toHaveLength(1)
+  })
+
+  it.each(['status', 'message'] as const)('does not block a delayed incident after the worker reports progress by %s', async progress => {
+    const f = await recoveryFixture(), detectedAt = Date.now() + 1000
+    const later = new SuperTabStore(db, () => detectedAt + 1)
+    const command: Command = progress === 'status'
+      ? { type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: null }
+      : { type: 'message.send', conversationId: f.group, text: 'Recovered and committed the next step', replyTo: null, recipientIds: [] }
+    await later.execute(host, f.tab, { operationId: randomUUID(), command }, f.worker)
+    const first = await f.append({ ...f.gap, gap: { incidentId: 'delayed_restart', reason: 'recording_restarted', detectedAt } })
+    await f.append({ ...f.gap, turnId: 'later_retry', previousEventId: first.eventId,
+      gap: { incidentId: 'delayed_restart', reason: 'recording_restarted', detectedAt } })
+    expect(await f.state()).toMatchObject({ status: 'working', result: null })
+    expect(await f.gapDeliveries()).toHaveLength(0)
+  })
+
+  it.each(['done', 'blocked', 'needs_human'] as const)('does not replace %s work or notify the Lead', async status => {
+    const f = await recoveryFixture()
+    if (status === 'done') {
+      const checkId = (await store.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!.checks[0]!.id
+      await run(f.tab, { type: 'work.check', conversationId: f.group, assignmentId: f.assignmentId, checkId,
+        passed: true, evidence: 'The fixture recorded its checkpoint' }, host, f.worker)
+    }
+    await run(f.tab, { type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId,
+      status, result: 'Existing outcome' }, host, f.worker)
+    await store.native.append(host, f.tab, f.contextId, f.gap)
+    expect(await f.state()).toMatchObject({ status, result: 'Existing outcome' })
+    expect(await f.gapDeliveries()).toHaveLength(0)
+  })
+
+  it('does not wake or block the Lead itself, even when it holds active work', async () => {
+    const { tab, lead } = await fixture()
+    await run(tab, { type: 'work.define', conversationId: 'lead', brief: 'Lead task', checks: [{ description: 'Checked', independent: false }] })
+    await run(tab, { type: 'work.assign', conversationId: 'lead', agentId: lead })
+    const { contextId } = await store.native.open(owner, tab, { operationId: randomUUID(), conversationId: 'lead', agentId: lead })
+    const receipt = await store.native.append(host, tab, contextId, { turnId: 'lead_restart', kind: 'gap', previousEventId: null,
+      text: '', truncated: false, interrupted: false }) as { eventId: string }
+    expect((await store.read(owner, tab)).state.conversations[0]!.assignment!.status).toBe('working')
+    expect(await db.superTabDelivery.findMany({ where: { messageId: receipt.eventId } })).toEqual([])
+  })
+
+  it('does not notify for a worker without an assignment', async () => {
+    const { tab } = await fixture()
+    const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Idle Engineer', configuration: config, lead: false })).result.agentId as string
+    const { contextId } = await store.native.open(owner, tab, { operationId: randomUUID(), conversationId: 'lead', agentId: worker })
+    const receipt = await store.native.append(host, tab, contextId, { turnId: 'idle_restart', kind: 'gap', previousEventId: null,
+      text: '', truncated: false, interrupted: false }) as { eventId: string }
+    expect((await store.read(owner, tab)).state.conversations[0]!.assignment).toBeNull()
+    expect(await db.superTabDelivery.findMany({ where: { messageId: receipt.eventId } })).toEqual([])
+  })
+})
+
 describe('Change agent on a Swarm member', () => {
   it('moves active execution and keeps queued, held, answered and uncertain receipts; Send again uses the current member', async () => {
     const { tab, lead } = await fixture()
