@@ -1479,6 +1479,17 @@ int main(void) {
         CHECK(text_run("Linh Tran")->y > text_run("working")->y);
         N.stack[0].scroll = 0; fresh(); ph_view_home(&F, &N, &M, 1000);   // the next page peeks at the right: its gradient and title only
         CHECK(text_run("Solo swarm") && !text_run("ops") && hits_of(POD_A_LEAD) == 3);
+        {   // the working line's clock needs a turn's start: a local Lead working only from open assignments (no since) says "working", with no 0:00 counting on
+            pod_lead_t l;
+            memset(&l, 0, sizeof l);
+            char line[64];
+            snprintf(l.local, ID_MAX, "h1"); l.state = POD_LEAD_WORK;
+            ph_lead_status(&l, 5000, line, sizeof line, 0);
+            CHECK(!strcmp(line, "working"));
+            l.since_s = 134; l.since_at_ms = 1000;
+            ph_lead_status(&l, 3500, line, sizeof line, 0);
+            CHECK(!strcmp(line, "working \xc2\xb7 2:16"));
+        }
         // Leads: the pet's scene is work (WORK), ask (ASK, STUCK) or rest (DONE)
         CHECK(ph_lead_scene(POD_LEAD_WORK) == POD_SCENE_WORK && ph_lead_scene(POD_LEAD_ASK) == POD_SCENE_ASK && ph_lead_scene(POD_LEAD_STUCK) == POD_SCENE_ASK && ph_lead_scene(POD_LEAD_DONE) == POD_SCENE_REST);
         {   // the capsule's counts in the fixed order; the Leads in the Swarm's order whatever their state (the daemon's `order`); "All done", the long forms

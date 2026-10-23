@@ -73,7 +73,7 @@ unsigned ph_lead_status(const pod_lead_t *l, uint32_t now_ms, char *line, size_t
     if (l->state == POD_LEAD_ASK) { snprintf(line, n, "needs you"); return PH_LEAD_ASK; }
     if (l->state == POD_LEAD_STUCK) { snprintf(line, n, "stuck"); return PH_LEAD_STUCK; }
     if (l->state == POD_LEAD_DONE) { snprintf(line, n, "done"); return dim; }
-    if (l->local[0] || l->since_s) {   // working: a local Lead's turn runs on (a remote one has no clock)
+    if (l->since_s) {   // working with a turn's start (the daemon's since): the clock runs on; without one (a remote Lead, or only open assignments) none
         char t[24];
         const uint32_t into = (int32_t)(now_ms - l->since_at_ms) > 0 ? (now_ms - l->since_at_ms) / 1000 : 0;
         pod_fmt_elapsed(t, sizeof t, (int64_t)l->since_s + into);
