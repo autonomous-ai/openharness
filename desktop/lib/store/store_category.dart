@@ -9,6 +9,7 @@ import 'store_listing.dart';
 import 'store_featured_art.dart';
 import 'store_exploration.dart';
 import 'store_explore_widgets.dart';
+import 'store_host.dart';
 import 'store_models.dart';
 
 /// A short invitation and an icon-led catalog. Product details and examples
@@ -159,7 +160,8 @@ class _StoreCategoryState extends State<StoreCategory> {
                       ),
                     )
                   else if (entries.isEmpty)
-                    loaded
+                    // A browser runs no harness, so it has no computer to ask.
+                    loaded || storeRunsNoHarness(context)
                         ? Padding(
                             padding: const EdgeInsets.symmetric(vertical: 36),
                             child: Text(

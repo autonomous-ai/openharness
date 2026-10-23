@@ -30,10 +30,12 @@ import '../widgets/open_harness_intent.dart';
 import 'experimental_harnesses.dart';
 import 'store_category.dart';
 import 'store_collections.dart';
+import 'store_compact_nav.dart';
 import 'store_controller.dart';
 import 'store_discover.dart';
 import 'store_editorial.dart';
 import 'store_harness_actions.dart';
+import 'store_host.dart';
 import 'store_listing.dart';
 import 'store_models.dart';
 import 'store_search.dart';
@@ -468,140 +470,126 @@ class _StoreTabState extends State<StoreTab> {
               final category = selected != null
                   ? storeCategoryFor(selected)
                   : (_shelf is _Category ? (_shelf as _Category).name : null);
+              final compact = storeIsCompact(context);
+              final nav = _Nav(
+                shelf: _shelf,
+                selectedCategory: category,
+                hasProduct: selected != null,
+                sessionCount: storeRecordedSessions(catalog.values).length,
+                counts: {
+                  for (final name in _categories)
+                    name: catalog.values
+                        .where(
+                          (e) =>
+                              !e.isViewerPackage && storeCategoryFor(e) == name,
+                        )
+                        .length,
+                },
+                categories: _categories,
+                onSelect: _show,
+              );
+              final search = StoreSearch(
+                controller: _search,
+                focusNode: _searchFocus,
+                onChanged: _searchChanged,
+                autofocus: _selected == null,
+                onClear: _clearSearch,
+                onBack: _canGoBack ? _goBack : null,
+                onForward: _place.forward.isEmpty ? null : _goForward,
+                compact: compact,
+              );
+              final page = Expanded(
+                child: PageStorage(
+                  bucket: _place.scroll,
+                  child: KeyedSubtree(
+                    key: PageStorageKey(
+                      'store-location:${_shelfKey(_shelf)}:${_selected ?? ''}',
+                    ),
+                    child: selected != null
+                        ? _ProductPage(
+                            key: ValueKey('store-page:${selected.id}'),
+                            entry: selected,
+                            notifier: widget.notifier,
+                            recentHarnesses: widget.recentHarnesses,
+                            store: _store,
+                          )
+                        : _shelf is _Viewers
+                        ? StoreViewers(
+                            viewers: _shelved(const _Viewers()),
+                            agents:
+                                widget
+                                    .notifier
+                                    .localMachineState
+                                    ?.dsh
+                                    .entries ??
+                                const [],
+                            installedOn: (id) => _installedOn(id)
+                                .map((machine) => machine.machine.displayName)
+                                .toList(),
+                            onOpenAgent: _openPage,
+                            loaded:
+                                widget.notifier.localMachineState?.dsh.loaded ??
+                                false,
+                          )
+                        : _shelf is _Sessions
+                        ? StoreSessions(
+                            sessions: storeRecordedSessions(
+                              _shelved(const _Sessions()),
+                            ),
+                            onOpen: _openPage,
+                          )
+                        : _shelf is _Discover
+                        ? StoreDiscover(
+                            entries: _shelved(const _Discover()),
+                            loaded:
+                                widget.notifier.localMachineState?.dsh.loaded ??
+                                false,
+                            ratingFor: (entry) =>
+                                _store.ratingOf(StoreController.keyFor(entry)),
+                            onOpen: _openPage,
+                            onCategory: (name) => _show(_Category(name)),
+                            onAll: () => _show(const _All()),
+                            onEngines: () => _show(const _Category('Coding')),
+                            essentialLabel: (id) =>
+                                widget.notifier.essential(id)?.exists == true
+                                ? 'Open'
+                                : 'Create',
+                            onEssential: (id) => unawaited(_openEssential(id)),
+                          )
+                        : _Shelf$View(
+                            shelf: _shelf as _Listed,
+                            categories: _categories,
+                            onCategory: (name) => _show(_Category(name)),
+                            entries: _shelved(_shelf),
+                            store: _store,
+                            installedOn: _installedOn,
+                            loaded:
+                                widget.notifier.localMachineState?.dsh.loaded ??
+                                false,
+                            onOpen: _openPage,
+                          ),
+                  ),
+                ),
+              );
+              if (compact) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    search,
+                    _StoreChips(nav: nav),
+                    page,
+                  ],
+                );
+              }
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _StoreNav(
-                    shelf: _shelf,
-                    selectedCategory: category,
-                    hasProduct: selected != null,
-                    sessionCount: storeRecordedSessions(catalog.values).length,
-                    counts: {
-                      for (final name in _categories)
-                        name: catalog.values
-                            .where(
-                              (e) =>
-                                  !e.isViewerPackage &&
-                                  storeCategoryFor(e) == name,
-                            )
-                            .length,
-                    },
-                    categories: _categories,
-                    onSelect: _show,
-                  ),
+                  _StoreNav(nav: nav),
                   VerticalDivider(width: 1, color: grid.AppPalette.divider),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        StoreSearch(
-                          controller: _search,
-                          focusNode: _searchFocus,
-                          onChanged: _searchChanged,
-                          autofocus: _selected == null,
-                          onClear: _clearSearch,
-                          onBack: _canGoBack ? _goBack : null,
-                          onForward: _place.forward.isEmpty ? null : _goForward,
-                        ),
-                        Expanded(
-                          child: PageStorage(
-                            bucket: _place.scroll,
-                            child: KeyedSubtree(
-                              key: PageStorageKey(
-                                'store-location:${_shelfKey(_shelf)}:${_selected ?? ''}',
-                              ),
-                              child: selected != null
-                                  ? _ProductPage(
-                                      key: ValueKey(
-                                        'store-page:${selected.id}',
-                                      ),
-                                      entry: selected,
-                                      notifier: widget.notifier,
-                                      recentHarnesses: widget.recentHarnesses,
-                                      store: _store,
-                                    )
-                                  : _shelf is _Viewers
-                                  ? StoreViewers(
-                                      viewers: _shelved(const _Viewers()),
-                                      agents:
-                                          widget
-                                              .notifier
-                                              .localMachineState
-                                              ?.dsh
-                                              .entries ??
-                                          const [],
-                                      installedOn: (id) => _installedOn(id)
-                                          .map(
-                                            (machine) =>
-                                                machine.machine.displayName,
-                                          )
-                                          .toList(),
-                                      onOpenAgent: _openPage,
-                                      loaded:
-                                          widget
-                                              .notifier
-                                              .localMachineState
-                                              ?.dsh
-                                              .loaded ??
-                                          false,
-                                    )
-                                  : _shelf is _Sessions
-                                  ? StoreSessions(
-                                      sessions: storeRecordedSessions(
-                                        _shelved(const _Sessions()),
-                                      ),
-                                      onOpen: _openPage,
-                                    )
-                                  : _shelf is _Discover
-                                  ? StoreDiscover(
-                                      entries: _shelved(const _Discover()),
-                                      loaded:
-                                          widget
-                                              .notifier
-                                              .localMachineState
-                                              ?.dsh
-                                              .loaded ??
-                                          false,
-                                      ratingFor: (entry) => _store.ratingOf(
-                                        StoreController.keyFor(entry),
-                                      ),
-                                      onOpen: _openPage,
-                                      onCategory: (name) =>
-                                          _show(_Category(name)),
-                                      onAll: () => _show(const _All()),
-                                      onEngines: () =>
-                                          _show(const _Category('Coding')),
-                                      essentialLabel: (id) =>
-                                          widget.notifier
-                                                  .essential(id)
-                                                  ?.exists ==
-                                              true
-                                          ? 'Open'
-                                          : 'Create',
-                                      onEssential: (id) =>
-                                          unawaited(_openEssential(id)),
-                                    )
-                                  : _Shelf$View(
-                                      shelf: _shelf as _Listed,
-                                      categories: _categories,
-                                      onCategory: (name) =>
-                                          _show(_Category(name)),
-                                      entries: _shelved(_shelf),
-                                      store: _store,
-                                      installedOn: _installedOn,
-                                      loaded:
-                                          widget
-                                              .notifier
-                                              .localMachineState
-                                              ?.dsh
-                                              .loaded ??
-                                          false,
-                                      onOpen: _openPage,
-                                    ),
-                            ),
-                          ),
-                        ),
-                      ],
+                      children: [search, page],
                     ),
                   ),
                 ],
@@ -616,8 +604,9 @@ class _StoreTabState extends State<StoreTab> {
 
 // ─── the rail ────────────────────────────────────────────────────────────────
 
-class _StoreNav extends StatelessWidget {
-  const _StoreNav({
+/// What the rail, or a phone's chip row, offers and which entry is open.
+class _Nav {
+  const _Nav({
     required this.shelf,
     required this.categories,
     required this.selectedCategory,
@@ -635,10 +624,22 @@ class _StoreNav extends StatelessWidget {
   final Map<String, int> counts;
   final ValueChanged<_Shelf> onSelect;
 
+  bool get onDiscover => !hasProduct && shelf is _Discover;
+  bool get onAll => !hasProduct && shelf is _All;
+  bool get onSessions => !hasProduct && shelf is _Sessions;
+  bool get offersSessions => sessionCount > 0 || shelf is _Sessions;
+}
+
+class _StoreNav extends StatelessWidget {
+  const _StoreNav({required this.nav});
+
+  final _Nav nav;
+
   @override
   Widget build(BuildContext context) {
     TerminalFontScope.watch(context);
-    final shelf = this.shelf;
+    final _Nav(:shelf, :categories, :selectedCategory, :counts, :onSelect) =
+        nav;
     final textScale = grid.appTextScaleOf(context).clamp(1.0, 1.5);
     return Container(
       width:
@@ -655,23 +656,23 @@ class _StoreNav extends StatelessWidget {
                   key: const ValueKey('store-shelf-discover'),
                   icon: AppIcons.sparkles,
                   label: 'Discover',
-                  selected: !hasProduct && shelf is _Discover,
+                  selected: nav.onDiscover,
                   onTap: () => onSelect(const _Discover()),
                 ),
                 SidebarItem(
                   key: const ValueKey('store-shelf-all'),
                   icon: AppIcons.layoutGrid,
                   label: 'All harnesses',
-                  selected: !hasProduct && shelf is _All,
+                  selected: nav.onAll,
                   onTap: () => onSelect(const _All()),
                 ),
-                if (sessionCount > 0 || shelf is _Sessions)
+                if (nav.offersSessions)
                   SidebarItem(
                     key: const ValueKey('store-shelf-sessions'),
                     icon: AppIcons.play,
                     label: 'Featured',
-                    tooltip: '$sessionCount recorded runs',
-                    selected: !hasProduct && shelf is _Sessions,
+                    tooltip: '${nav.sessionCount} recorded runs',
+                    selected: nav.onSessions,
                     onTap: () => onSelect(const _Sessions()),
                   ),
                 const SizedBox(height: 22),
@@ -728,6 +729,60 @@ class _StoreNav extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The rail as a row of chips above the content, for a phone.
+class _StoreChips extends StatelessWidget {
+  const _StoreChips({required this.nav});
+
+  final _Nav nav;
+
+  @override
+  Widget build(BuildContext context) {
+    final onSelect = nav.onSelect;
+    return StoreChipRow(
+      chips: [
+        StoreChip(
+          id: 'discover',
+          icon: AppIcons.sparkles,
+          label: 'Discover',
+          selected: nav.onDiscover,
+          onTap: () => onSelect(const _Discover()),
+        ),
+        StoreChip(
+          id: 'all',
+          icon: AppIcons.layoutGrid,
+          label: 'All harnesses',
+          selected: nav.onAll,
+          onTap: () => onSelect(const _All()),
+        ),
+        if (nav.offersSessions)
+          StoreChip(
+            id: 'sessions',
+            icon: AppIcons.play,
+            label: 'Featured',
+            selected: nav.onSessions,
+            onTap: () => onSelect(const _Sessions()),
+          ),
+        for (final name in nav.categories)
+          StoreChip(
+            id: 'category:$name',
+            icon: _categoryIcon(name),
+            label: name,
+            count: nav.counts[name],
+            selected: nav.selectedCategory == name,
+            onTap: () => onSelect(_Category(name)),
+          ),
+        StoreChip(
+          id: 'viewers',
+          icon: AppIcons.panelsTopLeft,
+          label: 'Viewers',
+          selected: nav.shelf is _Viewers,
+          onTap: () => onSelect(const _Viewers()),
+        ),
+      ],
     );
   }
 }
@@ -823,7 +878,7 @@ class _Shelf$View extends StatelessWidget {
                   child: Text(
                     shelf is _Search
                         ? 'No matching harnesses. Try a name or something you want to make.'
-                        : loaded
+                        : loaded || storeRunsNoHarness(context)
                         ? 'Nothing here yet.'
                         : 'Asking this computer…',
                     style: grid.AppType.body(
@@ -1482,7 +1537,9 @@ class _ProductPageState extends State<_ProductPage> {
                       Center(
                         child: local == null
                             ? Text(
-                                'Connecting to this computer…',
+                                storeRunsNoHarness(context)
+                                    ? 'Get it in the Harness app on a computer.'
+                                    : 'Connecting to this computer…',
                                 style: grid.AppType.body(
                                   color: grid.AppPalette.textFaint,
                                 ),
