@@ -1,5 +1,5 @@
 import type { PrismaClient } from '@prisma/client'
-import { activeWork, actorKey, agent, author, conversation, fail, stableId, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
+import { activeWork, actorKey, agent, author, conversation, fail, isLeads, stableId, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
 import { downSince } from './machines.js'
 import { agentProjectId, projectOf, readAgent } from './projects.js'
@@ -40,10 +40,11 @@ export function mayDrive(state: SuperTabState, actor: Actor, target: Agent): voi
   }
 }
 
-/** The group a terminal row belongs in: the agent's active work, else its newest open group as a member, else its project's Lead chat. */
+/** The group a terminal row belongs in: the agent's active work, else its newest open project group as a member (never the
+ *  Swarm-wide Leads conversation), else its project's Lead chat. */
 export function currentGroup(state: SuperTabState, target: Agent): Conversation {
   return state.conversations.find(c => activeWork(c) && c.assignment!.agentId === target.id)
-    ?? state.conversations.findLast(c => !c.archived && c.agentIds.includes(target.id) && c.leadId !== target.id)
+    ?? state.conversations.findLast(c => !c.archived && !isLeads(c) && c.agentIds.includes(target.id) && c.leadId !== target.id)
     ?? conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId)
 }
 
