@@ -195,6 +195,21 @@ describe('strength, fit and effective cost', () => {
     expect(r.shown[1].label).toContain('fits: metered, no usage window to run out')
     expect(r.shown[1].label).toContain('quota metered')
   })
+  it('keeps the best row of every machine inside the shown rows, then fills by rank', () => {
+    const full = windows([90, 3 * H], [80, 5 * D], 'S')
+    const crowd = Array.from({ length: 14 }, (_, i) => probe({ kind: 'member', agentId: `m${i}`, name: `Member ${String(i).padStart(2, '0')}`, machineId: 'a', machineName: 'a', quota: full }))
+    const far = on({ ...OPUS }, 'z', windows([90, 3 * H], [80, 5 * D], 'Z'))
+    const r = route([...crowd, far], { difficulty: 'low' })
+    expect(r.shown).toHaveLength(12)
+    // The costlier machine z ranks 15th, behind all of a's rows, yet its best row is shown, in place of a's 12th.
+    expect(r.shown.map(s => s.machineName)).toEqual([...Array(11).fill('a'), 'z'])
+    expect(r.shown.map(s => s.id)).toEqual(Array.from({ length: 12 }, (_, i) => `c${i}`))
+  })
+  it('with more machines than rows shown, keeps the best rows of the best-ranked machines', () => {
+    const many = Array.from({ length: 14 }, (_, i) => on(SONNET, `m${String(i).padStart(2, '0')}`, windows([90 - i, 3 * H], [80, 5 * D], `A${i}`)))
+    const r = route([...many, ...many.map(p => ({ ...p, kind: 'member' as const, agentId: p.machineId, name: 'Extra' }))], { difficulty: 'low' })
+    expect(new Set(r.shown.map(s => s.machineName)).size).toBe(12)
+  })
   it('orders the short by how far they get, then by the policy order, and says when no reset is known', () => {
     const r = route([on(SONNET, 'b', windows([25, null], [80, null], 'B')), on(SONNET, 'a', windows([25, null], [80, null], 'A')), on(SONNET, 'c', windows([30, null], [80, null], 'C'))], {})
     expect(picks(r)).toEqual(['sonnet on c', 'sonnet on a', 'sonnet on b'])

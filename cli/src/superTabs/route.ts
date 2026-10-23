@@ -265,6 +265,16 @@ function compare(x: Probe & Sized, y: Probe & Sized, soft: Soft): number {
     || titleOf(x).localeCompare(titleOf(y))
 }
 
+/** The rows shown: each machine's best row first (the best-ranked machines, if there are more than the limit), then the rest by rank,
+ * all in rank order, so the Lead can always choose another machine. */
+function withEveryMachine<T extends { machineId: string }>(ranked: T[]): T[] {
+  const firsts = new Set<T>(), seen = new Set<string>()
+  for (const p of ranked) if (!seen.has(p.machineId)) { seen.add(p.machineId); firsts.add(p) }
+  const keep = new Set([...firsts].slice(0, MAX_SHOWN))
+  for (const p of ranked) if (keep.size < MAX_SHOWN) keep.add(p)
+  return ranked.filter(p => keep.has(p))
+}
+
 export function choose(probes: Probe[], policy: Policy, a: Assessment, now: number = Date.now(), open: Commitment[] = [], rules: SwarmRule[] = []): Choice | { error: 'NO_CANDIDATE'; excluded: Array<{ title: string; reason: string }> } {
   // A lifted row can equal another row on the same machine (Codex `default` lifted to high beside Codex high); one is kept.
   const raised = probes.map(p => lifted(rules, p)), key = (p: Probe) => `${p.kind}\0${p.machineId}\0${p.engine}\0${p.model}\0${p.effort}`
@@ -285,7 +295,7 @@ export function choose(probes: Probe[], policy: Policy, a: Assessment, now: numb
   // When every candidate is short, the one expected to get furthest goes first.
   const soft = softOf(rules, a.kind)
   const set = sized.filter(p => p.fit.status === status).sort((x, y) => status === 'short' ? y.fit.coverage! - x.fit.coverage! || compare(x, y, soft) : compare(x, y, soft))
-  const shown = set.slice(0, MAX_SHOWN).map(({ tight, text, ...p }, i) => ({ ...p, id: `c${i}`, title: titleOf(p), label: labelOf({ ...p, tight, text }, now) }))
+  const shown = withEveryMachine(set).map(({ tight, text, ...p }, i) => ({ ...p, id: `c${i}`, title: titleOf(p), label: labelOf({ ...p, tight, text }, now) }))
   const first = set[0].tight!
   return { shown, excluded, floor, belowFloor: !meeting.length, ...(status === 'short'
     ? { short: `No candidate is expected to cover this task; its ${first.name} quota is expected to run out partway${first.resetsIn === null ? '' : ` and resets in ${span(first.resetsIn)}`}.` } : {}) }
