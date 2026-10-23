@@ -1,0 +1,50 @@
+[
+  {
+    "flow": "first-machine-failed",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/first-machine-failed/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-failed",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/first-machine-failed/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-failed",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/first-machine-failed/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-failed",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/first-machine-failed/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-failed",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/first-machine-failed/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine-failed",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/first-machine-failed/1440-light.png",
+    "failed": null,
+    "errors": []
+  }
+]
