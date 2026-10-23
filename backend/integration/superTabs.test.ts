@@ -2436,3 +2436,41 @@ describe('Leads conversation', () => {
     expect((await store.deliveries(host, tab, docsLead)).filter(d => d.conversationId === leads)).toHaveLength(1)
   })
 })
+
+describe('a Swarm written by a later release', () => {
+  it('keeps conversation kinds and fields it does not know unchanged through its own reads and writes', async () => {
+    // Like production Swarms, no project is named 'lead', so a conversation without a project belongs to none.
+    const tab = (await store.create(owner, randomUUID(), 'Rollout')).id
+    await run(tab, { type: 'project.create', name: 'Pilot', visibility: 'public', brief: '' })
+    await run(tab, { type: 'project.delete', projectId: 'lead' })
+    type Stored = Record<string, unknown> & { conversations: Array<Record<string, unknown>>; parkedConversations?: Array<Record<string, unknown>> }
+    const stored = (await db.superTab.findUniqueOrThrow({ where: { id: tab } })).state as unknown as Stored
+    const later = { id: 'later', kind: 'later-kind', title: 'From a later release', leadId: null, agentIds: [], archived: false, brief: '',
+      checks: [], assignment: null, lastMessageSequence: 0, laterField: { nested: [1] } }
+    const chat = stored.conversations.find(c => c.kind !== 'leads')!
+    stored.laterField = { kept: true }
+    chat.laterField = 'kept'
+    stored.conversations.push(later)
+    await db.superTab.update({ where: { id: tab }, data: { state: stored as never } })
+
+    expect((await store.read(owner, tab)).state.conversations.map(c => c.id)).toEqual([chat.id, stored.leadsConversationId])
+    await run(tab, { type: 'message.send', conversationId: chat.id as string, text: 'Still writable', replyTo: null, recipientIds: [] })
+    expect((await store.messages(owner, tab, chat.id as string, {})).messages.map(m => m.text)).toEqual(['Still writable'])
+    await expect(store.messages(owner, tab, 'later', {})).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    const written = (await db.superTab.findUniqueOrThrow({ where: { id: tab } })).state as unknown as Stored
+    expect(written.laterField).toEqual({ kept: true })
+    expect(written.conversations.find(c => c.id === chat.id)!.laterField).toBe('kept')
+    // A later release, which knows the kind, puts it back from here.
+    expect(written.parkedConversations).toEqual([later])
+  })
+
+  it('never gives a new conversation the number of a conversation it set aside', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Rollout numbers')).id
+    const stored = (await db.superTab.findUniqueOrThrow({ where: { id: tab } })).state as unknown as { conversations: Array<Record<string, unknown>> }
+    stored.conversations.push({ id: 'later', kind: 'later-kind', number: 7, title: 'From a later release', leadId: null, agentIds: [],
+      archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 })
+    await db.superTab.update({ where: { id: tab }, data: { state: stored as never } })
+    const created = String((await run(tab, { type: 'conversation.create', title: 'New work', brief: '', checks: [] })).result.conversationId)
+    expect((await store.read(owner, tab)).state.conversations.find(c => c.id === created)!.number).toBe(8)
+  })
+})

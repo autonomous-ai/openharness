@@ -186,6 +186,8 @@ export interface SuperTabState {
   releasedHarnesses?: Array<{ machineId: string; harnessId: string }>
   /** Sessions of removed agents their host closes, listed to that host until it says they closed (agent.sessionClosed). */
   closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string }>
+  /** Conversations of a kind a later release added, set aside unchanged by a release that does not know it (parkLaterConversations). */
+  parkedConversations?: Conversation[]
 }
 export interface OtherProjectWork {
   conversationId: string
@@ -281,6 +283,18 @@ export function conversation(state: SuperTabState, id: string): Conversation {
 
 export const isLeads = (group: Conversation): boolean => group.kind === 'leads'
 
+const KNOWN_KINDS: Record<NonNullable<Conversation['kind']>, true> = { leads: true }
+/** During a rolling deploy the previous release reads what the next one wrote. A conversation kind it does not know
+ *  belongs to no project it can check, so it waits here unchanged, and the release that knows it puts it back. */
+export function parkLaterConversations(state: SuperTabState): void {
+  const all = [...state.conversations, ...state.parkedConversations ?? []]
+  const known = (c: Conversation) => c.kind == null || Object.hasOwn(KNOWN_KINDS, c.kind)
+  state.conversations = all.filter(known)
+  const parked = all.filter(c => !known(c))
+  if (parked.length) state.parkedConversations = parked
+  else delete state.parkedConversations
+}
+
 /** Work a Lead of another project should know about: assigned and moving, not finished, stuck or archived. */
 export const crossProjectActive = (group: Conversation): boolean => !group.archived && !isLeads(group)
   && ['working', 'review', 'needs_human'].includes(group.assignment?.status ?? '')
@@ -316,7 +330,7 @@ export function numberConversations(state: SuperTabState): void {
   }
 }
 export function nextConversationNumber(state: SuperTabState): number {
-  return Math.max(state.retiredConversationNumber ?? 0, 0, ...state.conversations.map(c => c.number ?? 0)) + 1
+  return Math.max(state.retiredConversationNumber ?? 0, 0, ...[...state.conversations, ...state.parkedConversations ?? []].map(c => c.number ?? 0)) + 1
 }
 export function author(state: SuperTabState, actor: Actor, write = false): Author {
   if (actor.kind === 'person') {
@@ -368,6 +382,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   delete visible.overlapAlerts
   // Only that machine's host roster lists them (store.ts hostTabs); a removed private agent's session is not every member's.
   delete visible.closingSessions
+  delete visible.parkedConversations
   numberConversations(visible)
   delete visible.retiredConversationNumber
   placeRules(visible)
