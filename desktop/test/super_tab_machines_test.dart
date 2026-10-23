@@ -1425,7 +1425,7 @@ void main() {
         'name': f.app.stateOf('m')!.machine.displayName,
         'cwd': '/work/project',
         'scope': 'swarm',
-        'engines': ['claude', 'codex', 'pi'],
+        'engines': ['claude', 'codex'],
         'maxAgents': 8,
       });
       expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
@@ -1799,6 +1799,7 @@ void main() {
       {
         'machineId': 'm',
         'contributorId': 'owner',
+        'engines': ['opencode'],
         'observation': {
           'receivedAt': DateTime.now().millisecondsSinceEpoch,
           'quotas': [
@@ -1843,6 +1844,7 @@ void main() {
     );
     await tester.tap(find.byKey(const ValueKey('super-machine-m')));
     await tester.pumpAndSettle();
+    expect(find.text('OpenCode'), findsNothing);
     expect(
       tester
           .widgetList<EngineMark>(find.byType(EngineMark))
@@ -1957,7 +1959,7 @@ void main() {
         'name': f.app.stateOf('m')!.machine.displayName,
         'cwd': '/work/project',
         'scope': 'swarm',
-        'engines': ['claude', 'codex', 'pi'],
+        'engines': ['claude', 'codex'],
         'maxAgents': 4,
       });
       expect(tester.takeException(), isNull);
@@ -2099,7 +2101,7 @@ void main() {
         'name': f.app.stateOf('m')!.machine.displayName,
         'cwd': '/work/project',
         'scope': 'swarm',
-        'engines': ['claude', 'codex', 'pi'],
+        'engines': ['claude', 'codex'],
         'maxAgents': 4,
       });
       expect(tester.takeException(), isNull);
@@ -2281,7 +2283,7 @@ void main() {
       'name': f.app.stateOf('m')!.machine.displayName,
       'cwd': '/work/project',
       'scope': 'swarm',
-      'engines': ['claude', 'codex', 'pi'],
+      'engines': ['claude', 'codex'],
       'maxAgents': 16,
     });
     expect(tester.takeException(), isNull);

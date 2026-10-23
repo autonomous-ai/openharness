@@ -1,12 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { startAgent } from './start.js'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { createLaunchRequests } from '../core/agents/launches.js'
-import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
-import type { RegisteredSession } from '../lib/registry.js'
-import type { AgentFrame } from '../lib/agentFrame.js'
+import { inspectCapacity, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
 function fixture(options: { state?: Record<string, unknown> | Error; refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string } } = {}) {
@@ -58,6 +51,13 @@ function fixture(options: { state?: Record<string, unknown> | Error; refuse?: st
 const switchCall = (f: { request: { mock: { calls: unknown[][] } } }) => f.request.mock.calls.find(c => c[0] === 'agent_update')
 
 describe('Swarm permission mode', () => {
+  it('admits installed Claude when an API environment is opaque to the vendor login probe', async () => {
+    const f = fixture(), request = f.request.getMockImplementation()!
+    f.request.mockImplementation(async (type, payload, ms) => type === 'engines_probe'
+      ? { engines: [{ engine: 'claude', installed: true, signedIn: false }] }
+      : request(type, payload, ms))
+    expect(await inspectCapacity(await f.open() as never, f.start.request)).toMatchObject({ allowed: true, engine: { installed: true, signedIn: false } })
+  })
   it.each(['claude', 'codex'] as const)('starts %s in full mode on direct and contributed hosts', async engine => {
     for (const hostDispatch of [false, true]) {
       const f = fixture()
@@ -72,34 +72,12 @@ describe('Swarm permission mode', () => {
     }
   })
 
-  it.each(['opencode', 'hermes'])('keeps %s launchable through the real native permission validator', async engine => {
-    const f = fixture(), request = f.request.getMockImplementation()!
-    Object.assign(f.start.request, { engine, worktree: false })
-    const folder = mkdtempSync(join(tmpdir(), 'swarm-native-'))
-    const created: Array<Record<string, unknown>> = []
-    const native = createLaunchRequests({
-      receipts: new AgentCreationReceipts(folder),
-      createAgent: () => async input => {
-        created.push(input)
-        return { ok: true, session: { agentId: 'native', engine } as RegisteredSession }
-      },
-      forkAgent: () => null, resumeAgent: () => null, restartAgent: () => null,
-      byAgent: () => undefined, toProject: async () => ({ id: 'native', engine }) as AgentFrame,
-      modelTarget: async () => null,
-    })
-    f.request.mockImplementation(async (type, payload) => {
-      if (type === 'agent_create') {
-        let reply: Record<string, unknown> = {}
-        await native.create({ ...payload, creationId: undefined }, { local: true }, value => { reply = value })
-        if (reply.error) return reply
-      }
-      return request(type, payload)
-    })
-    try {
-      expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
-      expect(created).toHaveLength(1)
-      expect(created[0]).toMatchObject({ permissionMode: null, bypassPermission: true })
-    } finally { native.stop(); rmSync(folder, { recursive: true, force: true }) }
+  it.each(['opencode', 'kilo'])('fails a pending legacy %s Swarm start before native creation', async engine => {
+    const f = fixture()
+    Object.assign(f.start.request, { engine })
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ error: 'SWARM_ENGINE' })
+    expect(f.start.error).toContain('Claude Code or Codex')
+    expect(f.open).not.toHaveBeenCalled()
   })
 
   it('recovers the same legacy start after its accepted reply is lost', async () => {
@@ -205,18 +183,13 @@ const expectSwitchTo = (f: Parameters<typeof switchCall>[0], selectedModel: stri
   expect(call[2]).toBeGreaterThan(50_000)
   expect(call[2]).toBeLessThanOrEqual(60_000)
 }
-it.each(['claude', 'codex', 'opencode'])('only tells supported %s workers to use their built-in skill', async engine => {
+it.each(['claude', 'codex'])('tells supported %s workers to use their built-in skill', async engine => {
   const f = fixture()
   f.start.request.engine = engine
   await startAgent({ action: 'start', tabId: 'tab', operationId: 'role-prompt', request: f.start.request }, f.scoped, where, f.open)
   const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
-  if (engine === 'claude' || engine === 'codex') {
-    expect(payload.prompt).toContain('swarm-dev')
-    expect(payload.swarmRole).toBe('dev')
-  } else {
-    expect(payload.prompt).not.toContain('swarm-dev')
-    expect(payload.swarmRole).toBeUndefined()
-  }
+  expect(payload.prompt).toContain('swarm-dev')
+  expect(payload.swarmRole).toBe('dev')
 })
 
 it.each(['claude', 'codex'])('starts a %s Reviewer with the built-in swarm-review skill', async engine => {
