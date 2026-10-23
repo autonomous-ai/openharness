@@ -1845,6 +1845,66 @@ void main() {
       expect(viewport.scrolls, [(1, 10, 0)]);
     });
 
+    group('a shrink that cuts rows under the cursor', () {
+      // Claude Code's screen at 80×24: its prompt between two rules, two status lines under it, and
+      // the cursor at the end of what is typed.
+      final claudeScreen =
+          '\x1b[?25h${'\r\n' * 18}${'─' * 79}\r\n❯ hello world\r\n${'─' * 79}'
+          '\r\n  ? for shortcuts\r\n  auto mode on\x1b[20;14H';
+
+      TerminalBinaryFrame answer(String streamId, String text) =>
+          TerminalBinaryFrame(
+            kind: TerminalBinaryKind.keyframe,
+            streamId: streamId,
+            seq: 1,
+            bytes: Uint8List.fromList(utf8.encode(text)),
+            compressed: false,
+            cols: 80,
+            rows: 18,
+          );
+
+      Future<(TerminalSession, String)> shrunk() async {
+        final (s, streamId) = await live(screen: claudeScreen);
+        expect(s.terminal.cursorVisibleMode, isTrue);
+        // The keyboard comes up: tmux drops the rows under the prompt.
+        s.resize(80, 18);
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+        expect(wire.of('terminal_resize'), isNotEmpty);
+        return (s, streamId);
+      }
+
+      test('keeps the cursor shown when the answer has it in the prompt', () async {
+        final (s, streamId) = await shrunk();
+
+        await s.handleBinary(
+          answer(
+            streamId,
+            '\x1b[?25h${'\r\n' * 12}${'─' * 79}\r\n❯ hello world\r\n${'─' * 79}'
+            '\r\n  ? for shortcuts\r\n  auto mode on\x1b[14;14H',
+          ),
+        );
+
+        expect(s.terminal.cursorVisibleMode, isTrue);
+      });
+
+      test('hides a cursor left under the status lines until the program '
+          'draws again', () async {
+        final (s, streamId) = await shrunk();
+
+        await s.handleBinary(
+          answer(
+            streamId,
+            '\x1b[?25h${'\r\n' * 12}${'─' * 79}\r\n❯ hello world\r\n${'─' * 79}'
+            '\r\n  ? for shortcuts\r\n  auto mode on\x1b[18;1H',
+          ),
+        );
+        expect(s.terminal.cursorVisibleMode, isFalse);
+
+        await s.handleBinary(_output(streamId, 2, '\x1b[14;14H'));
+        expect(s.terminal.cursorVisibleMode, isTrue);
+      });
+    });
+
     test('the cursor blinks locally, never into the stream', () async {
       final (s, _) = await live();
 

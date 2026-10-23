@@ -211,6 +211,7 @@ import { createSharingLink } from './sharingLink.js'
 import { createAgentSettingsSync, createExperimentHooks, wakeExperiments } from './experiments.js'
 import { answerExperimentQuery, createForExperiment, creationForExperiment } from './experimentQueries.js'
 import { createSuperTabAttention } from './superTabAttention.js'
+import { createSuperTabTerminal } from './superTabTerminal.js'
 import { createSuperTabCards } from './superTabCards.js'
 import { answerConnectorsQuery } from './connectorsQueries.js'
 import { answerSharedMachinesQuery } from './sharedMachinesQueries.js'
@@ -850,6 +851,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     send: (frame) => ports.devices?.card(frame),
     asking: (agentId) => [...openQuestions.values()].some((asked) => asked.agentId === agentId),
   })
+  // A member's terminal for its Lead (core/superTabTerminal.ts): read plain, typed under the pane's write lock, which is
+  // built below, after the inputs.
+  const superTabTerminal = createSuperTabTerminal({
+    resolve: (agentId) => registry.byAgent(agentId),
+    capture: (session, options) => terminals.capture(session, options),
+    read: (session, capture) => screens.read(session, capture),
+    type: typeTerminal,
+    key: keyTerminal,
+    locked: (agentId, write) => deviceInput.legacyWrite(agentId, write),
+  })
   // The Swarms' cards and Leads' recaps for the Harness Pro, on the devices alone (core/superTabCards.ts): kept whole, and shown
   // again to a dial that attaches.
   const routeSuperTabs = (payload: Record<string, unknown>): Promise<Record<string, unknown>> => new Promise((resolve) => {
@@ -870,7 +881,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const coreApi = createCoreApi({
     nativeTurns: async (agentId, cursor) => nativeTurns.read(agentId, cursor),
     cloud: cloudDoors,
-    superTabs: { attention: (items) => superTabWaits.attention(items), cards: (items) => superTabCards.cards(items), cardRecap: (recap) => superTabCards.recap(recap) },
+    superTabs: { attention: (items) => superTabWaits.attention(items), cards: (items) => superTabCards.cards(items), cardRecap: (recap) => superTabCards.recap(recap),
+      // In the core's own process Share was started with it; out of it, the master starts Share's process.
+      shareObservers: () => { if (outOfProcess.has('sharing')) coreLink.want('sharing') },
+      screen: (agentId, scrollback) => superTabTerminal.screen(agentId, scrollback),
+      input: (agentId, text, keys) => superTabTerminal.input(agentId, text, keys) },
     // The devices' `cardsWanted`, `cardRecap` and `cardOpen`, and no other action of the Super Tab service (core/superTabCards.ts `ask`).
     superTabRequest: (payload) => superTabCards.ask(payload),
     cloudRows: () => (cloudAgents?.dialRows() ?? []) as unknown as RegisteredSession[],

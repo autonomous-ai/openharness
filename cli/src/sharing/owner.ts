@@ -40,7 +40,9 @@ export interface ShareOwnerDeps {
   /** The shared tabs' rosters this computer verified against their pins, and the account signed in here, which the
    *  observers each tab wants are derived from (`harness_share_rosters`); null when either cannot be read. */
   rosters?: () => Promise<{ accountId: string; rosters: Roster[]; consent: ReadonlySet<string> } | null>
-  derivedGrants?: () => Array<Omit<DerivedGrant, 'ownerPublicKey'>>
+  /** The Swarm observers this machine's host wants, or null while no roster of its is in force (superTabs/observers.ts
+   *  `known`): their invitations are then kept as they are, neither withdrawn nor sent again. */
+  derivedGrants?: () => Array<Omit<DerivedGrant, 'ownerPublicKey'>> | null
   allowsGrant?: (grant: HarnessGrant) => boolean
   now?: () => number
 }
@@ -78,7 +80,10 @@ export class HarnessShareOwner {
       // Derived again every 30 s: the renewals fall due, and a roster change whose nudge never came is caught here. A
       // refused grant is tried again at most hourly from here: up to 256 of them every 30 s would hammer the backend.
       // One already waiting to run makes another pointless; it publishes what waits as it ends.
-      const signature = JSON.stringify(this.deps.derivedGrants?.() ?? [])
+      // A roster no longer in force is no change of membership: deriving from it withdrew every Swarm invitation and
+      // sent it again a moment later (superTabs/observers.ts `OBSERVER_VALID_MS`).
+      const derived = this.deps.derivedGrants?.()
+      const signature = derived === null ? derivedSignature : JSON.stringify(derived ?? [])
       const changed = signature !== derivedSignature
       derivedSignature = signature
       if ((++ticks % 30 === 0 || changed) && this.derivesQueued === 0) void this.derive(this.now() - HOUR).catch(ignore)
@@ -270,10 +275,13 @@ export class HarnessShareOwner {
     const source = await this.deps.rosters?.().catch(() => null)
     if (!source && !this.deps.derivedGrants) return { invited: 0, revoked: 0 }
     const machineId = this.deps.machineId()
-    const legacy = source ? rosterGrants(source.rosters, { machineId, accountId: source.accountId }, source.consent)
-      : this.deps.grants.all().filter(g => g.machineId === machineId && g.tab && !g.tab.startsWith('super:') && !g.revoked)
-        .map(g => ({ agentId: g.agentId, email: g.recipientEmail, tab: g.tab!, name: g.name, engine: g.engine }))
-    const wanted = [...legacy, ...this.deps.derivedGrants?.() ?? []]
+    // What is held of one kind, kept as it is when what decides that kind cannot be read now.
+    const kept = (swarm: boolean) => this.deps.grants.all()
+      .filter(g => g.machineId === machineId && g.tab && g.tab.startsWith('super:') === swarm && !g.revoked)
+      .map(g => ({ agentId: g.agentId, email: g.recipientEmail, tab: g.tab!, name: g.name, engine: g.engine }))
+    const legacy = source ? rosterGrants(source.rosters, { machineId, accountId: source.accountId }, source.consent) : kept(false)
+    const derived = this.deps.derivedGrants?.()
+    const wanted = [...legacy, ...derived === null ? kept(true) : derived ?? []]
     // Asked only when there is something to grant: in Share's own process each ask goes to the gateway.
     const key = wanted.length ? await this.ownerPublicKey().catch(() => null) : ''
     // Without this machine's key (its gateway is down) nothing new can be published, but a member who left must still

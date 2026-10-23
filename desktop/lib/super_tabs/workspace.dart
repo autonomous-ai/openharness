@@ -11,6 +11,7 @@ import 'dialog_scope.dart';
 import 'model.dart';
 import 'pane.dart';
 import 'sharing.dart';
+import 'terminal_unavailable.dart';
 import 'view.dart';
 
 /// Keeps the app's one native canvas alive in the group's middle area.
@@ -199,9 +200,14 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
         machine = app.stateOf(agent.machineId);
       }
       if (machine?.agents.any((a) => a.id == agent.harnessId) != true) {
-        throw const SuperTabFailure(
+        throw SuperTabFailure(
           'TERMINAL_UNAVAILABLE',
-          'The shared terminal is not available yet. Its execution machine must be online.',
+          superTabTerminalUnavailable(
+            snapshot: controller.snapshot,
+            agent: agent,
+            accountId: controller.accountId,
+            machine: machine,
+          ),
         );
       }
       if (!current()) return;

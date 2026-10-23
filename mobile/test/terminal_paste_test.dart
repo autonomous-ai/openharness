@@ -67,6 +67,14 @@ void main() {
     report: reports.add,
   );
 
+  /// Real time passing until [done], in small steps: the image transcode decodes and encodes on
+  /// the engine's own threads, which an event-queue pump does not wait for.
+  Future<void> until(bool Function() done) async {
+    for (var i = 0; i < 500 && !done(); i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+  }
+
   setUp(() {
     frames = [];
     reports = [];
@@ -190,7 +198,7 @@ void main() {
 
     // Nothing answers the upload's begin here, so only that it was asked for is checked.
     unawaited(paste());
-    await pumpEventQueue();
+    await until(() => sentTypes.isNotEmpty || reports.isNotEmpty);
 
     expect(sentTypes, contains('terminal_chunked_upload_begin'));
     expect(reports, isEmpty);

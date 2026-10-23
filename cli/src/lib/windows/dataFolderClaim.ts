@@ -8,8 +8,11 @@
  * `\\.\pipe\` is one namespace for the whole computer, and any account may take a name nobody holds. So a start
  * that finds the name taken asks the holder to prove the daemon's token (pipeAuth.ts `claimProofValue`), the one
  * thing the claim answers. A core that proves it serves the folder: refused, unless its master is gone, which is
- * waited for as `refuseServedDataFolder` waits for one. Anything else (silent, closed, a wrong proof) is not
- * Harness: the start goes on without the claim, and says so. Another account cannot keep this user's daemon down.
+ * waited for as `refuseServedDataFolder` waits for one. A holder that may not be asked at all (access denied) is
+ * refused too: a pipe takes the token of whoever made it, so that is what a daemon started as administrator or in
+ * another Windows session looks like to an ordinary start (DESKTOP-0TFH0OJ, 2026-10-23: the second core ran beside
+ * the first). Anything else (silent, closed, a wrong proof) is not Harness: the start goes on without the claim,
+ * and says so.
  */
 import { createHash, randomBytes } from 'node:crypto'
 import { mkdirSync, realpathSync } from 'node:fs'
@@ -47,7 +50,7 @@ export interface DataFolderClaimDeps {
   waitMs?: number
   pollMs?: number
   /** Ask the holder of a taken name (`askHolder`); a spec stands in for a name that reads as gone. */
-  ask?: (path: string, token: Buffer, timeoutMs: number) => Promise<ClaimHolder | 'gone' | null>
+  ask?: (path: string, token: Buffer, timeoutMs: number) => Promise<ClaimHolder | 'gone' | 'denied' | null>
 }
 
 const ASK_TIMEOUT_MS = 3_000
@@ -98,14 +101,15 @@ function listenClaim(path: string, token: Buffer, holder: ClaimHolder): Promise<
   })
 }
 
-/** Ask whoever holds [path] to prove [token]: the holder it names when it does, `gone` when nobody holds it, else null. */
-function askHolder(path: string, token: Buffer, timeoutMs: number): Promise<ClaimHolder | 'gone' | null> {
+/** Ask whoever holds [path] to prove [token]: the holder it names when it does, `gone` when nobody holds it, `denied`
+ *  when this process may not open it, else null. */
+function askHolder(path: string, token: Buffer, timeoutMs: number): Promise<ClaimHolder | 'gone' | 'denied' | null> {
   return new Promise((resolve) => {
     const nonce = randomBytes(32).toString('hex')
     const socket = connect(path)
     let answer = ''
     let done = false
-    const finish = (result: ClaimHolder | 'gone' | null): void => {
+    const finish = (result: ClaimHolder | 'gone' | 'denied' | null): void => {
       if (done) return
       done = true
       socket.destroy()
@@ -113,7 +117,8 @@ function askHolder(path: string, token: Buffer, timeoutMs: number): Promise<Clai
     }
     socket.setTimeout(timeoutMs, () => finish(null))
     socket.on('connect', () => socket.write(`${nonce}\n`))
-    socket.on('error', (error: NodeJS.ErrnoException) => finish(error.code === 'ENOENT' || error.code === 'ECONNREFUSED' ? 'gone' : null))
+    socket.on('error', (error: NodeJS.ErrnoException) => finish(error.code === 'ENOENT' || error.code === 'ECONNREFUSED' ? 'gone'
+      : error.code === 'EPERM' || error.code === 'EACCES' ? 'denied' : null))
     socket.on('close', () => finish(null))
     socket.on('data', (chunk) => {
       answer += chunk.toString('utf8')
@@ -152,6 +157,9 @@ export async function claimDataFolder(dataDir: string, token: Buffer, deps: Data
       if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw error
     }
     const found = await (deps.ask ?? askHolder)(path, token, deps.askTimeoutMs ?? ASK_TIMEOUT_MS)
+    if (found === 'denied') {
+      throw Object.assign(new Error(`${path} is held by something this process may not open, most likely a Harness daemon started as administrator or in another Windows session. Stop it there, then start Harness again.`), { code: 'EADDRINUSE' })
+    }
     if (found === null) {
       log(`[cli] something that is not Harness holds ${path}; starting without the data folder claim`)
       return { path, held: false, release: () => { /* nothing held */ } }

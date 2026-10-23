@@ -22,6 +22,7 @@ Future<void> showProjectAction(
   var visibility = project.isPrivate ? 'private' : 'public';
   final members = project.memberIds.toSet();
   var minutes = project.updateMinutes;
+  var mode = project.skillMode;
   var busy = false;
   await showAppDialog<void>(
     context: context,
@@ -43,6 +44,7 @@ Future<void> showProjectAction(
               title: Text(switch (action) {
                 'rename' => 'Rename project',
                 'sharing' => 'Sharing',
+                'skills' => 'Skills for this project',
                 'cadence' => 'Project updates',
                 _ => 'Project details',
               }),
@@ -129,6 +131,35 @@ Future<void> showProjectAction(
                           style: DesktopChrome.metadata(),
                         ),
                       ],
+                      if (action == 'skills')
+                        RadioGroup<String>(
+                          groupValue: mode,
+                          onChanged: (value) {
+                            if (busy || !canManage || value == null) return;
+                            update(() => mode = value);
+                          },
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              RadioListTile<String>(
+                                value: 'default',
+                                enabled: !busy && canManage,
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text(
+                                  'Default — the team process; agents otherwise work their usual way',
+                                ),
+                              ),
+                              RadioListTile<String>(
+                                value: 'orchestration',
+                                enabled: !busy && canManage,
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text(
+                                  'Harness orchestration — adds Harness practices: plans, test-first, review rounds',
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       if (readOnly) ...[
                         Text(
                           current?.name ?? project.name,
@@ -192,6 +223,8 @@ Future<void> showProjectAction(
                                       ? 'rename'
                                       : action == 'sharing'
                                       ? 'sharing'
+                                      : action == 'skills'
+                                      ? 'skills'
                                       : 'cadence'}',
                               'projectId': project.id,
                               if (action == 'rename') 'name': name.trim(),
@@ -200,6 +233,7 @@ Future<void> showProjectAction(
                                 'memberIds': members.toList(),
                               },
                               if (action == 'cadence') 'minutes': minutes,
+                              if (action == 'skills') 'mode': mode,
                             });
                             if (!context.mounted) return;
                             if (result != null) {

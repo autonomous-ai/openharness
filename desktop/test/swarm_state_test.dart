@@ -11,6 +11,7 @@ import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/state/swarm.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/terminal/terminal_session.dart';
+import 'package:harness/ws/local_cli_discovery.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 class MemoryStore implements LocalKeyValueStore {
@@ -33,12 +34,14 @@ AppNotifier createApp({
   WsConn Function(String)? connectionForTest,
   bool connected = false,
   ProductMeasurement? productMeasurement,
+  LocalCliDiscovery? localCliDiscovery,
 }) {
   final app = AppNotifier(
     config: AppConfig.dev,
     authSession: AuthSession(),
     configStore: null,
     connectionForTest: connectionForTest,
+    localCliDiscovery: localCliDiscovery,
     productMeasurement: productMeasurement,
     paneLayoutStore: store == null ? null : PaneLayoutStore(storage: store),
   )..hasNavigationRail = false;

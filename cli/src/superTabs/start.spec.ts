@@ -1,20 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
-import { startAgent } from './start.js'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { createLaunchRequests } from '../core/agents/launches.js'
-import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
-import type { RegisteredSession } from '../lib/registry.js'
-import type { AgentFrame } from '../lib/agentFrame.js'
+import { inspectCapacity, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
-function fixture(options: { refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string } } = {}) {
+function fixture(options: { state?: Record<string, unknown> | Error; refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string } } = {}) {
   const start = { creationId: 'super-native-receipt', error: null as string | null, request: { machineId: 'target', conversationId: 'group', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }, dispatched: false }
   let nativeState = 'missing', lostJoin = false
   const scoped = vi.fn(async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
     if (payload.action === 'startStatus') return { ok: true, value: structuredClone(start) }
+    if (payload.action === 'status') {
+      if (options.state instanceof Error) throw options.state
+      return { ok: true, value: { revision: 1, state: options.state ?? { conversations: [{ id: 'group' }] } } }
+    }
     const cmd = payload.command as Record<string, unknown>
     if (cmd.type === 'agent.startDispatch') start.dispatched = true
     if (cmd.type === 'agent.startFailed') {
@@ -54,6 +51,13 @@ function fixture(options: { refuse?: string; loseCancel?: boolean; loseFailure?:
 const switchCall = (f: { request: { mock: { calls: unknown[][] } } }) => f.request.mock.calls.find(c => c[0] === 'agent_update')
 
 describe('Swarm permission mode', () => {
+  it('admits installed Claude when an API environment is opaque to the vendor login probe', async () => {
+    const f = fixture(), request = f.request.getMockImplementation()!
+    f.request.mockImplementation(async (type, payload, ms) => type === 'engines_probe'
+      ? { engines: [{ engine: 'claude', installed: true, signedIn: false }] }
+      : request(type, payload, ms))
+    expect(await inspectCapacity(await f.open() as never, f.start.request)).toMatchObject({ allowed: true, engine: { installed: true, signedIn: false } })
+  })
   it.each(['claude', 'codex'] as const)('starts %s in full mode on direct and contributed hosts', async engine => {
     for (const hostDispatch of [false, true]) {
       const f = fixture()
@@ -68,34 +72,39 @@ describe('Swarm permission mode', () => {
     }
   })
 
-  it.each(['opencode', 'hermes'])('keeps %s launchable through the real native permission validator', async engine => {
+  it.each(['opencode', 'kilo'])('fails a pending legacy %s Swarm start before native creation', async engine => {
+    const f = fixture()
+    Object.assign(f.start.request, { engine })
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ error: 'SWARM_ENGINE' })
+    expect(f.start.error).toContain('Claude Code or Codex')
+    expect(f.open).not.toHaveBeenCalled()
+  })
+
+  it.each(['opencode', 'kilo'])('keeps a dispatched legacy %s start uncertain without marking it failed', async engine => {
+    const f = fixture()
+    Object.assign(f.start.request, { engine })
+    f.start.dispatched = true
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open))
+      .toMatchObject({ error: 'START_UNCERTAIN', creationId: f.start.creationId })
+    expect(f.start.error).toBeNull()
+    expect(f.scoped.mock.calls.some(c => (c[0].command as any)?.type === 'agent.startFailed')).toBe(false)
+    expect(f.request.mock.calls.map(c => c[0])).toEqual(['agent_create_status'])
+  })
+
+  it('reconciles an already-created legacy OpenCode agent instead of orphaning it', async () => {
     const f = fixture(), request = f.request.getMockImplementation()!
-    Object.assign(f.start.request, { engine, worktree: false })
-    const folder = mkdtempSync(join(tmpdir(), 'swarm-native-'))
-    const created: Array<Record<string, unknown>> = []
-    const native = createLaunchRequests({
-      receipts: new AgentCreationReceipts(folder),
-      createAgent: () => async input => {
-        created.push(input)
-        return { ok: true, session: { agentId: 'native', engine } as RegisteredSession }
-      },
-      forkAgent: () => null, resumeAgent: () => null, restartAgent: () => null,
-      byAgent: () => undefined, toProject: async () => ({ id: 'native', engine }) as AgentFrame,
-      modelTarget: async () => null,
-    })
-    f.request.mockImplementation(async (type, payload) => {
-      if (type === 'agent_create') {
-        let reply: Record<string, unknown> = {}
-        await native.create({ ...payload, creationId: undefined }, { local: true }, value => { reply = value })
-        if (reply.error) return reply
-      }
-      return request(type, payload)
-    })
-    try {
-      expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
-      expect(created).toHaveLength(1)
-      expect(created[0]).toMatchObject({ permissionMode: null, bypassPermission: true })
-    } finally { native.stop(); rmSync(folder, { recursive: true, force: true }) }
+    Object.assign(f.start.request, { engine: 'opencode' })
+    f.start.dispatched = true
+    f.request.mockImplementation(async (type, payload, ms) => type === 'agent_create_status'
+      ? { creationId: f.start.creationId, state: 'created', agent: { id: 'native', engine: 'opencode' } }
+      : request(type, payload, ms))
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open))
+      .toMatchObject({ ok: true, harnessId: 'native' })
+    expect(f.start.error).toBeNull()
+    const commands = f.scoped.mock.calls.map(c => c[0].command as Record<string, any> | undefined)
+    expect(commands.find(c => c?.type === 'agent.started')).toMatchObject({ configuration: { engine: 'opencode' } })
+    expect(commands.some(c => c?.type === 'agent.startFailed')).toBe(false)
+    expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
   })
 
   it('recovers the same legacy start after its accepted reply is lost', async () => {
@@ -201,18 +210,13 @@ const expectSwitchTo = (f: Parameters<typeof switchCall>[0], selectedModel: stri
   expect(call[2]).toBeGreaterThan(50_000)
   expect(call[2]).toBeLessThanOrEqual(60_000)
 }
-it.each(['claude', 'codex', 'opencode'])('only tells supported %s workers to use their built-in skill', async engine => {
+it.each(['claude', 'codex'])('tells supported %s workers to use their built-in skill', async engine => {
   const f = fixture()
   f.start.request.engine = engine
   await startAgent({ action: 'start', tabId: 'tab', operationId: 'role-prompt', request: f.start.request }, f.scoped, where, f.open)
   const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
-  if (engine === 'claude' || engine === 'codex') {
-    expect(payload.prompt).toContain('swarm-dev')
-    expect(payload.swarmRole).toBe('dev')
-  } else {
-    expect(payload.prompt).not.toContain('swarm-dev')
-    expect(payload.swarmRole).toBeUndefined()
-  }
+  expect(payload.prompt).toContain('swarm-dev')
+  expect(payload.swarmRole).toBe('dev')
 })
 
 it.each(['claude', 'codex'])('starts a %s Reviewer with the built-in swarm-review skill', async engine => {
@@ -223,6 +227,36 @@ it.each(['claude', 'codex'])('starts a %s Reviewer with the built-in swarm-revie
   expect(payload.swarmRole).toBe('review')
   expect(payload.prompt).toContain('swarm-review skill')
   expect(payload.prompt).not.toContain('swarm-dev')
+})
+
+describe('the skills of the project the agent joins', () => {
+  const projects = (skillMode?: string) => ({ conversations: [{ id: 'other', projectId: 'p1' }, { id: 'group', projectId: 'p2' }],
+    projects: [{ id: 'p1', skillMode: 'default' }, { id: 'p2', ...(skillMode ? { skillMode } : {}) }] })
+  const started = async (state: Record<string, unknown> | Error, role?: string) => {
+    const f = fixture({ state })
+    if (role) f.start.request = { ...f.start.request, role } as typeof f.start.request
+    expect(await startAgent({ action: 'start', tabId: 'tab', operationId: 'mode', request: f.start.request }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+    return f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+  }
+  it.each([undefined, 'reviewer'])('starts a Default project\'s agent (role %s) with the Default text and a prompt line that fits it', async role => {
+    const payload = await started(projects('default'), role), skill = role ? 'review' : 'dev'
+    expect(payload).toMatchObject({ swarmRole: skill, swarmSkillMode: 'default' })
+    expect(payload.prompt).toContain(`Use the swarm-${skill} skill for this session: the team process; otherwise work your usual way. Run harness`)
+    expect(payload.prompt).not.toContain('built-in')
+  })
+  it('starts a Harness orchestration project\'s agent with the built-in text', async () => {
+    const payload = await started(projects('orchestration'))
+    expect(payload).toMatchObject({ swarmRole: 'dev', swarmSkillMode: 'orchestration' })
+    expect(payload.prompt).toContain('Use the built-in swarm-dev skill for this session. Run harness')
+  })
+  it.each([
+    ['a project from before modes', projects()],
+    ['a Swarm from before projects', { conversations: [{ id: 'group' }] }],
+    ['a group it cannot see', { conversations: [], projects: [{ id: 'lead', skillMode: 'default' }] }],
+    ['a state it cannot read', new Error('offline')],
+  ])('reads %s as Harness orchestration', async (_name, state) => {
+    expect(await started(state)).toMatchObject({ swarmSkillMode: 'orchestration' })
+  })
 })
 
 it('asks for an owner contribution instead of widening a guest machine connection', async () => {

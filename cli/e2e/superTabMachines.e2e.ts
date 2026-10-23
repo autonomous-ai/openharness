@@ -35,7 +35,7 @@ it.each(['project', 'swarm'])('queues a teammate start with %s capacity and resu
   const agents: Array<Record<string, any>> = [], starts = new Map<string, Record<string, any>>()
   let generation = 'grant-1', observations = 0
   const pool = { machineId: memberMachine.machineId, generation,
-    cwd: scope === 'swarm' ? join(b.dataDir, 'swarm-projects', 'pool-tab') : project,
+    cwd: scope === 'swarm' ? join(b.env.HOME!, 'harnesses', 'swarms', 'pool-tab') : project,
     ...(scope === 'swarm' ? { scope } : {}), engines: ['codex'], maxAgents: 2, paused: false }
   const projects = scope === 'swarm' ? [{ id: 'lead', conversationIds: ['lead'],
     repository: { machineId: memberMachine.machineId, cwd: project, repositoryUrl: null } }] : undefined

@@ -13866,6 +13866,7 @@ class AppNotifier extends ChangeNotifier {
     String? codexHome,
     String? dsh,
     String? swarmRole,
+    String? swarmSkillMode,
     GridModel? model,
     String? prompt,
     String? name,
@@ -13888,7 +13889,10 @@ class AppNotifier extends ChangeNotifier {
       // The harness this agent is created from. `engine` above is its BASE —
       // the machine refuses the pair when they disagree (`INVALID_DSH`).
       'dsh': ?dsh,
-      if (engine == 'claude' || engine == 'codex') 'swarmRole': ?swarmRole,
+      if (engine == 'claude' || engine == 'codex') ...{
+        'swarmRole': ?swarmRole,
+        'swarmSkillMode': ?swarmSkillMode,
+      },
       'gridModel': ?model?.id,
       'gridName': ?model?.grid,
       // A first message the engine is opened with, and the pane's name before

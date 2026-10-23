@@ -61,6 +61,7 @@ class SuperTabLaunch {
       creationId: saved['creationId'] as String? ?? superTabOperationId(),
       initialTask: saved['initialMessage'] as String?,
       swarmRole: saved['lead'] == true ? 'lead' : 'dev',
+      swarmSkillMode: saved['skillMode'] as String? ?? 'orchestration',
       actionLabel: saved['newProject'] == true
           ? 'New Project'
           : saved['lead'] == true
@@ -80,7 +81,10 @@ class SuperTabLaunch {
           saved['visibility'] = integration.projectVisibility ?? 'public';
         }
         try {
-          return await launch.prepare(machine, task);
+          final prompt = await launch.prepare(machine, task);
+          integration.swarmSkillMode =
+              saved['skillMode'] as String? ?? 'orchestration';
+          return prompt;
         } on SuperTabFailure catch (failure) {
           // Validation rejects the request before applying it. A lost response
           // stays locked so retrying cannot create a second project or change
@@ -206,9 +210,9 @@ class SuperTabLaunch {
       '/api/super-tabs/${saved['tabId']}',
     );
     checkAccount();
-    final groups =
-        superTabMap(current['state'])['conversations'] as List? ?? const [];
-    if (!groups.any((g) => (g as Map)['id'] == saved['conversationId'])) {
+    final snapshot = SuperTabSnapshot.fromJson(superTabMap(current['state']));
+    final conversationId = saved['conversationId'] as String;
+    if (snapshot.conversation(conversationId) == null) {
       if (saved['phase'] != 'starting' && saved['phase'] != 'joining') {
         // Nothing can still be starting: reopening New Project should get a
         // fresh destination instead of loading this deleted project forever.
@@ -220,6 +224,8 @@ class SuperTabLaunch {
         'This project is no longer available. Close this form and create a new project.',
       );
     }
+    saved['skillMode'] =
+        snapshot.projectFor(conversationId)?.skillMode ?? 'orchestration';
     final prompt = superTabLaunchPrompt(
       tabId: saved['tabId'] as String,
       conversationId: saved['conversationId'] as String,

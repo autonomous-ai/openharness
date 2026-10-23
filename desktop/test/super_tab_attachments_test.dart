@@ -12,7 +12,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/open_in_browser.dart';
+import 'package:harness/finder/widgets/finder_code_editor.dart';
+import 'package:harness/finder/widgets/finder_markdown_view.dart';
 import 'package:harness/super_tabs/attachment_upload.dart';
+import 'package:harness/super_tabs/attachment_viewer.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -49,6 +52,22 @@ class _Picker extends FileSelectorPlatform {
     String? initialDirectory,
     String? confirmButtonText,
   }) async => files;
+}
+
+/// A save dialog that answers with [path], or cancels when it is null.
+class _SaveTo extends FileSelectorPlatform {
+  _SaveTo(this.path);
+  final String? path;
+  final suggested = <String?>[];
+
+  @override
+  Future<FileSaveLocation?> getSaveLocation({
+    List<XTypeGroup>? acceptedTypeGroups,
+    SaveDialogOptions options = const SaveDialogOptions(),
+  }) async {
+    suggested.add(options.suggestedName);
+    return path == null ? null : FileSaveLocation(path!);
+  }
 }
 
 void main() {
@@ -533,6 +552,55 @@ void main() {
     );
   });
 
+  group('download', () {
+    final file = SuperTabAttachment.fromJson({
+      'id': 'a1',
+      'name': 'spec.md',
+      'mime': 'text/markdown',
+      'size': 5,
+      'url': 'https://cdn.harness.autonomous.ai/a1/spec.md',
+    });
+    final url = Uri.parse(file.url);
+    late Directory dir;
+    late FileSelectorPlatform picker;
+    final fetched = <Uri>[];
+    late Future<Uint8List> Function(Uri, {int? maxBytes}) fetcher;
+
+    setUp(() {
+      dir = Directory.systemTemp.createTempSync('attachment-download');
+      picker = FileSelectorPlatform.instance;
+      fetcher = attachmentFetcher;
+      fetched.clear();
+      attachmentFetcher = (url, {maxBytes}) async {
+        fetched.add(url);
+        return Uint8List.fromList(utf8.encode('hello'));
+      };
+    });
+    tearDown(() {
+      FileSelectorPlatform.instance = picker;
+      attachmentFetcher = fetcher;
+      dir.deleteSync(recursive: true);
+    });
+
+    test('asks where, then saves the fetched file there', () async {
+      final target = '${dir.path}/saved.md';
+      final dialog = _SaveTo(target);
+      FileSelectorPlatform.instance = dialog;
+
+      expect(await downloadAttachment(file, url), isTrue);
+      expect(dialog.suggested, ['spec.md']);
+      expect(fetched, [url]);
+      expect(File(target).readAsStringSync(), 'hello');
+    });
+
+    test('a cancelled save dialog fetches nothing', () async {
+      FileSelectorPlatform.instance = _SaveTo(null);
+
+      expect(await downloadAttachment(file, url), isFalse);
+      expect(fetched, isEmpty);
+    });
+  });
+
   group('messages', () {
     testWidgets('show chips and load nothing until a click', (tester) async {
       final server = ConversationServer()
@@ -664,6 +732,235 @@ void main() {
       await tester.pump();
       expect(find.text(why), findsOneWidget);
       expect(opened, isEmpty);
+      await close(tester, controller);
+    });
+
+    /// A message carrying [rows], mounted, with the browser and the file
+    /// fetch recorded; a fetch answers with [served] by file name.
+    Future<(SuperTabController, List<Uri>, List<Uri>)> showFiles(
+      WidgetTester tester,
+      List<Map<String, dynamic>> rows, {
+      Map<String, List<int>> served = const {},
+    }) async {
+      final server = ConversationServer()..append('Here', attachments: rows);
+      final controller = server.controller();
+      await controller.refresh();
+      await mount(tester, controller);
+      final opened = <Uri>[], fetched = <Uri>[];
+      final browser = browserOpener, fetcher = attachmentFetcher;
+      browserOpener = (url) async {
+        opened.add(url);
+        return true;
+      };
+      attachmentFetcher = (url, {maxBytes}) async {
+        fetched.add(url);
+        return Uint8List.fromList(served[url.pathSegments.last]!);
+      };
+      addTearDown(() {
+        browserOpener = browser;
+        attachmentFetcher = fetcher;
+      });
+      return (controller, opened, fetched);
+    }
+
+    Map<String, dynamic> row(String id, String name, String mime, int size) => {
+      'id': id,
+      'name': name,
+      'mime': mime,
+      'size': size,
+      'url': 'https://cdn.harness.autonomous.ai/$id/$name',
+    };
+
+    String shownText(WidgetTester tester) => tester
+        .widget<FinderCodeEditor>(find.byType(FinderCodeEditor))
+        .controller
+        .text;
+
+    testWidgets('a Markdown file opens rendered, its source a click away', (
+      tester,
+    ) async {
+      final (controller, opened, fetched) = await showFiles(
+        tester,
+        [row('a1', 'spec.md', 'text/markdown', 40)],
+        served: {'spec.md': utf8.encode('# The spec\n\nRead **this**.')},
+      );
+
+      await tester.tap(find.byKey(const ValueKey('super-attachment:a1')));
+      await tester.pumpAndSettle();
+      expect(fetched, [
+        Uri.parse('https://cdn.harness.autonomous.ai/a1/spec.md'),
+      ]);
+      expect(find.byType(FinderMarkdownView), findsOneWidget);
+      expect(find.text('The spec'), findsOneWidget);
+      expect(find.byType(FinderCodeEditor), findsNothing);
+
+      await tester.tap(find.byTooltip('Show source'));
+      await tester.pumpAndSettle();
+      expect(find.byType(FinderMarkdownView), findsNothing);
+      final editor = tester.widget<FinderCodeEditor>(
+        find.byType(FinderCodeEditor),
+      );
+      expect(editor.readOnly, isTrue);
+      expect(editor.controller.text, '# The spec\n\nRead **this**.');
+
+      await tester.tap(find.byTooltip('Show preview'));
+      await tester.pumpAndSettle();
+      expect(find.byType(FinderMarkdownView), findsOneWidget);
+      expect(find.text('Download'), findsOneWidget);
+      expect(find.text('Open in browser'), findsOneWidget);
+      expect(opened, isEmpty);
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+      await close(tester, controller);
+    });
+
+    testWidgets('a log and a JSON file open as text', (tester) async {
+      final (controller, opened, _) = await showFiles(
+        tester,
+        [
+          row('a1', 'run.log', 'text/plain', 20),
+          row('a2', 'data.json', 'application/json', 20),
+        ],
+        served: {
+          'run.log': utf8.encode('line one\nline two'),
+          'data.json': utf8.encode('{"ok": true}'),
+        },
+      );
+
+      await tester.tap(find.byKey(const ValueKey('super-attachment:a1')));
+      await tester.pumpAndSettle();
+      expect(shownText(tester), 'line one\nline two');
+      expect(find.byTooltip('Show source'), findsNothing);
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('super-attachment:a2')));
+      await tester.pumpAndSettle();
+      expect(shownText(tester), '{"ok": true}');
+      expect(opened, isEmpty);
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+      await close(tester, controller);
+    });
+
+    testWidgets('a file too large or not text opens in the browser unread', (
+      tester,
+    ) async {
+      final (controller, opened, fetched) = await showFiles(tester, [
+        row('a1', 'huge.log', 'text/plain', kAttachmentTextMaxBytes + 1),
+        row('a2', 'bundle.zip', 'application/zip', 100),
+      ]);
+
+      await tester.tap(find.byKey(const ValueKey('super-attachment:a1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-attachment:a2')));
+      await tester.pumpAndSettle();
+      expect(opened, [
+        Uri.parse('https://cdn.harness.autonomous.ai/a1/huge.log'),
+        Uri.parse('https://cdn.harness.autonomous.ai/a2/bundle.zip'),
+      ]);
+      expect(fetched, isEmpty);
+      await close(tester, controller);
+    });
+
+    testWidgets(
+      'a file that runs past the limit while read opens the browser',
+      (tester) async {
+        final (controller, opened, _) = await showFiles(tester, [
+          row('a1', 'small-on-paper.log', 'text/plain', 10),
+        ]);
+        final limits = <int?>[];
+        attachmentFetcher = (url, {maxBytes}) async {
+          limits.add(maxBytes);
+          throw const AttachmentTooLarge();
+        };
+
+        await tester.tap(find.byKey(const ValueKey('super-attachment:a1')));
+        await tester.pumpAndSettle();
+        expect(limits, [kAttachmentTextMaxBytes]);
+        expect(opened, [
+          Uri.parse('https://cdn.harness.autonomous.ai/a1/small-on-paper.log'),
+        ]);
+        expect(find.text('Close'), findsNothing);
+        await close(tester, controller);
+      },
+    );
+
+    testWidgets('a text name over binary bytes shows no preview', (
+      tester,
+    ) async {
+      final (controller, _, _) = await showFiles(
+        tester,
+        [row('a1', 'notes.txt', 'text/plain', 4)],
+        served: {
+          'notes.txt': [0, 1, 2, 3],
+        },
+      );
+
+      await tester.tap(find.byKey(const ValueKey('super-attachment:a1')));
+      await tester.pumpAndSettle();
+      expect(find.text('No preview'), findsOneWidget);
+      expect(find.byType(FinderCodeEditor), findsNothing);
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+      await close(tester, controller);
+    });
+
+    testWidgets('the picture viewer offers Download', (tester) async {
+      final (controller, _, _) = await showFiles(tester, [
+        row('a1', 'shot.png', 'image/png', 2048),
+      ]);
+
+      await tester.tap(find.byKey(const ValueKey('super-attachment:a1')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('super-attachment-image:a1')),
+        findsOneWidget,
+      );
+      expect(find.text('Download'), findsOneWidget);
+      expect(find.text('Open in browser'), findsOneWidget);
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+      await close(tester, controller);
+    });
+
+    testWidgets('a text file off the attachments host is never fetched', (
+      tester,
+    ) async {
+      final server = ConversationServer()
+        ..append(
+          'Here',
+          attachments: [
+            {
+              'id': 'a1',
+              'name': 'notes.md',
+              'mime': 'text/markdown',
+              'size': 10,
+              'url': 'https://evil.example/a1/notes.md',
+            },
+          ],
+        );
+      final controller = server.controller();
+      await controller.refresh();
+      await mount(tester, controller);
+      final fetched = <Uri>[];
+      final original = attachmentFetcher;
+      attachmentFetcher = (url, {maxBytes}) async {
+        fetched.add(url);
+        return Uint8List(0);
+      };
+      addTearDown(() => attachmentFetcher = original);
+
+      await tester.tap(find.byKey(const ValueKey('super-attachment:a1')));
+      await tester.pump();
+      expect(
+        find.text(
+          'This file isn’t on Harness’s file storage, so it wasn’t opened.',
+        ),
+        findsOneWidget,
+      );
+      expect(fetched, isEmpty);
+      expect(find.byType(FinderMarkdownView), findsNothing);
       await close(tester, controller);
     });
 

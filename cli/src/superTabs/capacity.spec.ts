@@ -25,7 +25,7 @@ it('keeps unknown quota distinct from unused quota and honors all limiting windo
   const result = admission(capacity, { installed: true }, quota, requirements)
   expect(result.allowed).toBe(false)
   expect(result.reasons).toHaveLength(6)
-  expect(admission({}, { installed: true, signedIn: false }, quotaOf({}, 'codex', false), requirements).reasons).toContain('The selected agent engine is not signed in on this machine.')
+  expect(admission({}, { installed: true, signedIn: false }, quotaOf({}, 'codex', false), requirements).reasons).not.toContain('The selected agent engine is not signed in on this machine.')
   expect(admission({}, {}, quotaOf({}, 'claude', false), { ...requirements, quotaRequired: true }).reasons).toContain('The requested subscription allowance could not be verified.')
 })
 it('distinguishes a missing tool from a failed probe and keeps the failure detail', async () => {

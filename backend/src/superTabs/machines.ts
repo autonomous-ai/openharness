@@ -17,6 +17,14 @@ export interface ContributedMachine {
   paused: boolean
   observation?: MachineObservation & { receivedAt: number }
 }
+/** Older contributions may name engines that Swarm no longer starts. Their fresh
+ * observation lists the supported engines that are actually installed. */
+export function contributedEngines(pool: ContributedMachine, observation: MachineObservation | undefined = pool.observation): string[] {
+  const supported = (engine: string) => engine === 'claude' || engine === 'codex'
+  return pool.engines.some(engine => !supported(engine))
+    ? (observation?.quotas ?? []).map(quota => quota.engine).filter(supported)
+    : pool.engines.filter(supported)
+}
 const measure = z.number().finite().nonnegative().nullable()
 const percent = z.number().min(0).max(100).nullable()
 const resource = z.object({
@@ -109,7 +117,8 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   // setting can be a path or a name of the caller's own.
   const refused: string[] = []
   if (request.cwd !== cwd) refused.push(`cwd (this project uses ${cwd} on it)`)
-  if (!pool.engines.includes(request.engine)) refused.push(`engine (it contributes ${pool.engines.join(', ') || 'no engines'})`)
+  const engines = contributedEngines(pool)
+  if (!engines.includes(request.engine)) refused.push(`engine (it contributes ${engines.join(', ') || 'no engines'})`)
   const settings = (['codexHome', 'gridModel', 'gridName'] as const).filter(key => request[key])
   if (settings.length) refused.push(`${settings.join(', ')} (it runs with its own default account settings, so leave ${settings.length > 1 ? 'them' : 'it'} out)`)
   if (request.permissionMode !== undefined && request.permissionMode !== 'full') {

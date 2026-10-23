@@ -650,6 +650,19 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   }
                   if (!context.mounted || !c.canWrite) return;
                   final machine = app.stateOf(selected);
+                  final engines =
+                      (prepared['engines'] as List?)
+                          ?.whereType<String>()
+                          .where((engine) => _chipEngines.contains(engine))
+                          .toSet()
+                          .toList() ??
+                      <String>[];
+                  if (engines.isEmpty) {
+                    throw const SuperTabFailure(
+                      'NO_SWARM_ENGINE',
+                      'Install Claude Code or Codex on this machine, then try again.',
+                    );
+                  }
                   // A machine with no number of its own whose reading failed,
                   // or had not answered yet, is showing the floor rather than
                   // a suggestion. The owner never chose that, so send what
@@ -690,7 +703,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                     'name': machine!.machine.displayName,
                     'cwd': prepared['cwd'],
                     if (prepared['scope'] != null) 'scope': prepared['scope'],
-                    'engines': prepared['engines'],
+                    'engines': engines,
                     'maxAgents': slots,
                   });
                   if (result == null) {
@@ -954,7 +967,17 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         shared?['name'] as String? ??
         state?.machine.displayName ??
         'Unavailable machine';
-    final allowed = (shared?['engines'] as List?)?.cast<String>();
+    final configured = (shared?['engines'] as List?)
+        ?.whereType<String>()
+        .toList();
+    final allowed =
+        configured?.any((engine) => !_chipEngines.contains(engine)) == true
+        ? [
+            for (final raw in observation['quotas'] as List? ?? [])
+              if (_chipEngines.contains(superTabMap(raw)['engine']))
+                superTabMap(raw)['engine'] as String,
+          ]
+        : configured?.where(_chipEngines.contains).toList();
     var accounts =
         _usage?.rows
             .where(

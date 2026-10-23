@@ -41,9 +41,14 @@ class SuperTabAgent {
       machineId = _text(row, 'machineId'),
       harnessId = _text(row, 'harnessId'),
       contributorId = _text(row, 'contributorId'),
+      machineOwnerId =
+          row['machineOwnerId'] as String? ?? _text(row, 'contributorId'),
       role = row['role'] as String?,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
+
+  /// The account whose computer runs it; a contributor may run agents on a computer another account shared with them.
+  final String machineOwnerId;
   // Keep the legacy default for callers while allowing group-based roster ownership.
   final bool hasProjectId;
   final String? displayName;
@@ -111,6 +116,7 @@ class SuperTabProject {
       name = _text(row, 'name'),
       ownerId = _text(row, 'ownerId'),
       leadConversationId = _text(row, 'leadConversationId'),
+      skillMode = row['skillMode'] == 'default' ? 'default' : 'orchestration',
       isPrivate = row['visibility'] == 'private',
       memberIds = [
         for (final member in row['members'] as List? ?? const [])
@@ -121,6 +127,7 @@ class SuperTabProject {
           ? Map.unmodifiable(superTabMap(row['repository']))
           : null;
   final String id, name, ownerId, leadConversationId;
+  final String skillMode;
   final bool isPrivate;
   final List<String> memberIds;
   final int updateMinutes;

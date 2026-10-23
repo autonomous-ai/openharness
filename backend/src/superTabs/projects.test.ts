@@ -31,7 +31,7 @@ describe('projects inside an invite-only swarm', () => {
     const original = f.run({ type: 'conversation.create', title: 'First', brief: '', checks: [] })
     const p = f.project()
     const next = f.run({ type: 'conversation.create', projectId: p.projectId, title: 'Second', brief: '', checks: [] })
-    expect(f.state.conversations.map(c => c.number)).toEqual([undefined, 1, undefined, 2])
+    expect(f.state.conversations.map(c => c.number)).toEqual([undefined, 1, undefined, 2, undefined])
     expect(f.state.conversations.map(c => c.id)).toContain(original.conversationId)
     expect(next.number).toBe(2)
     expect(() => f.run({ type: 'conversation.archive', conversationId: p.conversationId, archived: true })).toThrow('stays available')
@@ -42,7 +42,7 @@ describe('projects inside an invite-only swarm', () => {
     const id = f.add(p.conversationId, 'private-lead')
     const visible = visibleState(f.state, peer)
     expect(visible.projects!.map(p => p.id)).toEqual(['lead'])
-    expect(visible.conversations.map(c => c.id)).toEqual(['lead'])
+    expect(visible.conversations.map(c => c.id)).toEqual(['lead', f.state.leadsConversationId])
     expect(visible.agents).toEqual([])
     expect(canReadAgent(f.state, peer, f.state.agents[0]!)).toBe(false)
     expect(() => readConversation(f.state, peer, p.conversationId)).toThrow('unavailable')
@@ -95,7 +95,8 @@ describe('projects inside an invite-only swarm', () => {
     f.run({ type: 'invite.create', email: 'new@example.com', role: 'collaborator', conversationId: 'lead' })
     expect(f.run({ type: 'project.delete', projectId: 'lead' })).toEqual({})
     expect(projectsOf(f.state)).toEqual([])
-    expect(f.state.conversations).toEqual([])
+    // Only the Swarm-wide Leads conversation is left.
+    expect(f.state.conversations.map(c => c.kind)).toEqual(['leads'])
     expect(f.state.invitations).toEqual([])
     expect(f.state.project).toBeUndefined()
     expect(f.state.machines?.map(m => m.machineId)).toEqual(['shared'])
@@ -156,7 +157,6 @@ describe('projects inside an invite-only swarm', () => {
       expect(() => f.run(command, actor(workerId))).toThrow('coordinating lead')
       expect(() => f.run(command, actor(otherId))).toThrow('unavailable')
     }
-    f.run({ type: 'agent.remove', agentId: leadId })
     f.run({ type: 'agent.remove', agentId: workerId })
     f.run({ type: 'project.delete', projectId: 'lead' })
     expect(() => f.run({ type: 'tab.rename', name: 'Forbidden' }, actor(otherId))).toThrow('unavailable')
@@ -181,7 +181,7 @@ describe('projects inside an invite-only swarm', () => {
   })
 
   it('removes only its own agents, even one that left every workgroup', () => {
-    const f = setup(), p = f.project(), agentId = f.add(p.conversationId, 'idle'), otherId = f.add('lead', 'other')
+    const f = setup(), p = f.project(), agentId = f.add(p.conversationId, 'idle', false), otherId = f.add('lead', 'other')
     f.run({ type: 'conversation.agent', conversationId: p.conversationId, agentId, present: false, lead: false })
     f.run({ type: 'project.delete', projectId: p.projectId })
     expect(projectsOf(f.state).map(p => p.id)).toEqual(['lead'])
@@ -234,7 +234,7 @@ describe('projects inside an invite-only swarm', () => {
   })
 
   it('keeps active work visible after its contributed agent is removed', () => {
-    const f = setup(), p = f.project(), agentId = f.add(p.conversationId, 'worker')
+    const f = setup(), p = f.project(), agentId = f.add(p.conversationId, 'worker', false)
     f.run({ type: 'work.define', conversationId: p.conversationId, brief: 'Finish the task',
       checks: [{ description: 'Verified', independent: false }] })
     f.run({ type: 'work.assign', conversationId: p.conversationId, agentId })

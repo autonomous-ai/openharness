@@ -59,6 +59,17 @@ const recorded = (s: ReturnType<typeof scoped>) => s.mock.calls.find(c => c[0].a
 const labels = (s: ReturnType<typeof scoped>) => (recorded(s).command.decision.candidates as Array<{ label: string }>).map(c => c.label)
 
 describe('routeTask', () => {
+  it('never offers OpenCode or Kilo even if an old policy enables them', async () => {
+    const oldPolicy = { ...policy, models: [...policy.models.map(model => ({ ...model, enabled: false })),
+      { engine: 'opencode', model: 'default', effort: 'default', quality: 3, cost: 1, enabled: true },
+      { engine: 'kilo', model: 'default', effort: 'default', quality: 3, cost: 1, enabled: true }] }
+    const oldTab = tab(); oldTab.state.agents = [agents[1]]
+    const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: oldTab, policy: { policy: oldPolicy },
+      machines: [{ machineId: 'm1', name: 'remote-1' }] } } })
+    const result = await routeTask(input, s, where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [],
+      engines: [{ engine: 'claude', installed: true }, { engine: 'opencode', installed: true }, { engine: 'kilo', installed: true }] })))
+    expect(result).toMatchObject({ error: 'NO_CANDIDATE' })
+  })
   it('offers the same member after Change agent when only its replacement terminal is live', async () => {
     const rebound = tab()
     rebound.state.agents = agents.map(a => a.id === 'a1' ? { ...a, harnessId: 'replacement' } : a)
@@ -404,6 +415,17 @@ describe('routeTask', () => {
     await routeTask(input, t, where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], usage: { providers: [] } })))
     expect((recorded(t).command.decision.candidates as Array<{ title: string }>).some(c => c.title.startsWith('Multiply'))).toBe(true)
   })
+  it('skips a member whose screen showed a usage limit until its reset time, and offers it again after', async () => {
+    const limited = (until: string | null) => { const t = tab(); t.state.agents = agents.map(a => a.id === 'a1' ? { ...a, limitedUntil: until } : a); return t }
+    const s = scoped({ tab: limited(new Date(Date.now() + 30 * 60_000).toISOString()) })
+    await routeTask(input, s, where as never, opener())
+    expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([{ title: 'Multiply · Claude sonnet medium · remote-1', reason: expect.stringContaining('usage limit') }]))
+    for (const until of [new Date(Date.now() - 60_000).toISOString(), null]) {
+      const t = scoped({ tab: limited(until) })
+      await routeTask(input, t, where as never, opener())
+      expect((recorded(t).command.decision.candidates as Array<{ title: string }>).some(c => c.title.startsWith('Multiply'))).toBe(true)
+    }
+  })
   it('uses the real admission texts the member refusal filter keys on', () => {
     const quota = quotaOf({ providers: [{ provider: 'claude', outcome: 'answered', httpStatus: 200, body: { five_hour: { utilization: 100 } } }] }, 'claude', false)
     const requirements = { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: ['git'], devices: ['/dev/x'], quotaRequired: false }
@@ -636,6 +658,13 @@ describe('routing contributed capacity', () => {
     const member = await runPool(healthy(), true)
     expect(member.answer.ok).toBe(true)
   })
+  it('reads an old OpenCode contribution as its installed Claude observation', async () => {
+    const pool = healthy()
+    pool.engines = ['opencode']
+    const { answer, s } = await runPool(pool)
+    expect(answer).toMatchObject({ ok: true, pick: { engine: 'claude' } })
+    expect(recorded(s).command.decision.candidates.every((c: { engine: string }) => c.engine === 'claude')).toBe(true)
+  })
   it('keeps a healthy contributed member pickable', async () => {
     const { answer, s } = await runPool(healthy(), true)
     expect(answer.ok).toBe(true)
@@ -714,6 +743,20 @@ describe('routing contributed capacity', () => {
     delete (p.observation as any).runningHarnessIds
     expect((await runPool(p)).answer.ok).toBe(true)
     expect((await runPool({ ...p, observation: {} }, true)).answer.ok).not.toBe(true)
+  })
+  it('lists API-key machines beside a subscription one, and offers the best row of every other machine as an alternative', async () => {
+    const keyed = (machineId: string) => ({ ...healthy(), machineId, name: `Keyed ${machineId}`, observation: { ...healthy().observation, runningHarnessIds: [],
+      quotas: [{ engine: 'claude', known: true, windows: [] }] } })
+    // The subscription machine has two engines, so its two best rows come before any other machine's.
+    const subscription = healthy(), reading = { usedPercent: 20, resetsAt: Date.now() + 5 * 86_400_000 }
+    Object.assign(subscription, { engines: ['claude', 'codex'] })
+    subscription.observation.quotas = ['claude', 'codex'].map(engine => ({ engine, known: true, windows: [{ ...reading, name: '5-hour' }, { ...reading, name: 'weekly' }] }))
+    const enabled = { ...policy, models: policy.models.map(m => ({ ...m, enabled: true })) }
+    const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: [agents[1]], conversations: conversations(), machines: [subscription, keyed('m2'), keyed('m3')] } },
+      policy: { policy: enabled, warnings: [] }, machines: [] } } })
+    const answer = await routeTask(input, s, where, opener())
+    expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm1', engine: 'codex' } })
+    expect((answer.alternatives as Array<{ machineId: string; engine: string }>).map(x => [x.machineId, x.engine])).toEqual([['m1', 'claude'], ['m2', 'claude'], ['m3', 'claude']])
   })
   it('refuses unobserved tools and devices, without probing arbitrary paths on a teammate computer', async () => {
     expect((await runPool(healthy(), false, { tools: ['docker'], devices: ['/dev/fixture'] })).answer.ok).not.toBe(true)
