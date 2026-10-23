@@ -4,7 +4,7 @@
  * and records the decision in the tab. */
 import { randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
-import { startRequirements } from './capacity.js'
+import { requiredToolReason, startRequirements } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
 import { choose, decide, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
@@ -233,7 +233,7 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       ...(pool.availableSlots === 0 ? ['This machine has no available agent slots.'] : []),
       ...(!finite(resources.projectDiskFreeBytes) || resources.projectDiskFreeBytes < needs.diskBytes ? ['The project has insufficient measured free disk.'] : []),
       ...(!finite(resources.memoryTotalBytes) || !finite(resources.memoryUsedBytes) || resources.memoryTotalBytes - resources.memoryUsedBytes < needs.memoryBytes ? ['Insufficient measured free memory.'] : []),
-      ...needs.tools.filter(t => tools[t] !== true).map(t => `Required tool not reported: ${t}.`),
+      ...needs.tools.map(t => requiredToolReason(t, tools[t], object(observed.toolProbeErrors)[t])).filter((reason): reason is string => reason !== null),
       ...(needs.devices.length ? ['Required devices have not been reported.'] : [])]
     return [...members.map(m => {
       const allowance = quota(String(object(m.configuration).engine))

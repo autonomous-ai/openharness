@@ -32,6 +32,7 @@ const quota = z.object({ engine: z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), kn
 }).strict()
 export const machineObservationSchema = z.object({ generation: z.string().max(160), resources: resource,
   tools: z.record(z.string().max(80), z.boolean()).refine(v => Object.keys(v).length <= 20),
+  toolProbeErrors: z.record(z.string().max(80), z.string().max(200)).refine(v => Object.keys(v).length <= 20).optional(),
   quotas: z.array(quota).max(32), runningHarnessIds: z.array(z.string().max(160)).max(1000),
   stoppedHarnessIds: z.array(z.string().max(160)).max(1000),
   stoppedReservations: z.array(z.object({ harnessId: z.string().min(1).max(160), generation: z.string().min(1).max(160) }).strict()).max(1000).optional(),
