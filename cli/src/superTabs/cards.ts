@@ -5,7 +5,8 @@
  * only when its `revision` moved. The service hands the result to the core whole (`onCards`); the core owns the wire.
  *
  * Status of a project's Lead, most pressing first: `ask` (an assignment of the project needs a person, `needs_human`),
- * `stuck` (`blocked`), `work` (the Lead runs here and is in a turn, or an assignment works or is in review), else `done`.
+ * `stuck` (`blocked`), `work` (an agent of the project, the Lead or a worker, runs here and is in a turn, as the app marks each
+ * agent working by its own live turn; or an assignment works or is in review, all there is for agents on other machines), else `done`.
  * A paused Swarm keeps its card and every Lead reads `done`.
  */
 import { randomUUID } from 'node:crypto'
@@ -49,6 +50,10 @@ export function leadsOf(state: Json, machineId: string, live: (harnessId: string
   // An old tab has no `projects`: its one project is the tab itself, `lead`, led by the conversation `lead`.
   const projects = Array.isArray(state.projects) ? list(state.projects) : [{ id: 'lead', name: state.name, leadConversationId: 'lead' }]
   const paused = state.paused === true
+  // An agent's project as the app's roster reads it: its own, else the first group that has it or that it leads.
+  const projectOf = (a: Json) => typeof a.projectId === 'string' ? a.projectId
+    : conversations.find(c => (Array.isArray(c.agentIds) && c.agentIds.includes(a.id)) || c.leadId === a.id)?.projectId ?? 'lead'
+  const inTurnHere = (a: Json) => a.machineId === machineId && typeof a.harnessId === 'string' && a.harnessId !== '' && live(a.harnessId)?.inTurn === true
   const leads: SwarmLead[] = []
   for (const [order, project] of projects.entries()) {
     const lead = conversations.find(c => c.id === project.leadConversationId)
@@ -64,6 +69,7 @@ export function leadsOf(state: Json, machineId: string, live: (harnessId: string
       if (waits.has('needs_human')) state = 'ask'
       else if (waits.has('blocked')) state = 'stuck'
       else if (here?.inTurn) { state = 'work'; since = here.since }
+      else if (agents.some(a => a !== agent && projectOf(a) === (project.id ?? 'lead') && inTurnHere(a))) state = 'work'
       else if (waits.has('working') || waits.has('review')) state = 'work'
     }
     const ownerId = agent.machineOwnerId
