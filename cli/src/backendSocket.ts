@@ -159,7 +159,7 @@ export class BackendSocket {
      *  contract for it — so cli.ts never sees one it cannot hand over. Never logged. */
     prompt: string | null
     /** Session-scoped built-in instructions for a newly launched Swarm agent. */
-    swarmRole?: 'lead' | 'dev'
+    swarmRole?: import('./lib/swarmSkills.js').SwarmRole
     /** The name the pane opens under, instead of the next `agent-N`; null to number it. */
     name: string | null
     /** The engine's named agent the pane opens AS (`NAMED_AGENT_ARGS` in engineLaunch.ts; opencode
@@ -745,9 +745,11 @@ export class BackendSocket {
   }
 
   /** The window's focused agent on this local connection — its terminal gets the short output window. */
-  setLocalTerminalFocus(connId: string, agentId: string | null): void {
+  setLocalTerminalFocus(connId: string, agentId: string | null, visibleAgents?: readonly string[]): void {
     if (!this.localClients.has(connId)) return
     this.terminalStreams?.setFocusedAgent(connId, agentId)
+    // Absent (an older desktop) stays null: that window keeps counting as looking.
+    if (visibleAgents) this.terminalStreams?.setVisibleAgents(connId, visibleAgents)
   }
 
   /** Route an authenticated local terminal frame without applying cloud E2EE. */

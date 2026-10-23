@@ -22,6 +22,10 @@ interface Entry {
 export const WORK_EVIDENCE_MS = 30_000
 export const WORK_HEARTBEAT_LEASE_MS = WORK_EVIDENCE_MS
 const PROGRESS = new Set(['turn_started', 'text_delta', 'thinking_delta', 'thinking_title', 'tool_start', 'tool_end', 'subagent_finished'])
+/** Whether a live event of [type] says the engine is working: a turn starting, or one making progress. */
+export function isProgressEvent(type: string): boolean {
+  return PROGRESS.has(type)
+}
 
 export class TurnActivity {
   private readonly entries = new Map<string, Entry>()

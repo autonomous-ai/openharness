@@ -5,7 +5,7 @@
 //! record of `ptyhost:p1:%1` matched a new, unrelated pane (Task 15 review): its tile and its
 //! input could reach another agent's pane before the reconciler had counted it missing twice.
 //!
-//! The counter lives in `<home>/run/pty-host-<protocol>.panes`, as the decimal ceiling of the ids
+//! The counter lives in `<home>/run/pty-host-<instance>.panes`, as the decimal ceiling of the ids
 //! reserved so far. Ids are reserved in blocks of `BLOCK`: the new ceiling is written (temporary
 //! file, fsync, rename, owner-only) before any id of its block is handed out, so a crash at any
 //! point leaves a ceiling at or above every id already used. A new boot starts after it. A
@@ -14,13 +14,12 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::protocol::PROTOCOL;
 
 /// How many ids one write of the counter file reserves.
 pub const BLOCK: u64 = 1000;
 
 pub fn file_path(run_dir: &Path) -> PathBuf {
-    run_dir.join(format!("pty-host-{PROTOCOL}.panes"))
+    crate::instance::run_file(run_dir, &crate::instance::current(), "panes")
 }
 
 /// The next pane number, and the reservation that covers it.

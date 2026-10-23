@@ -230,7 +230,7 @@ process names stay `node` (`processName.ts` already does that).
 ### Self-update and rollback
 
 1. The updater downloads the CLI into `cli\<version>\`, verifies it, and canaries it
-   (`node cli.js version` in a temp folder).
+   (`node cli.js version --json` in a temp folder, which also says the host protocol it needs).
 2. It writes `cli\current` and refreshes the stable `cli\notify.mjs` (temp file and rename, retried if
    a running hook holds it), then says `harnessd:staged`.
 3. The handoff is the Mac's: the core exits 75, the master starts the new core from the new folder and
@@ -239,10 +239,13 @@ process names stay `node` (`processName.ts` already does that).
    folders are removed once no live process runs from them, retried later when removal fails.
 5. A Node runtime update installs a new `runtime\node-…` folder and pointer; the next master and core
    use it; the old folder is retired when nothing runs it.
-6. The terminal host payload (`runtime\pty\<version>`, `current-pty`) is not part of self-update: only
-   `install.ps1` writes it. Until the host is updated with the CLI (PTY host rollover, parked), a CLI release
-   must not raise `PTY_PROTOCOL`, and fixes to `harness-pty.exe`, `harness-launch.exe` or `harness-serial.exe`
-   reach a machine only when `install.ps1` runs again.
+6. The terminal host payload (`runtime\pty\<version>`, `current-pty`) now updates with the CLI (sub-project G,
+   [the PTY host rollover](2026-10-20-pty-host-rollover-design.md) §5). The updater installs a promoted payload
+   beside the CLI's check, under the same lock and handover, and the master's probation judges both;
+   `harness update` installs one too. Fixes to `harness-pty.exe`, `harness-launch.exe` or `harness-serial.exe`
+   no longer wait for `install.ps1` to run again. A CLI release may raise `PTY_PROTOCOL`: the updater stages
+   a build whose `version --json` names a protocol above the installed host's only together with a promoted
+   payload of exactly that protocol, the host first, in one handover and one probation.
 
 The Mac's rules stay: a dev build is never replaced, updates only move forward, rejected versions are
 remembered. Agents survive because the pty host is independent of the daemon (A).

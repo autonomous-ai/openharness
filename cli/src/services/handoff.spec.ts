@@ -4,11 +4,29 @@ import type { HandoffDeps } from '../lib/agentHandoff.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { HANDOFF_REQUESTS, startHandoff } from './handoff.js'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const request = { agentId: 'agent', changeId: '0123456789abcdef0123456789abcdef', targetEngine: 'codex' }
 const owner = { owner: true, local: true }
 
 describe('the change-agent handoff service', () => {
+  it('records a completed switch only for the owner with current native facts', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'handoff-complete-'))
+    try {
+      const old = { agentId: 'old', cwd: '/repo', resumeOnly: true }, target = { agentId: 'new', cwd: '/repo', engine: 'claude' }
+      const core = fakeCore({ dataDir, conversations: { resolve: vi.fn(async id => (id === 'old' ? old : target) as never) } })
+      const handler = startHandoff(core).agent_handoff_complete!
+      const payload = { agentId: 'old', replacementId: 'new', changeId: '0123456789abcdef', targetEngine: 'claude' }
+      expect(await handler(payload, { local: false, owner: false })).toEqual({ error: 'OWNER_REQUIRED' })
+      expect(await handler(payload, owner)).toEqual({ ok: true })
+      expect(await handler(payload, owner)).toEqual({ ok: true })
+      expect(await handler({ ...payload, replacementId: 'old' }, owner)).toMatchObject({ error: 'HANDOFF_UNAVAILABLE' })
+      const closed = new AbortController(); closed.abort()
+      expect(await handler(payload, owner, closed.signal)).toMatchObject({ error: 'HANDOFF_UNAVAILABLE' })
+    } finally { rmSync(dataDir, { recursive: true, force: true }) }
+  })
   it('uses the real provider by default and preserves its unknown-agent answer', async () => {
     const handlers = startHandoff(fakeCore())
     expect(Object.keys(handlers)).toEqual([...HANDOFF_REQUESTS])

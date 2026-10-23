@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
+import type { SwarmRole } from '../../lib/swarmSkills.js'
 import { createLaunchAuthority } from './launchAuthority.js'
 import { createSwarmSkillAdoption } from './swarmSkills.js'
 
@@ -8,7 +9,7 @@ const row = (over: Partial<RegisteredSession> = {}) => ({ agentId: 'old-session'
 
 function setup(saved = row(), live: RegisteredSession | null = saved) {
   let current = true
-  const role = vi.fn(async (): Promise<'lead' | 'dev' | null | undefined> => 'lead')
+  const role = vi.fn(async (): Promise<SwarmRole | null | undefined> => 'lead')
   const save = (id: string, skill: NonNullable<RegisteredSession['swarmSkill']>) => {
     if (!live || live.agentId !== id) return false
     live.swarmSkill = skill; return true
@@ -20,7 +21,7 @@ function setup(saved = row(), live: RegisteredSession | null = saved) {
 
 describe('old Swarm role adoption', () => {
   it.each(['claude', 'codex'] as const)('adopts each role for old %s sessions and persists it before launch', async engine => {
-    for (const role of ['lead', 'dev'] as const) {
+    for (const role of ['lead', 'dev', 'review'] as const) {
       const t = setup(row({ engine })); t.role.mockResolvedValue(role)
       expect(await t.adopt(t.saved, t.current)).toMatchObject({ swarmSkill: { role, key: 'old-session' } })
       expect(t.saved.swarmSkill).toEqual({ role, key: 'old-session' })

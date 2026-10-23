@@ -1,4 +1,4 @@
-//! The named pipe `\\.\pipe\harness-pty-<hash>-<random>-p<protocol>`, open to its owner only.
+//! The named pipe `\\.\pipe\harness-pty-<hash>-<random>-<instance>`, open to its owner only.
 //!
 //! - The name hashes the user's SID and the canonical home, so each user and each home has its
 //!   own pipe, and a long home path cannot make the name too long.
@@ -59,7 +59,6 @@ use windows_sys::Win32::System::Threading::{
 };
 
 use super::{Bound, Connection, Listener};
-use crate::protocol::PROTOCOL;
 
 /// Each direction's pipe buffer.
 const BUFFER: u32 = 64 * 1024;
@@ -80,7 +79,7 @@ fn wide_path(path: &Path) -> Vec<u16> {
         .collect()
 }
 
-/// `\\.\pipe\harness-pty-<16 hex of SHA-256(sid + "\0" + home)>-<suffix>-p<protocol>`.
+/// `\\.\pipe\harness-pty-<16 hex of SHA-256(sid + "\0" + home)>-<suffix>-<instance>`.
 pub fn pipe_name(user_sid: &str, canonical_home: &str, suffix: &str) -> String {
     let mut hash = Sha256::new();
     hash.update(user_sid.as_bytes());
@@ -88,7 +87,10 @@ pub fn pipe_name(user_sid: &str, canonical_home: &str, suffix: &str) -> String {
     hash.update(canonical_home.as_bytes());
     let digest = hash.finalize();
     let hex: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
-    format!(r"\\.\pipe\harness-pty-{hex}-{suffix}-p{PROTOCOL}")
+    format!(
+        r"\\.\pipe\harness-pty-{hex}-{suffix}-{}",
+        crate::instance::current()
+    )
 }
 
 /// 16 random hex digits (64 bits from the system's random source, through a v4 UUID).
@@ -801,7 +803,7 @@ mod tests {
         let hash = a
             .strip_prefix(r"\\.\pipe\harness-pty-")
             .unwrap()
-            .strip_suffix(&format!("-0123456789abcdef-p{PROTOCOL}"))
+            .strip_suffix(&format!("-0123456789abcdef-{}", crate::instance::current()))
             .unwrap();
         assert_eq!(hash.len(), 16);
         let s = "0123456789abcdef";
@@ -814,7 +816,10 @@ mod tests {
         let want: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(
             pipe_name("S-1-5-21-1", r"C:\h", s),
-            format!(r"\\.\pipe\harness-pty-{want}-{s}-p{PROTOCOL}")
+            format!(
+                r"\\.\pipe\harness-pty-{want}-{s}-{}",
+                crate::instance::current()
+            )
         );
         // A new name each call, for the same home, however it is written: only its hash part is
         // the home's.
@@ -825,8 +830,9 @@ mod tests {
             pipe_name_for(Path::new(&other)).unwrap(),
         );
         assert_ne!(first, second);
-        let home_part =
-            |name: &str| name[..name.len() - format!("-{s}-p{PROTOCOL}").len()].to_owned();
+        let home_part = |name: &str| {
+            name[..name.len() - format!("-{s}-{}", crate::instance::current()).len()].to_owned()
+        };
         assert_eq!(home_part(&first), home_part(&second));
         let suffix = random_suffix();
         assert_eq!(suffix.len(), 16);

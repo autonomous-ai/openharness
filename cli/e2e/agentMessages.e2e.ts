@@ -45,7 +45,7 @@ const reads = (relay: FakeBackend) => relay.seen.filter((line) => line.split('?'
 /** `harness settings`, as the person turns a switch: through the daemon to the account, and kept here at once, which
  *  tells Agent Messages. */
 const settings = (d: IsolatedDaemon, body: Record<string, boolean>) => fetch(`http://127.0.0.1:${d.port}/api/agent-settings`, {
-  method: 'PATCH', headers: { 'x-adapter-local': '1', 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  method: 'PATCH', headers: d.localHeaders({ 'x-adapter-local': '1', 'content-type': 'application/json' }), body: JSON.stringify(body) })
 /** The account's agent experiments as this daemon keeps them (lib/agentSettings.ts), once it has read them. */
 const kept = (d: IsolatedDaemon, want: (settings: Record<string, unknown>) => boolean = () => true) => until('the account\'s experiments to be kept', () => {
   try {
@@ -160,7 +160,7 @@ describe('Agent Messages, end to end', () => {
     await until('Agent Messages to connect from the edge host', () => connected(d) || null, 30_000, 200)
     // An older window's chat icon still reaches the backend, and decides nothing here.
     const tab = await fetch(`http://127.0.0.1:${d.port}/api/agent-messages/tabs/app`, {
-      method: 'PATCH', headers: { 'x-adapter-local': '1', 'content-type': 'application/json' }, body: JSON.stringify({ enabled: true }) })
+      method: 'PATCH', headers: d.localHeaders({ 'x-adapter-local': '1', 'content-type': 'application/json' }), body: JSON.stringify({ enabled: true }) })
     expect(tab.status).toBe(200)
     expect((await settings(d, { pullRequestLine: true })).status).toBe(200)
     expect(relay.experiments).toEqual({ agent_pull_request_line: true })

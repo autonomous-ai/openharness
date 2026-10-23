@@ -44,6 +44,7 @@ class SuperTabAvatar extends StatelessWidget {
       ),
       child: Text(
         initial,
+        textScaler: TextScaler.noScaling,
         style: DesktopChrome.control(
           medium: true,
           color: color,
@@ -55,27 +56,11 @@ class SuperTabAvatar extends StatelessWidget {
 
 String superTabPersonName(String email) => email.split('@').first;
 
-/// A Bonjour hostname is useful in details, but noisy in a member list.
-/// Only normalize generated hostnames; names chosen by a person stay intact.
+/// A computer as it calls itself: a Bonjour hostname without its `.local` suffix ("MacBookPro2021"), never mapped
+/// to a model name, so two machines of one model stay told apart. A name a person chose stays as it is.
 String superTabMachineName(String name) {
-  if (!name.toLowerCase().endsWith('.local')) return name;
-  final host = name.substring(0, name.length - '.local'.length);
-  for (final model in const [
-    ('mac-?book-?pro', 'MacBook Pro'),
-    ('mac-?book-?air', 'MacBook Air'),
-    ('mac-?book', 'MacBook'),
-    ('mac-?mini', 'Mac mini'),
-    ('mac-?studio', 'Mac Studio'),
-    ('mac-?pro', 'Mac Pro'),
-    ('i-?mac-?pro', 'iMac Pro'),
-    ('i-?mac', 'iMac'),
-  ]) {
-    if (RegExp(
-      '(?:^|-)${model.$1}(?:-?[0-9]+(?:,[0-9]+)?)?\$',
-      caseSensitive: false,
-    ).hasMatch(host)) {
-      return model.$2;
-    }
-  }
-  return host;
+  const suffix = '.local';
+  return name.length > suffix.length && name.toLowerCase().endsWith(suffix)
+      ? name.substring(0, name.length - suffix.length)
+      : name;
 }

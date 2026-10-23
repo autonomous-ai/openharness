@@ -170,6 +170,17 @@ describe('process-owned hook server', () => {
     })
   })
 
+  it.each(['p2-0.4.21-dev.win1', 'p2-h0123456789ab'])('resolves a hook from a versioned pty host\'s pane by its instance: %s', async (instance) => {
+    const resolveHookAgent = vi.fn(async () => null)
+    const { base, headers } = await start({ resolveHookAgent })
+    const runtimeHints = [{ backend: 'ptyhost', instance, paneId: '%7' }]
+    const response = await fetch(`${base}/api/hook/session-start`, {
+      method: 'POST', headers, body: JSON.stringify({ engine: 'claude', sessionId: 'session-1', runtimeHints, callerPid: 4242 }),
+    })
+    expect(response.status).toBe(200)
+    expect(resolveHookAgent).toHaveBeenCalledWith(expect.objectContaining({ runtimeHints }))
+  })
+
   it('answers a hook whose agent has yet to record its process before the wait, and only logs what the wait finds', async () => {
     // The engine's hook command gives up on a reply after 500ms and then writes the registry itself, as for
     // a daemon that is down (hook/notify.mjs, fallbackRegister): held for the wait, its own row took the
@@ -269,6 +280,8 @@ describe('process-owned hook server', () => {
     [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'tmux', paneId: '%1', extra: true }] }],
     [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 'p1', paneId: '%1', extra: true }] }],
     [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 'host', paneId: '%1' }] }],
+    [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 'p2-0.4.21 x', paneId: '%1' }] }],
+    [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 'p2-', paneId: '%1' }] }],
     [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 'p1', paneId: '1' }] }],
     [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 'p1' }] }],
     [{ engine: 'claude', sessionId: 'session-1', runtimeHints: [{ backend: 'ptyhost', instance: 1, paneId: '%1' }] }],

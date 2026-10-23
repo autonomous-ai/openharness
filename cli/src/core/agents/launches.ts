@@ -22,6 +22,7 @@ import { ENGINES, isTerminalEngine, type AgentEngine } from '../../engines/types
 import { AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationOutcome, type AgentCreationReceipts, type AgentCreationStatus, type CreationAuthority } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
 import { engineLabel } from '../../lib/agentNames.js'
+import { isSwarmRole } from '../../lib/swarmSkills.js'
 import {
   AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves,
   permissionModeFlags, supportsFirstPrompt, supportsNamedAgent, unsupportedLaunchModelFlag,
@@ -393,8 +394,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     }
     const swarmRole = payload.swarmRole
     if (swarmRole !== undefined && swarmRole !== null &&
-      ((swarmRole !== 'lead' && swarmRole !== 'dev') || (engine !== 'claude' && engine !== 'codex'))) {
-      reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm role is lead or dev, for Claude Code or Codex.' }); return
+      (!isSwarmRole(swarmRole) || (engine !== 'claude' && engine !== 'codex'))) {
+      reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm role is lead, dev or review, for Claude Code or Codex.' }); return
     }
     // Blank is "number it", the same as absent — a client that sends an empty field is not
     // asking for an agent with no name.
@@ -464,7 +465,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       codexHome,
       dsh,
       prompt,
-      ...(swarmRole === 'lead' || swarmRole === 'dev' ? { swarmRole } : {}),
+      ...(isSwarmRole(swarmRole) ? { swarmRole } : {}),
       name,
       agent,
       resumeSessionId,

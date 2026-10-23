@@ -1,4 +1,4 @@
-//! `<home>/run/pty-host-<protocol>.lock`: one host per home.
+//! `<home>/run/pty-host-<instance>.lock`: one host per home.
 //!
 //! A host takes the lock before it binds its endpoint or reserves pane ids, and holds it for its
 //! life; a host that cannot take it exits as one that found another host serving. Without it, two
@@ -13,10 +13,9 @@ use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::protocol::PROTOCOL;
 
 pub fn file_path(run_dir: &Path) -> PathBuf {
-    run_dir.join(format!("pty-host-{PROTOCOL}.lock"))
+    crate::instance::run_file(run_dir, &crate::instance::current(), "lock")
 }
 
 /// The lock, held while this lives.

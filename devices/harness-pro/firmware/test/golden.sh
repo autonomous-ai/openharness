@@ -30,7 +30,7 @@ python3 "$fw/scripts/gen_fonts.py" ${font_args[@]+"${font_args[@]}"} --out "$out
 cc -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -O1 -g -DHT_FACE_PX=720 -I"$disp" -I"$fw/main" \
    -o "$out/pod_render" "$here/pod_render.c" "$fw"/main/pod/*.c "$fw"/main/pod/home/*.c "$disp/pro_canvas.c" "$disp/terminal.c" "$out/pro_fonts.c"
 
-screens=(tabs tabs:bell tabs:mock tabs:0+2 tabs:2+2 tabs:long tabs:9 tabs:linkdown tabs:1 tabs:3 tabs:5 tabs:seven tabs:single tabs:notices tabs:working tabs:none
+screens=(tabs tabs:bell tabs:mock tabs:0+2 tabs:2+2 tabs:long tabs:9 tabs:linkdown tabs:1 tabs:3 tabs:5 tabs:seven tabs:single tabs:notices tabs:working tabs:none home:swarm:p1 home:swarm:p2 home:swarm:stuck home:swarm:done home:swarm:many home:swarm:remote lead:loaded lead:ask lead:loading lead:none lead:remote
     agent:fw agent:cli agent:be agent:desk agent:kilo agent:fw:long agent:cli:long agent:be:offline agent:fw:banner agent:cli:banner tabs:banner agent:fw:toast@0 agent:fw:toast@200 agent:fw:toast@2500 agent:fw:toast@4900
     agent:fw:toast:decision@2500 agent:fw:toast:stuck@9000
     recap:desk:toast@200 recap:desk:toast@2500 recap:docs:toast@4900

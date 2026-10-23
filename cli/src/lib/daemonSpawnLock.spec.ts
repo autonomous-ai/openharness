@@ -111,6 +111,40 @@ describe('daemon spawn lock', () => {
     }
   })
 
+  it('takes the lock synchronously for a caller that cannot wait on its event loop, re-entrant, and null while a live holder keeps it', async () => {
+    const lock = await loadLock()
+    const release = lock.tryAcquireSpawnLockSync('update', 100)
+    expect(release).not.toBeNull()
+    expect(lock.readSpawnLockOwner()).toMatchObject({ pid: process.pid, purpose: 'update' })
+    // Inside another section of this process: a nested handle.
+    const nested = lock.tryAcquireSpawnLockSync('update', 100)
+    nested!()
+    expect(existsSync(lockDir())).toBe(true)
+    release!()
+    expect(existsSync(lockDir())).toBe(false)
+
+    const holder = sleeper()
+    await waitFor(() => !!holder.pid)
+    mkdirSync(lockDir(), { mode: 0o700 })
+    writeFileSync(ownerFile(), JSON.stringify({ pid: holder.pid, startMarker: '', token: 't', purpose: 'start', since: Date.now() }), { mode: 0o600 })
+    try {
+      const started = Date.now()
+      expect(lock.tryAcquireSpawnLockSync('update', 300)).toBeNull()
+      expect(Date.now() - started).toBeGreaterThanOrEqual(250)
+      expect(readFileSync(ownerFile(), 'utf8')).toContain('"token":"t"')
+    } finally {
+      holder.kill('SIGKILL')
+    }
+    // A dead holder's lock is reclaimed, as the asynchronous wait reclaims it.
+    await waitFor(() => holder.exitCode !== null || holder.signalCode !== null)
+    const reclaimed = lock.tryAcquireSpawnLockSync('update', 1000)
+    expect(lock.readSpawnLockOwner()?.pid).toBe(process.pid)
+    reclaimed!()
+    // Something that is not a lock: null at once.
+    writeFileSync(lockDir(), 'a file')
+    expect(lock.tryAcquireSpawnLockSync('update', 1000)).toBeNull()
+  })
+
   it('reclaims a lock whose owner is dead', async () => {
     const lock = await loadLock()
     const dead = spawnSync(process.execPath, ['-e', 'process.exit(0)'])

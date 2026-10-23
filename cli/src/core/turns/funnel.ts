@@ -24,7 +24,7 @@ import type { QuestionWatcher } from '../../lib/questionController.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
 import { promptLine } from '../../lib/activitySummary.js'
-import type { TurnActivity } from '../../lib/turnActivity.js'
+import { isProgressEvent, type TurnActivity } from '../../lib/turnActivity.js'
 
 type Events = ReturnType<CursorNormalizer['ingest']>
 type EmitOptions = { resumed?: boolean; replay?: boolean }
@@ -62,6 +62,9 @@ export interface FunnelDeps {
   nativeTurns?: { ingest(agentId: string, events: readonly Events[number][], replay: boolean): void }
   /** How a consumer outside the core is called ([outsideConsumers]). */
   outside?: OutsideConsumers
+  /** The agent's engine is working now: a live turn start or its progress, never a re-read (the mover's quiet clock,
+   *  lib/hostMove/quiet.ts). */
+  working?: (agentId: string) => void
 }
 
 type OutsideConsumers = (consumer: string, call: () => void) => void
@@ -102,7 +105,7 @@ export function outsideConsumers(options: {
 /** The funnel itself, over what it feeds. */
 export function funnelFor({
   bySession, tokenUsage, agentIdFor, turnActivity, isSubagentSession, clients, search, turnStartedAt, prompts, input,
-  deviceInput, submission, device, startHeartbeat, questionWatcher, mirror, nativeTurns, outside = outsideConsumers(),
+  deviceInput, submission, device, startHeartbeat, questionWatcher, mirror, nativeTurns, outside = outsideConsumers(), working,
 }: FunnelDeps) {
   return (sessionId: string, events: Events, opts?: EmitOptions): void => {
     if (!events.length || !bySession(sessionId)?.active) return
@@ -112,6 +115,7 @@ export function funnelFor({
       const agentId = agentIdFor(sessionId)
       const replay = !!(opts?.resumed || opts?.replay)
       turnActivity.observe(sessionId, event.type, replay)
+      if (!replay && isProgressEvent(event.type)) working?.(agentId)
       const frame = correlateAgentEvent({ ...event, payload: { ...event.payload, activity: turnActivity.snapshot(sessionId) } }, sessionId, agentId)
       // A `turn_started` that is not a turn starting NOW — a turn picked back up at attach, or a prompt
       // re-read from a transcript that was already on disk — says so in the clear, beside `agentId`

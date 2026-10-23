@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,23 +8,55 @@ import '../core/models.dart';
 import '../core/test_run.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/appearance_prefs_store.dart';
+import '../shared/theme/status_line_style.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../shared/widgets/app_menu.dart';
 import '../state/app_state.dart';
+import '../state/harness_activity.dart';
+import '../terminal/terminal_theme.dart';
+import '../terminal/terminal_theme_store.dart';
 import '../usage/models_menu_controller.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
+import '../widgets/harness_activity_mark.dart';
 import '../widgets/workspace_subscription_usage.dart';
+import 'agent_details.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
-import 'machine_status.dart';
 import 'machine_details.dart';
+import 'machine_status.dart';
 import 'model.dart';
 import 'section_heading.dart';
 
 export 'machine_status.dart';
+
+/// The backend's upper bound. A machine's own total RAM may set a lower one.
+const _agentSlotsMin = 1;
+const _agentSlotsMax = 16;
+
+/// What one more agent needs to start, the CLI's own figure
+/// (`START_REQUIREMENTS.memoryBytes`, `cli/src/superTabs/capacity.ts`).
+const _agentMemoryBytes = 2 * 1024 * 1024 * 1024;
+
+int _clampAgentSlots(num value) =>
+    value.toInt().clamp(_agentSlotsMin, _agentSlotsMax);
+
+/// The machine's total-RAM limit and its half-sized starting suggestion.
+/// The suggestion is capped separately, so 64 GiB suggests 16 of 16 slots.
+int? _maxAgentSlots(MachineResources? resources) {
+  final total = resources?.memoryTotalBytes;
+  if (total == null) return null;
+  return _clampAgentSlots((total / _agentMemoryBytes).floor());
+}
+
+int? _suggestedAgentSlots(MachineResources? resources) {
+  final total = resources?.memoryTotalBytes;
+  if (total == null) return null;
+  return _clampAgentSlots((total / (2 * _agentMemoryBytes)).floor());
+}
 
 class SuperTabMachines extends StatefulWidget {
   const SuperTabMachines({
@@ -38,20 +69,19 @@ class SuperTabMachines extends StatefulWidget {
     this.readLocal,
     this.collapsed = false,
     this.onToggleCollapsed,
-    this.onYourDevices,
+    this.onOpenAgent,
   });
   final SuperTabController controller;
   final AppNotifier? app;
   final bool embedded;
 
   /// Whether the body below the heading is hidden. The heading itself, and
-  /// its Your devices and Add machine actions, remain visible so the group
-  /// stays reachable.
+  /// its Add machine action, remain visible so the group stays reachable.
   final bool collapsed;
   final VoidCallback? onToggleCollapsed;
 
-  /// The heading's Your devices action, just before Add machine; absent when null.
-  final VoidCallback? onYourDevices;
+  /// Opens an existing agent using the workspace's membership and account guards.
+  final ValueChanged<SuperTabAgent>? onOpenAgent;
   final ValueChanged<SuperTabConversation> onAddAgent;
 
   /// The clock the readings' ages are counted against.
@@ -74,6 +104,88 @@ class _MachineChoice {
 
   final String id, label;
   final ({IconData icon, String message})? unavailable;
+}
+
+/// "Agent slots" — how many agents this machine offers the Swarm — with the one
+/// thing the number is not: a promise. Each start still checks free memory.
+///
+/// A stepper rather than a number field, so no keystroke can leave the dialog
+/// holding a count the backend would refuse; both buttons go dead at the bounds
+/// rather than staying lit and doing nothing.
+class _AgentSlots extends StatelessWidget {
+  const _AgentSlots({
+    required this.value,
+    required this.maximum,
+    required this.busy,
+    required this.onChanged,
+  });
+
+  final int value;
+  final int maximum;
+  final bool busy;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final value = this.value;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(child: Text('Agent slots', style: DesktopChrome.text())),
+            Container(
+              width: 96,
+              constraints: const BoxConstraints(
+                minHeight: grid.AppControl.height,
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              decoration: BoxDecoration(
+                // The same recessed well the picker's control sits in.
+                color: grid.AppSurface.recess,
+                borderRadius: BorderRadius.circular(grid.AppControl.radius),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  AppIconButton(
+                    key: const ValueKey('agent-slots-fewer'),
+                    icon: AppIcons.minus,
+                    size: 16,
+                    tooltip: 'Fewer slots',
+                    onPressed: busy || value <= _agentSlotsMin
+                        ? null
+                        : () =>
+                              onChanged(value > maximum ? maximum : value - 1),
+                  ),
+                  Text(
+                    value.toString(),
+                    key: const ValueKey('agent-slots-value'),
+                    style: DesktopChrome.control(),
+                  ),
+                  AppIconButton(
+                    key: const ValueKey('agent-slots-more'),
+                    icon: AppIcons.plus,
+                    size: 16,
+                    tooltip: 'More slots',
+                    onPressed: busy || value >= maximum
+                        ? null
+                        : () => onChanged(value + 1),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Each new agent still needs free memory when it starts.',
+          style: DesktopChrome.metadata(),
+        ),
+      ],
+    );
+  }
 }
 
 /// Unlike an ordinary choice field, this inventory also explains computers
@@ -237,9 +349,10 @@ class _MachinePickerState extends State<_MachinePicker> {
 
 class _SuperTabMachinesState extends State<SuperTabMachines> {
   final _samples = <String, (MachineResources, DateTime)>{};
+  String? _selectedMachineId;
 
-  /// Machines whose sample in [_samples] was taken before the app last came back to the front: it is shown, dimmed,
-  /// as "refreshing…" until the read that follows replaces it.
+  /// Samples from before foreground return stay cached, but their readings are
+  /// hidden behind the refreshing state until the next read answers.
   final _awaiting = <String>{};
 
   /// How many reads of the Swarm's state had been answered when the app came back to the front; the machines
@@ -295,8 +408,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     _revision++;
     _timer?.cancel();
     if (widget.app?.foreground.value == true) {
-      // Back in front: what was read before stays on the screen, dimmed, as refreshing — it used to vanish and
-      // come back a second later. The Swarm is read again at once, and so are this computer's readings.
+      // Keep machine identity stable while refreshing, without presenting the
+      // previous foreground session's readings as current capacity.
       _awaiting.addAll(_samples.keys);
       _swarmReadsAtReturn = c.stateReads;
       unawaited(c.refresh());
@@ -403,6 +516,80 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     String? error;
     var busy = false;
     String? setupId;
+    // The agent slots the owner is choosing. A machine already in this Swarm
+    // starts at the number it has; a new one starts at what its total memory
+    // suggests, worked out here rather than by preparation (below).
+    int? storedSlots(String? id) {
+      final row = id == null
+          ? null
+          : c.snapshot?.machines.where((m) => m['machineId'] == id).firstOrNull;
+      final current = row?['maxAgents'];
+      return current is num ? current.toInt() : null;
+    }
+
+    // Readings this dialog has taken itself, keyed by machine. The panel's own
+    // samples stand in for a machine it already reads.
+    final suggestions = <String, int>{};
+    final maximums = <String, int>{};
+
+    /// What this machine's own memory says, once a reading has answered. Null
+    /// while one is still coming, or when it failed.
+    int? memorySuggestion(String? id) => id == null
+        ? null
+        : suggestions[id] ?? _suggestedAgentSlots(_samples[id]?.$1);
+
+    int maximumFor(String? id) => id == null
+        ? _agentSlotsMin
+        : maximums[id] ??
+              _maxAgentSlots(_samples[id]?.$1) ??
+              _clampAgentSlots(storedSlots(id) ?? _agentSlotsMin);
+
+    int slotsFor(String? id) {
+      final stored = storedSlots(id);
+      if (stored != null) return _clampAgentSlots(stored);
+      return memorySuggestion(id) ?? _agentSlotsMin;
+    }
+
+    var slots = slotsFor(machineId);
+    var slotsEdited = false;
+    // The open dialog and its own setState, once it is built: a reading
+    // answers while the form is open, and the field has to repaint when it
+    // does. Both are read only while the dialog is still there — one that
+    // arrives after it closed has nothing to repaint.
+    BuildContext? dialog;
+    void Function(void Function())? repaint;
+    final reading = <String>{};
+
+    /// Start the field where this machine's own memory says, without asking
+    /// preparation: preparation sets the project up, probes engines and takes
+    /// one of its 32 setup slots, and opening a form the owner may cancel is
+    /// no reason to do that. A configured machine still needs its RAM reading
+    /// for the stepper limit, but its chosen number is never replaced.
+    Future<void> suggestSlots() async {
+      final id = machineId;
+      if (id == null || !canSelect(app.stateOf(id)) || !reading.add(id)) {
+        return;
+      }
+      MachineResources? resources;
+      try {
+        resources = await (widget.readLocal ?? app.readMachineResources)(id);
+      } catch (_) {
+        return;
+      }
+      final suggested = _suggestedAgentSlots(resources);
+      // The picker may have moved on to another machine, whose own reading is
+      // the one that belongs in the field now — or the dialog may have closed.
+      if (suggested == null || machineId != id || dialog?.mounted != true) {
+        return;
+      }
+      suggestions[id] = suggested;
+      maximums[id] = _maxAgentSlots(resources)!;
+      // Repaint the limit, but never replace a number the owner chose.
+      repaint?.call(() {
+        if (!slotsEdited && storedSlots(id) == null) slots = suggested;
+      });
+    }
+
     await showAppDialog<void>(
       context: context,
       builder: (context) => SuperTabDialogScope(
@@ -411,6 +598,12 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           listenable: app,
           builder: (context, _) => StatefulBuilder(
             builder: (context, update) {
+              dialog = context;
+              repaint = update;
+              // Not awaited: the form is usable immediately, and the number
+              // only has to be there by the time the owner reads it. Each
+              // machine is read once, so a rebuild does not read again.
+              unawaited(suggestSlots());
               Future<void> save() async {
                 if (busy ||
                     !c.canWrite ||
@@ -457,19 +650,49 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   }
                   if (!context.mounted || !c.canWrite) return;
                   final machine = app.stateOf(selected);
-                  final result =
-                      c.pendingCommand?['type'] == 'machine.contribute'
-                      ? await c.retry()
-                      : await c.command({
-                          'type': 'machine.contribute',
-                          'machineId': selected,
-                          'name': machine!.machine.displayName,
-                          'cwd': prepared['cwd'],
-                          if (prepared['scope'] != null)
-                            'scope': prepared['scope'],
-                          'engines': prepared['engines'],
-                          'maxAgents': prepared['maxAgents'],
-                        });
+                  // A machine with no number of its own whose reading failed,
+                  // or had not answered yet, is showing the floor rather than
+                  // a suggestion. The owner never chose that, so send what
+                  // preparation offered instead — the number the field would
+                  // have shown had the reading arrived.
+                  final offered = prepared['maxAgents'];
+                  final offeredMaximum = prepared['maxAvailableAgents'];
+                  if (offeredMaximum is num) {
+                    maximums[selected] = _clampAgentSlots(offeredMaximum);
+                  }
+                  if (!slotsEdited &&
+                      storedSlots(selected) == null &&
+                      memorySuggestion(selected) == null &&
+                      offered is num) {
+                    slots = _clampAgentSlots(offered);
+                  }
+                  // An earlier lost reply leaves an uncertain attempt holding
+                  // its own receipt, and only one action may be in flight:
+                  // check that one first, then send the number the owner is
+                  // looking at — the stored attempt cannot know it was changed.
+                  if (c.pendingCommand?['type'] == 'machine.contribute') {
+                    // If that attempt cannot be confirmed, its own error is
+                    // the one worth showing: it says why it is still unclear.
+                    if (await c.retry() == null) {
+                      if (!context.mounted) return;
+                      throw SuperTabFailure(
+                        c.operationErrorCode ?? 'CONTRIBUTION_FAILED',
+                        c.operationError ??
+                            'The earlier attempt is still not confirmed. '
+                                'Try again to check it.',
+                      );
+                    }
+                    if (!context.mounted || !c.canWrite) return;
+                  }
+                  final result = await c.command({
+                    'type': 'machine.contribute',
+                    'machineId': selected,
+                    'name': machine!.machine.displayName,
+                    'cwd': prepared['cwd'],
+                    if (prepared['scope'] != null) 'scope': prepared['scope'],
+                    'engines': prepared['engines'],
+                    'maxAgents': slots,
+                  });
                   if (result == null) {
                     throw SuperTabFailure(
                       'CONTRIBUTION_FAILED',
@@ -499,71 +722,95 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 title: Text(isConfigure ? 'Configure machine' : 'Add machine'),
                 content: SizedBox(
                   width: 360,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (own.isNotEmpty)
-                        _MachinePicker(
-                          value: machineId,
-                          busy: busy,
-                          choices: [
-                            for (final m in own)
-                              _MachineChoice(
-                                id: m.machine.machineId,
-                                label: labelFor(m),
-                                unavailable: unavailable(m),
-                              ),
-                          ],
-                          onChanged: (id) {
-                            if (busy || !canSelect(app.stateOf(id))) return;
-                            update(() {
-                              machineId = id;
-                              setupId = null;
-                              error = null;
-                            });
-                          },
-                        )
-                      else
-                        Text(
-                          'No computer is connected to this account yet.',
-                          style: DesktopChrome.text(),
-                        ),
-                      const SizedBox(height: 16),
-                      if (own.isNotEmpty)
-                        Text(
-                          'Let the product manager run agents here using this machine’s signed-in accounts.',
-                          style: DesktopChrome.text(),
-                        ),
-                      if (own.isNotEmpty) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          'Agents the Swarm starts on this machine run without asking for permission.',
-                          style: DesktopChrome.text(),
-                        ),
-                      ] else ...[
-                        Text(
-                          'To add another computer, install Harness on it and sign in with '
-                          'this account, or approve a device with no screen from Machines.',
-                          style: DesktopChrome.text(),
-                        ),
-                        const SizedBox(height: 4),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton(
-                            onPressed: () {
-                              Navigator.pop(context);
-                              app.requestMachines();
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (own.isNotEmpty)
+                          _MachinePicker(
+                            value: machineId,
+                            busy: busy,
+                            choices: [
+                              for (final m in own)
+                                _MachineChoice(
+                                  id: m.machine.machineId,
+                                  label: labelFor(m),
+                                  unavailable: unavailable(m),
+                                ),
+                            ],
+                            onChanged: (id) {
+                              if (busy || !canSelect(app.stateOf(id))) return;
+                              update(() {
+                                machineId = id;
+                                setupId = null;
+                                error = null;
+                                // Another machine has its own number: the one it
+                                // already offers, or its own suggestion.
+                                slots = slotsFor(id);
+                                slotsEdited = false;
+                              });
+                              unawaited(suggestSlots());
                             },
-                            child: const Text('Open Machines'),
+                          )
+                        else
+                          Text(
+                            'No computer is connected to this account yet.',
+                            style: DesktopChrome.text(),
                           ),
-                        ),
+                        const SizedBox(height: 16),
+                        if (own.isNotEmpty) ...[
+                          Text(
+                            'Let the product manager run agents here using this machine’s signed-in accounts.',
+                            style: DesktopChrome.text(),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Agents the Swarm starts on this machine run without asking for permission.',
+                            style: DesktopChrome.text(),
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'Harness clones each project into ~/harnesses/swarms and lets '
+                            "the Swarm's agents work in it.",
+                            style: DesktopChrome.text(),
+                          ),
+                        ] else ...[
+                          Text(
+                            'To add another computer, install Harness on it and sign in with '
+                            'this account, or approve a device with no screen from Machines.',
+                            style: DesktopChrome.text(),
+                          ),
+                          const SizedBox(height: 4),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton(
+                              onPressed: () {
+                                Navigator.pop(context);
+                                app.requestMachines();
+                              },
+                              child: const Text('Open Machines'),
+                            ),
+                          ),
+                        ],
+                        if (own.isNotEmpty) ...[
+                          const SizedBox(height: 16),
+                          _AgentSlots(
+                            value: slots,
+                            maximum: maximumFor(machineId),
+                            busy: busy,
+                            onChanged: (next) => update(() {
+                              slots = next;
+                              slotsEdited = true;
+                            }),
+                          ),
+                        ],
+                        if (error != null) ...[
+                          const SizedBox(height: 12),
+                          Text(error!, style: DesktopChrome.metadata()),
+                        ],
                       ],
-                      if (error != null) ...[
-                        const SizedBox(height: 12),
-                        Text(error!, style: DesktopChrome.metadata()),
-                      ],
-                    ],
+                    ),
                   ),
                 ),
                 actions: [
@@ -634,8 +881,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         : '${minutes ~/ 1440}d';
   }
 
-  /// Below this share of an allowance left, a machine's row shows its one warning.
-  static const _lowAllowance = 10;
+  /// The engines whose allowance a machine row shows, in this order.
+  static const _chipEngines = ['claude', 'codex'];
 
   /// Everything a machine's row, its tooltip and its details say of it, read once per build.
   _MachineView _view(String id) {
@@ -681,7 +928,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           : _swarmReadsAtReturn != null && c.stateReads <= _swarmReadsAtReturn!,
       connected: direct ? connected : null,
     );
-    // Every state but live or late reads old numbers: kept in the tooltip, never blanked, but not taken as now.
+    // Cached samples remain available to the refresh logic, but stale numbers are not presented as current.
     final dim =
         status == SuperTabMachineStatus.offline ||
         status == SuperTabMachineStatus.unknown ||
@@ -750,17 +997,40 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           );
     String available(double used) =>
         resourcePercent((100 - used).clamp(0, 100));
-    // An old reading's allowance is not a warning about now.
-    final low = dim
-        ? const <String>[]
+    // Each engine with a known, unexpired allowance, Claude first. Offline or out of reach, an allowance is an
+    // old reading and no chip shows it as now.
+    final allowances = dim
+        ? const <_Allowance>[]
         : [
-            for (final row in accounts)
-              if (row['remainingPercent'] case final num left
-                  when left < _lowAllowance)
+            for (final engine in _chipEngines)
+              if (accounts
+                      .where(
+                        (row) =>
+                            row['engine'] == engine &&
+                            row['remainingPercent'] is num,
+                      )
+                      .firstOrNull
+                  case final row?)
                 for (final account in WorkspaceSubscriptionUsage.fromRows([
                   row,
-                ]).accounts)
-                  '${account.name}: ${account.figure} left',
+                ]).accounts.take(1))
+                  _Allowance(
+                    engine: engine,
+                    name: account.name,
+                    figure: account.figure,
+                    left: (row['remainingPercent'] as num).toDouble().clamp(
+                      0,
+                      100,
+                    ),
+                    detail: [
+                      account.name,
+                      ...switch (row['details']) {
+                        final List lines when lines.isNotEmpty =>
+                          lines.whereType<String>(),
+                        _ => ['${account.figure} remaining'],
+                      },
+                    ].join('\n'),
+                  ),
           ];
     return _MachineView(
       id: id,
@@ -768,14 +1038,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       owner: person,
       contributor: contributor,
       shared: shared,
-      agents: [
-        for (final agent in agents)
-          (
-            id: agent.id,
-            name: c.snapshot!.agentName(agent.id),
-            role: c.snapshot!.isLead(agent.id) ? 'Product Manager' : 'Engineer',
-          ),
-      ],
+      agents: agents,
       status: status,
       readingAt: readingAt,
       arrived: age != null && age < const Duration(milliseconds: 1200),
@@ -785,21 +1048,170 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       resources: value,
       accounts: accounts,
       engines: allowed,
-      low: low,
-      // What the line leaves out, for hover, focus and a screen reader: how old the reading is, the numbers
-      // behind it and an allowance running out. Old numbers are kept here, never blanked.
+      allowances: allowances,
+      // What the line leaves out, for hover, focus and a screen reader: whose machine it is and its hardware,
+      // after its state when that is not online. Never an age. Only current readings are included.
       tip: [
-        superTabMachineTip(status, age),
+        ?superTabMachineTip(status),
+        if (person != null) 'Owned by ${superTabPersonName(person.email)}',
         if (paused) 'New work paused',
-        if (value?.cpuPercent case final cpu?) 'CPU ${available(cpu)} free',
-        if (value?.busiestGpu?.utilizationPercent case final gpu?)
-          'GPU ${available(gpu)} free',
-        if (memoryFree != null)
+        if (!dim && value?.cpuPercent != null)
+          'CPU ${available(value!.cpuPercent!)} free',
+        if (!dim && value?.busiestGpu?.utilizationPercent != null)
+          'GPU ${available(value!.busiestGpu!.utilizationPercent!)} free',
+        if (!dim && memoryFree != null)
           'RAM ${resourceBytes(memoryFree.toDouble())} free',
-        if (diskFree != null) 'SSD ${resourceBytes(diskFree)} free',
-        ...low,
+        if (!dim && diskFree != null) 'SSD ${resourceBytes(diskFree)} free',
       ].join(' · '),
     );
+  }
+
+  /// Every agent of the Swarm on [machineId]: removing the machine takes them all with it.
+  List<SuperTabAgent> _agentsOn(String machineId) => [
+    for (final a in c.snapshot?.agents ?? const <SuperTabAgent>[])
+      if (a.machineId == machineId) a,
+  ];
+
+  /// The Swarm owner removes any machine; anyone else, one that is all theirs: their contribution and
+  /// only their agents (backend `machine.remove`).
+  bool _canRemove(String machineId) {
+    if (!c.canWrite) return false;
+    if (c.isOwner) return true;
+    final pool = c.snapshot?.machines
+        .where((m) => m['machineId'] == machineId)
+        .firstOrNull;
+    final contributor = pool?['contributorId'] as String?;
+    return (contributor == null || contributor == c.accountId) &&
+        _agentsOn(machineId).every((a) => a.contributorId == c.accountId);
+  }
+
+  /// Takes a machine out of this Swarm, and the Swarm's agents on it with it, after a yes. Their sessions keep
+  /// running on the machine, as Remove from Swarm leaves one agent's (roster.dart).
+  Future<void> _remove(_MachineView v) async {
+    final id = v.id, name = superTabMachineName(v.name);
+    var busy = false, attempted = false;
+    await showAppDialog<void>(
+      context: context,
+      builder: (context) => SuperTabDialogScope(
+        controller: c,
+        child: StatefulBuilder(
+          builder: (context, update) => ListenableBuilder(
+            listenable: c,
+            builder: (context, _) {
+              final pending = c.pendingCommand;
+              final checking =
+                  pending?['type'] == 'machine.remove' &&
+                  pending?['machineId'] == id;
+              final available = _ids.contains(id) || checking || busy;
+              final permitted = _canRemove(id) || checking;
+              final enabled =
+                  permitted &&
+                  !busy &&
+                  !c.saving &&
+                  (checking || !c.hasPendingAction);
+              final names = [
+                for (final a in _agentsOn(id)) c.snapshot!.agentName(a.id),
+              ];
+              final shown = names.length > 4
+                  ? '${names.take(3).join(', ')} and ${names.length - 3} more'
+                  : names.length > 1
+                  ? '${names.take(names.length - 1).join(', ')} and ${names.last}'
+                  : names.firstOrNull;
+              return PopScope(
+                canPop: !busy,
+                child: AlertDialog(
+                  title: Text(
+                    available
+                        ? 'Remove $name from this Swarm?'
+                        : 'Machine unavailable',
+                  ),
+                  content: SizedBox(
+                    width: 400,
+                    child: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            !available || !permitted
+                                ? 'This action is no longer available.'
+                                : shown == null
+                                ? 'The Swarm stops using it for new work.'
+                                : '$shown ${names.length == 1 ? 'leaves' : 'leave'} the Swarm with it and keep running on $name. '
+                                      'Any open task needs to be assigned again or closed.',
+                          ),
+                          if (attempted && c.operationError != null) ...[
+                            const SizedBox(height: 12),
+                            Text(c.operationError!),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                  actions: [
+                    TextButton(
+                      autofocus: true,
+                      onPressed: busy ? null : () => Navigator.pop(context),
+                      child: Text(
+                        checking || !available || !permitted
+                            ? 'Close'
+                            : 'Cancel',
+                      ),
+                    ),
+                    if (available && permitted)
+                      FilledButton(
+                        key: const ValueKey('super-machine-remove-confirm'),
+                        style: grid.dangerButtonStyle(),
+                        onPressed: !enabled
+                            ? null
+                            : () async {
+                                update(() {
+                                  busy = true;
+                                  attempted = true;
+                                });
+                                final result = checking
+                                    ? await c.retry()
+                                    : await c.command({
+                                        'type': 'machine.remove',
+                                        'machineId': id,
+                                      });
+                                if (!context.mounted) return;
+                                if (result != null) {
+                                  Navigator.pop(context);
+                                } else {
+                                  update(() => busy = false);
+                                }
+                              },
+                        child: Text(checking ? 'Retry' : 'Remove from Swarm'),
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// A machine row's right-click: its details, and Remove from Swarm for whoever may.
+  Future<void> _menu(_MachineView view, Offset at) async {
+    final choice = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx, at.dy),
+      items: [
+        const PopupMenuItem(value: 'details', child: Text('Details')),
+        if (_canRemove(view.id))
+          const PopupMenuItem(
+            key: ValueKey('super-machine-menu-remove'),
+            value: 'remove',
+            child: Text('Remove from Swarm'),
+          ),
+      ],
+    );
+    if (!mounted) return;
+    if (choice == 'details') await _openDetails(view);
+    if (choice == 'remove' && _canRemove(view.id)) await _remove(view);
   }
 
   Future<void> _details(_MachineView v) {
@@ -813,12 +1225,31 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         controller: c,
         requireWrite: false,
         child: AlertDialog(
-          title: Text(superTabMachineName(name)),
+          title: Row(
+            children: [
+              Expanded(child: Text(superTabMachineName(name))),
+              // Out of the way of the everyday actions below: a quiet mark that turns red when pointed at.
+              if (_canRemove(id))
+                AppIconButton(
+                  key: const ValueKey('super-machine-remove'),
+                  icon: AppIcons.trash2,
+                  tooltip: 'Remove from Swarm',
+                  color: DesktopChrome.muted,
+                  destructive: true,
+                  onPressed: () {
+                    Navigator.pop(context);
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) unawaited(_remove(v));
+                    });
+                  },
+                ),
+            ],
+          ),
           content: SuperTabMachineDetails(
             name: name,
             owner: person?.email,
             status: details,
-            // The row's tooltip keeps old numbers, aged; the details do not present them as capacity to use.
+            // Details follow the same freshness rule as the row and its disclosure.
             resources: dim ? null : value,
             cwd: shared?['cwd'] as String?,
             engines: allowed,
@@ -868,122 +1299,243 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     );
   }
 
-  /// Where the trailing marks of a row center: on the heading's +, as the project rows' dots do.
-  double get _anchor =>
-      SuperTabSectionHeading.actionWidth / 2 + (widget.embedded ? 0 : 12);
+  Future<void> _openDetails(_MachineView view) async {
+    setState(() => _selectedMachineId = view.id);
+    try {
+      await _details(view);
+    } finally {
+      if (mounted) setState(() => _selectedMachineId = null);
+    }
+  }
 
-  /// One machine on one line: its state's dot in the icon column, its name on the text column, its agents at
-  /// the end. Everything else is in its tooltip and its details.
-  Widget _machine(_MachineView v, {String? owner, int level = 1}) {
-    final tipKey = _tips.putIfAbsent(v.id, GlobalKey<TooltipState>.new);
-    final name = superTabMachineName(v.name);
-    final row = Padding(
-      padding: const EdgeInsets.only(bottom: 2),
-      child: Material(
-        color: Colors.transparent,
+  Widget _machine(_MachineView view) {
+    final tipKey = _tips.putIfAbsent(view.id, GlobalKey<TooltipState>.new);
+    final expanded = c.isMachineExpanded(view.id);
+    final selected = _selectedMachineId == view.id;
+    final row = Material(
+      color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
+      borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        key: ValueKey('super-machine-${view.id}'),
+        onTap: () => unawaited(_openDetails(view)),
+        onSecondaryTapUp: (event) =>
+            unawaited(_menu(view, event.globalPosition)),
+        hoverColor: grid.AppSurface.hoverFill,
+        focusColor: grid.AppSurface.hoverFill,
         borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          key: ValueKey('super-machine-${v.id}'),
-          onTap: () => unawaited(_details(v)),
-          hoverColor: grid.AppSurface.hoverFill,
-          focusColor: grid.AppSurface.hoverFill,
-          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-          // Hover shows the row's tooltip; so does keyboard focus, which a Tooltip does not do by itself.
-          onFocusChange: (focused) {
-            if (focused &&
-                FocusManager.instance.highlightMode ==
-                    FocusHighlightMode.traditional) {
-              tipKey.currentState?.ensureTooltipVisible();
-            } else if (!focused) {
-              Tooltip.dismissAllToolTips();
-            }
+        onFocusChange: (focused) {
+          if (focused &&
+              FocusManager.instance.highlightMode ==
+                  FocusHighlightMode.traditional) {
+            tipKey.currentState?.ensureTooltipVisible();
+          } else if (!focused) {
+            Tooltip.dismissAllToolTips();
+          }
+        },
+        child: _MachineLine(
+          view: view,
+          expanded: expanded,
+          onToggle: () {
+            c.toggleMachineExpanded(view.id);
+            _changed();
           },
-          child: _MachineLine(
-            view: v,
-            owner: owner,
-            anchor: _anchor,
-            level: level,
-          ),
         ),
       ),
     );
-    // One label for the row, so that colour is never the only signal: the machine, its state in words, and
-    // what hovering it says.
-    return Semantics(
-      // Rows move as states change; each keeps its own element, tooltip and all.
-      key: ValueKey('super-machine-entry-${v.id}'),
-      container: true,
-      label:
-          '$name${owner == null ? '' : ' · $owner'}, '
-          '${superTabMachineStateLabel(v.status)}, ${v.tip}',
-      child: Tooltip(
-        key: tipKey,
-        message: v.tip,
-        excludeFromSemantics: true,
-        child: row,
-      ),
+    return Column(
+      key: ValueKey('super-machine-entry-${view.id}'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 2),
+          child: Semantics(
+            container: true,
+            selected: selected,
+            label: [
+              superTabMachineName(view.name),
+              superTabMachineStateLabel(view.status),
+              if (view.tip.isNotEmpty) view.tip,
+            ].join(', '),
+            child: Tooltip(
+              key: tipKey,
+              message: view.tip.isEmpty
+                  ? superTabMachineStateLabel(view.status)
+                  : view.tip,
+              excludeFromSemantics: true,
+              child: row,
+            ),
+          ),
+        ),
+        if (expanded) ...[
+          for (final agent in view.agents) _agent(view, agent),
+          _MachineReadings(view: view),
+          if (view.agents.isEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(36, 4, 32, 8),
+              child: Text(
+                view.status == SuperTabMachineStatus.offline
+                    ? 'Offline'
+                    : view.status == SuperTabMachineStatus.unknown
+                    ? "Can't reach Harness"
+                    : view.status == SuperTabMachineStatus.refreshing
+                    ? 'Refreshing…'
+                    : 'No agents yet',
+                style: DesktopChrome.metadata(),
+              ),
+            ),
+        ],
+      ],
     );
   }
 
-  /// "Offline · N": the disclosure the offline machines sit under, closed until opened.
-  Widget _offlineToggle(int count) {
-    final open = c.offlineMachinesOpen;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 2),
+  HarnessActivity _activity(_MachineView view, SuperTabAgent agent) {
+    final app = widget.app;
+    final native = app == null
+        ? null
+        : harnessActivity(app, agent.machineId, agent.harnessId);
+    if (native == HarnessActivity.offline ||
+        native == HarnessActivity.paused ||
+        native == HarnessActivity.starting ||
+        native == HarnessActivity.failed ||
+        native == HarnessActivity.needsInput) {
+      return native!;
+    }
+    // A direct session is better evidence than a missing capacity sample.
+    // When no native lifecycle is available, stale remote work cannot imply
+    // that an offline machine is still waiting for input.
+    if (native == null || native == HarnessActivity.unknown) {
+      if (view.status == SuperTabMachineStatus.offline) {
+        return HarnessActivity.offline;
+      }
+      if (view.status == SuperTabMachineStatus.unknown) {
+        return HarnessActivity.unknown;
+      }
+    }
+    if (c.snapshot?.conversations.any(
+          (group) =>
+              !group.archived &&
+              group.assignment?['agentId'] == agent.id &&
+              superTabWorkWaits(group.assignment?['status']),
+        ) ==
+        true) {
+      return HarnessActivity.needsInput;
+    }
+    return native ?? HarnessActivity.unknown;
+  }
+
+  Widget _agent(_MachineView view, SuperTabAgent agent) {
+    final name = c.snapshot!.agentName(agent.id);
+    final activity = _activity(view, agent);
+    final lead = c.snapshot!.isLead(agent.id);
+    final role = lead
+        ? 'Product Manager'
+        : agent.isReviewer
+        ? 'Reviewer'
+        : 'Engineer';
+    final badge = lead
+        ? 'PM'
+        : agent.isReviewer
+        ? 'Rev'
+        : 'Dev';
+    final info = SuperTabAgentInfo(c, widget.app, agent, activity: activity);
+    final theme = terminalThemeFor(
+      grid.AppTheme.surfacePalette,
+      terminalThemeStore.value,
+    );
+    return Tooltip(
+      message: info.tooltip,
       child: Material(
         color: Colors.transparent,
         borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
-          key: const ValueKey('super-machines-offline'),
-          // The sidebar rebuilds on the controller; a list shown on its own does not.
-          onTap: () {
-            c.toggleOfflineMachines();
-            _changed();
-          },
+          key: ValueKey('super-machine-agent-${view.id}-${agent.id}'),
+          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
           hoverColor: grid.AppSurface.hoverFill,
           focusColor: grid.AppSurface.hoverFill,
-          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-          child: Semantics(
-            button: true,
-            expanded: open,
-            label: 'Offline machines, $count',
-            excludeSemantics: true,
-            child: Row(
-              children: [
-                SizedBox(width: SuperTabSectionHeading.indentFor(1)),
-                SizedBox(
-                  width: _MachineLine.iconColumn,
-                  child: Icon(
-                    open ? AppIcons.chevronDown : AppIcons.chevronRight,
-                    size: AppIcons.inlineSize,
-                    color: DesktopChrome.muted,
-                  ),
-                ),
-                Expanded(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(minHeight: 36),
-                    child: Padding(
-                      padding: EdgeInsets.fromLTRB(
-                        0,
-                        8,
-                        _anchor - _MachineLine.dotHalf,
-                        8,
+          onTap: widget.onOpenAgent == null
+              ? null
+              : () {
+                  final current = c.snapshot?.agent(agent.id);
+                  if (current != null) widget.onOpenAgent!(current);
+                },
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 36),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(
+                children: [
+                  const SizedBox(width: 4),
+                  SizedBox(
+                    width: 32,
+                    child: Center(
+                      child: SuperTabAvatar(
+                        identity: 'agent:${agent.id}',
+                        name: name,
+                        size: 22,
                       ),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          'Offline · $count',
+                    ),
+                  ),
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final label = Text(
+                          name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: DesktopChrome.metadata(),
+                          style: DesktopChrome.control(),
+                        );
+                        final roleBadge = Semantics(
+                          label: role,
+                          excludeSemantics: true,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 5,
+                              vertical: 1,
+                            ),
+                            decoration: BoxDecoration(
+                              color: grid.AppSurface.hoverFill,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(badge, style: DesktopChrome.metadata()),
+                          ),
+                        );
+                        if (constraints.maxWidth <
+                            MediaQuery.textScalerOf(context).scale(100)) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [label, roleBadge],
+                          );
+                        }
+                        return Row(
+                          children: [
+                            Flexible(child: label),
+                            const SizedBox(width: 6),
+                            roleBadge,
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                  SizedBox(
+                    width: 32,
+                    child: Center(
+                      child: ActivityMark(
+                        activity: activity,
+                        color: activityColor(
+                          activity,
+                          theme,
+                          color: appearancePrefsStore.value.prompt.color,
                         ),
                       ),
                     ),
                   ),
-                ),
-              ],
+                  const SizedBox(width: 32),
+                ],
+              ),
             ),
           ),
         ),
@@ -991,20 +1543,12 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     );
   }
 
-  /// Online machines first, then "Offline · N" with the offline ones under it; each part by name.
+  /// Keep offline machines in the same list and on the same columns.
   List<Widget> _machines() {
     final views = [for (final id in _ids) _view(id)];
-    // A name two machines share is told apart by whose each is.
-    String key(_MachineView v) => superTabMachineName(v.name).toLowerCase();
-    final named = <String, int>{};
-    for (final v in views) {
-      named.update(key(v), (n) => n + 1, ifAbsent: () => 1);
-    }
-    String? owner(_MachineView v) => named[key(v)]! > 1 && v.owner != null
-        ? superTabPersonName(v.owner!.email)
-        : null;
-    // A machine being refreshed keeps its place; one whose state cannot be read follows the ones that report.
-    int rank(_MachineView v) => switch (v.status) {
+    String key(_MachineView view) =>
+        superTabMachineName(view.name).toLowerCase();
+    int rank(_MachineView view) => switch (view.status) {
       SuperTabMachineStatus.unknown => 1,
       SuperTabMachineStatus.offline => 2,
       _ => 0,
@@ -1016,19 +1560,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           ? key(a).compareTo(key(b))
           : a.id.compareTo(b.id),
     );
-    final offline = views
-        .where((v) => v.status == SuperTabMachineStatus.offline)
-        .toList();
-    return [
-      for (final v in views)
-        if (v.status != SuperTabMachineStatus.offline)
-          _machine(v, owner: owner(v)),
-      if (offline.isNotEmpty) ...[
-        _offlineToggle(offline.length),
-        if (c.offlineMachinesOpen)
-          for (final v in offline) _machine(v, owner: owner(v), level: 2),
-      ],
-    ];
+    return [for (final view in views) _machine(view)];
   }
 
   @override
@@ -1049,15 +1581,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                     : widget.now().difference(failingSince),
               )
             : null,
-        actions: [
-          if (widget.onYourDevices != null)
-            AppIconButton(
-              key: const ValueKey('super-your-devices'),
-              icon: AppIcons.monitorSmartphone,
-              tooltip: 'Your devices',
-              onPressed: widget.onYourDevices,
-            ),
-        ],
         endInset: widget.embedded ? 0 : 12,
         collapsed: widget.onToggleCollapsed == null ? null : widget.collapsed,
         onToggleCollapsed: widget.onToggleCollapsed,
@@ -1065,14 +1588,18 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       if (!widget.collapsed) ...[
         if (_ids.isEmpty)
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            padding: const EdgeInsets.fromLTRB(36, 8, 16, 16),
             child: Text(
               'Add a machine for the product manager to use.',
               style: DesktopChrome.metadata(),
             ),
           )
         else
-          ..._machines(),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: _machines(),
+          ),
       ],
     ];
     return widget.embedded
@@ -1103,7 +1630,7 @@ class _MachineView {
     required this.resources,
     required this.accounts,
     required this.engines,
-    required this.low,
+    required this.allowances,
     required this.tip,
   });
 
@@ -1111,7 +1638,7 @@ class _MachineView {
   final SuperTabPerson? owner;
   final String? contributor;
   final Map<String, dynamic>? shared;
-  final List<({String id, String name, String role})> agents;
+  final List<SuperTabAgent> agents;
   final SuperTabMachineStatus status;
 
   /// When the reading shown was taken, and whether that is just now (the dot pings once).
@@ -1124,281 +1651,257 @@ class _MachineView {
   final List<Map<String, Object?>> accounts;
   final List<String>? engines;
 
-  /// Each allowance under [_SuperTabMachinesState._lowAllowance], as "Claude Code: 2% left".
-  final List<String> low;
+  /// What the row's chips show, Claude first; empty while offline or out of reach.
+  final List<_Allowance> allowances;
 }
 
-/// A machine's line, at the height and on the columns of a project row: the dot centered in the icon column,
-/// the name on the text column, and at the end the allowance warning when there is one and up to three agents
-/// overlapping, then +N. The last mark centers on [anchor], the heading +'s column.
+/// One engine's allowance on a machine: its mark and remaining share on the row, its windows on hover.
+class _Allowance {
+  const _Allowance({
+    required this.engine,
+    required this.name,
+    required this.figure,
+    required this.left,
+    required this.detail,
+  });
+
+  final String engine, name, figure, detail;
+
+  /// The share left, 0–100.
+  final double left;
+
+  /// Amber below 20%, red below 10%, otherwise the row's quiet metadata ink.
+  Color get ink => statusLineInkOnSurface(
+    left < 10
+        ? grid.AppPalette.usageCritical
+        : left < 20
+        ? grid.AppPalette.usageLow
+        : DesktopChrome.muted,
+    DesktopChrome.surface,
+  );
+}
+
+/// The same leading icon/name and trailing status/disclosure columns as projects.
 class _MachineLine extends StatelessWidget {
   const _MachineLine({
     required this.view,
-    required this.owner,
-    required this.anchor,
-    required this.level,
+    required this.expanded,
+    required this.onToggle,
   });
 
   final _MachineView view;
-
-  /// Whose machine it is, when another has the same name.
-  final String? owner;
-
-  /// From the row's right edge to the center of its last mark.
-  final double anchor;
-
-  /// 1 under the Machines heading, 2 under "Offline · N".
-  final int level;
-
-  static const iconColumn = SuperTabSectionHeading.actionWidth;
-
-  /// Half the project rows' dot, so that a row with nothing at its end stops where theirs do.
-  static const dotHalf = 3.0;
-  static const _avatar = 16.0;
-  static const _ring = 1.0;
-  static const _overlap = 5.0;
-  static const _maxAvatars = 3;
-  static const _warning = 14.0;
-
-  /// Agents give way to the name, down to +N, until it fits or has this share of the line.
-  static const _nameShare = .5;
-
-  static double get _ringed => _avatar + 2 * _ring;
+  final bool expanded;
+  final VoidCallback onToggle;
 
   @override
   Widget build(BuildContext context) {
-    final v = view;
     final muted =
-        v.status == SuperTabMachineStatus.offline ||
-        v.status == SuperTabMachineStatus.unknown;
-    final style = DesktopChrome.control(
-      color: muted ? DesktopChrome.muted : DesktopChrome.foreground,
-    );
-    final countStyle = DesktopChrome.metadata().copyWith(
-      fontFeatures: const [FontFeature.tabularFigures()],
-    );
-    double measure(String text, [TextStyle? textStyle]) {
-      final painter = TextPainter(
-        text: TextSpan(text: text, style: textStyle ?? countStyle),
-        textDirection: Directionality.of(context),
-        textScaler: MediaQuery.textScalerOf(context),
-        maxLines: 1,
-      )..layout();
-      final result = painter.width;
-      painter.dispose();
-      return result;
-    }
-
-    return Row(
-      children: [
-        SizedBox(width: SuperTabSectionHeading.indentFor(level)),
-        SizedBox(
-          width: iconColumn,
-          child: Center(
-            child: KeyedSubtree(
-              key: ValueKey('super-machine-state-${v.id}-${v.status.name}'),
-              child: SuperTabMachineDot(
-                status: v.status,
-                readingAt: v.readingAt,
-                arrived: v.arrived,
-              ),
+        view.status == SuperTabMachineStatus.offline ||
+        view.status == SuperTabMachineStatus.unknown;
+    final name = superTabMachineName(view.name);
+    final owner = view.owner;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 36),
+      child: Row(
+        children: [
+          const SizedBox(width: 4),
+          SizedBox(
+            width: 32,
+            child: Icon(
+              AppIcons.monitor,
+              size: AppIcons.inlineSize,
+              color: DesktopChrome.muted,
             ),
           ),
-        ),
-        Expanded(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 36),
+          Expanded(
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  final warning = v.low.isNotEmpty;
-                  ({double width, double end}) end(int shown) {
-                    final hidden = v.agents.length - shown;
-                    final last = hidden > 0
-                        ? measure('+$hidden')
-                        : shown > 0
-                        ? _ringed
-                        : warning
-                        ? _warning
-                        : 2 * dotHalf;
-                    final width =
-                        (warning ? _warning : 0) +
-                        (warning && v.agents.isNotEmpty ? 6 : 0) +
-                        (shown > 0
-                            ? _ringed + (_ringed - _overlap) * (shown - 1)
-                            : 0) +
-                        (hidden > 0 ? (shown > 0 ? 4 : 0) + last : 0);
-                    return (
-                      width: width == 0 ? 0 : width + 8,
-                      end: (anchor - last / 2).clamp(0.0, anchor),
-                    );
-                  }
-
-                  final name = superTabMachineName(v.name);
-                  final suffix = owner == null ? null : ' · $owner';
-                  final wanted = math.min(
-                    measure(name, style) +
-                        (suffix == null ? 0 : measure(suffix, style)),
-                    constraints.maxWidth * _nameShare,
+                  final style = DesktopChrome.control(
+                    color: muted
+                        ? DesktopChrome.muted
+                        : DesktopChrome.foreground,
                   );
-                  var shown = v.agents.length.clamp(0, _maxAvatars);
-                  while (shown > 0) {
-                    final e = end(shown);
-                    if (constraints.maxWidth - e.width - e.end >= wanted) {
-                      break;
-                    }
-                    shown--;
-                  }
-                  final hidden = v.agents.length - shown;
-                  final room =
-                      constraints.maxWidth - end(shown).width - end(shown).end;
-                  final roles = v.agents
-                      .map((a) => '${a.name} — ${a.role}')
-                      .join('\n');
-                  return Row(
-                    children: [
-                      Expanded(
-                        child: _name(context, name, suffix, style, room),
-                      ),
-                      if (warning) ...[
-                        const SizedBox(width: 8),
-                        Tooltip(
-                          message: v.low.join('\n'),
-                          child: Semantics(
-                            label: v.low.join(', '),
-                            child: Icon(
-                              AppIcons.triangleAlert,
-                              key: ValueKey('super-machine-attention-${v.id}'),
-                              size: _warning,
-                              color: grid.AppPalette.warn,
-                            ),
-                          ),
-                        ),
-                      ],
-                      if (v.agents.isNotEmpty) ...[
-                        SizedBox(width: warning ? 6 : 8),
-                        Tooltip(
-                          message: roles,
-                          child: Semantics(
-                            label: v.agents
-                                .map((a) => '${a.name}, ${a.role}')
-                                .join('; '),
-                            excludeSemantics: true,
-                            child: Row(
-                              key: ValueKey('super-machine-agents-${v.id}'),
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                if (shown > 0) _stack(context, shown),
-                                if (hidden > 0) ...[
-                                  if (shown > 0) const SizedBox(width: 4),
-                                  Text('+$hidden', style: countStyle),
-                                ],
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                      SizedBox(width: end(shown).end),
-                    ],
+                  final text = Text(
+                    name,
+                    key: ValueKey('super-machine-name-${view.id}'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: style,
                   );
+                  final painter = TextPainter(
+                    text: TextSpan(text: name, style: style),
+                    textDirection: Directionality.of(context),
+                    textScaler: MediaQuery.textScalerOf(context),
+                    maxLines: 1,
+                  )..layout(maxWidth: constraints.maxWidth);
+                  final truncated = painter.didExceedMaxLines;
+                  painter.dispose();
+                  return truncated
+                      ? Tooltip(
+                          message: [
+                            name,
+                            if (view.tip.isNotEmpty) view.tip,
+                          ].join('\n'),
+                          excludeFromSemantics: true,
+                          child: text,
+                        )
+                      : text;
                 },
               ),
             ),
           ),
-        ),
-      ],
-    );
-  }
-
-  /// The name, then a shared name's owner in muted ink. The name gives way first, since the owner is what
-  /// tells it apart, and a name cut short shows itself whole on hover.
-  Widget _name(
-    BuildContext context,
-    String name,
-    String? suffix,
-    TextStyle style,
-    double room,
-  ) {
-    double measure(String text) {
-      final painter = TextPainter(
-        text: TextSpan(text: text, style: style),
-        textDirection: Directionality.of(context),
-        textScaler: MediaQuery.textScalerOf(context),
-        maxLines: 1,
-      )..layout();
-      final result = painter.width;
-      painter.dispose();
-      return result;
-    }
-
-    // Up to half the room for the owner, so a long address cannot crowd the name out.
-    final ownerWidth = suffix == null
-        ? 0.0
-        : math.min(measure(suffix), room / 2);
-    final fits = room - ownerWidth;
-    var shown = name;
-    if (measure(name) > fits) {
-      final chars = name.characters.toList();
-      var keep = 0;
-      for (var lo = 1, hi = chars.length - 1; lo <= hi;) {
-        final mid = (lo + hi) ~/ 2;
-        if (measure('${chars.take(mid).join().trimRight()}…') <= fits) {
-          keep = mid;
-          lo = mid + 1;
-        } else {
-          hi = mid - 1;
-        }
-      }
-      shown = '${chars.take(keep).join().trimRight()}…';
-    }
-    final text = Text.rich(
-      TextSpan(
-        children: [
-          TextSpan(text: shown),
-          if (suffix != null)
-            TextSpan(
-              text: suffix,
-              style: TextStyle(color: DesktopChrome.muted),
-            ),
-        ],
-      ),
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: style,
-    );
-    return shown == name ? text : Tooltip(message: name, child: text);
-  }
-
-  /// The first [shown] agents, overlapping, each on a ring of the surface so the one behind reads as behind.
-  Widget _stack(BuildContext context, int shown) {
-    final step = _ringed - _overlap;
-    return MediaQuery.withClampedTextScaling(
-      maxScaleFactor: 1,
-      child: SizedBox(
-        width: _ringed + step * (shown - 1),
-        height: _ringed,
-        child: Stack(
-          children: [
-            // The first agent is drawn last, on top.
-            for (var i = shown - 1; i >= 0; i--)
-              Positioned(
-                left: step * i,
-                child: Container(
-                  padding: const EdgeInsets.all(_ring),
-                  decoration: BoxDecoration(
-                    color: DesktopChrome.surface,
-                    shape: BoxShape.circle,
-                  ),
-                  child: SuperTabAvatar(
-                    identity: 'agent:${view.agents[i].id}',
-                    name: view.agents[i].name,
-                    size: _avatar,
-                  ),
+          if (owner != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 6),
+              child: Tooltip(
+                message: 'Owned by ${superTabPersonName(owner.email)}',
+                child: SuperTabAvatar(
+                  identity: 'person:${owner.id}',
+                  name: superTabPersonName(owner.email),
+                  size: 20,
                 ),
               ),
-          ],
-        ),
+            ),
+          SizedBox(
+            width: 32,
+            child: Center(
+              child: KeyedSubtree(
+                key: ValueKey(
+                  'super-machine-state-${view.id}-${view.status.name}',
+                ),
+                child: SuperTabMachineDot(
+                  status: view.status,
+                  readingAt: view.readingAt,
+                  arrived: view.arrived,
+                ),
+              ),
+            ),
+          ),
+          Semantics(
+            expanded: expanded,
+            button: true,
+            child: IconButton(
+              key: ValueKey('super-machine-toggle-${view.id}'),
+              icon: Icon(
+                expanded ? AppIcons.chevronDown : AppIcons.chevronRight,
+                size: AppIcons.inlineSize,
+              ),
+              color: DesktopChrome.muted,
+              style: const ButtonStyle(
+                minimumSize: WidgetStatePropertyAll(Size.square(32)),
+                padding: WidgetStatePropertyAll(EdgeInsets.all(6)),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                visualDensity: VisualDensity.standard,
+                overlayColor: WidgetStatePropertyAll(Colors.transparent),
+                backgroundColor: WidgetStatePropertyAll(Colors.transparent),
+              ),
+              tooltip: '${expanded ? 'Collapse' : 'Expand'} $name',
+              onPressed: onToggle,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The expanded reading block wraps complete values, without filling missing slots.
+class _MachineReadings extends StatelessWidget {
+  const _MachineReadings({required this.view});
+  final _MachineView view;
+
+  @override
+  Widget build(BuildContext context) {
+    if (view.dim) return const SizedBox.shrink();
+    final resources = view.resources;
+    final usage = <(String, String)>[
+      if (resources?.cpuPercent case final cpu?)
+        ('CPU ${resourcePercent(cpu)}', 'CPU utilization'),
+      if (resources?.busiestGpu?.utilizationPercent case final gpu?)
+        ('GPU ${resourcePercent(gpu)}', 'GPU utilization'),
+    ];
+    final memoryFree =
+        resources?.memoryTotalBytes == null ||
+            resources?.memoryUsedBytes == null
+        ? null
+        : (resources!.memoryTotalBytes! - resources.memoryUsedBytes!).clamp(
+            0,
+            resources.memoryTotalBytes!,
+          );
+    final diskFree = resources?.projectDiskTotalBytes == null
+        ? resources?.diskFreeBytes
+        : resources?.projectDiskFreeBytes;
+    final capacity = <(String, String)>[
+      if (memoryFree != null)
+        ('RAM ${resourceBytes(memoryFree.toDouble())}', 'Memory available'),
+      if (diskFree != null)
+        ('SSD ${resourceBytes(diskFree)}', 'Storage available'),
+    ];
+    final style = DesktopChrome.metadata().copyWith(
+      fontFeatures: const [FontFeature.tabularFigures()],
+    );
+    Widget readings(List<(String, String)> readings) => Wrap(
+      spacing: 10,
+      runSpacing: 2,
+      children: [
+        for (final (label, meaning) in readings)
+          Tooltip(
+            message: meaning,
+            child: Text(label, style: style),
+          ),
+      ],
+    );
+    if (usage.isEmpty && capacity.isEmpty && view.allowances.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      key: ValueKey('super-machine-readings-${view.id}'),
+      padding: const EdgeInsets.fromLTRB(36, 4, 32, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (usage.isNotEmpty) readings(usage),
+          if (capacity.isNotEmpty) readings(capacity),
+          if (view.allowances.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Wrap(
+                spacing: 12,
+                runSpacing: 4,
+                children: [
+                  for (final allowance in view.allowances)
+                    Tooltip(
+                      message: allowance.detail,
+                      child: Semantics(
+                        label:
+                            '${allowance.name} ${allowance.figure} remaining',
+                        excludeSemantics: true,
+                        child: Row(
+                          key: ValueKey(
+                            'super-machine-allowance-${view.id}-${allowance.engine}',
+                          ),
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            EngineMark(engine: allowance.engine, size: 14),
+                            const SizedBox(width: 4),
+                            Text(
+                              allowance.figure,
+                              key: ValueKey(
+                                'super-machine-figure-${view.id}-${allowance.engine}',
+                              ),
+                              style: style.copyWith(color: allowance.ink),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+        ],
       ),
     );
   }

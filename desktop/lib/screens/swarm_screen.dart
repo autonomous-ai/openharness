@@ -4608,7 +4608,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
   String? _devicesAttemptedKey;
 
   Widget _devicesViewer(BuildContext context) {
-    final key = '${app.currentUser?.id}:${app.activeSwarmId}';
+    final viewerId = app.panes.where((pane) => pane.isDevices).firstOrNull?.id;
+    final key = '${app.currentUser?.id}:${app.activeSwarmId}:$viewerId';
     if (app.activeSwarm.isDevices &&
         app.devicesEnabled &&
         _devicesAttemptedKey != key) {
@@ -4617,8 +4618,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
         if (mounted &&
             app.activeSwarm.isDevices &&
             app.devicesEnabled &&
-            key == '${app.currentUser?.id}:${app.activeSwarmId}') {
-          unawaited(_devicesHarness.open());
+            key ==
+                '${app.currentUser?.id}:${app.activeSwarmId}:${app.panes.where((pane) => pane.isDevices).firstOrNull?.id}') {
+          unawaited(_devicesHarness.open(swarmId: app.activeSwarmId));
         }
       });
     }
@@ -4635,7 +4637,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
       name: 'Devices',
       opening: _devicesHarness.opening,
       error: _devicesHarness.error,
-      onRetry: () => unawaited(_devicesHarness.open()),
+      onRetry: () =>
+          unawaited(_devicesHarness.open(swarmId: app.activeSwarmId)),
     ),
   );
 
@@ -4656,7 +4659,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _closeSearch(restoreFocus: false);
     dismissTransientMenus();
     app.openDevices();
-    unawaited(_devicesHarness.open());
+    if (app.activeSwarm.isDevices) unawaited(_devicesHarness.open());
   }
 
   Widget _devicesButton(BuildContext context) => WorkspaceStoreButton(

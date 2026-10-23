@@ -1914,6 +1914,12 @@ describe('hook notify in a Harness pty host pane (Windows)', () => {
     expect(requests[0].body.tmuxPane).toBeUndefined()
   })
 
+  it.each(['p2-0.4.21-dev.win1', 'p2-h0123456789ab'])('names a versioned pty host\'s pane by HARNESS_PANE: %s', async (instance) => {
+    const { port, requests } = await collect()
+    await runHook({ port, env: { HARNESS_PANE: `${instance}:%7` }, input: sessionStart() })
+    expect(requests[0].body.runtimeHints).toEqual([{ backend: 'ptyhost', instance, paneId: '%7' }])
+  })
+
   it('keeps naming a tmux pane by TMUX_PANE, and ignores a HARNESS_PANE that is not one', async () => {
     const { port, requests } = await collect()
     await runHook({ port, tmuxPane: '%42', env: { HARNESS_PANE: 'p3:%1007' }, input: sessionStart() })
@@ -1921,6 +1927,9 @@ describe('hook notify in a Harness pty host pane (Windows)', () => {
     const bad = await collect()
     await runHook({ port: bad.port, env: { HARNESS_PANE: 'p3:1007' }, input: sessionStart() })
     expect(bad.requests).toEqual([])
+    const odd = await collect()
+    await runHook({ port: odd.port, env: { HARNESS_PANE: 'p2-0.4.21 x:%7' }, input: sessionStart() })
+    expect(odd.requests).toEqual([])
     const empty = await collect()
     await runHook({ port: empty.port, env: { HARNESS_PANE: '' }, input: sessionStart() })
     expect(empty.requests).toEqual([])

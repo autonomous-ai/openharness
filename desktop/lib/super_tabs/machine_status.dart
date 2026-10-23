@@ -56,7 +56,7 @@ SuperTabMachineStatus superTabMachineStatus({
       : SuperTabMachineStatus.live;
 }
 
-/// How long ago, as a machine's tooltip says it: "just now", "4s ago", "3 min ago", "2 h ago".
+/// How long ago: "just now", "4s ago", "3 min ago", "2 h ago".
 String superTabAgo(Duration age) {
   final seconds = age.inSeconds;
   if (seconds < 1) return 'just now';
@@ -74,21 +74,14 @@ String superTabAgoShort(Duration age) {
   return '${age.inDays}d';
 }
 
-/// What hovering or focusing a machine's row says.
-String superTabMachineTip(SuperTabMachineStatus status, Duration? age) {
-  final ago = age == null ? null : superTabAgo(age);
-  return switch (status) {
-    SuperTabMachineStatus.refreshing => 'Refreshing…',
-    SuperTabMachineStatus.unknown =>
-      ago == null
-          ? "Can't reach Harness"
-          : "Can't reach Harness · data from $ago",
-    SuperTabMachineStatus.offline =>
-      ago == null ? 'Offline' : 'Offline · last seen $ago',
-    SuperTabMachineStatus.live ||
-    SuperTabMachineStatus.late => ago == null ? 'Updated' : 'Updated $ago',
-  };
-}
+/// What hovering or focusing a machine's row says of its state, before its owner and hardware: nothing while
+/// it is online (the dot says so), and never how old the reading is.
+String? superTabMachineTip(SuperTabMachineStatus status) => switch (status) {
+  SuperTabMachineStatus.refreshing => 'Refreshing…',
+  SuperTabMachineStatus.unknown => "Can't reach Harness",
+  SuperTabMachineStatus.offline => 'Offline',
+  SuperTabMachineStatus.live || SuperTabMachineStatus.late => null,
+};
 
 /// The state in words, so that colour is never the only signal.
 String superTabMachineStateLabel(SuperTabMachineStatus status) =>

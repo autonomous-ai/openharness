@@ -5,8 +5,11 @@
  * Moved from lib/claudeTrust.ts, whose every write it reproduces (engines/launchPrep.golden.spec.ts).
  *
  * ⚠️ Never for a folder with content the person has not been asked about (a clone, their own repo, a worktree
- * of one): that answer is theirs. The callers decide (core/agents/create.ts, launches.ts). A worktree only
- * inherits the answer its source repo already has.
+ * of one): that answer is theirs. One consented exception is a Swarm's own project clones: clicking Add
+ * machine authorizes those checkouts and their Swarm agent worktrees (superTabs/cloneTrust.ts), including
+ * earlier contributions repaired after an update. It never authorizes the person's other repositories.
+ * The callers decide (core/agents/create.ts, launches.ts). A worktree only inherits the answer its source
+ * repo already has.
  *
  * Only ever ADDS trust, never removes anything, and does nothing when the engine has never run here (no
  * file), when the file does not parse, or when it already says yes.

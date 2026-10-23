@@ -8,6 +8,7 @@ import '../logging/app_log.dart';
 import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
 import 'model.dart';
+import 'review_verdict.dart';
 
 typedef SuperTabRequest = Future<Map<String, dynamic>> Function(
   String method,
@@ -48,6 +49,10 @@ class SuperTabController extends ChangeNotifier {
       expandedProjects.addAll(
         (initial['expandedProjects'] as List? ?? const []).whereType<String>(),
       );
+      expandedMachines.addAll(
+        (initial['expandedMachines'] as List? ?? const []).whereType<String>(),
+      );
+      devicesSelected = initial['devicesSelected'] == true;
       projectsGroupOpen = initial['projectsGroupOpen'] as bool? ?? true;
       machinesGroupOpen = initial['machinesGroupOpen'] as bool? ?? true;
       offlineMachinesOpen = initial['offlineMachinesOpen'] as bool? ?? false;
@@ -148,7 +153,26 @@ class SuperTabController extends ChangeNotifier {
   final _before = <String, int?>{};
   final _reading = <String>{};
   final expandedProjects = <String>{};
+  final expandedMachines = <String>{};
+  bool devicesSelected = false;
   bool projectsGroupOpen = true, machinesGroupOpen = true;
+
+  bool isMachineExpanded(String id) => expandedMachines.contains(id);
+
+  void toggleMachineExpanded(String id) {
+    if (!expandedMachines.remove(id)) expandedMachines.add(id);
+    _saveSoon();
+    _changed();
+  }
+
+  /// Devices is personal navigation inside this Swarm. The selected workgroup,
+  /// its draft and terminal choice stay available when the person returns.
+  void selectDevices() {
+    if (_disposed || accessRevoked || devicesSelected) return;
+    devicesSelected = true;
+    _saveSoon();
+    _changed();
+  }
 
   /// Whether the Machines group's "Offline · N" disclosure is open; it starts closed.
   bool offlineMachinesOpen = false;
@@ -156,6 +180,17 @@ class SuperTabController extends ChangeNotifier {
   void toggleProject(String id) {
     if (!expandedProjects.remove(id)) expandedProjects.add(id);
     _saveSoon();
+    _changed();
+  }
+
+  /// Projects whose "Closed (N)" row is open; every one starts collapsed and
+  /// the choice is not saved.
+  final closedOpenProjects = <String>{};
+
+  void toggleClosed(String projectId) {
+    if (!closedOpenProjects.remove(projectId)) {
+      closedOpenProjects.add(projectId);
+    }
     _changed();
   }
 
@@ -220,7 +255,7 @@ class SuperTabController extends ChangeNotifier {
   }
 
   List<SuperTabAgent> terminalAgents(String conversationId) {
-    if (accessRevoked) return const [];
+    if (accessRevoked || devicesSelected) return const [];
     final id = _terminals[conversationId];
     final group = snapshot?.conversation(conversationId);
     if (id == null || group == null) return const [];
@@ -236,6 +271,7 @@ class SuperTabController extends ChangeNotifier {
       return;
     }
     _terminals[conversationId] = '*';
+    devicesSelected = false;
     _saveSoon();
     _changed();
   }
@@ -247,9 +283,10 @@ class SuperTabController extends ChangeNotifier {
             true) {
       return;
     }
-    if (_terminals[conversationId] == agentId) {
+    if (_terminals[conversationId] == agentId && !devicesSelected) {
       return;
     }
+    devicesSelected = false;
     if (agentId == null) {
       _terminals.remove(conversationId);
     } else {
@@ -264,6 +301,24 @@ class SuperTabController extends ChangeNotifier {
       (m) => m.source['kind'] != 'update-request',
     ),
   );
+
+  /// "Reviewer: Ada · Ready: yes on 1a2b3c4d5", from the newest `Ready:` message a
+  /// reviewer of [group] posted in the loaded history. Null without a reviewer.
+  String? reviewLine(SuperTabConversation? group) {
+    final state = snapshot;
+    if (group == null) return null;
+    final reviewers = state?.reviewers(group) ?? const <SuperTabAgent>[];
+    if (reviewers.isEmpty) return null;
+    final ids = {for (final r in reviewers) r.id};
+    final verdict = messages(group.id).reversed
+        .where((m) => m.fromAgent && ids.contains(m.authorId))
+        .map((m) => parseSuperTabVerdict(m.text))
+        .nonNulls
+        .firstOrNull;
+    final names = reviewers.map((r) => state!.agentName(r.id)).join(', ');
+    return 'Reviewer: $names · ${verdict?.label ?? 'No verdict yet'}';
+  }
+
   bool hasOlder(String id) => _before[id] != null;
   int _loadedMessageSequence(String id) =>
       _messages[id]?.reversed
@@ -293,6 +348,7 @@ class SuperTabController extends ChangeNotifier {
   void revokeAccess(String message) {
     if (_disposed) return;
     accessRevoked = true;
+    devicesSelected = false;
     error = message;
     snapshot = null;
     _messages.clear();
@@ -305,6 +361,8 @@ class SuperTabController extends ChangeNotifier {
     'accountId': accountId,
     'selectedId': selectedId,
     'expandedProjects': expandedProjects.toList(),
+    'expandedMachines': expandedMachines.toList(),
+    'devicesSelected': devicesSelected,
     'projectsGroupOpen': projectsGroupOpen,
     'machinesGroupOpen': machinesGroupOpen,
     'offlineMachinesOpen': offlineMachinesOpen,
@@ -364,9 +422,15 @@ class SuperTabController extends ChangeNotifier {
       Map.unmodifiable(_mentions[conversationId] ?? const {});
 
   void select(String id) {
-    if (snapshot?.conversation(id) == null || id == selectedId) return;
+    if (snapshot?.conversation(id) == null ||
+        (id == selectedId && !devicesSelected)) {
+      return;
+    }
+    devicesSelected = false;
     if (!snapshot!.isProjectLead(id)) {
-      expandedProjects.add(snapshot!.conversation(id)!.projectId);
+      final group = snapshot!.conversation(id)!;
+      expandedProjects.add(group.projectId);
+      if (group.archived) closedOpenProjects.add(group.projectId);
     }
     selectedId = id;
     _saveSoon();
@@ -477,6 +541,7 @@ class SuperTabController extends ChangeNotifier {
         failure is SuperTabFailure &&
         const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
       accessRevoked = true;
+      devicesSelected = false;
       snapshot = null;
       _messages.clear();
       _poll?.cancel();

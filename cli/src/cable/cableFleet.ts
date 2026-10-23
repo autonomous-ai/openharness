@@ -191,6 +191,7 @@ export class CableFleet {
       if (this.stopped) return
       const entry: Entry = { port, attached: false, status: { attached: false }, session: undefined!, faults: [] }
       const attached = () => {
+        this.verdicts.markDial(port)
         if (entry.attached) return
         const first = ![...this.entries.values()].some(e => e.attached)
         entry.attached = true
@@ -322,6 +323,8 @@ export class CableFleet {
   syncAgents(...args: Parameters<Surface['syncAgents']>) { return this.send('syncAgents', ...args) }
   syncSwarms(...args: Parameters<Surface['syncSwarms']>) { return this.send('syncSwarms', ...args) }
   syncMachines(...args: Parameters<Surface['syncMachines']>) { return this.send('syncMachines', ...args) }
+  syncSwarmCards(...args: Parameters<Surface['syncSwarmCards']>) { return this.send('syncSwarmCards', ...args) }
+  swarmCardRecap(...args: Parameters<Surface['swarmCardRecap']>) { return this.send('swarmCardRecap', ...args) }
   followApp(...args: Parameters<Surface['followApp']>) { return this.send('followApp', ...args) }
   replaceNotifications(...args: Parameters<Surface['replaceNotifications']>) { return this.send('replaceNotifications', ...args) }
   agentSeen(...args: Parameters<Surface['agentSeen']>) { return this.send('agentSeen', ...args) }

@@ -14,13 +14,16 @@ import { tmuxFeatures, type TmuxFeatures } from './tmuxVersion.js'
 import { processIdentityOf } from './terminalRuntime.js'
 import type { TerminalPaneInfo, TerminalPaneRead, TerminalPaneState } from './terminalTypes.js'
 import { processRows, type ProcessRow } from './processTable.js'
+import { isKittyGraphicsCommand } from './terminalTitle.js'
 export { captureTmuxPane, tmuxCaptureArgs } from './tmuxCapture.js'
 
 // Every tmux and `ps` call here: a held event loop must not turn a timeout into an empty answer
 // (patientExec.ts).
 const run = patientExec(execFile)
 
-function cleanPaneTitle(title: string): string | null {
+/** A pane's title as a harness name, or none: a kitty graphics query tmux took as a title is none (terminalTitle.ts). */
+export function cleanPaneTitle(title: string): string | null {
+  if (isKittyGraphicsCommand(title)) return null
   const cleaned = title
     .trim()
     .replace(/^[\s"'`*✳✱✲✴✶✷✸✹✺✻✼✽✾✿❃❉❋•·.-]+/, '')

@@ -23,6 +23,9 @@ export const sessionStore: SessionStoreContract = {
     archived: 'archived_sessions',
   },
   byId: { layout: 'walk', suffix: rollouts.suffix, id: rollouts.id, walk: rollouts.walk },
+  // Codex's cold-rollout worker replaces .jsonl with .jsonl.zst. The saved path stays .jsonl.
+  // Upstream: codex-rs/rollout/src/compression.rs (materialize_rollout_for_append).
+  compression: { suffix: '.zst', format: 'zstd' },
   /**
    * The rollout's first record is the session's metadata: its id (the file name only holds it), the folder it
    * started in (the one field that says where a rollout belongs), and whether a parent delegated to it. Read

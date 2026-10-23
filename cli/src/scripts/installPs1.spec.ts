@@ -73,7 +73,15 @@ describe('install.ps1, as written', () => {
 
   it('moves a running daemon to the new build when it is run again over an install', () => {
     expect(source).toContain('$before = Read-HarnessCurrentCli -Root $root')
-    expect(source).toContain('$null = Restart-HarnessDaemon -Command $command -Before $before -After $version')
+    expect(source).toContain('$ptyBefore = Read-HarnessCurrentPty -Root $root')
+    expect(source).toContain('$null = Restart-HarnessDaemon -Command $command -Before $before -After $version -PtyBefore $ptyBefore -PtyAfter $ptyAfter')
+  })
+
+  it('clears a terminal host probation when it moves current-pty, and names the host when a host-only move does not start', () => {
+    const pty = source.match(/^function Install-HarnessPty[\s\S]*?^}\r?$/m)?.[0] ?? ''
+    expect(pty).toContain("if ($before -ne $version) { Remove-Item -LiteralPath (Join-Path $ptyRoot 'pty-pending.json') -Force -ErrorAction SilentlyContinue }")
+    expect(pty.indexOf('Write-HarnessPointer -Path $pointer -Value $version')).toBeLessThan(pty.indexOf("'pty-pending.json'"))
+    expect(source).toContain(`Write-Host "  Harness did not start again on terminal host \${PtyAfter}. Run 'harness start'."`)
   })
 
   it('keeps exactly one app-default line off in the CLI source', () => {
@@ -582,6 +590,50 @@ describe.runIf(windows)('install.ps1, run again over a live install', { timeout:
     const stopped = fakeHarness('stopped')
     expect(ps(`Restart-HarnessDaemon -Command '${stopped.command}' -Before '1.0.0' -After '1.0.1'`).stdout).toBe('False')
     expect(stopped.calls()).toEqual(['status'])
+  })
+
+  it('names the terminal host when Harness does not start again after a host-only move', () => {
+    const harness = fakeHarness('running - backend connected', ['if "%1"=="start" exit /b 3'])
+    const run = ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.1' -After '1.0.1' -PtyBefore '2.0.0' -PtyAfter '2.0.1'`)
+    expect(last(run.stdout), run.stderr).toBe('True')
+    expect(run.stdout).toContain("Harness did not start again on terminal host 2.0.1. Run 'harness start'.")
+  })
+
+  it('removes a terminal host probation marker when it moves current-pty, and keeps it when the pointer stays', () => {
+    const root = mkdtempSync(join(tmpdir(), 'harness-ps1-pending-'))
+    scratch.push(root)
+    const ptyRoot = join(root, 'runtime', 'pty')
+    for (const version of ['1.0.0', '2.0.0']) {
+      mkdirSync(join(ptyRoot, version), { recursive: true })
+      for (const name of ['harness-pty.exe', 'harness-launch.exe', 'harness.exe', 'conpty.dll', 'OpenConsole.exe', 'harness-serial.exe']) writeFileSync(join(ptyRoot, version, name), name)
+    }
+    const marker = join(ptyRoot, 'pty-pending.json')
+    writeFileSync(join(ptyRoot, 'current-pty'), '1.0.0\r\n')
+    writeFileSync(marker, JSON.stringify({ version: '1.0.0', previous: '0.9.0' }))
+    const moved = ps(`$null = Install-HarnessPty -Root '${root}' -Entry @{ version = '2.0.0' } -Source '' -Tar ''`)
+    expect(moved.status, moved.stderr).toBe(0)
+    expect(readFileSync(join(ptyRoot, 'current-pty'), 'utf8')).toBe('2.0.0\r\n')
+    expect(existsSync(marker)).toBe(false)
+    writeFileSync(marker, JSON.stringify({ version: '2.0.0', previous: '1.0.0' }))
+    const same = ps(`$null = Install-HarnessPty -Root '${root}' -Entry @{ version = '2.0.0' } -Source '' -Tar ''`)
+    expect(same.status, same.stderr).toBe(0)
+    expect(existsSync(marker)).toBe(true)
+  })
+
+  it('restarts the daemon when only the terminal host moved', () => {
+    const harness = fakeHarness('running - backend connected')
+    const run = ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.1' -After '1.0.1' -PtyBefore '2.0.0' -PtyAfter '2.0.1'`)
+    expect(last(run.stdout), run.stderr).toBe('True')
+    expect(run.stdout).toContain('Moving the running Harness to terminal host 2.0.1 (your agents keep running)...')
+    expect(harness.calls()).toEqual(['status', 'stop', 'start'])
+  })
+
+  it('does not restart the daemon when neither the CLI nor the terminal host changed', () => {
+    const harness = fakeHarness('running - backend connected')
+    expect(ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.1' -After '1.0.1' -PtyBefore '2.0.1' -PtyAfter '2.0.1'`).stdout).toBe('False')
+    // A first terminal host install has nothing running to move.
+    expect(ps(`Restart-HarnessDaemon -Command '${harness.command}' -Before '1.0.1' -After '1.0.1' -PtyBefore '' -PtyAfter '2.0.1'`).stdout).toBe('False')
+    expect(harness.calls()).toEqual([])
   })
 
   it('closes without the setup steps when this computer is signed in and Harness runs', () => {

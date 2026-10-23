@@ -22,7 +22,10 @@ import {
   type PtyResponse,
 } from './protocol.js'
 
-/** `<home>/run/pty-host-<protocol>.json`, as the host writes it (pty/src/discovery.rs). */
+/**
+ * `<home>/run/pty-host-<instance>.json` (a legacy `p<n>`'s `pty-host-<n>.json`), as the host writes it
+ * (pty/src/discovery.rs).
+ */
 export interface PtyHostDiscovery {
   protocol: number
   instance: string
@@ -76,7 +79,7 @@ class LineSplitter {
 }
 
 type HelloOutcome =
-  | { state: 'ok'; socket: net.Socket; instance: string; rest: Buffer }
+  | { state: 'ok'; socket: net.Socket; instance: string; features: string[]; rest: Buffer }
   | { state: 'incompatible'; reason: string }
   | { state: 'unreachable' }
 
@@ -156,7 +159,9 @@ function hello(discovery: PtyHostDiscovery, role: HelloRole, timeoutMs: number):
       } else if (reply.ok === true) {
         // The lines after the hello's are not split here: they belong to whoever reads next.
         const after = chunk.subarray(chunk.indexOf(0x0a) + 1)
-        finish({ state: 'ok', socket, instance: String(reply.instance), rest: Buffer.from(after) })
+        // A host from before features sends none: it has none. Only names count.
+        const features = Array.isArray(reply.features) ? reply.features.filter((name): name is string => typeof name === 'string') : []
+        finish({ state: 'ok', socket, instance: String(reply.instance), features, rest: Buffer.from(after) })
       } else {
         finish({ state: 'incompatible', reason: `${reply.code ?? 'incompatible'}: ${reply.reason ?? 'refused'}` })
       }
@@ -194,10 +199,12 @@ export class PtyHostClient {
     const outcome = await hello(discovery, 'control', timeoutMs)
     if (outcome.state === 'unreachable') return null
     if (outcome.state === 'incompatible') return { incompatible: outcome.reason }
-    return new PtyHostClient(discovery, outcome.socket, outcome.instance, outcome.rest)
+    return new PtyHostClient(discovery, outcome.socket, outcome.instance, outcome.features, outcome.rest)
   }
 
   readonly instance: string
+  /** What the host says it can do beyond its protocol (protocol.ts `SEED_FEATURE`), from its hello; `[]` when none. */
+  readonly features: readonly string[]
   /** The protocol this connection speaks: the host's own, which gates the ops added since (protocol.ts). */
   get protocol(): number {
     return this.discovery.protocol
@@ -229,9 +236,11 @@ export class PtyHostClient {
     private readonly discovery: PtyHostDiscovery,
     private readonly socket: net.Socket,
     instance: string,
+    features: readonly string[],
     rest: Buffer,
   ) {
     this.instance = instance
+    this.features = Object.freeze([...features])
     socket.on('data', chunk => this.onData(chunk))
     socket.on('error', () => { /* 'close' follows */ })
     socket.on('close', () => this.onEnded())

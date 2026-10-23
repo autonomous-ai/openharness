@@ -4,7 +4,7 @@ import base from './vitest.config.js'
 
 /** Super Tab routing v1 (docs/superpowers/specs/2026-10-19-super-tab-routing-v1-design.md): new files outside
  *  the core and services, which no other gate covers, held to 100% in every file. */
-const FILES = ['src/superTabs/route.ts', 'src/superTabs/routeCommand.ts']
+const FILES = ['src/superTabs/route.ts', 'src/superTabs/routeCommand.ts', 'src/superTabs/shortCommand.ts']
 export default defineConfig({
   test: {
     ...base.test,

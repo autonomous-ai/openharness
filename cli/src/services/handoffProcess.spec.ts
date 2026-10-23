@@ -99,6 +99,7 @@ describe('the handoff in the edge host', () => {
       start: core => { api = core; return { agent_handoff_prepare: async () => ({ value: await core.conversations.resolve('a') }) } },
     })
     expect(options).toMatchObject({ name: 'handoff', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
+    expect(api.daemon.machineId()).toBe('m')
     await expect(api.conversations.resolve('a')).rejects.toMatchObject({ code: 'HANDOFF_UNAVAILABLE' })
     const query = vi.fn(async () => ({ value: { agentId: 'a' } }))
     options.onConnected!({ query })

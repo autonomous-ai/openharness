@@ -1,13 +1,19 @@
 import type { CoreApi } from '../core/api.js'
 import { openDaemon } from '../agentClient/daemon.js'
-import { backend } from './host.js'
+import { backend, SuperTabHostError } from './host.js'
 import { identifier, object } from './wire.js'
 import { readCapabilities, quotaOf } from './capacity.js'
 import { startAgent, type ScopedRequest } from './start.js'
 import { prepareSwarmProject } from './projectFolder.js'
+import { createSwarmCloneTrustRepair } from './cloneTrust.js'
 
 const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
+// The route's requirements are not known before the Lead routes. Include common tools in each snapshot, then
+// include tools from pending starts. An uncommon tool first named during routing remains unverified and is refused.
+const COMMON_TOOLS = ['git', 'node', 'npm', 'flutter', 'gh', 'cargo', 'python3']
+const VERIFIED_TOOL_TTL_MS = 10 * 60_000
+const UNVERIFIED_TOOL_TTL_MS = 60_000
 
 /** How often the executor asks the backend what its tabs want of it (a start waiting, a pause) and compares what it
  *  would report with what it last did. Only this read is this frequent: the resource readers run when there is
@@ -26,10 +32,13 @@ export class ContributedMachines {
   /** A pass or one of its publishes failed: the next one waits a whole beat, as every pass once did. */
   private failed = false
   private readonly cursors = new Map<string, number>()
+  private repairTrust?: ReturnType<typeof createSwarmCloneTrustRepair>
   /** Per tab, when its observation was last sent and what it said that matters to a reader: the harnesses
    *  running and stopped, whether new work is paused, and which starts are waiting. A change in any of them is
    *  sent at once; otherwise the heartbeat keeps the reading fresh. */
   private readonly published = new Map<string, { at: number; signature: string }>()
+  /** Shell tool availability belongs to this machine, not a tab. Resource readings still refresh every heartbeat. */
+  private readonly toolCache = new Map<string, { value: boolean | null; detail?: string; until: number }>()
   constructor(private readonly core: CoreApi, private readonly machineId: string,
     private readonly deps: { backend: typeof backend; open: typeof openDaemon; capabilities: typeof readCapabilities;
       start: typeof startAgent; now: () => number; prepare?: typeof prepareSwarmProject } =
@@ -65,6 +74,10 @@ export class ContributedMachines {
         for (const id of ids) if (await this.core.agents.stopped?.(id)) stopped.push(id)
         const running = ids.filter(id => !!this.core.agents.byAgent(id) && !stopped.includes(id))
         const pending = list(row.starts)
+        const tools = [...new Set([...COMMON_TOOLS, ...pending.flatMap(start => {
+          const wanted = object(object(start.request).requirements).tools
+          return Array.isArray(wanted) ? wanted.filter((name): name is string => typeof name === 'string' && /^[A-Za-z0-9_.+-]{1,80}$/.test(name)) : []
+        })])].slice(0, 20)
         const signature = JSON.stringify([row.reservations, pool.generation, [...running].sort(), [...stopped].sort(), row.paused === true || pool.paused === true,
           pending.map(start => start.id).sort()])
         const last = this.published.get(String(row.tabId))
@@ -73,11 +86,27 @@ export class ContributedMachines {
         // The existing usage reader owns its provider cache. Raw responses and
         // account credentials never leave this machine.
         const readings = usage ??= await local.request('usage_read', {}, 20_000).catch(() => ({}))
-        const observed = await this.deps.capabilities({ cwd: pool.cwd, tools: ['git'], devices: [] })
+        const sampledAt = this.deps.now()
+        const probeTools = tools.filter(name => (this.toolCache.get(name)?.until ?? 0) <= sampledAt)
+        const observed = await this.deps.capabilities({ cwd: pool.cwd, tools: probeTools, devices: [] })
         if (this.stopped) return
         const resources = object('resources' in observed ? observed.resources : null)
         const gpus = list(resources.gpus).map(g => finite(g.utilizationPercent)).filter((n): n is number => n !== null)
-        const observation = { generation: pool.generation, tools: 'tools' in observed ? observed.tools : {},
+        const measuredTools = object('tools' in observed ? observed.tools : null)
+        const measuredErrors = object('toolProbeErrors' in observed ? observed.toolProbeErrors : null)
+        for (const name of probeTools) {
+          const value = typeof measuredTools[name] === 'boolean' ? measuredTools[name] as boolean : null
+          const detail = value === null ? String(measuredErrors[name] ?? 'The tool probe did not complete.') : undefined
+          this.toolCache.set(name, { value, detail, until: sampledAt + (value === null ? UNVERIFIED_TOOL_TTL_MS : VERIFIED_TOOL_TTL_MS) })
+        }
+        const reportedTools: Record<string, boolean> = {}, toolProbeErrors: Record<string, string> = {}
+        for (const name of tools) {
+          const result = this.toolCache.get(name)
+          if (result?.value !== null && result?.value !== undefined) reportedTools[name] = result.value
+          else toolProbeErrors[name] = result?.detail ?? 'The tool probe did not complete.'
+        }
+        const observation = { generation: pool.generation, tools: reportedTools,
+          ...(Object.keys(toolProbeErrors).length ? { toolProbeErrors } : {}),
           resources: { cpuPercent: finite(resources.cpuPercent), memoryUsedBytes: finite(resources.memoryUsedBytes), memoryTotalBytes: finite(resources.memoryTotalBytes),
             diskFreeBytes: finite(resources.diskFreeBytes), diskTotalBytes: finite(resources.diskTotalBytes), projectDiskFreeBytes: finite(resources.projectDiskFreeBytes), projectDiskTotalBytes: finite(resources.projectDiskTotalBytes),
             deviceType: typeof resources.deviceType === 'string' ? resources.deviceType : null,
@@ -90,10 +119,20 @@ export class ContributedMachines {
           ...(Array.isArray(row.reservations) ? { stoppedReservations: list(row.reservations).filter(r => stopped.includes(String(r.harnessId))
             && identifier(r.harnessId) && identifier(r.generation)).map(r => ({ harnessId: r.harnessId, generation: r.generation })) } : {}) }
         try {
-          await this.deps.backend(this.core, 'POST', `/api/super-tabs/${row.tabId}/machines/${this.machineId}`, observation)
+          const path = `/api/super-tabs/${row.tabId}/machines/${this.machineId}`
+          try { await this.deps.backend(this.core, 'POST', path, observation) }
+          catch (error) {
+            if (!(error instanceof SuperTabHostError) || error.status !== 400 || error.code !== 'VALIDATION_ERROR' || !('toolProbeErrors' in observation)) throw error
+            // Older backends reject the additive field. Their boolean-only view still safely refuses an unverified tool.
+            const { toolProbeErrors: _probeErrors, ...legacy } = observation
+            await this.deps.backend(this.core, 'POST', path, legacy)
+          }
           this.published.set(String(row.tabId), { at: began, signature })
         } catch (error) { this.failed = true; throw error }
         }
+        this.repairTrust ??= createSwarmCloneTrustRepair(this.core, this.deps.now)
+        try { await this.repairTrust(row) }
+        catch { /* Trust migration cannot prevent this pass from picking up pending starts. */ }
         // Two launches per pass bounds expensive native work. Pending starts
         // keep their original receipt across network failures and host restarts.
         const cursor = this.cursors.get(String(row.tabId)) ?? 0

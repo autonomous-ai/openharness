@@ -229,6 +229,7 @@ mod tests {
                 cols: 80,
                 rows: 24,
                 clear_env: Vec::new(),
+                seed: None,
             },
             1000,
             tx,

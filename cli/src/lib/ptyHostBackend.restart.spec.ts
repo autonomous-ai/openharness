@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { PtyHostBackend } from './ptyHostBackend.js'
-import { readDiscovery } from './ptyHost/launch.js'
+import { listDiscoveries } from './ptyHost/launch.js'
 import { PTY_PROTOCOL } from './ptyHost/protocol.js'
 import { canRestart } from './terminalBackend.js'
 import { removeTree, SHELL } from './terminalBackend.contract.js'
@@ -69,7 +69,7 @@ async function withHost(run: (backend: PtyHostBackend) => Promise<void>): Promis
     throw error
   } finally {
     backend.dispose()
-    const pid = readDiscovery(home, PTY_PROTOCOL)?.pid
+    const pid = listDiscoveries(home).findLast((found) => found.protocol === PTY_PROTOCOL)?.pid
     if (pid) {
       try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
     }

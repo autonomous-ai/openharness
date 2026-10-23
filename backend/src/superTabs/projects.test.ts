@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { applyCommand, type Command } from './commands.js'
-import { createSuperTab, visibleState, type Actor } from './model.js'
-import { canReadAgent, projectsOf, readConversation } from './projects.js'
+import { applyCommand, type Command, type CommandContext } from './commands.js'
+import { createSuperTab, visibleState, type Actor, type MessageDraft } from './model.js'
+import { canReadAgent, projectOf, projectsOf, readConversation, skillModeOf } from './projects.js'
 
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Actor = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -9,18 +9,19 @@ const configuration = { engine: 'codex', model: null, effort: null, contextWindo
 function setup() {
   let state = createSuperTab('swarm', 'Team', { id: 'owner', email: 'owner@example.com' }, 'test')
   state.people.push({ id: 'peer', email: 'peer@example.com', role: 'collaborator', generation: 'first' })
-  let next = 0
-  const run = (command: Command, actor = owner) => {
+  let next = 0, messages: MessageDraft[] = []
+  const run = (command: Command, actor = owner, context: Partial<CommandContext> = {}) => {
     const effect = applyCommand(state, actor, command, { operationId: `op${next++}`, now: 1000,
-      contribution: { machineOwnerId: 'host', contributorId: actor.kind === 'person' ? actor.userId : 'owner' } })
+      contribution: { machineOwnerId: 'host', contributorId: actor.kind === 'person' ? actor.userId : 'owner' }, ...context })
     state = effect.state
+    messages = effect.messages
     return effect.result
   }
   const project = (visibility: 'private' | 'public' = 'private', actor = owner) =>
     run({ type: 'project.create', name: 'Other project', visibility, brief: 'Its own outcome' }, actor) as { projectId: string; conversationId: string }
   const add = (conversationId: string, harnessId: string, lead = true) =>
     run({ type: 'agent.add', conversationId, harnessId, machineId: 'machine', name: harnessId, configuration, lead }).agentId as string
-  return { run, project, add, get state() { return state } }
+  return { run, project, add, get state() { return state }, get messages() { return messages } }
 }
 
 describe('projects inside an invite-only swarm', () => {
@@ -225,6 +226,7 @@ describe('projects inside an invite-only swarm', () => {
 
   it('shares a missing repository address on a tab from before projects', () => {
     const f = setup(), url = 'git@github.com:example/project.git'
+    delete f.state.projects
     f.state.project = { machineId: 'machine', cwd: '/old', repositoryUrl: null }
     f.run({ type: 'project.repository', projectId: 'lead', repositoryUrl: url })
     expect(f.state.project).toEqual({ machineId: 'machine', cwd: '/old', repositoryUrl: url })
@@ -239,5 +241,75 @@ describe('projects inside an invite-only swarm', () => {
     f.run({ type: 'agent.remove', agentId })
     expect(() => f.run({ type: 'project.delete', projectId: p.projectId })).toThrow('active work')
     expect(readConversation(f.state, owner, p.conversationId).assignment?.status).toBe('reconciling')
+  })
+})
+
+describe('project skill modes', () => {
+  const skills = (projectId: string, mode: 'default' | 'orchestration', askedIn?: { conversationId: string; messageId: string }): Command =>
+    ({ type: 'project.skills', projectId, mode, ...(askedIn ? { askedIn } : {}) })
+  const said = (id: string, patch: Record<string, unknown> = {}): Partial<CommandContext> => ({ askedIn: {
+    author: { kind: 'person', id, name: id, membershipGeneration: 'first' }, source: false, createdAt: 1000, ...patch } })
+  const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host' })
+  const modeOf = (f: ReturnType<typeof setup>, projectId: string) => skillModeOf(projectOf(f.state, projectId))
+
+  it('reads a project with no stored mode as Harness orchestration, and new projects and Swarms as Default', () => {
+    const legacy = createSuperTab('old', 'Old', { id: 'owner', email: 'owner@example.com' }, 'test')
+    delete legacy.projects
+    expect(skillModeOf(projectsOf(legacy)[0]!)).toBe('orchestration')
+    expect(skillModeOf({ ...projectsOf(legacy)[0]!, skillMode: undefined })).toBe('orchestration')
+    for (const visibility of [undefined, 'private', 'public'] as const) {
+      const swarm = createSuperTab('new', 'New', { id: 'owner', email: 'owner@example.com' }, 'test', visibility)
+      expect(projectsOf(swarm).map(p => p.skillMode)).toEqual(['default'])
+    }
+    const f = setup(), p = f.project()
+    expect(projectOf(f.state, p.projectId).skillMode).toBe('default')
+  })
+
+  it('lets the project owner change the mode and posts one Skills row in the project chat per real change', () => {
+    const f = setup(), p = f.project('public', peer)
+    f.run(skills(p.projectId, 'orchestration'), peer)
+    expect(modeOf(f, p.projectId)).toBe('orchestration')
+    expect(f.messages).toEqual([expect.objectContaining({ conversationId: p.conversationId, text: 'Skills: Harness orchestration', source: { kind: 'system' } })])
+    f.run(skills(p.projectId, 'orchestration'), peer)
+    expect(f.messages).toEqual([])
+    const legacy = setup()
+    delete legacy.state.projects
+    legacy.run(skills('lead', 'orchestration'))
+    expect([legacy.state.projects, legacy.messages]).toEqual([undefined, []])
+    f.run(skills(p.projectId, 'default'), peer)
+    expect(modeOf(f, p.projectId)).toBe('default')
+    expect(f.messages).toEqual([expect.objectContaining({ conversationId: p.conversationId, text: 'Skills: Default', source: { kind: 'system' } })])
+  })
+
+  it('stores the mode on a Swarm whose original project was never materialized', () => {
+    const f = setup()
+    delete f.state.projects
+    f.run(skills('lead', 'default'))
+    expect(f.state.projects!.map(p => [p.id, p.skillMode])).toEqual([['lead', 'default']])
+    expect(f.messages).toEqual([expect.objectContaining({ conversationId: 'lead', text: 'Skills: Default' })])
+  })
+
+  it('lets the project\'s Lead change it by quoting a chat message the project owner wrote in the last day', () => {
+    const f = setup(), p = f.project('public', peer), lead = agentActor(f.add(p.conversationId, 'app-lead'))
+    f.run(skills(p.projectId, 'orchestration', { conversationId: p.conversationId, messageId: 'm1' }), lead, said('peer'))
+    expect(modeOf(f, p.projectId)).toBe('orchestration')
+    expect(f.messages).toEqual([expect.objectContaining({ conversationId: p.conversationId, text: 'Skills: Harness orchestration' })])
+  })
+
+  it('refuses a collaborator, the Swarm owner, another project\'s Lead, a worker, a system row and an old message', () => {
+    const f = setup(), p = f.project('public', peer), other = f.project('public')
+    const lead = agentActor(f.add(p.conversationId, 'app-lead')), worker = agentActor(f.add(p.conversationId, 'app-worker', false))
+    const otherLead = agentActor(f.add(other.conversationId, 'other-lead'))
+    const quoted = { conversationId: p.conversationId, messageId: 'm1' }
+    expect(() => f.run(skills(other.projectId, 'orchestration'), peer)).toThrow('Only the project owner')
+    expect(() => f.run(skills(p.projectId, 'orchestration'), owner)).toThrow('Only the project owner')
+    expect(() => f.run(skills(p.projectId, 'orchestration', quoted), otherLead, said('peer'))).toThrow('unavailable')
+    expect(() => f.run(skills(p.projectId, 'orchestration', quoted), worker, said('peer'))).toThrow('Only the project owner')
+    expect(() => f.run(skills(p.projectId, 'orchestration'), lead, said('peer'))).toThrow('quote a chat message the project owner wrote')
+    expect(() => f.run(skills(p.projectId, 'orchestration', quoted), lead, said('owner'))).toThrow('quote a chat message the project owner wrote')
+    expect(() => f.run(skills(p.projectId, 'orchestration', quoted), lead, said('peer', { source: true }))).toThrow('quote a chat message the project owner wrote')
+    expect(() => f.run(skills(p.projectId, 'orchestration', quoted), lead, said('peer', { createdAt: 1000 - 24 * 3_600_000 - 1 }))).toThrow('quote a chat message the project owner wrote')
+    expect(() => f.run(skills(p.projectId, 'orchestration', { conversationId: 'lead', messageId: 'm1' }), lead, said('peer'))).toThrow('unavailable')
+    expect([modeOf(f, p.projectId), modeOf(f, other.projectId)]).toEqual(['default', 'default'])
   })
 })

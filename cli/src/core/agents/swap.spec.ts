@@ -14,9 +14,11 @@ import { setAgentSignaller } from '../../lib/processSignals.js'
 import { createPaneSwap, SWAP_SETTLE_MS, type PaneSwapDeps } from './swap.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { NATIVE_LAUNCH_MARKER } from '../../lib/nativePaneHold.js'
+import { stopConflictingBackgroundJob } from '../../lib/claudeBackgroundJob.js'
 
 vi.mock('../../lib/deleteAgentFallback.js', async (real) => ({ ...await real<object>(), terminateDeletedAgent: vi.fn(async () => ({ ok: true })) }))
 vi.mock('../../lib/engineLaunch.js', async (real) => ({ ...await real<object>(), buildEngineLaunchArgv: vi.fn(() => ['zsh', '-lc', 'claude']) }))
+vi.mock('../../lib/claudeBackgroundJob.js', () => ({ stopConflictingBackgroundJob: vi.fn(async () => {}) }))
 vi.mock('../../lib/terminalAgentDiscovery.js', async (real) => ({ ...await real<object>(), processRows: vi.fn(async () => null) }))
 vi.mock('../../lib/paneEngineProcess.js', async (real) => ({
   ...await real<object>(),
@@ -57,6 +59,37 @@ describe('the pane-process swap', () => {
     const prepared = setup().swap.paneSwapDeps(session(), place(), { native })
     prepared.buildArgv({ resumeSessionId: 's1', bypassPermission: false })
     expect(buildEngineLaunchArgv).toHaveBeenCalledWith('claude', expect.objectContaining({ native, resumeSessionId: 's1' }))
+  })
+  it('wires a background-job check for a plain Claude pane restart, with its own session and env', async () => {
+    const prepared = setup().swap.paneSwapDeps(session(), place(), { env: { CLAUDE_CONFIG_DIR: '/custom' } })
+    expect(prepared.stopConflictingJob).toBeDefined()
+    await prepared.stopConflictingJob!()
+    expect(stopConflictingBackgroundJob).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 's1', env: expect.objectContaining({ CLAUDE_CONFIG_DIR: '/custom' }),
+    }))
+  })
+  it('skips the background-job check for a non-Claude engine', () => {
+    const prepared = setup(session({ engine: 'codex' })).swap.paneSwapDeps(session({ engine: 'codex' }), place())
+    expect(prepared.stopConflictingJob).toBeUndefined()
+  })
+  it('skips the background-job check for a DSH agent: its pane may run on a different host', () => {
+    const dshSession = session({ dsh: { id: 'fixture-dsh', url: 'https://example.test' } as never })
+    const prepared = setup(dshSession).swap.paneSwapDeps(dshSession, place())
+    expect(prepared.stopConflictingJob).toBeUndefined()
+  })
+  it('still checks for a background job on a captured-native launch, with that launch\'s own environment', async () => {
+    // `native` is the captured launch for every ordinary LOCAL Claude run (launchOverrides.ts), not a
+    // signal the pane is elsewhere — it must not turn this off. `env` here stands in for what
+    // launchOverrides.ts really produces: `native.environment` (its CLAUDE_CONFIG_DIR) merged in already.
+    const native: NativeLaunch = { token: 'prepared-native', opencodeMajor: null,
+      environment: { CLAUDE_CONFIG_DIR: '/native/claude-home' }, proofs: [], current: () => true,
+      prepareHooks: async () => true, permission: async () => 'supported' }
+    const prepared = setup().swap.paneSwapDeps(session(), place(), { native, env: { CLAUDE_CONFIG_DIR: '/native/claude-home' } })
+    expect(prepared.stopConflictingJob).toBeDefined()
+    await prepared.stopConflictingJob!()
+    expect(stopConflictingBackgroundJob).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 's1', env: expect.objectContaining({ CLAUDE_CONFIG_DIR: '/native/claude-home' }),
+    }))
   })
   it('refuses, before anything is stopped, a relaunch Windows would run through cmd.exe; builds no launch script for it', () => {
     vi.mocked(buildEngineLaunchArgv).mockClear()

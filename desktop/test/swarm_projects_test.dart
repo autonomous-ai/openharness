@@ -5,7 +5,6 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/project_visibility.dart';
-import 'package:harness/super_tabs/section_heading.dart';
 
 import 'support/super_tab_fixture.dart';
 
@@ -126,11 +125,10 @@ void main() {
         of: project,
         matching: find.text('Lamp OS'),
       );
-      // A workgroup sits one indent step in from its project.
+      // Workgroups share the project name column in the compact sidebar.
       expect(
-        tester.getTopLeft(find.text('#12 Offline editing')).dx -
-            tester.getTopLeft(projectName).dx,
-        SuperTabSectionHeading.indentStep,
+        tester.getTopLeft(find.text('#12 Offline editing')).dx,
+        tester.getTopLeft(projectName).dx,
       );
 
       // A child row's formerly empty inset is part of its one click target.

@@ -4,7 +4,7 @@ import { parseProjectFolder, prepareProjectFolder } from '../lib/projectFolder.j
 import { readCapabilities, START_REQUIREMENTS } from './capacity.js'
 import { backend, identifier, object } from './host.js'
 import { mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { repairSwarmCloneTrust, swarmCloneRoot, swarmCloneRoots } from './cloneTrust.js'
 
 type Json = Record<string, unknown>
 
@@ -19,8 +19,11 @@ export async function prepareContribution(core: CoreApi, input: Json, deps = {
   const machineId = core.daemon.machineId()
   const existing = (Array.isArray(state.machines) ? state.machines.map(object) : []).find(m => m.machineId === machineId)
   const swarm = input.scope === 'swarm' || Array.isArray(state.projects)
-  let cwd = swarm ? join(core.dataDir, 'swarm-projects', input.tabId) : existing?.cwd
-  if (swarm) await mkdir(cwd as string, { recursive: true })
+  let cwd = swarm ? swarmCloneRoot(core.dataDir, input.tabId, existing?.cwd) ?? swarmCloneRoots(core.dataDir, input.tabId)[0] : existing?.cwd
+  if (swarm) {
+    await mkdir(cwd as string, { recursive: true })
+    await repairSwarmCloneTrust(core, { tabId: input.tabId, machine: { scope: 'swarm', cwd } })
+  }
   if (typeof cwd !== 'string') {
     if (project.machineId === machineId && typeof project.cwd === 'string') cwd = project.cwd
     else {
@@ -42,12 +45,12 @@ export async function prepareContribution(core: CoreApi, input: Json, deps = {
     if (!engines.length) throw new Error('Sign in to an agent on this machine, then try again.')
     const resources = object('resources' in capability ? capability.resources : null)
     if (capability.ok !== true || typeof resources.projectDiskFreeBytes !== 'number') throw new Error('The project folder is unavailable on this machine.')
-    const available = typeof resources.memoryTotalBytes === 'number' && typeof resources.memoryUsedBytes === 'number'
-      ? Math.max(0, resources.memoryTotalBytes - resources.memoryUsedBytes) : 0
-    // A ceiling, not a promise: each actual start still needs 2 GiB free at that moment (START_REQUIREMENTS), so it
-    // matches that. At 4 GiB a 32 GiB Mac with 5 GiB free offered one slot while it could run two.
-    const maxAgents = Math.max(1, Math.min(8, Math.floor(available / START_REQUIREMENTS.memoryBytes)))
-    return { ok: true, state: 'ready', cwd, engines: [...new Set(engines)], maxAgents, ...(swarm ? { scope: 'swarm' } : {}) }
+    const total = typeof resources.memoryTotalBytes === 'number' ? resources.memoryTotalBytes : 0
+    // Free memory is checked again for every start. It must not shrink the machine's
+    // configured limit just because other work happens to be running during setup.
+    const maxAvailableAgents = Math.max(1, Math.min(16, Math.floor(total / START_REQUIREMENTS.memoryBytes)))
+    const maxAgents = Math.max(1, Math.min(16, Math.floor(total / (2 * START_REQUIREMENTS.memoryBytes))))
+    return { ok: true, state: 'ready', cwd, engines: [...new Set(engines)], maxAgents, maxAvailableAgents, ...(swarm ? { scope: 'swarm' } : {}) }
   } finally { connection.close() }
 }
 

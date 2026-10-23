@@ -6,7 +6,15 @@ import { createHomeAdopter, homeIsAbsolute, homeIsNetworkOrDevice, inspectJourna
 import { NATIVE_EVIDENCE_MS } from './nativeEvidence.js'
 
 const clock = vi.hoisted(() => ({ now: 0, remaining: Infinity }))
+const platform = vi.hoisted(() => ({ windows: false }))
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => --clock.remaining < 0 ? 3_001 : clock.now } })) // past NATIVE_EVIDENCE_MS
+vi.mock('./windowsFiles.js', async original => {
+  const actual = await original<typeof import('./windowsFiles.js')>()
+  return { ...actual,
+    hostPlatform: () => platform.windows ? 'win32' : actual.hostPlatform(),
+    journalFlushFlags: () => actual.journalFlushFlags(platform.windows ? 'win32' : undefined),
+  }
+})
 
 vi.mock('node:fs', async original => {
   const actual = await original<typeof fs>()
@@ -23,7 +31,7 @@ const seal = (index: number) => index ? join(file + '.confirmations', `${String(
 const unavailable = () => Object.assign(new Error('fixture storage unavailable'), { code: 'EIO' })
 const files = new Map<number, string>()
 beforeEach(async () => {
-  clock.now = 0; clock.remaining = Infinity
+  clock.now = 0; clock.remaining = Infinity; platform.windows = false
   actual = await vi.importActual<typeof fs>('node:fs')
   for (const name of ['openSync', 'closeSync', 'fsyncSync', 'linkSync', 'readSync', 'writeFileSync', 'opendirSync', 'lstatSync'] as const) {
     vi.mocked(fs[name]).mockReset().mockImplementation(actual[name] as never)
@@ -40,6 +48,14 @@ beforeEach(async () => {
 afterEach(() => { vi.restoreAllMocks(); actual.rmSync(root, { recursive: true, force: true }) })
 
 describe('durable monotone home adoption', () => {
+  it('does not reopen a Windows journal record for a flush after its staged bytes were synced', () => {
+    platform.windows = true
+    expect(adopter.adopt(add('C:\\saved'))).toEqual(add('C:\\saved'))
+    const writableRecordOpens = vi.mocked(fs.openSync).mock.calls.filter(([path, flags]) =>
+      String(path) === record(0) && typeof flags === 'number' && (flags & 3) === fs.constants.O_RDWR)
+    expect(writableRecordOpens).toHaveLength(0)
+  })
+
   it('leaves a new installation alone for an empty request', () => {
     expect(adopter.adopt(empty())).toEqual(empty())
     expect(actual.existsSync(file + '.adoptions')).toBe(false)
