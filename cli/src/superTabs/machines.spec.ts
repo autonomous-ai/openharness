@@ -4,7 +4,7 @@ import { ContributedMachines } from './machines.js'
 import { SuperTabHostError } from './host.js'
 import { startAgent } from './start.js'
 
-function fixture() {
+function fixture(env: NodeJS.ProcessEnv = {}) {
   let now = 1000
   const core = fakeCore({ dataDir: '/isolated-pool-fixture', agents: {
     byAgent: vi.fn(id => id === 'running' ? { agentId: id } as never : undefined),
@@ -20,7 +20,7 @@ function fixture() {
   const start = vi.fn(async () => ({ ok: true }))
   const prepare = vi.fn(async () => {})
   const log = vi.fn()
-  const machine = new ContributedMachines(core, 'host', { backend, open, capabilities, start, prepare, log, now: () => now } as never)
+  const machine = new ContributedMachines(core, 'host', { backend, open, capabilities, start, prepare, log, env, now: () => now } as never)
   return { machine, pool, core, backend, open, request, close, capabilities, start, prepare, log, advance: () => { now += 16000 }, step: (ms: number) => { now += ms } }
 }
 
@@ -36,6 +36,25 @@ describe('contributed machine executor', () => {
     const body = f.backend.mock.calls.find(c => c[1] === 'POST')![3]
     expect(body).toMatchObject({ quotas: [{ engine: 'claude' }] })
     expect(f.request).toHaveBeenCalledWith('engines_probe', { engines: ['claude', 'codex'] }, 20_000)
+  })
+  const signedOut = { providers: [{ provider: 'codex', account: null, outcome: 'signedOut' }] }
+  it('reports an engine run on an API key as metered: known, with no windows', async () => {
+    const f = fixture({ OPENAI_API_KEY: 'sk-or-private' })
+    f.request.mockImplementation(async () => signedOut)
+    await f.machine.tick()
+    const body = f.backend.mock.calls.find(c => c[1] === 'POST')![3]
+    expect(body).toMatchObject({ quotas: [{ engine: 'codex', known: true, windows: [] }] })
+    expect(JSON.stringify(body)).not.toContain('sk-or-private')
+  })
+  it('keeps an unreadable subscription unknown, and a readable one by its windows even beside an API key', async () => {
+    const unknown = fixture()
+    unknown.request.mockImplementation(async () => signedOut)
+    await unknown.machine.tick()
+    expect(unknown.backend.mock.calls.find(c => c[1] === 'POST')![3]).toMatchObject({ quotas: [{ engine: 'codex', known: false, windows: [] }] })
+    const read = fixture({ OPENAI_API_KEY: 'sk-or-private' })
+    await read.machine.tick()
+    const quota = (read.backend.mock.calls.find(c => c[1] === 'POST')![3] as { quotas: Array<{ windows: unknown[] }> }).quotas[0]!
+    expect(quota.windows).toHaveLength(1)
   })
   it('prepares a swarm project before dispatch and durably rejects an unsafe checkout', async () => {
     const f = fixture()

@@ -193,7 +193,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   return {
     ok: true, ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : { unrecorded: true }),
     pick: publicOf(verdict.pick), via: verdict.via, p: verdict.p, belowFloor: choice.belowFloor, why: verdict.why,
-    alternatives: choice.shown.filter(s => s.id !== verdict.pick.id).slice(0, 2).map(publicOf),
+    alternatives: alternativesTo(verdict.pick, choice.shown).map(publicOf),
     warnings: [...(Array.isArray(effective.warnings) ? effective.warnings : []), ...(value.machinesUnreadable === true ? [MACHINES_UNREADABLE] : []),
       ...(choice.shown.some(p => p.kind === 'member' && p.terminalUnverified) ? ["A member's terminal could not be verified from its machine's snapshot. Check it before assignment."] : []),
       ...(choice.short ? [choice.short] : [])],
@@ -203,6 +203,12 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
         worktree: true, requirements: startRequirements(assessment.needs), machineId: verdict.pick.machineId, engine: verdict.pick.engine, model: verdict.pick.model,
         effort: verdict.pick.effort, ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : {}) })}, then assign the started agent${decision ? ' with the same routeDecisionId' : ''}. It starts from the repository's default branch, fetched first; add "branchRef":"refs/remotes/origin/BRANCH" to start from another branch.`,
   }
+}
+
+/** The next two rows, and the best row of every other machine, so the Lead can choose another machine with an overrideReason. */
+function alternativesTo<T extends { id: string; machineId: string }>(pick: T, shown: T[]): T[] {
+  const seen = new Set([pick.machineId])
+  return shown.filter(s => s.id !== pick.id).filter((s, i) => { const best = !seen.has(s.machineId); seen.add(s.machineId); return i < 2 || best })
 }
 
 async function probeMachine(machineId: string, { name: machineName, status, account, pool }: { name: string; status: string; account: boolean; pool?: Json },

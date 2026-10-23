@@ -733,6 +733,20 @@ describe('routing contributed capacity', () => {
     expect((await runPool(p)).answer.ok).toBe(true)
     expect((await runPool({ ...p, observation: {} }, true)).answer.ok).not.toBe(true)
   })
+  it('lists API-key machines beside a subscription one, and offers the best row of every other machine as an alternative', async () => {
+    const keyed = (machineId: string) => ({ ...healthy(), machineId, name: `Keyed ${machineId}`, observation: { ...healthy().observation, runningHarnessIds: [],
+      quotas: [{ engine: 'claude', known: true, windows: [] }] } })
+    // The subscription machine has two engines, so its two best rows come before any other machine's.
+    const subscription = healthy(), reading = { usedPercent: 20, resetsAt: Date.now() + 5 * 86_400_000 }
+    Object.assign(subscription, { engines: ['claude', 'codex'] })
+    subscription.observation.quotas = ['claude', 'codex'].map(engine => ({ engine, known: true, windows: [{ ...reading, name: '5-hour' }, { ...reading, name: 'weekly' }] }))
+    const enabled = { ...policy, models: policy.models.map(m => ({ ...m, enabled: true })) }
+    const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: [agents[1]], conversations: conversations(), machines: [subscription, keyed('m2'), keyed('m3')] } },
+      policy: { policy: enabled, warnings: [] }, machines: [] } } })
+    const answer = await routeTask(input, s, where, opener())
+    expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm1', engine: 'codex' } })
+    expect((answer.alternatives as Array<{ machineId: string; engine: string }>).map(x => [x.machineId, x.engine])).toEqual([['m1', 'claude'], ['m2', 'claude'], ['m3', 'claude']])
+  })
   it('refuses unobserved tools and devices, without probing arbitrary paths on a teammate computer', async () => {
     expect((await runPool(healthy(), false, { tools: ['docker'], devices: ['/dev/fixture'] })).answer.ok).not.toBe(true)
   })

@@ -23,8 +23,9 @@ export interface Policy { version: 1; models: PolicyModel[]; floor: Record<Level
 /** One usage window, named by the reader (`5-hour`, `weekly`); `leftPercent` is what remains of it. */
 export interface QuotaWindow { name: string | null; leftPercent: number; resetsAt: number | null }
 /** `leftPercent` and `resetsAt` are the tightest window's; `windows` is every window. `account` is the reading's hashed
- * account key, which models on one subscription share. */
-export interface Quota { known: boolean; leftPercent: number | null; resetsAt: number | null; windows?: QuotaWindow[]; account?: string }
+ * account key, which models on one subscription share. `metered` is an engine on an API key or gateway: known, with no
+ * usage window to run out. */
+export interface Quota { known: boolean; leftPercent: number | null; resetsAt: number | null; windows?: QuotaWindow[]; account?: string; metered?: true }
 /** The task's folder as the Lead's machine sees it. `unknown` means it could not be read, `none` that it is not a repository,
  * `missing` that the Lead's machine has no such folder (a member elsewhere may). */
 export interface TaskFolder { cwd: string; kind: 'git' | 'none' | 'missing' | 'unknown'; name: string | null; root: string | null; remote: string | null }
@@ -130,7 +131,8 @@ function resetMs(value: unknown): number | null {
 }
 export function quotaOf2(q: { known: boolean; windows: Array<{ usedPercent: number; resetsAt: unknown; name?: string }>; account?: string | null }): Quota {
   const account = q.account ? { account: q.account } : {}
-  if (!q.known || !q.windows.length) return { known: false, leftPercent: null, resetsAt: null, ...account }
+  if (!q.known) return { known: false, leftPercent: null, resetsAt: null, ...account }
+  if (!q.windows.length) return { known: true, leftPercent: null, resetsAt: null, metered: true, ...account }
   const tightest = q.windows.reduce((x, y) => y.usedPercent > x.usedPercent ? y : x)
   return { known: true, leftPercent: Math.max(0, 100 - tightest.usedPercent), resetsAt: resetMs(tightest.resetsAt),
     windows: q.windows.map(w => ({ name: w.name ?? null, leftPercent: Math.max(0, 100 - w.usedPercent), resetsAt: resetMs(w.resetsAt) })), ...account }
@@ -177,6 +179,7 @@ function span(ms: number): string {
 }
 const resetsIn = (resetsAt: number, now: number) => span(Math.max(0, resetsAt - now))
 function quotaText(q: Quota, now: number): string {
+  if (q.metered) return 'quota metered'
   if (!q.known || q.leftPercent === null) return 'quota unknown'
   if (q.windows?.length) {
     return `quota ${q.windows.map(w => `${w.name ?? 'window'} ${Math.round(w.leftPercent)}% left${w.resetsAt === null ? '' : ` (resets in ${resetsIn(w.resetsAt, now)})`}`).join(', ')}`
@@ -217,6 +220,7 @@ function sizeUp(p: Probe, policy: Policy, a: Assessment, now: number, open: Comm
   const { minutes, spend: base } = SIZES[a.size], runMs = minutes * 60_000
   const account = p.quota.account ?? `${p.machineId}:${p.engine}`
   const spend = { '5-hour': base['5-hour'] * p.cost / 2, weekly: base.weekly * p.cost / 2 }
+  if (p.quota.metered) return { fit: { status: 'fits', coverage: null, effectiveCost: p.cost, expiring: 0, spend, account }, tight: null, text: 'fits: metered, no usage window to run out' }
   // Picks still at work hold what they were expected to spend, less the part of their run time already over.
   const committed = (name: Window) => open.filter(c => c.account === account)
     .reduce((sum, c) => sum + (c.spend[name] ?? 0) * Math.max(0, 1 - (now - c.createdAt) / (SIZES[c.size].minutes * 60_000)), 0)

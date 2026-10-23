@@ -2,7 +2,7 @@ import type { CoreApi } from '../core/api.js'
 import { openDaemon } from '../agentClient/daemon.js'
 import { backend, SuperTabHostError } from './host.js'
 import { identifier, object } from './wire.js'
-import { readCapabilities, quotaOf } from './capacity.js'
+import { readCapabilities, quotaOf, meteredEngine } from './capacity.js'
 import { startAgent, type ScopedRequest } from './start.js'
 import { prepareSwarmProject } from './projectFolder.js'
 import { createSwarmCloneTrustRepair } from './cloneTrust.js'
@@ -43,7 +43,7 @@ export class ContributedMachines {
   private readonly waiting = new Map<string, string>()
   constructor(private readonly core: CoreApi, private readonly machineId: string,
     private readonly deps: { backend: typeof backend; open: typeof openDaemon; capabilities: typeof readCapabilities;
-      start: typeof startAgent; now: () => number; prepare?: typeof prepareSwarmProject; log?: (message: string) => void } =
+      start: typeof startAgent; now: () => number; prepare?: typeof prepareSwarmProject; log?: (message: string) => void; env?: NodeJS.ProcessEnv } =
       { backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }) {}
   stop() { this.stopped = true }
   /** DESKTOP-0TFH0OJ, 2026-10-23: every Claude start there was refused (CLI 0.4.57 took an API-key Claude for one not
@@ -133,7 +133,8 @@ export class ContributedMachines {
             gpuPercent: gpus.length ? Math.max(...gpus) : null },
           quotas: engines.map(engine => {
             const q = quotaOf(readings, engine, false)
-            return { engine, known: q.known, windows: q.windows }
+            // Windows that could not be read on an API key are metered: known, with none (route.ts quotaOf2).
+            return { engine, known: q.known || meteredEngine(engine, this.deps.env ?? process.env), windows: q.windows }
           }), runningHarnessIds: running, stoppedHarnessIds: stopped,
           ...(Array.isArray(row.reservations) ? { stoppedReservations: list(row.reservations).filter(r => stopped.includes(String(r.harnessId))
             && identifier(r.harnessId) && identifier(r.generation)).map(r => ({ harnessId: r.harnessId, generation: r.generation })) } : {}) }
