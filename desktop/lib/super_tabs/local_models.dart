@@ -6,6 +6,7 @@ import '../models/model_search_catalog.dart';
 import '../models/swarm_models_target.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/widgets/app_dialog.dart';
+import '../shared/widgets/app_icon_button.dart';
 import '../state/app_state.dart';
 import '../state/swarm_navigation.dart';
 import '../state/swarm_search.dart';
@@ -95,10 +96,10 @@ class _SwarmModelsWindow extends StatelessWidget {
                           ),
                   ),
                   const SizedBox(width: 4),
-                  IconButton(
+                  AppIconButton(
                     key: const ValueKey('super-local-models-close'),
                     tooltip: 'Close',
-                    icon: const Icon(Icons.close, size: 18),
+                    icon: AppIcons.close,
                     onPressed: () => Navigator.pop(context),
                   ),
                 ],
@@ -309,24 +310,19 @@ String _sentence(String text) {
   return RegExp(r'[.!?]$').hasMatch(t) ? t : '$t.';
 }
 
-/// The Local models part of a machine's details: what it runs for the Swarm, and on the viewer's own machine, a way to
-/// run or stop one.
+/// The Local models part of a machine's details: what it runs for the Swarm. Running, sharing and offering are in the
+/// sidebar's Local models.
 class SuperTabMachineLocalModels extends StatelessWidget {
   const SuperTabMachineLocalModels({
     super.key,
     required this.controller,
     required this.machineId,
-    required this.mine,
-    this.app,
     this.now = DateTime.now,
   });
 
   final SuperTabController controller;
   final String machineId;
 
-  /// The viewer's own machine, which their window can reach: only they start a model on it.
-  final bool mine;
-  final AppNotifier? app;
   final DateTime Function() now;
 
   @override
@@ -336,34 +332,64 @@ class SuperTabMachineLocalModels extends StatelessWidget {
     final pool = controller.snapshot?.machines
         .where((m) => m['machineId'] == machineId)
         .firstOrNull;
-    final served = superTabServedModels(pool, local.grid, now: now());
+    // A fresh reading only, as the route reads it; then each model by what it is: an API this machine's person
+    // shares, or a model of theirs running for the Swarm.
+    final fresh = superTabServedModels(pool, local.grid, now: now());
+    final apis = <String>[], models = <String>[];
+    final observed = pool?['observation'];
+    for (final m
+        in observed is Map && observed['localModels'] is List
+            ? observed['localModels'] as List
+            : const []) {
+      if (m is! Map || m['grid'] != local.grid || m['model'] is! String) {
+        continue;
+      }
+      if (!fresh.any((f) => f.model == m['model'])) continue;
+      final model = m['model'] as String;
+      if (m['kind'] == 'api') {
+        apis.add(
+          model.contains('/')
+              ? model.substring(model.lastIndexOf('/') + 1)
+              : model,
+        );
+      } else {
+        models.add(m['name'] is String ? m['name'] as String : model);
+      }
+    }
+    Widget line(String label, List<String> names) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 104,
+            child: Text(label, style: DesktopChrome.metadata()),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Text(
+              names.isEmpty ? 'None' : names.join(', '),
+              style: names.isEmpty
+                  ? DesktopChrome.control(color: DesktopChrome.muted)
+                  : DesktopChrome.control(),
+            ),
+          ),
+        ],
+      ),
+    );
     return Padding(
       key: ValueKey('super-machine-local-models-$machineId'),
       padding: const EdgeInsets.only(top: 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('Local models', style: DesktopChrome.control(medium: true)),
-          const SizedBox(height: 8),
           Text(
-            served.isEmpty
-                ? 'Not running a model for this Swarm.'
-                : 'Running ${served.map((m) => m.name).join(', ')} for this Swarm.',
-            style: DesktopChrome.control(),
+            'Models for this Swarm',
+            style: DesktopChrome.control(medium: true),
           ),
-          if (mine && app != null) ...[
-            const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: OutlinedButton(
-                key: const ValueKey('super-machine-local-models-run'),
-                onPressed: () => unawaited(
-                  showSwarmLocalModels(context, controller, app: app, now: now),
-                ),
-                child: const Text('Run a local model…'),
-              ),
-            ),
-          ],
+          const SizedBox(height: 8),
+          line('API models', apis),
+          line('Local models', models),
         ],
       ),
     );

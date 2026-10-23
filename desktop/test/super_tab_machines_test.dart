@@ -903,52 +903,10 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    final open = find.byKey(const ValueKey('super-local-models'));
-    final toggle = find.byKey(const ValueKey('super-local-models-switch'));
-
-    testWidgets('the owner turns them on from Machines; it is off until then', (
-      tester,
-    ) async {
-      final server = ConversationServer();
-      server.state['machines'] = [machine()];
-      final c = server.controller();
-      await c.refresh();
-      await mount(tester, c);
-      await tester.tap(open);
-      await tester.pumpAndSettle();
-      expect(tester.widget<Switch>(toggle).value, isFalse);
-      expect(find.text('Off. Only you can turn it on.'), findsOneWidget);
-      await tester.tap(toggle);
-      await tester.pumpAndSettle();
-      expect(
-        server.posts
-            .map((p) => p['command'])
-            .where((cmd) => (cmd as Map)['type'] == 'localModels.set')
-            .single,
-        {'type': 'localModels.set', 'enabled': true},
-      );
-      await tester.tap(find.byKey(const ValueKey('super-local-models-close')));
-      await tester.pumpAndSettle();
-      await tester.pumpWidget(const SizedBox());
-      await c.flush();
-      c.dispose();
-    });
-
     testWidgets(
-      'others see them only once on, cannot switch them, and see what each machine runs',
+      'a machine\'s details say what it runs for the Swarm, and offer nothing to do there',
       (tester) async {
         final server = ConversationServer();
-        (server.state['people'] as List).add({
-          'id': 'peer',
-          'email': 'peer@example.com',
-          'role': 'collaborator',
-        });
-        server.state['machines'] = [machine()];
-        final c = server.controller(account: 'peer');
-        await c.refresh();
-        await mount(tester, c);
-        expect(open, findsNothing);
-
         server.state['localModels'] = {
           'grid': swarmGrid,
           'enabled': true,
@@ -959,23 +917,56 @@ void main() {
             served: [
               {'grid': swarmGrid, 'model': 'qwen3', 'name': 'Qwen 3'},
               {'grid': 'swarm-ffffffffffff', 'model': 'other'},
+              {
+                'grid': swarmGrid,
+                'model': 'deepseek/deepseek-v4.1-flash',
+                'name': 'deepseek/deepseek-v4.1-flash · OpenRouter',
+                'kind': 'api',
+              },
+              {'grid': 'team', 'model': 'muse', 'kind': 'shared'},
             ],
           ),
         ];
-        server.revision++;
+        final c = server.controller();
         await c.refresh();
+        await mount(tester, c);
+        // Local models live in the sidebar now, not the Machines heading.
+        expect(find.byKey(const ValueKey('super-local-models')), findsNothing);
+        // Its expanded readings list what it offers, under labels; a model shared with its owner stays hidden.
+        await tester.tap(
+          find.byKey(const ValueKey('super-machine-toggle-studio')),
+        );
         await tester.pumpAndSettle();
-        await tester.tap(open);
-        await tester.pumpAndSettle();
-        expect(tester.widget<Switch>(toggle).onChanged, isNull);
-        expect(find.text('Running now: Qwen 3 on Studio'), findsOneWidget);
-        await tester.tap(find.byKey(const ValueKey('super-local-models-close')));
-        await tester.pumpAndSettle();
-
-        // The machine's details say what it runs; Run is for the machine's own person, in their window.
+        expect(find.text('Local models'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('super-machine-local-studio-Qwen 3')),
+          findsOneWidget,
+        );
+        expect(find.text('API models'), findsOneWidget);
+        expect(
+          find.byKey(
+            const ValueKey('super-machine-api-studio-deepseek-v4.1-flash'),
+          ),
+          findsOneWidget,
+        );
+        expect(find.text('muse'), findsNothing);
         await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
         await tester.pumpAndSettle();
-        expect(find.text('Running Qwen 3 for this Swarm.'), findsOneWidget);
+        expect(find.text('Models for this Swarm'), findsOneWidget);
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('super-machine-local-models-studio')),
+            matching: find.text('Qwen 3'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('super-machine-local-models-studio')),
+            matching: find.text('deepseek-v4.1-flash'),
+          ),
+          findsOneWidget,
+        );
         expect(
           find.byKey(const ValueKey('super-machine-local-models-run')),
           findsNothing,

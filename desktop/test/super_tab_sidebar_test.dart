@@ -7,6 +7,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/machine_status.dart';
+import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/section_heading.dart';
 
@@ -427,5 +428,184 @@ void main() {
     await disposeSidebar(tester, controller);
     await reopened.flush();
     reopened.dispose();
+  });
+
+  group('Local models', () {
+    const swarmGrid = 'swarm-0123456789ab';
+    Map<String, dynamic> machine({
+      List<Map<String, dynamic>> served = const [],
+      int? receivedAt,
+    }) => {
+      'machineId': 'studio',
+      'name': 'Studio.local',
+      'contributorId': 'owner',
+      'observation': {
+        'receivedAt': receivedAt ?? DateTime.now().millisecondsSinceEpoch,
+        'localModels': served,
+      },
+    };
+    Future<void> mount(WidgetTester tester, SuperTabController c) async {
+      await tester.binding.setSurfaceSize(const Size(900, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: c,
+              builder: (context, _) => ProjectSidebar(
+                controller: c,
+                onAddAgent: (_) {},
+                needsHuman: (_) => 0,
+                onSelect: c.select,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    final open = find.byKey(const ValueKey('super-local-models'));
+    final toggle = find.byKey(const ValueKey('super-local-models-switch'));
+
+    testWidgets(
+      'the owner turns them on from the sidebar; it is off until then',
+      (tester) async {
+        final server = ConversationServer();
+        server.state['machines'] = [machine()];
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        expect(find.text('Manage models'), findsOneWidget);
+        await tester.tap(open);
+        await tester.pumpAndSettle();
+        expect(tester.widget<Switch>(toggle).value, isFalse);
+        expect(find.text('Off. Only you can turn it on.'), findsOneWidget);
+        await tester.tap(toggle);
+        await tester.pumpAndSettle();
+        expect(
+          server.posts
+              .map((p) => p['command'])
+              .where((cmd) => (cmd as Map)['type'] == 'localModels.set')
+              .single,
+          {'type': 'localModels.set', 'enabled': true},
+        );
+        await tester.tap(
+          find.byKey(const ValueKey('super-local-models-close')),
+        );
+        await tester.pumpAndSettle();
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      },
+    );
+
+    testWidgets(
+      'others see Manage models once it is on, and cannot switch it',
+      (tester) async {
+        final server = ConversationServer();
+        (server.state['people'] as List).add({
+          'id': 'peer',
+          'email': 'peer@example.com',
+          'role': 'collaborator',
+        });
+        server.state['machines'] = [machine()];
+        final c = server.controller(account: 'peer');
+        await c.refresh();
+        await mount(tester, c);
+        expect(open, findsNothing);
+
+        server.state['localModels'] = {'grid': swarmGrid, 'enabled': true};
+        server.state['machines'] = [
+          machine(
+            served: [
+              {'grid': swarmGrid, 'model': 'qwen3', 'name': 'Qwen 3'},
+              {
+                'grid': swarmGrid,
+                'model': 'deepseek/v4',
+                'name': 'deepseek/v4 · OpenRouter',
+                'kind': 'api',
+              },
+              {'grid': 'team', 'model': 'muse', 'kind': 'shared'},
+              {'grid': swarmGrid, 'model': 'qwen3'},
+            ],
+          ),
+        ];
+        server.revision++;
+        await c.refresh();
+        await tester.pumpAndSettle();
+        expect(open, findsOneWidget);
+        // What each machine offers is on the machine now, not listed here.
+        expect(find.text('Qwen 3'), findsNothing);
+
+        // A model's row opens the same window, where the switch is the owner's alone.
+        await tester.tap(open);
+        await tester.pumpAndSettle();
+        expect(tester.widget<Switch>(toggle).onChanged, isNull);
+        await tester.tap(
+          find.byKey(const ValueKey('super-local-models-close')),
+        );
+        await tester.pumpAndSettle();
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      },
+    );
+
+    test(
+      'lists only fresh readings, once each, and none while the add-on is off',
+      () {
+        final now = DateTime.fromMillisecondsSinceEpoch(1000000);
+        SuperTabSnapshot snapshot({bool enabled = true, int at = 990000}) =>
+            SuperTabSnapshot.fromJson({
+              'version': 1,
+              'id': 'tab',
+              'name': 'Swarm',
+              'ownerId': 'owner',
+              'people': <Object>[],
+              'agents': <Object>[],
+              'conversations': <Object>[],
+              'invitations': <Object>[],
+              'localModels': {'grid': swarmGrid, 'enabled': enabled},
+              'machines': [
+                {'machineId': 'a', 'observation': 'junk'},
+                {
+                  'machineId': 'b',
+                  'observation': {
+                    'receivedAt': at,
+                    'localModels': [
+                      {'grid': swarmGrid, 'model': 'm'},
+                      {'grid': 'team', 'model': 'n'},
+                      {'grid': swarmGrid, 'model': 7},
+                      'junk',
+                    ],
+                  },
+                },
+              ],
+            });
+        expect(superTabLocalModelRows(snapshot(), now: now), [
+          (
+            grid: swarmGrid,
+            model: 'm',
+            name: 'm',
+            machine: 'A machine',
+            kind: 'local',
+          ),
+          (
+            grid: 'team',
+            model: 'n',
+            name: 'n',
+            machine: 'A machine',
+            kind: 'shared',
+          ),
+        ]);
+        expect(superTabLocalModelRows(snapshot(at: 900000), now: now), isEmpty);
+        expect(
+          superTabLocalModelRows(snapshot(enabled: false), now: now),
+          isEmpty,
+        );
+        expect(superTabLocalModelRows(null, now: now), isEmpty);
+      },
+    );
   });
 }

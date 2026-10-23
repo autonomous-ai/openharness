@@ -2,6 +2,10 @@ import 'package:flutter/foundation.dart';
 
 import '../state/app_state.dart';
 
+/// Models shared with the person on someone else's grid, and offering them to a Swarm. Hidden for now (owner,
+/// 2026-10-23); the code stays, and turning this on brings it back everywhere it was.
+const swarmSharedWithYouShown = false;
+
 /// The Models picker opened for a Swarm's Local models (docs/plans/2026-10-23-swarm-local-models.md): the same
 /// sections as ⌘I's Models, less Subscriptions, whose actions put a model on the Swarm's grid instead of starting a
 /// harness on it. A model of this computer's runs for the Swarm; a saved API is shared with it, on this computer's key;

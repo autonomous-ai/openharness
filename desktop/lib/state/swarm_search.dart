@@ -2244,6 +2244,10 @@ class SwarmSearchController extends ChangeNotifier {
           if (modelSection(row) == ModelSearchSection.subscriptions) {
             return false;
           }
+          if (!swarmSharedWithYouShown &&
+              modelSection(row) == ModelSearchSection.shared) {
+            return false;
+          }
           final entry = models?.entries[row.modelId];
           return entry?.local != null || entry?.gridModel?.grid != swarm.grid;
         }).toList();

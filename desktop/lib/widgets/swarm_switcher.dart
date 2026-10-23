@@ -29,6 +29,7 @@ import '../state/session_content_search.dart';
 import '../state/session_activity.dart';
 import '../state/swarm_search.dart';
 import '../models/model_search_catalog.dart';
+import '../models/swarm_models_target.dart' show swarmSharedWithYouShown;
 import '../state/harness_sessions.dart'
     show SessionFilter, harnessActivityTooltip;
 import '../store/store_mark.dart';
@@ -644,7 +645,9 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
       // shared with you while Grid is not set up: the Set up row under Your models stands for it.
       // A Swarm's Local models have no Subscriptions: nothing in one can be given to a Swarm.
       if (search.swarmModels != null &&
-          section == ModelSearchSection.subscriptions) {
+          (section == ModelSearchSection.subscriptions ||
+              (!swarmSharedWithYouShown &&
+                  section == ModelSearchSection.shared))) {
         continue;
       }
       if (indices.isEmpty &&

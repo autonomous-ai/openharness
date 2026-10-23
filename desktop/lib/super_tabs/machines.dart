@@ -27,6 +27,7 @@ import 'controller.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'local_models.dart';
+import '../models/swarm_models_target.dart' show swarmSharedWithYouShown;
 import 'machine_details.dart';
 import 'machine_status.dart';
 import 'model.dart';
@@ -1033,7 +1034,41 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                     ].join('\n'),
                   ),
           ];
+    // The models this machine offers the Swarm, from the same reading: an API's by its model, without the
+    // provider's folder ("deepseek/…"), the API's name on hover.
+    final apiModels = <_ServedModel>[], localModels = <_ServedModel>[];
+    if (c.snapshot?.localModels case final local? when local.enabled) {
+      for (final m
+          in observation['localModels'] is List
+              ? observation['localModels'] as List
+              : const []) {
+        if (m is! Map || m['model'] is! String) continue;
+        final model = m['model'] as String;
+        final named = m['name'] is String ? m['name'] as String : model;
+        switch (m['kind']) {
+          case 'api' when m['grid'] == local.grid:
+            final via = named.contains(' · ')
+                ? named.substring(named.lastIndexOf(' · ') + 3)
+                : null;
+            apiModels.add((
+              name: model.contains('/')
+                  ? model.substring(model.lastIndexOf('/') + 1)
+                  : model,
+              tip: [model, if (via != null) 'Shared from $via'].join('\n'),
+            ));
+          case 'shared' when swarmSharedWithYouShown:
+            localModels.add((name: named, tip: '$named\nShared with you'));
+          case 'local' || null when m['grid'] == local.grid:
+            localModels.add((
+              name: named,
+              tip: '$named\nRunning on this machine',
+            ));
+        }
+      }
+    }
     return _MachineView(
+      apiModels: apiModels,
+      localModels: localModels,
       id: id,
       name: name,
       owner: person,
@@ -1260,11 +1295,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               builder: (context, _) => SuperTabMachineLocalModels(
                 controller: c,
                 machineId: id,
-                // Only on a machine of the viewer's own that this window reaches does Run start anything.
-                mine:
-                    (person?.id ?? contributor) == c.accountId &&
-                    widget.app?.stateOf(id) != null,
-                app: widget.app,
                 now: widget.now,
               ),
             ),
@@ -1587,26 +1617,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             ? () => unawaited(_contribute())
             : null,
         addTooltip: 'Add machine',
-        // The Local models add-on: the owner turns it on here; everyone else sees it once it is on.
-        actions: [
-          if (c.isOwner || c.snapshot?.localModels?.enabled == true)
-            AppIconButton(
-              key: const ValueKey('super-local-models'),
-              icon: AppIcons.cpu,
-              tooltip: 'Local models',
-              color: c.snapshot?.localModels?.enabled == true
-                  ? DesktopChrome.accent
-                  : DesktopChrome.muted,
-              onPressed: () => unawaited(
-                showSwarmLocalModels(
-                  context,
-                  c,
-                  app: widget.app,
-                  now: widget.now,
-                ),
-              ),
-            ),
-        ],
         // Only a Swarm that can't be read is news; a live one says nothing.
         trailing: c.backendUnreachable
             ? SuperTabMachinesPill(
@@ -1666,6 +1676,8 @@ class _MachineView {
     required this.engines,
     required this.allowances,
     required this.tip,
+    this.apiModels = const [],
+    this.localModels = const [],
   });
 
   final String id, name, details, tip;
@@ -1687,7 +1699,14 @@ class _MachineView {
 
   /// What the row's chips show, Claude first; empty while offline or out of reach.
   final List<_Allowance> allowances;
+
+  /// What this machine offers the Swarm on its grid, as its reading says: the APIs its person shares, and its own
+  /// models running for the Swarm (docs/plans/2026-10-23-swarm-local-models.md). Empty while the add-on is off.
+  final List<_ServedModel> apiModels, localModels;
 }
+
+/// A model a machine offers its Swarm: its short name on the row, the whole of it on hover.
+typedef _ServedModel = ({String name, String tip});
 
 /// One engine's allowance on a machine: its mark and remaining share on the row, its windows on hover.
 class _Allowance {
@@ -1873,69 +1892,129 @@ class _MachineReadings extends StatelessWidget {
       if (diskFree != null)
         ('SSD ${resourceBytes(diskFree)}', 'Storage available'),
     ];
-    final style = DesktopChrome.metadata().copyWith(
-      fontFeatures: const [FontFeature.tabularFigures()],
-    );
+    final label = DesktopChrome.metadata();
+    final style = DesktopChrome.metadata(color: DesktopChrome.foreground)
+        .copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
     Widget readings(List<(String, String)> readings) => Wrap(
       spacing: 10,
       runSpacing: 2,
       children: [
-        for (final (label, meaning) in readings)
+        for (final (text, meaning) in readings)
           Tooltip(
             message: meaning,
-            child: Text(label, style: style),
+            child: Text(text, style: style),
           ),
       ],
     );
-    if (usage.isEmpty && capacity.isEmpty && view.allowances.isEmpty) {
-      return const SizedBox.shrink();
-    }
+    Widget models(List<_ServedModel> models, String kind) => Wrap(
+      spacing: 10,
+      runSpacing: 2,
+      children: [
+        for (final model in models)
+          Tooltip(
+            message: model.tip,
+            child: Text(
+              model.name,
+              key: ValueKey('super-machine-$kind-${view.id}-${model.name}'),
+              style: style,
+            ),
+          ),
+      ],
+    );
+    final hardware = [...usage, ...capacity];
+    // One labelled line each, the labels in a column as wide as the widest, so values line up at any text size.
+    final lines = <(String, Widget)>[
+      if (hardware.isNotEmpty) ('Hardware', readings(hardware)),
+      if (view.allowances.isNotEmpty)
+        (
+          'Subscriptions',
+          Wrap(
+            spacing: 12,
+            runSpacing: 4,
+            children: [
+              for (final allowance in view.allowances)
+                Tooltip(
+                  message: allowance.detail,
+                  child: Semantics(
+                    label: '${allowance.name} ${allowance.figure} remaining',
+                    excludeSemantics: true,
+                    child: Row(
+                      key: ValueKey(
+                        'super-machine-allowance-${view.id}-${allowance.engine}',
+                      ),
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        EngineMark(engine: allowance.engine, size: 14),
+                        const SizedBox(width: 4),
+                        Text(
+                          allowance.figure,
+                          key: ValueKey(
+                            'super-machine-figure-${view.id}-${allowance.engine}',
+                          ),
+                          style: style.copyWith(color: allowance.ink),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      if (view.apiModels.isNotEmpty)
+        ('API models', models(view.apiModels, 'api')),
+      if (view.localModels.isNotEmpty)
+        ('Local models', models(view.localModels, 'local')),
+    ];
+    if (lines.isEmpty) return const SizedBox.shrink();
     return Padding(
       key: ValueKey('super-machine-readings-${view.id}'),
-      padding: const EdgeInsets.fromLTRB(36, 4, 32, 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (usage.isNotEmpty) readings(usage),
-          if (capacity.isNotEmpty) readings(capacity),
-          if (view.allowances.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Wrap(
-                spacing: 12,
-                runSpacing: 4,
-                children: [
-                  for (final allowance in view.allowances)
-                    Tooltip(
-                      message: allowance.detail,
-                      child: Semantics(
-                        label:
-                            '${allowance.name} ${allowance.figure} remaining',
-                        excludeSemantics: true,
-                        child: Row(
-                          key: ValueKey(
-                            'super-machine-allowance-${view.id}-${allowance.engine}',
-                          ),
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            EngineMark(engine: allowance.engine, size: 14),
-                            const SizedBox(width: 4),
-                            Text(
-                              allowance.figure,
-                              key: ValueKey(
-                                'super-machine-figure-${view.id}-${allowance.engine}',
-                              ),
-                              style: style.copyWith(color: allowance.ink),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
+      padding: const EdgeInsets.fromLTRB(36, 6, 24, 12),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // Side by side while there is room for a value beside its label; above it in a narrow sidebar or at
+          // large text, where a column of labels would leave the values no width.
+          final stacked =
+              constraints.maxWidth < 240 ||
+              MediaQuery.textScalerOf(context).scale(12) > 18;
+          if (stacked) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final (index, (name, value)) in lines.indexed) ...[
+                  if (index > 0) const SizedBox(height: 8),
+                  Text(name, style: label),
+                  const SizedBox(height: 2),
+                  value,
                 ],
-              ),
-            ),
-        ],
+              ],
+            );
+          }
+          return Table(
+            columnWidths: const {
+              0: IntrinsicColumnWidth(),
+              1: FlexColumnWidth(),
+            },
+            children: [
+              for (final (index, (name, value)) in lines.indexed)
+                TableRow(
+                  children: [
+                    Padding(
+                      padding: EdgeInsets.only(
+                        right: 12,
+                        top: index == 0 ? 0 : 6,
+                      ),
+                      child: Text(name, style: label),
+                    ),
+                    Padding(
+                      padding: EdgeInsets.only(top: index == 0 ? 0 : 6),
+                      child: value,
+                    ),
+                  ],
+                ),
+            ],
+          );
+        },
       ),
     );
   }

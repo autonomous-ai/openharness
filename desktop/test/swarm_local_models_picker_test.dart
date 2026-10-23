@@ -148,45 +148,46 @@ void main() {
   SwarmDestination row(String modelId) =>
       search.rows.firstWhere((r) => r.modelId == 'model:local:$modelId');
 
-  test(
-    'lists models shared with you, but not what the Swarm\'s own grid serves',
-    () async {
-      app.inventory = const GridModels(
-        gridName: 'home',
-        models: [],
-        grids: [
-          GridSection(
-            name: 'Team',
-            own: false,
-            models: [GridModel(id: 'Shared Qwen', node: 'team.lan')],
-          ),
-          GridSection(
-            name: _grid,
-            own: false,
-            models: [GridModel(id: 'deepseek/v4', node: 'This Mac')],
-          ),
-        ],
-      );
-      await app.modelManager.refresh(force: true);
-      final shared = search.rows
-          .where((r) => search.modelSection(r) == ModelSearchSection.shared)
-          .map((r) => r.title);
-      expect(shared, ['Shared Qwen · team.lan · Team']);
-      // Not offered until the person offers it, and then stopped the same way.
-      SwarmDestination qwen() =>
-          search.rows.firstWhere((r) => r.title.startsWith('Shared Qwen'));
-      expect(search.modelRowStatus(qwen()), isNull);
-      final offer = search.swarmModelAction(qwen())!;
-      expect(offer.label, 'Offer to Swarm');
-      expect(await offer.run!(), isNull);
-      expect(app.offered, {(sharedGrid: 'Team', model: 'Shared Qwen')});
-      expect(search.modelRowStatus(qwen()), 'Offered');
-      final stop = search.swarmModelAction(qwen())!;
-      expect(stop.label, 'Stop offering');
-      await stop.run!();
-      expect(app.offered, isEmpty);
-    },
-  );
+  test('hides models shared with you for now, keeping their offer and what the Swarm\'s own grid serves apart', () async {
+    app.inventory = const GridModels(
+      gridName: 'home',
+      models: [],
+      grids: [
+        GridSection(
+          name: 'Team',
+          own: false,
+          models: [GridModel(id: 'Shared Qwen', node: 'team.lan')],
+        ),
+        GridSection(
+          name: _grid,
+          own: false,
+          models: [GridModel(id: 'deepseek/v4', node: 'This Mac')],
+        ),
+      ],
+    );
+    await app.modelManager.refresh(force: true);
+    // Hidden for now (swarmSharedWithYouShown): no Shared with you in the Swarm's window.
+    expect(swarmSharedWithYouShown, isFalse);
+    expect(
+      search.rows.where(
+        (r) => search.modelSection(r) == ModelSearchSection.shared,
+      ),
+      isEmpty,
+    );
+    // Its actions stay, for when it is shown again: not offered until the person offers it, then stopped the same way.
+    SwarmDestination qwen() =>
+        catalog.rows.firstWhere((r) => r.title.startsWith('Shared Qwen'));
+    expect(search.modelRowStatus(qwen()), isNull);
+    final offer = search.swarmModelAction(qwen())!;
+    expect(offer.label, 'Offer to Swarm');
+    expect(await offer.run!(), isNull);
+    expect(app.offered, {(sharedGrid: 'Team', model: 'Shared Qwen')});
+    expect(search.modelRowStatus(qwen()), 'Offered');
+    final stop = search.swarmModelAction(qwen())!;
+    expect(stop.label, 'Stop offering');
+    await stop.run!();
+    expect(app.offered, isEmpty);
+  });
 
   test('lists no subscriptions: nothing in one can be given to a Swarm', () {
     expect(

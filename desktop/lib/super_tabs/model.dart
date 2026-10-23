@@ -235,6 +235,58 @@ class SuperTabLocalModels {
   final String? error;
 }
 
+/// One model the Swarm can start Builders on now, as a machine's fresh reading says: on the Swarm's grid (`local`, a
+/// member's engine; `api`, an API a member shares), usable from any machine; or shared with the machine's owner and
+/// offered by them (`shared`), usable on that machine alone.
+typedef SuperTabLocalModelRow = ({
+  String grid,
+  String model,
+  String name,
+  String machine,
+  String kind,
+});
+
+/// Every model the Swarm can use now, once each, from the machines' fresh readings (backend `MACHINE_FRESH_MS`).
+List<SuperTabLocalModelRow> superTabLocalModelRows(
+  SuperTabSnapshot? snapshot, {
+  required DateTime now,
+  Duration freshFor = const Duration(seconds: 45),
+}) {
+  final local = snapshot?.localModels;
+  if (local == null || !local.enabled) return const [];
+  final rows = <SuperTabLocalModelRow>[];
+  for (final pool in snapshot!.machines) {
+    final observation = pool['observation'];
+    if (observation is! Map) continue;
+    final at = observation['receivedAt'];
+    if (at is! num ||
+        now.difference(DateTime.fromMillisecondsSinceEpoch(at.toInt())) >
+            freshFor) {
+      continue;
+    }
+    for (final m
+        in observation['localModels'] is List
+            ? observation['localModels'] as List
+            : const []) {
+      if (m is! Map || m['grid'] is! String || m['model'] is! String) continue;
+      final grid = m['grid'] as String, model = m['model'] as String;
+      if (rows.any((r) => r.grid == grid && r.model == model)) continue;
+      rows.add((
+        grid: grid,
+        model: model,
+        name: m['name'] is String ? m['name'] as String : model,
+        machine: pool['name'] as String? ?? 'A machine',
+        kind: m['kind'] is String
+            ? m['kind'] as String
+            : grid == local.grid
+            ? 'local'
+            : 'shared',
+      ));
+    }
+  }
+  return rows;
+}
+
 /// One model a machine serves on the Swarm's grid, as its last reading says.
 typedef SuperTabServedModel = ({String model, String name});
 
