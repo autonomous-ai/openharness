@@ -41,9 +41,14 @@ class SuperTabAgent {
       machineId = _text(row, 'machineId'),
       harnessId = _text(row, 'harnessId'),
       contributorId = _text(row, 'contributorId'),
+      machineOwnerId =
+          row['machineOwnerId'] as String? ?? _text(row, 'contributorId'),
       role = row['role'] as String?,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
+
+  /// The account whose computer runs it; a contributor may run agents on a computer another account shared with them.
+  final String machineOwnerId;
   // Keep the legacy default for callers while allowing group-based roster ownership.
   final bool hasProjectId;
   final String? displayName;
