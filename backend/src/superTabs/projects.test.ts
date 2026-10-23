@@ -345,6 +345,7 @@ describe('custom role sets', () => {
     const create = (roles: unknown) => () => f.run({ type: 'project.roles.create', projectId: p.projectId, roles } as Command, peer)
     expect(create([role('dev', 'Engineer', 'builder')])).toThrow('exactly one lead')
     expect(create([...defaults(), role('aaaaaaaaaaaa', 'Second lead', 'lead')])).toThrow('exactly one lead')
+    expect(create([role('aaaaaaaaaaaa', 'Product Manager', 'lead'), role('dev', 'Engineer', 'builder')])).toThrow('keeps the id lead')
     expect(create([...defaults(), role('aaaaaaaaaaaa', ' engineer ', 'builder')])).toThrow('unique')
     expect(create([...defaults(), role('dev', 'Other', 'builder')])).toThrow('unique')
     expect(create([...defaults(), role('not-hex', 'Other', 'builder')])).toThrow()
