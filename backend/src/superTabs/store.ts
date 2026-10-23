@@ -528,6 +528,14 @@ export class SuperTabStore {
         const start = original.starts?.find(s => s.id === command.startId)
         if (start?.routeDecisionId) await closeUnassignedStart(tx, tabId, start.routeDecisionId, start.id, 'failed', context.now)
       }
+      if (command.type === 'machine.remove') {
+        for (const start of original.starts ?? []) {
+          if (!start.routeDecisionId || start.request.machineId !== command.machineId || start.harnessId || start.error) continue
+          if (effects.state.starts?.find(s => s.id === start.id)?.error) {
+            await closeUnassignedStart(tx, tabId, start.routeDecisionId, start.id, 'failed', context.now)
+          }
+        }
+      }
       if (command.type === 'agent.remove' && actor.kind === 'agent' && actor.agentId === command.agentId) {
         const start = original.starts?.find(s => s.routeDecisionId && s.harnessId &&
           stableId(s.request.machineId, s.harnessId) === command.agentId)

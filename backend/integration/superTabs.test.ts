@@ -1284,6 +1284,28 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBe('failed')
   })
 
+  it('releases every queued route hold when its machine is removed', async () => {
+    const { tab, lead } = await fixture()
+    const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
+    await run(tab, { type: 'machine.contribute', machineId: 'test-host', name: 'Host', cwd: '/fixture/repo', engines: ['codex'], maxAgents: 4 }, host)
+    const machine = (await store.hostPools(host, 'test-host')).find(pool => pool.tabId === tab)!.machine
+    await store.observeMachine(host, tab, 'test-host', { generation: machine.generation,
+      resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
+        projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+      quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
+    const starts = [await routedStart(tab, lead), await routedStart(tab, lead)]
+    for (const { routeDecisionId } of starts) expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBeNull()
+
+    await run(tab, { type: 'machine.remove', machineId: 'test-host' })
+
+    const state = (await store.read(owner, tab)).state
+    for (const { routeDecisionId, startId } of starts) {
+      expect(state.starts?.find(s => s.id === startId)?.error).toBe('Its machine was removed from the Swarm.')
+      expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBe('failed')
+    }
+  })
+
   it('releases a started agent\'s route hold when the host stops it before assignment', async () => {
     const { tab, lead } = await fixture()
     const { routeDecisionId, startId } = await routedStart(tab, lead, 'reviewer')
