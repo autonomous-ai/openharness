@@ -834,7 +834,8 @@ class _SuperTabViewState extends State<SuperTabView>
                 color: _terminalsVisible
                     ? DesktopChrome.foreground
                     : DesktopChrome.muted,
-                onPressed: group.agentIds.isNotEmpty
+                // A read-only viewer's terminal reads are refused.
+                onPressed: group.agentIds.isNotEmpty && c.canWrite
                     ? () {
                         setState(() => _showPullRequests = false);
                         widget.onOpenGroupTerminals?.call();

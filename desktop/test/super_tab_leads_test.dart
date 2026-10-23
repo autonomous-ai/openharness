@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/widgets/app_icon_button.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/terminal_row.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -65,6 +66,7 @@ void main() {
     WidgetTester tester,
     ConversationServer server, {
     Brightness brightness = Brightness.dark,
+    String account = 'owner',
   }) async {
     await tester.binding.setSurfaceSize(const Size(1100, 640));
     final previous = grid.AppTheme.brightness.value;
@@ -72,7 +74,8 @@ void main() {
     addTearDown(() => grid.AppTheme.brightness.value = previous);
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final controller = server.controller(
-      initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
+      account: account,
+      initial: {'tabId': 'tab', 'accountId': account, 'selectedId': 'lead'},
     );
     await controller.refresh();
     await tester.pumpWidget(
@@ -214,6 +217,43 @@ void main() {
         'Nova, please go first.',
       );
 
+      await close(tester, controller);
+    },
+  );
+
+  testWidgets(
+    'a viewer reads it, without the terminals they may not open, and its pull requests have no project scope',
+    (tester) async {
+      final server = swarm();
+      (server.state['people'] as List).add({
+        'id': 'viewer',
+        'email': 'viewer@example.com',
+        'role': 'viewer',
+      });
+      final controller = await show(tester, server, account: 'viewer');
+      // "This project" chosen in a workgroup does not follow into it.
+      await tester.tap(find.byKey(const ValueKey('super-project-expand-lead')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-group-offline')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-pull-requests')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(DropdownButton<bool>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('This project').last);
+      await tester.pumpAndSettle();
+      await tester.tap(leadsRow);
+      await tester.pumpAndSettle();
+      final terminals = find.byKey(const ValueKey('super-terminals'));
+      expect(terminals, findsOneWidget);
+      // A read-only viewer's terminal reads are refused, so the button is off.
+      expect(tester.widget<AppIconButton>(terminals).onPressed, isNull);
+      // It belongs to no project: no "This project" scope beside "This group".
+      await tester.tap(find.byKey(const ValueKey('super-pull-requests')));
+      await tester.pumpAndSettle();
+      expect(find.text('This project'), findsNothing);
+      expect(find.byType(DropdownButton<bool>), findsNothing);
+      expect(find.textContaining('any chat of this project'), findsNothing);
       await close(tester, controller);
     },
   );
