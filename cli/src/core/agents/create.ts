@@ -337,7 +337,7 @@ export function createAgentCreator({
     // A harness another agent started says so in the pull requests it opens (lib/agentAttribution.ts), last, as every
     // relaunch appends it (`buildLaunchOverrides`), and read from the person's settings where this launch reads them.
     // What Harness tells the agent (its instructions, and the pull request line for one another agent started), last.
-    const swarmSkill = input.swarmRole ? { role: input.swarmRole, key: label } : undefined
+    const swarmSkill = input.swarmRole ? { role: input.swarmRole, key: label, ...(input.swarmSkillMode ? { mode: input.swarmSkillMode } : {}) } : undefined
     let swarmInstructions: string | undefined
     if (swarmSkill) {
       try { swarmInstructions = prepareSwarmSkill(cwd, swarmSkill).instructions }

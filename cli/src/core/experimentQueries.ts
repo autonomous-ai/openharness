@@ -22,7 +22,11 @@
  * - `super_tab_attention`: the Super Tab members here waiting on a person (`core.superTabs`,
  *   core/superTabAttention.ts), for the Super Tab service alone;
  * - `super_tab_cards`, `super_tab_card_recap`: the Swarms' cards and a Lead's last message for the Harness Pro
- *   (`core.superTabs`, core/superTabCards.ts), for the Super Tab service alone.
+ *   (`core.superTabs`, core/superTabCards.ts), for the Super Tab service alone;
+ * - `super_tab_observers`: members may watch an agent here, so Share must run (`core.superTabs`), for the Super Tab
+ *   service alone;
+ * - `super_tab_screen`, `super_tab_input`: a member's terminal read as plain text and typed into for its Lead
+ *   (`core.superTabs`, core/superTabTerminal.ts), for the Super Tab service alone.
  * The core answers them only for the experiments (core/api.ts `EXPERIMENTS`): creating an agent or
  * telling the windows something is no other process's to ask. The process's side is
  * services/processCoreApi.ts. Agent Messages, an experiment until 2026-10-12, asks a few of the same and is
@@ -36,7 +40,7 @@ import { nativeTurnCursorIn } from '../lib/nativeTurnObservations.js'
 type Payload = Record<string, unknown>
 type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud' | 'superTabs' | 'transcripts'>
 
-const QUERIES: ReadonlySet<string> = new Set(['shown', 'close_swarm', 'stopped', 'gone', 'creation_status', 'native_turns', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention', 'super_tab_cards', 'super_tab_card_recap'])
+const QUERIES: ReadonlySet<string> = new Set(['shown', 'close_swarm', 'stopped', 'gone', 'creation_status', 'native_turns', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention', 'super_tab_cards', 'super_tab_card_recap', 'super_tab_observers', 'super_tab_screen', 'super_tab_input'])
 const METHODS: ReadonlySet<string> = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
@@ -149,6 +153,19 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       if (query === 'super_tab_cards') core.superTabs.cards(Array.isArray(payload.items) ? payload.items : [])
       else core.superTabs.cardRecap(payload.recap as never)
       return {}
+    }
+    case 'super_tab_observers':
+      if (service !== 'superTabs' || !core.superTabs) return { error: 'NOT_SUPER_TABS' }
+      core.superTabs.shareObservers()
+      return {}
+    case 'super_tab_screen':
+    case 'super_tab_input': {
+      if (service !== 'superTabs' || !core.superTabs) return { error: 'NOT_SUPER_TABS' }
+      const { agentId, scrollback = 0, text: typed = '', keys = [] } = payload
+      if (!/^[A-Za-z0-9_-]{1,160}$/.test(text(agentId)) || typeof scrollback !== 'number' || typeof typed !== 'string'
+        || !Array.isArray(keys) || !keys.every(key => typeof key === 'string')) return { ok: false, error: 'INVALID_REQUEST' }
+      return { ...query === 'super_tab_screen' ? await core.superTabs.screen(agentId as string, scrollback)
+        : await core.superTabs.input(agentId as string, typed, keys as string[]) }
     }
     case 'account': {
       const known = await core.account.identity()

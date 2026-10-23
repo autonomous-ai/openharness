@@ -15,7 +15,8 @@ import { checkPidRuntime } from './deleteAgentFallback.js'
 import { checkSessionRuntime, resolvePaneEngineProcess } from './paneEngineProcess.js'
 import { windowsAfterExit, windowsPaneLaunch } from './windows/engineStart.js'
 import { buildEngineLaunchArgv, dropPermissionFlagIfUnsupported, engineLaunchEnv, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
-import { enginePathOverride } from './engineBin.js'
+import { engineBin, enginePathOverride } from './engineBin.js'
+import { stopConflictingBackgroundJob } from './claudeBackgroundJob.js'
 import { installedDsh } from '../dsh/installed.js'
 import { createLaunchHelpers } from '../core/agents/launch.js'
 import { createLaunchAuthority } from '../core/agents/launchAuthority.js'
@@ -41,7 +42,8 @@ vi.mock('./engineLaunch.js', async importOriginal => ({
   dropPermissionFlagIfUnsupported: vi.fn(async (_engine: unknown, choice: unknown) => ({ choice, droppedFlag: null })),
   refusePermissionFlagIfUnsupported: vi.fn(async () => null),
 }))
-vi.mock('./engineBin.js', () => ({ enginePathOverride: vi.fn(() => undefined) }))
+vi.mock('./engineBin.js', () => ({ enginePathOverride: vi.fn(() => undefined), engineBin: vi.fn((engine: string) => engine) }))
+vi.mock('./claudeBackgroundJob.js', () => ({ stopConflictingBackgroundJob: vi.fn(async () => {}) }))
 vi.mock('./engineInstall.js', async original => ({ ...await original<object>(), engineInstallRecipe: () => ({ command: 'fixture-install' }) }))
 vi.mock('../dsh/installed.js', () => ({ installedDsh: vi.fn() }))
 vi.mock('../engines/transcriptBindings.js', async original => ({ ...await original<object>(), controlTranscriptEvidence: vi.fn() }))
@@ -348,6 +350,52 @@ describe('production resume handler', () => {
     rewrite({ engine: 'opencode', transcriptPath: '' })
     expect(await start()).toMatchObject({ ok: true, resumed: true, session: { launch: { state: 'ready' } } })
     expect(buildEngineLaunchArgv).toHaveBeenCalledWith('opencode', expect.objectContaining({ resumeSessionId: saved.sessionId }))
+  })
+
+  it('stops a live `claude --bg` job on the exact session before building the resume argv', async () => {
+    rewrite({ engine: 'claude' })
+    expect(await start()).toMatchObject({ ok: true, resumed: true })
+    expect(stopConflictingBackgroundJob).toHaveBeenCalledWith(expect.objectContaining({
+      bin: engineBin('claude'), sessionId: saved.sessionId,
+    }))
+    const stopOrder = vi.mocked(stopConflictingBackgroundJob).mock.invocationCallOrder[0]
+    const argvOrder = vi.mocked(buildEngineLaunchArgv).mock.invocationCallOrder[0]
+    expect(stopOrder).toBeLessThan(argvOrder)
+  })
+
+  it('never checks for a background job on a fresh or fork launch (no resumeSessionId)', async () => {
+    rewrite({ engine: 'claude', sessionId: '' })
+    await start()
+    expect(stopConflictingBackgroundJob).not.toHaveBeenCalled()
+  })
+
+  it('does not check for a background job on a non-Claude engine', async () => {
+    expect(saved.engine).toBe('codex')
+    await start()
+    expect(stopConflictingBackgroundJob).not.toHaveBeenCalled()
+  })
+
+  it('skips the background-job check for a DSH agent: its pane may run on a different host', async () => {
+    rewrite({ engine: 'claude', dsh: { id: 'fixture-dsh', url: 'https://example.test' } as any })
+    vi.mocked(installedDsh).mockReturnValue(true as any)
+    await start()
+    expect(stopConflictingBackgroundJob).not.toHaveBeenCalled()
+  })
+
+  it('still checks for a background job on a captured-native launch, with that launch\'s own environment', async () => {
+    // `native` is the captured launch for every ordinary LOCAL Claude run (launchOverrides.ts), not a
+    // signal the pane is elsewhere — it must not turn this off. `launchEnv` here stands in for what
+    // launchOverrides.ts really produces: `native.environment` (its CLAUDE_CONFIG_DIR) merged in already.
+    rewrite({ engine: 'claude' })
+    const native: NativeLaunch = { token: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', opencodeMajor: null,
+      environment: { CLAUDE_CONFIG_DIR: '/native/claude-home' }, proofs: [], current: vi.fn(() => true),
+      prepareHooks: vi.fn(async () => true), permission: vi.fn(async () => 'supported' as const) }
+    vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: true,
+      overrides: { env: { CLAUDE_CONFIG_DIR: '/native/claude-home' }, extraArgs: [], clearEnv: [], native } })
+    await start()
+    expect(stopConflictingBackgroundJob).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: saved.sessionId, env: expect.objectContaining({ CLAUDE_CONFIG_DIR: '/native/claude-home' }),
+    }))
   })
 
   it('marks an engine with no startup hook ready off its own process', async () => {

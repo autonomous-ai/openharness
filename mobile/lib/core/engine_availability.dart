@@ -21,6 +21,8 @@ class EngineAvailability {
     this.supportsCodexHome = false,
     this.installable = false,
     this.installCommand,
+    this.signedIn,
+    this.lastUsedAt,
   });
 
   final String engine;
@@ -51,6 +53,11 @@ class EngineAvailability {
   /// [installable] covers remote ones — is not a thing to do unannounced.
   final String? installCommand;
 
+  /// Reported by this computer, never inferred from installation or this phone's history.
+  /// Null from an older computer that does not report credentials or session activity.
+  final bool? signedIn;
+  final int? lastUsedAt;
+
   static EngineAvailability? fromJson(Object? raw) {
     if (raw is! Map) return null;
     final engine = raw['engine'];
@@ -65,6 +72,10 @@ class EngineAvailability {
       installable: raw['installable'] == true,
       installCommand: installCommand is String && installCommand.isNotEmpty
           ? installCommand
+          : null,
+      signedIn: raw['signedIn'] is bool ? raw['signedIn'] as bool : null,
+      lastUsedAt: raw['lastUsedAt'] is num
+          ? (raw['lastUsedAt'] as num).toInt()
           : null,
     );
   }

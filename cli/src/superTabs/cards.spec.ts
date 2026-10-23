@@ -97,7 +97,7 @@ function setup(tabs: Record<string, { revision: number; state: Record<string, un
   let listFails = false
   let pages: Record<string, { next: string | null }> = {}
   let pageSize = 0
-  const call = vi.fn(async (method: string, path: string) => {
+  const call = vi.fn(async (method: string, path: string, _body?: unknown) => {
     calls.push(`${method} ${path}`)
     const [route, query] = path.split('?')
     if (route === '/api/super-tabs') {
@@ -283,6 +283,22 @@ describe('SwarmCards.recap', () => {
     t.tabs.t1.state = withSequence(3)
     await t.cards.tick()
     expect(pushed).toEqual(['m2'])
+  })
+})
+
+describe('SwarmCards.say', () => {
+  it('posts the words as the person in the Lead\'s conversation of a harness here, and is false for any other harness', async () => {
+    const t = setup({ t1: { revision: 1, state: swarm({ agents: [agent('a1', { machineId: 'm2' }), agent('a2')] }) } })
+    await t.cards.tick()
+    expect(await t.cards.say('h-a2', 'ship it')).toBe(true)
+    const post = t.call.mock.calls.find(c => c[0] === 'POST')!
+    expect(post[1]).toBe('/api/super-tabs/t1/commands')
+    expect(post[2]).toMatchObject({ operationId: expect.stringMatching(/^pro-voice-/),
+      command: { type: 'message.send', conversationId: 'lead-mobile', text: 'ship it', replyTo: null, recipientIds: [] } })
+    expect(post[2]).not.toHaveProperty('asAgentId')
+    expect(await t.cards.say('h-a1', 'x')).toBe(false)   // that Lead runs on another machine
+    expect(await t.cards.say('h-zz', 'x')).toBe(false)
+    expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(1)
   })
 })
 

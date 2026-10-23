@@ -4,7 +4,7 @@ import { ContributedMachines } from './machines.js'
 import { SuperTabHostError } from './host.js'
 import { startAgent } from './start.js'
 
-function fixture() {
+function fixture(env: NodeJS.ProcessEnv = {}) {
   let now = 1000
   const core = fakeCore({ dataDir: '/isolated-pool-fixture', agents: {
     byAgent: vi.fn(id => id === 'running' ? { agentId: id } as never : undefined),
@@ -13,17 +13,49 @@ function fixture() {
   const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['codex'], paused: false },
     harnessIds: ['running', 'stopped'], starts: [{ id: 'start', dispatched: false }], paused: false }
   const backend = vi.fn(async (_core: unknown, method: string, path: string, _body?: unknown): Promise<unknown> => path.endsWith('/pools') ? [pool] : { revision: 1 })
-  const request = vi.fn(async () => ({ providers: [{ provider: 'codex', outcome: 'answered', httpStatus: 200,
+  const request = vi.fn(async (_type: string): Promise<Record<string, unknown>> => ({ providers: [{ provider: 'codex', outcome: 'answered', httpStatus: 200,
     body: { account_email: 'private@example.com', secret: 'private-token', rate_limit: { primary_window: { used_percent: 25, reset_at: 1234567890 } } } }] }))
   const close = vi.fn(), open = vi.fn(async () => ({ machineId: 'host', request, close }))
   const capabilities = vi.fn(async (_input: { cwd: string; tools: string[]; devices: string[] }) => ({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 }, tools: { git: true } }))
   const start = vi.fn(async () => ({ ok: true }))
   const prepare = vi.fn(async () => {})
-  const machine = new ContributedMachines(core, 'host', { backend, open, capabilities, start, prepare, now: () => now } as never)
-  return { machine, pool, core, backend, open, close, capabilities, start, prepare, advance: () => { now += 16000 }, step: (ms: number) => { now += ms } }
+  const log = vi.fn()
+  const machine = new ContributedMachines(core, 'host', { backend, open, capabilities, start, prepare, log, env, now: () => now } as never)
+  return { machine, pool, core, backend, open, request, close, capabilities, start, prepare, log, advance: () => { now += 16000 }, step: (ms: number) => { now += ms } }
 }
 
 describe('contributed machine executor', () => {
+  it('reports only installed supported engines for a legacy OpenCode contribution', async () => {
+    const f = fixture()
+    f.pool.machine.engines = ['opencode']
+    const usage = f.request.getMockImplementation()!
+    f.request.mockImplementation(async type => type === 'engines_probe'
+      ? { engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: false }] }
+      : usage(type))
+    await f.machine.tick()
+    const body = f.backend.mock.calls.find(c => c[1] === 'POST')![3]
+    expect(body).toMatchObject({ quotas: [{ engine: 'claude' }] })
+    expect(f.request).toHaveBeenCalledWith('engines_probe', { engines: ['claude', 'codex'] }, 20_000)
+  })
+  const signedOut = { providers: [{ provider: 'codex', account: null, outcome: 'signedOut' }] }
+  it('reports an engine run on an API key as metered: known, with no windows', async () => {
+    const f = fixture({ OPENAI_API_KEY: 'sk-or-private' })
+    f.request.mockImplementation(async () => signedOut)
+    await f.machine.tick()
+    const body = f.backend.mock.calls.find(c => c[1] === 'POST')![3]
+    expect(body).toMatchObject({ quotas: [{ engine: 'codex', known: true, windows: [] }] })
+    expect(JSON.stringify(body)).not.toContain('sk-or-private')
+  })
+  it('keeps an unreadable subscription unknown, and a readable one by its windows even beside an API key', async () => {
+    const unknown = fixture()
+    unknown.request.mockImplementation(async () => signedOut)
+    await unknown.machine.tick()
+    expect(unknown.backend.mock.calls.find(c => c[1] === 'POST')![3]).toMatchObject({ quotas: [{ engine: 'codex', known: false, windows: [] }] })
+    const read = fixture({ OPENAI_API_KEY: 'sk-or-private' })
+    await read.machine.tick()
+    const quota = (read.backend.mock.calls.find(c => c[1] === 'POST')![3] as { quotas: Array<{ windows: unknown[] }> }).quotas[0]!
+    expect(quota.windows).toHaveLength(1)
+  })
   it('prepares a swarm project before dispatch and durably rejects an unsafe checkout', async () => {
     const f = fixture()
     Object.assign(f.pool.machine, { scope: 'swarm' })
@@ -142,9 +174,28 @@ describe('contributed machine executor', () => {
     expect(f.start).toHaveBeenCalledOnce()
   })
 
+  // DESKTOP-0TFH0OJ, 2026-10-23: CLI 0.4.57 refused every Claude start there as not signed in (Claude ran on an API key
+  // set in its settings), and the pass dropped the refusal: two starts stayed "Queued" for hours with nothing in the log.
+  it('logs why a waiting start was not started, once per reason', async () => {
+    const f = fixture()
+    f.start.mockResolvedValue({ error: 'CAPACITY_UNAVAILABLE', startId: 'start', reasons: ['The selected agent engine is not signed in on this machine.'] } as never)
+    await f.machine.tick()
+    f.advance(); await f.machine.tick()
+    expect(f.start).toHaveBeenCalledTimes(2)
+    expect(f.log.mock.calls).toEqual([['Swarm start start is waiting: The selected agent engine is not signed in on this machine.']])
+    f.start.mockRejectedValue(new Error('Could not reach the Harness backend.'))
+    f.advance(); await f.machine.tick()
+    f.start.mockResolvedValue({ ok: true, harnessId: 'harness' } as never)
+    f.advance(); await f.machine.tick()
+    f.start.mockResolvedValue({ error: 'START_PENDING', startId: 'start', detail: 'Waiting for the launched engine.' } as never)
+    f.advance(); await f.machine.tick()
+    expect(f.log.mock.calls.slice(1)).toEqual([['Swarm start start is waiting: Could not reach the Harness backend.'],
+      ['Swarm start start is waiting: Waiting for the launched engine.']])
+  })
+
   it('a lead queues a contributed start without connecting to that computer', async () => {
     const open = vi.fn()
-    const scoped = vi.fn(async () => ({ ok: true, value: { creationId: 'creation', poolGeneration: 'grant', request: { machineId: 'host' } } }))
+    const scoped = vi.fn(async () => ({ ok: true, value: { creationId: 'creation', poolGeneration: 'grant', request: { machineId: 'host', engine: 'claude' } } }))
     const reply = await startAgent({ startId: 'start' }, scoped, { port: 14001, machineId: 'lead', dataDir: '/fixture' }, open)
     expect(reply).toMatchObject({ ok: true, queued: true, startId: 'start', machineId: 'host' })
     expect(open).not.toHaveBeenCalled()

@@ -86,11 +86,17 @@ export function quotaOf(reply: Json, engine: string, customAccount: boolean) {
   }
   return { known: windows.length > 0, account: typeof reading?.account === 'string' ? reading.account : null, windows }
 }
+/** An engine that runs on an API key or a gateway's base URL has no subscription windows to read: it is metered, not unknown.
+ * `env` is the machine's own, so the host reads its own and a key never leaves it. */
+export function meteredEngine(engine: string, env: NodeJS.ProcessEnv): boolean {
+  const names = engine === 'claude' ? ['ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY']
+    : engine === 'codex' ? ['OPENAI_BASE_URL', 'OPENAI_API_KEY', 'CODEX_API_KEY'] : []
+  return names.some(name => !!env[name]?.trim())
+}
 export function admission(capacity: Json, engine: Json, quota: ReturnType<typeof quotaOf>, requirements: Requirements, customAccount = false) {
   const reasons: string[] = [], unknown: string[] = []
   const resources = object(capacity.resources), tools = object(capacity.tools), devices = object(capacity.devices), toolProbeErrors = object(capacity.toolProbeErrors)
   if (engine.installed !== true) reasons.push('The selected agent engine is not installed on this machine.')
-  if (engine.signedIn === false && !customAccount) reasons.push('The selected agent engine is not signed in on this machine.')
   const memory = finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes)
     ? resources.memoryTotalBytes - resources.memoryUsedBytes : null
   for (const [label, value, needed] of [

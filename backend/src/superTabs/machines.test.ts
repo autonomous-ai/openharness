@@ -62,6 +62,7 @@ describe('a start on a contributed machine', () => {
 
   it('names the project\'s own checkout when the lead\'s machine is the one contributed', () => {
     const f = setup()
+    delete f.state.projects
     f.state.project = { machineId: 'host', cwd: '/Users/lead/work/repo', repositoryUrl: null }
     expect(refusal(f.state, f.request({ cwd: '/data/swarm-projects/tab/lead' }))!.message).toContain('this project uses /Users/lead/work/repo on it')
     expect(refusal(f.state, f.request({ cwd: '/Users/lead/work/repo' }))).toBeNull()
@@ -76,6 +77,16 @@ describe('a start on a contributed machine', () => {
     expect(error.message).not.toContain('opencode')
     f.state.machines![0]!.engines = []
     expect(refusal(f.state, f.request())!.message).toContain('it contributes no engines')
+  })
+
+  it('uses only installed Claude or Codex from an older contribution with unsupported engines', () => {
+    const f = setup()
+    const pool = f.state.machines![0]!
+    pool.engines = ['opencode', 'kilo']
+    pool.observation = { ...observation, quotas: [{ engine: 'claude', known: false, windows: [] }] }
+    expect(refusal(f.state, f.request({ engine: 'claude' }))).toBeNull()
+    expect(refusal(f.state, f.request({ engine: 'codex' }))).toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
+    expect(refusal(f.state, f.request({ engine: 'opencode' }))).toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
   })
 
   it.each(['codexHome', 'gridModel', 'gridName'] as const)('names %s as the refused account setting, and not its value', field => {

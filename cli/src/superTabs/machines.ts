@@ -2,7 +2,7 @@ import type { CoreApi } from '../core/api.js'
 import { openDaemon } from '../agentClient/daemon.js'
 import { backend, SuperTabHostError } from './host.js'
 import { identifier, object } from './wire.js'
-import { readCapabilities, quotaOf } from './capacity.js'
+import { readCapabilities, quotaOf, meteredEngine } from './capacity.js'
 import { startAgent, type ScopedRequest } from './start.js'
 import { prepareSwarmProject } from './projectFolder.js'
 import { createSwarmCloneTrustRepair } from './cloneTrust.js'
@@ -39,11 +39,20 @@ export class ContributedMachines {
   private readonly published = new Map<string, { at: number; signature: string }>()
   /** Shell tool availability belongs to this machine, not a tab. Resource readings still refresh every heartbeat. */
   private readonly toolCache = new Map<string, { value: boolean | null; detail?: string; until: number }>()
+  /** Per waiting start, why it was last not started, so the log says it once per reason, not every pass. */
+  private readonly waiting = new Map<string, string>()
   constructor(private readonly core: CoreApi, private readonly machineId: string,
     private readonly deps: { backend: typeof backend; open: typeof openDaemon; capabilities: typeof readCapabilities;
-      start: typeof startAgent; now: () => number; prepare?: typeof prepareSwarmProject } =
+      start: typeof startAgent; now: () => number; prepare?: typeof prepareSwarmProject; log?: (message: string) => void; env?: NodeJS.ProcessEnv } =
       { backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }) {}
   stop() { this.stopped = true }
+  /** DESKTOP-0TFH0OJ, 2026-10-23: every Claude start there was refused (CLI 0.4.57 took an API-key Claude for one not
+   *  signed in) and the refusal was dropped, so two starts stayed "Queued" for hours with nothing in the log. */
+  private noteWaiting(startId: string, reason: string) {
+    if (this.waiting.get(startId) === reason) return
+    this.waiting.set(startId, reason)
+    ;(this.deps.log ?? (message => console.warn(`[super-tabs] ${message}`)))(`Swarm start ${startId} is waiting: ${reason}`)
+  }
   /** One pass at a time, one [MACHINE_POLL_MS] after the last began (or a beat after one that failed). */
   tick(): Promise<void> {
     if (this.stopped || this.deps.now() < this.next) return Promise.resolve()
@@ -58,7 +67,9 @@ export class ContributedMachines {
   private async poll(began: number) {
     const where = { dataDir: this.core.dataDir, port: this.core.daemon.port, machineId: this.machineId }
     const pools = list(await this.deps.backend(this.core, 'GET', `/api/super-tabs/hosts/${this.machineId}/pools`)).filter(row => identifier(row.tabId) && object(row.machine).machineId === this.machineId && identifier(object(row.machine).generation))
-    if (this.stopped || pools.length === 0) { this.published.clear(); return }
+    if (this.stopped || pools.length === 0) { this.published.clear(); this.waiting.clear(); return }
+    const pendingIds = new Set(pools.flatMap(row => list(row.starts).map(start => start.id)))
+    for (const id of this.waiting.keys()) if (!pendingIds.has(id)) this.waiting.delete(id)
     for (const tab of this.published.keys()) if (!pools.some(row => row.tabId === tab)) this.published.delete(tab)
     // The local daemon is reached only for a reading to send, never for a pass that has nothing to say.
     let local: Awaited<ReturnType<typeof openDaemon>> | null = null
@@ -105,6 +116,14 @@ export class ContributedMachines {
           if (result?.value !== null && result?.value !== undefined) reportedTools[name] = result.value
           else toolProbeErrors[name] = result?.detail ?? 'The tool probe did not complete.'
         }
+        const listedEngines = Array.isArray(pool.engines) ? pool.engines.filter((engine): engine is string => typeof engine === 'string') : []
+        const supported = (engine: string) => engine === 'claude' || engine === 'codex'
+        // Older contributions may name only OpenCode or another retired Swarm engine. Probe this host so their
+        // replacement choices reflect the engines actually installed here, without changing the owner's slot limit.
+        const engines = listedEngines.some(engine => !supported(engine))
+          ? list(object(await local.request('engines_probe', { engines: ['claude', 'codex'] }, 20_000).catch(() => ({}))).engines)
+            .filter(engine => supported(String(engine.engine)) && engine.installed === true).map(engine => String(engine.engine))
+          : listedEngines.filter(supported)
         const observation = { generation: pool.generation, tools: reportedTools,
           ...(Object.keys(toolProbeErrors).length ? { toolProbeErrors } : {}),
           resources: { cpuPercent: finite(resources.cpuPercent), memoryUsedBytes: finite(resources.memoryUsedBytes), memoryTotalBytes: finite(resources.memoryTotalBytes),
@@ -112,9 +131,10 @@ export class ContributedMachines {
             deviceType: typeof resources.deviceType === 'string' ? resources.deviceType : null,
             chip: typeof resources.chip === 'string' ? resources.chip : null, os: typeof resources.os === 'string' ? resources.os : null,
             gpuPercent: gpus.length ? Math.max(...gpus) : null },
-          quotas: (Array.isArray(pool.engines) ? pool.engines : []).filter((e): e is string => typeof e === 'string').map(engine => {
+          quotas: engines.map(engine => {
             const q = quotaOf(readings, engine, false)
-            return { engine, known: q.known, windows: q.windows }
+            // Windows that could not be read on an API key are metered: known, with none (route.ts quotaOf2).
+            return { engine, known: q.known || meteredEngine(engine, this.deps.env ?? process.env), windows: q.windows }
           }), runningHarnessIds: running, stoppedHarnessIds: stopped,
           ...(Array.isArray(row.reservations) ? { stoppedReservations: list(row.reservations).filter(r => stopped.includes(String(r.harnessId))
             && identifier(r.harnessId) && identifier(r.generation)).map(r => ({ harnessId: r.harnessId, generation: r.generation })) } : {}) }
@@ -156,10 +176,16 @@ export class ContributedMachines {
               }
             }
             const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true }, scoped, where, this.deps.open)
-            if (result.ok === true && identifier(result.harnessId)) await scoped({ action: 'command', operationId: `settled-${start.id}`,
-              command: { type: 'agent.startSettled', startId: start.id, warning: result.modelWarning ?? null } })
+            if (result.ok === true && identifier(result.harnessId)) {
+              this.waiting.delete(start.id)
+              await scoped({ action: 'command', operationId: `settled-${start.id}`,
+                command: { type: 'agent.startSettled', startId: start.id, warning: result.modelWarning ?? null } })
+            } else if (result.ok !== true) {
+              this.noteWaiting(start.id, String(result.detail ?? (Array.isArray(result.reasons) ? result.reasons.join(' ') : result.error)))
+            }
           }
-          catch { /* Keep its durable receipt; another start must not be starved by this failure. */ }
+          // Keep its durable receipt; another start must not be starved by this failure.
+          catch (error) { this.noteWaiting(start.id, error instanceof Error ? error.message : String(error)) }
         }
         } catch { /* Revocation or one unavailable project cannot block another contribution. */ }
       }

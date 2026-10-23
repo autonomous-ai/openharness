@@ -149,6 +149,7 @@ export async function signIn(backend: RealBackend, a: Account, env: Record<strin
   await before?.(daemon)
   await daemon.start()
   await untilDaemon('connected', async () => (await (await fetch(`http://127.0.0.1:${daemon.port}/api/status`,
-    { headers: { 'x-adapter-local': '1' } })).json()).connected === true, 60_000, 200)
+    // Without the local credential the status is cut down to what says a daemon is here (hookServer.ts `publicStatus`).
+    { headers: daemon.localHeaders() })).json()).connected === true, 60_000, 200)
   return { daemon, machineId, client: await LocalClient.connect(daemon, { machineId }) }
 }

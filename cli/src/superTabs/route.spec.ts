@@ -113,6 +113,7 @@ describe('strength, fit and effective cost', () => {
   const HAIKU = { engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1 } as const
   const CODEX = { engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2 } as const
   const on = (row: Partial<Probe>, machine: string, quota: Probe['quota']) => probe({ ...row, machineId: machine, machineName: machine, quota })
+  const unknown = { known: false, leftPercent: null, resetsAt: null }
   const route = (probes: Probe[], patch: Partial<Assessment>, now = NOW, open: Commitment[] = []) => ok(choose(probes, defaults, a(patch), now, open))
   const picks = (r: ReturnType<typeof route>) => r.shown.map(s => `${s.model} on ${s.machineName}`)
 
@@ -183,6 +184,31 @@ describe('strength, fit and effective cost', () => {
     const spent = route([on(SONNET, 'a', windows([90, 5 * H], [5, 7 * D]))], {})
     expect(spent.shown[0].fit).toMatchObject({ status: 'short', effectiveCost: 2 })
     expect(spent.short).toBe('No candidate is expected to cover this task; its weekly quota is expected to run out partway and resets in 7 days.')
+  })
+  it('an engine on an API key is metered: it fits with no window, beside a subscription machine and ranked after it', () => {
+    const metered = quotaOf2({ known: true, windows: [] })
+    expect(metered).toEqual({ known: true, leftPercent: null, resetsAt: null, metered: true })
+    const r = route([on(SONNET, 'key', metered), on(SONNET, 'sub', windows([90, 3 * H], [80, 5 * D], 'S')), on(SONNET, 'unread', unknown)], { difficulty: 'low' })
+    expect(r.shown.map(s => [s.machineName, s.fit.status])).toEqual([['sub', 'fits'], ['key', 'fits']])
+    expect(r.excluded).toEqual([{ title: 'New agent · Claude sonnet medium · unread', reason: 'Its quota could not be read in full, and another candidate\'s quota fits this task.' }])
+    expect(r.shown[1].fit).toEqual({ status: 'fits', coverage: null, effectiveCost: 2, expiring: 0, spend: { '5-hour': 30, weekly: 4 }, account: 'key:claude' })
+    expect(r.shown[1].label).toContain('fits: metered, no usage window to run out')
+    expect(r.shown[1].label).toContain('quota metered')
+  })
+  it('keeps the best row of every machine inside the shown rows, then fills by rank', () => {
+    const full = windows([90, 3 * H], [80, 5 * D], 'S')
+    const crowd = Array.from({ length: 14 }, (_, i) => probe({ kind: 'member', agentId: `m${i}`, name: `Member ${String(i).padStart(2, '0')}`, machineId: 'a', machineName: 'a', quota: full }))
+    const far = on({ ...OPUS }, 'z', windows([90, 3 * H], [80, 5 * D], 'Z'))
+    const r = route([...crowd, far], { difficulty: 'low' })
+    expect(r.shown).toHaveLength(12)
+    // The costlier machine z ranks 15th, behind all of a's rows, yet its best row is shown, in place of a's 12th.
+    expect(r.shown.map(s => s.machineName)).toEqual([...Array(11).fill('a'), 'z'])
+    expect(r.shown.map(s => s.id)).toEqual(Array.from({ length: 12 }, (_, i) => `c${i}`))
+  })
+  it('with more machines than rows shown, keeps the best rows of the best-ranked machines', () => {
+    const many = Array.from({ length: 14 }, (_, i) => on(SONNET, `m${String(i).padStart(2, '0')}`, windows([90 - i, 3 * H], [80, 5 * D], `A${i}`)))
+    const r = route([...many, ...many.map(p => ({ ...p, kind: 'member' as const, agentId: p.machineId, name: 'Extra' }))], { difficulty: 'low' })
+    expect(new Set(r.shown.map(s => s.machineName)).size).toBe(12)
   })
   it('orders the short by how far they get, then by the policy order, and says when no reset is known', () => {
     const r = route([on(SONNET, 'b', windows([25, null], [80, null], 'B')), on(SONNET, 'a', windows([25, null], [80, null], 'A')), on(SONNET, 'c', windows([30, null], [80, null], 'C'))], {})

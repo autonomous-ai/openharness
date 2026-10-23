@@ -7,6 +7,7 @@ import type { CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { backend, swarmRoleFor, hostJournalFile, SuperTabHost } from './host.js'
 import { retainedHarnesses, retentionFile } from './retention.js'
+import { observerSource } from './observers.js'
 
 const roots: string[] = []
 const hosts: SuperTabHost[] = []
@@ -55,7 +56,7 @@ describe('current Swarm role lookup', () => {
     let groups = [{ leadId: 'other', agentIds: ['agent'] }]
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
       path.includes('/hosts/') ? [{ tabId: 'tab', agent }] : { state: { agents: [agent], conversations: groups } } } }))
-    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBe('review')
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: 'review', mode: 'orchestration' })
     groups = []
     expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBeNull()
   })
@@ -66,8 +67,22 @@ describe('current Swarm role lookup', () => {
       assignment: kind === 'assigned' ? { agentId: 'agent', execution: { machineId: 'machine-1' } } : null }
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
       path.includes('/hosts/') ? [{ tabId: 'tab', agent }] : { state: { agents: [agent], conversations: [group] } } } }))
-    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBe(kind === 'lead' ? 'lead' : 'dev')
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: kind === 'lead' ? 'lead' : 'dev', mode: 'orchestration' })
     expect(await swarmRoleFor(t.core, 'machine-1', 'personal')).toBeNull()
+  })
+  it('gives the mode of the project whose group made the role, Lead first', async () => {
+    const t = setup()
+    const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }
+    const projects = [{ id: 'lead', skillMode: 'default' }, { id: 'p2', skillMode: 'orchestration' }, { id: 'p3', skillMode: 'default' }]
+    let conversations: unknown[] = [{ projectId: 'p2', leadId: 'other', agentIds: ['agent'] }, { projectId: 'p3', leadId: 'agent', agentIds: [] }]
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
+      path.includes('/hosts/') ? [{ tabId: 'tab', agent }] : { state: { agents: [agent], conversations, projects } } } }))
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: 'lead', mode: 'default' })
+    conversations = [{ projectId: 'p2', leadId: 'other', agentIds: ['agent'] }]
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: 'dev', mode: 'orchestration' })
+    // A group from before projects is in the first project.
+    conversations = [{ leadId: 'other', agentIds: ['agent'] }]
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: 'dev', mode: 'default' })
   })
   it.each(['removed-roster', 'foreign', 'removed-state', 'archived', 'released', 'none', 'malformed'] as const)
     ('never adopts a session whose membership is %s', async kind => {
@@ -85,7 +100,7 @@ describe('current Swarm role lookup', () => {
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/')
       ? present ? [{ tabId: 'tab', agent }] : []
       : { state: { agents: [agent], conversations: [{ agentIds: ['agent'] }, { leadId: 'agent' }] } } } }))
-    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBe('lead')
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: 'lead', mode: 'orchestration' })
     present = false
     expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBeNull()
     expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBeNull()
@@ -541,7 +556,7 @@ describe('Super Tab waits for the Harness Pro', () => {
       if (offline) throw new Error('Host offline')
       return { status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }
     })
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { creationStatus: vi.fn(async creationId => ({ creationId, state: 'created' as const, agentId: 'harness' })), byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
     const open = () => { const host = new SuperTabHost(core, 'machine-1', { log: vi.fn() }); hosts.push(host); return host }
@@ -578,7 +593,7 @@ describe('Super Tab waits for the Harness Pro', () => {
       agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }]
     const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }))
     let here = true, clock = 0
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { byAgent: vi.fn(() => (here ? { agentId: 'harness' } : undefined) as never), terminalAvailable: vi.fn(() => true) } })
     const host = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(host)
@@ -896,6 +911,67 @@ it('rechecks authoritative native absence before retrying a lost acknowledgement
   expect(t.close).toHaveBeenLastCalledWith({ agentId: 'harness' })
 })
 
+describe('a Lead\'s terminal requests', () => {
+  it('asks for its agents\' terminal requests with each roster read, and answers a screen read as the agent', async () => {
+    const t = setup()
+    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), input: vi.fn(),
+      screen: vi.fn(async () => ({ ok: true as const, text: 'Allow? 1. Yes', hold: null })) } })
+    const roster = vi.mocked(t.call).getMockImplementation()!
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => path === '/api/super-tabs/hosts/machine-1/terminal'
+      ? { status: 200, body: { success: true, data: [{ tabId: 'tab', agentId: 'agent', harnessId: 'harness', request: { id: 'r1', kind: 'screen' } }] } }
+      : roster(method, path, body))
+    await t.open().tick()
+    await vi.waitFor(() => expect(t.call).toHaveBeenCalledWith('POST', '/api/super-tabs/tab/commands',
+      { operationId: 'terminal-r1', asAgentId: 'agent', command: { type: 'agent.screenResult', requestId: 'r1', ok: true, text: 'Allow? 1. Yes' } }))
+  })
+})
+
+describe('the members a host lets watch its agents', () => {
+  it('keeps them watching through a 3 s roster read, wakes Share once, and lets a removed member go at once', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
+    const member = { tabId: 'tab', agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', name: 'River' },
+      observers: [{ email: 'peer@example.com', userId: 'peer' }] }
+    let rows: unknown[] = [member], clock = 0, answer: (() => void) | null = null
+    const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) => {
+      // The roster read takes 3 s when asked to (seen up to 2.8 s, 2026-10-23); everything else answers at once.
+      if (path.includes('/hosts/') && answer === null) await new Promise<void>(resolve => { answer = resolve })
+      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }
+    })
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
+    const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
+      agents: { byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
+    const host = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(host)
+    const source = observerSource(dir, () => 'machine-1', () => clock)
+    const peer = { tab: 'super:tab', agentId: 'harness', recipientEmail: 'peer@example.com' } as never
+    const read = async () => { const reading = host.tick(); await vi.waitFor(() => expect(answer).not.toBeNull()); answer!(); await reading; answer = null }
+    await read()
+    expect(source.allows(peer)).toBe(true)
+    // The next read is asked a second later and answers 3 s after that: the roster in force never lapses meanwhile.
+    for (let i = 0; i < 4; i++) {
+      clock += 1_000
+      const reading = host.tick()
+      await vi.waitFor(() => expect(answer).not.toBeNull())
+      clock += 3_000
+      expect(source.allows(peer)).toBe(true)
+      expect(source.known()).toHaveLength(1)
+      answer!(); await reading; answer = null
+    }
+    expect(superTabs.shareObservers).toHaveBeenCalledOnce()
+    // Removed from the Swarm: the very next answer takes the view away and tells Share everyone left.
+    rows = []
+    clock += 1_000; await read(); clock += 201
+    expect(source.allows(peer)).toBe(false)
+    expect(source.known()).toEqual([])
+    // A host that stops publishes nobody, in force: Share withdraws the invitations rather than keeping them.
+    rows = [member]
+    clock += 1_000; await read(); clock += 201
+    expect(source.known()).toHaveLength(1)
+    host.stop(); clock += 201
+    expect(source.known()).toEqual([])
+    expect(superTabs.shareObservers).toHaveBeenCalledOnce()
+  })
+})
+
 describe('adding the machine its own Lead runs on to the Swarm', () => {
   function joining() {
     const dir = mkdtempSync(join(tmpdir(), 'super-tab-join-')); roots.push(dir)
@@ -975,14 +1051,15 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
 
 describe('built-in skill text after a CLI update', () => {
   const older = '---\nname: swarm-dev\n---\nAn older release of this skill.\n'
-  function syncFixture(stale = true) {
+  function syncFixture(stale = true, mode?: 'default' | 'orchestration') {
+    let skillMode = mode
     const t = setup(), workspace = mkdtempSync(join(tmpdir(), 'super-tab-skills-')); roots.push(workspace)
     const roles = { lead: 'lead', builder: 'dev', reviewer: 'review' } as const
     const sessions = Object.fromEntries([...Object.entries(roles).map(([name, role]) => [`h-${name}`,
       { agentId: `h-${name}`, cwd: workspace, swarmSkill: { role, key: `key-${name}` } }]),
       ['h-personal', { agentId: 'h-personal', cwd: workspace }]])
     const files = Object.fromEntries(Object.entries(roles).map(([name, role]) => {
-      const { file } = prepareSwarmSkill(workspace, { role, key: `key-${name}` })
+      const { file } = prepareSwarmSkill(workspace, { role, key: `key-${name}`, ...(mode ? { mode } : {}) })
       // What an older CLI left: its own text and no record of which text it was.
       if (stale) { writeFileSync(file, older); rmSync(join(dirname(file), 'version.json')) }
       return [name, file]
@@ -1002,7 +1079,7 @@ describe('built-in skill text after a CLI update', () => {
       await Promise.resolve()
       inFlight--
       const request = body as any
-      if (path.includes('/hosts/')) return { status: 200, body: { data: agents.map(agent => ({ tabId: 'tab', agent })) } }
+      if (path.includes('/hosts/')) return { status: 200, body: { data: agents.map(agent => ({ tabId: 'tab', agent, ...(skillMode ? { skillMode } : {}) })) } }
       if (path.endsWith('/deliveries')) return { status: 200, body: { data: [] } }
       if (request?.command?.type === 'message.send') {
         // As the backend does: a repeated operation gets its first receipt; the same id for a different request is refused.
@@ -1019,7 +1096,7 @@ describe('built-in skill text after a CLI update', () => {
       for (let idle = 0; idle < 3;) { await new Promise(resolve => setImmediate(resolve)); idle = inFlight ? 0 : idle + 1 }
       return host
     }
-    return { t, files, sent, pass, setGroups: (next: typeof groups) => { groups = next } }
+    return { t, files, sent, pass, setGroups: (next: typeof groups) => { groups = next }, setMode: (next: typeof mode) => { skillMode = next } }
   }
 
   it('rewrites each running Lead, Builder and Reviewer skill once and tells each agent once, never a personal session', async () => {
@@ -1041,15 +1118,50 @@ describe('built-in skill text after a CLI update', () => {
     await f.pass()
     const lead = join(dirname(f.files.lead!), 'version.json'), record = JSON.parse(readFileSync(lead, 'utf8'))
     // The send succeeded, the record did not survive, and the Lead's group was archived meanwhile.
-    writeFileSync(lead, JSON.stringify({ ...record, notified: 'older' }))
+    writeFileSync(lead, JSON.stringify({ ...record, notified: 'older', toldChange: undefined }))
     f.setGroups([{ id: 'lead-group', archived: true, leadId: 'a-lead', agentIds: ['a-lead'] }, { id: 'next', leadId: 'a-lead', agentIds: ['a-lead'] }])
     await f.pass()
-    expect(JSON.parse(readFileSync(lead, 'utf8')).notified).toBe(record.notified)
+    expect(JSON.parse(readFileSync(lead, 'utf8'))).toMatchObject({ notified: record.notified, toldChange: record.toldChange })
     expect(f.t.log).not.toHaveBeenCalled()
     const calls = vi.mocked(f.t.core.account.backend).mock.calls.length
     await f.pass()
     expect(vi.mocked(f.t.core.account.backend).mock.calls.slice(calls).some(([, , body]) => (body as any)?.command?.type === 'message.send')).toBe(false)
     expect(f.sent).toHaveLength(3)
+  })
+
+  it('moves running agents to the project\'s new mode at once, tells each once, and again when it switches back', async () => {
+    const f = syncFixture(false, 'default')
+    const defaults = Object.fromEntries(Object.entries(f.files).map(([name, file]) => [name, readFileSync(file, 'utf8')]))
+    // A new Default agent started with its mode's text: nothing to rewrite or tell.
+    const host = await f.pass()
+    expect(f.sent).toEqual([])
+    f.setMode('orchestration')
+    await f.pass(host, 1_000)
+    expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-builder', 'a-lead', 'a-reviewer'])
+    for (const s of f.sent) expect(s.command.text).toBe(`This project now uses the Harness orchestration skills. Before your next step, read ${JSON.stringify(f.files[s.asAgentId.slice(2)])} again with your file or shell tool and follow it in place of your earlier swarm-${({ lead: 'lead', builder: 'dev', reviewer: 'review' } as Record<string, string>)[s.asAgentId.slice(2)]} skill.`)
+    expect(readFileSync(f.files.builder!, 'utf8')).toContain('No production code without a failing test first.')
+    await f.pass(host, 1_000)
+    expect(f.sent).toHaveLength(3)
+    f.setMode('default')
+    await f.pass(host, 1_000)
+    expect(f.sent).toHaveLength(6)
+    expect(new Set(f.sent.map(s => s.operationId)).size).toBe(6)
+    expect(f.sent.slice(3).every(s => s.command.text.startsWith('This project now uses the Default skills.'))).toBe(true)
+    for (const [name, file] of Object.entries(f.files)) expect(readFileSync(file, 'utf8')).toBe(defaults[name])
+    await f.pass(host, 1_000)
+    await f.pass()
+    expect(f.sent).toHaveLength(6)
+  })
+
+  it('reads a roster row without a mode, or with one it does not know, as Harness orchestration', async () => {
+    const f = syncFixture(false, 'default')
+    f.setMode(undefined)
+    await f.pass()
+    expect(f.sent.map(s => s.command.text.split('.')[0])).toEqual(Array(3).fill('This project now uses the Harness orchestration skills'))
+    const g = syncFixture(false)
+    g.setMode('light' as never)
+    await g.pass()
+    expect(g.sent).toEqual([])
   })
 
   it('says nothing when the skill files already hold the built-in text', async () => {

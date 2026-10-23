@@ -15,6 +15,7 @@ import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/phone/terminal_file_send.dart';
 import 'package:harness_mobile/phone/terminal_find_bar.dart';
 import 'package:harness_mobile/phone/terminal_page.dart';
+import 'package:harness_mobile/widgets/terminal_panel.dart';
 import 'package:harness_mobile/phone/terminal_search.dart';
 import 'package:harness_mobile/phone/settings_page.dart';
 import 'package:harness_mobile/phone/voice_input_controller.dart';
@@ -110,6 +111,29 @@ void main() {
     lowerKeyboard(tester);
     await frames(tester);
     expect(find.byType(VoiceMicButton), findsOneWidget);
+    await focus.close();
+  });
+
+  testWidgets('a keyboard asked for again while ⌄ still slides it down is '
+      "the page's", (tester) async {
+    final focus = await _Focus.open(tester);
+    bool focused() =>
+        tester.widget<TerminalPanel>(find.byType(TerminalPanel)).focused;
+
+    await focus.tapPrompt();
+    raiseKeyboard(tester);
+    await frames(tester);
+    expect(focused(), isTrue);
+
+    await tester.tap(find.byKey(const ValueKey('terminal-key-Hide keyboard')));
+    // Halfway down when the prompt is tapped again: the inset turns back without reaching zero.
+    tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+    await tester.pump(const Duration(milliseconds: 16));
+    await focus.tapPrompt();
+    raiseKeyboard(tester);
+    await frames(tester);
+
+    expect(focused(), isTrue, reason: 'the keyboard up is read as up');
     await focus.close();
   });
 

@@ -22,7 +22,7 @@ import { ENGINES, isTerminalEngine, type AgentEngine } from '../../engines/types
 import { AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationOutcome, type AgentCreationReceipts, type AgentCreationStatus, type CreationAuthority } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
 import { engineLabel } from '../../lib/agentNames.js'
-import { isSwarmRole } from '../../lib/swarmSkills.js'
+import { isSwarmRole, isSwarmSkillMode } from '../../lib/swarmSkills.js'
 import {
   AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves,
   permissionModeFlags, supportsFirstPrompt, supportsNamedAgent, unsupportedLaunchModelFlag,
@@ -397,6 +397,11 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       (!isSwarmRole(swarmRole) || (engine !== 'claude' && engine !== 'codex'))) {
       reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm role is lead, dev or review, for Claude Code or Codex.' }); return
     }
+    // The skills of the project the agent joins (superTabs/start.ts); a start from before modes sends none.
+    const swarmSkillMode = payload.swarmSkillMode
+    if (swarmSkillMode !== undefined && !isSwarmSkillMode(swarmSkillMode)) {
+      reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm skill mode is default or orchestration.' }); return
+    }
     // Blank is "number it", the same as absent — a client that sends an empty field is not
     // asking for an agent with no name.
     const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : null
@@ -465,7 +470,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       codexHome,
       dsh,
       prompt,
-      ...(isSwarmRole(swarmRole) ? { swarmRole } : {}),
+      ...(isSwarmRole(swarmRole) ? { swarmRole, ...(swarmSkillMode ? { swarmSkillMode } : {}) } : {}),
       name,
       agent,
       resumeSessionId,

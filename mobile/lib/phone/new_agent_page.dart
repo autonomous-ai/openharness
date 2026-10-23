@@ -5,6 +5,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/core/codex_profiles.dart';
 import 'package:harness_mobile/core/first_task.dart';
+import 'package:harness_mobile/core/first_engine.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/core/permission_modes.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -18,6 +19,7 @@ import 'package:harness_mobile/widgets/remote_folder_picker.dart';
 
 import '../demo/sample_mode.dart' show SampleMode;
 import 'agent_index.dart';
+import 'first_task_suggestion.dart';
 import 'branch_picker_sheet.dart';
 import 'phone_navigation.dart';
 import 'new_agent_attachments.dart';
@@ -98,8 +100,10 @@ class _NewAgentPageState extends State<NewAgentPage> {
   /// "New project", or the repository's name.
   String? _projectLabel;
 
-  /// Claude until somebody picks another — the engine most agents are started with.
-  String? _engine = 'claude';
+  /// What the form opens on until somebody picks another: [_defaultEngine], read again whenever
+  /// this computer's engines arrive or the computer changes ([_adoptDefaultEngine]). OpenCode is the
+  /// answer before the computer has said anything.
+  String? _engine = 'opencode';
 
   /// A plain shell is chosen rather than an agent — the desktop's `isTerminal`.
   ///
@@ -184,6 +188,12 @@ class _NewAgentPageState extends State<NewAgentPage> {
   void initState() {
     super.initState();
     _restoreDraft();
+    if (!_engineChosen) _engine = _defaultEngine();
+    // The last agent started from this phone, the desktop's `agentPreference`: read from disk once,
+    // and [_engine] follows it if it lands before anybody has picked.
+    unawaited(
+      widget.notifier.agentPreference.load().then((_) => _adoptDefaultEngine()),
+    );
     // After the first frame, not during it: `probeEngines` can notify synchronously, and a notify
     // while this page is still being mounted marks the listeners above it dirty mid-build — the
     // "setState() called during build" assertion.
@@ -197,22 +207,43 @@ class _NewAgentPageState extends State<NewAgentPage> {
         if (mounted) setState(() {});
       }),
     );
-    // The last agent started from this phone, the desktop's `agentPreference`. A draft being
-    // restored keeps its own.
-    if (newAgentDraft == null) {
-      final preference = widget.notifier.agentPreference;
-      unawaited(
-        preference.load().then((_) {
-          final remembered = preference.value;
-          if (!mounted || remembered == null || _engineChosen) return;
-          setState(() => _engine = remembered);
-        }),
-      );
-    }
   }
 
-  /// Whether the engine was picked on this page — a remembered one arriving late must not undo it.
+  /// Whether the engine was picked on this page. A pick is never undone: not by a remembered agent
+  /// arriving late, nor by the computer's engines, nor by moving to another computer.
   bool _engineChosen = false;
+
+  /// What the desktop's New Harness opens on: the agent last started from this phone while this
+  /// computer can still run it, otherwise [firstEngine] — Claude Code or Codex when installed and
+  /// signed in there, else OpenCode.
+  String _defaultEngine() {
+    final remembered = widget.notifier.agentPreference.value;
+    if (remembered != null && _rememberedUsable(remembered)) return remembered;
+    return firstEngine(_machine?.engines);
+  }
+
+  /// Whether this computer can run [id]: installed, and signed in where it reports that. A computer
+  /// that has not answered yet, or an older one that reports no sign-in at all (null), has not said
+  /// "no" — it is not treated as signed out.
+  bool _rememberedUsable(String id) {
+    if (isTerminalEngine(id)) return true;
+    final engines = _machine?.engines;
+    if (engines == null || !engines.loaded) return true;
+    final engine = engines[id];
+    return engine != null && engine.installed && engine.signedIn != false;
+  }
+
+  /// Opens on [_defaultEngine] while nothing was picked. Run when the computer's engines or the
+  /// remembered agent arrive and when the computer changes — never from [build].
+  void _adoptDefaultEngine() {
+    if (!mounted || _engineChosen) return;
+    final next = _defaultEngine();
+    if (next == _engine) return;
+    setState(() {
+      _permissionMode = kDefaultPermissionMode;
+      _engine = next;
+    });
+  }
 
   @override
   void dispose() {
@@ -322,6 +353,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
     }
     _machineId = draft.machineId;
     _engine = draft.engine;
+    _engineChosen = draft.engineChosen;
     _permissionMode = draft.permissionMode;
     _folder = draft.folder;
     _exactFolder = draft.exactFolder;
@@ -354,6 +386,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
     newAgentDraft = NewAgentDraft(
       machineId: _machineId,
       engine: _engine,
+      engineChosen: _engineChosen,
       permissionMode: _permissionMode,
       folder: _folder,
       exactFolder: _exactFolder,
@@ -378,7 +411,9 @@ class _NewAgentPageState extends State<NewAgentPage> {
     // Which engines this machine actually has. Best effort: an unanswered probe
     // leaves the list to the engines its own agents are already running, and a
     // machine with neither still gets the browse-and-create path.
-    unawaited(widget.notifier.probeEngines(_machineId));
+    unawaited(
+      widget.notifier.probeEngines(_machineId).then((_) => _adoptDefaultEngine()),
+    );
     unawaited(_loadCodexProfiles());
   }
 
@@ -415,6 +450,7 @@ class _NewAgentPageState extends State<NewAgentPage> {
       _model = null;
       _error = null;
     });
+    _adoptDefaultEngine();
     _askMachine();
   }
 
@@ -1406,12 +1442,8 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                         spacing: 8,
                                         runSpacing: 8,
                                         children: [
-                                          for (final idea in const [
-                                            'Explain this project to me',
-                                            'Find a bug and fix it',
-                                            'Run the tests',
-                                          ])
-                                            _Suggestion(
+                                          for (final idea in firstTaskIdeas)
+                                            FirstTaskSuggestion(
                                               text: idea,
                                               onTap: () => setState(() {
                                                 _task.value = TextEditingValue(
@@ -1735,15 +1767,16 @@ class _NewAgentPageState extends State<NewAgentPage> {
       kTerminalEngine,
     };
     final ordered = [
+      ?_engine,
       for (final id in recent)
-        if (ids.contains(id)) id,
-      ...(ids
-          .where((id) => !recent.contains(id) && !isTerminalEngine(id))
-          .toList()
-        ..sort((a, b) => _engineName(a).compareTo(_engineName(b)))),
+        if (ids.contains(id) && id != _engine) id,
+      ...ids.where(
+        (id) => id != _engine && !recent.contains(id) && !isTerminalEngine(id),
+      ),
       // After every agent, as the desktop lists it: a plain shell, for when none of them is wanted.
       // Among the recents instead once it has been started here, as any agent is.
-      if (!recent.contains(kTerminalEngine)) kTerminalEngine,
+      if (_engine != kTerminalEngine && !recent.contains(kTerminalEngine))
+        kTerminalEngine,
     ];
     final picked = await showNewAgentChooser<String>(
       context,
@@ -2198,35 +2231,4 @@ class _Silent implements Listenable {
 
   @override
   void removeListener(VoidCallback listener) {}
-}
-
-/// A first task to tap — fills the task field.
-class _Suggestion extends StatelessWidget {
-  const _Suggestion({required this.text, required this.onTap});
-
-  final String text;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final tty = Tty.of(context);
-    return Semantics(
-      button: true,
-      label: text,
-      excludeSemantics: true,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: Container(
-          constraints: const BoxConstraints(minHeight: 36),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: tty.dim),
-          ),
-          child: TtyText(text, size: TtySize.meta, color: tty.text),
-        ),
-      ),
-    );
-  }
 }

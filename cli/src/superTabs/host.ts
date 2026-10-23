@@ -1,4 +1,4 @@
-import { publishObservers } from './observers.js'
+import { OBSERVER_VALID_MS, publishObservers } from './observers.js'
 import { ContributedMachines } from './machines.js'
 import { retainContributions } from './retention.js'
 import { configurationObservation } from './configuration.js'
@@ -17,6 +17,7 @@ import { attentionOf } from './attention.js'
 import { prepareContribution } from './contribution.js'
 import { hostname } from 'node:os'
 import { replacementObservations } from './replacements.js'
+import { TerminalHost } from './terminal.js'
 
 type Json = Record<string, unknown>
 export class SuperTabHostError extends Error {
@@ -24,7 +25,7 @@ export class SuperTabHostError extends Error {
 }
 export { identifier, object } from './wire.js'
 import { ENDED_WORK, identifier, object } from './wire.js'
-import { recordSwarmSkillNotice, refreshSwarmSkill, type SwarmRole, type SwarmSkill } from '../lib/swarmSkills.js'
+import { recordSwarmSkillNotice, refreshSwarmSkill, type SkillRefresh, type SwarmSkillGrant, type SwarmSkillMode } from '../lib/swarmSkills.js'
 
 /** The core signs each request. Neither the service nor its journal holds an account credential. */
 export async function backend(core: CoreApi, method: string, path: string, body?: unknown): Promise<unknown> {
@@ -37,13 +38,20 @@ export async function backend(core: CoreApi, method: string, path: string, body?
   return reply.body.data
 }
 
+/** The skills of a group's project in a tab state: a group from before projects is in the first, and a project from before
+ *  modes, or a Swarm from before projects, is orchestration. */
+export function groupSkillMode(state: Record<string, unknown>, group: Record<string, unknown> | undefined): SwarmSkillMode {
+  const project = group && (Array.isArray(state.projects) ? state.projects.map(object) : []).find(p => p.id === (group.projectId ?? 'lead'))
+  return project?.skillMode === 'default' ? 'default' : 'orchestration'
+}
+
 /** Restart/resume can include stopped harnesses, so the live process list is not membership proof.
  * Re-read the exact machine roster and its groups; a removed contribution must never adopt a skill. */
-export async function swarmRoleFor(core: CoreApi, machineId: string, harnessId: string): Promise<SwarmRole | null> {
+export async function swarmRoleFor(core: CoreApi, machineId: string, harnessId: string): Promise<SwarmSkillGrant | null> {
   if (!identifier(machineId) || !identifier(harnessId)) return null
   const rows = await backend(core, 'GET', `/api/super-tabs/hosts/${machineId}`)
   if (!Array.isArray(rows)) return null
-  const roles = await Promise.all(rows.map(object).filter(row => {
+  const grants = await Promise.all(rows.map(object).filter(row => {
     const agent = object(row.agent)
     return identifier(row.tabId) && identifier(agent.id) && agent.machineId === machineId
       && agent.harnessId === harnessId && row.stopRequested !== true
@@ -55,12 +63,13 @@ export async function swarmRoleFor(core: CoreApi, machineId: string, harnessId: 
       && agent.harnessId === harnessId && agent.machineId === machineId && agent.workDecision !== 'stop')
     if (!agent) return null
     const groups = (Array.isArray(state.conversations) ? state.conversations.map(object) : []).filter(group => group.archived !== true)
-    if (groups.some(group => group.leadId === target.id)) return 'lead'
-    return groups.some(group => Array.isArray(group.agentIds) && group.agentIds.includes(target.id)
+    const led = groups.find(group => group.leadId === target.id)
+    if (led) return { role: 'lead' as const, mode: groupSkillMode(state, led) }
+    const member = groups.find(group => Array.isArray(group.agentIds) && group.agentIds.includes(target.id)
       || object(group.assignment).agentId === target.id && object(object(group.assignment).execution).machineId === machineId)
-      ? agent.role === 'reviewer' ? 'review' : 'dev' : null
+    return member ? { role: agent.role === 'reviewer' ? 'review' as const : 'dev' as const, mode: groupSkillMode(state, member) } : null
   }))
-  return (['lead', 'dev', 'review'] as const).find(role => roles.includes(role)) ?? null
+  return (['lead', 'dev', 'review'] as const).map(role => grants.find(grant => grant?.role === role)).find(Boolean) ?? null
 }
 
 interface Entry {
@@ -73,7 +82,8 @@ interface Entry {
   receipt?: string
 }
 interface Journal { version: 1; machineId: string; entries: Record<string, Entry> }
-interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string } }
+/** `skillMode` is the agent's project's skills; a row without it (an older backend, a project from before modes) is orchestration. */
+interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string }; skillMode?: unknown }
 export interface SuperTabHostOptions {
   now?: () => number
   write?: (file: string, journal: Journal) => void
@@ -127,6 +137,8 @@ export class SuperTabHost {
   private readonly log: (message: string) => void
   private retentionError: string | null = null
   private readonly observers: typeof publishObservers
+  /** Share was asked to run once a roster here first named someone to show an agent to. */
+  private shareWoken = false
   private readonly attachedFiles: typeof attachedFiles
   private readonly prepareContribution: typeof prepareContribution
   /** Per tab the roster marks, the add in progress or when the next may run. */
@@ -166,8 +178,12 @@ export class SuperTabHost {
   /** When each running Swarm session's skill is next compared with the built-in text: once per host, and again while
    *  its re-read notice is still owed. */
   private readonly skillChecks = new Map<string, number>()
+  /** The mode each session's skill was last compared with: a change makes it due again at once. */
+  private readonly skillModes = new Map<string, SwarmSkillMode>()
   private skillsRunning: Promise<void> | null = null
   private missing = new Map<string, number>()
+  /** A Lead's reads of and typing into this machine's agents' terminals, and the stuck and usage-limit alerts. */
+  private readonly terminal: TerminalHost
 
   constructor(private readonly core: CoreApi, readonly machineId: string, options: SuperTabHostOptions = {}) {
     if (!identifier(machineId)) throw new SuperTabHostError('MACHINE_UNAVAILABLE', 'This machine is not signed in.')
@@ -179,6 +195,7 @@ export class SuperTabHost {
     this.now = options.now ?? Date.now
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
+    this.terminal = new TerminalHost(core, machineId, { now: this.now, log: this.log })
     this.journal = { version: 1, machineId, entries: {} }
     if (existsSync(this.file)) {
       const raw = readFileSync(this.file, 'utf8')
@@ -226,7 +243,9 @@ export class SuperTabHost {
     this.native?.stop()
     this.machines?.stop()
     this.authorized.clear()
-    try { this.observers(this.core.dataDir, this.machineId, [], 0) } catch { /* The old snapshot expires. */ }
+    // An empty roster in force, which Share reads as everyone gone and withdraws their invitations; a lapsed one
+    // would only pause their views (superTabs/observers.ts `known`).
+    try { this.observers(this.core.dataDir, this.machineId, [], this.now() + OBSERVER_VALID_MS) } catch { /* The old snapshot expires. */ }
     // Signed out or another machine: this host's alerts are no longer anyone's. A core that is gone heard nothing, and
     // the next host's first roster replaces them anyway.
     if (this.attention !== null && this.attention !== '[]') {
@@ -426,7 +445,6 @@ export class SuperTabHost {
     return this.core.turns.leaseDeliveries('superTabs', Object.fromEntries(this.authorized))
   }
   private async poll(): Promise<void> {
-    const requestedAt = this.now()
     const data = await backend(this.core, 'GET', `/api/super-tabs/hosts/${this.machineId}`)
     if (this.stopped) return
     if (!Array.isArray(data)) throw new Error('Invalid Super Tab host roster.')
@@ -441,9 +459,13 @@ export class SuperTabHost {
       if (message !== this.retentionError) this.log(message)
       this.retentionError = message
     }
-    this.observers(this.core.dataDir, this.machineId, data, requestedAt + 2500)
+    // Valid from this answer until the next is due, slow reads included, so it never lapses between two reads.
+    this.observers(this.core.dataDir, this.machineId, data, this.now() + OBSERVER_VALID_MS)
+    this.wakeShare(data)
     this.publishAttention(data)
     this.joinSwarms(data)
+    // Off the poll: a screen read waits on the core, and never delays the input leases below.
+    if (this.core.superTabs) void this.terminal.tick(data)
     // Recovery can wait on a native receipt. Run it beside leases, so another worker's input
     // never expires while an old Change agent is being reconciled.
     if (!this.replacementsRunning && this.now() >= this.nextReplacementsAt) {
@@ -524,20 +546,26 @@ export class SuperTabHost {
   private async refreshSkill(target: HostAgent): Promise<void> {
     const session = this.core.agents.byAgent(target.agent.harnessId)
     const skill = session?.swarmSkill
+    const mode: SwarmSkillMode = target.skillMode === 'default' ? 'default' : 'orchestration'
+    // A checked session waits for the next host (Infinity); the project's owner switching its skills must reach it now.
+    if (this.skillModes.get(target.agent.harnessId) !== mode) {
+      this.skillModes.set(target.agent.harnessId, mode)
+      this.skillChecks.delete(target.agent.harnessId)
+    }
     const due = this.skillChecks.get(target.agent.harnessId) ?? 0
     if (!skill || !session.cwd || this.now() < due) return
     this.skillChecks.set(target.agent.harnessId, Infinity)
     try {
-      const refresh = refreshSwarmSkill(session.cwd, skill)
+      const refresh = refreshSwarmSkill(session.cwd, skill, mode)
       if (!refresh?.owed) return
-      if (await this.tellSkill(target, skill, refresh)) recordSwarmSkillNotice(session.cwd, skill, refresh.version)
+      if (await this.tellSkill(target, refresh)) recordSwarmSkillNotice(session.cwd, skill, refresh)
       else this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
     } catch (error) {
       this.log(error instanceof Error ? error.message : String(error))
       this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
     }
   }
-  private async tellSkill(target: HostAgent, skill: SwarmSkill, refresh: { file: string; version: string }): Promise<boolean> {
+  private async tellSkill(target: HostAgent, refresh: SkillRefresh): Promise<boolean> {
     const id = target.agent.id
     const answer = object(await backend(this.core, 'GET', `/api/super-tabs/${target.tabId}?asAgentId=${id}`))
     const groups = (Array.isArray(object(answer.state).conversations) ? object(answer.state).conversations as unknown[] : []).map(object)
@@ -546,9 +574,9 @@ export class SuperTabHost {
     if (!group) return false
     try {
       await backend(this.core, 'POST', `/api/super-tabs/${target.tabId}/commands`, {
-        operationId: `skill-${id}-${refresh.version.slice(0, 32)}`, asAgentId: id,
-        command: { type: 'message.send', conversationId: group.id, replyTo: null, recipientIds: [id],
-          text: `Harness updated your built-in swarm-${skill.role} skill. Before your next step, read ${JSON.stringify(refresh.file)} again with your file or shell tool and follow the new version.` },
+        // A switch back to an earlier mode's text is a new rewrite, so its count keeps it from reusing that text's id.
+        operationId: `skill-${id}-${refresh.version.slice(0, 32)}${refresh.change ? `-${refresh.change}` : ''}`, asAgentId: id,
+        command: { type: 'message.send', conversationId: group.id, replyTo: null, recipientIds: [id], text: refresh.notice },
       })
     } catch (error) {
       // The notice was sent, but its record was lost (a crash, a restart, another daemon) and its group has changed since:
@@ -585,6 +613,12 @@ export class SuperTabHost {
 
   /** Hands the core this roster's waits when they changed (or on the first roster). A failed roster read changes
    *  nothing: a network blip does not close an alert. */
+  private wakeShare(rows: unknown[]): void {
+    if (this.shareWoken || !rows.some(row => Array.isArray((row as { observers?: unknown }).observers)
+      && ((row as { observers: unknown[] }).observers.length > 0))) return
+    this.shareWoken = true
+    this.core.superTabs?.shareObservers()
+  }
   private publishAttention(rows: unknown[]): void {
     // A harness the core's live list misses for a moment (a process-side snapshot between reads, a restart of its
     // terminal) keeps its wait for 3 s: closing and raising it again would alert twice for the same wait.

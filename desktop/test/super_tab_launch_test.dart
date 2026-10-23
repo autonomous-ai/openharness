@@ -13,6 +13,7 @@ import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/super_tabs/launch.dart';
 import 'package:harness/super_tabs/client.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/ws/local_cli_discovery.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -158,7 +159,8 @@ class SuperTabFixtureConnection extends WsConn {
           'cwd': '/work/project',
           'scope': 'swarm',
           'engines': ['claude', 'codex', 'pi'],
-          'maxAgents': 4,
+          'maxAgents': 8,
+          'maxAvailableAgents': 16,
         };
       }
       if (payload['action'] == 'prepareNative' ||
@@ -186,12 +188,15 @@ class SuperTabFixtureConnection extends WsConn {
       if (payload['path'] == '/api/super-tabs' && payload['method'] == 'POST') {
         final body = payload['body'] as Map;
         server.state['projects'] ??= [
-          projectFixture(
-            'lead',
-            'Swarm',
-            'lead',
-            visibility: body['projectVisibility'] as String? ?? 'public',
-          ),
+          {
+            ...projectFixture(
+              'lead',
+              'Swarm',
+              'lead',
+              visibility: body['projectVisibility'] as String? ?? 'public',
+            ),
+            'skillMode': 'default',
+          },
         ];
         return {
           'ok': true,
@@ -338,6 +343,7 @@ class SuperTabLaunchFixture {
   SuperTabLaunchFixture({
     bool local = false,
     SuperTabFixtureConnection Function(MemoryStore)? connectionFactory,
+    LocalCliDiscovery? discovery,
   }) {
     connection =
         connectionFactory?.call(store) ??
@@ -346,6 +352,7 @@ class SuperTabLaunchFixture {
       store: store,
       connectionForTest: (_) => connection,
       connected: true,
+      localCliDiscovery: discovery,
     );
     app.machineStates['m']!
       ..localOnly = true
@@ -362,11 +369,20 @@ class SuperTabLaunchFixture {
       email: 'owner@example.com',
     );
     app.markSuperTabDraft(app.activeSwarmId);
-    addTearDown(app.dispose);
+    addTearDown(dispose);
   }
   final store = MemoryStore();
   late final AppNotifier app;
   late final SuperTabFixtureConnection connection;
+  bool _disposed = false;
+
+  /// Once. A widget test whose app read a machine list must call it itself: Flutter checks for pending timers (the
+  /// list's safety net) before tear-downs run.
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    app.dispose();
+  }
 
   Future<NewHarnessController> box({
     String engine = 'codex',
@@ -461,6 +477,10 @@ void main() {
               .$2;
           expect(request['permissionMode'], 'full');
           expect(request['swarmRole'], kind == 'member' ? 'dev' : 'lead');
+          expect(
+            request['swarmSkillMode'],
+            kind == 'member' ? 'orchestration' : 'default',
+          );
           await Future<void>.delayed(Duration.zero);
           final ordinary = NewHarnessController(
             f.app,
@@ -877,6 +897,24 @@ void main() {
       expect(create['prompt'], contains('swarm-dev'));
     });
   }
+
+  test(
+    'a Desktop Builder starts with the existing project skill mode',
+    () async {
+      final f = SuperTabLaunchFixture();
+      f.connection.server.state['projects'] = [
+        {...projectFixture('lead', 'Company', 'lead'), 'skillMode': 'default'},
+      ];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box();
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      final create = f.connection.calls
+          .firstWhere((c) => c.$1 == 'agent_create')
+          .$2;
+      expect(create['swarmRole'], 'dev');
+      expect(create['swarmSkillMode'], 'default');
+    },
+  );
 
   test('the lead prompt routes before starting or assigning work', () async {
     final f = SuperTabLaunchFixture()..connection.nativeName = 'hi';

@@ -36,21 +36,21 @@ export async function prepareContribution(core: CoreApi, input: Json, deps = {
   const connection = await deps.open({ dataDir: core.dataDir, port: core.daemon.port, machineId })
   try {
     const [probe, capability] = await Promise.all([
-      connection.request('engines_probe', { accounts: true }, 20_000),
+      connection.request('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000),
       deps.capacity({ cwd, tools: ['git'], devices: [] }),
     ])
     const engines = (Array.isArray(probe.engines) ? probe.engines.map(object) : [])
-      .filter(e => identifier(e.engine) && e.engine !== 'terminal' && e.installed === true && e.signedIn !== false)
+      .filter(e => (e.engine === 'claude' || e.engine === 'codex') && e.installed === true)
       .map(e => e.engine as string)
-    if (!engines.length) throw new Error('Sign in to an agent on this machine, then try again.')
+    if (!engines.length) throw new Error('Install Claude Code or Codex on this machine, then try again.')
     const resources = object('resources' in capability ? capability.resources : null)
     if (capability.ok !== true || typeof resources.projectDiskFreeBytes !== 'number') throw new Error('The project folder is unavailable on this machine.')
-    const available = typeof resources.memoryTotalBytes === 'number' && typeof resources.memoryUsedBytes === 'number'
-      ? Math.max(0, resources.memoryTotalBytes - resources.memoryUsedBytes) : 0
-    // A ceiling, not a promise: each actual start still needs 2 GiB free at that moment (START_REQUIREMENTS), so it
-    // matches that. At 4 GiB a 32 GiB Mac with 5 GiB free offered one slot while it could run two.
-    const maxAgents = Math.max(1, Math.min(8, Math.floor(available / START_REQUIREMENTS.memoryBytes)))
-    return { ok: true, state: 'ready', cwd, engines: [...new Set(engines)], maxAgents, ...(swarm ? { scope: 'swarm' } : {}) }
+    const total = typeof resources.memoryTotalBytes === 'number' ? resources.memoryTotalBytes : 0
+    // Free memory is checked again for every start. It must not shrink the machine's
+    // configured limit just because other work happens to be running during setup.
+    const maxAvailableAgents = Math.max(1, Math.min(16, Math.floor(total / START_REQUIREMENTS.memoryBytes)))
+    const maxAgents = Math.max(1, Math.min(16, Math.floor(total / (2 * START_REQUIREMENTS.memoryBytes))))
+    return { ok: true, state: 'ready', cwd, engines: [...new Set(engines)], maxAgents, maxAvailableAgents, ...(swarm ? { scope: 'swarm' } : {}) }
   } finally { connection.close() }
 }
 

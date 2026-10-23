@@ -186,14 +186,15 @@ class ConversationServer {
           projectFixture('lead', state['name'] as String, 'lead'),
         ];
         final id = 'project-$revision', leadId = 'lead-$revision';
-        (projects as List).add(
-          projectFixture(
+        (projects as List).add({
+          ...projectFixture(
             id,
             command['name'] as String,
             leadId,
             visibility: command['visibility'] as String,
           ),
-        );
+          'skillMode': 'default',
+        });
         (state['conversations'] as List).add({
           ...conversationFixture(leadId, 'Lead'),
           'projectId': id,

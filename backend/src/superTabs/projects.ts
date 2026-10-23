@@ -1,7 +1,10 @@
-import { activeWork, agent, author, conversation, fail, nextConversationNumber, person, type Actor, type Agent, type Conversation, type SuperTabState } from './model.js'
+import { activeWork, agent, author, conversation, fail, isLeads, nextConversationNumber, person, type Actor, type Agent, type Conversation, type SuperTabState } from './model.js'
 import type { SwarmRule } from './rules.js'
 
 export type ProjectVisibility = 'public' | 'private'
+/** Which built-in skill texts the project's agents get: Default (the team process only) or today's Harness orchestration. */
+export type SkillMode = 'default' | 'orchestration'
+export const SKILL_MODE_NAMES: Record<SkillMode, string> = { default: 'Default', orchestration: 'Harness orchestration' }
 export interface SwarmProject {
   id: string
   name: string
@@ -20,7 +23,11 @@ export interface SwarmProject {
     requestMessageId?: string
   }
   repository?: { machineId: string; cwd: string; repositoryUrl: string | null }
+  /** Absent on projects from before skill modes, which keep the texts their agents already run. */
+  skillMode?: SkillMode
 }
+
+export const skillModeOf = (project: SwarmProject): SkillMode => project.skillMode ?? 'orchestration'
 
 /** Existing tabs are one project; their conversation IDs and messages stay intact. */
 export function projectsOf(state: SuperTabState): SwarmProject[] {
@@ -36,12 +43,22 @@ export function projectOf(state: SuperTabState, projectId: string): SwarmProject
 }
 
 export function groupProject(state: SuperTabState, group: Conversation): SwarmProject {
+  if (isLeads(group)) fail('LEADS_CONVERSATION', 'The Leads conversation is only for messages between Leads and people.')
   return projectOf(state, group.projectId ?? 'lead')
 }
 
 export function agentProjectId(state: SuperTabState, target: Agent): string {
   return target.projectId ?? state.conversations.find(c => c.agentIds.includes(target.id))?.projectId ?? 'lead'
 }
+
+/** The project whose Lead (Product Manager) this agent is: the Lead of that project's Lead conversation. */
+export function ledProject(state: SuperTabState, agentId: string): SwarmProject | undefined {
+  return projectsOf(state).find(p => state.conversations.some(c => c.id === p.leadConversationId && c.leadId === agentId))
+}
+
+/** Whose active work other projects' Leads see and are alerted about. A private project's work stays with its own people:
+ *  the Leads conversation is read by the whole Swarm. */
+export const sharedWithLeads = (project: SwarmProject): boolean => project.visibility !== 'private'
 
 export function canReadProject(state: SuperTabState, actor: Actor, project: SwarmProject): boolean {
   if (actor.kind === 'agent') {
@@ -62,6 +79,11 @@ export function readProject(state: SuperTabState, actor: Actor, projectId: strin
 
 export function readConversation(state: SuperTabState, actor: Actor, conversationId: string): Conversation {
   const group = conversation(state, conversationId)
+  if (isLeads(group)) {
+    author(state, actor)
+    if (actor.kind === 'agent' && !ledProject(state, actor.agentId)) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
+    return group
+  }
   readProject(state, actor, groupProject(state, group).id)
   return group
 }
@@ -102,7 +124,7 @@ export function manageProject(state: SuperTabState, actor: Actor, projectId: str
  * Pending starts must be reconciled first; terminal-history privacy bindings remain permanent. */
 export function deleteProject(state: SuperTabState, actor: Actor, projectId: string): void {
   const project = manageProject(state, actor, projectId)
-  const groups = state.conversations.filter(c => groupProject(state, c).id === project.id)
+  const groups = state.conversations.filter(c => !isLeads(c) && groupProject(state, c).id === project.id)
   const groupIds = new Set(groups.map(c => c.id))
   if (state.starts?.some(s => groupIds.has(s.request.conversationId) && !s.error &&
     (!s.harnessId || s.poolGeneration && !s.poolSettled))) {

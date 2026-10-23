@@ -6265,6 +6265,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           agent.harnessId == row.agentId,
                     )
                     .firstOrNull;
+                final native = app
+                    .stateOf(row.machineId ?? '')
+                    ?.agents
+                    .where((agent) => agent.id == row.agentId)
+                    .firstOrNull;
+                final engine = agent?.engine ?? native?.engine ?? row.engine;
+                if (engine != null &&
+                    engine != 'terminal' &&
+                    engine != 'claude' &&
+                    engine != 'codex') {
+                  return 'Only Claude Code or Codex can join this Swarm.';
+                }
                 if (agent != null) {
                   if (agent.projectId != contributionProject?.id) {
                     return 'This agent belongs to another project. Create a new agent here.';
@@ -6277,11 +6289,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
                       ? 'Already in this conversation.'
                       : null;
                 }
-                final native = app
-                    .stateOf(row.machineId ?? '')
-                    ?.agents
-                    .where((agent) => agent.id == row.agentId)
-                    .firstOrNull;
                 return native != null &&
                         native.engine != 'terminal' &&
                         native.terminalAvailable &&
