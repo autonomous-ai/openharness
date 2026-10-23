@@ -600,6 +600,125 @@ describe('private swarm projects on the real control API', () => {
   })
 })
 
+describe('since when a worker is down', () => {
+  async function downFixture() {
+    let now = 1_000_000
+    const timed = new SuperTabStore(db, () => now)
+    const tab = (await timed.create(owner, randomUUID(), 'Down since', 'public')).id
+    const execute = (command: Command, user = owner, asAgentId?: string) =>
+      timed.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
+    const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+    await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
+    await execute({ type: 'machine.contribute', machineId: 'test-host', name: 'Host', cwd: '/repo', engines: ['codex'], maxAgents: 4 }, host)
+    const leadHarness = randomUUID(), workerHarness = randomUUID()
+    const lead = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: leadHarness,
+      name: 'Lead', configuration: config, lead: true })).result.agentId)
+    const group = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief: 'Implement it',
+      checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
+    const worker = String((await execute({ type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: workerHarness,
+      name: 'Worker', configuration: config, lead: false })).result.agentId)
+    const assignmentId = String((await execute({ type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId)
+    const generation = (await timed.hostPools(host, 'test-host')).find(p => p.tabId === tab)!.machine.generation
+    const observe = (running: string[], stopped: string[] = []) => timed.observeMachine(host, tab, 'test-host', { generation,
+      resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
+        projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+      quotas: [], tools: {}, runningHarnessIds: running, stoppedHarnessIds: stopped })
+    // What the Lead reads with `status`.
+    const downSince = async (agentId: string) => (await timed.read(host, tab, lead)).state.agents.find(a => a.id === agentId)!.downSince
+    return { timed, tab, execute, lead, group, worker, assignmentId, leadHarness, workerHarness, observe, downSince,
+      clock: { get now() { return now }, set now(value: number) { now = value } } }
+  }
+  const iso = (ms: number) => new Date(ms).toISOString()
+
+  it('is set by a gone session, a confirmed stop and an offline machine, and cleared when the worker is back', async () => {
+    const f = await downFixture()
+    await f.observe([f.leadHarness, f.workerHarness])
+    expect(await f.downSince(f.worker)).toBeUndefined()
+
+    // The host no longer lists the session as running.
+    f.clock.now += 1_000
+    const gone = f.clock.now
+    await f.observe([f.leadHarness])
+    f.clock.now += 1_000
+    await f.observe([f.leadHarness])
+    expect(await f.downSince(f.worker)).toBe(iso(gone))
+    expect(await f.downSince(f.lead)).toBeUndefined()
+    await f.observe([f.leadHarness, f.workerHarness])
+    expect(await f.downSince(f.worker)).toBeUndefined()
+
+    // The host confirms the session stopped, before its next reading.
+    f.clock.now += 1_000
+    const stopped = f.clock.now
+    await f.timed.stopped(host, f.tab, f.assignmentId, 'fixture-native-stop')
+    expect(await f.downSince(f.worker)).toBe(iso(stopped))
+    f.clock.now += 1_000
+    await f.observe([f.leadHarness], [f.workerHarness])
+    expect(await f.downSince(f.worker)).toBe(iso(stopped))
+    await f.observe([f.leadHarness, f.workerHarness])
+    expect(await f.downSince(f.worker)).toBeUndefined()
+
+    // The machine stops sending readings: down since its last one, kept when it returns without the session.
+    f.clock.now += 1_000
+    const lastReading = f.clock.now
+    await f.observe([f.leadHarness, f.workerHarness])
+    f.clock.now += 45_000
+    expect(await f.downSince(f.worker)).toBeUndefined()
+    f.clock.now += 1
+    expect(await f.downSince(f.worker)).toBe(iso(lastReading))
+    expect(await f.downSince(f.lead)).toBe(iso(lastReading))
+    f.clock.now += 60_000
+    await f.observe([f.leadHarness])
+    expect(await f.downSince(f.worker)).toBe(iso(lastReading))
+    expect(await f.downSince(f.lead)).toBeUndefined()
+  })
+
+  it('names a worker down two hours or more in the Lead\'s scheduled wake-up, once per time it went down', async () => {
+    const f = await downFixture()
+    const wakeUps = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: 'lead' }, orderBy: { sequence: 'asc' } }))
+      .filter(m => (m.source as Record<string, unknown>)?.kind === 'update-request')
+    const poll = async () => (await f.timed.deliveries(host, f.tab, f.lead)).filter(d => d.conversationId === 'lead')
+    // The Lead acknowledges through the revision its wake-up names.
+    const acknowledge = async () => f.execute({ type: 'project.report', projectId: 'lead',
+      throughRevision: ((await wakeUps()).at(-1)!.source as { throughRevision: number }).throughRevision, text: null }, host, f.lead)
+    await f.observe([f.leadHarness, f.workerHarness])
+    f.clock.now += 300_000
+    expect(await poll()).toHaveLength(1)
+    await acknowledge()
+    expect(await poll()).toEqual([])
+
+    const down = f.clock.now
+    await f.observe([f.leadHarness, f.workerHarness])
+    await f.observe([f.leadHarness])
+    f.clock.now = down + 2 * 3_600_000 - 60_000
+    await f.execute({ ...message('A new report'), conversationId: f.group } as Command)
+    f.clock.now += 59_999
+    expect(await poll()).toEqual([])
+    f.clock.now++
+    expect(await poll()).toHaveLength(1)
+    const named = (await wakeUps()).at(-1)!
+    expect(named.text).toContain(`Worker (down since ${iso(down)}; task "Ship the parser")`)
+    expect(named.text).not.toContain('Lead (down')
+    expect(named.text).not.toContain('Consolidate')
+    expect(await poll()).toHaveLength(1)
+    await acknowledge()
+    // The report that was not yet due still gets its own request.
+    f.clock.now += 240_000
+    expect(await poll()).toHaveLength(1)
+    expect((await wakeUps()).at(-1)!.text).toContain('Consolidate new reports')
+    await acknowledge()
+    f.clock.now += 3 * 3_600_000
+    expect(await poll()).toEqual([])
+
+    await f.observe([f.leadHarness, f.workerHarness])
+    const again = f.clock.now
+    await f.observe([f.leadHarness])
+    f.clock.now += 2 * 3_600_000
+    expect(await poll()).toHaveLength(1)
+    expect((await wakeUps()).at(-1)!.text).toContain(`Worker (down since ${iso(again)}`)
+    expect(await wakeUps()).toHaveLength(4)
+  })
+})
+
 describe('Super Tabs on a real Mongo replica set', () => {
   it('contributes project capacity without sharing the computer and fences host execution', async () => {
     const tab = (await store.create(owner, randomUUID(), 'Machine pool')).id

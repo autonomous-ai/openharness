@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
+import { downSince } from './machines.js'
 import { canReadAgent, canReadProject, groupProject, placeRules, projectsOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
@@ -36,6 +37,10 @@ export interface Agent {
   configurationVersion?: string
   /** Fences a repeated Change agent report without rolling back later model observations. */
   replacement?: { previousHarnessId: string; harnessId: string }
+  /** When a reading first showed its session gone or its host confirmed a stop; cleared when it is back (machines.ts). */
+  downSince?: string
+  /** The down time already named in the Lead's scheduled wake-up (projectUpdates.ts), so each time down is named once. */
+  downNamed?: string
 }
 export type AgentRole = 'builder' | 'reviewer'
 export const agentRole = (agent: Pick<Agent, 'role'>): AgentRole => agent.role ?? 'builder'
@@ -271,10 +276,15 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
 }
 
 /** Pending invitations are management data, not part of the shared conversation. */
-export function visibleState(state: SuperTabState, actor: Actor): SuperTabState {
+export function visibleState(state: SuperTabState, actor: Actor, now = Date.now()): SuperTabState {
   author(state, actor)
   const visible = structuredClone(state)
   assignAgentDisplayNames(visible.agents)
+  for (const target of visible.agents) {
+    const since = downSince(state, target, now)
+    if (since) target.downSince = since
+    delete target.downNamed
+  }
   delete visible.sharing
   delete visible.harnessReservations
   delete visible.releasedHarnesses
