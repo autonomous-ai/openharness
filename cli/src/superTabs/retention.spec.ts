@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, wr
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { RETENTION_LAPSE_MS, retainContributions, retainedHarnesses, retentionFile } from './retention.js'
+import { RETENTION_LAPSE_MS, retainContributions, retainedHarnesses, retainedLeads, retentionFile } from './retention.js'
 
 const roots: string[] = []
 const root = () => { const dir = mkdtempSync(join(tmpdir(), 'super-retention-')); roots.push(dir); return dir }
@@ -57,4 +57,24 @@ it('pauses cleanup on corrupt or oversized retention until the host rewrites it 
   expect([...retainedHarnesses(dir, now)]).toEqual(['multiply'])
   unlinkSync(file)
   expect([...retainedHarnesses(dir, now)]).toEqual([])
+})
+
+// The owner, 2026-10-23: the Lead of an active project is never stopped, in any case. It is kept from cleanup even when
+// its groups read as archived, and never lapses: a machine signed out for a week still keeps its Lead.
+it('keeps a Lead apart, never lapses it, and releases it only when a confirmed roster no longer marks it', () => {
+  const dir = root(), now = Date.now()
+  expect([...retainedLeads(dir)]).toEqual([])
+  retainContributions(dir, 'machine', [row('lead', { lead: true, active: false }), row('worker'), row('foreign-lead', { lead: true }, 'other')], now)
+  expect([...retainedLeads(dir)]).toEqual(['lead'])
+  expect([...retainedHarnesses(dir, now)]).toEqual(['lead', 'worker'])
+  expect([...retainedHarnesses(dir, now + RETENTION_LAPSE_MS + 1000)]).toEqual(['lead'])
+  retainContributions(dir, 'machine', [row('lead', { closeSession: true }), row('worker')], now)
+  expect([...retainedLeads(dir)]).toEqual([])
+})
+
+it('reads no Lead from a missing or unreadable file rather than failing a close', () => {
+  const dir = root()
+  retainContributions(dir, 'machine', [row('lead', { lead: true })])
+  writeFileSync(retentionFile(dir), '{')
+  expect([...retainedLeads(dir)]).toEqual([])
 })

@@ -9,7 +9,9 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, utimesSync, 
 import { dirname, join } from 'node:path'
 import { identifier, object } from './wire.js'
 
-interface Retention { version: 2; machineId: string; harnesses: string[] }
+/** `leads`: the Leads of active projects here, which never lapse (owner, 2026-10-23: the Lead of an active project is never
+ *  stopped in any case). Absent in a file from before Leads were kept. */
+interface Retention { version: 2; machineId: string; harnesses: string[]; leads?: string[] }
 export const retentionFile = (dataDir: string) => join(dataDir, 'super-tabs', 'retained.json')
 export const RETENTION_LAPSE_MS = 7 * 24 * 60 * 60_000
 const REFRESH_MS = 60 * 60_000
@@ -18,7 +20,8 @@ function read(file: string): Retention {
   if (statSync(file).size > 4 * 1024 * 1024) throw new Error('Super Tab retention is too large. Automatic cleanup is paused.')
   let value: Record<string, unknown> = {}
   try { value = object(JSON.parse(readFileSync(file, 'utf8'))) } catch { /* reported below */ }
-  if (value.version !== 2 || !identifier(value.machineId) || !Array.isArray(value.harnesses) || !value.harnesses.every(identifier)) {
+  if (value.version !== 2 || !identifier(value.machineId) || !Array.isArray(value.harnesses) || !value.harnesses.every(identifier)
+    || (value.leads !== undefined && (!Array.isArray(value.leads) || !value.leads.every(identifier)))) {
     throw new Error('Super Tab retention is unreadable. Automatic cleanup is paused.')
   }
   return value as unknown as Retention
@@ -27,21 +30,29 @@ function read(file: string): Retention {
 export function retainedHarnesses(dataDir: string, now = Date.now()): Set<string> {
   const file = retentionFile(dataDir)
   // An unreadable file fails closed only until it lapses; the host rewrites it on its next roster.
-  if (!existsSync(file) || now - statSync(file).mtimeMs > RETENTION_LAPSE_MS) return new Set()
+  if (!existsSync(file)) return new Set()
+  if (now - statSync(file).mtimeMs > RETENTION_LAPSE_MS) return retainedLeads(dataDir)
   return new Set(read(file).harnesses)
+}
+
+/** The Leads here, for the core's close guard: a file that cannot be read names none, so a corrupt file never stops every
+ *  close on this machine; the host rewrites it on its next roster. */
+export function retainedLeads(dataDir: string): Set<string> {
+  try { return new Set(read(retentionFile(dataDir)).leads) } catch { return new Set() }
 }
 
 export function retainContributions(dataDir: string, machineId: string, rows: unknown[], now = Date.now()): void {
   if (!identifier(machineId)) throw new Error('Invalid Super Tab retention machine.')
-  const ids = new Set<string>()
+  const ids = new Set<string>(), leads = new Set<string>()
   for (const item of rows) {
     const row = object(item), agent = object(row.agent)
     if (!identifier(row.tabId) || !identifier(agent.harnessId) || agent.machineId !== machineId) continue
-    if (row.active === false) continue
+    if (row.lead === true) leads.add(agent.harnessId)
+    else if (row.active === false) continue
     ids.add(agent.harnessId)
   }
   const file = retentionFile(dataDir)
-  const next: Retention = { version: 2, machineId, harnesses: [...ids].sort() }
+  const next: Retention = { version: 2, machineId, harnesses: [...ids].sort(), leads: [...leads].sort() }
   // This machine's confirmed roster is authoritative: it replaces an unreadable
   // file and another identity's entry. Unchanged rosters only refresh the lapse clock.
   let previous: Retention | null = null
