@@ -39,7 +39,7 @@ class AttachmentTooLarge implements Exception {
 /// The file at [url], or [AttachmentTooLarge] once it passes [maxBytes]:
 /// read as it arrives, so a file larger than it says is cut off, not read
 /// whole. A redirect is refused, since it could lead off the attachments
-/// host; a browser follows one itself, so there it is refused after the fact.
+/// host.
 Future<Uint8List> fetchAttachment(Uri url, {int? maxBytes}) async {
   final dio = Dio();
   try {
@@ -52,9 +52,6 @@ Future<Uint8List> fetchAttachment(Uri url, {int? maxBytes}) async {
       ),
     );
     final body = answer.data!;
-    if (answer.isRedirect || body.isRedirect) {
-      throw StateError('The attachments host redirected $url.');
-    }
     final bytes = BytesBuilder(copy: false);
     await for (final chunk in body.stream) {
       bytes.add(chunk);
@@ -70,8 +67,11 @@ Future<Uint8List> fetchAttachment(Uri url, {int? maxBytes}) async {
 }
 
 /// Whether [file] opens in the text viewer: text by its name, as Finder tells
-/// it, and small enough to read in place.
+/// it, and small enough to read in place. Never in a browser, whose fetch
+/// follows redirects and loads a body whole before the page sees it; there
+/// the file opens in a new tab.
 bool opensAsText(SuperTabAttachment file) =>
+    !kIsWeb &&
     file.size <= kAttachmentTextMaxBytes &&
     switch (finderFileKind(file.name)) {
       FinderFileKind.text || FinderFileKind.markdown => true,
