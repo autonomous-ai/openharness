@@ -45,7 +45,7 @@ Future<void> showProjectAction(
               title: Text(switch (action) {
                 'rename' => 'Rename project',
                 'sharing' => 'Sharing',
-                'skills' => 'Skills for this project',
+                'skills' => 'Instructions for this project',
                 'cadence' => 'Project updates',
                 _ => 'Project details',
               }),
@@ -136,6 +136,11 @@ Future<void> showProjectAction(
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            Text(
+                              'Instructions',
+                              style: DesktopChrome.metadata(),
+                            ),
+                            const SizedBox(height: 8),
                             RadioGroup<String>(
                               groupValue: mode,
                               onChanged: (value) {

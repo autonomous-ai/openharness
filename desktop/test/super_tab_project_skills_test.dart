@@ -169,10 +169,10 @@ void main() {
     return server;
   }
 
-  Future<void> openSkills(WidgetTester tester) async {
+  Future<void> openInstructions(WidgetTester tester) async {
     await tester.tap(find.byTooltip('Project options'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(MenuItemButton, 'Skills'));
+    await tester.tap(find.widgetWithText(MenuItemButton, 'Instructions'));
     await tester.pumpAndSettle();
   }
 
@@ -180,8 +180,13 @@ void main() {
     tester,
   ) async {
     final server = await mount(tester);
-    await openSkills(tester);
-    expect(find.text('Skills for this project'), findsOneWidget);
+    await openInstructions(tester);
+    expect(find.text('Instructions for this project'), findsOneWidget);
+    expect(find.text('Instructions'), findsOneWidget);
+    expect(
+      find.textContaining(RegExp('skill', caseSensitive: false)),
+      findsNothing,
+    );
     expect(
       find.text(
         'Default — the team process; agents otherwise work their usual way',
@@ -219,7 +224,7 @@ void main() {
     'owner sees Default selected for a project already in that mode',
     (tester) async {
       final server = await mount(tester, skillMode: 'default');
-      await openSkills(tester);
+      await openInstructions(tester);
       expect(
         tester
             .widget<RadioGroup<String>>(find.byType(RadioGroup<String>))
@@ -232,13 +237,13 @@ void main() {
     },
   );
 
-  testWidgets('collaborator does not see Skills in the project menu', (
+  testWidgets('collaborator does not see Instructions in the project menu', (
     tester,
   ) async {
     final server = await mount(tester, account: 'peer');
     await tester.tap(find.byTooltip('Project options'));
     await tester.pumpAndSettle();
-    expect(find.widgetWithText(MenuItemButton, 'Skills'), findsNothing);
+    expect(find.widgetWithText(MenuItemButton, 'Instructions'), findsNothing);
     expect(server.posts, isEmpty);
   });
 
@@ -264,7 +269,7 @@ void main() {
     tester,
   ) async {
     final server = await mount(tester, skillMode: 'default');
-    await openSkills(tester);
+    await openInstructions(tester);
     expect(
       tester
           .widget<RadioListTile<String>>(
@@ -318,7 +323,7 @@ void main() {
       addTearDown(tester.view.reset);
     }
     final server = await mount(tester, custom: true);
-    await openSkills(tester);
+    await openInstructions(tester);
     await captureWindow(tester, captureDir, 'custom-skills');
     await tester.tap(find.text('Edit custom roles'));
     await tester.pumpAndSettle();
@@ -333,13 +338,21 @@ void main() {
     );
     expect(find.text('# Lead'), findsOneWidget);
     expect(find.byKey(const ValueKey('role-delete-lead')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('role-edit-lead')));
+    await tester.pumpAndSettle();
+    expect(find.text('Product Manager instructions'), findsOneWidget);
+    expect(
+      find.textContaining(RegExp('skill', caseSensitive: false)),
+      findsNothing,
+    );
+    await captureWindow(tester, captureDir, 'custom-role-instructions');
   });
 
   testWidgets('backend refusal is shown when removing a role in use', (
     tester,
   ) async {
     final server = await mount(tester, custom: true);
-    await openSkills(tester);
+    await openInstructions(tester);
     await tester.tap(find.text('Edit custom roles'));
     await tester.pumpAndSettle();
     server.refuse = {
@@ -356,15 +369,18 @@ void main() {
 
   testWidgets('owner edits a role name and Markdown text', (tester) async {
     final server = await mount(tester, custom: true);
-    await openSkills(tester);
+    await openInstructions(tester);
     await tester.tap(find.text('Edit custom roles'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('role-edit-dev')));
     await tester.pumpAndSettle();
+    expect(find.text('Engineer instructions'), findsOneWidget);
     await tester.enterText(
       find.byKey(const ValueKey('role-name')),
       'Research Engineer',
     );
+    await tester.pump();
+    expect(find.text('Research Engineer instructions'), findsOneWidget);
     await tester.enterText(
       find.byKey(const ValueKey('role-text')),
       '# Research work',
@@ -395,15 +411,24 @@ void main() {
     tester,
   ) async {
     final server = await mount(tester, custom: true);
-    await openSkills(tester);
+    await openInstructions(tester);
     await tester.tap(find.text('Edit custom roles'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Add role'));
     await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const ValueKey('role-text')))
+          .decoration
+          ?.labelText,
+      'Instructions',
+    );
     await tester.enterText(
       find.byKey(const ValueKey('role-name')),
       'Security Reviewer',
     );
+    await tester.pump();
+    expect(find.text('Security Reviewer instructions'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('role-kind')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Reviewer').last);
@@ -432,12 +457,18 @@ void main() {
     tester,
   ) async {
     final server = await mount(tester, custom: true);
-    await openSkills(tester);
+    await openInstructions(tester);
     await tester.tap(find.text('Edit custom roles'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Reset to Default'));
     await tester.pumpAndSettle();
     expect(find.text('Reset custom roles to Default?'), findsOneWidget);
+    expect(
+      find.text(
+        'This replaces every custom role and its instructions. Agents using removed roles may need to stop or be reassigned first.',
+      ),
+      findsOneWidget,
+    );
     expect(server.posts, isEmpty);
     await tester.tap(find.widgetWithText(FilledButton, 'Reset'));
     await tester.pumpAndSettle();

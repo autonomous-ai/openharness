@@ -327,15 +327,17 @@ class _RolesEditorState extends State<_RolesEditor> {
                         controller: textController,
                         minLines: 5,
                         maxLines: 12,
-                        decoration: const InputDecoration(
-                          labelText: 'Skill text (Markdown)',
+                        decoration: InputDecoration(
+                          labelText: name.isEmpty
+                              ? 'Instructions'
+                              : '$name instructions',
                         ),
                         onChanged: (_) => update(() {}),
                       ),
                       if (duplicate)
                         const Text('Each role needs a different name.'),
                       if (utf8.encode(markdown).length > 65536)
-                        const Text('Skill text is limited to 64 KB.'),
+                        const Text('Instructions are limited to 64 KB.'),
                       if (error != null) Text(error!),
                     ],
                   ),
@@ -388,7 +390,7 @@ class _RolesEditorState extends State<_RolesEditor> {
       builder: (dialogContext) => AlertDialog(
         title: const Text('Reset custom roles to Default?'),
         content: const Text(
-          'This replaces every custom role and its skill text. Agents using removed roles may need to stop or be reassigned first.',
+          'This replaces every custom role and its instructions. Agents using removed roles may need to stop or be reassigned first.',
         ),
         actions: [
           TextButton(
