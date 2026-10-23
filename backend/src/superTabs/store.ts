@@ -1,4 +1,4 @@
-import { contributedEngines, machineContribution, machineObservationSchema, machineSlots, recordAgentPresence, type MachineObservation } from './machines.js'
+import { contributedEngines, machineContribution, machineObservationSchema, machineSlots, recordAgentPresence, removalPreview, type MachineObservation } from './machines.js'
 import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient, SuperTab, SuperTabDelivery } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
@@ -10,7 +10,7 @@ import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, MAX_AT
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
-import { canReadAgent, canReadProject, groupProject, ledProject, projectsOf, agentProjectId, readConversation, skillModeOf, type ProjectVisibility } from './projects.js'
+import { agentSetRole, canReadAgent, canReadProject, groupProject, ledProject, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, skillSetOf, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
@@ -64,8 +64,20 @@ async function restorePullRequestUrls(tx: Transaction, tabId: string, state: Sup
 const indexes = (state: SuperTabState) => ({
   memberIds: state.people.map(p => p.id), invitedEmails: state.invitations.map(i => i.email),
   machineIds: [...new Set([...state.agents.map(a => a.machineId), ...(state.machines ?? []).map(m => m.machineId),
-    ...state.conversations.filter(activeWork).map(c => c.assignment!.execution.machineId), ...(state.closingSessions ?? []).map(c => c.machineId)])],
+    ...state.conversations.filter(activeWork).map(c => c.assignment!.execution.machineId), ...(state.closingSessions ?? []).map(c => c.machineId),
+    ...(state.machineCleanups ?? []).map(c => c.machineId)])],
+  cleanupMachineIds: cleanups(state).map(c => c.machineId),
 })
+/** Removed machines whose host has not yet said it cleaned up: still listed (machine.removal), or past the 24 h fallback. */
+const cleanups = (state: SuperTabState) => [
+  ...(state.machines ?? []).flatMap(m => m.removal ? [{ machineId: m.machineId, removalId: m.removal.id, machineOwnerId: m.contributorId }] : []),
+  ...(state.machineCleanups ?? [])]
+
+/** A machine its owner removed: its host deletes the Swarm's folders for this tab, then says so (machine.cleaned).
+ *  The row has no agent, so a host from before removals skips it. */
+const cleanupRows = (tabId: string, state: SuperTabState, machineId: string, ownerId: string) =>
+  cleanups(state).filter(c => c.machineId === machineId && c.machineOwnerId === ownerId)
+    .map(({ removalId }) => ({ tabId, cleanup: { machineId, removalId } }))
 
 /** A host reads its 100 most recently changed Swarms. Unordered, a Swarm just joined could be cut by older ones, such as
  *  Swarms only waiting for this machine to close a removed agent's session. */
@@ -360,8 +372,8 @@ export class SuperTabStore {
         fail('FORBIDDEN', 'Only the execution host can confirm this removal.', 403)
       }
       if (hostMachineId && !['agent.startDispatch', 'agent.started', 'agent.startFailed', 'agent.startSettled', 'route.modelResult'].includes(command.type)) fail('FORBIDDEN', 'A host can only settle its queued starts.', 403)
-      // A removed agent's host confirms its close as the machine owner, who may have left the Swarm with it.
-      const actor: Actor = command.type === 'agent.sessionClosed' ? { kind: 'person', userId: user.sub, email: user.email }
+      // A removed agent's or machine's host confirms its close or cleanup as the machine owner, who may have left the Swarm with it.
+      const actor: Actor = command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned' ? { kind: 'person', userId: user.sub, email: user.email }
         : hostMachineId && 'startId' in command
           ? await this.poolHostActor(tx, user, original, hostMachineId, command.startId)
           : await this.actor(tx, user, original, asAgentId)
@@ -397,7 +409,7 @@ export class SuperTabStore {
         }
         return { revision: prior.revision, result: prior.result }
       }
-      if (command.type !== 'invite.accept' && command.type !== 'agent.sessionClosed') author(original, actor)
+      if (command.type !== 'invite.accept' && command.type !== 'agent.sessionClosed' && command.type !== 'machine.cleaned') author(original, actor)
       const context: CommandContext = { operationId, now: this.now() }
       if ('startId' in command && ['agent.startDispatch', 'agent.started', 'agent.startFailed', 'agent.startSettled', 'route.modelResult'].includes(command.type)) {
         const start = original.starts?.find(s => s.id === command.startId)
@@ -594,9 +606,10 @@ export class SuperTabStore {
         const start = original.starts?.find(s => s.id === command.startId)
         if (start?.routeDecisionId) await closeUnassignedStart(tx, tabId, start.routeDecisionId, start.id, 'failed', context.now)
       }
-      if (command.type === 'machine.remove') {
+      // Starts a removed machine failed, whether its owner removed it or left the Swarm with it, release their route holds.
+      if (command.type === 'machine.remove' || command.type === 'member.remove') {
         for (const start of original.starts ?? []) {
-          if (!start.routeDecisionId || start.request.machineId !== command.machineId || start.harnessId || start.error) continue
+          if (!start.routeDecisionId || start.harnessId || start.error) continue
           if (effects.state.starts?.find(s => s.id === start.id)?.error) {
             await closeUnassignedStart(tx, tabId, start.routeDecisionId, start.id, 'failed', context.now)
           }
@@ -607,6 +620,7 @@ export class SuperTabStore {
           stableId(s.request.machineId, s.harnessId) === command.agentId)
         if (start?.routeDecisionId) await closeUnassignedStart(tx, tabId, start.routeDecisionId, start.id, 'stopped', context.now)
       }
+      if (command.type === 'project.delete' || command.type.startsWith('project.role')) await this.writeRoleTexts(tx, tabId, effects.state, command)
       if (effects.terminal) await this.writeTerminal(tx, tabId, effects.terminal, context.now)
       if (command.type === 'work.cancel') {
         await closeAssignment(tx, tabId, command.assignmentId, 'cancelled', context.now)
@@ -710,6 +724,49 @@ export class SuperTabStore {
       if (row.usedBy) fail('ATTACHMENT_USED', 'This file was already sent. Attach it again to send it in another message.')
       return { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) }
     })
+  }
+
+  /** Keeps the project's stored texts equal to its custom set: the roles the command wrote, nothing for roles it dropped. */
+  private async writeRoleTexts(tx: Transaction, tabId: string, state: SuperTabState, command: Command) {
+    if (!('projectId' in command) || !command.projectId) return
+    const { projectId } = command
+    const kept = projectsOf(state).find(p => p.id === projectId)?.roles?.map(r => r.id) ?? []
+    await tx.superTabRoleText.deleteMany({ where: { tabId, projectId, roleId: { notIn: kept } } })
+    const written = command.type === 'project.role.set' ? [command.role]
+      : command.type === 'project.roles.create' || command.type === 'project.roles.reset' ? command.roles : []
+    for (const role of written) {
+      const id = stableId(tabId, projectId, role.id), data = { version: roleVersion(role.text), text: role.text }
+      await tx.superTabRoleText.upsert({ where: { id }, create: { id, tabId, projectId, roleId: role.id, ...data }, update: data })
+    }
+  }
+
+  /** A custom role's text, for the project's owner, its Lead, and the hosts of its agents (which fetch it when the version
+   *  in their roster changes). Anyone else, like a missing role, reads it as unavailable. */
+  async roleText(user: AuthUser, tabId: string, projectId: string, roleId: string, asAgentId?: string) {
+    return transaction(this.db, async tx => {
+      const state = stateOf(await this.row(tx, user, tabId))
+      const unavailable = () => fail('NOT_FOUND', 'This role is unavailable.', 404)
+      const project = projectsOf(state).find(p => p.id === projectId) ?? unavailable()
+      const role = project.roles?.find(r => r.id === roleId) ?? unavailable()
+      if (asAgentId) {
+        await this.actor(tx, user, state, asAgentId)
+        if (ledProject(state, asAgentId)?.id !== project.id) unavailable()
+      } else if (!(user.sub === project.ownerId && state.people.some(p => p.id === user.sub)) && !await this.hostsProject(tx, state, user, project.id)) {
+        unavailable()
+      }
+      const stored = await tx.superTabRoleText.findUnique({ where: { id: stableId(tabId, projectId, roleId) } })
+      if (stored?.version !== role.version) unavailable()
+      return { version: stored!.version, text: stored!.text }
+    })
+  }
+
+  /** Whether this account could host one of the project's agents now, by the same live grant as its host reads. */
+  private async hostsProject(tx: Transaction, state: SuperTabState, user: AuthUser, projectId: string): Promise<boolean> {
+    for (const target of state.agents.filter(a => a.machineOwnerId === user.sub && agentProjectId(state, a) === projectId)) {
+      try { agent(state, target.id); await this.agentGrant(tx, state, target); return true }
+      catch (error) { if (!(error instanceof SuperTabError)) throw error }
+    }
+    return false
   }
 
   private async writeTerminal(tx: Transaction, tabId: string, effect: TerminalEffect, now: number) {
@@ -928,6 +985,16 @@ export class SuperTabStore {
     })
   }
 
+  /** What removing a machine would do, for its owner's confirmation (machines.ts removalPreview). */
+  async machineRemoval(user: AuthUser, tabId: string, machineId: string) {
+    return transaction(this.db, async tx => {
+      const state = stateOf(await this.row(tx, user, tabId))
+      const actor = await this.actor(tx, user, state)
+      author(state, actor)
+      return removalPreview(state, actor, machineId)
+    })
+  }
+
   async observeMachine(user: AuthUser, tabId: string, machineId: string, input: MachineObservation) {
     const observation = machineObservationSchema.parse(input)
     return transaction(this.db, async tx => {
@@ -960,6 +1027,9 @@ export class SuperTabStore {
       const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
       if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
       const rows = await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, machineIds: { has: machineId } }, ...HOST_TABS })
+      // A cleanup is never cut by that limit: a machine in more than 100 Swarms would otherwise keep a removed Swarm's folders.
+      const cleaning = await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, cleanupMachineIds: { has: machineId },
+        id: { notIn: rows.map(r => r.id) } } })
       const result = []
       for (const row of rows) {
         const state = stateOf(row)
@@ -982,7 +1052,12 @@ export class SuperTabStore {
           // whose project is gone reads like one from before skill modes instead of failing the host's whole poll.
           const home = projectsOf(state).find(p => p.id === agentProjectId(state, target))
           const skillMode = home ? skillModeOf(home) : 'orchestration'
-          result.push({ tabId: row.id, tabName: state.name, revision: row.revision, paused: state.paused, active, attention, agent: target, joinSwarm, skillMode,
+          // On Custom, the role it runs and its text's version, never the text (roleText); null when its kind has no role there.
+          // The project lets the host fetch that text (roleText).
+          const custom = home && skillSetOf(home) === 'custom' ? home : null
+          const chosen = custom ? agentSetRole(state, custom, target) : null
+          const role = custom ? { role: chosen && { ...chosen, projectId: custom.id } } : {}
+          result.push({ tabId: row.id, tabName: state.name, revision: row.revision, paused: state.paused, active, attention, agent: target, joinSwarm, skillMode, ...role,
             lead: !!ledProject(state, target.id),
             stopRequested: target.workDecision === 'stop' && !state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id),
             observers: people.filter(p => p.id !== user.sub &&
@@ -993,7 +1068,9 @@ export class SuperTabStore {
         for (const { agentId: id, harnessId } of (state.closingSessions ?? []).filter(c => c.machineId === machineId && c.machineOwnerId === user.sub)) {
           result.push({ tabId: row.id, agent: { id, harnessId, machineId }, closeSession: true as const, active: false })
         }
+        result.push(...cleanupRows(row.id, state, machineId, user.sub))
       }
+      for (const row of cleaning) result.push(...cleanupRows(row.id, stateOf(row), machineId, user.sub))
       return result
     })
   }

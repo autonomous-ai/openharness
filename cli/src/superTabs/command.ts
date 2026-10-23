@@ -2,14 +2,14 @@ import { inspectCapacity, startAgent } from './start.js'
 import { object } from './host.js'
 import { routeTask } from './routeCommand.js'
 import { openDaemon, whereFor, type Daemon, type Where } from '../agentClient/daemon.js'
-import { callerOf, type Frame } from '../agentClient/model.js'
+import { callerOf, outsideCaller, type Frame } from '../agentClient/model.js'
 import { identifier } from './host.js'
 import { resolve } from 'node:path'
 import { uploadAttachments } from './attach.js'
 import { keyName } from './terminal.js'
 import { randomUUID } from 'node:crypto'
 
-const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status | messages GROUP | message GROUP MESSAGE_ID | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... | command OPERATION_ID JSON | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
+const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status | messages GROUP | message GROUP MESSAGE_ID | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... | command OPERATION_ID JSON | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | remove-machine MACHINE_ID [--yes] | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
 export function parseSuperTabArgs(argv: readonly string[], where: Where) {
   const positional: string[] = []
   let tabId = '', agentId = ''
@@ -50,6 +50,13 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
   } else if (action === 'resume' && identifier(first) && positional.length === 2) payload.startId = first
   else if (action === 'capacity' && identifier(first) && second && positional.length === 3) {
     Object.assign(payload, { targetMachineId: first, request: JSON.parse(second) })
+  } else if (action === 'remove-machine' && identifier(first) && (positional.length === 2 || positional.length === 3 && second === '--yes')) {
+    // The machine's owner, as the person: without --yes, what removal would do (the agents it stops, a refusal); with it,
+    // the removal. The daemon's owner-only backend request carries both.
+    Object.assign(payload, second === '--yes'
+      ? { action: 'backend', method: 'POST', path: `/api/super-tabs/${tabId}/commands`,
+        body: { operationId: `machine-remove-${randomUUID()}`, command: { type: 'machine.remove', machineId: first } } }
+      : { action: 'backend', method: 'GET', path: `/api/super-tabs/${tabId}/machines/${first}/removal` })
   } else if (action === 'route' && identifier(first) && second && positional.length === 3) {
     Object.assign(payload, { conversationId: first, assessment: JSON.parse(second) })
   } else if (action === 'screen' && identifier(first) && (positional.length === 2
@@ -76,7 +83,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
 }
 
 export async function superTabCommand(argv: readonly string[], deps: {
-  where?: () => Where; open?: typeof openDaemon; print?: (text: string) => void; pane?: string; fetch?: typeof fetch
+  where?: () => Where; open?: typeof openDaemon; print?: (text: string) => void; pane?: string; fetch?: typeof fetch; env?: NodeJS.ProcessEnv
 } = {}): Promise<number> {
   let daemon: Daemon | null = null
   let operationId: unknown
@@ -85,7 +92,15 @@ export async function superTabCommand(argv: readonly string[], deps: {
     const request = parseSuperTabArgs(argv, (deps.where ?? (() => whereFor(process.env.TMUX_PANE)))())
     operationId = request.payload.operationId
     daemon = await (deps.open ?? openDaemon)(request.where)
-    if (request.payload.action !== 'help' && !request.payload.agentId) {
+    if (request.payload.action === 'backend') {
+      // The owner's own act: it deletes this machine's Swarm folders, so neither a Swarm agent on it (its pane, or --agent)
+      // nor an outside agent's shell may run it with the owner's authority.
+      const listed = request.payload.agentId || outsideCaller(deps.env ?? process.env, request.where.machineId) ? null : await daemon.request('agents_list')
+      if (!listed || callerOf(Array.isArray(listed.agents) ? listed.agents as Frame[] : [], deps.pane ?? process.env.TMUX_PANE, request.where.machineId)) {
+        throw new Error('Remove a machine from your own terminal or from Desktop, not from an agent.')
+      }
+    }
+    if (!['help', 'backend'].includes(String(request.payload.action)) && !request.payload.agentId) {
       const listed = await daemon.request('agents_list')
       const frames = Array.isArray(listed.agents) ? listed.agents as Frame[] : []
       const caller = callerOf(frames, deps.pane ?? process.env.TMUX_PANE, request.where.machineId)

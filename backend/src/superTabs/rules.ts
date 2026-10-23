@@ -49,13 +49,14 @@ export function modelMatches(ruleModel: string, model: string | null): boolean {
   return target !== 'default' && (target.includes(rule) || (FAMILY.exec(target)?.[0] === target && FAMILY.exec(rule)?.[0] === target))
 }
 
-/** Why a hard rule rules the target out, or null when none does. */
-export function broken(rules: SwarmRule[] | undefined, target: RunTarget): string | null {
+/** Why a hard rule rules the target out, or null when none does. A machines rule names the machines it allows now: a removed
+ *  machine leaves the rule but stays in the owner's words (machine.remove). */
+export function broken(rules: SwarmRule[] | undefined, target: RunTarget, machineName = (id: string) => id): string | null {
   for (const { rule, text } of rules ?? []) {
     const engineName = ENGINE[target.engine] ?? target.engine
     const out = rule.kind === 'forbidModel' ? (!rule.engine || rule.engine === target.engine)
         && modelMatches(rule.model, target.model) && `${engineName} ${target.model}`
-      : rule.kind === 'machines' ? !rule.machineIds.includes(target.machineId) && 'this machine'
+      : rule.kind === 'machines' ? !rule.machineIds.includes(target.machineId) && `this machine (it allows only ${rule.machineIds.map(machineName).join(', ')})`
       : rule.kind === 'minEffort' ? (!rule.engine || rule.engine === target.engine) && rank(target.effort) < rank(rule.effort)
         && `${engineName} at ${target.effort && rank(target.effort) >= 0 ? `${target.effort} effort` : 'an unnamed effort'}`
       : false

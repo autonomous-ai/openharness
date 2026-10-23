@@ -1000,14 +1000,19 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       ];
     }
     final paused = shared?['paused'] == true;
-    final details = switch (status) {
-      SuperTabMachineStatus.live ||
-      SuperTabMachineStatus.late => paused ? 'New work paused' : 'Online',
-      SuperTabMachineStatus.offline =>
-        paused ? 'Offline, new work paused' : 'Offline',
-      SuperTabMachineStatus.unknown => "Can't reach Harness",
-      SuperTabMachineStatus.refreshing => 'Refreshing…',
-    };
+    final removal = shared?['removal'];
+    final cleaning =
+        removal is Map && superTabMap(removal)['state'] == 'cleaning';
+    final details = cleaning
+        ? 'Cleaning up'
+        : switch (status) {
+            SuperTabMachineStatus.live ||
+            SuperTabMachineStatus.late => paused ? 'New work paused' : 'Online',
+            SuperTabMachineStatus.offline =>
+              paused ? 'Offline, new work paused' : 'Offline',
+            SuperTabMachineStatus.unknown => "Can't reach Harness",
+            SuperTabMachineStatus.refreshing => 'Refreshing…',
+          };
     final diskFree = value?.projectDiskTotalBytes == null
         ? value?.diskFreeBytes
         : value?.projectDiskFreeBytes;
@@ -1066,6 +1071,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       readingAt: readingAt,
       arrived: age != null && age < const Duration(milliseconds: 1200),
       paused: paused,
+      cleaning: cleaning,
       dim: dim,
       details: details,
       resources: value,
@@ -1075,7 +1081,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       // What the line leaves out, for hover, focus and a screen reader: whose machine it is and its hardware,
       // after its state when that is not online. Never an age. Only current readings are included.
       tip: [
-        ?superTabMachineTip(status),
+        if (cleaning) 'Cleaning up' else ?superTabMachineTip(status),
         if (person != null) 'Owned by ${superTabPersonName(person.email)}',
         if (paused) 'New work paused',
         if (!dim && value?.cpuPercent != null)
@@ -1106,127 +1112,180 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     return null;
   }
 
-  /// The Swarm owner removes any machine; anyone else, one that is all theirs: their contribution and
-  /// only their agents (backend `machine.remove`).
+  /// A person can remove only the machine they contributed to this Swarm.
   bool _canRemove(String machineId) {
     if (!c.canWrite) return false;
-    if (c.isOwner) return true;
     final pool = c.snapshot?.machines
         .where((m) => m['machineId'] == machineId)
         .firstOrNull;
-    final contributor = pool?['contributorId'] as String?;
-    return (contributor == null || contributor == c.accountId) &&
-        _agentsOn(machineId).every((a) => a.contributorId == c.accountId);
+    final removal = pool?['removal'];
+    return pool?['contributorId'] == c.accountId &&
+        (removal is! Map || superTabMap(removal)['state'] != 'cleaning');
+  }
+
+  Future<_RemovalPreview> _removalPreview(String machineId) async {
+    final reply = await c.request(
+      'GET',
+      '/api/super-tabs/${Uri.encodeComponent(c.tabId)}/machines/${Uri.encodeComponent(machineId)}/removal',
+    );
+    return _RemovalPreview.fromMap(reply);
   }
 
   /// Takes a machine out of this Swarm, and stops its ordinary agents after confirmation.
   Future<void> _remove(_MachineView v) async {
     final id = v.id, name = superTabMachineName(v.name);
+    if (!_canRemove(id)) return;
+    Future<_RemovalPreview>? previewFuture;
     var busy = false, attempted = false;
     await showAppDialog<void>(
       context: context,
-      builder: (context) => SuperTabDialogScope(
-        controller: c,
-        child: StatefulBuilder(
-          builder: (context, update) => ListenableBuilder(
-            listenable: c,
-            builder: (context, _) {
-              final pending = c.pendingCommand;
-              final checking =
-                  pending?['type'] == 'machine.remove' &&
-                  pending?['machineId'] == id;
-              final available = _ids.contains(id) || checking || busy;
-              final permitted = _canRemove(id) || checking;
-              final reason = _removeReason(id);
-              final enabled =
-                  permitted &&
-                  reason == null &&
-                  !busy &&
-                  !c.saving &&
-                  (checking || !c.hasPendingAction);
-              final names = [
-                for (final a in _agentsOn(id)) c.snapshot!.agentName(a.id),
-              ];
-              final shown = names.length > 4
-                  ? '${names.take(3).join(', ')} and ${names.length - 3} more'
-                  : names.length > 1
-                  ? '${names.take(names.length - 1).join(', ')} and ${names.last}'
-                  : names.firstOrNull;
-              return PopScope(
-                canPop: !busy,
-                child: AlertDialog(
-                  title: Text(
-                    available
-                        ? 'Remove $name from this Swarm?'
-                        : 'Machine unavailable',
-                  ),
-                  content: SizedBox(
-                    width: 400,
-                    child: SingleChildScrollView(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            reason ??
-                                (!available || !permitted
-                                    ? 'This action is no longer available.'
-                                    : shown == null
-                                    ? 'The Swarm stops using it for new work.'
-                                    : '$shown ${names.length == 1 ? 'leaves' : 'leave'} the Swarm with it and ${names.length == 1 ? 'stops' : 'stop'} on $name. '
-                                          'Any open task needs to be assigned again or closed.'),
+      builder: (context) {
+        // Start the read when the route builds, so FutureBuilder owns failures.
+        previewFuture ??= _removalPreview(id);
+        return SuperTabDialogScope(
+          controller: c,
+          child: StatefulBuilder(
+            builder: (context, update) => FutureBuilder<_RemovalPreview>(
+              future: previewFuture,
+              builder: (context, previewState) => ListenableBuilder(
+                listenable: c,
+                builder: (context, _) {
+                  final pending = c.pendingCommand;
+                  final checking =
+                      pending?['type'] == 'machine.remove' &&
+                      pending?['machineId'] == id;
+                  final available = _ids.contains(id) || checking || busy;
+                  final permitted = _canRemove(id) || checking;
+                  final reason = _removeReason(id);
+                  final preview = previewState.data;
+                  final blockedReason = preview?.blockedProjectName == null
+                      ? null
+                      : 'This machine runs the Product Manager of project ${preview!.blockedProjectName}. Delete the project first.';
+                  final refusal = reason ?? blockedReason;
+                  final enabled =
+                      permitted &&
+                      reason == null &&
+                      blockedReason == null &&
+                      (preview != null || checking) &&
+                      !busy &&
+                      !c.saving &&
+                      (checking || !c.hasPendingAction);
+                  return PopScope(
+                    canPop: !busy,
+                    child: AlertDialog(
+                      title: Text(
+                        available
+                            ? 'Remove $name from this Swarm?'
+                            : 'Machine unavailable',
+                      ),
+                      content: SizedBox(
+                        width: 400,
+                        child: SingleChildScrollView(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (refusal != null)
+                                Text(refusal)
+                              else if (!available || !permitted)
+                                const Text(
+                                  'This action is no longer available.',
+                                )
+                              else if (previewState.hasError)
+                                Text(switch (previewState.error) {
+                                  SuperTabFailure failure => failure.message,
+                                  _ => 'Could not check this machine.',
+                                })
+                              else if (preview == null)
+                                const Text('Checking what will happen…')
+                              else ...[
+                                const Text(
+                                  'The Swarm stops using this machine for new work.',
+                                ),
+                                if (preview.agents.isNotEmpty) ...[
+                                  const SizedBox(height: 12),
+                                  const Text('These agents will stop:'),
+                                  for (final agent in preview.agents) ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      '${agent.name} · ${agent.projectName}',
+                                    ),
+                                    if (agent.task != null)
+                                      Text(
+                                        'The open task “${agent.task}” goes back to the Product Manager.',
+                                      ),
+                                  ],
+                                ],
+                                if (preview.soleSourceProjects.isNotEmpty) ...[
+                                  const SizedBox(height: 12),
+                                  const Text(
+                                    'These projects have code only on this machine:',
+                                  ),
+                                  for (final project
+                                      in preview.soleSourceProjects)
+                                    Text(project),
+                                ],
+                                const SizedBox(height: 12),
+                                const Text(
+                                  'The Swarm folders on this machine will be deleted, including uncommitted or unpushed work.',
+                                ),
+                              ],
+                              if (attempted && c.operationError != null) ...[
+                                const SizedBox(height: 12),
+                                Text(c.operationError!),
+                              ],
+                            ],
                           ),
-                          if (attempted && c.operationError != null) ...[
-                            const SizedBox(height: 12),
-                            Text(c.operationError!),
-                          ],
-                        ],
+                        ),
                       ),
+                      actions: [
+                        TextButton(
+                          autofocus: true,
+                          onPressed: busy ? null : () => Navigator.pop(context),
+                          child: Text(
+                            checking || !available || !permitted
+                                ? 'Close'
+                                : 'Cancel',
+                          ),
+                        ),
+                        if (available && permitted)
+                          FilledButton(
+                            key: const ValueKey('super-machine-remove-confirm'),
+                            style: grid.dangerButtonStyle(),
+                            onPressed: !enabled
+                                ? null
+                                : () async {
+                                    update(() {
+                                      busy = true;
+                                      attempted = true;
+                                    });
+                                    final result = checking
+                                        ? await c.retry()
+                                        : await c.command({
+                                            'type': 'machine.remove',
+                                            'machineId': id,
+                                          });
+                                    if (!context.mounted) return;
+                                    if (result != null) {
+                                      Navigator.pop(context);
+                                      _changed();
+                                    } else {
+                                      update(() => busy = false);
+                                    }
+                                  },
+                            child: Text(
+                              checking ? 'Retry' : 'Remove from Swarm',
+                            ),
+                          ),
+                      ],
                     ),
-                  ),
-                  actions: [
-                    TextButton(
-                      autofocus: true,
-                      onPressed: busy ? null : () => Navigator.pop(context),
-                      child: Text(
-                        checking || !available || !permitted
-                            ? 'Close'
-                            : 'Cancel',
-                      ),
-                    ),
-                    if (available && permitted)
-                      FilledButton(
-                        key: const ValueKey('super-machine-remove-confirm'),
-                        style: grid.dangerButtonStyle(),
-                        onPressed: !enabled
-                            ? null
-                            : () async {
-                                update(() {
-                                  busy = true;
-                                  attempted = true;
-                                });
-                                final result = checking
-                                    ? await c.retry()
-                                    : await c.command({
-                                        'type': 'machine.remove',
-                                        'machineId': id,
-                                      });
-                                if (!context.mounted) return;
-                                if (result != null) {
-                                  Navigator.pop(context);
-                                } else {
-                                  update(() => busy = false);
-                                }
-                              },
-                        child: Text(checking ? 'Retry' : 'Remove from Swarm'),
-                      ),
-                  ],
-                ),
-              );
-            },
+                  );
+                },
+              ),
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -1423,7 +1482,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             selected: selected,
             label: [
               superTabMachineName(view.name),
-              superTabMachineStateLabel(view.status),
+              view.cleaning
+                  ? 'Cleaning up'
+                  : superTabMachineStateLabel(view.status),
               if (view.tip.isNotEmpty) view.tip,
             ].join(', '),
             child: Tooltip(
@@ -1680,6 +1741,68 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   }
 }
 
+/// The server's removal preview is authoritative for the confirmation.
+class _RemovalPreview {
+  const _RemovalPreview({
+    required this.blockedProjectName,
+    required this.agents,
+    required this.soleSourceProjects,
+  });
+
+  factory _RemovalPreview.fromMap(Map<String, dynamic> value) {
+    if (value['agents'] is! List || value['soleSourceProjects'] is! List) {
+      throw const FormatException('Invalid machine removal preview');
+    }
+    final blocked = value['blockedBy'];
+    if (blocked != null && blocked is! Map) {
+      throw const FormatException('Invalid machine removal preview');
+    }
+    final blockedName = blocked == null
+        ? null
+        : superTabMap(blocked)['projectName'];
+    if (blocked != null && (blockedName is! String || blockedName.isEmpty)) {
+      throw const FormatException('Invalid machine removal preview');
+    }
+    final agents = <_RemovalAgent>[];
+    for (final item in value['agents'] as List) {
+      final agent = superTabMap(item);
+      final name = agent['name'], projectName = agent['projectName'];
+      final task = agent['task'];
+      if (name is! String ||
+          name.isEmpty ||
+          projectName is! String ||
+          projectName.isEmpty ||
+          (task != null && task is! String)) {
+        throw const FormatException('Invalid machine removal preview');
+      }
+      agents.add(_RemovalAgent(name, projectName, task as String?));
+    }
+    final projects = <String>[];
+    for (final item in value['soleSourceProjects'] as List) {
+      final name = superTabMap(item)['name'];
+      if (name is! String || name.isEmpty) {
+        throw const FormatException('Invalid machine removal preview');
+      }
+      projects.add(name);
+    }
+    return _RemovalPreview(
+      blockedProjectName: blockedName as String?,
+      agents: agents,
+      soleSourceProjects: projects,
+    );
+  }
+
+  final String? blockedProjectName;
+  final List<_RemovalAgent> agents;
+  final List<String> soleSourceProjects;
+}
+
+class _RemovalAgent {
+  const _RemovalAgent(this.name, this.projectName, this.task);
+  final String name, projectName;
+  final String? task;
+}
+
 /// What [_SuperTabMachinesState._view] read of one machine.
 class _MachineView {
   const _MachineView({
@@ -1693,6 +1816,7 @@ class _MachineView {
     required this.readingAt,
     required this.arrived,
     required this.paused,
+    required this.cleaning,
     required this.dim,
     required this.details,
     required this.resources,
@@ -1711,7 +1835,7 @@ class _MachineView {
 
   /// When the reading shown was taken, and whether that is just now (the dot pings once).
   final DateTime? readingAt;
-  final bool arrived, paused;
+  final bool arrived, paused, cleaning;
 
   /// Offline, unknown or refreshing: its numbers are old.
   final bool dim;
@@ -1831,6 +1955,11 @@ class _MachineLine extends StatelessWidget {
                   size: 20,
                 ),
               ),
+            ),
+          if (view.cleaning)
+            Padding(
+              padding: const EdgeInsets.only(left: 6),
+              child: Text('Cleaning up', style: DesktopChrome.metadata()),
             ),
           SizedBox(
             width: 32,

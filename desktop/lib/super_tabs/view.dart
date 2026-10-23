@@ -785,6 +785,8 @@ class _SuperTabViewState extends State<SuperTabView>
                                 : 'Choose a project'
                           : c.snapshot!.isProjectLead(group.id)
                           ? c.snapshot!.projectFor(group.id)!.name
+                          : group.id == c.snapshot!.leadsConversationId
+                          ? 'Product Managers'
                           : group.label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -832,7 +834,8 @@ class _SuperTabViewState extends State<SuperTabView>
                 color: _terminalsVisible
                     ? DesktopChrome.foreground
                     : DesktopChrome.muted,
-                onPressed: group.agentIds.isNotEmpty
+                // A read-only viewer's terminal reads are refused.
+                onPressed: group.agentIds.isNotEmpty && c.canWrite
                     ? () {
                         setState(() => _showPullRequests = false);
                         widget.onOpenGroupTerminals?.call();
@@ -855,7 +858,8 @@ class _SuperTabViewState extends State<SuperTabView>
                   setState(() => _showPullRequests = true);
                 },
               ),
-              _options(group),
+              // Not a workgroup: nothing to rename, archive or detail.
+              if (group.id != c.snapshot!.leadsConversationId) _options(group),
             ],
             if (!showRoster)
               AppIconButton(
@@ -962,7 +966,7 @@ class _SuperTabViewState extends State<SuperTabView>
     Map<String, SuperTabMessage> byId, {
     bool showReceipt = false,
   }) {
-    if (message.terminalEvent) {
+    if (message.terminalEvent || message.source['kind'] == 'overlap') {
       return SuperTabTerminalRow(
         key: ValueKey('super-message-${message.id}'),
         message: message,
@@ -1521,6 +1525,11 @@ class _SuperTabViewState extends State<SuperTabView>
                                                     group.id,
                                                   )
                                                   ? 'Message Product Manager'
+                                                  : group.id ==
+                                                        c
+                                                            .snapshot!
+                                                            .leadsConversationId
+                                                  ? 'Message Product Managers'
                                                   : 'Message ${group.title}'
                                             : 'Read-only conversation',
                                         border: InputBorder.none,

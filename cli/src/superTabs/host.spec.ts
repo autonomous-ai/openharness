@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { prepareSwarmSkill } from '../lib/swarmSkills.js'
@@ -1422,5 +1422,31 @@ describe('closing the sessions the backend ends', () => {
     t.rows.splice(0, 1, ended())
     await t.poll()
     expect(t.commands).toHaveLength(0)
+  })
+})
+
+describe('a machine its owner removed from a Swarm', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+  it('cleans up for its own machine\'s cleanup row and acknowledges, ignoring another machine\'s', async () => {
+    const t = setup()
+    const home = join(t.dir, 'home'); vi.stubEnv('HOME', home); vi.stubEnv('USERPROFILE', home)
+    const folder = join(t.dir, 'swarm-projects', 'tab', 'project'), other = join(t.dir, 'swarm-projects', 'other-tab')
+    mkdirSync(folder, { recursive: true }); mkdirSync(other, { recursive: true })
+    const sent: unknown[] = []
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => {
+      if (path.includes('/hosts/')) return { status: 200, body: { success: true, data: [
+        { tabId: 'tab', cleanup: { machineId: 'machine-1', removalId: 'removal' } },
+        { tabId: 'other-tab', cleanup: { machineId: 'machine-2', removalId: 'theirs' } }] } }
+      if (method === 'POST') sent.push(body)
+      return { status: 200, body: { success: true, data: method === 'GET' ? { state: { starts: [] } } : { revision: 1 } } }
+    })
+    const host = t.open()
+    await host.tick()
+    await vi.waitFor(() => expect(sent).toEqual([{ operationId: 'machine-cleaned-removal', command: { type: 'machine.cleaned', machineId: 'machine-1', removalId: 'removal' } }]))
+    expect(existsSync(join(t.dir, 'swarm-projects', 'tab'))).toBe(false)
+    expect(existsSync(other)).toBe(true)
+    await host.tick()
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(sent).toHaveLength(1)
   })
 })

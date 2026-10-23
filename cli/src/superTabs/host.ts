@@ -486,6 +486,7 @@ export class SuperTabHost {
     this.wakeShare(data)
     this.publishAttention(data)
     this.joinSwarms(data)
+    this.cleanRemoved(data)
     // Off the poll: a screen read waits on the core, and never delays the input leases below.
     if (this.core.superTabs) void this.terminal.tick(data)
     // Recovery can wait on a native receipt. Run it beside leases, so another worker's input
@@ -707,6 +708,17 @@ export class SuperTabHost {
           : this.now() + Math.min(JOIN_RETRY_MAX_MS, JOIN_RETRY_MS * 2 ** join.failures++)
         this.log(`Could not add this machine to its Swarm: ${error instanceof Error ? error.message : String(error)}`)
       }).finally(() => { join.running = false })
+    }
+  }
+
+  /** Its owner removed this machine from a Swarm: the roster names the cleanup until this host acknowledges it, so a host
+   *  that restarted part-way cleans again. Off the poll: deleting folders never delays deliveries. */
+  private cleanRemoved(rows: unknown[]): void {
+    for (const row of rows.map(object)) {
+      const cleanup = object(row.cleanup)
+      if (!identifier(row.tabId) || cleanup.machineId !== this.machineId || !identifier(cleanup.removalId)) continue
+      this.machines ??= new ContributedMachines(this.core, this.machineId)
+      void this.machines.clean(row.tabId, cleanup.removalId).catch(error => this.log(error instanceof Error ? error.message : String(error)))
     }
   }
 
