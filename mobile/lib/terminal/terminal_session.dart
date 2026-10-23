@@ -1590,6 +1590,13 @@ class TerminalSession extends ChangeNotifier {
   /// blind. Set and cleared by the page; null the rest of the time.
   Future<bool> Function(String text)? voiceDeliver;
 
+  /// While this pane is the onboarding's first session, its mic's takes pretend: no microphone, no
+  /// permission prompt, each heard as what this says when it ends — the task in the prompt
+  /// (`VoiceInputController.startListening`). Null from it means an ordinary recording: the first send
+  /// has gone, or a question is open that a spoken answer is for. Set and cleared by the page; read
+  /// only by this pane's own mic (`voice_mic_action.dart`), never by Find's or New's.
+  String? Function()? voicePretend;
+
   /// Called each time this pane sends a line on the person's behalf: a Return typed or pressed —
   /// it crosses [_onTerminalOutput] — or a composed message that went ([sendComposerText]). Set by
   /// the page showing the pane, which asks for notifications after the phone's first send

@@ -141,9 +141,20 @@ String? typedPromptText(Buffer buffer, String? engine) {
   if (engine == 'opencode') return openCodePromptText(buffer);
   final range = promptInputRange(buffer);
   if (range == null) return null;
-  final text = buffer.getText(range).replaceAll(RegExp(r'\s+'), ' ').trim();
+  final text = buffer.getText(range).replaceAll(_spaces, ' ').trim();
   return text.isEmpty ? null : text;
 }
+
+final _spaces = RegExp(r'\s+');
+
+/// Whether [text] read off a prompt holds what a TUI drew in place of something pasted — Claude
+/// Code's `[Pasted text #1 +12 lines]` and `[Image #1]`, Codex's `[Pasted Content 1200 chars]`. What
+/// was pasted is only in the program: typed again from the screen, it would be the marker.
+bool holdsPasteMarker(String text) => _pasteMarker.hasMatch(text);
+
+final _pasteMarker = RegExp(
+  r'\[(?:Pasted text #\d+|Image #\d+|Pasted Content \d+)',
+);
 
 /// Whether the cursor is in [engine]'s prompt: on Claude Code's or Codex's `❯`/`›` line or a row
 /// its text wrapped onto, or inside OpenCode's box — where all three keep the terminal's own cursor,
@@ -157,15 +168,26 @@ bool cursorInPrompt(Buffer buffer, String? engine) {
     return side >= 0 && buffer.cursorX > side;
   }
   if (engine != 'claude' && engine != 'codex') return false;
-  return emptyPromptAtCursor(buffer) || promptInputRange(buffer) != null;
+  final line = buffer.lines[cursor];
+  if (_promptGlyphColumn(line) case final glyph?) {
+    // A question's answer the cursor sits on (`❯ 1. Yes`) is a dialog, not the prompt.
+    return !_answerRow.hasMatch(line.getText(glyph + 1).trimLeft());
+  }
+  // A row the typed text wrapped onto.
+  return promptInputRange(buffer) != null;
 }
 
 /// Whether the cursor sits on a Claude Code or Codex prompt with nothing typed in it — its glyph
 /// alone, or its grey placeholder: the TUI is drawn and waiting for its first words.
+///
+/// Not a question's answer the cursor sits on (`❯ 1. Yes, proceed`): that is a dialog.
 bool emptyPromptAtCursor(Buffer buffer) {
   final cursor = buffer.absoluteCursorY;
   if (cursor < 0 || cursor >= buffer.lines.length) return false;
-  return _promptGlyphColumn(buffer.lines[cursor]) != null &&
+  final line = buffer.lines[cursor];
+  final glyph = _promptGlyphColumn(line);
+  return glyph != null &&
+      !_answerRow.hasMatch(line.getText(glyph + 1).trimLeft()) &&
       promptInputRange(buffer) == null;
 }
 

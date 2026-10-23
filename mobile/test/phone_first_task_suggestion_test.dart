@@ -135,6 +135,13 @@ void main() {
     );
   }
 
+  /// OpenCode answering a send: its box emptied, the cursor where the placeholder starts — written
+  /// after the tick, as the session writes output.
+  void emptyBox() {
+    session.outputTicks.value++;
+    session.terminal.write('\x1b[2;1H\x1b[2K       ┃  \x1b[2;11H');
+  }
+
   /// A spoken message through the real mic button and controller; only the recognizer is a fake.
   Future<void> speak(WidgetTester tester, String words) async {
     transcriber.replies.add(words);
@@ -323,6 +330,65 @@ void main() {
       },
     );
 
+    testWidgets('a box emptied on the keyboard still sends Desktop\'s starter, '
+        'never a task the screen did not show', (tester) async {
+      typeStarter();
+      await open(tester, line: OnboardingCopy.micSendIt);
+      session.terminal.write('\x1b[2;1H\x1b[2K       ┃  \x1b[2;11H');
+      await tester.tap(sendButton);
+      await settleSend(tester);
+      expect(messages(), [typed]);
+      await leave(tester);
+    });
+
+    testWidgets(
+      'a paste the box shows as a marker goes by Return as it stands',
+      (tester) async {
+        typeStarter();
+        await open(tester, line: OnboardingCopy.micSendIt);
+        session.terminal.write(
+          '\x1b[2;1H\x1b[2K       ┃  read [Pasted text #1 +12 lines]\x1b[2;43H',
+        );
+        await tester.tap(sendButton);
+        await settleSend(tester);
+        expect(messages(), isEmpty);
+        final keys = sent.where((e) => e.$1 == 'keys').map((e) => e.$2).join();
+        expect(keys, contains('\r'));
+        expect(
+          keys,
+          isNot(contains('\x15')),
+          reason: 'the paste is not cleared',
+        );
+        await leave(tester);
+      },
+    );
+
+    testWidgets('a pretend take does not follow a swipe to another page', (
+      tester,
+    ) async {
+      typeStarter();
+      await open(tester, line: OnboardingCopy.micSendIt);
+      await tester.tap(find.byType(VoiceMicButton));
+      await settleSend(tester);
+      expect(voice.pretending, isTrue);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TerminalPage(
+            notifier: app,
+            machineId: 'm',
+            agentId: 'a',
+            voice: voice,
+            isActive: false,
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(voice.pretending, isFalse);
+      expect(voice.isIdle, isTrue);
+      await leave(tester);
+    });
+
     testWidgets('Send sends the box as it was last changed', (tester) async {
       typeStarter();
       await open(tester, line: OnboardingCopy.micSendIt);
@@ -411,8 +477,12 @@ void main() {
 
       session.terminal.keyInput(TerminalKey.enter);
       await settleSend(tester);
-      await tester.pump(const Duration(seconds: 1));
       expect(app.firstSessionLine, isNull);
+      // Up until the harness has taken the task: its box empties.
+      expect(tester.testTextInput.isVisible, isTrue);
+      emptyBox();
+      await settleSend(tester);
+      await tester.pump(const Duration(seconds: 1));
       expect(tester.testTextInput.isVisible, isFalse);
 
       // Raised again by hand, a tap on the prompt: Return in a session at work keeps it up.
@@ -482,9 +552,28 @@ void main() {
 
       await tester.tap(sendButton);
       await settleSend(tester);
+      emptyBox();
+      await settleSend(tester);
       await tester.pump(const Duration(seconds: 1));
       expect(messages(), [typed]);
       expect(tester.testTextInput.isVisible, isFalse);
+      await leave(tester);
+    });
+
+    testWidgets('stays up after a Return that sent nothing: the prompt still '
+        'holds its text', (tester) async {
+      typeStarter();
+      await open(tester, line: OnboardingCopy.micSendIt);
+      await tester.pump();
+
+      // A file picked from a menu, say: the box redraws with its text still in it.
+      session.terminal.keyInput(TerminalKey.enter);
+      await settleSend(tester);
+      session.outputTicks.value++;
+      session.terminal.write('\x1b[2;1H\x1b[2K       ┃  $typed\x1b[2;54H');
+      await settleSend(tester);
+      await tester.pump(const Duration(seconds: 4));
+      expect(tester.testTextInput.isVisible, isTrue);
       await leave(tester);
     });
 
@@ -530,15 +619,79 @@ void main() {
 
     String keys() => sent.where((e) => e.$1 == 'keys').map((e) => e.$2).join();
 
-    /// Claude Code's prompt between its rules, with [typed] in it and the cursor after it.
+    /// Claude Code's prompt between its rules, with [typed] in it and the cursor after it — written
+    /// as the session writes output: the tick first, then the text.
     void drawPrompt([String typed = '']) {
       claude.terminal.resize(60, 20);
+      claude.outputTicks.value++;
       claude.terminal.write(
         '\x1b[H\x1b[2J${'─' * 60}\r\n❯ $typed\r\n${'─' * 60}'
         '\x1b[2;${3 + typed.length}H',
       );
-      claude.outputTicks.value++;
     }
+
+    /// Claude Code asking first, its cursor on the answer: a dialog where the prompt will be.
+    void drawQuestion() {
+      claude.terminal.resize(60, 20);
+      claude.outputTicks.value++;
+      claude.terminal.write(
+        '\x1b[H\x1b[2J${'─' * 60}\r\n Do you want to proceed?\r\n'
+        '❯ 1. Yes\r\n  2. No\r\n\r\n Esc to cancel · Enter to select'
+        '\x1b[3;3H',
+      );
+    }
+
+    testWidgets('a prompt that arrives in a keyframe gets the idea too', (
+      tester,
+    ) async {
+      await open(
+        tester,
+        line: OnboardingCopy.micSayWhat,
+        agent: 'c',
+        page: 'c',
+      );
+      await settleSend(tester);
+      expect(keys(), isNot(contains(ideas.first)));
+
+      // A keyframe swaps the screen and notifies the session; no output tick.
+      claude.terminal.resize(60, 20);
+      claude.terminal.write('${'─' * 60}\r\n❯ \r\n${'─' * 60}\x1b[2;3H');
+      claude.notifyListeners();
+      await settleSend(tester);
+      expect(keys(), contains(ideas.first));
+      expect(tester.testTextInput.isVisible, isTrue);
+      await leave(tester);
+    });
+
+    testWidgets('a question first: no keyboard over it, the mic records an '
+        'answer, and the prompt after it gets the idea', (tester) async {
+      drawQuestion();
+      await open(
+        tester,
+        line: OnboardingCopy.micSayWhat,
+        agent: 'c',
+        page: 'c',
+      );
+      await settleSend(tester);
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(tester.testTextInput.isVisible, isFalse);
+      expect(keys(), isNot(contains(ideas.first)));
+
+      await tester.tap(find.byType(VoiceMicButton));
+      await settleSend(tester);
+      expect(voice.status, VoiceInputStatus.listening);
+      expect(recorder.starts, 1, reason: 'an answer is spoken, not pretended');
+      voice.clear();
+      await settleSend(tester);
+
+      // Answered on the computer: the prompt is drawn.
+      drawPrompt();
+      await settleSend(tester);
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(keys(), contains(ideas.first));
+      expect(tester.testTextInput.isVisible, isTrue);
+      await leave(tester);
+    });
 
     testWidgets('gets the first idea typed into its prompt, unsent, once the '
         'prompt is drawn', (tester) async {
