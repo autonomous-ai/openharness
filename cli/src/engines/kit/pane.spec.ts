@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { composerState } from '../claude/composer.js'
 import { inspectPane } from './pane.js'
 import { teamHold } from './screen.js'
 
@@ -21,6 +22,16 @@ describe("Claude Code's composer on Windows", () => {
     on('win32')
     expect(read(claudeScreen('>'))).toEqual({ pane: { idle: true, plan: false, dialog: false, draft: false }, hold: null })
     expect(read(claudeScreen('>', 'install flutter'))).toMatchObject({ pane: { idle: false, draft: true }, hold: 'team_waiting_draft' })
+  })
+
+  // The resent assignment (08:27 UTC) then reached the pane and was refused as `prompt_hidden`: the composer reader looked
+  // for `❯` alone too.
+  it('finds the composer there, so input is typed into it', () => {
+    on('win32')
+    expect(composerState(claudeScreen('>'))).toBe('ready')
+    expect(composerState(claudeScreen('>', '/mo'))).toBe('ready')
+    on('darwin')
+    expect(composerState(claudeScreen('>'))).toBe('absent')
   })
 
   it('never reads a shell prompt or a `>` in the transcript as an idle Claude Code', () => {
