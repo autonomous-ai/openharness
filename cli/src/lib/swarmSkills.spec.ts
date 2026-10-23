@@ -43,6 +43,8 @@ describe('built-in Swarm skills', () => {
   const sha = (text: string) => createHash('sha256').update(text).digest('hex')
   // The approved terminal line (spec/2026-10-23-lead-sees-agent-terminal.md), the Lead's alone, in both modes.
   const terminal = '- When a worker seems stuck, read its terminal; answer prompts within its task; ask the owner before approving anything risky.\n'
+  // The approved overlap line (spec/2026-10-23-leads-see-and-talk.md, call 6), the Lead's alone, in both modes.
+  const overlap = '- Before assigning, look at other projects\' active work; if your task touches the same code, say so in the Leads conversation and agree an order first.\n'
   const twoHours = '- A Builder or Reviewer that has been down for 2 hours (machine offline, session gone or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).\n'
   it.each([
     ['lead', '5fc83d8c43b66b44cdab27b48235dbc86b7ab11a57153edc1ae7e92831642a8e'],
@@ -57,7 +59,8 @@ describe('built-in Swarm skills', () => {
       expect(text.startsWith(`---\nname: swarm-${role}\n`)).toBe(true)
       expect(text.split(twoHours)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(terminal)).toHaveLength(role === 'lead' ? 2 : 1)
-      expect(sha(text.replace(twoHours, '').replace(terminal, ''))).toBe(sha256)
+      expect(text.split(overlap)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(sha(text.replace(twoHours, '').replace(terminal, '').replace(overlap, ''))).toBe(sha256)
     }
   })
   it('adds the 2-hour line to section 7 right after the 6-hour rule', () => {
@@ -70,6 +73,12 @@ describe('built-in Swarm skills', () => {
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
     expect(plain).toContain(`- A worker with active work that has said nothing for 20 minutes: ask it.\n${terminal}- A Builder or Reviewer`)
   })
+  it('adds the overlap line last in each Lead skill\'s "Route, start, assign"', () => {
+    const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
+    expect(orchestration).toContain(`Never pass your chat history; put everything needed in the brief.\n${overlap}\n## 7. Run the work`)
+    const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
+    expect(plain).toContain(`- The brief is all a Builder gets; never rely on chat history.\n${overlap}\n## 4. Keep work moving`)
+  })
   // The owner's approved Default texts (attached to the spec, 2026-10-23), byte for byte.
   it.each([
     ['lead', 'a7b8aed240f38edda8a461d87ce83499696588b2da41ed261821985caa63e415'],
@@ -80,7 +89,8 @@ describe('built-in Swarm skills', () => {
     const prepared = prepareSwarmSkill(fixture(), { role, key: 'session', mode: 'default' })
     const text = readFileSync(prepared.file, 'utf8')
     expect(text.split(terminal)).toHaveLength(role === 'lead' ? 2 : 1)
-    expect(sha(text.replace(terminal, ''))).toBe(sha256)
+    expect(text.split(overlap)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(sha(text.replace(terminal, '').replace(overlap, ''))).toBe(sha256)
     expect(prepared.instructions).toBe(`Use the swarm-${role} skill for this session: the team process; otherwise work your usual way. Before working, read ${JSON.stringify(prepared.file)} with your file or shell tool.`)
   })
 

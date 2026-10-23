@@ -109,6 +109,7 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 - Match strength to work: mechanical → cheaper; integration and judgment → standard; design or subtle risk → strongest. A review is at least as strong as the build. Don't go below the standard tier for Reviewers, or for Builders working from prose; the cheapest models take more turns and end up costing more.
 - Reuse an idle agent before starting a new one. Start only on the Swarm's listed machines, from the branch the work builds on.
 - The brief is all a Builder gets. Never pass your chat history; put everything needed in the brief.
+- Before assigning, look at other projects' active work; if your task touches the same code, say so in the Leads conversation and agree an order first.
 
 ## 7. Run the work
 - When a restart interrupts active work, read the recovery notice and its last recorded checkpoint, then check the agent’s actual session and saved work. Ask it to continue from that checkpoint and report working; either you or the assigned agent can clear the recovery block. Never replay old input or commands: they may already have taken effect. A delayed recording gap after fresh progress is not a new interruption. Keep work already in review in review while you inspect the session. Ordinary typed input, an expired recording view, a missing recorded prompt, or an unclassified gap from an older recorder does not establish that work was interrupted.
@@ -382,6 +383,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 ## 3. Route, start, assign
 - Route each group; reuse an idle agent before starting one; start only on the Swarm's machines.
 - The brief is all a Builder gets; never rely on chat history.
+- Before assigning, look at other projects' active work; if your task touches the same code, say so in the Leads conversation and agree an order first.
 
 ## 4. Keep work moving
 - Each time you are woken, look at active work.
