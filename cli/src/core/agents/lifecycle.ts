@@ -5,6 +5,7 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
 import type { clearDeleted as clearDeletedFn, markDeleted as markDeletedFn } from '../../lib/deletedSessions.js'
+import { LEAD_PROTECTED_DETAIL } from '../../lib/closeAgentService.js'
 import { PurgeAgentService } from '../../lib/purgeAgentService.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { createResumeAgentService, type ResumeAgentServiceDeps } from '../../lib/resumeAgentService.js'
@@ -67,7 +68,7 @@ export interface LifecycleDeps {
 /** The owner, 2026-10-23: the Lead of an active project is never stopped, in any case; deleting its project closes it. */
 export class LeadProtectedError extends Error {
   readonly code = 'LEAD_PROTECTED'
-  constructor() { super('This harness is the Product Manager of a Swarm project. Delete its project first to stop it.') }
+  constructor() { super(LEAD_PROTECTED_DETAIL) }
 }
 
 export function createAgentLifecycle({

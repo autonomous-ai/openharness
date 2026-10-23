@@ -383,6 +383,8 @@ it('asks the core to reopen a Lead or close a member, and fails closed without i
   expect(ask).toHaveBeenLastCalledWith('keep_lead_alive', { agentId: 'lead' })
   expect(await api.agents.closeMember!('worker')).toEqual({ closed: true })
   expect(ask).toHaveBeenLastCalledWith('close_member', { agentId: 'worker' })
+  expect(await api.agents.closeMember!('worker', 'super-0123456789abcdef')).toEqual({ closed: true })
+  expect(ask).toHaveBeenLastCalledWith('close_member', { agentId: 'worker', creationId: 'super-0123456789abcdef' })
   ask.mockResolvedValueOnce({ ok: false, error: 'AGENT_BUSY', detail: 'busy' })
   expect(await api.agents.keepLeadAlive!('lead')).toEqual({ ok: false, error: 'AGENT_BUSY', detail: 'busy' })
   ask.mockResolvedValueOnce({ ok: false, error: 'NOT_A_LEAD' })

@@ -1,6 +1,6 @@
 import { OBSERVER_VALID_MS, publishObservers } from './observers.js'
 import { ContributedMachines } from './machines.js'
-import { retainContributions, retainedHarnesses } from './retention.js'
+import { retainContributions } from './retention.js'
 import { configurationObservation } from './configuration.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
 import { attachedFiles } from './attachments.js'
@@ -470,9 +470,6 @@ export class SuperTabHost {
       if (message !== this.retentionError) this.log(message)
       this.retentionError = message
     }
-    // What the retention names is what this host may close: a member it kept before the backend ended it.
-    let kept = new Set<string>()
-    try { kept = retainedHarnesses(this.core.dataDir) } catch { /* A file that cannot be read closes nothing; the next roster rewrites it. */ }
     // Valid from this answer until the next is due, slow reads included, so it never lapses between two reads.
     this.observers(this.core.dataDir, this.machineId, data, this.now() + OBSERVER_VALID_MS)
     this.wakeShare(data)
@@ -506,7 +503,7 @@ export class SuperTabHost {
       // A row still marked Lead is never closed (owner, 2026-10-23); one marked both is neither closed nor reopened.
       if (row.closeSession === true) {
         ended.add(endingKey(target))
-        if (row.lead !== true && kept.has(target.agent.harnessId)) this.endSession(target)
+        if (row.lead !== true) this.endSession(target)
         continue
       }
       if (row.stopRequested === true) {
@@ -603,7 +600,10 @@ export class SuperTabHost {
     state.running = true
     void (async () => {
       if (!state.closed) {
-        const result = await close(agent.harnessId)
+        // The core closes only a member the retention names, or one the Swarm's start receipt proves its own: an agent
+        // removed before this host wrote its first roster was never a member here (the review of #1635).
+        const started = object(object(agent).startedSession).creationId
+        const result = await close(agent.harnessId, identifier(started) ? started : undefined)
         if (!result.closed) throw new Error(`Could not close a session the Swarm ended (${result.error ?? 'unknown'}${result.detail ? `: ${result.detail}` : ''}).`)
         state.closed = true
       }

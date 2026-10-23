@@ -90,11 +90,12 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
     case 'keep_lead_alive':
     case 'close_member': {
       if (service !== 'superTabs') return { error: 'NOT_SUPER_TABS' }
-      const agentId = payload.agentId
-      if (typeof agentId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(agentId)) return { error: 'INVALID_REQUEST' }
+      const { agentId, creationId } = payload
+      if (typeof agentId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(agentId)
+        || creationId !== undefined && (typeof creationId !== 'string' || !/^[A-Za-z0-9_-]{16,96}$/.test(creationId))) return { error: 'INVALID_REQUEST' }
       return query === 'keep_lead_alive'
         ? { ...await (core.agents.keepLeadAlive?.(agentId) ?? { ok: false, error: 'UNSUPPORTED' }) }
-        : { ...await (core.agents.closeMember?.(agentId) ?? { error: 'UNSUPPORTED' }) }
+        : { ...await (core.agents.closeMember?.(agentId, creationId as string | undefined) ?? { error: 'UNSUPPORTED' }) }
     }
     case 'stopped':
       return { stopped: !!text(payload.agentId) && await core.agents.stopped?.(text(payload.agentId)) === true }

@@ -36,10 +36,21 @@ export function retainedHarnesses(dataDir: string, now = Date.now()): Set<string
   return new Set(read(file).harnesses)
 }
 
-/** The Leads here, for the core's close guard: a file that cannot be read names none, so a corrupt file never stops every
- *  close on this machine; the host rewrites it on its next roster. */
+/** The Leads here the host may reopen: only those a valid roster named. */
 export function retainedLeads(dataDir: string): Set<string> {
   try { return new Set(read(retentionFile(dataDir)).leads) } catch { return new Set() }
+}
+
+/** Whether a stop may reach a Lead, for the core's guard, which fails closed (the review of #1635): with no file this
+ *  machine never had a roster, so no Lead; one from before Leads were kept names no Lead apart, so each member may be one;
+ *  one that cannot be read may name anyone, until the host's next roster rewrites it. */
+export function mayBeLead(dataDir: string, agentId: string): boolean {
+  const file = retentionFile(dataDir)
+  if (!existsSync(file)) return false
+  try {
+    const kept = read(file)
+    return (kept.leads ?? kept.harnesses).includes(agentId)
+  } catch { return true }
 }
 
 export function retainContributions(dataDir: string, machineId: string, rows: unknown[], now = Date.now()): void {

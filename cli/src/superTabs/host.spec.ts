@@ -1284,7 +1284,7 @@ describe('closing the sessions the backend ends', () => {
     t.rows.splice(0, 1, ended())
     await t.poll()
     await vi.waitFor(() => expect(t.commands).toHaveLength(1))
-    expect(t.closeMember).toHaveBeenCalledWith('harness')
+    expect(t.closeMember).toHaveBeenCalledWith('harness', undefined)
     expect(t.commands[0]).toEqual({ operationId: 'session-closed-agent-harness', command: { type: 'agent.sessionClosed', agentId: 'agent', harnessId: 'harness' } })
     for (let i = 0; i < 3; i++) await t.poll(60_000)
     expect(t.closeMember).toHaveBeenCalledTimes(1)
@@ -1309,15 +1309,25 @@ describe('closing the sessions the backend ends', () => {
     expect(t.closeMember).toHaveBeenCalledTimes(1)
   })
 
-  it('never closes a session it never saw as a member, nor a Lead', async () => {
-    const t = lifeFixture([ended()])
-    for (let i = 0; i < 3; i++) await t.poll(60_000)
-    t.rows.splice(0, 1, leadRow())
-    await t.poll()
-    t.rows.splice(0, 1, ended({ lead: true }))
+  it('never asks to close a Lead, and acknowledges nothing the core refuses as not its member', async () => {
+    const t = lifeFixture([ended({ lead: true })])
     for (let i = 0; i < 3; i++) await t.poll(60_000)
     expect(t.closeMember).not.toHaveBeenCalled()
+    t.rows.splice(0, 1, ended())
+    t.closeMember.mockResolvedValue({ error: 'NOT_A_MEMBER' })
+    for (let i = 0; i < 3; i++) await t.poll(60_000)
+    expect(t.closeMember).toHaveBeenCalledWith('harness', undefined)
     expect(t.commands).toHaveLength(0)
+  })
+
+  // The review of #1635: an agent removed before this host wrote its first roster was never a member here, so it was never
+  // closed nor acknowledged, and its row stayed for good. The Swarm's start receipt proves it is the Swarm's to close.
+  it('closes an agent removed before any roster named it, proven by its start receipt', async () => {
+    const started = { creationId: 'super-0123456789abcdef', sessionId: 'native', createdAt: new Date(0).toISOString() }
+    const t = lifeFixture([ended({ agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', startedSession: started } })])
+    await t.poll()
+    await vi.waitFor(() => expect(t.commands).toHaveLength(1))
+    expect(t.closeMember).toHaveBeenCalledWith('harness', 'super-0123456789abcdef')
   })
 
   it('backs off a close the core refuses, and acknowledges nothing until it closes', async () => {

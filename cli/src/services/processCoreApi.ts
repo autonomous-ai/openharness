@@ -129,7 +129,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
           ? { ok: false, error: answer.error, ...(typeof answer.detail === 'string' ? { detail: answer.detail } : {}) }
           : { ok: false, error: 'SERVICE_UNAVAILABLE' }
       },
-      closeMember: async agentId => await (ask?.('close_member', { agentId }) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }))
+      closeMember: async (agentId, creationId) => await (ask?.('close_member', { agentId, ...(creationId ? { creationId } : {}) }) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }))
         .catch(() => ({ error: 'SERVICE_UNAVAILABLE' })),
       stopped: async agentId => (await ask?.('stopped', { agentId }).catch(() => null))?.stopped === true,
       gone: async agentId => (await ask?.('gone', { agentId }).catch(() => null))?.gone === true,

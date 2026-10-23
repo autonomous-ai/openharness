@@ -1,6 +1,6 @@
 import { screenFor } from '../engines/screens.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CloseAgentService, inspectCloseActivity as inspectCloseReading, type CloseActivity, type CloseAgentServiceDeps, type AgentCloseRequest } from './closeAgentService.js'
+import { CloseAgentService, LEAD_PROTECTED_DETAIL, inspectCloseActivity as inspectCloseReading, type CloseActivity, type CloseAgentServiceDeps, type AgentCloseRequest } from './closeAgentService.js'
 import { registry, type RegisteredSession } from './registry.js'
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -51,6 +51,18 @@ it('a Swarm close closes a worker reopened on the conversation it was started wi
   row.startedBy = 'agent'
   row.resumeOnly = true
   expect(await service.request({ ...request('now'), onlyIfOriginalLaunch: true })).toEqual({ closed: true })
+})
+
+// The review of #1635: Close after task answered a Swarm Lead "deferred", saved its plan, and said LEAD_PROTECTED only once
+// the task ended. A Lead is refused at once, for every kind of close, before anything is read, saved or stopped.
+it.each(['now', 'idle', 'after_task'] as const)('refuses to close a Swarm Lead (%s) at once, saving no plan', async mode => {
+  const svc = new CloseAgentService({ ...deps, leadProtected: id => id === row.agentId })
+  expect(await svc.request(request(mode))).toEqual({ error: 'LEAD_PROTECTED', detail: LEAD_PROTECTED_DETAIL })
+  expect(registry.byAgent(row.agentId)?.closePlan).toBeUndefined()
+  expect(deps.activity).not.toHaveBeenCalled()
+  expect(deps.stop).not.toHaveBeenCalled()
+  expect(await svc.request(request('inspect'))).toEqual({ activity: expect.any(String) })
+  svc.dispose()
 })
 
 it.each(['before', 'activity', 'checkpoint'] as const)('an expired native close lease preserves the worker at %s', async phase => {

@@ -1,6 +1,6 @@
 import { createSwarmSkillAdoption } from './agents/swarmSkills.js'
 import { swarmRoleThrough } from './superTabSkills.js'
-import { retainedHarnesses, retainedLeads } from '../superTabs/retention.js'
+import { mayBeLead, retainedHarnesses, retainedLeads } from '../superTabs/retention.js'
 import { createGridAssignments } from './agents/gridAssignments.js'
 import { createQuestionControls } from './engines/questionControls.js'
 import { masterRunsEngineQuestionControl } from '../harnessd/services.js'
@@ -2795,7 +2795,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     stopped: (agentId) => ports.agentCleanup?.closed(agentId),
     moveHeld: (agentId) => moveHeld.has(agentId),
     // The Lead of an active Swarm project is never stopped (owner, 2026-10-23); its host keeps the list (superTabs/retention.ts).
-    leadProtected: (agentId) => retainedLeads(env.ADAPTER_DATA_DIR).has(agentId),
+    leadProtected: (agentId) => mayBeLead(env.ADAPTER_DATA_DIR, agentId),
   })
   const stopJobs = lifecycle.stopJobs
   launchCancelled = id => stopJobs.has(id)
@@ -2821,6 +2821,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     announceSession,
     engineReady: (engine, ms) => engineLinks.ready(engine, ms),
     stoppedAgents,
+    leadProtected: (agentId) => mayBeLead(env.ADAPTER_DATA_DIR, agentId),
   })
   backend.closeAgentService = closing.closeAgentService
   backend.closeAgentService.start()

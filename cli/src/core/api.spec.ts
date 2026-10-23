@@ -98,6 +98,25 @@ describe('the core API services stand on', () => {
     expect(await createCoreApi({ ...deps, swarmMembers: { leads: () => new Set(), harnesses: () => new Set(['live']) } }).agents.closeMember!('live')).toEqual({ error: 'UNSUPPORTED' })
   })
 
+  // The review of #1635: an agent removed before its host wrote a roster naming it is no member there; the exact receipt of
+  // the Swarm's start proves it is the Swarm's own to close, and a receipt naming another harness proves nothing.
+  it('closes a member the retention does not name only when its start receipt names it', async () => {
+    const base = coreDeps(), closeAgent = vi.fn(async () => ({ closed: true as const }))
+    const creationStatus = vi.fn(async (creationId: string) => ({ creationId, state: 'created' as const, agentId: 'live' }))
+    const deps = { ...base, closeAgent, creationStatus, swarmMembers: { leads: () => new Set<string>(), harnesses: () => new Set<string>() },
+      registry: { ...base.registry, byAgent: (id: string) => id === 'live' ? { ...row('live'), registeredAt: 1000 } : undefined } as CoreApiDeps['registry'] }
+    const core = createCoreApi(deps)
+    expect(await core.agents.closeMember!('live')).toEqual({ error: 'NOT_A_MEMBER' })
+    expect(await core.agents.closeMember!('live', 'super-start')).toEqual({ closed: true })
+    expect(creationStatus).toHaveBeenCalledWith('super-start')
+    creationStatus.mockResolvedValueOnce({ creationId: 'super-start', state: 'created', agentId: 'another' })
+    expect(await core.agents.closeMember!('live', 'super-start')).toEqual({ error: 'NOT_A_MEMBER' })
+    creationStatus.mockResolvedValueOnce(null as never)
+    expect(await core.agents.closeMember!('live', 'super-start')).toEqual({ error: 'NOT_A_MEMBER' })
+    expect(await createCoreApi({ ...deps, creationStatus: undefined }).agents.closeMember!('live', 'super-start')).toEqual({ error: 'NOT_A_MEMBER' })
+    expect(closeAgent).toHaveBeenCalledTimes(1)
+  })
+
   it('refuses missing or expired close leases, including expiry during the creation lookup', async () => {
     let now = 1000
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)

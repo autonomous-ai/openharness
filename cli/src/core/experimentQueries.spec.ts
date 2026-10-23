@@ -256,7 +256,10 @@ it('lets only the Swarm service reopen a Lead or close a member, by a valid agen
   expect(await answerExperimentQuery(core, allowed, 'superTabs', 'keep_lead_alive', { agentId: 'lead' })).toEqual({ ok: true })
   expect(keepLeadAlive).toHaveBeenCalledWith('lead')
   expect(await answerExperimentQuery(core, allowed, 'superTabs', 'close_member', { agentId: 'worker' })).toEqual({ closed: true })
-  expect(closeMember).toHaveBeenCalledWith('worker')
+  expect(closeMember).toHaveBeenCalledWith('worker', undefined)
+  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'close_member', { agentId: 'worker', creationId: 'super-0123456789abcdef' })).toEqual({ closed: true })
+  expect(closeMember).toHaveBeenLastCalledWith('worker', 'super-0123456789abcdef')
+  for (const creationId of ['short', 4]) expect(await answerExperimentQuery(core, allowed, 'superTabs', 'close_member', { agentId: 'worker', creationId })).toEqual({ error: 'INVALID_REQUEST' })
   for (const query of ['keep_lead_alive', 'close_member']) {
     expect(await answerExperimentQuery(core, allowed, 'orchestrator', query, { agentId: 'lead' })).toEqual({ error: 'NOT_SUPER_TABS' })
     for (const agentId of ['', '../x', 4]) expect(await answerExperimentQuery(core, allowed, 'superTabs', query, { agentId })).toEqual({ error: 'INVALID_REQUEST' })
@@ -264,5 +267,5 @@ it('lets only the Swarm service reopen a Lead or close a member, by a valid agen
   expect(await answerExperimentQuery(fakeCore(), allowed, 'superTabs', 'keep_lead_alive', { agentId: 'lead' })).toEqual({ ok: false, error: 'UNSUPPORTED' })
   expect(await answerExperimentQuery(fakeCore(), allowed, 'superTabs', 'close_member', { agentId: 'worker' })).toEqual({ error: 'UNSUPPORTED' })
   expect(keepLeadAlive).toHaveBeenCalledTimes(1)
-  expect(closeMember).toHaveBeenCalledTimes(1)
+  expect(closeMember).toHaveBeenCalledTimes(2)
 })

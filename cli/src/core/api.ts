@@ -211,8 +211,9 @@ export interface CoreApi {
      *  Lead of an active project (superTabs/retention.ts); a live one is answered ok. */
     keepLeadAlive?(agentId: string): Promise<{ ok: true } | { ok: false; error: string; detail?: string }>
     /** Close, now and keeping its conversation, a Super Tab member whose session the backend ends (its project deleted,
-     *  the agent removed). Only a harness this machine's Super Tab host retains as a member; a gone one is closed. */
-    closeMember?(agentId: string): Promise<AgentCloseResult>
+     *  the agent removed). Only a harness this machine's Super Tab host retains as a member, or one whose exact native
+     *  creation receipt [creationId] (the Swarm's start) names it; a gone one is closed. */
+    closeMember?(agentId: string, creationId?: string): Promise<AgentCloseResult>
     /** When a live agent's conversation last moved, epoch ms: the latest dated work in its transcript
      *  (lib/transcriptActivity.ts), what the apps' `updatedAt` is when there is one. Null for none live, and for an
      *  engine that keeps no dated transcript: a hook's time or the bind's is not when it last answered. Absent where
@@ -1902,13 +1903,19 @@ export function createCoreApi({
         const reply = await resumeAgent(agentId)
         return reply.ok ? { ok: true } : { ok: false, error: reply.error, ...(reply.detail ? { detail: reply.detail } : {}) }
       },
-      closeMember: async agentId => {
+      closeMember: async (agentId, creationId) => {
         if (!closeAgent || !swarmMembers) return { error: 'UNSUPPORTED' }
         const session = registry.byAgent(agentId)
         if (!session) return { closed: true }
         let member = false
         try { member = swarmMembers.harnesses().has(agentId) } catch { /* An unreadable retention names no member. */ }
+        // An agent removed before its host wrote a roster naming it: the Swarm's own start receipt proves it (the review of #1635).
+        if (!member && creationId) {
+          const creation = await creationStatus?.(creationId)
+          member = creation?.state === 'created' && creation.agentId === agentId
+        }
         if (!member) return { error: 'NOT_A_MEMBER' }
+        // The close itself refuses a session that changed during the receipt read.
         return closeAgent({ agentId, sessionId: session.sessionId, createdAt: new Date(session.registeredAt).toISOString(), mode: 'now' })
       },
       closeStarted: async (agentId, mode) => {
