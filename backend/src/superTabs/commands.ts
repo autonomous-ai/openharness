@@ -248,6 +248,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   }
   /** Rows the system writes for rules; a Lead cannot quote one as the owner asking. Names, not emails, in the text. */
   const RULE_ROW = { kind: 'rule' }
+  /** Any other row the system writes in the actor's name. Without a source, a notice written as the owner read as the owner
+   * asking, and a Lead could quote it to change rules (review of #1594). Only `message.send` and an initial message stay plain. */
+  const SYSTEM_ROW = { kind: 'system' }
   const who = sender.kind === 'person' ? sender.name.split('@')[0]! : sender.name
   /** A hard rule refuses an agent, unless it carries out what a person chose by hand. A person is not blocked: the
    * command goes through and the group is told. */
@@ -258,11 +261,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     result.warnings = [why]
     effects.messages.push({ id: stableId(operationId, 'rule'), conversationId, author: sender, text: `${done} anyway. ${why}`, replyTo: null, recipients: [], source: RULE_ROW })
   }
-  /** Only the owner changes rules, or the tab's Lead quoting a chat message the owner wrote in the last day (review of
-   * #1586: any owner row, a rule row included, could otherwise be quoted at any time). One message may ask for several rules. */
-  const ruleChange = (askedIn: { conversationId: string; messageId: string } | undefined) => {
-    if (actor.kind === 'person' && actor.userId === state.ownerId) return
-    if (actor.kind !== 'agent' || conversation(state, 'lead').leadId !== actor.agentId) {
+  /** Only the owner changes rules, or the Lead of the quoted chat's project quoting a message the owner wrote there in the
+   * last day (review of #1586: any owner row, a rule row included, could otherwise be quoted at any time). One message may
+   * ask for several rules. Returns the Lead chat that hears the change: the quoted project's, else a remaining one. A Swarm
+   * of projects has no 'lead' chat; on backend v1.3.14 looking for it refused every Lead's rule. */
+  const ruleChange = (askedIn: { conversationId: string; messageId: string } | undefined): string | null => {
+    const leadChat = askedIn ? groupProject(state, conversation(state, askedIn.conversationId)).leadConversationId : inviteLanding(state)
+    if (actor.kind === 'person' && actor.userId === state.ownerId) return leadChat
+    if (actor.kind !== 'agent' || !leadChat || conversation(state, leadChat).leadId !== actor.agentId) {
       fail('OWNER_REQUIRED', 'Only the Swarm owner, or the Lead passing on the owner\'s request, changes rules.', 403)
     }
     const asked = askedIn && context.askedIn
@@ -270,6 +276,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       || context.now - asked.createdAt > RULE_MESSAGE_MS) {
       fail('OWNER_MESSAGE_REQUIRED', 'Only the Swarm owner sets rules; quote a chat message the owner wrote in the last day asking for this change.', 403)
     }
+    return leadChat
   }
   const openDecision = (): RouteDecision => {
     const decision = context.routeDecision ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
@@ -391,10 +398,16 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // Mac that day) and refused every contribution. Those finish as failed; a dispatched or recent start still blocks.
       const abandoned = (state.starts ?? []).filter(s => context.abandonedStartIds?.includes(s.id))
       for (const start of abandoned) start.error = 'Abandoned before it started.'
-      // One command records one message, so the Lead's conversation hears it once, whichever groups asked.
-      const names = [...new Set(abandoned.map(s => s.request.name))]
-      if (names.length && state.conversations.some(c => c.id === 'lead')) {
-        message('lead', `${names.join(', ')} never started and will not start now. Start ${names.length > 1 ? 'them' : 'it'} again if still needed.`)
+      // Each project's Lead chat hears once about its own starts, whichever of its groups asked.
+      const byLeadChat = new Map<string, Set<string>>()
+      for (const start of abandoned) {
+        const group = state.conversations.find(c => c.id === start.request.conversationId)
+        const leadChat = group && groupProject(state, group).leadConversationId
+        if (leadChat && state.conversations.some(c => c.id === leadChat)) byLeadChat.set(leadChat, (byLeadChat.get(leadChat) ?? new Set()).add(start.request.name))
+      }
+      for (const [leadChat, names] of byLeadChat) {
+        effects.messages.push({ id: stableId(operationId, leadChat), conversationId: leadChat, author: sender, replyTo: null, recipients: [], source: SYSTEM_ROW,
+          text: `${[...names].join(', ')} never started and will not start now. Start ${names.size > 1 ? 'them' : 'it'} again if still needed.` })
       }
       if (state.starts?.some(s => s.request.machineId === command.machineId && (!s.harnessId || (s.poolGeneration && !s.poolSettled)) && !s.error)) fail('STARTS_PENDING', 'Reconcile pending starts before changing this contribution.')
       state.machines = state.machines.filter(m => m.machineId !== command.machineId)
@@ -425,22 +438,22 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       else delete state.routingPolicy
       break
     case 'rule.set': {
-      ruleChange(command.askedIn)
+      const leadChat = ruleChange(command.askedIn)
       // There is one machines list; a new one replaces it.
       const rules = (state.rules ?? []).filter(r => command.rule.kind !== 'machines' || r.rule.kind !== 'machines')
       if (rules.length >= MAX_RULES) fail('RULES_FULL', `This Swarm has ${MAX_RULES} rules. Remove one first.`)
       state.rules = [...rules, { id: operationId, rule: command.rule, text: command.text, askedBy: state.ownerId,
         askedIn: command.askedIn ?? null, addedBy: actorKey(actor), createdAt: new Date(context.now).toISOString() }]
       result.ruleId = operationId
-      message('lead', `Rule added: ${command.text}`, [], null, RULE_ROW)
+      if (leadChat) message(leadChat, `Rule added: ${command.text}`, [], null, RULE_ROW)
       break
     }
     case 'rule.remove': {
-      ruleChange(command.askedIn)
+      const leadChat = ruleChange(command.askedIn)
       const rule = state.rules?.find(r => r.id === command.ruleId) ?? fail('NOT_FOUND', 'This Swarm has no such rule.', 404)
       state.rules = state.rules!.filter(r => r.id !== rule.id)
       if (!state.rules.length) delete state.rules
-      message('lead', `Rule removed: ${rule.text}`, [], null, RULE_ROW)
+      if (leadChat) message(leadChat, `Rule removed: ${rule.text}`, [], null, RULE_ROW)
       break
     }
     case 'conversation.create': {
@@ -468,7 +481,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       })
       result.conversationId = operationId
       result.number = number
-      if (brief) message(operationId, brief)
+      if (brief) message(operationId, brief, [], null, SYSTEM_ROW)
       break
     }
     case 'conversation.rename':
@@ -594,14 +607,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (!start.poolGeneration || !start.harnessId || start.error) fail('START_PENDING', 'This contributed start is not ready to settle.')
         if (!start.poolSettled) message(start.request.conversationId, command.warning
           ? `${start.request.name}: ${command.warning}`
-          : `${start.request.name} is ready for an assignment.`)
+          : `${start.request.name} is ready for an assignment.`, [], null, SYSTEM_ROW)
         start.poolSettled = true
         break
       }
       if (command.type === 'agent.startFailed') {
         if (start.harnessId) fail('ALREADY_STARTED', 'This agent already started.')
         start.error = command.error
-        message(start.request.conversationId, `Could not start ${start.request.name}: ${command.error}`)
+        message(start.request.conversationId, `Could not start ${start.request.name}: ${command.error}`, [], null, SYSTEM_ROW)
         break
       }
       if (start.error) fail('START_FAILED', 'This start failed. Use a new start request.')
@@ -624,7 +637,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       result.agentId = agentId
       message(group.id, start.poolGeneration
         ? `${start.request.name} joined. Preparing its model.`
-        : `${start.request.name} joined. Ready for an assignment.`)
+        : `${start.request.name} joined. Ready for an assignment.`, [], null, SYSTEM_ROW)
       break
     }
     case 'agent.configuration': {
@@ -737,7 +750,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // One person can withdraw an agent from several groups. Each notice needs its own durable message ID.
         effects.messages.push({ id: stableId(operationId, 'agent-removed', group.id), conversationId: group.id,
           author: sender, text: `${sender.name.split('@')[0]} removed ${target.displayName ?? target.name} from the Swarm.${task}`,
-          replyTo: null, recipients: lead ? [lead] : [] })
+          replyTo: null, recipients: lead ? [lead] : [], source: SYSTEM_ROW })
       }
       break
     }
@@ -835,11 +848,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.resolution === 'resend') {
         open(state, group.id)
         if (!group.agentIds.includes(target.id)) fail('INVALID_RECIPIENT', 'This agent is no longer in the conversation.', 400)
-        message(group.id, delivery.text, [target.id], delivery.messageId, undefined, delivery.attachments)
+        message(group.id, delivery.text, [target.id], delivery.messageId, SYSTEM_ROW, delivery.attachments)
       } else {
         message(group.id, command.resolution === 'received'
           ? `Checked ${target.name}’s terminal and confirmed the earlier instruction was received.`
-          : `Dismissed the delivery warning for ${target.name}. This does not stop work already received.`, [], delivery.messageId)
+          : `Dismissed the delivery warning for ${target.name}. This does not stop work already received.`, [], delivery.messageId, SYSTEM_ROW)
       }
       result.deliveryId = delivery.id
       result.resolution = command.resolution
@@ -911,7 +924,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.task) group.task = command.task
       else delete group.task
       group.checks = command.checks.map((c, i) => ({ ...c, id: stableId(operationId, String(i)), evidence: null, passedBy: null }))
-      message(group.id, group.brief)
+      message(group.id, group.brief, [], null, SYSTEM_ROW)
       break
     }
     case 'work.assign': {
@@ -955,7 +968,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         personChose = !override && decision.override?.by === 'person'
       }
       ruled(agentTarget(state, worker), group.id, `${who} assigned ${worker.name}`, personChose)
-      message(group.id, `${group.brief}\n\nAcceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`, [worker.id])
+      message(group.id, `${group.brief}\n\nAcceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`, [worker.id], null, SYSTEM_ROW)
       if (routeNote) effects.messages.push({ id: stableId(operationId, 'route-override'), conversationId: group.id, author: sender,
         text: routeNote.text, replyTo: null, recipients: [], source: { kind: 'route-override', decisionId: routeNote.decisionId, by: 'lead' } })
       break
@@ -984,7 +997,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // Ready for review also wakes the group's Reviewers, whoever marked it.
         const reviewers = command.status !== 'review' ? [] : group.agentIds.filter(id => id !== lead &&
           (actor.kind !== 'agent' || id !== actor.agentId) && state.agents.some(a => a.id === id && agentRole(a) === 'reviewer' && a.workDecision !== 'stop'))
-        message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}`, [...(tellLead ? [lead] : []), ...reviewers])
+        message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}`, [...(tellLead ? [lead] : []), ...reviewers], null, SYSTEM_ROW)
       }
       break
     }
@@ -1006,7 +1019,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       assignment.result = command.reason
       finishWorker(state, assignment.agentId, group)
       message(group.id, `${isLead ? 'The Lead' : 'The tab owner'} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.${gone ? '' : ' Stop working on it.'}`,
-        gone ? [] : [assignment.agentId])
+        gone ? [] : [assignment.agentId], null, SYSTEM_ROW)
       break
     }
     case 'work.check': {

@@ -836,6 +836,23 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const ownRow = await run(tab, { type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Reuse idle agents.' })
     await expect(run(tab, rule(ownRow.result.messageId as string), host, lead)).rejects.toMatchObject({ code: 'OWNER_MESSAGE_REQUIRED' })
   })
+  it('lets a project\'s Lead record and remove a rule from the owner\'s message in that project\'s chat', async () => {
+    // Backend v1.3.14 refused it: a Swarm of projects has no 'lead' chat.
+    const tab = (await store.create(owner, randomUUID(), 'Projects')).id
+    const { projectId, conversationId: chat } = (await run(tab, { type: 'project.create', name: 'App', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
+    await run(tab, { type: 'project.delete', projectId: 'lead' })
+    const lead = (await run(tab, { type: 'agent.add', conversationId: chat, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Lead', configuration: config, lead: true })).result.agentId as string
+    const said = (await run(tab, { ...message('Only use this Mac.'), conversationId: chat } as Command)).result.messageId as string
+    const askedIn = { conversationId: chat, messageId: said }
+    const ruleId = (await run(tab, { type: 'rule.set', rule: { kind: 'machines', machineIds: ['test-host'] }, text: 'Only this Mac.', askedIn }, host, lead)).result.ruleId as string
+    expect((await store.read(owner, tab)).state.rules).toEqual([expect.objectContaining({ text: 'Only this Mac.', askedIn, addedBy: `agent:${lead}` })])
+    await run(tab, { type: 'rule.remove', ruleId, askedIn }, host, lead)
+    expect((await store.read(owner, tab)).state).not.toHaveProperty('rules')
+    const rows = (await store.messages(owner, tab, chat, {})).messages.filter(m => m.source).map(m => m.text)
+    expect(rows).toEqual(['Rule added: Only this Mac.', 'Rule removed: Only this Mac.'])
+    expect((await store.read(owner, tab)).state.projects!.map(p => p.id)).toEqual([projectId])
+  })
   it('closes the replying agent\'s own deliveries of a message as answered, and nobody else\'s', async () => {
     const { tab, lead } = await fixture()
     const helper = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
@@ -1595,7 +1612,7 @@ describe('the owner\'s Lead machine joins its Swarm', () => {
     const machineId = `owner-mac-${randomUUID()}`
     await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
     const tab = (await store.create(owner, randomUUID(), 'Own machine')).id
-    await run(tab, { type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true })
+    const lead = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true })).result.agentId as string
     expect((await store.hostTabs(owner, machineId)).map(r => r.joinSwarm)).toEqual([true])
     const request = { conversationId: 'lead', machineId, engine: 'codex', name: 'Builder', cwd: '/repo', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
@@ -1616,7 +1633,11 @@ describe('the owner\'s Lead machine joins its Swarm', () => {
     expect(joined.starts!.find(s => s.id === abandoned)!.error).toBe('Abandoned before it started.')
     expect(joined.starts!.find(s => s.id === inFlight)!.error).toBe('Launch refused.')
     expect(joined.starts!.find(s => s.id === dispatched)!.error).toBeNull()
-    expect((await store.messages(owner, tab, 'lead', {})).messages.at(-1)!.text).toBe('Builder never started and will not start now. Start it again if still needed.')
+    const notice = (await store.messages(owner, tab, 'lead', {})).messages.at(-1)!
+    expect(notice.text).toBe('Builder never started and will not start now. Start it again if still needed.')
+    // The notice is written in the owner's name, but the system wrote it: a Lead cannot quote it as the owner asking.
+    await expect(run(tab, { type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Idle first.', askedIn: { conversationId: 'lead', messageId: notice.id } },
+      owner, lead)).rejects.toMatchObject({ code: 'OWNER_MESSAGE_REQUIRED' })
     const added = joined.machines!.find(m => m.machineId === machineId)!
     expect(added).toMatchObject({ contributorId: owner.sub, maxAgents: 3, scope: 'swarm', cwd: '/swarm' })
     expect((await store.hostTabs(owner, machineId)).map(r => r.joinSwarm)).toEqual([false, false])

@@ -1275,6 +1275,86 @@ describe('the owner\'s rules', () => {
   })
 })
 
+describe('the owner\'s rules in a Swarm of projects', () => {
+  // Backend v1.3.14: once the original 'lead' project is gone, every Lead rule.set failed NOT_FOUND.
+  const said = (patch: Record<string, unknown> = {}) => ({ askedIn: { author: { kind: 'person', id: 'owner', name: owner.email, membershipGeneration: 'tab' },
+    source: false, createdAt: 1000, ...patch } }) as Partial<CommandContext>
+  function projects() {
+    const f = fixture(); f.invite()
+    const app = f.run({ type: 'project.create', name: 'App', visibility: 'public', brief: '' }).result.conversationId as string
+    const site = f.run({ type: 'project.create', name: 'Site', visibility: 'public', brief: '' }).result.conversationId as string
+    f.run({ type: 'project.delete', projectId: 'lead' })
+    const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+    return { ...f, get state() { return f.state }, app, site, lead: agentActor(f.add('app-lead', 'owner', app, true)),
+      worker: agentActor(f.add('app-worker', 'owner', app)), siteLead: agentActor(f.add('site-lead', 'owner', site, true)) }
+  }
+  const machines = (conversationId: string, messageId = 'm1') => ({ type: 'rule.set', rule: { kind: 'machines', machineIds: ['m1'] }, text: 'Only m1.',
+    askedIn: { conversationId, messageId } }) as Command
+
+  it('lets a project\'s Lead set a rule by quoting the owner in that project\'s chat, and posts the row there', () => {
+    const f = projects()
+    const added = f.run(machines(f.app), f.lead, said())
+    expect(f.state.rules).toEqual([expect.objectContaining({ rule: { kind: 'machines', machineIds: ['m1'] }, askedIn: { conversationId: f.app, messageId: 'm1' },
+      addedBy: `agent:${f.lead.kind === 'agent' && f.lead.agentId}` })])
+    expect(added.messages).toEqual([expect.objectContaining({ conversationId: f.app, text: 'Rule added: Only m1.', source: { kind: 'rule' } })])
+    const removed = f.run({ type: 'rule.remove', ruleId: added.result.ruleId as string, askedIn: { conversationId: f.app, messageId: 'm2' } }, f.lead, said())
+    expect(f.state).not.toHaveProperty('rules')
+    expect(removed.messages).toEqual([expect.objectContaining({ conversationId: f.app, text: 'Rule removed: Only m1.', source: { kind: 'rule' } })])
+  })
+  it('posts the owner\'s own rule rows in the quoted project, or else in a remaining Lead chat', () => {
+    const f = projects()
+    expect(f.run(machines(f.site)).messages[0]!.conversationId).toBe(f.site)
+    expect(f.run({ type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Idle first.' }).messages[0]!.conversationId).toBe(f.app)
+  })
+  it('refuses another project\'s Lead, a worker, a collaborator, a system row and an old message', () => {
+    const f = projects()
+    expect(() => f.run(machines(f.app), f.siteLead, said())).toThrow('unavailable')
+    expect(() => f.run(machines(f.app), f.worker, said())).toThrow('Only the Swarm owner')
+    expect(() => f.run(machines(f.app), peer, said({ author: { kind: 'person', id: 'peer' } }))).toThrow('Only the Swarm owner')
+    expect(() => f.run(machines(f.app), f.lead, said({ source: true }))).toThrow('quote a chat message the owner wrote')
+    expect(() => f.run(machines(f.app), f.lead, said({ createdAt: 1000 - 24 * 3_600_000 - 1 }))).toThrow('quote a chat message the owner wrote')
+    expect(f.state).not.toHaveProperty('rules')
+  })
+  it('tells each project\'s Lead chat which of its starts were abandoned when the machine joins', () => {
+    const f = projects()
+    const start = (id: string, conversationId: string, name: string) => ({ id, request: { conversationId, machineId: 'mac', name }, error: null })
+    f.state.starts = [start('s1', f.app, 'Builder'), start('s2', f.site, 'Writer'), start('s3', f.app, 'Reviewer')] as never
+    const joined = f.run({ type: 'machine.contribute', machineId: 'mac', name: 'Mac', cwd: '/swarm', engines: ['codex'], maxAgents: 2 },
+      owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, abandonedStartIds: ['s1', 's2', 's3'] })
+    expect(joined.messages.map(m => [m.conversationId, m.text])).toEqual([
+      [f.app, 'Builder, Reviewer never started and will not start now. Start them again if still needed.'],
+      [f.site, 'Writer never started and will not start now. Start it again if still needed.']])
+    expect(new Set(joined.messages.map(m => m.id)).size).toBe(2)
+  })
+})
+
+it('marks every row the system writes in the owner\'s name, so a Lead cannot quote it as the owner asking for a rule', () => {
+  const f = fixture(); f.invite()
+  const rows: { text: string; source?: unknown }[] = []
+  const run = (command: Command, context: Partial<CommandContext> = {}) => { const effects = f.run(command, owner, context); rows.push(...effects.messages); return effects }
+  f.add('lead', 'owner', 'lead', true)
+  const group = run({ type: 'conversation.create', title: 'Drafts', brief: 'Save drafts.', checks: [{ description: 'Saved.', independent: false }] }).result.conversationId as string
+  const worker = f.add('worker', 'owner', group)
+  run({ type: 'work.define', conversationId: group, brief: 'Save drafts offline.', checks: [{ description: 'Saved.', independent: false }] })
+  const assignmentId = run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
+  run({ type: 'work.status', conversationId: group, assignmentId, status: 'blocked', result: 'Waiting.' })
+  run({ type: 'delivery.resolve', deliveryId: 'd1', resolution: 'received' },
+    { delivery: { id: 'd1', conversationId: group, agentId: worker, messageId: 'm1', text: 'Earlier.' } })
+  run({ type: 'delivery.resolve', deliveryId: 'd2', resolution: 'resend' },
+    { delivery: { id: 'd2', conversationId: group, agentId: worker, messageId: 'm2', text: 'Earlier.' } })
+  run({ type: 'work.cancel', conversationId: group, assignmentId, reason: 'Obsolete.' })
+  run({ type: 'agent.remove', agentId: worker })
+  const start = (id: string) => ({ id, actorKey: 'person:owner', contributorId: 'owner', membershipGeneration: f.state.people[0]!.generation,
+    request: { conversationId: 'lead', machineId: 'mac', name: 'Builder' }, error: null })
+  f.state.starts = [start('s1'), start('s2')] as never
+  run({ type: 'agent.startFailed', startId: 's1', error: 'Launch refused.' })
+  run({ type: 'machine.contribute', machineId: 'mac', name: 'Mac', cwd: '/swarm', engines: ['codex'], maxAgents: 2 },
+    { contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, abandonedStartIds: ['s2'] })
+  expect(rows.map(r => r.text)).toEqual(expect.arrayContaining(['Builder never started and will not start now. Start it again if still needed.',
+    'Could not start Builder: Launch refused.', 'owner removed worker from the Swarm.']))
+  expect(rows.filter(r => !r.source).map(r => r.text)).toEqual([])
+})
+
 describe('the owner\'s rules, after review', () => {
   const set = (rule: Record<string, unknown>, text = 'Rule.') => ({ type: 'rule.set', rule, text } as Command)
   const request = (patch: Record<string, unknown> = {}) => ({ conversationId: 'lead', machineId: 'machine', engine: 'claude', model: 'opus', effort: 'high', name: 'Builder',
