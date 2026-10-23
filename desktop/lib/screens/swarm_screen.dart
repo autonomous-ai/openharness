@@ -4003,7 +4003,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     final content = _newHarnessContent();
-    _newHarnessOverlay = OverlayEntry(
+    _newHarnessOverlay = _workspaceOverlay(
       // Hidden, not removed, while a dialog ROUTE is up — see
       // [_withNewHarnessHidden]. The form keeps its State and its draft.
       builder: (context) => Offstage(
@@ -5542,7 +5542,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         _closeDaemonPreview();
         return;
       }
-      _daemonPreview = OverlayEntry(
+      _daemonPreview = _workspaceOverlay(
         builder: (context) {
           final width = math.min(
             350.0,
@@ -5688,7 +5688,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (overlay == null) return false;
     _closeDaemonPreview();
     _closeDaemonHint();
-    _daemonHintOverlay = OverlayEntry(
+    _daemonHintOverlay = _workspaceOverlay(
       builder: (context) {
         final cell = workspaceBarCellSizeOf(context);
         return Positioned(
@@ -5781,7 +5781,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _closeSearch(restoreFocus: false);
     dismissTransientMenus();
     _preparePaneFocus();
-    _daemonOverlay = OverlayEntry(
+    _daemonOverlay = _workspaceOverlay(
       builder: (context) => _anchoredBesideSlot(
         onBarrierTap: _closeDaemon,
         width: 480,
@@ -5897,7 +5897,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _face.beginReveal(kind: egg.kind);
     final result = _zoo.hatch(egg.id);
     _preparePaneFocus();
-    _hatchOverlay = OverlayEntry(
+    _hatchOverlay = _workspaceOverlay(
       builder: (context) => _anchoredBesideSlot(
         onBarrierTap: _closeHatch,
         cells: daemonRevealCells,
@@ -5977,7 +5977,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.markModelsOpened();
     unawaited(app.modelManager.refresh());
     unawaited(_modelsMenu!.refresh());
-    _modelsOverlay = OverlayEntry(
+    _modelsOverlay = _workspaceOverlay(
       builder: (context) => LayoutBuilder(
         builder: (context, constraints) => Stack(
           children: [
@@ -6399,7 +6399,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       },
     );
     _search!.addListener(_syncSearch);
-    _searchOverlay = OverlayEntry(builder: _buildSearchOverlay);
+    _searchOverlay = _workspaceOverlay(builder: _buildSearchOverlay);
     Overlay.of(context).insert(_searchOverlay!);
     _syncSearch();
     // The overlay and focus nodes update independently of the retained canvas.
@@ -7914,8 +7914,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
         if (mounted) linuxTitleBarActions.refresh();
       });
     }
-    return _buildWorkspace(context);
+    return _inChrome(_buildWorkspace(context));
   }
+
+  /// [child] under this workspace's host chrome, so [WorkspaceChrome.of]
+  /// reads the chrome this screen was given. The workspace and every overlay
+  /// it opens go through here; an overlay is outside the workspace's subtree.
+  Widget _inChrome(Widget child) =>
+      WorkspaceChromeScope(chrome: widget.chrome, child: child);
+
+  /// An overlay of this workspace, under its host chrome ([_inChrome]).
+  OverlayEntry _workspaceOverlay({required WidgetBuilder builder}) =>
+      OverlayEntry(builder: (context) => _inChrome(builder(context)));
 
   /// Search, notifications and Store, for the right end of the Linux title
   /// bar — the same three the tab strip draws on every other host.
