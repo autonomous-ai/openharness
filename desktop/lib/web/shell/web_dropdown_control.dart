@@ -58,19 +58,6 @@ class WebDropdownControl extends StatelessWidget {
   );
 }
 
-/// The smallest target a finger can hit, both ways (S1). On a phone a menu's
-/// rows and buttons grow to it; under a mouse they keep their size.
-const double kWebFingerTarget = 44;
-
-/// [row] as a phone menu row: at least [kWebFingerTarget] tall when
-/// [compact]. Its text stays centered in the taller row.
-Widget webMenuRowTarget(Widget row, {required bool compact}) => compact
-    ? ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: kWebFingerTarget),
-        child: row,
-      )
-    : row;
-
 /// Where a menu opened from the widget at [context] goes: under it, flush
 /// with its right edge. Near the bottom of the window the menu is lifted to
 /// fit. Null while that widget is not laid out.

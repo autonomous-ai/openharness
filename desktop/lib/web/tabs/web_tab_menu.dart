@@ -7,8 +7,8 @@ import '../../state/terminal_pane.dart';
 import '../../state/workspace_chrome.dart';
 import '../../state/workspace_status.dart';
 import '../../widgets/pane_grid.dart' show soloPaneId;
+import '../../widgets/finger_target.dart';
 import '../../widgets/pane_menu.dart';
-import '../shell/web_dropdown_control.dart';
 
 /// What a row of the tab menu asks for, carried out once the menu is gone.
 sealed class WebTabChoice {
@@ -81,7 +81,7 @@ List<Widget> webTabMenuRows(
         onTap: () => close(choice),
         child: KeyedSubtree(
           key: ValueKey(key),
-          child: webMenuRowTarget(content, compact: true),
+          child: fingerTarget(content, enabled: true),
         ),
       );
   Widget closable({
@@ -101,8 +101,8 @@ List<Widget> webTabMenuRows(
           key: ValueKey('$key:close'),
           tooltip: closeTooltip,
           constraints: const BoxConstraints.tightFor(
-            width: kWebFingerTarget,
-            height: kWebFingerTarget,
+            width: kFingerTarget,
+            height: kFingerTarget,
           ),
           iconSize: 16,
           onPressed: () => close(closeChoice),

@@ -3,11 +3,14 @@
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/screens/swarm_screen.dart';
+import 'package:harness/settings/settings_screen.dart';
+import 'package:harness/settings/settings_section.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/terminal_pane.dart';
@@ -16,6 +19,7 @@ import 'package:harness/web/shell/web_app_menu.dart';
 import 'package:harness/web/shell/web_chrome.dart';
 import 'package:harness/web/tabs/web_tab_menu.dart';
 import 'package:harness/widgets/desktop_workspace_tab.dart';
+import 'package:harness/widgets/swarm_switcher.dart';
 
 const _phone = Size(390, 844);
 const _computer = Size(1440, 900);
@@ -36,12 +40,14 @@ void _size(WidgetTester tester, Size size) {
   addTearDown(tester.view.reset);
 }
 
-/// The web workspace, as the browser build composes it. With [harness], the
-/// tab holds one on a connected machine, so the footer has a menu to open.
+/// The web workspace, as the browser build composes it (or Desktop's, when
+/// [desktop]). With [harness], the tab holds one on a connected machine, so
+/// the footer has a menu to open and Machines a machine to show.
 Future<AppNotifier> _workspace(
   WidgetTester tester,
   Size size, {
   bool harness = false,
+  bool desktop = false,
 }) async {
   final app = _app();
   if (harness) {
@@ -67,12 +73,50 @@ Future<AppNotifier> _workspace(
       home: SwarmScreen(
         notifier: app,
         nativeTabs: false,
-        chrome: webWorkspaceChrome(app),
+        chrome: desktop ? null : webWorkspaceChrome(app),
       ),
     ),
   );
   await tester.pump(const Duration(milliseconds: 200));
   return app;
+}
+
+/// Machines, with the connected machine chosen so its actions show.
+Future<void> _openMachines(WidgetTester tester) async {
+  final search = tester
+      .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+      .search;
+  final index = search.rows.indexWhere(
+    (row) => row.isMachine && row.machineId == 'm',
+  );
+  search.move(index - search.cursor);
+  await tester.pump(const Duration(milliseconds: 200));
+}
+
+/// Settings as the web opens it: the phone layout below 720 px.
+Future<void> _openSettings(WidgetTester tester, Size size) async {
+  final app = _app();
+  _size(tester, size);
+  await tester.pumpWidget(
+    MaterialApp(
+      theme: grid.buildAppTheme(brightness: Brightness.dark),
+      home: Builder(
+        builder: (context) => Scaffold(
+          body: TextButton(
+            onPressed: () => showSettingsScreen(
+              context,
+              app,
+              source: 'test',
+              compactBelow: 720,
+            ),
+            child: const Text('Open'),
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.tap(find.text('Open'));
+  await tester.pumpAndSettle();
 }
 
 Future<void> _openAppMenu(WidgetTester tester) async {
@@ -311,6 +355,96 @@ void main() {
         reason: row,
       );
     }
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  const machineActions = [
+    ValueKey('resource-action:picker.resource_view'),
+    ValueKey('resource-action:picker.resource_rename'),
+    Key('machine-picker-add-machine'),
+    Key('account-devices-history'),
+    Key('machine-window-choice-field'),
+  ];
+
+  Future<void> machines(
+    WidgetTester tester,
+    Size size, {
+    bool desktop = false,
+  }) async {
+    await _workspace(tester, size, harness: true, desktop: desktop);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    final menu = find.byKey(const ValueKey('web-app-menu-button'));
+    if (menu.evaluate().isNotEmpty) {
+      await _openAppMenu(tester);
+      await tester.tap(find.byKey(const ValueKey('web-menu:machines.list')));
+    } else {
+      await tester.tap(find.byKey(const ValueKey('swarm-search-button')));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.enterText(find.byType(EditableText).first, '@');
+    }
+    await tester.pump(const Duration(milliseconds: 400));
+    await _openMachines(tester);
+  }
+
+  testWidgets('a phone Machines picker has actions a finger can hit', (
+    tester,
+  ) async {
+    await machines(tester, _phone);
+
+    for (final key in machineActions) {
+      expect(
+        _target(tester, key).height,
+        greaterThanOrEqualTo(_finger),
+        reason: '$key',
+      );
+    }
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('Machines keeps its actions under a mouse and on Desktop', (
+    tester,
+  ) async {
+    await machines(tester, _computer);
+    final web = {
+      for (final key in machineActions) key: _target(tester, key).height,
+    };
+    await tester.pumpWidget(const SizedBox.shrink());
+    await machines(tester, _phone, desktop: true);
+    final desktop = {
+      for (final key in machineActions) key: _target(tester, key).height,
+    };
+
+    for (final key in machineActions) {
+      expect(web[key], lessThan(_finger), reason: 'web 1440 $key');
+      expect(desktop[key], web[key], reason: 'Desktop 390 $key');
+    }
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('phone Settings has a Back a finger can hit, both ways back', (
+    tester,
+  ) async {
+    await _openSettings(tester, _phone);
+    expect(
+      _target(tester, const Key('settings-back-button')).height,
+      greaterThanOrEqualTo(_finger),
+    );
+
+    await tester.tap(find.text(SettingsSection.notifications.label));
+    await tester.pumpAndSettle();
+    expect(
+      _target(tester, const Key('settings-compact-back')).height,
+      greaterThanOrEqualTo(_finger),
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('a wide Settings keeps its Back as it was', (tester) async {
+    await _openSettings(tester, _computer);
+
+    expect(_target(tester, const Key('settings-back-button')).height, 38);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

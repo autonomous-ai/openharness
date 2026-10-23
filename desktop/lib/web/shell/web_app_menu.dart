@@ -11,9 +11,9 @@ import '../../state/workspace_chrome.dart';
 import '../../terminal/terminal_theme.dart';
 import '../../theme/app_theme.dart' show AppColors;
 import '../../terminal/terminal_theme_store.dart';
+import '../../widgets/finger_target.dart';
 import '../../widgets/pane_menu.dart';
 import '../../widgets/workspace_bar_control.dart';
-import 'web_dropdown_control.dart';
 import 'web_layout.dart';
 import 'web_menu_items.dart';
 
@@ -104,8 +104,9 @@ class WebAppMenuButton extends StatelessWidget {
     // label when the row lights up.
     Widget row(String id, String label, Widget icon) => paneMenuItem(
       onTap: () => close(id),
-      child: webMenuRowTarget(
-        compact: compact,
+      // On a phone the row is a finger's height; a mouse keeps it as it was.
+      child: fingerTarget(
+        enabled: compact,
         PaneMenuRow(
           key: ValueKey('web-menu:$id'),
           selected: false,

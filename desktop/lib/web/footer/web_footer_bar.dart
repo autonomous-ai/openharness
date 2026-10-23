@@ -7,6 +7,7 @@ import '../../state/workspace_chrome.dart';
 import '../../terminal/terminal_theme.dart';
 import '../../terminal/terminal_theme_store.dart';
 import '../../widgets/box_chrome.dart' show kWorkspaceInset;
+import '../../widgets/finger_target.dart';
 import '../../widgets/pane_menu.dart';
 import '../../widgets/web_download_button.dart';
 import '../../widgets/workspace_bar_control.dart';
@@ -87,8 +88,8 @@ class WebFooterBar extends StatelessWidget {
             child: KeyedSubtree(
               key: ValueKey('web-footer:${item.title}'),
               // The footer is a phone's: its rows are a finger's size.
-              child: webMenuRowTarget(
-                compact: true,
+              child: fingerTarget(
+                enabled: true,
                 PaneMenuRow(
                   selected: false,
                   title: item.title,

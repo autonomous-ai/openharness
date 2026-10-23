@@ -4,12 +4,13 @@ import 'package:flutter/material.dart';
 import '../shared/layouts/widgets/sidebar_item.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/section_scaffold.dart';
+import '../widgets/finger_target.dart';
 import 'settings_nav.dart';
 import 'settings_section.dart';
 
 /// One settings section on a narrow screen (the web on a phone): the section
 /// takes the width, and the way back to the list of sections sits above it,
-/// shaped like the list's own "Back to app" row.
+/// shaped like the list's own "Back to app" row and as easy to hit.
 class SettingsCompactSection extends StatelessWidget {
   const SettingsCompactSection({
     super.key,
@@ -32,13 +33,19 @@ class SettingsCompactSection extends StatelessWidget {
           0,
         ),
         child: SizedBox(
-          height: SectionScaffold.headingHeight(context),
+          height: fingerHeight(
+            SectionScaffold.headingHeight(context),
+            enabled: true,
+          ),
           child: Center(
-            child: SidebarItem(
-              key: const Key('settings-compact-back'),
-              icon: AppIcons.arrowLeft,
-              label: 'Settings',
-              onTap: onBack,
+            child: fingerTarget(
+              enabled: true,
+              SidebarItem(
+                key: const Key('settings-compact-back'),
+                icon: AppIcons.arrowLeft,
+                label: 'Settings',
+                onTap: onBack,
+              ),
             ),
           ),
         ),
@@ -86,6 +93,7 @@ class SettingsCompactScreen extends StatelessWidget {
                 onSelect: onSelect,
                 railWidth: double.infinity,
                 autofocusSearch: false,
+                compact: true,
               ),
       ),
     ),
