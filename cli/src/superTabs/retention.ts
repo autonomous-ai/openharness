@@ -3,8 +3,9 @@
  * roster read may release it to automatic cleanup. This grants no input access.
  *
  * Membership only in archived groups is not in use, and a roster nobody confirms
- * for a week (signed out, unlinked machine) lapses. A paused tab still counts:
- * pause blocks new work, while discussion and running assignments continue. */
+ * for a week (signed out, unlinked machine) lapses, except a project's Lead, which
+ * is never stopped. A paused tab still counts: pause blocks new work, while
+ * discussion and running assignments continue. */
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { identifier, object } from './wire.js'
