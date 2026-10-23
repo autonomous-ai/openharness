@@ -17,6 +17,7 @@ interface View {
   state: RuntimeState
   control?: RuntimeControl
   selected: string | null
+  stageCommitted: boolean
 }
 interface Waiter { check(): boolean; resolve(value: boolean): void; timer: ReturnType<typeof setTimeout> }
 export interface RuntimeSessionDeps {
@@ -72,7 +73,7 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
     if (stopped || identity !== binding(deps.resolve(s.agentId))) unavailable()
     if (previous?.identity === identity) return previous
     if (previous) forget(previous.agentId)
-    const view: View = { agentId: s.agentId, sessionId: s.sessionId, identity, revision: 0, state: blankRuntimeState(), selected: null }
+    const view: View = { agentId: s.agentId, sessionId: s.sessionId, identity, revision: 0, state: blankRuntimeState(), selected: null, stageCommitted: false }
     views.set(s.agentId, view)
     return view
   }
@@ -129,16 +130,47 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
     wake(view.sessionId)
     if (!silent && !suppressed && before !== view.selected && !view.control) notify(view)
   }
-  const read = (s: RegisteredSession, operation: RuntimeOperation, silent = false, stillCurrent = () => true): Promise<RuntimeAnswer> => {
-    const identity = binding(s), view = viewFor(s)
-    return slot(s.engine, async () => {
-      if (!valid(view) || view.identity !== identity || !stillCurrent()) unavailable()
-      const current = deps.resolve(view.agentId)!, version = current.cliVersion, revision = view.revision
-      const answer = await deps.transport.read(current.engine, contextFor(current, view), operation)
-      if (!valid(view) || revision !== view.revision || deps.resolve(view.agentId)?.cliVersion !== version) unavailable()
-      if (operation.kind === 'records' || operation.kind === 'pane' || operation.kind === 'config') accept(view, answer, silent)
-      return answer
-    })
+  const read = async (s: RegisteredSession, operation: RuntimeOperation, silent = false, stillCurrent = () => true): Promise<RuntimeAnswer> => {
+    const started = { ...s }
+    let row = s
+    for (let attempt = 0; ; attempt++) {
+      const identity = binding(row), view = viewFor(row)
+      let revision = view.revision
+      const answer = await slot(row.engine, async () => {
+        if (!valid(view) || view.identity !== identity || !stillCurrent()) return null
+        const current = deps.resolve(view.agentId)!, version = current.cliVersion
+        revision = view.revision
+        const reply = await deps.transport.read(current.engine, contextFor(current, view), operation)
+        if (!valid(view) || revision !== view.revision || deps.resolve(view.agentId)?.cliVersion !== version) return null
+        if (operation.kind === 'records' || operation.kind === 'pane' || operation.kind === 'config') accept(view, reply, silent)
+        return reply
+      })
+      if (answer) return answer
+      // Only the first models read may follow an initial binding or its first profile commit. A worker
+      // failure, a different conversation, or a later control change still fails the original request.
+      if (attempt || operation.kind !== 'models' || revision !== 0 || view.control) unavailable()
+      const sameAgent = (candidate: RegisteredSession | undefined): candidate is RegisteredSession => !!candidate
+        && candidate.agentId === started.agentId && candidate.engine === started.engine && candidate.cwd === started.cwd
+        && candidate.tmuxPane === started.tmuxPane && candidate.codexHome === started.codexHome && candidate.active === started.active
+      if (started.sessionId) {
+        const latest = deps.resolve(started.agentId)
+        if (!sameAgent(latest)) throw new EngineReadError('ENGINE_STALE_REPLY')
+        const firstStage = view.stageCommitted && view.revision === 1
+        const firstBinding = view.revision === 0 && !valid(view)
+        if (latest.sessionId !== started.sessionId || stopped || !(firstStage || firstBinding)) unavailable()
+        row = latest
+      } else {
+        const deadline = performance.now() + 1_000
+        let latest = deps.resolve(started.agentId)
+        while (sameAgent(latest) && !latest.sessionId && !stopped && performance.now() < deadline) {
+          await new Promise(resolve => setTimeout(resolve, 20))
+          latest = deps.resolve(started.agentId)
+        }
+        if (!sameAgent(latest)) throw new EngineReadError('ENGINE_STALE_REPLY')
+        if (!latest.sessionId || stopped) unavailable()
+        row = latest
+      }
+    }
   }
 
   const stage = (s: RegisteredSession, hydrate: boolean, silent: boolean): RuntimeStage => {
@@ -176,7 +208,7 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
       commit(install = () => true) {
         if (!current() || !install()) return false
         committed = true
-        if (answer) accept(view, answer, silent)
+        if (answer) { accept(view, answer, silent); view.stageCommitted = true }
         return true
       },
     }
