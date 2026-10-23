@@ -11,7 +11,7 @@ import { NativeRecorder, nativeJournalFile } from './native.js'
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 const alpha = 'context_alpha_123456', beta = 'context_beta_1234567'
-function setup() {
+function setup(recovery = false) {
   const root = mkdtempSync(join(tmpdir(), 'super-tab-native-')); roots.push(root)
   let now = 100, revoked = false, loseReply = false
   const observer = createNativeTurnObservations({ resolve: () => ({ sessionId: 'session', engine: 'codex', runtime: 'runtime' }), now: () => 100 })
@@ -20,7 +20,8 @@ function setup() {
   const backend = vi.fn(async (method: string, path: string, body?: unknown) => {
     if (revoked) return { status: 403, body: { success: false, error: { code: 'NATIVE_CONTEXT_REVOKED', message: 'Removed' } } }
     const id = path.split('/').at(-1)!, context = contexts.get(id)!
-    if (method === 'GET') return { status: 200, body: { data: { contextId: id, tabId: 'tab', machineId: 'machine-1', harnessId: 'harness', ...context } } }
+    if (method === 'GET') return { status: 200, body: { data: { contextId: id, tabId: 'tab', machineId: 'machine-1', harnessId: 'harness', ...context,
+      ...(recovery ? { recovery: { version: 1, serverTime: now + 900 } } : {}) } } }
     const value = body as Record<string, unknown>
     sent.push(value)
     const eventId = createHash('sha256').update(JSON.stringify(['native-event', id, value.turnId, value.kind])).digest('hex').slice(0, 24)
@@ -47,6 +48,98 @@ function setup() {
 }
 
 describe('durable native conversation recording', () => {
+  it('identifies a recording restart when preparing a previously recorded context, without replaying input', async () => {
+    const t = setup(true)
+    t.contexts.get(alpha)!.lastEventId = 'previous_event'
+    const host = t.open()
+    await host.prepare('tab', alpha); await host.flush()
+    expect(t.sent).toEqual([expect.objectContaining({ kind: 'gap', previousEventId: 'previous_event',
+      gap: { incidentId: expect.any(String), reason: 'recording_restarted', detectedAt: 1000 } })])
+    expect(t.core.turns.deliver).not.toHaveBeenCalled()
+  })
+
+  it('uses the same restart incident across capture and preparation, and preserves it through a lost reply', async () => {
+    const t = setup(true), first = t.open()
+    await first.prepare('tab', alpha); t.prompt('Checkpoint'); await first.capture(); await first.flush()
+    t.contexts.get(beta)!.lastEventId = 'other_checkpoint'
+    t.observer.ingest('harness', [], true)
+    t.time(200)
+    await first.prepare('tab', beta)
+    await first.capture()
+    const gaps = t.saved().agents.harness.outbox
+    expect(gaps).toHaveLength(2)
+    expect(gaps[0].gap).toEqual({ incidentId: expect.any(String), reason: 'recording_restarted', detectedAt: 1100 })
+    expect(gaps[1].gap).toEqual(gaps[0].gap)
+    t.lose(); await expect(first.flush()).rejects.toThrow(); first.stop()
+    const restarted = t.open(); await restarted.capture(); await restarted.flush(); await restarted.capture(); await restarted.flush()
+    expect(t.sent.slice(1)).toHaveLength(3)
+    expect(t.sent[1]).toEqual(t.sent[2])
+    expect(t.records.size).toBe(3)
+    expect(t.core.turns.deliver).not.toHaveBeenCalled()
+  })
+
+  it('keeps the old wire format for a backend without recovery support, including saved outboxes', async () => {
+    const t = setup(), first = t.open()
+    t.contexts.get(alpha)!.lastEventId = 'previous_event'
+    await first.prepare('tab', alpha); first.stop()
+    const restarted = t.open(); await restarted.flush()
+    expect(t.sent).toEqual([{ turnId: expect.any(String), kind: 'gap', previousEventId: 'previous_event',
+      text: '', truncated: false, interrupted: false }])
+  })
+
+  it('reopens a retired context in the same epoch without reusing an observation with different content', async () => {
+    const t = setup(true), host = t.open()
+    t.contexts.get(alpha)!.lastEventId = 'previous_event'
+    await host.prepare('tab', alpha); await host.flush()
+    t.time(100_000); await host.capture()
+    expect(host.hasWork).toBe(false)
+    await host.prepare('tab', alpha); await host.flush()
+    expect(t.sent).toHaveLength(2)
+    expect(t.sent[0]).toMatchObject({ gap: { incidentId: expect.any(String) } })
+    expect(t.sent[1]!.gap).toMatchObject({ incidentId: (t.sent[0]!.gap as { incidentId: string }).incidentId })
+    expect(t.sent[1]!.turnId).not.toBe(t.sent[0]!.turnId)
+    expect(t.records.size).toBe(2)
+  })
+
+  it.each(['incident', 'reason', 'time', 'kind'] as const)('rejects corrupted recovery %s in a saved outbox', async field => {
+    const t = setup(true), host = t.open()
+    t.contexts.get(alpha)!.lastEventId = 'previous_event'
+    await host.prepare('tab', alpha); host.stop()
+    const saved = t.saved(), event = saved.agents.harness.outbox[0]
+    event.gap = { incidentId: 'restart', reason: 'recording_restarted', detectedAt: 1000 }
+    if (field === 'incident') event.gap.incidentId = '../invalid'
+    if (field === 'reason') event.gap.reason = 'not_a_reason'
+    if (field === 'time') event.gap.detectedAt = -1
+    if (field === 'kind') event.kind = 'prompt'
+    writeFileSync(t.file, JSON.stringify(saved))
+    expect(() => t.open()).toThrow('Invalid terminal recording gap')
+    expect(t.sent).toEqual([])
+  })
+
+  it('reports a confirmed stop with its detection time and retains the exact incident on retry', async () => {
+    const t = setup(true), host = t.open()
+    await host.prepare('tab', alpha); t.prompt('Unfinished'); await host.capture(); await host.flush()
+    vi.mocked(t.core.transcripts.nativeTurns!).mockResolvedValue(null)
+    t.core.agents.stopped = vi.fn(async () => ({ agentId: 'harness' }) as never)
+    t.time(300); await host.capture()
+    expect(t.saved().agents.harness.outbox[0]).toMatchObject({ kind: 'gap', interrupted: true,
+      gap: { incidentId: expect.any(String), reason: 'agent_stopped', detectedAt: 1200 } })
+    await host.flush(); await host.capture()
+    expect(t.sent).toHaveLength(2)
+  })
+
+  it('distinguishes lost history and unattributed input from a recording restart', async () => {
+    const t = setup(true), host = t.open()
+    await host.prepare('tab', alpha)
+    t.prompt('Unknown input', null); await host.capture(); await host.flush()
+    expect(t.sent[0]).toMatchObject({ gap: { reason: 'unattributed_input', detectedAt: 1000 } })
+    const cursor = t.saved().agents.harness.cursor
+    vi.mocked(t.core.transcripts.nativeTurns!).mockResolvedValueOnce({ cursor: { ...cursor, sequence: cursor.sequence + 1 }, observations: [], gap: true })
+    await host.capture(); await host.flush()
+    expect(t.sent[1]).toMatchObject({ gap: { reason: 'history_lost', detectedAt: 1000 } })
+    expect(t.sent[0]!.turnId).not.toEqual(t.sent[1]!.turnId)
+  })
+
   it('says why an unidentified terminal cannot be recorded instead of asking for an update', async () => {
     const t = setup()
     const transcripts = t.core.transcripts as { nativeTurns?: unknown }

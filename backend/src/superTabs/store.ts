@@ -456,6 +456,15 @@ export class SuperTabStore {
           status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled', holdReason: null, holdSince: null } })
       }
       const revision = row.revision + 1
+      if (command.type === 'work.assign' || command.type === 'work.status' || command.type === 'message.send') {
+        const group = conversation(effects.state, command.conversationId)
+        const assignment = group.assignment
+        if (assignment && (command.type !== 'message.send' || actor.kind === 'agent' && actor.agentId === assignment.agentId)) {
+          // Even an unchanged working status is fresh evidence that the agent
+          // continued. An older queued gap must not turn that progress into Stuck.
+          assignment.recordingProgress = { at: context.now, revision }
+        }
+      }
       if (command.type === 'agent.add' || command.type === 'agent.started' || command.type === 'agent.configuration' || command.type === 'agent.rebind') {
         for (const target of effects.state.agents) {
           if (target.configurationVersion !== receiptId) continue
