@@ -16,7 +16,10 @@ afterEach(() => { for (const host of hosts.splice(0)) host.stop(); for (const ro
 function setup(messageFields: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
   const listeners = new Set<(e: TurnDelivery) => void>()
-  const row = { tabId: 'tab', agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }
+  const row: { tabId: string; agent: { id: string; harnessId: string; machineId: string }; lead?: boolean } = { tabId: 'tab', agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }
+  /** The conversation the delivery comes from, and the ones the agent's own view of the tab lists. */
+  let from = 'lead'
+  const views = ['lead']
   let removed = false, revoked = false, status = 'queued', claimId: string | null = null
   const receipts: Record<string, unknown>[] = []
   const holds: Record<string, unknown>[] = []
@@ -24,8 +27,9 @@ function setup(messageFields: Record<string, unknown> = {}) {
   const call: CoreApi['account']['backend'] = vi.fn(async (method, path, body) => {
     let data: unknown
     if (path.includes('/hosts/')) data = removed ? [] : [row]
+    else if (path.includes('?asAgentId=')) data = { state: { conversations: views.map(id => ({ id })) } }
     else if (revoked) return { status: 403, body: { success: false, error: { code: 'FORBIDDEN', message: 'Grant removed' } } }
-    else if (method === 'GET') data = status === 'delivered' ? [] : [{ id: 'delivery', claimId, status }]
+    else if (method === 'GET') data = status === 'delivered' ? [] : [{ id: 'delivery', conversationId: from, claimId, status }]
     else {
       const command = body as Record<string, unknown>
       if (command.type === 'claim') { claimId = command.claimId as string; status = 'claimed' }
@@ -46,7 +50,7 @@ function setup(messageFields: Record<string, unknown> = {}) {
     for (const fn of listeners) fn({ deliveryId: 'team:service:superTabs:delivery', sessionId: 'harness', state, reason })
   }
   const saved = () => JSON.parse(readFileSync(hostJournalFile(dir, 'machine-1'), 'utf8'))
-  return { core, call, open, event, receipts, holds, log, row, wait: (ms: number) => { clock += ms }, saved, dir, remove: () => { removed = true }, revoke: (value = true) => { revoked = value }, foreignClaim: () => { claimId = 'another-process' } }
+  return { core, call, open, event, receipts, holds, log, row, wait: (ms: number) => { clock += ms }, saved, dir, remove: () => { removed = true }, revoke: (value = true) => { revoked = value }, foreignClaim: () => { claimId = 'another-process' }, from: (id: string) => { from = id }, views }
 }
 
 describe('current Swarm role lookup', () => {
@@ -130,6 +134,35 @@ describe('Super Tab native delivery handoff', () => {
     await fresh.tick()
     expect(t.saved().entries.delivery.stage).toBe('uncertain')
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+  })
+  // Leads see each other's work and talk (spec 2026-10-23): the Leads conversation reaches Leads alone. The server
+  // delivers it only to them; this host also types into an agent that leads nothing only what its own view can read.
+  it('never types a Leads conversation message into an agent that leads nothing, and says so once', async () => {
+    const t = setup(), host = t.open()
+    t.from('leads')
+    for (let i = 0; i < 3; i++) await host.tick()
+    expect(t.core.turns.deliver).not.toHaveBeenCalled()
+    expect(t.call).not.toHaveBeenCalledWith('POST', expect.stringContaining('/deliveries/delivery'), expect.anything())
+    expect(t.log.mock.calls.filter(([line]) => String(line).includes('not in a conversation'))).toHaveLength(1)
+    t.views.push('leads')
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+  })
+  it('reads an agent\'s view once for its own conversation, and never for a Lead', async () => {
+    const t = setup(), host = t.open()
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    const views = () => vi.mocked(t.call).mock.calls.filter(([, path]) => path === '/api/super-tabs/tab?asAgentId=agent').length
+    expect(views()).toBe(1)
+    t.event('rejected', 'team_waiting_busy')
+    await host.tick()
+    expect(views()).toBe(1)
+    const lead = setup()
+    lead.row.lead = true
+    lead.from('leads')
+    await lead.open().tick()
+    expect(lead.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(lead.call).mock.calls.some(([, path]) => path.includes('?asAgentId='))).toBe(false)
   })
   it('names all five task parts in the worker delivery header', async () => {
     const t = setup()
@@ -242,7 +275,7 @@ describe('Super Tab native delivery handoff', () => {
     const original = vi.mocked(t.core.account.backend).getMockImplementation()!
     vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
       if (method === 'GET' && path.endsWith('/deliveries')) {
-        return { status: 200, body: { success: true, data: [{ id: 'delivery', claimId: null, status: 'queued' }, { id: 'second', claimId: null, status: 'queued' }] } }
+        return { status: 200, body: { success: true, data: [{ id: 'delivery', conversationId: 'lead', claimId: null, status: 'queued' }, { id: 'second', conversationId: 'lead', claimId: null, status: 'queued' }] } }
       }
       if (method === 'POST' && path.endsWith('/deliveries/delivery')) {
         return { status: 409, body: { success: false, error: { code: 'DELIVERY_RESOLVED', message: 'This message was already answered.' } } }

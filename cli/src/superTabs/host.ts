@@ -83,7 +83,7 @@ interface Entry {
 }
 interface Journal { version: 1; machineId: string; entries: Record<string, Entry> }
 /** `skillMode` is the agent's project's skills; a row without it (an older backend, a project from before modes) is orchestration. */
-interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string }; skillMode?: unknown }
+interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string }; skillMode?: unknown; lead?: unknown }
 export interface SuperTabHostOptions {
   now?: () => number
   write?: (file: string, journal: Journal) => void
@@ -198,6 +198,9 @@ export class SuperTabHost {
   private readonly keepAlives = new Map<string, { running: boolean; failures: number; retryAt: number; reason?: string }>()
   /** Per session the backend ends: a close or acknowledgement in progress, how far it got, and when the next try may run. */
   private readonly endings = new Map<string, { running: boolean; closed: boolean; acked: boolean; failures: number; retryAt: number }>()
+  /** Per agent that leads nothing (tab:agent): the conversations its own view of the tab lists, and the deliveries refused. */
+  private readonly readable = new Map<string, Set<string>>()
+  private readonly unreadable = new Set<string>()
   /** A Lead's reads of and typing into this machine's agents' terminals, and the stuck and usage-limit alerts. */
   private readonly terminal: TerminalHost
 
@@ -537,6 +540,8 @@ export class SuperTabHost {
           const delivery = object(item)
           if (!identifier(delivery.id)) continue
           seen.add(delivery.id)
+          // A claimed one is never typed again without its journal: it is only reported, as uncertain.
+          if (!this.journal.entries[delivery.id] && !delivery.claimId && !await this.mayRead(target, delivery)) continue
           try { await this.accept(target, delivery, path) } catch (error) {
             // Answered (or resolved by a person) between the roster read and this call: nothing is owed, and the
             // agent's other deliveries go on.
@@ -553,6 +558,8 @@ export class SuperTabHost {
     // A Lead the roster no longer marks (its project deleted) is never reopened again.
     for (const [harnessId, state] of this.keepAlives) if (!leads.has(harnessId) && !state.running) this.keepAlives.delete(harnessId)
     for (const [key, state] of this.endings) if (!ended.has(key) && !state.running) this.endings.delete(key)
+    for (const key of this.readable.keys()) if (!running.some(target => `${target.tabId}:${target.agent.id}` === key)) this.readable.delete(key)
+    for (const deliveryId of this.unreadable) if (!seen.has(deliveryId)) this.unreadable.delete(deliveryId)
     for (const deliveryId of this.files.keys()) if (!this.journal.entries[deliveryId]) this.files.delete(deliveryId)
     for (const entry of Object.values(this.journal.entries)) {
       const id = typedId(entry)
@@ -737,6 +744,24 @@ export class SuperTabHost {
     this.authorized.delete(id)
     if (this.active.delete(id)) this.core.turns.cancelDelivery(id)
     this.persist()
+  }
+
+  /** Leads see each other's work and talk (spec 2026-10-23): the Leads conversation reaches Leads alone. The server
+   *  delivers it only to them; an agent that leads nothing is also given only what its own view of the tab lists. */
+  private async mayRead(target: HostAgent, delivery: Json): Promise<boolean> {
+    if (target.lead === true) return true
+    const key = `${target.tabId}:${target.agent.id}`
+    if (this.readable.get(key)?.has(String(delivery.conversationId))) return true
+    const state = object(object(await backend(this.core, 'GET', `/api/super-tabs/${target.tabId}?asAgentId=${target.agent.id}`)).state)
+    const readable = new Set((Array.isArray(state.conversations) ? state.conversations.map(object) : [])
+      .filter(c => identifier(c.id) && c.kind !== 'leads' && c.id !== state.leadsConversationId).map(c => c.id as string))
+    this.readable.set(key, readable)
+    if (readable.has(String(delivery.conversationId))) return true
+    if (!this.unreadable.has(delivery.id as string)) {
+      this.unreadable.add(delivery.id as string)
+      this.log(`Withheld delivery ${String(delivery.id)}: it is not in a conversation ${target.agent.harnessId} can read.`)
+    }
+    return false
   }
 
   private async accept(target: HostAgent, delivery: Json, path: string): Promise<void> {
