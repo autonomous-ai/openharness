@@ -62,6 +62,7 @@ describe('a start on a contributed machine', () => {
 
   it('names the project\'s own checkout when the lead\'s machine is the one contributed', () => {
     const f = setup()
+    delete f.state.projects
     f.state.project = { machineId: 'host', cwd: '/Users/lead/work/repo', repositoryUrl: null }
     expect(refusal(f.state, f.request({ cwd: '/data/swarm-projects/tab/lead' }))!.message).toContain('this project uses /Users/lead/work/repo on it')
     expect(refusal(f.state, f.request({ cwd: '/Users/lead/work/repo' }))).toBeNull()

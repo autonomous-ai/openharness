@@ -10,7 +10,7 @@ import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, MAX_AT
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
-import { canReadAgent, canReadProject, groupProject, projectsOf, agentProjectId, readConversation, type ProjectVisibility } from './projects.js'
+import { canReadAgent, canReadProject, groupProject, projectsOf, agentProjectId, readConversation, skillModeOf, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
@@ -399,7 +399,7 @@ export class SuperTabStore {
         const reply = await tx.superTabMessage.findFirst({ where: { id: command.replyTo, tabId, conversationId: command.conversationId } })
         if (reply) context.reply = { id: reply.id, conversationId: reply.conversationId, author: reply.author as unknown as Author }
       }
-      if ((command.type === 'rule.set' || command.type === 'rule.remove') && command.askedIn) {
+      if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills') && command.askedIn) {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.askedIn.messageId, tabId, conversationId: command.askedIn.conversationId } })
         if (asked) context.askedIn = { author: asked.author as unknown as Author, source: !!asked.source, createdAt: asked.createdAt.getTime() }
       }
@@ -811,7 +811,11 @@ export class SuperTabStore {
           // (cli/src/superTabs/host.ts). A collaborator's Lead on a machine shared with them must not open it to every member.
           const joinSwarm = state.ownerId === user.sub && target.contributorId === user.sub && !state.machines?.some(m => m.machineId === machineId)
             && state.conversations.some(c => !c.archived && c.leadId === target.id)
-          result.push({ tabId: row.id, tabName: state.name, revision: row.revision, paused: state.paused, active, attention, agent: target, joinSwarm,
+          // Which skill texts this agent runs; the host reads it here rather than fetching each tab's state per poll. A row
+          // whose project is gone reads like one from before skill modes instead of failing the host's whole poll.
+          const home = projectsOf(state).find(p => p.id === agentProjectId(state, target))
+          const skillMode = home ? skillModeOf(home) : 'orchestration'
+          result.push({ tabId: row.id, tabName: state.name, revision: row.revision, paused: state.paused, active, attention, agent: target, joinSwarm, skillMode,
             stopRequested: target.workDecision === 'stop' && !state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id),
             observers: people.filter(p => p.id !== user.sub &&
               canReadAgent(state, { kind: 'person', userId: p.id, email: p.email }, target))

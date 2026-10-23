@@ -1178,6 +1178,34 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(rows).toEqual(['Rule added: Only this Mac.', 'Rule removed: Only this Mac.'])
     expect((await store.read(owner, tab)).state.projects!.map(p => p.id)).toEqual([projectId])
   })
+  it('lets a project\'s Lead change its skills only by quoting a message the project owner wrote there, and tells the host', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Skills')).id
+    await invite(tab)
+    const { projectId, conversationId: chat } = (await run(tab, { type: 'project.create', name: 'App', visibility: 'public', brief: '' }, peer)).result as { projectId: string; conversationId: string }
+    const lead = (await run(tab, { type: 'agent.add', conversationId: chat, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Lead', configuration: config, lead: true }, peer)).result.agentId as string
+    const legacyLead = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Old', configuration: config, lead: true })).result.agentId as string
+    const modes = async () => Object.fromEntries((await store.hostTabs(host, 'test-host')).filter(r => r.tabId === tab).map(r => [r.agent.id, r.skillMode]))
+    expect(await modes()).toEqual({ [lead]: 'default', [legacyLead]: 'default' })
+    const say = async (text: string, user = peer) => (await run(tab, { ...message(text), conversationId: chat } as Command, user)).result.messageId as string
+    const skills = (messageId: string): Command => ({ type: 'project.skills', projectId, mode: 'orchestration', askedIn: { conversationId: chat, messageId } })
+    await expect(run(tab, skills(await say('Use Harness orchestration.', owner)), host, lead)).rejects.toMatchObject({ code: 'OWNER_MESSAGE_REQUIRED' })
+    await expect(run(tab, skills('missing'), host, lead)).rejects.toMatchObject({ code: 'OWNER_MESSAGE_REQUIRED' })
+    await run(tab, skills(await say('Use Harness orchestration.')), host, lead)
+    expect(await modes()).toEqual({ [lead]: 'orchestration', [legacyLead]: 'default' })
+    const row = (await store.messages(owner, tab, chat, {})).messages.find(m => m.text === 'Skills: Harness orchestration')!
+    expect(row.source).toEqual({ kind: 'system' })
+    await expect(run(tab, { ...skills(row.id), mode: 'default' } as Command, host, lead)).rejects.toMatchObject({ code: 'OWNER_MESSAGE_REQUIRED' })
+    await run(tab, { type: 'project.skills', projectId, mode: 'default' }, peer)
+    expect(await modes()).toEqual({ [lead]: 'default', [legacyLead]: 'default' })
+    // A project stored before skill modes keeps Harness orchestration.
+    const stored = await db.superTab.findUniqueOrThrow({ where: { id: tab } })
+    const state = stored.state as { projects: Array<{ id: string; skillMode?: string }> }
+    delete state.projects.find(p => p.id === 'lead')!.skillMode
+    await db.superTab.update({ where: { id: tab }, data: { state } })
+    expect(await modes()).toEqual({ [lead]: 'default', [legacyLead]: 'orchestration' })
+  })
   it('closes the replying agent\'s own deliveries of a message as answered, and nobody else\'s', async () => {
     const { tab, lead } = await fixture()
     const helper = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),

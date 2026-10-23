@@ -271,7 +271,8 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
     agents: [], invitations: [],
     conversations: [{ id: 'lead', title: 'Lead', leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 }],
   }
-  if (visibility) state.projects = [{ ...projectsOf(state)[0]!, visibility }]
+  // A new Swarm's first project starts in Default; only a project from before skill modes reads as Harness orchestration.
+  state.projects = [{ ...projectsOf(state)[0]!, ...(visibility ? { visibility } : {}), skillMode: 'default' }]
   return state
 }
 
