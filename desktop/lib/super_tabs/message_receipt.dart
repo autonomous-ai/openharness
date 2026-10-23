@@ -193,7 +193,11 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
           elapsed = _clockText(now.difference(delivery.deliveredAt!));
         }
       }
-    } else if (delivery == null && c.selected?.leadId == null) {
+    } else if (delivery == null &&
+        c.selected?.leadId == null &&
+        // Every person reads the Product Managers' conversation; a post there
+        // stands even before any Product Manager receives it.
+        c.selected?.id != c.snapshot?.leadsConversationId) {
       title = 'Not sent · this chat has no Lead';
       icon = AppIcons.triangleAlert;
       color = Theme.of(context).colorScheme.error;

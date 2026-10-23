@@ -109,8 +109,8 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
                           Text(
                             reason ??
                                 (available && permitted
-                                ? 'Any open task needs to be assigned again or closed. Its session on $machine will stop.'
-                                : 'This action is no longer available.'),
+                                    ? 'Any open task needs to be assigned again or closed. Its session on $machine will stop.'
+                                    : 'This action is no longer available.'),
                           ),
                           if (attempted && c.operationError != null) ...[
                             const SizedBox(height: 12),
@@ -199,71 +199,68 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     widget.onOpenAgent,
   );
 
-  Widget _agentIdentity(
-    String name,
-    String role,
-    String badge,
-  ) => LayoutBuilder(
-    builder: (context, constraints) {
-      final nameStyle = DesktopChrome.control();
-      final tagStyle = DesktopChrome.metadata();
-      final scale = MediaQuery.textScalerOf(context);
-      double measure(String text, TextStyle style) {
-        final painter = TextPainter(
-          text: TextSpan(text: text, style: style),
-          textDirection: Directionality.of(context),
-          textScaler: scale,
-          maxLines: 1,
-        )..layout();
-        final width = painter.width;
-        painter.dispose();
-        return width;
-      }
+  Widget _agentIdentity(String name, String role, String badge) =>
+      LayoutBuilder(
+        builder: (context, constraints) {
+          final nameStyle = DesktopChrome.control();
+          final tagStyle = DesktopChrome.metadata();
+          final scale = MediaQuery.textScalerOf(context);
+          double measure(String text, TextStyle style) {
+            final painter = TextPainter(
+              text: TextSpan(text: text, style: style),
+              textDirection: Directionality.of(context),
+              textScaler: scale,
+              maxLines: 1,
+            )..layout();
+            final width = painter.width;
+            painter.dispose();
+            return width;
+          }
 
-      final badgeWidth = (measure(badge, tagStyle) + 10).clamp(
-        0.0,
-        constraints.maxWidth,
-      );
-      final nameWidth = measure(name, nameStyle).clamp(
-        0.0,
-        (constraints.maxWidth - badgeWidth - 6).clamp(0.0, double.infinity),
-      );
-      Widget tag(String text) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-        decoration: BoxDecoration(
-          color: grid.AppSurface.hoverFill,
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: Text(
-          text,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: tagStyle,
-        ),
-      );
-      return Row(
-        children: [
-          if (nameWidth > 0) ...[
-            SizedBox(
-              width: nameWidth,
-              child: Text(
-                name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: nameStyle,
-              ),
+          final badgeWidth = (measure(badge, tagStyle) + 10).clamp(
+            0.0,
+            constraints.maxWidth,
+          );
+          final nameWidth = measure(name, nameStyle).clamp(
+            0.0,
+            (constraints.maxWidth - badgeWidth - 6).clamp(0.0, double.infinity),
+          );
+          Widget tag(String text) => Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+            decoration: BoxDecoration(
+              color: grid.AppSurface.hoverFill,
+              borderRadius: BorderRadius.circular(4),
             ),
-            const SizedBox(width: 6),
-          ],
-          Semantics(
-            label: role,
-            excludeSemantics: true,
-            child: SizedBox(width: badgeWidth, child: tag(badge)),
-          ),
-        ],
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: tagStyle,
+            ),
+          );
+          return Row(
+            children: [
+              if (nameWidth > 0) ...[
+                SizedBox(
+                  width: nameWidth,
+                  child: Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: nameStyle,
+                  ),
+                ),
+                const SizedBox(width: 6),
+              ],
+              Semantics(
+                label: role,
+                excludeSemantics: true,
+                child: SizedBox(width: badgeWidth, child: tag(badge)),
+              ),
+            ],
+          );
+        },
       );
-    },
-  );
 
   Widget _agent(SuperTabAgent agent) {
     final name = c.snapshot!.agentName(agent.id), activity = _activity(agent);
@@ -386,8 +383,11 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     final state = c.snapshot;
     // The backend already scopes this snapshot to projects the person can
     // access. The roster follows the selected project; without one it keeps
-    // the full directory. Local machine inventory is not membership here.
-    final projectId = c.selected?.projectId;
+    // the full directory, as the Product Managers' conversation, which belongs
+    // to no project, does. Local machine inventory is not membership here.
+    final projectId = c.selected?.projectId == ''
+        ? null
+        : c.selected?.projectId;
     final members =
         state?.agents
             .where(
@@ -466,7 +466,11 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
       const SizedBox(height: 16),
       SuperTabSectionHeading(
         'Agents',
-        onAdd: c.canWrite && c.selected != null
+        // An agent joins the Product Managers' conversation by leading a project.
+        onAdd:
+            c.canWrite &&
+                c.selected != null &&
+                c.selected!.id != c.snapshot?.leadsConversationId
             ? () => widget.onAddAgent(c.selected!)
             : null,
         addTooltip: 'Add agent',
