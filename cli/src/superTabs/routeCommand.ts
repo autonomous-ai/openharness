@@ -24,10 +24,10 @@ const UNKNOWN_QUOTA: Probe['quota'] = { known: false, leftPercent: null, resetsA
 const UNKNOWN_LOAD: NonNullable<Probe['load']> = { agents: null, freeMemoryBytes: null, hasFolder: null }
 const EXHAUSTED_WINDOW = 'The subscription has an exhausted usage window. Wait for a fresh allowance reading or choose another account.'
 /** A running member keeps its engine and memory, but still needs a live terminal, account allowance and the task's tools. */
-function memberRefusals(running: boolean | null, quota: Probe['quota'], tools: string[], devices: string[], reportedTools: Json, reportedDevices: Json): string[] {
+function memberRefusals(running: boolean | null, quota: Probe['quota'], tools: string[], devices: string[], reportedTools: Json, reportedDevices: Json, toolProbeErrors: Json): string[] {
   return [
     ...(running === false ? ['Its terminal is not running.'] : []),
-    ...tools.filter(tool => reportedTools[tool] !== true).map(tool => `Required tool unavailable: ${tool}.`),
+    ...tools.map(tool => requiredToolReason(tool, reportedTools[tool], toolProbeErrors[tool])).filter((reason): reason is string => reason !== null),
     ...devices.filter(device => reportedDevices[device] !== true).map(device => `Required device unavailable: ${device}.`),
     ...(quota.leftPercent === 0 ? [EXHAUSTED_WINDOW] : []),
   ]
@@ -238,7 +238,7 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     return [...members.map(m => {
       const allowance = quota(String(object(m.configuration).engine))
       const running = Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.includes(m.harnessId) : null
-      return memberProbe(m, fresh ? memberRefusals(running, allowance, needs.tools, needs.devices, tools, object(observed.devices)) : [OFFLINE],
+      return memberProbe(m, fresh ? memberRefusals(running, allowance, needs.tools, needs.devices, tools, object(observed.devices), object(observed.toolProbeErrors)) : [OFFLINE],
         allowance, null, fresh && running === null)
     }),
       ...models.map(m => newProbe(m, [...newReasons, ...(quota(m.engine).leftPercent === 0 ? ['Subscription exhausted.'] : [])], quota(m.engine), fresh && quota(m.engine).known,
@@ -270,7 +270,7 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       const allowance = quotaOf2(inspected.quota)
       const capacity = object(inspected.capacity)
       const refusals = memberRefusals(live.has(String(m.harnessId)), allowance, needs.tools, needs.devices,
-        object(capacity.tools), object(capacity.devices))
+        object(capacity.tools), object(capacity.devices), object(capacity.toolProbeErrors))
       const frame = frames.find(f => f.id === m.harnessId)
       probes.push(memberProbe(m, refusals, allowance, frame ? frameOf(frame) : null))
     }

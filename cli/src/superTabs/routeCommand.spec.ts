@@ -642,7 +642,16 @@ describe('routing contributed capacity', () => {
     const { answer } = await runPool(pool, true)
     expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
     expect(answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
-      reason: expect.stringContaining('Required tool unavailable: git.') })]))
+      reason: expect.stringContaining('Required tool missing: git.') })]))
+  })
+  it('explains a contributed member tool probe that did not complete', async () => {
+    const pool = healthy()
+    delete (pool.observation.tools as Record<string, unknown>).git
+    Object.assign(pool.observation, { toolProbeErrors: { git: 'interactive shell timed out' } })
+    const { answer } = await runPool(pool, true)
+    expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+    expect(answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
+      reason: expect.stringMatching(/Required tool not verified: git.*interactive shell timed out.*check it/) })]))
   })
   it('withholds a contributed member absent from an explicit running-terminal list', async () => {
     const pool = healthy(); pool.observation.runningHarnessIds = []
