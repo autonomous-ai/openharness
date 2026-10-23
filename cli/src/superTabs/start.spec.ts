@@ -9,12 +9,16 @@ import type { RegisteredSession } from '../lib/registry.js'
 import type { AgentFrame } from '../lib/agentFrame.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
-function fixture(options: { refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string } } = {}) {
+function fixture(options: { state?: Record<string, unknown> | Error; refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string } } = {}) {
   const start = { creationId: 'super-native-receipt', error: null as string | null, request: { machineId: 'target', conversationId: 'group', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }, dispatched: false }
   let nativeState = 'missing', lostJoin = false
   const scoped = vi.fn(async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
     if (payload.action === 'startStatus') return { ok: true, value: structuredClone(start) }
+    if (payload.action === 'status') {
+      if (options.state instanceof Error) throw options.state
+      return { ok: true, value: { revision: 1, state: options.state ?? { conversations: [{ id: 'group' }] } } }
+    }
     const cmd = payload.command as Record<string, unknown>
     if (cmd.type === 'agent.startDispatch') start.dispatched = true
     if (cmd.type === 'agent.startFailed') {
@@ -223,6 +227,36 @@ it.each(['claude', 'codex'])('starts a %s Reviewer with the built-in swarm-revie
   expect(payload.swarmRole).toBe('review')
   expect(payload.prompt).toContain('swarm-review skill')
   expect(payload.prompt).not.toContain('swarm-dev')
+})
+
+describe('the skills of the project the agent joins', () => {
+  const projects = (skillMode?: string) => ({ conversations: [{ id: 'other', projectId: 'p1' }, { id: 'group', projectId: 'p2' }],
+    projects: [{ id: 'p1', skillMode: 'default' }, { id: 'p2', ...(skillMode ? { skillMode } : {}) }] })
+  const started = async (state: Record<string, unknown> | Error, role?: string) => {
+    const f = fixture({ state })
+    if (role) f.start.request = { ...f.start.request, role } as typeof f.start.request
+    expect(await startAgent({ action: 'start', tabId: 'tab', operationId: 'mode', request: f.start.request }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+    return f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+  }
+  it.each([undefined, 'reviewer'])('starts a Default project\'s agent (role %s) with the Default text and a prompt line that fits it', async role => {
+    const payload = await started(projects('default'), role), skill = role ? 'review' : 'dev'
+    expect(payload).toMatchObject({ swarmRole: skill, swarmSkillMode: 'default' })
+    expect(payload.prompt).toContain(`Use the swarm-${skill} skill for this session: the team process; otherwise work your usual way. Run harness`)
+    expect(payload.prompt).not.toContain('built-in')
+  })
+  it('starts a Harness orchestration project\'s agent with the built-in text', async () => {
+    const payload = await started(projects('orchestration'))
+    expect(payload).toMatchObject({ swarmRole: 'dev', swarmSkillMode: 'orchestration' })
+    expect(payload.prompt).toContain('Use the built-in swarm-dev skill for this session. Run harness')
+  })
+  it.each([
+    ['a project from before modes', projects()],
+    ['a Swarm from before projects', { conversations: [{ id: 'group' }] }],
+    ['a group it cannot see', { conversations: [], projects: [{ id: 'lead', skillMode: 'default' }] }],
+    ['a state it cannot read', new Error('offline')],
+  ])('reads %s as Harness orchestration', async (_name, state) => {
+    expect(await started(state)).toMatchObject({ swarmSkillMode: 'orchestration' })
+  })
 })
 
 it('asks for an owner contribution instead of widening a guest machine connection', async () => {

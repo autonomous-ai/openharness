@@ -3,9 +3,10 @@ import { parseRuntimeProfile } from '../lib/runtimeProfileWire.js'
 import { randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { admission, quotaOf, type Requirements } from './capacity.js'
-import { identifier, object } from './host.js'
+import { groupSkillMode, identifier, object } from './host.js'
 import { permissionModeFlags } from '../lib/engineLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
+import { swarmSkillUse, type SwarmSkillMode } from '../lib/swarmSkills.js'
 
 type Json = Record<string, unknown>
 export type ScopedRequest = (payload: Json) => Promise<Json>
@@ -48,6 +49,14 @@ export async function inspectCapacity(target: Daemon, request: Json) {
   const engine = choices.find(e => e.engine === request.engine) ?? {}
   const quota = quotaOf(usage.status === 'fulfilled' ? usage.value : {}, String(request.engine), !!request.codexHome || !!request.gridModel)
   return { capacity, engine, quota, ...admission(capacity, engine, quota, requirements, !!request.codexHome || !!request.gridModel) }
+}
+
+/** The skills of the project whose group the agent joins, so it starts on that text and is never moved to it at once. A
+ *  project from before modes, or a state this start cannot read, is orchestration; the host moves a running agent to its
+ *  project's mode (superTabs/host.ts) if that guess is wrong. */
+async function projectSkillMode(scoped: ScopedRequest, conversationId: unknown): Promise<SwarmSkillMode> {
+  const state = object(object(object(await scoped({ action: 'status' }).catch(() => ({}))).value).state)
+  return groupSkillMode(state, (Array.isArray(state.conversations) ? state.conversations.map(object) : []).find(group => group.id === conversationId))
 }
 
 /** Whether the machine launches `engine` with a model of its own for that session (lib/launchModel.ts). A daemon from
@@ -143,10 +152,11 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
       // Engines without a full mode retain their existing approving launch flags.
       // The backend starts a Reviewer only on Claude Code or Codex, the engines with built-in Swarm skills.
       const skilled = ['claude', 'codex'].includes(String(request.engine)), reviewer = request.role === 'reviewer'
+      const role = reviewer ? 'review' : 'dev', mode = skilled ? await projectSkillMode(scoped, request.conversationId) : null
       const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: true,
         ...(permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
-        ...(skilled ? { swarmRole: reviewer ? 'review' : 'dev' } : {}),
-        prompt: `You are joining a shared Super Tab${reviewer ? ' as a Reviewer' : ''}. ${skilled ? `Use the built-in swarm-${reviewer ? 'review' : 'dev'} skill. ` : ''}Run harness super-tab --tab ${input.tabId} status until this harness appears in the roster. ${reviewer
+        ...(mode ? { swarmRole: role, swarmSkillMode: mode } : {}),
+        prompt: `You are joining a shared Super Tab${reviewer ? ' as a Reviewer' : ''}. ${mode ? `${swarmSkillUse(role, mode)} ` : ''}Run harness super-tab --tab ${input.tabId} status until this harness appears in the roster. ${reviewer
           ? `Do not review yet. You review work in conversation ${request.conversationId} when it is ready for review.`
           : `Do not begin project work yet. Your lead will assign work in conversation ${request.conversationId}.`} Reply in that conversation using harness super-tab --tab ${input.tabId} post ${request.conversationId} 'your message' UNIQUE_OPERATION_ID. Run harness super-tab help for commands. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`,
         ...(request.worktree ? { projectSource: 'worktree', gitSource: request.cwd, branchName: `super-tab/${startId}`,

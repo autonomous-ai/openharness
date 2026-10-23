@@ -55,7 +55,7 @@ describe('current Swarm role lookup', () => {
     let groups = [{ leadId: 'other', agentIds: ['agent'] }]
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
       path.includes('/hosts/') ? [{ tabId: 'tab', agent }] : { state: { agents: [agent], conversations: groups } } } }))
-    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBe('review')
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: 'review', mode: 'orchestration' })
     groups = []
     expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBeNull()
   })
@@ -66,8 +66,22 @@ describe('current Swarm role lookup', () => {
       assignment: kind === 'assigned' ? { agentId: 'agent', execution: { machineId: 'machine-1' } } : null }
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
       path.includes('/hosts/') ? [{ tabId: 'tab', agent }] : { state: { agents: [agent], conversations: [group] } } } }))
-    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBe(kind === 'lead' ? 'lead' : 'dev')
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: kind === 'lead' ? 'lead' : 'dev', mode: 'orchestration' })
     expect(await swarmRoleFor(t.core, 'machine-1', 'personal')).toBeNull()
+  })
+  it('gives the mode of the project whose group made the role, Lead first', async () => {
+    const t = setup()
+    const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }
+    const projects = [{ id: 'lead', skillMode: 'default' }, { id: 'p2', skillMode: 'orchestration' }, { id: 'p3', skillMode: 'default' }]
+    let conversations: unknown[] = [{ projectId: 'p2', leadId: 'other', agentIds: ['agent'] }, { projectId: 'p3', leadId: 'agent', agentIds: [] }]
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
+      path.includes('/hosts/') ? [{ tabId: 'tab', agent }] : { state: { agents: [agent], conversations, projects } } } }))
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: 'lead', mode: 'default' })
+    conversations = [{ projectId: 'p2', leadId: 'other', agentIds: ['agent'] }]
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: 'dev', mode: 'orchestration' })
+    // A group from before projects is in the first project.
+    conversations = [{ leadId: 'other', agentIds: ['agent'] }]
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: 'dev', mode: 'default' })
   })
   it.each(['removed-roster', 'foreign', 'removed-state', 'archived', 'released', 'none', 'malformed'] as const)
     ('never adopts a session whose membership is %s', async kind => {
@@ -85,7 +99,7 @@ describe('current Swarm role lookup', () => {
     vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/')
       ? present ? [{ tabId: 'tab', agent }] : []
       : { state: { agents: [agent], conversations: [{ agentIds: ['agent'] }, { leadId: 'agent' }] } } } }))
-    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBe('lead')
+    expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toEqual({ role: 'lead', mode: 'orchestration' })
     present = false
     expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBeNull()
     expect(await swarmRoleFor(t.core, 'machine-1', 'harness')).toBeNull()
@@ -975,14 +989,15 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
 
 describe('built-in skill text after a CLI update', () => {
   const older = '---\nname: swarm-dev\n---\nAn older release of this skill.\n'
-  function syncFixture(stale = true) {
+  function syncFixture(stale = true, mode?: 'default' | 'orchestration') {
+    let skillMode = mode
     const t = setup(), workspace = mkdtempSync(join(tmpdir(), 'super-tab-skills-')); roots.push(workspace)
     const roles = { lead: 'lead', builder: 'dev', reviewer: 'review' } as const
     const sessions = Object.fromEntries([...Object.entries(roles).map(([name, role]) => [`h-${name}`,
       { agentId: `h-${name}`, cwd: workspace, swarmSkill: { role, key: `key-${name}` } }]),
       ['h-personal', { agentId: 'h-personal', cwd: workspace }]])
     const files = Object.fromEntries(Object.entries(roles).map(([name, role]) => {
-      const { file } = prepareSwarmSkill(workspace, { role, key: `key-${name}` })
+      const { file } = prepareSwarmSkill(workspace, { role, key: `key-${name}`, ...(mode ? { mode } : {}) })
       // What an older CLI left: its own text and no record of which text it was.
       if (stale) { writeFileSync(file, older); rmSync(join(dirname(file), 'version.json')) }
       return [name, file]
@@ -1002,7 +1017,7 @@ describe('built-in skill text after a CLI update', () => {
       await Promise.resolve()
       inFlight--
       const request = body as any
-      if (path.includes('/hosts/')) return { status: 200, body: { data: agents.map(agent => ({ tabId: 'tab', agent })) } }
+      if (path.includes('/hosts/')) return { status: 200, body: { data: agents.map(agent => ({ tabId: 'tab', agent, ...(skillMode ? { skillMode } : {}) })) } }
       if (path.endsWith('/deliveries')) return { status: 200, body: { data: [] } }
       if (request?.command?.type === 'message.send') {
         // As the backend does: a repeated operation gets its first receipt; the same id for a different request is refused.
@@ -1019,7 +1034,7 @@ describe('built-in skill text after a CLI update', () => {
       for (let idle = 0; idle < 3;) { await new Promise(resolve => setImmediate(resolve)); idle = inFlight ? 0 : idle + 1 }
       return host
     }
-    return { t, files, sent, pass, setGroups: (next: typeof groups) => { groups = next } }
+    return { t, files, sent, pass, setGroups: (next: typeof groups) => { groups = next }, setMode: (next: typeof mode) => { skillMode = next } }
   }
 
   it('rewrites each running Lead, Builder and Reviewer skill once and tells each agent once, never a personal session', async () => {
@@ -1050,6 +1065,41 @@ describe('built-in skill text after a CLI update', () => {
     await f.pass()
     expect(vi.mocked(f.t.core.account.backend).mock.calls.slice(calls).some(([, , body]) => (body as any)?.command?.type === 'message.send')).toBe(false)
     expect(f.sent).toHaveLength(3)
+  })
+
+  it('moves running agents to the project\'s new mode at once, tells each once, and again when it switches back', async () => {
+    const f = syncFixture(false, 'default')
+    const defaults = Object.fromEntries(Object.entries(f.files).map(([name, file]) => [name, readFileSync(file, 'utf8')]))
+    // A new Default agent started with its mode's text: nothing to rewrite or tell.
+    const host = await f.pass()
+    expect(f.sent).toEqual([])
+    f.setMode('orchestration')
+    await f.pass(host, 1_000)
+    expect(f.sent.map(s => s.asAgentId).sort()).toEqual(['a-builder', 'a-lead', 'a-reviewer'])
+    for (const s of f.sent) expect(s.command.text).toBe(`This project now uses the Harness orchestration skills. Before your next step, read ${JSON.stringify(f.files[s.asAgentId.slice(2)])} again with your file or shell tool and follow it in place of your earlier swarm-${({ lead: 'lead', builder: 'dev', reviewer: 'review' } as Record<string, string>)[s.asAgentId.slice(2)]} skill.`)
+    expect(readFileSync(f.files.builder!, 'utf8')).toContain('No production code without a failing test first.')
+    await f.pass(host, 1_000)
+    expect(f.sent).toHaveLength(3)
+    f.setMode('default')
+    await f.pass(host, 1_000)
+    expect(f.sent).toHaveLength(6)
+    expect(new Set(f.sent.map(s => s.operationId)).size).toBe(6)
+    expect(f.sent.slice(3).every(s => s.command.text.startsWith('This project now uses the Default skills.'))).toBe(true)
+    for (const [name, file] of Object.entries(f.files)) expect(readFileSync(file, 'utf8')).toBe(defaults[name])
+    await f.pass(host, 1_000)
+    await f.pass()
+    expect(f.sent).toHaveLength(6)
+  })
+
+  it('reads a roster row without a mode, or with one it does not know, as Harness orchestration', async () => {
+    const f = syncFixture(false, 'default')
+    f.setMode(undefined)
+    await f.pass()
+    expect(f.sent.map(s => s.command.text.split('.')[0])).toEqual(Array(3).fill('This project now uses the Harness orchestration skills'))
+    const g = syncFixture(false)
+    g.setMode('light' as never)
+    await g.pass()
+    expect(g.sent).toEqual([])
   })
 
   it('says nothing when the skill files already hold the built-in text', async () => {
