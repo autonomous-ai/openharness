@@ -103,7 +103,7 @@ describe('the gateway in its own process', () => {
     const { machine, backend, desk, agentId } = await fresh({ HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '10000', HARNESSD_SERVICE_MAX_BACKOFF_MS: '10000' }, { phone: false })
     const d = machine.daemon
     const machines = async () => {
-      const response = await fetch(`http://127.0.0.1:${d.port}/api/machines`, { signal: AbortSignal.timeout(10_000) })
+      const response = await fetch(`http://127.0.0.1:${d.port}/api/machines`, { headers: d.localHeaders(), signal: AbortSignal.timeout(10_000) })
       return { status: response.status, body: await response.json() as Record<string, any> }
     }
     const first = await machines()
@@ -137,7 +137,7 @@ describe('the gateway in its own process', () => {
     expect(relayed.filter((f) => f.type === 'message' || f.type === 'turn_started').every((f) => (f.payload as any)?.__e2e)).toBe(true)
     expect(JSON.stringify(relayed)).not.toContain('through the gateway')
     // The machine's E2EE fingerprint and pairings, which the core asks the gateway for.
-    const status = await (await fetch(`http://127.0.0.1:${machine.daemon.port}/api/status`)).json() as Record<string, any>
+    const status = await (await fetch(`http://127.0.0.1:${machine.daemon.port}/api/status`, { headers: machine.daemon.localHeaders() })).json() as Record<string, any>
     expect(status.fingerprint).toEqual(expect.any(String))
     expect(status.pairs).toEqual([expect.objectContaining({ label: 'phone', role: 'web' })])
     expect(status.connected).toBe(true)
@@ -188,7 +188,7 @@ describe('the gateway in its own process', () => {
     expect(w.backend.nodeUp(machine.machineId)).toBe(false)
     await deskTurn(desk, agentId, 'the gateway is parked and nothing else cares')
     // The pairings are the gateway's to tell: refused plainly, not hung.
-    const pairs = await fetch(`http://127.0.0.1:${machine.daemon.port}/api/status`)
+    const pairs = await fetch(`http://127.0.0.1:${machine.daemon.port}/api/status`, { headers: machine.daemon.localHeaders() })
     expect(pairs.ok).toBe(true)
     expect(((await pairs.json()) as Record<string, any>).pairs).toEqual([])
     expect(machine.daemon.coresStarted()).toBe(1)
