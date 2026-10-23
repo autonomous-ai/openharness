@@ -1,10 +1,19 @@
-import { activeWork, agent, author, conversation, fail, isLeads, nextConversationNumber, person, type Actor, type Agent, type Conversation, type SuperTabState } from './model.js'
+import { createHash } from 'node:crypto'
+import { activeWork, agent, agentRole, author, conversation, fail, isLeads, nextConversationNumber, person, type Actor, type Agent, type Conversation, type SuperTabState } from './model.js'
 import type { SwarmRule } from './rules.js'
 
 export type ProjectVisibility = 'public' | 'private'
 /** Which built-in skill texts the project's agents get: Default (the team process only) or today's Harness orchestration. */
 export type SkillMode = 'default' | 'orchestration'
-export const SKILL_MODE_NAMES: Record<SkillMode, string> = { default: 'Default', orchestration: 'Harness orchestration' }
+/** What new clients read: a built-in mode, or the project's own custom role set. */
+export type SkillSet = SkillMode | 'custom'
+export const SKILL_SET_NAMES: Record<SkillSet, string> = { default: 'Default', orchestration: 'Harness orchestration', custom: 'Custom' }
+export type RoleKind = 'lead' | 'builder' | 'reviewer'
+/** A role of a project's custom set as the tab state keeps it. Its text lives outside the state (store.ts roleText), so a
+ *  roster or tab read never carries up to 20 x 64 KB of skill text; `version` names the text. */
+export interface ProjectRole { id: string; name: string; kind: RoleKind; version: string }
+export const MAX_ROLES = 20
+export const roleVersion = (text: string): string => createHash('sha256').update(text).digest('hex').slice(0, 16)
 export interface SwarmProject {
   id: string
   name: string
@@ -25,9 +34,27 @@ export interface SwarmProject {
   repository?: { machineId: string; cwd: string; repositoryUrl: string | null }
   /** Absent on projects from before skill modes, which keep the texts their agents already run. */
   skillMode?: SkillMode
+  /** Absent before custom sets. While it is 'custom', skillMode stays 'default' so older clients run the Default text. */
+  skillSet?: SkillSet
+  /** The project's custom set, kept when the project switches away from it. */
+  roles?: ProjectRole[]
 }
 
 export const skillModeOf = (project: SwarmProject): SkillMode => project.skillMode ?? 'orchestration'
+/** Custom only while the stored mode is still Default: a release from before custom sets switches a project by skillMode
+ *  alone during a rolling deploy, and that switch must hold here too. */
+export const skillSetOf = (project: SwarmProject): SkillSet =>
+  project.skillSet === 'custom' && project.roles && skillModeOf(project) === 'default' ? 'custom' : skillModeOf(project)
+
+/** The Lead is whoever leads the project; every other agent is the kind it was started as. */
+export const agentKind = (state: SuperTabState, target: Agent): RoleKind => ledProject(state, target.id) ? 'lead' : agentRole(target)
+
+/** The custom role an agent runs: its own role id while that role is of its kind, else the set's first role of its kind
+ *  (agents from before custom sets read as the copied Engineer and Reviewer), else none: its role is gone. */
+export function agentSetRole(state: SuperTabState, project: SwarmProject, target: Agent): ProjectRole | null {
+  const kind = agentKind(state, target), roles = project.roles ?? []
+  return roles.find(r => r.id === target.roleId && r.kind === kind) ?? roles.find(r => r.kind === kind) ?? null
+}
 
 /** Existing tabs are one project; their conversation IDs and messages stay intact. */
 export function projectsOf(state: SuperTabState): SwarmProject[] {

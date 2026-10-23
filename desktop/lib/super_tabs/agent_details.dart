@@ -86,14 +86,21 @@ class SuperTabAgentInfo {
   bool get hasQuestion =>
       app?.questionFor(agent.machineId, agent.harnessId) != null;
 
+  /// The agent's machine owner, named as the sidebar Humans list names them.
+  String? get owner => _personName(agent.machineOwnerId);
+
+  String? _personName(Object? personId) {
+    final person = controller.snapshot?.people
+        .where((p) => p.id == personId)
+        .firstOrNull;
+    return _known(person == null ? null : superTabPersonName(person.email));
+  }
+
   String? get questionOwner {
     if (!hasQuestion) return null;
     final execution = taskGroup?.assignment?['execution'];
     final ownerId = execution is Map ? execution['machineOwnerId'] : null;
-    final person = controller.snapshot?.people
-        .where((p) => p.id == ownerId)
-        .firstOrNull;
-    return _known(person == null ? null : superTabPersonName(person.email)) ??
+    return _personName(ownerId) ??
         _known(app?.stateOf(agent.machineId)?.machine.machineShare?.owner) ??
         _known(app?.stateOf(agent.machineId)?.machine.ownerName);
   }
@@ -278,6 +285,7 @@ Future<void> showSuperTabAgentDetails(
                         ),
                       ),
                     if (info.machine case final value?) _fact('Machine', value),
+                    if (info.owner case final value?) _fact('Owner', value),
                     if (info.folder case final value?)
                       _fact('Working folder', value),
                     if (info.permission case final value?)

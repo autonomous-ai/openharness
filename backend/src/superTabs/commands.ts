@@ -11,7 +11,7 @@ import { routingOverrideSchema } from './routingPolicy.js'
 import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, type TerminalRequest } from './terminal.js'
-import { agentProjectId, deleteProject, groupProject, inviteLanding, ledProject, manageProject, mutableProjects, placeRules, projectMembers, projectOf, projectRules, readAgent, readConversation, readProject, sameProject, sharedWithLeads, SKILL_MODE_NAMES, skillModeOf, type SwarmProject } from './projects.js'
+import { agentKind, agentProjectId, agentSetRole, deleteProject, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -37,8 +37,13 @@ const repositoryUrl = z.string().max(4096).refine(value => {
   } catch { return false }
 }, 'Share a repository URL without credentials.')
 const project = z.object({ cwd: path, repositoryUrl: repositoryUrl.nullable() }).strict()
+// Copied Default roles keep the ids lead, dev and review; a role the owner adds gets 12 random hex characters from the client.
+const roleId = z.string().regex(/^([0-9a-f]{12}|lead|dev|review)$/)
+const role = z.object({ id: roleId, name: z.string().trim().min(1).max(40), kind: z.enum(['lead', 'builder', 'reviewer']),
+  text: z.string().min(1).refine(value => Buffer.byteLength(value) <= 65_536, 'A role\'s skill text is at most 64 KB.') }).strict()
+const roleSet = z.array(role).min(1).max(MAX_ROLES)
 export const startRequestSchema = z.object({
-  conversationId: id, machineId: id, engine: swarmEngine, name: title, cwd: path, role: z.enum(['builder', 'reviewer']).optional(),
+  conversationId: id, machineId: id, engine: swarmEngine, name: title, cwd: path, role: z.enum(['builder', 'reviewer']).optional(), roleId: roleId.optional(),
   worktree: z.boolean(), branchRef: z.string().max(1024).regex(/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/).optional(),
   model: z.string().trim().min(1).max(200).optional(), effort: z.string().trim().min(1).max(80).optional(),
   permissionMode: z.string().min(1).max(80).optional(), codexHome: path.optional(),
@@ -71,7 +76,11 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.cadence'), projectId: id, minutes: z.union([z.literal(1), z.literal(5), z.literal(15), z.literal(30)]) }).strict(),
   z.object({ type: z.literal('project.report'), projectId: id, throughRevision: z.number().int().nonnegative().safe(), text: text.nullable() }).strict(),
   z.object({ type: z.literal('project.repository'), projectId: id, repositoryUrl }).strict(),
-  z.object({ type: z.literal('project.skills'), projectId: id, mode: z.enum(['default', 'orchestration']), askedIn: askedInSchema.optional() }).strict(),
+  z.object({ type: z.literal('project.skills'), projectId: id, mode: z.enum(['default', 'orchestration', 'custom']), askedIn: askedInSchema.optional() }).strict(),
+  z.object({ type: z.literal('project.roles.create'), projectId: id, roles: roleSet }).strict(),
+  z.object({ type: z.literal('project.role.set'), projectId: id, role }).strict(),
+  z.object({ type: z.literal('project.role.remove'), projectId: id, roleId }).strict(),
+  z.object({ type: z.literal('project.roles.reset'), projectId: id, roles: roleSet }).strict(),
   z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000).optional(), task: task.optional(), reviewOf: id.optional(), checks: z.array(check).max(40) }).strict()
     .refine(c => c.task !== undefined || c.brief !== undefined, 'Provide a task or brief.')
     .refine(c => !c.task || renderWorkTask(c.task).length <= 8000, 'Keep the rendered task within 8,000 characters.'),
@@ -104,7 +113,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('work.define'), conversationId: id, brief: text.optional(), task: task.optional(), checks: z.array(check).min(1).max(40) }).strict()
     .refine(c => c.task !== undefined || c.brief !== undefined, 'Provide a task or brief.')
     .refine(c => !c.task || renderWorkTask(c.task).length <= 32_000, 'Keep the rendered task within 32,000 characters.'),
-  z.object({ type: z.literal('work.assign'), conversationId: id, agentId: id, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
+  z.object({ type: z.literal('work.assign'), conversationId: id, agentId: id, roleId: roleId.optional(), routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   z.object({ type: z.literal('work.status'), conversationId: id, assignmentId: id,
     status: z.enum(['working', 'needs_human', 'blocked', 'review', 'done', 'stopped']), result: text.nullable() }).strict(),
   z.object({ type: z.literal('work.cancel'), conversationId: id, assignmentId: id, reason }).strict(),
@@ -172,6 +181,45 @@ function assignable(group: Conversation, worker: Agent): void {
   const reviewer = agentRole(worker) === 'reviewer'
   if (reviewer && !group.reviewOf) fail('REVIEWER_NOT_ASSIGNABLE', 'A Reviewer is assigned only review groups. Assign a Builder.')
   if (!reviewer && group.reviewOf) fail('REVIEW_GROUP', 'A review group is assigned only to a Reviewer.')
+}
+
+/** A whole custom set: one lead role (always id lead, so its Lead never loses it), ids and names unique, names ignoring case. */
+function roleSetOf(roles: ProjectRole[]): ProjectRole[] {
+  const leads = roles.filter(r => r.kind === 'lead')
+  if (leads.length !== 1) fail('ROLE_LEAD', 'A role set has exactly one lead role.', 400)
+  if (leads[0]!.id !== 'lead') fail('ROLE_LEAD', 'The lead role keeps the id lead.', 400)
+  if (new Set(roles.map(r => r.id)).size !== roles.length || new Set(roles.map(r => r.name.toLowerCase())).size !== roles.length) {
+    fail('ROLE_NAME', 'Role names and ids are unique in the set.', 400)
+  }
+  return roles
+}
+const projectRole = (r: z.infer<typeof role>): ProjectRole => ({ id: r.id, name: r.name, kind: r.kind, version: roleVersion(r.text) })
+
+/** The custom set's role an agent of this kind is started or assigned with. */
+function chosenRole(project: SwarmProject, id: string, kind: RoleKind): ProjectRole {
+  const chosen = project.roles?.find(r => r.id === id) ?? fail('ROLE_UNAVAILABLE', 'This role is not in this project\'s custom roles.', 400)
+  if (chosen.kind !== kind) fail('ROLE_KIND', `${chosen.name} is a role of another kind: ${chosen.kind}, not ${kind}.`, 400)
+  return chosen
+}
+
+/** Removing roles, or changing one's kind, never leaves a project's agent without the role it runs. */
+function keepUsedRoles(state: SuperTabState, project: SwarmProject, next: ProjectRole[]): void {
+  const dropped = new Set<string>()
+  const users = state.agents.filter(a => {
+    if (agentProjectId(state, a) !== project.id) return false
+    const used = agentSetRole(state, project, a)
+    if (!used || next.some(r => r.id === used.id && r.kind === used.kind)) return false
+    dropped.add(used.id)
+    return true
+  })
+  if (users.length) fail('ROLE_IN_USE', `Stop or reassign the ${users.length} agent${users.length === 1 ? '' : 's'} with ${dropped.size === 1 ? 'this role' : 'these roles'} first.`)
+}
+
+/** On Custom, an agent whose kind has no role there takes no new work, and the project has no review groups without a reviewer role. */
+function requireCustomRole(project: SwarmProject, kind: RoleKind): void {
+  if (skillSetOf(project) === 'custom' && !project.roles!.some(r => r.kind === kind)) {
+    fail('ROLE_GONE', `This project's Custom skills have no ${kind} role.`)
+  }
 }
 
 function controls(state: SuperTabState, actor: Actor, conversationId = 'lead'): void {
@@ -487,10 +535,56 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           fail('OWNER_MESSAGE_REQUIRED', 'Only the project owner changes its skills; quote a chat message the project owner wrote in the last day asking for this change.', 403)
         }
       }
-      if (skillModeOf(project) === command.mode) break
+      if (command.mode === 'custom' && !project.roles) fail('ROLES_MISSING', 'Create the project\'s custom roles first.')
+      if (skillSetOf(project) === command.mode) break
       mutableProjects(state)
-      projectOf(state, project.id).skillMode = command.mode
-      message(project.leadConversationId, `Skills: ${SKILL_MODE_NAMES[command.mode]}`, [], null, SYSTEM_ROW)
+      const changed = projectOf(state, project.id)
+      changed.skillSet = command.mode
+      // Older clients know only skillMode: on Custom they run the Default text, the closest to the copied set.
+      changed.skillMode = command.mode === 'custom' ? 'default' : command.mode
+      message(project.leadConversationId, `Skills: ${SKILL_SET_NAMES[command.mode]}`, [], null, SYSTEM_ROW)
+      if (command.mode !== 'custom') break
+      for (const target of state.agents.filter(a => agentProjectId(state, a) === project.id && !agentSetRole(state, changed, a))) {
+        const group = state.conversations.find(c => !c.archived && !isLeads(c) && c.agentIds.includes(target.id)) ?? conversation(state, project.leadConversationId)
+        effects.messages.push({ id: stableId(operationId, 'role-gone', target.id), conversationId: group.id, author: sender, recipients: [target.id], replyTo: null,
+          text: `Custom has no ${agentKind(state, target) === 'reviewer' ? 'Reviewer' : 'Engineer'} role for ${target.displayName ?? target.name}. `
+            + 'Finish your current work; you take no new work.', source: SYSTEM_ROW })
+      }
+      break
+    }
+    case 'project.roles.create': {
+      const project = manageProject(state, actor, command.projectId)
+      if (project.roles) fail('ROLES_EXIST', 'This project already has custom roles.')
+      project.roles = roleSetOf(command.roles.map(projectRole))
+      break
+    }
+    case 'project.role.set': {
+      const project = manageProject(state, actor, command.projectId)
+      const roles = project.roles ?? fail('ROLES_MISSING', 'Create the project\'s custom roles first.')
+      const existing = roles.find(r => r.id === command.role.id)
+      if (existing?.kind === 'lead' && command.role.kind !== 'lead') fail('ROLE_LEAD', 'The lead role stays a lead role.', 400)
+      if (!existing && roles.length >= MAX_ROLES) fail('ROLES_FULL', `A project has at most ${MAX_ROLES} roles.`)
+      const next = roleSetOf(existing ? roles.map(r => r === existing ? projectRole(command.role) : r) : [...roles, projectRole(command.role)])
+      keepUsedRoles(state, project, next)
+      project.roles = next
+      break
+    }
+    case 'project.role.remove': {
+      const project = manageProject(state, actor, command.projectId)
+      const roles = project.roles ?? fail('ROLES_MISSING', 'Create the project\'s custom roles first.')
+      const removed = roles.find(r => r.id === command.roleId) ?? fail('NOT_FOUND', 'This role is unavailable.', 404)
+      if (removed.kind === 'lead') fail('ROLE_LEAD', 'The lead role cannot be removed.', 400)
+      const next = roles.filter(r => r !== removed)
+      keepUsedRoles(state, project, next)
+      project.roles = next
+      break
+    }
+    case 'project.roles.reset': {
+      const project = manageProject(state, actor, command.projectId)
+      if (!project.roles) fail('ROLES_MISSING', 'Create the project\'s custom roles first.')
+      const next = roleSetOf(command.roles.map(projectRole))
+      keepUsedRoles(state, project, next)
+      project.roles = next
       break
     }
     case 'project.rename': {
@@ -660,6 +754,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (reviewed.id === project.leadConversationId || reviewed.reviewOf || groupProject(state, reviewed).id !== project.id) {
           fail('REVIEW_TARGET', 'A review group reviews one build group of the same project.', 400)
         }
+        requireCustomRole(project, 'reviewer')
       }
       const number = nextConversationNumber(state)
       state.conversations.push({ id: operationId, ...(state.projects ? { projectId: project.id } : {}),
@@ -742,6 +837,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (!['claude', 'codex'].includes(command.request.engine)) {
         fail('SWARM_ENGINE', 'A Swarm agent runs only Claude Code or Codex.', 400)
       }
+      const home = groupProject(state, conversation(state, command.request.conversationId))
+      if (command.request.roleId) chosenRole(home, command.request.roleId, command.request.role ?? 'builder')
+      else requireCustomRole(home, command.request.role ?? 'builder')
       // The Lead's account has machines the Swarm never prepared (no clone of the project), so a Lead may start only where the
       // Swarm already lists a machine: a contributed one, or one an agent of the Swarm runs on. A person's start may name any
       // machine of theirs, because the first Lead is created before anything is listed.
@@ -826,7 +924,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         ...(state.projects ? { projectId: groupProject(state, group).id } : {}),
         machineOwnerId: start.machineOwnerId, contributorId: start.contributorId, membershipGeneration: start.membershipGeneration,
         hostGrant: start.hostGrant, name: start.request.name, configuration: command.configuration, configurationVersion: operationId,
-        ...(start.request.role ? { role: start.request.role } : {}),
+        ...(start.request.role ? { role: start.request.role } : {}), ...(start.request.roleId ? { roleId: start.request.roleId } : {}),
         ...(command.startedSession ? { startedSession: { ...command.startedSession, creationId: start.creationId } } : {}) })
       group.agentIds.push(agentId)
       start.harnessId = command.harnessId
@@ -1132,6 +1230,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const worker = agent(state, command.agentId)
       assignable(group, worker)
       sameProject(state, group, worker)
+      const home = groupProject(state, group)
+      if (command.roleId) worker.roleId = chosenRole(home, command.roleId, agentKind(state, worker)).id
+      else requireCustomRole(home, agentKind(state, worker))
       requireWorkerDecisions(state, actor, group, worker.id)
       if (worker.workDecision === 'stop') fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
       if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === worker.id)) fail('AGENT_BUSY', 'This agent already owns an active assignment.')

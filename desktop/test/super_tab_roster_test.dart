@@ -594,7 +594,8 @@ void main() {
           of: find.byType(AlertDialog),
           matching: find.text('owner'),
         ),
-        findsOneWidget,
+        // The Owner row and Who can answer both name the machine owner.
+        findsNWidgets(2),
       );
       await tester.tap(find.widgetWithText(TextButton, 'Close'));
       await tester.pumpAndSettle();
@@ -606,6 +607,55 @@ void main() {
       await f.close(tester);
     },
   );
+
+  group('agent details Owner', () {
+    Future<void> openDetails(WidgetTester tester, RosterFixture f) async {
+      await f.show(tester);
+      await tester.tap(f.row(1));
+      await tester.pumpAndSettle();
+    }
+
+    Finder inDialog(String text) => find.descendant(
+      of: find.byType(AlertDialog),
+      matching: find.text(text),
+    );
+
+    testWidgets('names a teammate who owns the machine, under Machine', (
+      tester,
+    ) async {
+      final f = await fixture(tester, account: 'ann');
+      (f.server.state['agents'] as List)[1]['machineOwnerId'] = 'ann';
+      await f.controller.refresh();
+      await openDetails(tester, f);
+      expect(inDialog('Owner'), findsOneWidget);
+      expect(inDialog('ann'), findsOneWidget);
+      expect(
+        tester.getTopLeft(inDialog('Owner')).dy,
+        greaterThan(tester.getTopLeft(inDialog('Machine')).dy),
+      );
+      await f.close(tester);
+    });
+
+    testWidgets('names the current user the same way', (tester) async {
+      final f = await fixture(tester);
+      (f.server.state['agents'] as List)[1]['machineOwnerId'] = 'owner';
+      await f.controller.refresh();
+      await openDetails(tester, f);
+      expect(inDialog('Owner'), findsOneWidget);
+      expect(inDialog('owner'), findsOneWidget);
+      await f.close(tester);
+    });
+
+    testWidgets('hides the row when the owner is unknown', (tester) async {
+      final f = await fixture(tester);
+      (f.server.state['agents'] as List)[1]['machineOwnerId'] = 'ghost';
+      await f.controller.refresh();
+      await openDetails(tester, f);
+      expect(inDialog('Machine'), findsOneWidget);
+      expect(inDialog('Owner'), findsNothing);
+      await f.close(tester);
+    });
+  });
 
   testWidgets('a replaced member keeps its identity and shows its new engine', (
     tester,
