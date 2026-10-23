@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:file_selector/file_selector.dart';
@@ -27,14 +28,45 @@ const kAttachmentTextMaxBytes = 2 * 1024 * 1024;
 
 /// Reads a file off the attachments host, when a person asks for it.
 @visibleForTesting
-Future<Uint8List> Function(Uri url) attachmentFetcher = _fetch;
+Future<Uint8List> Function(Uri url, {int? maxBytes}) attachmentFetcher =
+    fetchAttachment;
 
-Future<Uint8List> _fetch(Uri url) async {
-  final answer = await Dio().getUri<List<int>>(
-    url,
-    options: Options(responseType: ResponseType.bytes),
-  );
-  return Uint8List.fromList(answer.data ?? const []);
+/// A file past the text viewer's limit; it opens in the browser instead.
+class AttachmentTooLarge implements Exception {
+  const AttachmentTooLarge();
+}
+
+/// The file at [url], or [AttachmentTooLarge] once it passes [maxBytes]:
+/// read as it arrives, so a file larger than it says is cut off, not read
+/// whole. A redirect is refused, since it could lead off the attachments
+/// host; a browser follows one itself, so there it is refused after the fact.
+Future<Uint8List> fetchAttachment(Uri url, {int? maxBytes}) async {
+  final dio = Dio();
+  try {
+    final answer = await dio.getUri<ResponseBody>(
+      url,
+      options: Options(
+        responseType: ResponseType.stream,
+        followRedirects: false,
+        validateStatus: (status) => status == 200,
+      ),
+    );
+    final body = answer.data!;
+    if (answer.isRedirect || body.isRedirect) {
+      throw StateError('The attachments host redirected $url.');
+    }
+    final bytes = BytesBuilder(copy: false);
+    await for (final chunk in body.stream) {
+      bytes.add(chunk);
+      if (maxBytes != null && bytes.length > maxBytes) {
+        throw const AttachmentTooLarge();
+      }
+    }
+    return bytes.takeBytes();
+  } finally {
+    // Hangs up a body read only in part, rather than leaving it open.
+    dio.close(force: true);
+  }
 }
 
 /// Whether [file] opens in the text viewer: text by its name, as Finder tells
@@ -72,7 +104,25 @@ class AttachmentTextViewer extends StatefulWidget {
 }
 
 class _AttachmentTextViewerState extends State<AttachmentTextViewer> {
-  late final Future<Uint8List> _bytes = attachmentFetcher(widget.url);
+  late final Future<Uint8List> _bytes = attachmentFetcher(
+    widget.url,
+    maxBytes: kAttachmentTextMaxBytes,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    // Larger than its size said: read it in the browser, as a large file is.
+    _bytes.then<void>(
+      (_) {},
+      onError: (Object error) {
+        if (error is! AttachmentTooLarge || !mounted) return;
+        Navigator.pop(context);
+        openInBrowser(widget.url);
+      },
+    );
+  }
+
   CodeLineEditingController? _text;
   bool _source = false;
 
@@ -132,9 +182,7 @@ class _AttachmentTextViewerState extends State<AttachmentTextViewer> {
   /// The file's text once it has arrived and reads as text; null otherwise.
   CodeLineEditingController? _textOf(AsyncSnapshot<Uint8List> read) {
     final bytes = read.data;
-    if (bytes == null ||
-        bytes.length > kAttachmentTextMaxBytes ||
-        !looksLikeText(bytes)) {
+    if (bytes == null || !looksLikeText(bytes)) {
       return null;
     }
     return _text ??= () {
@@ -217,10 +265,12 @@ class _AttachmentViewerActionsState extends State<AttachmentViewerActions> {
     children: [
       if (_outcome != null) Text(_outcome!, style: DesktopChrome.metadata()),
       const Spacer(),
-      TextButton(
-        onPressed: _saving ? null : _download,
-        child: const Text('Download'),
-      ),
+      // A browser cannot write to a chosen path; Open in browser saves there.
+      if (!kIsWeb)
+        TextButton(
+          onPressed: _saving ? null : _download,
+          child: const Text('Download'),
+        ),
       TextButton(
         onPressed: () => openInBrowser(widget.url),
         child: const Text('Open in browser'),

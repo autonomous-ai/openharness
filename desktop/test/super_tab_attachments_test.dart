@@ -564,14 +564,14 @@ void main() {
     late Directory dir;
     late FileSelectorPlatform picker;
     final fetched = <Uri>[];
-    late Future<Uint8List> Function(Uri) fetcher;
+    late Future<Uint8List> Function(Uri, {int? maxBytes}) fetcher;
 
     setUp(() {
       dir = Directory.systemTemp.createTempSync('attachment-download');
       picker = FileSelectorPlatform.instance;
       fetcher = attachmentFetcher;
       fetched.clear();
-      attachmentFetcher = (url) async {
+      attachmentFetcher = (url, {maxBytes}) async {
         fetched.add(url);
         return Uint8List.fromList(utf8.encode('hello'));
       };
@@ -752,7 +752,7 @@ void main() {
         opened.add(url);
         return true;
       };
-      attachmentFetcher = (url) async {
+      attachmentFetcher = (url, {maxBytes}) async {
         fetched.add(url);
         return Uint8List.fromList(served[url.pathSegments.last]!);
       };
@@ -863,6 +863,29 @@ void main() {
       await close(tester, controller);
     });
 
+    testWidgets(
+      'a file that runs past the limit while read opens the browser',
+      (tester) async {
+        final (controller, opened, _) = await showFiles(tester, [
+          row('a1', 'small-on-paper.log', 'text/plain', 10),
+        ]);
+        final limits = <int?>[];
+        attachmentFetcher = (url, {maxBytes}) async {
+          limits.add(maxBytes);
+          throw const AttachmentTooLarge();
+        };
+
+        await tester.tap(find.byKey(const ValueKey('super-attachment:a1')));
+        await tester.pumpAndSettle();
+        expect(limits, [kAttachmentTextMaxBytes]);
+        expect(opened, [
+          Uri.parse('https://cdn.harness.autonomous.ai/a1/small-on-paper.log'),
+        ]);
+        expect(find.text('Close'), findsNothing);
+        await close(tester, controller);
+      },
+    );
+
     testWidgets('a text name over binary bytes shows no preview', (
       tester,
     ) async {
@@ -922,7 +945,7 @@ void main() {
       await mount(tester, controller);
       final fetched = <Uri>[];
       final original = attachmentFetcher;
-      attachmentFetcher = (url) async {
+      attachmentFetcher = (url, {maxBytes}) async {
         fetched.add(url);
         return Uint8List(0);
       };
