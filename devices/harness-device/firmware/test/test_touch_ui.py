@@ -1428,11 +1428,185 @@ static void swarm_tabs_checks(const char *dir) {
     puts("Swarm tabs: linked desk tab kept with no agents, unopened Swarms after the desk tabs in list order, same font and ink, entered with no handshake, remembered Lead, hold to TABS, desk tabs unchanged PASS");
 }
 
+// Every run's text joined, and the first sprite (the pet's frame): what a face says and which pose it holds.
+static bool scene_says(const char *needle) {
+    for (int i = 0; i < scene.count; i++) if (strstr(scene.runs[i].text, needle)) return true;
+    return false;
+}
+static const void *pet_frame(void) {
+    for (int i = 0; i < scene.count; i++) if (scene.runs[i].sprite.width) return scene.runs[i].sprite.cells;
+    return NULL;
+}
+// The frames the pet cycles through over six seconds: a pose is its loop, not one instant of it.
+static int pet_frames(const void *out[64]) {
+    int n = 0; uint32_t base = fake_ms;
+    for (uint32_t t = 0; t < 6000; t += 20) {
+        fake_ms = base + t; scene_take(); const void *f = pet_frame(); bool seen = false;
+        for (int i = 0; i < n; i++) seen |= out[i] == f;
+        if (!seen && n < 64) out[n++] = f;
+    }
+    fake_ms = base; scene_take();
+    return n;
+}
+static int card_lines(const char **last) {
+    int n = 0;
+    for (int i = 0; i < scene.count; i++) if (scene.runs[i].font == &ht_lv_inter_30.base && scene.runs[i].text[0]) { n++; *last = scene.runs[i].text; }
+    return n;
+}
+static bool wire_has(int from, const char *line) {
+    for (int i = from; i < swarm_sent; i++) if (!strcmp(swarm_wire[i], line)) return true;
+    return false;
+}
+static void enter_at(const char *tab, const char *lead) {
+    swarm_enter(ht_supertabs_find(&swarm, tab), lead, true); scene_take();
+}
+static void no_red(void) {
+    for (int i = 0; i < scene.count; i++) assert(scene.runs[i].fg != ERROR && scene.runs[i].box.fill != ERROR);
+}
+static void swarm_pane_checks(const char *dir) {
+    // openharness's Leads come in urgency order and are kept in project order.
+    swarm_setup(); const ht_supertab_t *t = ht_supertabs_find(&swarm, "s1");
+    assert(t->lead_n == 5 && !strcmp(t->leads[0].id, "L0") && !strcmp(t->leads[1].id, "L1") && !strcmp(t->leads[2].id, "L2") &&
+           !strcmp(t->leads[3].id, "L3") && !strcmp(t->leads[4].id, "L4"));
+    // 2a "mobile" working on this computer: the time since `since` on the lower arc, the project on the upper.
+    enter_at("s1", "L0"); assert(title_is("mobile") && scene_says("2:14"));
+    FOCUS_PAGE("swarm-2a");
+    fake_ms += 6000; scene_take(); assert(scene_says("2:20"));   // the dial's own clock carries it on
+    // 2b a long name, done: the recap card. A recap for another Lead is dropped.
+    enter_at("s1", "L1");
+    ui_supertab_recap("s1", "L2", "Not this one.", 1792560000u, false); scene_take(); assert(!scene_says("Not this one."));
+    ui_supertab_recap("s1", "L1", "Release candidate built and checked on both dials.", 1792560000u, false); scene_take();
+    assert(scene_says("Release candidate built"));
+    FOCUS_PAGE("swarm-2b");
+    // 2g a 1,500-byte recap: four lines, the last ending in "…".
+    {
+        char longer[HT_SUPERTAB_TEXT]; size_t n = 0;
+        while (n + 6 < sizeof longer - 1) { memcpy(longer + n, "words ", 6); n += 6; }
+        longer[n] = 0;
+        ui_supertab_recap("s1", "L1", longer, 1792560000u, false); scene_take();
+        const char *last = ""; int lines = card_lines(&last);
+        assert(lines >= 1 && lines <= 4 && strstr(last, "\xe2\x80\xa6"));
+        FOCUS_PAGE("swarm-2g");
+    }
+    // 2f no message yet: the resting face, no card.
+    ui_supertab_recap("s1", "L1", "", 0, true); scene_take();
+    { const char *last; assert(!card_lines(&last)); }
+    FOCUS_PAGE("swarm-2f");
+    // 2c "docs" needs you, here: its wait's question takes the recap's place, in the asking pose.
+    enter_at("s1", "L2");
+    ui_supertab_recap("s1", "L2", "Docs drafted.", 1792560000u, false);
+    assert(!ui_supertab_wait("h2", "supertab:w1", "openharness", false, "Publish the docs today?"));   // on the face: no beep
+    scene_take(); assert(scene_says("Publish the docs") && !scene_says("Docs drafted."));
+    FOCUS_PAGE("swarm-2c");
+    // 2d "firmware" stuck: the daemon's "Stuck: …" in the same card, and no red anywhere.
+    enter_at("s1", "L3");
+    ui_supertab_wait("h3", "supertab:w2", "openharness", true, "Stuck: the release key is missing."); scene_take();
+    assert(scene_says("Stuck: the release key")); no_red();
+    FOCUS_PAGE("swarm-2d");
+    // The asking pose: Codex's asking loop, not the finished one it shows once the same Lead is done with a message.
+    {
+        static const void *asking[64], *done[64]; int asking_n = pet_frames(asking);
+        card_begin("s1", "t1", "openharness"); openharness_card(); card.leads[1].state = HT_LEAD_DONE;   // L3, firmware
+        assert(!strcmp(card.leads[1].id, "L3")); card_send(); ui_supertab_wait_close("h3", "supertab:w2");
+        ui_supertab_recap("s1", "L3", "Release key found; build signed.", 1792560000u, false);
+        int done_n = pet_frames(done); bool other = false;
+        for (int i = 0; i < asking_n; i++) { bool shared = false; for (int k = 0; k < done_n; k++) shared |= asking[i] == done[k]; other |= !shared; }
+        assert(asking_n && done_n && other);
+        openharness_card(); card_send();
+    }
+    // 2e "backend" on someone else's machine, working: "Working…" and no time; a tap on the face talks to nobody.
+    enter_at("s1", "L4"); assert(title_is("backend") && scene_says("Working") && !scene_says(":"));
+    FOCUS_PAGE("swarm-2e");
+    // (the real dispatch drops a face voice turn with no recipient: test_voice_ui.py)
+    assert(!make_action((hit_t){.action = A_VOICE}).id[0]);
+    enter_at("s1", "L0"); assert(!strcmp(make_action((hit_t){.action = A_VOICE}).id, "h0"));
+    tap(fake_ms, 233, 260); assert(!strcmp(target, "h0")); dispatch((action_t){.kind = A_VOICE_ABORT});
+    enter_at("s1", "L4");
+    // 2e' the same Lead asking: the asking pose and its last message, read-only.
+    card_begin("s1", "t1", "openharness");
+    card_lead("L0", "mobile", "claude", "h0", "work", 0, 134); card_lead("L1", "Round dial firmware release candidate", "claude", "h1", "done", 1, -1);
+    card_lead("L2", "docs", "claude", "h2", "ask", 2, -1); card_lead("L3", "firmware", "codex", "h3", "stuck", 3, -1);
+    card_lead("L4", "backend", "cursor", "", "ask", 4, -1); card_send();
+    ui_supertab_recap("s1", "L4", "Need a decision on the cache size.", 1792560000u, false); scene_take();
+    assert(scene_says("Need a decision") && !scene_says("Working"));
+    FOCUS_PAGE("swarm-2e-ask");
+    // 2h a Swarm with no projects: PANES' own empty page, and "Choose a tab" goes to TABS.
+    {
+        const char ids[4][ID_MAX] = {"s1", "s3", "s2", "s4"}; ui_supertabs_ids(ids, 4);
+        card_begin("s4", "", "empty"); card_send();
+        enter_at("s4", NULL); assert(scene_says("No panes in") && scene_says("this tab.") && scene_says("Choose a tab"));
+        FOCUS_PAGE("swarm-2h");
+        tap(fake_ms, 233, 365); assert(s.view == TABS);
+    }
+    // A swipe moves by order, wrapping, and says select, open and recap.get — never `focus` (no pane switch).
+    swarm_setup(); enter_at("s1", "L4"); swarm_sent = 0; int panes = switches;
+    habitat_touch(true, 320, 220, fake_ms); habitat_touch(false, 150, 220, fake_ms + 120); scene_take();
+    assert(!strcmp(sw.lead, "L0") && switches == panes);
+    assert(swarm_sent == 3 && !strcmp(swarm_wire[0], "select s1 L0") && !strcmp(swarm_wire[1], "open s1 L0") &&
+           !strcmp(swarm_wire[2], "recap.get s1 L0"));
+    habitat_touch(true, 150, 220, fake_ms + 1000); habitat_touch(false, 320, 220, fake_ms + 1120); scene_take();
+    assert(!strcmp(sw.lead, "L4") && switches == panes);
+    // No recap within 5 s: one more recap.get, and only one.
+    swarm_sent = 0; surface_tick(fake_ms + 4999); assert(!swarm_sent);
+    surface_tick(fake_ms + 5000); assert(swarm_sent == 1 && !strcmp(swarm_wire[0], "recap.get s1 L4"));
+    surface_tick(fake_ms + 11000); assert(swarm_sent == 1);
+    // PANES (tap the name): one page per Lead in order, opened on the one on the face; a long name on two lines with
+    // "…"; Done picks with the swipe's messages.
+    swarm_setup(); enter_at("s1", "L2"); tap(fake_ms, 233, 30);
+    assert(s.view == AGENTS && pane_carousel.count == 5 && ht_tab_carousel_index(&pane_carousel) == 2 && !strcmp(big_run()->text, "docs"));
+    FOCUS_PAGE("swarm-3a");
+    for (int i = 0; i < 5; i++) assert(!strcmp(pane_label(i), ht_supertabs_find(&swarm, "s1")->leads[i].project));
+    ht_tab_carousel_reset(&pane_carousel, 5, 1); scene_take();
+    {
+        int big = 0; bool cut = false;
+        for (int i = 0; i < scene.count; i++) if (scene.runs[i].font == &ht_lv_inter_44.base && scene.runs[i].text[0]) {
+            big++; size_t n = strlen(scene.runs[i].text); cut |= n > 3 && !strcmp(scene.runs[i].text + n - 3, "\xe2\x80\xa6");
+        }
+        assert(big == 2 && cut);
+    }
+    FOCUS_PAGE("swarm-3b");
+    swarm_sent = 0; tap(fake_ms + 2000, 233, 420);
+    assert(s.view == HOME && !strcmp(sw.lead, "L1") && wire_has(0, "select s1 L1") && wire_has(0, "open s1 L1") && wire_has(0, "recap.get s1 L1"));
+    // Twelve projects, twelve pages, the last one picked.
+    {
+        card_begin("s1", "t1", "openharness");
+        static const char *names[12] = {"mobile", "web", "docs", "firmware", "backend", "api", "infra", "design", "ops", "data", "growth", "support"};
+        char id[8];
+        for (int i = 0; i < 12; i++) { snprintf(id, sizeof id, "M%d", i); card_lead(id, names[i], i % 2 ? "codex" : "claude", "", "work", i, -1); }
+        card_send(); enter_at("s1", "M0"); tap(fake_ms, 233, 30);
+        assert(s.view == AGENTS && pane_carousel.count == 12);
+        ht_tab_carousel_reset(&pane_carousel, 12, 5); FOCUS_PAGE("swarm-3c");
+        ht_tab_carousel_reset(&pane_carousel, 12, 11); scene_take();
+        dispatch((action_t){.kind = A_LEAD, .id = "M11"}); assert(s.view == HOME && !strcmp(sw.lead, "M11") && sw.at == 11);
+    }
+    // Following the desktop: supertab.focus moves the face (no select back), but not while talking.
+    swarm_setup(); enter_at("s1", "L0"); swarm_sent = 0;
+    ui_supertab_focus("s1", "L3"); assert(!strcmp(sw.lead, "L3") && !wire_has(0, "select s1 L3") && wire_has(0, "open s1 L3"));
+    s.voice_open = true; ui_supertab_focus("s1", "L1"); assert(!strcmp(sw.lead, "L3")); s.voice_open = false;
+    // The desktop opening the Swarm's desk tab takes the dial in with it.
+    swarm_leave(); COPY(s.selected_tab, "t1"); s.view = HOME; ui_supertab_focus("s1", "L2");
+    assert(swarm_mode() && !strcmp(sw.tab, "s1") && !strcmp(sw.lead, "L2"));
+    // A new card without the Lead on the face: the face takes the Lead now at its place.
+    ui_supertab_focus("s1", "L3"); assert(sw.at == 3);
+    card_begin("s1", "t1", "openharness");
+    card_lead("L0", "mobile", "claude", "h0", "work", 0, 134); card_lead("L1", "Round dial firmware release candidate", "claude", "h1", "done", 1, -1);
+    card_lead("L2", "docs", "claude", "h2", "ask", 2, -1); card_lead("L4", "backend", "cursor", "", "work", 4, -1); card_send();
+    assert(!strcmp(sw.lead, "L4") && sw.at == 3);
+    // The Swarm gone from the list: back to TABS.
+    { const char ids[2][ID_MAX] = {"s3", "s2"}; ui_supertabs_ids(ids, 2); }
+    assert(!swarm_mode() && s.view == TABS);
+    // The side button: STOP for a busy Lead on this computer (its harness id), HOME for a remote one.
+    swarm_setup(); enter_at("s1", "L0"); ui_boot_pressed(); assert(s.view == STOP && !strcmp(s.stop_agent, "h0"));
+    dispatch((action_t){.kind = A_STOP_YES}); assert(!strcmp(stopped_agent, "h0") && s.view == HOME);
+    s.stop_agent[0] = 0; enter_at("s1", "L4"); ui_boot_pressed(); assert(s.view == HOME && !s.stop_agent[0]);
+    puts("Swarm panes: project order, faces 2a-2h (time, recap card and cut, resting, wait text, stuck without red, remote read-only), swipe with wrap and no focus, one recap retry, PANES 3a-3c, follow the desktop, Lead gone, Swarm gone, side button PASS");
+}
 int main(int argc, char **argv) {
     test_character = getenv("HABITAT_TEST_TUX") ? HT_CHARACTER_TUX : HT_CHARACTER_TIM;
     notification_read_checks(argc>1 ? argv[1] : NULL);
     bell_checks(argc>1 ? argv[1] : NULL);
     swarm_tabs_checks(argc>1 ? argv[1] : NULL);
+    swarm_pane_checks(argc>1 ? argv[1] : NULL);
     // The companion screen is gone: character, edge text and still-character are the app's now
     // (Settings > Autonomous robots). What the glass kept is actions, and Nap is the one that moved
     // off that screen into the controls list.
