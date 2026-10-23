@@ -129,34 +129,38 @@ export class SuperTabNativeStore {
   private async recovery(tx: Transaction, tabId: string, group: Conversation, target: Agent, record: SuperTabNativeContext,
     event: NativeEvent, eventId: string, revision: number): Promise<{ source: Recovery; text: string } | null> {
     const assignment = group.assignment
-    if (event.kind !== 'gap' || !assignment || !activeWork(group) || assignment.agentId !== target.id
+    // A recording gap can also mean ordinary human typing or an expired view.
+    // Older recorders do not distinguish those, so only known interruptions wake the Lead.
+    if (event.kind !== 'gap' || !event.gap || !['recording_restarted', 'history_lost', 'agent_stopped'].includes(event.gap.reason)
+      || !assignment || !activeWork(group) || assignment.agentId !== target.id
       || !group.leadId || group.leadId === target.id) return null
     const previous = await tx.superTabMessage.findFirst({ where: { id: record.lastEventId ?? assignment.id, tabId, conversationId: group.id } })
     const source = previous?.source as { turnId?: string; recovery?: Recovery } | null
-    // Preserve the original checkpoint through repeated gaps, including an old
-    // daemon's gaps with no incident metadata. A gap is not new work progress.
+    // Preserve the original checkpoint through repeated gaps. A gap is not new work progress.
     let checkpoint: Checkpoint = source?.recovery?.checkpoint ?? {
       eventId: previous?.id ?? null, turnId: source?.turnId ?? null,
       recordedAt: previous?.createdAt.toISOString() ?? null, sequence: previous?.sequence ?? 0,
     }
-    const incidentId = event.gap?.incidentId ?? stableId('legacy-recording-gap', target.id, checkpoint.eventId ?? assignment.id)
+    const incidentId = event.gap.incidentId
     const receiptId = stableId('native-recovery', assignment.id, incidentId)
     const prior = await tx.superTabOperation.findUnique({ where: { id: receiptId } })
     const progress = assignment.recordingProgress
-    const progressed = !!progress && (event.gap ? progress.at >= event.gap.detectedAt : progress.revision > checkpoint.sequence)
-    if (event.gap && progress && !progressed && progress.revision > checkpoint.sequence) {
+    const progressed = !!progress && progress.at >= event.gap.detectedAt
+    if (progress && !progressed && progress.revision > checkpoint.sequence) {
       const latest = await tx.superTabMessage.findFirst({ where: { tabId, conversationId: group.id, sequence: progress.revision } })
       if (latest) checkpoint = { eventId: latest.id, turnId: null, recordedAt: latest.createdAt.toISOString(), sequence: latest.sequence }
     }
     const required = !prior && !progressed && ['working', 'review'].includes(assignment.status)
-    const recovery: Recovery = { assignmentId: assignment.id, incidentId, reason: event.gap?.reason ?? 'restart_or_recording_gap',
-      detectedAt: event.gap?.detectedAt ?? Date.now(), checkpoint, required }
-    const reason = event.gap ? gapReasons[event.gap.reason] : 'The work was interrupted by a restart or a gap in terminal recording.'
+    const recovery: Recovery = { assignmentId: assignment.id, incidentId, reason: event.gap.reason,
+      detectedAt: event.gap.detectedAt, checkpoint, required }
+    const reason = assignment.status === 'review' && event.gap.reason === 'recording_restarted'
+      ? 'Terminal recording restarted while the task was in review.' : gapReasons[event.gap.reason]
+    const next = assignment.status === 'review' ? 'Keep this task in review while you check the agent’s session.'
+      : 'Check the agent’s session, then ask it to continue from the checkpoint and report working.'
     const text = `Recovery needed for ${target.displayName ?? target.name} on “${group.title}”. ${reason}\n\n`
-      + `Task attempt: ${assignment.id}. Last recorded checkpoint: ${checkpoint.eventId ?? 'none'}${checkpoint.turnId ? ` (turn ${checkpoint.turnId})` : ''}`
-      + `${checkpoint.recordedAt ? ` at ${checkpoint.recordedAt}` : ' (time unavailable)'}.\n\n`
-      + 'Check the agent’s session, then ask it to continue from the checkpoint and report working. Do not replay earlier input or commands; they may already have taken effect.'
-    if (required) { assignment.status = 'blocked'; assignment.result = text }
+      + `Last recorded checkpoint: ${checkpoint.recordedAt ?? 'time unavailable'}.\n\n`
+      + `${next} Do not replay earlier input or commands; they may already have taken effect.`
+    if (required && assignment.status === 'working') { assignment.status = 'blocked'; assignment.result = text }
     if (!prior) await tx.superTabOperation.create({ data: { id: receiptId, tabId, actorKey: `agent:${target.id}`,
       requestHash: digest([assignment.id, incidentId]), revision, result: json({ eventId, recovery }) } })
     return { source: recovery, text }

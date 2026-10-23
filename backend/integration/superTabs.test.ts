@@ -88,6 +88,8 @@ describe('native recording restart recovery', () => {
     const checkpointRow = await db.superTabMessage.findUniqueOrThrow({ where: { id: checkpoint.eventId } })
     const gap = { turnId: 'restart_observation', kind: 'gap' as const, previousEventId: checkpoint.eventId,
       text: '', truncated: false, interrupted: false }
+    const interruption = (reason: 'recording_restarted' | 'history_lost' | 'agent_stopped' = 'recording_restarted') => ({ ...gap,
+      gap: { incidentId: 'restart_incident', reason, detectedAt: Date.now() + 1000 } })
     const state = async () => (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!
     const gapDeliveries = async () => {
       const rows = await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: group } })
@@ -100,24 +102,60 @@ describe('native recording restart recovery', () => {
       expect(response.statusCode, response.body).toBe(200)
       return response.json().data as { eventId: string }
     }
-    return { tab, lead, group, worker, assignmentId, contextId, checkpoint, checkpointRow, gap, state, gapDeliveries, append }
+    return { tab, lead, group, worker, assignmentId, contextId, checkpoint, checkpointRow, gap, interruption, state, gapDeliveries, append }
   }
 
-  it.each(['working', 'review'] as const)('wakes only the Lead and blocks %s work with a recorded checkpoint for an older daemon', async status => {
-    const f = await recoveryFixture(status)
-    const result = await store.native.append(host, f.tab, f.contextId, f.gap) as { eventId: string }
-    expect(await f.state()).toMatchObject({ id: f.assignmentId, status: 'blocked', result: expect.stringContaining('restart') })
+  it.each(['recording_restarted', 'history_lost', 'agent_stopped'] as const)('wakes only the Lead and blocks working work for %s with a checkpoint time and no visible ids', async reason => {
+    const f = await recoveryFixture(), event = f.interruption(reason)
+    const result = await store.native.append(host, f.tab, f.contextId, event) as { eventId: string }
+    expect(await f.state()).toMatchObject({ id: f.assignmentId, status: 'blocked', result: expect.stringContaining('Recovery Engineer') })
     const message = await db.superTabMessage.findUniqueOrThrow({ where: { id: result.eventId } })
     expect(message.text).toContain('Recovery Engineer')
     expect(message.text).toContain('Recover interrupted work')
-    expect(message.text).toContain(f.checkpoint.eventId)
     expect(message.text).toContain(f.checkpointRow.createdAt.toISOString())
+    expect(message.text).not.toContain(f.assignmentId)
+    expect(message.text).not.toContain(f.checkpoint.eventId)
+    expect(message.text).not.toContain('saved_turn')
+    expect((await f.state()).result).toBe(message.text)
     expect(message.source).toMatchObject({ kind: 'native', phase: 'gap', recovery: {
       assignmentId: f.assignmentId, checkpoint: { eventId: f.checkpoint.eventId, turnId: 'saved_turn', recordedAt: f.checkpointRow.createdAt.toISOString() } } })
     expect(await f.gapDeliveries()).toMatchObject([{ agentId: f.lead, messageId: result.eventId }])
     expect(await f.gapDeliveries()).toHaveLength(1)
-    expect(await store.native.append(host, f.tab, f.contextId, f.gap)).toEqual(result)
+    expect(await store.native.append(host, f.tab, f.contextId, event)).toEqual(result)
     expect(await f.gapDeliveries()).toHaveLength(1)
+  })
+
+  it('keeps a person’s unattributed terminal input from blocking working work or waking the Lead', async () => {
+    const f = await recoveryFixture(), before = await f.state()
+    const result = await f.append({ ...f.gap, gap: { incidentId: 'typed_input', reason: 'unattributed_input', detectedAt: Date.now() + 1000 } })
+    expect(await f.state()).toEqual(before)
+    expect(await f.gapDeliveries()).toEqual([])
+    const message = await db.superTabMessage.findUniqueOrThrow({ where: { id: result.eventId } })
+    expect(message.text).toBe('Some terminal activity could not be recorded. Check the native session for the full conversation.')
+    expect(message.source).not.toHaveProperty('recovery')
+  })
+
+  it.each(['legacy', 'context_expired', 'prompt_missing'] as const)('keeps a %s gap as a plain note without changing work', async reason => {
+    const f = await recoveryFixture(), before = await f.state()
+    const result = await f.append({ ...f.gap, ...(reason === 'legacy' ? {} : { gap: { incidentId: 'plain_gap', reason, detectedAt: Date.now() + 1000 } }) })
+    expect(await f.state()).toEqual(before)
+    expect(await f.gapDeliveries()).toEqual([])
+    const message = await db.superTabMessage.findUniqueOrThrow({ where: { id: result.eventId } })
+    expect(message.text).toBe('Some terminal activity could not be recorded. Check the native session for the full conversation.')
+    expect(message.source).not.toHaveProperty('recovery')
+  })
+
+  it('notifies once about an interruption during review while preserving the review state and result', async () => {
+    const f = await recoveryFixture('review'), before = await f.state(), event = f.interruption()
+    const first = await f.append(event)
+    await f.append({ ...event, turnId: 'another_gap', previousEventId: first.eventId })
+    expect(await f.state()).toEqual(before)
+    expect(await f.gapDeliveries()).toMatchObject([{ agentId: f.lead, messageId: first.eventId }])
+    expect(await f.gapDeliveries()).toHaveLength(1)
+    const message = await db.superTabMessage.findUniqueOrThrow({ where: { id: first.eventId } })
+    expect(message.text).toContain('Keep this task in review')
+    expect(message.text).not.toContain('report working')
+    expect(message.text).not.toContain('work was interrupted')
   })
 
   it('advertises recovery metadata without requiring it from older recorders', async () => {
@@ -136,7 +174,8 @@ describe('native recording restart recovery', () => {
       gap: { incidentId: 'second_restart', reason: 'recording_restarted', detectedAt: detectedAt + 2 } })
     expect(await f.state()).toMatchObject({ status: 'blocked' })
     const message = await db.superTabMessage.findUniqueOrThrow({ where: { id: second.eventId } })
-    expect(message.text).toContain(checkpoint.id)
+    expect(message.text).toContain(checkpoint.createdAt.toISOString())
+    expect(message.text).not.toContain(checkpoint.id)
     expect(message.source).toMatchObject({ recovery: { checkpoint: { eventId: checkpoint.id, recordedAt: checkpoint.createdAt.toISOString() } } })
     expect(await f.gapDeliveries()).toHaveLength(2)
   })
@@ -158,7 +197,7 @@ describe('native recording restart recovery', () => {
 
   it.each(['worker', 'lead'] as const)('lets the %s resume a recovery block without a person, including a delayed legacy gap', async who => {
     const f = await recoveryFixture()
-    const first = await store.native.append(host, f.tab, f.contextId, f.gap) as { eventId: string }
+    const first = await store.native.append(host, f.tab, f.contextId, f.interruption()) as { eventId: string }
     expect(await f.state()).toMatchObject({ status: 'blocked' })
     await run(f.tab, { type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId,
       status: 'working', result: 'Session checked; work continued' }, host, who === 'worker' ? f.worker : f.lead)
@@ -190,7 +229,7 @@ describe('native recording restart recovery', () => {
     }
     await run(f.tab, { type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId,
       status, result: 'Existing outcome' }, host, f.worker)
-    await store.native.append(host, f.tab, f.contextId, f.gap)
+    await store.native.append(host, f.tab, f.contextId, f.interruption())
     expect(await f.state()).toMatchObject({ status, result: 'Existing outcome' })
     expect(await f.gapDeliveries()).toHaveLength(0)
   })
@@ -201,7 +240,8 @@ describe('native recording restart recovery', () => {
     await run(tab, { type: 'work.assign', conversationId: 'lead', agentId: lead })
     const { contextId } = await store.native.open(owner, tab, { operationId: randomUUID(), conversationId: 'lead', agentId: lead })
     const receipt = await store.native.append(host, tab, contextId, { turnId: 'lead_restart', kind: 'gap', previousEventId: null,
-      text: '', truncated: false, interrupted: false }) as { eventId: string }
+      text: '', truncated: false, interrupted: false,
+      gap: { incidentId: 'lead_restart', reason: 'recording_restarted', detectedAt: Date.now() + 1000 } }) as { eventId: string }
     expect((await store.read(owner, tab)).state.conversations[0]!.assignment!.status).toBe('working')
     expect(await db.superTabDelivery.findMany({ where: { messageId: receipt.eventId } })).toEqual([])
   })
@@ -212,7 +252,8 @@ describe('native recording restart recovery', () => {
       name: 'Idle Engineer', configuration: config, lead: false })).result.agentId as string
     const { contextId } = await store.native.open(owner, tab, { operationId: randomUUID(), conversationId: 'lead', agentId: worker })
     const receipt = await store.native.append(host, tab, contextId, { turnId: 'idle_restart', kind: 'gap', previousEventId: null,
-      text: '', truncated: false, interrupted: false }) as { eventId: string }
+      text: '', truncated: false, interrupted: false,
+      gap: { incidentId: 'idle_restart', reason: 'recording_restarted', detectedAt: Date.now() + 1000 } }) as { eventId: string }
     expect((await store.read(owner, tab)).state.conversations[0]!.assignment).toBeNull()
     expect(await db.superTabDelivery.findMany({ where: { messageId: receipt.eventId } })).toEqual([])
   })
