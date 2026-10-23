@@ -2071,10 +2071,16 @@ describe('Lead safety on the host roster', () => {
     // What the host sends: its own account, no agent, one operation per session.
     const confirm = (agentId: string, harnessId: string, user = host) =>
       run(tab, { type: 'agent.sessionClosed', agentId, harnessId }, user, undefined, `session-closed-${agentId}-${harnessId}`)
-    // The Swarm owner cannot confirm it; the machine's owner can, though it is not in the Swarm.
-    await expect(confirm(worker, harness, owner)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    expect((await store.read(owner, tab)).state).not.toHaveProperty('closingSessions')
+    // Neither the Swarm owner nor an outsider can confirm it, and a refusal writes nothing; the machine's owner can,
+    // though it is not in the Swarm.
+    const revision = (await store.read(owner, tab)).revision
+    await expect(confirm(worker, harness, owner)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(confirm(worker, harness, peer)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect((await store.read(owner, tab)).revision).toBe(revision)
     const receipt = await confirm(worker, harness)
     expect(await confirm(worker, harness)).toEqual(receipt)
+    await expect(run(tab, { type: 'agent.sessionClosed', agentId: worker, harnessId: harness }, host)).rejects.toMatchObject({ code: 'NOT_FOUND' })
     expect((await rows()).map(r => r.agent.id)).toEqual([lead])
 
     // Deleting the project takes its Lead, and its host is asked to close the session even with no agent left on the machine.

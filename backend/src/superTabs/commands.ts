@@ -261,10 +261,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     return effects
   }
   // The host of a removed agent may have left the Swarm with it: the machine owner the request names confirms the close.
+  // Anyone else, or a second confirmation, is told the same thing and writes nothing; the store answers an exact retry.
   if (command.type === 'agent.sessionClosed') {
-    const request = state.closingSessions?.find(c => c.agentId === command.agentId && c.harnessId === command.harnessId)
-    if (!request) return effects
-    if (actor.kind !== 'person' || actor.userId !== request.machineOwnerId) fail('FORBIDDEN', 'Only the machine that ran this session confirms it closed.', 403)
+    const request = state.closingSessions?.find(c => c.agentId === command.agentId && c.harnessId === command.harnessId
+      && actor.kind === 'person' && c.machineOwnerId === actor.userId) ?? fail('NOT_FOUND', 'This machine has no session waiting to close.', 404)
     dropClosing(state, c => c !== request)
     releaseHarness(state, request.machineId, request.harnessId)
     return effects

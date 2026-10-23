@@ -1635,10 +1635,11 @@ describe('Lead protection', () => {
     expect(f.state.closingSessions).toEqual([closing(lead, 'docs-lead')])
   })
 
-  it('asks the host to close the session of every agent a person removes', () => {
+  it('asks the host to close the session of every agent a person removes, and shows it to nobody else', () => {
     const f = fixture(), worker = f.add('worker')
     f.run({ type: 'agent.remove', agentId: worker })
     expect(f.state.closingSessions).toEqual([closing(worker, 'worker')])
+    expect(visibleState(f.state, owner)).not.toHaveProperty('closingSessions')
 
     const g = fixture(), other = g.add('other')
     g.run({ type: 'machine.remove', machineId: 'host' })
@@ -1656,15 +1657,16 @@ describe('Lead protection', () => {
     f.run({ type: 'agent.remove', agentId: worker })
     expect(f.state.harnessReservations).toEqual([expect.objectContaining({ machineId: 'host', harnessId: 'worker' })])
     const closed = { type: 'agent.sessionClosed', agentId: worker, harnessId: 'worker' } as Command
-    expect(() => f.run(closed)).toThrow(expect.objectContaining({ code: 'FORBIDDEN', status: 403 }))
+    const nothing = expect.objectContaining({ code: 'NOT_FOUND', status: 404 })
+    // Another account learns nothing, not even whether a close is pending.
+    expect(() => f.run(closed)).toThrow(nothing)
+    expect(() => f.run({ ...closed, harnessId: 'other' } as Command, hostOwner)).toThrow(nothing)
     f.run(closed, hostOwner)
     expect(f.state.closingSessions).toBeUndefined()
     expect(f.state.harnessReservations).toEqual([])
     expect(f.state.releasedHarnesses).toEqual([{ machineId: 'host', harnessId: 'worker' }])
-    // A host's retry after a lost answer changes nothing.
-    const before = structuredClone(f.state)
-    f.run(closed, hostOwner)
-    expect(f.state).toEqual(before)
+    // Only the store's receipt answers an exact retry; a new confirmation finds nothing to close.
+    expect(() => f.run(closed, hostOwner)).toThrow(nothing)
   })
 
   it('forgets a close request when the same session is added back before its host closed it', () => {

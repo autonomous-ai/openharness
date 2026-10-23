@@ -291,6 +291,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   delete visible.sharing
   delete visible.harnessReservations
   delete visible.releasedHarnesses
+  // Only that machine's host roster lists them (store.ts hostTabs); a removed private agent's session is not every member's.
+  delete visible.closingSessions
   numberConversations(visible)
   delete visible.retiredConversationNumber
   placeRules(visible)
