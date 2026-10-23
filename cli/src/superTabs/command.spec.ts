@@ -149,7 +149,8 @@ it('sends a terminal request, reads its result again while it is pending, and pr
   expect(await superTabCommand([...prefix, 'screen', 'worker'], deps)).toBe(0)
   expect(request.mock.calls.map(([, payload]) => payload!.action)).toEqual(['command', 'terminalResult', 'terminalResult', 'terminalResult'])
   expect(request.mock.calls[0]![1]).toMatchObject({ tabId: 'tab', agentId: 'agent', operationId: expect.stringMatching(/^terminal-/), command: { type: 'agent.screen', agentId: 'worker' } })
-  expect(request.mock.calls[1]![1]).toEqual({ action: 'terminalResult', tabId: 'tab', agentId: 'agent', requestId: 'r1' })
+  // Not `requestId`: the daemon's transport numbers each request under that name and would overwrite it.
+  expect(request.mock.calls[1]![1]).toEqual({ action: 'terminalResult', tabId: 'tab', agentId: 'agent', terminalRequestId: 'r1' })
   expect(print).toHaveBeenLastCalledWith('Allow?\n1. Yes')
   // Typing prints what became of it; a refusal from the host is a failure.
   results.push({ ok: true, value: { ok: false, error: 'Unknown key: Home.' } })

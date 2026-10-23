@@ -147,7 +147,8 @@ async function terminalRequest(payload: Record<string, unknown>, scoped: (payloa
   const requestId = object(object(sent.value).result).requestId
   if (!identifier(requestId)) return { error: 'TERMINAL_UNAVAILABLE', detail: 'This Swarm\'s server does not relay terminals yet.' }
   for (let read = 0; read < TERMINAL_READS; read++) {
-    const answer = await scoped({ action: 'terminalResult', requestId })
+    // Not `requestId`: the daemon's transport numbers each request under that name (agentClient/daemon.ts).
+    const answer = await scoped({ action: 'terminalResult', terminalRequestId: requestId })
     // A read the backend held to its limit while the worker's machine was still answering is read again.
     if (answer.error === 'BACKEND_TIMEOUT' || object(answer.value).pending === true) continue
     return answer

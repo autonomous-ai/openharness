@@ -210,8 +210,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'status') return { ok: true, value: answer }
         // A Lead's terminal read or typing (`screen`, `type`): the backend answers only the agent that asked.
         if (payload.action === 'terminalResult') {
-          if (!identifier(payload.requestId)) return { error: 'INVALID_REQUEST' }
-          return { ok: true, value: await backend(core, 'GET', `${path}/terminal/${payload.requestId}?${identity}`) }
+          if (!identifier(payload.terminalRequestId)) return { error: 'INVALID_REQUEST' }
+          return { ok: true, value: await backend(core, 'GET', `${path}/terminal/${payload.terminalRequestId}?${identity}`) }
         }
         if (payload.action === 'routeContext') {
           const [policy, machines] = await Promise.all([

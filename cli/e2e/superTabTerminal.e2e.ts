@@ -76,10 +76,12 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('a Lead driving a worker\
     // The worker asks permission to run a command, and waits on it.
     W.client.send('message', { agentId: workerHarness.id, content: '!permit printf terminal-check' })
     const asked = Date.now()
+    let last = ''
     const prompt = await until('the Lead to read the worker\'s prompt', async () => {
       const read = await superTab(L, tab, lead, ['screen', worker])
+      last = read.out
       return read.code === 0 && read.out.includes('Do you want to proceed?') ? read.out : null
-    }, 60_000, 1_000)
+    }, 60_000, 1_000).catch(error => { throw new Error(`${(error as Error).message}; last read: ${last}`) })
     expect(prompt).toContain('printf terminal-check')
     expect(prompt).not.toMatch(/\x1b\[/)
     const scrolled = await superTab(L, tab, lead, ['screen', worker, '--scrollback', '50'])
