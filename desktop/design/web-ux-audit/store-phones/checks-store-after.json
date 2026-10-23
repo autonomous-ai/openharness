@@ -1,0 +1,240 @@
+{
+  "tapTargets": [
+    {
+      "flow": "store",
+      "width": "360",
+      "small": [
+        {
+          "label": "Menu",
+          "w": 31,
+          "h": 28,
+          "x": 8,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 8,
+          "y": 75
+        },
+        {
+          "label": "Tabs: 2:store",
+          "w": 84,
+          "h": 28,
+          "x": 39,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 84,
+          "h": 28,
+          "x": 39,
+          "y": 75
+        },
+        {
+          "label": "New Tab",
+          "w": 23,
+          "h": 28,
+          "x": 123,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 23,
+          "h": 28,
+          "x": 123,
+          "y": 75
+        },
+        {
+          "label": "Open Harness",
+          "w": 31,
+          "h": 28,
+          "x": 290,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 290,
+          "y": 75
+        },
+        {
+          "label": "Notifications",
+          "w": 31,
+          "h": 28,
+          "x": 321,
+          "y": 75
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 321,
+          "y": 75
+        },
+        {
+          "label": "Status: Claude Code \u2014   Codex \u2014",
+          "w": 209,
+          "h": 28,
+          "x": 8,
+          "y": 707
+        },
+        {
+          "label": "",
+          "w": 209,
+          "h": 28,
+          "x": 8,
+          "y": 707
+        },
+        {
+          "label": "",
+          "w": 109,
+          "h": 28,
+          "x": 243,
+          "y": 707
+        }
+      ]
+    },
+    {
+      "flow": "store",
+      "width": "390",
+      "small": [
+        {
+          "label": "Menu",
+          "w": 31,
+          "h": 28,
+          "x": 8,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 8,
+          "y": 62
+        },
+        {
+          "label": "Tabs: 2:store",
+          "w": 84,
+          "h": 28,
+          "x": 39,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 84,
+          "h": 28,
+          "x": 39,
+          "y": 62
+        },
+        {
+          "label": "New Tab",
+          "w": 23,
+          "h": 28,
+          "x": 123,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 23,
+          "h": 28,
+          "x": 123,
+          "y": 62
+        },
+        {
+          "label": "Open Harness",
+          "w": 31,
+          "h": 28,
+          "x": 320,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 320,
+          "y": 62
+        },
+        {
+          "label": "Notifications",
+          "w": 31,
+          "h": 28,
+          "x": 351,
+          "y": 62
+        },
+        {
+          "label": "",
+          "w": 31,
+          "h": 28,
+          "x": 351,
+          "y": 62
+        },
+        {
+          "label": "Viewers",
+          "w": 21,
+          "h": 44,
+          "x": 369,
+          "y": 160
+        },
+        {
+          "label": "Status: Claude Code \u2014   Codex \u2014",
+          "w": 209,
+          "h": 28,
+          "x": 8,
+          "y": 811
+        },
+        {
+          "label": "",
+          "w": 209,
+          "h": 28,
+          "x": 8,
+          "y": 811
+        },
+        {
+          "label": "",
+          "w": 109,
+          "h": 28,
+          "x": 273,
+          "y": 811
+        }
+      ]
+    }
+  ],
+  "wheel": [
+    {
+      "flow": "store",
+      "area": "store page",
+      "box": [
+        120,
+        60,
+        1300,
+        860
+      ],
+      "wheel": [
+        0,
+        600
+      ],
+      "scrolled": false,
+      "images": "checks/store-store-page-{before,after}.png"
+    }
+  ],
+  "swipe": [
+    {
+      "flow": "store",
+      "area": "store page",
+      "from": [
+        195,
+        650
+      ],
+      "to": [
+        195,
+        200
+      ],
+      "scrolled": true,
+      "images": "checks/swipe-store-{before,after}.png"
+    }
+  ],
+  "blocked": []
+}
