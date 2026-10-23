@@ -15908,6 +15908,25 @@ class AppNotifier extends ChangeNotifier {
     ).whenComplete(() => change.pending = null);
   }
 
+  /// Keep explicit protocol refusals available to the compatibility and hold
+  /// handling below. WsConn throws them; transport failures must still throw.
+  Future<Map<String, dynamic>> _agentHandoffRequest(
+    String machineId,
+    String type, {
+    required Map<String, dynamic> payload,
+    required Duration timeout,
+  }) async {
+    try {
+      return await _conn(machineId).request(
+        type,
+        payload: payload,
+        timeout: timeout,
+      );
+    } on WsRequestFailure catch (failure) {
+      return {...failure.payload, 'error': failure.code};
+    }
+  }
+
   /// Fill [change].handoff for the new agent, or return why the switch must not go on.
   ///
   /// First choice: the machine writes a record of the whole conversation into the project and the
@@ -15924,7 +15943,8 @@ class AppNotifier extends ChangeNotifier {
   ) async {
     change.handoffHeld = true;
     try {
-      final reply = await _conn(machineId).request(
+      final reply = await _agentHandoffRequest(
+        machineId,
         'agent_handoff_prepare',
         payload: {
           'agentId': source.id,
@@ -16106,7 +16126,8 @@ class AppNotifier extends ChangeNotifier {
     }
     if (!change.replacementReported && source.dsh != 'autonomous/pair') {
       try {
-        final reported = await _conn(machineId).request(
+        final reported = await _agentHandoffRequest(
+          machineId,
           'agent_handoff_complete',
           payload: {
             'agentId': source.id,
