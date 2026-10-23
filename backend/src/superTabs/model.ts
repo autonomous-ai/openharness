@@ -266,8 +266,6 @@ export function conversation(state: SuperTabState, id: string): Conversation {
   return state.conversations.find(c => c.id === id) ?? fail('NOT_FOUND', 'This conversation is unavailable.', 404)
 }
 
-/** Legacy groups keep their append order, including archived groups. Persisted
- * numbers are never reassigned; the store serializes concurrent additions. */
 export const isLeads = (group: Conversation): boolean => group.kind === 'leads'
 
 /** Work a Lead of another project should know about: assigned and moving, not finished, stuck or archived. */
@@ -295,6 +293,8 @@ export function syncLeads(state: SuperTabState): void {
   group.agentIds = state.agents.filter(a => ledProject(state, a.id)).map(a => a.id)
 }
 
+/** Legacy groups keep their append order, including archived groups. Persisted
+ * numbers are never reassigned; the store serializes concurrent additions. */
 export function numberConversations(state: SuperTabState): void {
   let next = nextConversationNumber(state)
   const leads = new Set(projectsOf(state).map(p => p.leadConversationId))
