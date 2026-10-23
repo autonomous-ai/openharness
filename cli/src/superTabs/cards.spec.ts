@@ -62,8 +62,11 @@ describe('leadsOf', () => {
     // every assignment done, a worker still in a turn (one known only through its group, as the app's roster finds it)
     const noProjectId = withWorkers({ agents: [agent('a1'), agent('a2'), agent('b2')] })
     expect(Object.fromEntries(leadsOf(noProjectId, 'm1', inTurn('h-b2')).leads.map(l => [l.project, l.state]))).toEqual({ web: 'done', mobile: 'work' })
-    // the worker's turn carries no clock: `since` is the Lead's own turn
-    expect(leadsOf(withWorkers(), 'm1', inTurn('h-b1')).leads[0]).not.toHaveProperty('since')
+    // the clock is the project's earliest turn here: the worker's when only it works, else whichever began first
+    const since = (map: Record<string, number>) => (h: string) => h in map ? { inTurn: true, since: map[h] } : { inTurn: false }
+    expect(leadsOf(withWorkers(), 'm1', since({ 'h-b1': 40 })).leads[0]).toMatchObject({ project: 'web', state: 'work', since: 40 })
+    expect(leadsOf(withWorkers(), 'm1', since({ 'h-a1': 5, 'h-b1': 40 })).leads[0]).toMatchObject({ project: 'web', state: 'work', since: 40 })
+    expect(leadsOf(withWorkers(), 'm1', since({ 'h-a1': 90, 'h-b1': 40 })).leads[0]).toMatchObject({ project: 'web', state: 'work', since: 90 })
     // nobody in a turn and nothing open: done
     expect(leadsOf(withWorkers(), 'm1', idle).leads.map(l => l.state)).toEqual(['done', 'done'])
     // a worker on another machine has no turn here: its project goes by its assignment
