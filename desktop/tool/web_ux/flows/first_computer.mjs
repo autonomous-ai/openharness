@@ -5,8 +5,10 @@
 export const FLOWS = [
   { name: 'first-machine', scenario: 'first-machine' },
   { name: 'first-machine-loading', scenario: 'first-machine-loading' },
+  { name: 'first-machine-failed', scenario: 'first-machine-failed' },
   { name: 'link-machine', scenario: 'link-machine' },
   { name: 'computers', scenario: 'computers' },
   { name: 'link-password', scenario: 'link-machine', steps: [['exact', 'Connect']] },
   { name: 'offline-only', scenario: 'offline-only' },
+  { name: 'offline-back', scenario: 'offline-back' },
 ];
