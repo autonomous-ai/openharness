@@ -1,4 +1,4 @@
-import { activeWork, agent, author, conversation, fail, nextConversationNumber, person, type Actor, type Agent, type Conversation, type SuperTabState } from './model.js'
+import { activeWork, agent, author, conversation, fail, isLeads, nextConversationNumber, person, type Actor, type Agent, type Conversation, type SuperTabState } from './model.js'
 import type { SwarmRule } from './rules.js'
 
 export type ProjectVisibility = 'public' | 'private'
@@ -43,6 +43,7 @@ export function projectOf(state: SuperTabState, projectId: string): SwarmProject
 }
 
 export function groupProject(state: SuperTabState, group: Conversation): SwarmProject {
+  if (isLeads(group)) fail('LEADS_CONVERSATION', 'The Leads conversation is only for messages between Leads and people.')
   return projectOf(state, group.projectId ?? 'lead')
 }
 
@@ -74,6 +75,11 @@ export function readProject(state: SuperTabState, actor: Actor, projectId: strin
 
 export function readConversation(state: SuperTabState, actor: Actor, conversationId: string): Conversation {
   const group = conversation(state, conversationId)
+  if (isLeads(group)) {
+    author(state, actor)
+    if (actor.kind === 'agent' && !ledProject(state, actor.agentId)) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
+    return group
+  }
   readProject(state, actor, groupProject(state, group).id)
   return group
 }
@@ -114,7 +120,7 @@ export function manageProject(state: SuperTabState, actor: Actor, projectId: str
  * Pending starts must be reconciled first; terminal-history privacy bindings remain permanent. */
 export function deleteProject(state: SuperTabState, actor: Actor, projectId: string): void {
   const project = manageProject(state, actor, projectId)
-  const groups = state.conversations.filter(c => groupProject(state, c).id === project.id)
+  const groups = state.conversations.filter(c => !isLeads(c) && groupProject(state, c).id === project.id)
   const groupIds = new Set(groups.map(c => c.id))
   if (state.starts?.some(s => groupIds.has(s.request.conversationId) && !s.error &&
     (!s.harnessId || s.poolGeneration && !s.poolSettled))) {

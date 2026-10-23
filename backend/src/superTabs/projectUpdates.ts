@@ -1,4 +1,4 @@
-import { activeWork, author, conversation, stableId, type Agent, type MessageDraft, type SuperTabState } from './model.js'
+import { activeWork, author, conversation, isLeads, stableId, type Agent, type MessageDraft, type SuperTabState } from './model.js'
 import { downSince } from './machines.js'
 import { agentProjectId, groupProject, projectOf } from './projects.js'
 
@@ -7,7 +7,9 @@ import { agentProjectId, groupProject, projectOf } from './projects.js'
 export function noteProjectReports(state: SuperTabState, messages: MessageDraft[], revision: number, now: number) {
   if (!state.projects) return
   for (const message of messages) {
-    const group = conversation(state, message.conversationId), project = groupProject(state, group)
+    const group = conversation(state, message.conversationId)
+    if (isLeads(group)) continue
+    const project = groupProject(state, group)
     if (group.id === project.leadConversationId) continue
     project.progress ??= { dirtyRevision: revision, summarizedRevision: 0, requestedRevision: 0, since: now }
     if (project.progress.dirtyRevision <= project.progress.summarizedRevision) project.progress.since = now

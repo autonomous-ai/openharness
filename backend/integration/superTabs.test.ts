@@ -388,7 +388,7 @@ describe('deleting abandoned swarm projects', () => {
     expect(await run(tab, command, owner, undefined, deleteId)).toEqual(response.json().data)
     const state = (await store.read(owner, tab)).state
     expect(state.projects!.map(p => p.id)).toEqual(['lead'])
-    expect(state.conversations.map(c => c.id)).toEqual(['lead'])
+    expect(state.conversations.map(c => c.id)).toEqual(['lead', state.leadsConversationId])
     // An invitation is to the Swarm: it moves to the project that is left rather than disappearing.
     expect(state.invitations.map(i => [i.email, i.conversationId])).toEqual([['abandoned@example.com', 'lead']])
     for (const id of [conversationId, group]) {
@@ -409,7 +409,8 @@ describe('deleting abandoned swarm projects', () => {
     await run(tab, { type: 'project.delete', projectId: 'lead' })
     const empty = (await store.read(owner, tab)).state
     expect(empty.projects).toEqual([])
-    expect(empty.conversations).toEqual([])
+    // Only the Swarm-wide Leads conversation is left.
+    expect(empty.conversations.map(c => c.kind)).toEqual(['leads'])
     expect(empty.agents).toEqual([])
     expect(empty.people).toHaveLength(1)
     const projectId = String((await run(tab, { type: 'project.create', name: 'Fresh project', visibility: 'public', brief: '' })).result.projectId)
@@ -1722,7 +1723,7 @@ it('allocates workgroup numbers transactionally and replays the same number afte
   const results = await Promise.all(operations.map(id => run(tab, command, owner, undefined, id)))
   expect(results.map(r => r.result.number).sort()).toEqual([1, 2, 3])
   expect((await run(tab, command, owner, undefined, operations[0])).result).toEqual(results[0]!.result)
-  expect((await store.read(owner, tab)).state.conversations.map(c => c.number)).toEqual([undefined, 1, 2, 3])
+  expect((await store.read(owner, tab)).state.conversations.map(c => c.number)).toEqual([undefined, 1, 2, 3, undefined])
 })
 
 describe('Super Tab chat attachments', () => {
@@ -2201,5 +2202,36 @@ describe('the Lead reads and types in an agent terminal', () => {
     await run(tab, { type: 'agent.screenResult', requestId, ok: false, error: 'The pane closed.' }, host, worker)
     const answer = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/terminal/${requestId}?asAgentId=${lead}`, headers: { authorization: `Bearer ${host.sub}` } })
     expect(answer.json().data).toEqual({ requestId, ok: false, error: 'The pane closed.' })
+  })
+})
+
+describe('Leads conversation', () => {
+  it('appears in an old Swarm, lets people and Leads post, and delivers only to the other Leads', async () => {
+    const { tab, lead } = await fixture()
+    // A Swarm stored before the Leads conversation existed.
+    const row = await db.superTab.findUniqueOrThrow({ where: { id: tab } })
+    const stored = row.state as unknown as { leadsConversationId?: string; conversations: Array<{ kind?: string }> }
+    const leads = stored.leadsConversationId!
+    delete stored.leadsConversationId
+    stored.conversations = stored.conversations.filter(c => c.kind !== 'leads')
+    await db.superTab.update({ where: { id: tab }, data: { state: stored as never } })
+    expect((await store.read(owner, tab)).state.leadsConversationId).toBe(leads)
+    expect((await store.messages(owner, tab, leads, {})).messages).toEqual([])
+
+    const docs = String((await run(tab, { type: 'project.create', name: 'Docs', visibility: 'public', brief: '' })).result.conversationId)
+    const docsLead = (await run(tab, { type: 'agent.add', conversationId: docs, machineId: 'test-host', harnessId: randomUUID(), name: 'Docs Lead',
+      configuration: config, lead: true })).result.agentId as string
+    const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Worker',
+      configuration: config, lead: false })).result.agentId as string
+    const post = (text: string, user = owner, asAgentId?: string) => store.execute(user, tab, { operationId: randomUUID(),
+      command: { type: 'message.send', conversationId: leads, text, replyTo: null, recipientIds: [] } }, asAgentId)
+    await post('Who goes first?')
+    const waiting = async (agentId: string) => (await store.deliveries(host, tab, agentId)).filter(d => d.conversationId === leads).length
+    expect([await waiting(lead), await waiting(docsLead), await waiting(worker)]).toEqual([1, 1, 0])
+    await post('Pilot goes first.', host, lead)
+    expect([await waiting(lead), await waiting(docsLead)]).toEqual([1, 2])
+    await expect(post('Me too', host, worker)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(store.messages(host, tab, leads, {}, worker)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect((await store.messages(owner, tab, leads, {})).messages.map(m => m.text)).toEqual(['Who goes first?', 'Pilot goes first.'])
   })
 })

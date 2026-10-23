@@ -2,7 +2,7 @@ import { admitMachineStart, machineContribution } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
-  activeWork, actorKey, agent, agentRole, author, conversation, fail, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
+  activeWork, actorKey, agent, agentRole, author, conversation, fail, isLeads, person, stableId, syncLeads, numberConversations, nextConversationNumber, renderWorkTask,
   finishWorker, requireWorkerDecisions, reviewing,
   type Actor, type Agent, type Author, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
@@ -213,7 +213,10 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   author(state, actor, !leaving)
   // An invitation's group is only where the person lands, and invite.create replaces a deleted one (inviteLanding).
-  if ('conversationId' in command && command.type !== 'invite.create') readConversation(state, actor, command.conversationId)
+  if ('conversationId' in command && command.type !== 'invite.create') {
+    const group = readConversation(state, actor, command.conversationId)
+    if (isLeads(group) && command.type !== 'message.send') groupProject(state, group)
+  }
   if ('projectId' in command && command.projectId) readProject(state, actor, command.projectId)
   if ('agentId' in command) readAgent(state, actor, command.agentId)
   if (command.type === 'agent.start') readConversation(state, actor, command.request.conversationId)
@@ -251,6 +254,7 @@ function open(state: SuperTabState, conversationId: string) {
 export function applyCommand(original: SuperTabState, actor: Actor, input: Command, context: CommandContext): CommandEffects {
   const command = commandSchema.parse(input)
   const state = structuredClone(original)
+  syncLeads(state)
   numberConversations(state)
   placeRules(state)
   assignAgentDisplayNames(state.agents)
@@ -981,7 +985,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         && group.leadId && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? group.leadId : null
       const agentRecipient = leadToWorker ?? workerToLead
       const automatic = actor.kind === 'person' ? (replyAgent && group.agentIds.includes(replyAgent) ? replyAgent : group.leadId) : agentRecipient
-      const recipients = [...new Set(command.recipientIds.length ? command.recipientIds : automatic ? [automatic] : [])]
+      // In the Leads conversation everything posted reaches every other Lead.
+      const everyLead = isLeads(group) ? group.agentIds.filter(id => actor.kind !== 'agent' || id !== actor.agentId) : null
+      const recipients = [...new Set(command.recipientIds.length ? command.recipientIds : everyLead ?? (automatic ? [automatic] : []))]
       for (const id of recipients) {
         agent(state, id)
         if (!group.agentIds.includes(id)) fail('INVALID_RECIPIENT', 'Choose an agent in this conversation.', 400)
@@ -1191,6 +1197,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       (actor.kind === 'agent' && actor.agentId === target.id || actor.kind === 'person' && [state.ownerId, target.contributorId].includes(actor.userId))
     if (!acknowledged && !state.agents.some(a => a.id === target.id)) fail('STOP_REQUESTED', 'Wait for the execution host to finish stopping its workers before withdrawing them.')
   }
+  syncLeads(state)
   // MongoDB limits a document to 16 MiB. Leave room for indexes and metadata, and refuse before losing state.
   assignAgentDisplayNames(state.agents)
   if (Buffer.byteLength(JSON.stringify(state)) > 8 * 1024 * 1024) fail('TAB_TOO_LARGE', 'This Super Tab has reached its metadata limit.', 413)

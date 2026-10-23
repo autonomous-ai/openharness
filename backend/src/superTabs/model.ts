@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { downSince } from './machines.js'
-import { canReadAgent, canReadProject, groupProject, placeRules, projectsOf, type ProjectVisibility, type SwarmProject } from './projects.js'
+import { canReadAgent, canReadProject, groupProject, ledProject, placeRules, projectsOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
 export interface Person { id: string; email: string; role: Role; generation: string }
@@ -114,6 +114,8 @@ export function renderWorkTask(task: WorkTask): string {
 
 export interface Conversation {
   id: string
+  /** The Swarm-wide Leads conversation (syncLeads); absent on every project conversation. */
+  kind?: 'leads'
   projectId?: string
   /** Stable, tab-local workgroup reference. Lead has no number. */
   number?: number
@@ -142,6 +144,8 @@ export interface SuperTabState {
   name: string
   project?: { machineId: string; cwd: string; repositoryUrl: string | null }
   projects?: SwarmProject[]
+  /** The Leads conversation, outside every project (syncLeads). */
+  leadsConversationId?: string
   ownerId: string
   environment: string
   /** Fields this tab overrides from its owner's account routing policy (routingPolicy.ts). */
@@ -250,11 +254,24 @@ export function conversation(state: SuperTabState, id: string): Conversation {
 
 /** Legacy groups keep their append order, including archived groups. Persisted
  * numbers are never reassigned; the store serializes concurrent additions. */
+export const isLeads = (group: Conversation): boolean => group.kind === 'leads'
+
+/** The Swarm-wide conversation where Leads agree an order across projects and every person reads along. It belongs to no
+ *  project and stays after the project conversations; an older Swarm gets it on its next read or write. Its members are
+ *  always the projects' current Leads, so only they receive what is posted there. */
+export function syncLeads(state: SuperTabState): void {
+  const id = state.leadsConversationId ??= stableId(state.id, 'leads')
+  const group = state.conversations.find(c => c.id === id) ?? { id, kind: 'leads', title: 'Leads', leadId: null, agentIds: [],
+    archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 }
+  state.conversations = [...state.conversations.filter(c => c !== group), group]
+  group.agentIds = state.agents.filter(a => ledProject(state, a.id)).map(a => a.id)
+}
+
 export function numberConversations(state: SuperTabState): void {
   let next = nextConversationNumber(state)
   const leads = new Set(projectsOf(state).map(p => p.leadConversationId))
   for (const group of state.conversations) {
-    if (!leads.has(group.id) && group.number == null) group.number = next++
+    if (!leads.has(group.id) && !isLeads(group) && group.number == null) group.number = next++
   }
 }
 export function nextConversationNumber(state: SuperTabState): number {
@@ -281,6 +298,7 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
   }
   // A new Swarm's first project starts in Default; only a project from before skill modes reads as Harness orchestration.
   state.projects = [{ ...projectsOf(state)[0]!, ...(visibility ? { visibility } : {}), skillMode: 'default' }]
+  syncLeads(state)
   return state
 }
 
@@ -288,6 +306,12 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
 export function visibleState(state: SuperTabState, actor: Actor, now = Date.now()): SuperTabState {
   author(state, actor)
   const visible = structuredClone(state)
+  syncLeads(visible)
+  // People and Leads read the Leads conversation; it is not there for any other agent.
+  if (actor.kind === 'agent' && !ledProject(visible, actor.agentId)) {
+    visible.conversations = visible.conversations.filter(c => !isLeads(c))
+    delete visible.leadsConversationId
+  }
   assignAgentDisplayNames(visible.agents)
   for (const target of visible.agents) {
     const since = downSince(state, target, now)
@@ -306,8 +330,9 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   if (visible.rules) visible.rules = visible.rules.filter(r => projectsOf(state).some(p => p.id === r.projectId && canReadProject(state, actor, p)))
   if (visible.projects) {
     visible.projects = visible.projects.filter(p => canReadProject(state, actor, p))
-    visible.conversations = visible.conversations.filter(c => canReadProject(state, actor, groupProject(state, c)))
+    visible.conversations = visible.conversations.filter(c => isLeads(c) || canReadProject(state, actor, groupProject(state, c)))
     visible.agents = visible.agents.filter(a => canReadAgent(state, actor, a))
+    for (const group of visible.conversations.filter(isLeads)) group.agentIds = group.agentIds.filter(id => visible.agents.some(a => a.id === id))
     visible.starts = visible.starts?.filter(s => visible.conversations.some(c => c.id === s.request.conversationId))
     if (!visible.projects.some(p => p.id === 'lead')) {
       delete visible.project
