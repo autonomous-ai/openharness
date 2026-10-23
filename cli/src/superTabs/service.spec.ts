@@ -193,6 +193,13 @@ it('tells the Lead that start works only on a machine in the Swarm\'s Machines l
   expect(answer.help.start).toContain('create one agent in a conversation on a machine in this Swarm\'s Machines list; to use another machine, a person adds it to the Swarm first.')
   expect(answer.help.start).toContain('Repeat exactly after an interruption')
 })
+it('explains to a Lead other projects\' work and the Leads conversation', async () => {
+  const answer = await setup().ask({ action: 'help' }, owner) as { help: { status: string; leads: string } }
+  expect(answer.help.status).toContain('A Lead\'s status also lists otherProjectsWork: the active work of the Swarm\'s other projects')
+  expect(answer.help.leads).toContain('leadsConversationId')
+  expect(answer.help.leads).toContain('Only Leads and people post there, and only Leads among agents receive it.')
+  expect(answer.help.leads).toContain('if your task touches the same code, say so there and agree an order first')
+})
 it('resolves a native caller to its exact contribution and rechecks it before every agent command', async () => {
   const t = setup()
   expect(await t.ask({ action: 'status', tabId: 'tab', harnessId: 'native' }, owner)).toMatchObject({ ok: true })
