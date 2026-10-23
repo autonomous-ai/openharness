@@ -74,8 +74,13 @@ export const PRODUCT_USAGE_PHONE_SCREEN_METRICS = PRODUCT_USAGE_PHONE_SCREENS.fl
 /** Desktop's Add Phone card (desktop/lib/widgets/phone_offer_card.dart), offered once per computer: started
  * when it is on screen, ok for its Add Phone, cancelled for its ×, unknown when it goes another way (Add Phone
  * opened from elsewhere, a sign-out). It waits beside the work, so it has no 15-minute observation bound.
- * Vocabulary 3 (`x-harness-usage-vocabulary`, cli/src/lib/appProductUsageReport.ts), like the openings below. */
-export const PRODUCT_USAGE_DESKTOP_FLOWS = ['phone_offer', 'share_invite', 'share_accept'] as const
+ * Vocabulary 3 (`x-harness-usage-vocabulary`, cli/src/lib/appProductUsageReport.ts), like the openings below.
+ * `phone_offer_after_work` is the same card offered once to a computer that never showed it (a computer that
+ * opened signed in was marked offered without it), after one of its own harnesses finished a turn; vocabulary 4.
+ * `phone_offer_away_waited` / `_finished`: the card for a person back after five minutes or more away, to a harness
+ * that waited on them or finished meanwhile; vocabulary 4. docs/design/2026-10-20-desktop-phone-conversion.md. */
+export const PRODUCT_USAGE_DESKTOP_FLOWS = ['phone_offer', 'phone_offer_after_work', 'phone_offer_away_waited',
+  'phone_offer_away_finished', 'share_invite', 'share_accept'] as const
 /** Each time Add Phone opens on a computer, by its way in: that card (`offer`), the title bar's phone, Harness ▸
  * Add Phone… (`menu`, or a key bound to it on macOS), the account menu, the Machines picker, or the command
  * (`> add phone`, a key bound to it elsewhere). Which way in, nothing else. */
@@ -123,9 +128,11 @@ export const LAUNCH_ERROR_CODES = [
   'invalid_launch_model', 'launch_model_unsupported',
   // A new project's folder (lib/projectFolder.ts) and the launch's durable receipt (lib/agentCreationReceipt.ts).
   'project_exists', 'invalid_repository', 'clone_failed', 'clone_timeout', 'git_unavailable', 'project_preparation_failed',
+  'git_project_unavailable', 'branch_exists', 'invalid_branch', 'branch_switch_failed', 'branch_in_use', 'worktree_failed',
   'creation_conflict', 'creation_storage_failed', 'launch_authority_changed', 'internal',
   // The engine itself: preparing it (engines/nativeLaunch.ts) and its start (core/agents/newPane.ts).
   'engine_cannot_run', 'engine_install_failed', 'engine_did_not_start', 'engine_not_installed', 'start_timeout',
+  'engine_launch_refused',
   // A Store harness (core/agents/dshThrough.ts, services/storeLaunch.ts).
   'dsh_not_installed', 'dsh_unavailable', 'dsh_runtime_failed',
   // A conversation Harness did not start, opened in it (core/agents/adopt.ts, externalResume.ts, lib/registry.ts).
@@ -147,7 +154,7 @@ export const LAUNCH_ERROR_CODES = [
   'guest_engine_unsupported', 'guest_relay_failed', 'guest_folder_unavailable', 'guest_invalid', 'guest_helper_missing',
   'guest_helper_not_authorized', 'guest_helper_failed',
   // The `setup` kind's own codes, named for a delete or restart refusal (cli/src/lib/productUsageSignals.ts).
-  'tmux_unavailable', 'tmux_too_old_for_dsh', 'tmux_too_old_for_grid', 'engine_unavailable', 'native_launch_held',
+  'tmux_unavailable', 'pty_host_unavailable', 'tmux_too_old_for_dsh', 'tmux_too_old_for_grid', 'engine_unavailable', 'native_launch_held',
   'dsh_materialize_failed', 'spawn_failed', 'registration_failed', 'grid_config_failed',
   'unlisted', 'none',
 ] as const
@@ -155,9 +162,11 @@ export type LaunchErrorCode = typeof LAUNCH_ERROR_CODES[number]
 /** The families counted by code: a launch's failure, its start failing after it was created, the create
  * and resume requests' `other` refusals, and every delete and restart refusal — from any client, and again,
  * apart, those the phone asked for (`phone_`), which a daemon's report otherwise carries mixed with the
- * Desktop's, the TUI's and tools'. */
+ * Desktop's, the TUI's and tools'. Setup reasons have their own families, adding up to `launch_failed_setup`,
+ * `create_error_setup` and `request_phone_create_error_setup`; existing `other` families keep their meaning. */
 export const LAUNCH_ERROR_FAMILIES = ['launch_failed_code', 'launch_late_failed_code', 'create_error_code', 'resume_error_code',
-  'delete_error_code', 'restart_error_code', 'phone_delete_error_code', 'phone_restart_error_code'] as const
+  'delete_error_code', 'restart_error_code', 'phone_delete_error_code', 'phone_restart_error_code',
+  'launch_failed_setup_code', 'create_error_setup_code', 'phone_create_error_setup_code'] as const
 /** The engine an installation's first launch asked for; any other engine is `other`. */
 export const PRODUCT_USAGE_LAUNCH_ENGINES = ['opencode', 'claude', 'codex', 'other'] as const
 export type ProductUsageLaunchEngine = typeof PRODUCT_USAGE_LAUNCH_ENGINES[number]

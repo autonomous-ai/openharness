@@ -8,6 +8,7 @@ import { nativeFileKey, verifyNativePathFacts, type NativePathFact } from '../en
 import { HandoffError, handoffBaseName, handoffExcludeText, handoffHash, handoffIntentHash,
   type HandoffOutcome, type PreparedHandoff } from './handoffAuthority.js'
 import { readHandoffFile } from './handoffFiles.js'
+import { directorySyncSupported } from './secureState.js'
 import { handoffRoute, handoffShape, validateHandoff } from './handoffValidation.js'
 
 const MAX_RECEIPT_BYTES = 20 * 1024 * 1024
@@ -31,7 +32,9 @@ function sync(path: string, directory = false): void {
     // A successful disk flush may outlive one inspection budget. Retain the original
     // identity and bound its fresh verification; the request's deadline is never renewed.
     const route = files.paths.snapshot()
-    fsyncSync(fd); verifyNativePathFacts(route)
+    // Windows cannot flush a directory handle (secureState.ts `syncStateDirectory`); NTFS journals the names.
+    if (!directory || directorySyncSupported()) fsyncSync(fd)
+    verifyNativePathFacts(route)
   } finally { closeSync(fd) }
 }
 function createFile(path: string, text: string): Stage {

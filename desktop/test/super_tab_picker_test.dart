@@ -34,6 +34,7 @@ void main() {
     Size size = const Size(1280, 800),
     Brightness brightness = Brightness.dark,
     double scale = 1,
+    List<Agent> extraLocalAgents = const [],
   }) async {
     final oldEntry = newHarnessOpensInBox;
     newHarnessOpensInBox = true;
@@ -69,10 +70,13 @@ void main() {
         engine: 'terminal',
         terminalAvailable: true,
       ),
+      ...extraLocalAgents,
     ];
     final c = await f.app.superTabs.open(tabId);
     await c.refresh();
     c.select('offline');
+    // The teammate's machine has no reading, so it sits under the closed "Offline" disclosure.
+    c.offlineMachinesOpen = true;
     await f.app.agentPreference.remember('codex');
     await f.app.projectHistory.select('m', '/work/project');
     final map = MemoryKeymap();
@@ -114,13 +118,24 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    if (find.byTooltip('Members and machines').evaluate().isNotEmpty) {
-      await tester.tap(find.byTooltip('Members and machines'));
+    final machine = find.byKey(
+      const ValueKey('super-machine-teammate-machine'),
+    );
+    if (machine.evaluate().isEmpty &&
+        find.byTooltip('Conversations').evaluate().isNotEmpty) {
+      await tester.tap(find.byTooltip('Conversations'));
       await tester.pumpAndSettle();
     }
-    await tester.tap(
-      find.byKey(const ValueKey('super-machine-teammate-machine')),
-    );
+    // The teammate's machine is not online here, so it sits under the closed "Offline" disclosure.
+    final offline = find.byKey(const ValueKey('super-machines-offline'));
+    if (machine.evaluate().isEmpty && offline.evaluate().isNotEmpty) {
+      await tester.ensureVisible(offline);
+      await tester.tap(offline);
+      await tester.pumpAndSettle();
+    }
+    await tester.ensureVisible(machine);
+    await tester.pumpAndSettle();
+    await tester.tap(machine);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Attach running agent'));
     await tester.pumpAndSettle();
@@ -141,7 +156,7 @@ void main() {
       );
       await tester.enterText(input, 'Teammate builder');
       await tester.pumpAndSettle();
-      expect(find.text('Add agent to Offline editing'), findsOneWidget);
+      expect(find.text('Add agent to Pilot'), findsOneWidget);
       expect(tester.widget<TextField>(input).focusNode!.hasFocus, isTrue);
       final results = find.byType(SwarmSearchResults);
       expect(
@@ -183,8 +198,8 @@ void main() {
     (tester) async {
       final f = await open(tester);
       final shared = f.app.activeSwarm;
-      expect(find.text('Add agent to Offline editing'), findsOneWidget);
-      expect(find.text('Shared with everyone in Pilot.'), findsOneWidget);
+      expect(find.text('Add agent to Pilot'), findsOneWidget);
+      expect(find.text('Starts in Offline editing.'), findsOneWidget);
       expect(find.text('Models'), findsNothing);
       expect(find.text('Store'), findsNothing);
       final search = tester
@@ -240,13 +255,56 @@ void main() {
   );
 
   testWidgets(
+    'Add agent disables running engines outside Claude Code and Codex',
+    (tester) async {
+      final f = await open(
+        tester,
+        extraLocalAgents: const [
+          Agent(
+            id: 'open-code',
+            name: 'OpenCode builder',
+            engine: 'opencode',
+            terminalAvailable: true,
+          ),
+          Agent(
+            id: 'pi-agent',
+            name: 'Pi builder',
+            engine: 'pi',
+            terminalAvailable: true,
+          ),
+        ],
+      );
+      final search = tester
+          .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+          .search;
+      for (final id in ['open-code', 'pi-agent']) {
+        final row = search.rows.singleWhere((row) => row.agentId == id);
+        expect(
+          search.sessionUnavailable(row),
+          'Only Claude Code or Codex can join this Swarm.',
+        );
+        expect(search.canSubmit(row), isFalse);
+      }
+      expect(
+        search.canSubmit(
+          search.rows.singleWhere((row) => row.agentId == 'local-agent'),
+        ),
+        isTrue,
+      );
+      await tester.pumpWidget(const SizedBox());
+      await f.app.superTabs.peek(tabId)!.flush();
+      f.app.superTabs.dispose();
+    },
+  );
+
+  testWidgets(
     'withdrawing conversation access closes Add agent without contributing',
     (tester) async {
       final f = await open(tester);
       f.app.superTabs.peek(tabId)!.revokeAccess('Access was removed.');
       await tester.pumpAndSettle();
       expect(input, findsNothing);
-      expect(find.text('Add agent to Offline editing'), findsNothing);
+      expect(find.text('Add agent to Pilot'), findsNothing);
       expect(f.connection.server.posts, isEmpty);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
@@ -337,7 +395,7 @@ void main() {
     expect(f.connection.joins.single['command'], containsPair('lead', false));
     expect(f.app.swarms, hasLength(1));
     expect(f.app.panes, isEmpty);
-    // A successful join clears its journal; it was never a new Super Tab.
+    // A successful join clears its journal; it was never a new Swarm.
     expect(
       f.store.values.entries
           .where((entry) => entry.key.startsWith('super_tab.launch.'))

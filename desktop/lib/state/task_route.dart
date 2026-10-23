@@ -60,13 +60,25 @@ String? _projectFolder(AgentProject? project) => project == null
     ? project.root
     : project.cwd;
 
-bool _usable(String folder) =>
-    p.isAbsolute(folder) &&
-    !isInternalLaunchFolder(folder) &&
-    !folder.contains('/harnesses/worktrees/') &&
-    // Harness's own folders (a Store fork's `project`, say) are not where a person's new work starts.
-    !folder.contains('/.harness/') &&
-    folder.length <= 4096;
+// Projects belong to their machine, whose absolute path supplies the syntax.
+// A Windows desktop can route to POSIX folders, and a Mac can route to drive/UNC folders.
+p.Context _projectPaths(String folder) =>
+    p.windows.isAbsolute(folder) && !p.windows.isRootRelative(folder)
+    ? p.windows
+    : p.posix;
+
+bool _usable(String folder) {
+  final paths = _projectPaths(folder);
+  final segments = paths.style == p.Style.windows
+      ? folder.replaceAll(r'\', '/')
+      : folder;
+  return paths.isAbsolute(folder) &&
+      !isInternalLaunchFolder(segments) &&
+      !segments.contains('/harnesses/worktrees/') &&
+      // Harness's own folders (a Store fork's `project`, say) are not where a person's new work starts.
+      !segments.contains('/.harness/') &&
+      folder.length <= 4096;
+}
 
 /// The candidates sent, at most: the router shows Jev forty, after it drops twins and empty leftovers, so
 /// it is sent more to choose from — live sessions first, then stopped ones (cli/src/lib/routeDecide.ts
@@ -106,29 +118,34 @@ TaskRouteChoices taskRouteChoices(AppNotifier app, {DateTime? now}) {
       for (final agent in machine.agents.reversed)
         ?_projectFolder(machine.projectOf(agent)),
     ]) {
-      if (!_usable(folder) || !seen.add('$id\n${p.normalize(folder)}')) {
+      final paths = _projectPaths(folder);
+      if (!_usable(folder) || !seen.add('$id\n${paths.normalize(folder)}')) {
         continue;
       }
       found.add((
         machineId: id,
         machine: machine.machine.displayName,
-        folder: p.normalize(folder),
+        folder: paths.normalize(folder),
       ));
     }
   }
   // A folder's name is what the models read. Two of the same name are told apart by their machine.
   final named = <String, int>{};
   for (final row in found) {
-    named.update(p.basename(row.folder), (n) => n + 1, ifAbsent: () => 1);
+    named.update(
+      _projectPaths(row.folder).basename(row.folder),
+      (n) => n + 1,
+      ifAbsent: () => 1,
+    );
   }
   final projects = {
     for (final row in found)
       '${row.machineId}\n${row.folder}': (
         machineId: row.machineId,
         folder: row.folder,
-        name: named[p.basename(row.folder)]! > 1
-            ? '${p.basename(row.folder)} on ${row.machine}'
-            : p.basename(row.folder),
+        name: named[_projectPaths(row.folder).basename(row.folder)]! > 1
+            ? '${_projectPaths(row.folder).basename(row.folder)} on ${row.machine}'
+            : _projectPaths(row.folder).basename(row.folder),
       ),
   };
   // Live sessions, and stopped ones active in the last [stoppedSessionsWithin] that can resume their own
@@ -276,11 +293,17 @@ Future<void> warmTaskRoute(AppNotifier app) {
       ? null
       : _projectFolder(machine.projectOf(agent));
   final folder =
-      (paneFolder != null && p.isAbsolute(paneFolder) ? paneFolder : null) ??
+      (paneFolder != null && _projectPaths(paneFolder).isAbsolute(paneFolder)
+          ? paneFolder
+          : null) ??
       app.projectHistory.recent(id).where(_usable).firstOrNull;
   return folder == null
       ? null
-      : (machineId: id, engine: engine, folder: p.normalize(folder));
+      : (
+          machineId: id,
+          engine: engine,
+          folder: _projectPaths(folder).normalize(folder),
+        );
 }
 
 typedef TaskRouteSession = ({

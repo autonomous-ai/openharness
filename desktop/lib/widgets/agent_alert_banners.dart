@@ -36,6 +36,15 @@ class AgentAlertBanners extends StatelessWidget {
   /// (`phone_offer_card.dart`).
   final Widget? footer;
 
+  /// How far below the corner the [footer] starts when no banner is above it:
+  /// past the top-right pane's header. A banner goes when it is read, but the
+  /// card stays until it is answered, and at the corner it covered that pane's
+  /// model and its × — the very pane waiting on the person, in the card after
+  /// time away (owner, 2026-10-21). Measured: a 38 px header under the
+  /// workspace inset ends 36.5 px below the banners' top edge; this leaves a
+  /// gap past it.
+  static const footerDrop = 48.0;
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
@@ -56,7 +65,13 @@ class AgentAlertBanners extends StatelessWidget {
                   padding: const EdgeInsets.only(bottom: 8),
                   child: _Banner(alert: alert, notifier: notifier),
                 ),
-              ?footer,
+              if (footer case final footer?)
+                Padding(
+                  padding: EdgeInsets.only(
+                    top: alerts.isEmpty ? footerDrop : 0,
+                  ),
+                  child: footer,
+                ),
             ],
           );
         },

@@ -1,3 +1,4 @@
+import type { SwarmSkill } from './swarmSkills.js'
 /**
  * Open a tmux pane for a new agent and claim it in the registry, retrying the claim up to
  * `maxAttempts` times.
@@ -17,19 +18,20 @@ import type { GridLaunchRecord } from './gridLaunchWire.js'
 import type { ScmLaunchRecord } from '../scm/types.js'
 import type { ForkOrigin, RegisteredSession } from './registry.js'
 import type { TerminalBackend } from './terminalBackend.js'
-import type { TerminalCreateResult, TmuxRuntimeRef } from './terminalTypes.js'
+import type { TerminalCreateResult, TerminalRuntimeRef } from './terminalTypes.js'
 import { terminalRouteKey } from './terminalRuntime.js'
 import type { ExternalResumeIntent } from './externalResume.js'
+import type { WindowsPaneLaunch } from './windows/engineStart.js'
 import type { StartedBy } from './agentAttribution.js'
 
 const DEFAULT_MAX_ATTEMPTS = 3
 
-export interface CreateAgentPaneDeps {
-  tmuxBackend: Pick<TerminalBackend<TmuxRuntimeRef>, 'create' | 'kill'>
+export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRuntimeRef> {
+  tmuxBackend: Pick<TerminalBackend<Ref>, 'create' | 'kill'>
   registry: { openPendingAgent: (input: {
     nativeToken?: string
     engine: AgentEngine
-    runtimes: TmuxRuntimeRef[]
+    runtimes: TerminalRuntimeRef[]
     primaryRuntimeKey?: string
     cwd?: string | null
     grid?: { baseUrl: string; model: string | null } | null
@@ -37,6 +39,7 @@ export interface CreateAgentPaneDeps {
     scmLaunchRecord?: ScmLaunchRecord | null
     codexHome?: string | null
     dsh?: string | null
+    swarmSkill?: SwarmSkill
     dshRuntime?: string | null
     agent?: string | null
     bypassPermission?: boolean
@@ -64,6 +67,9 @@ export interface CreateAgentPaneDeps {
   argv: string[]
   /** Explicit-argv terminals start here; engine wrappers still enter cwd after rc files. */
   spawnCwd?: string
+  /** Windows: the folder the engine starts in (it has no wrapper to enter one) and the shell the pane becomes when it
+   *  exits (lib/windows/engineStart.ts `windowsPaneLaunch`); nothing elsewhere. */
+  paneLaunch?: WindowsPaneLaunch
   env?: Record<string, string>
   grid?: { baseUrl: string; model: string | null } | null
   /** The grid launch behind `grid` (credential included — what restore/restart relaunch the pane with)
@@ -76,6 +82,7 @@ export interface CreateAgentPaneDeps {
   codexHome?: string | null
   /** The domain-specific harness this agent is created as, if any. */
   dsh?: string | null
+  swarmSkill?: SwarmSkill
   dshRuntime?: string | null
   /** The engine's named agent the pane opens as (`agent_create`'s `agent`); kept on the row so a
    *  relaunch opens as it again. Already in `argv` — this is the record, not the launch. */
@@ -96,11 +103,13 @@ export interface CreateAgentPaneDeps {
   maxAttempts?: number
 }
 
-export type CreateAgentPaneResult =
-  | { ok: true; spawned: TerminalCreateResult<TmuxRuntimeRef> & { state: 'succeeded' }; pending: RegisteredSession }
+export type CreateAgentPaneResult<Ref extends TerminalRuntimeRef = TerminalRuntimeRef> =
+  | { ok: true; spawned: TerminalCreateResult<Ref> & { state: 'succeeded' }; pending: RegisteredSession }
   | { ok: false; error: 'TMUX_UNAVAILABLE' | 'SPAWN_FAILED' | 'REGISTRATION_FAILED'; detail: string }
 
-export async function createAndRegisterPane(deps: CreateAgentPaneDeps): Promise<CreateAgentPaneResult> {
+export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = TerminalRuntimeRef>(
+  deps: CreateAgentPaneDeps<Ref>,
+): Promise<CreateAgentPaneResult<Ref>> {
   const maxAttempts = deps.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const label = attempt === 1 ? deps.sessionLabel : `${deps.sessionLabel}-r${attempt}`
@@ -108,7 +117,9 @@ export async function createAndRegisterPane(deps: CreateAgentPaneDeps): Promise<
       // The login shell starts somewhere stable; its argv enters the requested workspace after rc
       // files. `deps.cwd` still travels below, into the registry entry — this is only about where
       // the pane's OWN shell starts, not the workspace the agent ends up in.
-      cwd: deps.spawnCwd ?? homedir(),
+      cwd: deps.spawnCwd ?? deps.paneLaunch?.cwd ?? homedir(),
+      ...(deps.paneLaunch?.afterExit ? { afterExit: deps.paneLaunch.afterExit } : {}),
+      ...(deps.paneLaunch?.clearInherited?.length ? { clearInherited: deps.paneLaunch.clearInherited } : {}),
       label,
       command: deps.argv,
       ...(deps.current ? { current: deps.current } : {}),
@@ -132,6 +143,7 @@ export async function createAndRegisterPane(deps: CreateAgentPaneDeps): Promise<
       codexHome: deps.codexHome,
       dsh: deps.dsh,
       dshRuntime: deps.dshRuntime,
+      ...(deps.swarmSkill ? { swarmSkill: deps.swarmSkill } : {}),
       agent: deps.agent,
       bypassPermission: deps.bypassPermission,
       permissionMode: deps.permissionMode,

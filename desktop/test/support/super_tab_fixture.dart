@@ -1,5 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:dio/dio.dart' show CancelToken;
+import 'package:harness/super_tabs/attachment_upload.dart';
 import 'package:harness/super_tabs/controller.dart';
 
 Map<String, dynamic> conversationFixture(String id, String title) => {
@@ -14,10 +18,27 @@ Map<String, dynamic> conversationFixture(String id, String title) => {
   'lastMessageSequence': 0,
 };
 
+Map<String, dynamic> projectFixture(
+  String id,
+  String name,
+  String leadConversationId, {
+  String visibility = 'public',
+}) => {
+  'id': id,
+  'name': name,
+  'ownerId': 'owner',
+  'leadConversationId': leadConversationId,
+  'visibility': visibility,
+  'members': <dynamic>[],
+  'updateMinutes': 5,
+};
+
 class ConversationServer {
   int revision = 0;
   bool loseReply = false, reject = false, failSave = false, failReads = false;
   Map<String, dynamic>? saved;
+  // While set, every read waits for it: a slow server.
+  Completer<void>? holdReads;
   // Makes every command answer with this refusal: {code, message}.
   Map<String, String>? refuse;
   final posts = <Map<String, dynamic>>[];
@@ -43,18 +64,28 @@ class ConversationServer {
       conversationFixture('offline', 'Offline editing'),
     ],
   };
+  // The files fully uploaded, in order, bytes included.
+  final uploads = <Map<String, dynamic>>[];
+  // Makes the upload of the file with this name fail with failUploadCode.
+  String? failUpload;
+  String failUploadCode = 'ATTACHMENT_TOO_LARGE';
   Future<void> save(Map<String, dynamic> value) async {
     if (failSave) throw StateError('Disk full');
     saved = jsonDecode(jsonEncode(value)) as Map<String, dynamic>;
   }
 
-  void append(String text, {String conversationId = 'lead'}) {
+  void append(
+    String text, {
+    String conversationId = 'lead',
+    List<Map<String, dynamic>> attachments = const [],
+  }) {
     revision++;
     messages.add({
       'id': 'message-$revision',
       'conversationId': conversationId,
       'sequence': revision,
       'text': text,
+      'attachments': attachments,
       'createdAt': '2026-10-18T00:00:00Z',
       'author': {'kind': 'person', 'id': 'owner', 'name': 'owner@example.com'},
       'deliveries': <dynamic>[],
@@ -62,6 +93,47 @@ class ConversationServer {
     (state['conversations'] as List).cast<Map<String, dynamic>>().firstWhere(
       (g) => g['id'] == conversationId,
     )['lastMessageSequence'] = revision;
+  }
+
+  /// What the backend does with a file sent to its upload route.
+  Future<Map<String, dynamic>> upload({
+    required String tabId,
+    required String conversationId,
+    required String name,
+    required String mime,
+    required Uint8List bytes,
+    required CancelToken cancel,
+    required void Function(double sent) onProgress,
+  }) async {
+    if (name == failUpload) {
+      throw SuperTabFailure(
+        failUploadCode,
+        'The file is too large.',
+        statusCode: 413,
+      );
+    }
+    onProgress(.5);
+    final id = 'attachment-${uploads.length + 1}';
+    uploads.add({
+      'conversationId': conversationId,
+      'name': name,
+      'mime': mime,
+      'file': bytes,
+      'id': id,
+    });
+    onProgress(1);
+    return {'attachment': _attachment(id)};
+  }
+
+  Map<String, dynamic> _attachment(String id) {
+    final upload = uploads.firstWhere((u) => u['id'] == id);
+    return {
+      'id': id,
+      'name': upload['name'],
+      'mime': upload['mime'],
+      'size': (upload['file'] as List).length,
+      'url': 'https://cdn.harness.autonomous.ai/$id/${upload['name']}',
+    };
   }
 
   Future<Map<String, dynamic>> request(
@@ -93,16 +165,89 @@ class ConversationServer {
         append(
           command['text'] as String,
           conversationId: command['conversationId'] as String,
+          attachments: [
+            for (final id in command['attachmentIds'] as List? ?? const [])
+              _attachment(id as String),
+          ],
         );
         messages.last['replyTo'] = command['replyTo'];
         output['messageId'] = 'message-$revision';
       } else if (command['type'] == 'conversation.create') {
         revision++;
         final id = 'group-$revision';
-        (state['conversations'] as List).add(
-          conversationFixture(id, command['title'] as String),
-        );
+        (state['conversations'] as List).add({
+          ...conversationFixture(id, command['title'] as String),
+          'projectId': command['projectId'] ?? 'lead',
+        });
         output['conversationId'] = id;
+      } else if (command['type'] == 'project.create') {
+        revision++;
+        final projects = state['projects'] ??= <dynamic>[
+          projectFixture('lead', state['name'] as String, 'lead'),
+        ];
+        final id = 'project-$revision', leadId = 'lead-$revision';
+        (projects as List).add({
+          ...projectFixture(
+            id,
+            command['name'] as String,
+            leadId,
+            visibility: command['visibility'] as String,
+          ),
+          'skillMode': 'default',
+        });
+        (state['conversations'] as List).add({
+          ...conversationFixture(leadId, 'Lead'),
+          'projectId': id,
+          'brief': command['brief'] ?? '',
+        });
+        output.addAll({'projectId': id, 'conversationId': leadId});
+      } else if (command['type'] == 'conversation.archive') {
+        (state['conversations'] as List)
+                .cast<Map<String, dynamic>>()
+                .firstWhere(
+                  (g) => g['id'] == command['conversationId'],
+                )['archived'] =
+            command['archived'];
+        revision++;
+      } else if (command['type'] == 'project.delete') {
+        final projectId = command['projectId'];
+        final projects =
+            state['projects'] ??
+            [projectFixture('lead', state['name'] as String, 'lead')];
+        state['projects'] = (projects as List)
+            .where((p) => p['id'] != projectId)
+            .toList();
+        final groups = state['conversations'] as List;
+        final removed = groups
+            .where((g) => (g['projectId'] ?? 'lead') == projectId)
+            .map((g) => g['id'])
+            .toSet();
+        groups.removeWhere((g) => removed.contains(g['id']));
+        messages.removeWhere((m) => removed.contains(m['conversationId']));
+        revision++;
+      } else if ([
+        'project.rename',
+        'project.cadence',
+        'project.sharing',
+      ].contains(command['type'])) {
+        final project = (state['projects'] as List?)
+            ?.cast<Map<String, dynamic>>()
+            .where((p) => p['id'] == command['projectId'])
+            .firstOrNull;
+        if (project != null) {
+          if (command['type'] == 'project.rename') {
+            project['name'] = command['name'];
+          } else if (command['type'] == 'project.cadence') {
+            project['updateMinutes'] = command['minutes'];
+          } else {
+            project['visibility'] = command['visibility'];
+            project['members'] = [
+              for (final id in command['memberIds'] as List)
+                {'id': id, 'generation': 'fixture'},
+            ];
+          }
+          revision++;
+        }
       }
       final result = {'revision': revision, 'result': output};
       receipts[operationId] = result;
@@ -112,6 +257,7 @@ class ConversationServer {
       }
       return result;
     }
+    if (holdReads case final hold?) await hold.future;
     if (failReads) throw StateError('Offline');
     final uri = Uri.parse(path);
     if (uri.pathSegments.last == 'routing-policy') {
@@ -133,10 +279,12 @@ class ConversationServer {
       final conversationId = uri.pathSegments[4];
       final after = int.tryParse(uri.queryParameters['after'] ?? '');
       final before = int.tryParse(uri.queryParameters['before'] ?? '');
+      final messageId = uri.queryParameters['messageId'];
       var rows = messages
           .where(
             (m) =>
                 m['conversationId'] == conversationId &&
+                (messageId == null || m['id'] == messageId) &&
                 (after == null || (m['sequence'] as int) > after) &&
                 (before == null || (m['sequence'] as int) < before),
           )
@@ -157,11 +305,13 @@ class ConversationServer {
   SuperTabController controller({
     Map<String, dynamic>? initial,
     String account = 'owner',
+    SuperTabUpload? upload,
   }) => SuperTabController(
     tabId: 'tab',
     accountId: account,
     request: request,
     save: save,
+    upload: upload ?? this.upload,
     initial: initial ?? const {},
     pollInterval: Duration.zero,
   );

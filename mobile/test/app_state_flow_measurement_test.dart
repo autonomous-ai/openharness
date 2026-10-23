@@ -1,10 +1,12 @@
 import 'dart:async';
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/measurement/launch_measurement.dart';
 import 'package:harness_mobile/measurement/onboarding_measurement.dart';
 import 'package:harness_mobile/measurement/product_measurement.dart';
+import 'package:harness_mobile/state/app_state.dart';
 
 import 'viewer_app_fixture.dart';
 import 'voice_fakes.dart' show MemoryKeyValueStore;
@@ -53,6 +55,25 @@ void main() {
     return total;
   }
 
+  /// A launch that came back signed in, its computers [machines], counted as the app counts one.
+  /// [observeLifecycle]: the launch listens to the app's own lifecycle, as in the shipped app.
+  Future<ViewerRig> launching(
+    Future<List<Machine>> Function() machines, {
+    bool observeLifecycle = false,
+  }) async {
+    final rig = viewerApp(productMeasurement: usage);
+    addTearDown(rig.app.dispose);
+    rig.app.launchMeasurement = LaunchMeasurement(
+      usage,
+      observeLifecycle: observeLifecycle,
+      sinceLaunch: () => const Duration(seconds: 3),
+    );
+    rig.api.onMachines = machines;
+    await rig.app.bootstrap();
+    await settle();
+    return rig;
+  }
+
   group('leaving the screen', () {
     // iOS suspends an app within seconds and may end it unannounced; counts still in RAM go with
     // it. The once-a-minute report is not waited for.
@@ -96,6 +117,317 @@ void main() {
       rig.app.handleAppInactive();
       await pumpEventQueue();
       expect(sentSince(rig, before), isEmpty);
+    });
+  });
+
+  group('a dial still going when the app goes to the background', () {
+    // The OS suspends the app within seconds, so the socket's answer may never be heard; the dial
+    // is cancelled by the person leaving, before the counts are sent.
+
+    const outcomes = ['started', 'ok', 'failed', 'cancelled', 'unknown'];
+
+    /// How many `remote_connect` dials started and ended each way, apart from the duration buckets.
+    Future<Map<String, int>> dials(ViewerRig rig) async {
+      final all = await sent(rig, 'remote_connect');
+      return {
+        for (final outcome in outcomes)
+          if (all.containsKey('ui_phone_remote_connect_$outcome'))
+            outcome: all['ui_phone_remote_connect_$outcome']!,
+      };
+    }
+
+    test('is cancelled, once, and that goes out with the pause', () async {
+      final rig = await sharing({'m': []});
+      final before = rig.api.usageReports.length;
+      rig.app.sendMeasurementBeforeBackground = true;
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+
+      rig.app.handleAppPaused();
+      rig.app.handleAppPaused();
+      await pumpEventQueue();
+
+      // In the report the pause itself sent, not one of a later flush.
+      final reported = <String, int>{};
+      for (final report in rig.api.usageReports.skip(before)) {
+        (report['counters'] as Map).forEach((metric, value) {
+          reported['$metric'] = (reported['$metric'] ?? 0) + (value as int);
+        });
+      }
+      expect(reported, containsPair('ui_phone_remote_connect_started', 1));
+      expect(reported, containsPair('ui_phone_remote_connect_cancelled', 1));
+      expect(reported, isNot(contains('ui_phone_remote_connect_ok')));
+      expect(reported, isNot(contains('ui_phone_remote_connect_failed')));
+    });
+
+    test('is no second outcome when the socket answers after all', () async {
+      final rig = await sharing({'m': [], 'n': []});
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+      rig.app.connectionStatusForTest('n', ConnectionStatus.reconnecting);
+      rig.app.handleAppPaused();
+
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
+      rig.app.connectionStatusForTest('n', ConnectionStatus.disconnected);
+
+      expect(await dials(rig), {'started': 2, 'cancelled': 2});
+    });
+
+    test('every machine still dialling is cancelled, each once', () async {
+      final rig = await sharing({'m': [], 'n': [], 'o': []});
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+      rig.app.connectionStatusForTest('n', ConnectionStatus.reconnecting);
+      rig.app.connectionStatusForTest('o', ConnectionStatus.connecting);
+      rig.app.connectionStatusForTest('o', ConnectionStatus.connected);
+
+      rig.app.handleAppPaused();
+
+      expect(await dials(rig), {'started': 3, 'ok': 1, 'cancelled': 2});
+    });
+
+    test('that had connected before stays ok, and only ok', () async {
+      final rig = await sharing({'m': []});
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
+
+      rig.app.handleAppPaused();
+
+      expect(await dials(rig), {'started': 1, 'ok': 1});
+    });
+
+    test('that failed before stays failed, and only failed', () async {
+      final rig = await sharing({'m': []});
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+      rig.app.connectionStatusForTest('m', ConnectionStatus.disconnected);
+
+      rig.app.handleAppPaused();
+
+      expect(await dials(rig), {'started': 1, 'failed': 1});
+    });
+
+    test(
+      'is followed by a new count when the app dials after resuming',
+      () async {
+        final rig = await sharing({'m': []});
+        rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+        rig.app.handleAppPaused();
+        rig.app.handleAppResumed();
+        await settle();
+
+        rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+        rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
+
+        expect(await dials(rig), {'started': 2, 'cancelled': 1, 'ok': 1});
+      },
+    );
+
+    test('is not cancelled by losing the foreground for a moment', () async {
+      // A system sheet or the app switcher does not stop the dial; only the background does.
+      final rig = await sharing({'m': []});
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+
+      rig.app.handleAppInactive();
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
+
+      expect(await dials(rig), {'started': 1, 'ok': 1});
+    });
+  });
+
+  /// The [flow]'s started and ended counts, apart from its duration buckets and (for a launch) its waits.
+  Future<Map<String, int>> outcomes(ViewerRig rig, String flow) async {
+    final all = await sent(rig, flow);
+    return {
+      for (final outcome in const [
+        'started',
+        'ok',
+        'failed',
+        'cancelled',
+        'unknown',
+      ])
+        if (all.containsKey('ui_phone_${flow}_$outcome'))
+          outcome: all['ui_phone_${flow}_$outcome']!,
+    };
+  }
+
+  group(
+    'connect_auto and connect_user when the app goes to the background',
+    () {
+      // The same dials as remote_connect's, counted by ProductConnections: the app's own, and the
+      // person's ("Try again").
+
+      test('the app\'s own dial still going is cancelled, once', () async {
+        final rig = await sharing({'m': []});
+        rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+
+        rig.app.handleAppPaused();
+        rig.app.handleAppPaused();
+
+        expect(await outcomes(rig, 'connect_auto'), {
+          'started': 1,
+          'cancelled': 1,
+        });
+        expect(await outcomes(rig, 'connect_user'), isEmpty);
+      });
+
+      test('a dial the person asked for is cancelled, not failed', () async {
+        final rig = await sharing({'m': []});
+        rig.app.connectionStatusForTest('m', ConnectionStatus.disconnected);
+        final retry = rig.app.retryMachine('m');
+        await settle();
+        rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+
+        rig.app.handleAppPaused();
+        rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
+        await retry;
+
+        expect(await outcomes(rig, 'connect_user'), {
+          'started': 1,
+          'cancelled': 1,
+        });
+        expect(await outcomes(rig, 'connect_auto'), isEmpty);
+      });
+
+      test('is no second outcome when the socket answers after all', () async {
+        final rig = await sharing({'m': [], 'n': []});
+        rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+        rig.app.connectionStatusForTest('n', ConnectionStatus.reconnecting);
+        rig.app.handleAppPaused();
+
+        rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
+        rig.app.connectionStatusForTest('n', ConnectionStatus.disconnected);
+
+        expect(await outcomes(rig, 'connect_auto'), {
+          'started': 2,
+          'cancelled': 2,
+        });
+      });
+
+      test('that had finished before keeps its outcome', () async {
+        final rig = await sharing({'m': [], 'n': []});
+        rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+        rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
+        rig.app.connectionStatusForTest('n', ConnectionStatus.connecting);
+        rig.app.connectionStatusForTest('n', ConnectionStatus.disconnected);
+
+        rig.app.handleAppPaused();
+
+        expect(await outcomes(rig, 'connect_auto'), {
+          'started': 2,
+          'ok': 1,
+          'unknown': 1,
+        });
+      });
+
+      test(
+        'is followed by a new count when the app dials after resuming',
+        () async {
+          final rig = await sharing({'m': []});
+          rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+          rig.app.handleAppPaused();
+          rig.app.handleAppResumed();
+          await settle();
+
+          rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+          rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
+
+          expect(await outcomes(rig, 'connect_auto'), {
+            'started': 2,
+            'cancelled': 1,
+            'ok': 1,
+          });
+        },
+      );
+
+      test('is not ended by losing the foreground for a moment', () async {
+        final rig = await sharing({'m': []});
+        rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+
+        rig.app.handleAppInactive();
+        rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
+
+        expect(await outcomes(rig, 'connect_auto'), {'started': 1, 'ok': 1});
+      });
+    },
+  );
+
+  group('app_start when the app goes to the background', () {
+    // A launch whose computers have not answered when the phone leaves is `unknown`: whatever the
+    // wait took from there was not the launch's.
+
+    test('a launch still open is unknown, once', () async {
+      final rig = await launching(() async => [remoteMachine('m')]);
+      expect(await outcomes(rig, 'app_start'), {'started': 1});
+
+      rig.app.handleAppPaused();
+      rig.app.handleAppPaused();
+
+      expect(await outcomes(rig, 'app_start'), {'started': 1, 'unknown': 1});
+    });
+
+    test('is no second outcome when a computer answers after all', () async {
+      final rig = await launching(() async => [remoteMachine('m')]);
+      rig.app.handleAppPaused();
+
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
+
+      expect(await outcomes(rig, 'app_start'), {'started': 1, 'unknown': 1});
+    });
+
+    test('a launch a computer had answered stays ok, and only ok', () async {
+      final rig = await launching(() async => [remoteMachine('m')]);
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
+
+      rig.app.handleAppPaused();
+
+      expect(await outcomes(rig, 'app_start'), {'started': 1, 'ok': 1});
+    });
+
+    test('is not ended by losing the foreground for a moment', () async {
+      final rig = await launching(() async => [remoteMachine('m')]);
+
+      rig.app.handleAppInactive();
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connecting);
+      rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
+
+      expect(await outcomes(rig, 'app_start'), {'started': 1, 'ok': 1});
+    });
+
+    test('a pause after the launch was counted unknown adds nothing', () async {
+      // The shipped app also ends the launch by its own lifecycle listener, when the app is hidden.
+      final rig = await launching(() async => [remoteMachine('m')]);
+      rig.app.launchMeasurement!.foreground(false);
+      expect(await outcomes(rig, 'app_start'), {'started': 1, 'unknown': 1});
+
+      rig.app.handleAppPaused();
+
+      expect(await outcomes(rig, 'app_start'), {'started': 1, 'unknown': 1});
+    });
+
+    test('in the shipped app, the lifecycle alone has ended the launch before the pause', () async {
+      final binding = TestWidgetsFlutterBinding.ensureInitialized();
+      // The launch listens to the app's lifecycle itself and the shell calls the notifier on
+      // `inactive` and `paused`; the framework passes through `hidden` between the two.
+      final rig = await launching(
+        () async => [remoteMachine('m')],
+        observeLifecycle: true,
+      );
+      final shell = _ShellLifecycle(rig.app);
+      WidgetsBinding.instance.addObserver(shell);
+      addTearDown(() => WidgetsBinding.instance.removeObserver(shell));
+      addTearDown(
+        () => binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed),
+      );
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      expect(await outcomes(rig, 'app_start'), {'started': 1});
+
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      expect(await outcomes(rig, 'app_start'), {'started': 1});
+
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      expect(await outcomes(rig, 'app_start'), {'started': 1, 'unknown': 1});
+
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      expect(await outcomes(rig, 'app_start'), {'started': 1, 'unknown': 1});
     });
   });
 
@@ -360,23 +692,6 @@ void main() {
   });
 
   group('what a launch back to work waited on', () {
-    /// A launch that came back signed in, its computers [machines], counted as the app counts one.
-    Future<ViewerRig> launching(
-      Future<List<Machine>> Function() machines,
-    ) async {
-      final rig = viewerApp(productMeasurement: usage);
-      addTearDown(rig.app.dispose);
-      rig.app.launchMeasurement = LaunchMeasurement(
-        usage,
-        observeLifecycle: false,
-        sinceLaunch: () => const Duration(seconds: 3),
-      );
-      rig.api.onMachines = machines;
-      await rig.app.bootstrap();
-      await settle();
-      return rig;
-    }
-
     Future<Set<String>> waits(ViewerRig rig) async => {
       for (final metric in (await sent(rig, 'app_start')).keys)
         for (final why in LaunchWait.values)
@@ -458,4 +773,25 @@ void main() {
       },
     );
   });
+}
+
+/// What `PhoneShell` does with the app's lifecycle (`lib/phone/phone_shell.dart`).
+class _ShellLifecycle with WidgetsBindingObserver {
+  _ShellLifecycle(this.app);
+  final AppNotifier app;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.inactive:
+        app.handleAppInactive();
+      case AppLifecycleState.paused:
+        app.handleAppPaused();
+      case AppLifecycleState.resumed:
+        app.handleAppResumed();
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.detached:
+        break;
+    }
+  }
 }

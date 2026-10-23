@@ -15,6 +15,8 @@ import '../core/models.dart';
 import 'local_daemon_transport.dart';
 import 'relay_codec.dart';
 import 'terminal_transport_plugin.dart';
+import 'trusted_pipe.dart';
+import 'windows_pipe.dart';
 
 typedef AccessTokenProvider = Future<String> Function(
   bool forceRefresh,
@@ -89,8 +91,13 @@ class WsConn {
 
   /// How the local daemon is reached (see [LocalDaemonTransport]). When it
   /// names a socket, a local connection dials [localWsUri]'s path over it and
-  /// falls back to [localWsUri] itself if the socket cannot be reached.
+  /// falls back to the port. Windows uses only the authenticated pipe.
   final LocalDaemonTransport? localTransport;
+
+  /// A loopback WebSocket fixture has no daemon pipe. This opt-in works only
+  /// under flutter test; installed Windows builds always require the pipe.
+  @visibleForTesting
+  final bool allowLocalTcpFixture;
 
   /// Retained only for fixture constructor compatibility. Local transport ignores it.
   final String? localApiKey;
@@ -101,6 +108,12 @@ class WsConn {
 
   /// An auxiliary local client must not count as an active desktop window.
   final bool localToolClient;
+
+  /// This computer's own window connection: the one the daemon takes its
+  /// `daemon_*` frames on, and only over its own socket. On Windows that is
+  /// its pipe ([LocalDaemonTransport.trustedPipe]), so this connection dials
+  /// the pipe first. Elsewhere it changes nothing.
+  final bool trustedLocal;
 
   /// A flat delay between reconnect attempts instead of the exponential backoff (1s→30s). Set for
   /// the socket to THIS computer's daemon: a refused connect on the loopback costs microseconds and
@@ -188,8 +201,17 @@ class WsConn {
   /// socket only when the two agree, and closes it otherwise. A key that could never match churned
   /// every socket on every `_conn()` call (measured: `agents_list` failing "WS closed" in a loop).
   String get endpointKey => isLocal
-      ? 'local:${localWsUri.toString()}:${fixedReconnectDelay?.inMilliseconds ?? 'backoff'}'
+      ? 'local:${localWsUri.toString()}:${fixedReconnectDelay?.inMilliseconds ?? 'backoff'}${trustedLocal ? ':trusted' : ''}'
       : 'cloud:$wsBaseUrl:$autonomousEnv';
+
+  bool _overPipe = false;
+
+  /// Whether the last connection attempt could not establish the private
+  /// pipe. The normal reconnect loop asks for the current pipe again.
+  bool get trustedPipeMissing =>
+      trustedLocal &&
+      (localTransport?.trustedPipe?.unavailable ?? false) &&
+      !_overPipe;
 
   WsConn({
     required this.wsBaseUrl,
@@ -203,11 +225,13 @@ class WsConn {
     this.transportKind = WsTransportKind.cloudE2ee,
     this.localWsUri,
     this.localTransport,
+    this.allowLocalTcpFixture = false,
     this.localApiKey,
     this.observerShareId,
     this.observerLink = false,
     this.localProtocolVersion = 1,
     this.localToolClient = false,
+    this.trustedLocal = false,
     this.fixedReconnectDelay,
     this.relayCodecs,
     this.transportPlugins,
@@ -248,9 +272,25 @@ class WsConn {
     }
   }
 
+  /// The daemon's Windows pipe, or null when it is missing or unproven. The
+  /// pipe is looked up afresh on every reconnect, including after a restart.
+  Future<WebSocketChannel?> _connectTrustedPipe(
+    Uri uri,
+    TrustedPipe pipe,
+  ) async {
+    try {
+      return IOWebSocketChannel(await pipe.webSocket(uri.path));
+    } on PipeFailure {
+      return null;
+    }
+  }
+
   /// The local WebSocket over the daemon's loopback port, showing its local
   /// credential: the port takes any OS user's process, the socket only ours.
   WebSocketChannel _connectLocalPort(Uri uri) {
+    if (Platform.isWindows && !(kUnderTest && allowLocalTcpFixture)) {
+      throw StateError('The local daemon pipe is unavailable');
+    }
     final transport =
         localTransport ??
         LocalDaemonTransport(
@@ -323,15 +363,25 @@ class WsConn {
           },
         );
       }
-      final socket = isLocal ? _localSocket() : null;
-      final channel = !isLocal
-          ? WebSocketChannel.connect(
-              uri,
-              protocols: token == null || token.isEmpty ? null : [token],
-            )
-          : socket != null
-          ? await _connectLocalSocket(uri, socket) ?? _connectLocalPort(uri)
-          : _connectLocalPort(uri);
+      final pipe = isLocal ? localTransport?.trustedPipe : null;
+      final overPipe = pipe == null
+          ? null
+          : await _connectTrustedPipe(uri, pipe);
+      if (pipe != null && overPipe == null) {
+        throw StateError('The local daemon pipe is unavailable');
+      }
+      final socket = isLocal && overPipe == null ? _localSocket() : null;
+      final channel =
+          overPipe ??
+          (!isLocal
+              ? WebSocketChannel.connect(
+                  uri,
+                  protocols: token == null || token.isEmpty ? null : [token],
+                )
+              : socket != null
+              ? await _connectLocalSocket(uri, socket) ?? _connectLocalPort(uri)
+              : _connectLocalPort(uri));
+      _overPipe = overPipe != null;
       if (_closing) {
         await channel.sink.close();
         return;
@@ -613,6 +663,8 @@ class WsConn {
     // Conversation-derived: file names and the project folder.
     'agent_handoff_prepare',
     'agent_handoff_prepare_result',
+    'agent_handoff_complete',
+    'agent_handoff_complete_result',
     'project_preview',
     'project_preview_result',
     // A name made from the panes' titles, asked again every few seconds
@@ -621,6 +673,8 @@ class WsConn {
     'window_name_result',
     'git_project_info',
     'git_project_info_result',
+    'git_pull_requests_status',
+    'git_pull_requests_status_result',
     'terminal_output',
     'terminal_input',
     'terminal_resize',

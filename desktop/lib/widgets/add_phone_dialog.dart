@@ -69,6 +69,7 @@ Future<void> showAddPhoneDialog(
   AppKeymap? keymap,
   PhonePairCall? pair,
   PhoneSignInCodeCall? signInCode,
+  bool Function()? signInUnavailable,
   VoidCallback? onConnectMachine,
   VoidCallback? onManageDevices,
 }) => showTerminalPrompt<void>(
@@ -78,6 +79,8 @@ Future<void> showAddPhoneDialog(
     app: app,
     pair: pair,
     signInCode: signInCode ?? app.api.phoneSignInCode,
+    signInUnavailable:
+        signInUnavailable ?? () => app.api.phoneSignInUnavailable,
     onConnectMachine: onConnectMachine,
     onManageDevices: onManageDevices,
   ),
@@ -262,6 +265,7 @@ class AddPhoneDialog extends StatefulWidget {
     required this.app,
     this.pair,
     required this.signInCode,
+    this.signInUnavailable,
     this.onConnectMachine,
     this.onManageDevices,
   });
@@ -269,6 +273,12 @@ class AddPhoneDialog extends StatefulWidget {
   final AppNotifier app;
   final PhonePairCall? pair;
   final PhoneSignInCodeCall signInCode;
+
+  /// Whether a sign-in code cannot be had on this computer at all right now
+  /// ([ApiClient.phoneSignInUnavailable]): on Windows, the Harness daemon's
+  /// private pipe is missing. The QR then goes without one, as with an older
+  /// CLI, and says how the phone signs in instead.
+  final bool Function()? signInUnavailable;
   final VoidCallback? onConnectMachine;
 
   /// "See your phones", beside Done once the phone is in: Machines, at its
@@ -326,6 +336,9 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
   /// without one: the phone then asks for an emailed code.
   String? _signIn;
   bool _signInAsked = false;
+
+  /// The last ask found no sign-in code to be had here ([AddPhoneDialog.signInUnavailable]).
+  bool _signInUnavailable = false;
   Timer? _signInTimer;
 
   /// Bumped to start the renewal over (see [_restartSignIn]): an answer to an
@@ -589,6 +602,8 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
     setState(() {
       _signIn = next?.code;
       _signInAsked = true;
+      _signInUnavailable =
+          next == null && (widget.signInUnavailable?.call() ?? false);
     });
     if (_ready != null || _stopped) return;
     final ttl = next?.ttl;
@@ -891,6 +906,15 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
         textAlign: TextAlign.center,
         style: DesktopChrome.text(size: 15, medium: true),
       ),
+      if (target != null && _signInUnavailable && _signIn == null) ...[
+        const SizedBox(height: 4),
+        Text(
+          'Your phone will ask for a code from your email.',
+          key: const ValueKey('add-phone-email-code'),
+          textAlign: TextAlign.center,
+          style: _note(),
+        ),
+      ],
       const SizedBox(height: 4),
       Wrap(
         alignment: WrapAlignment.center,

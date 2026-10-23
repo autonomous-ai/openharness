@@ -1,0 +1,68 @@
+▸ No X11 or Wayland display detected; native image clipboard is not applicable.
+▸ Installing required Linux packages (you may be asked for your password): tmux
+✗ Installing system packages needs root access, but sudo is unavailable.
+▸ Refreshing package indexes before retrying
+✗ Installing system packages needs root access, but sudo is unavailable.
+✗ Installing system packages needs root access, but sudo is unavailable.
+✗ Could not install tmux via apt-get.
+  Retry with: sudo apt-get install -y tmux
+curl: (23) Failure writing output to destination
+(first attempt: install.sh needs tmux and the container's user has no sudo; tmux was installed as root, then:)
+▸ No X11 or Wayland display detected; native image clipboard is not applicable.
+✓ tmux ready (tmux 3.4)
+▸ Installing the Harness Node runtime into /home/hx/.harness/runtime
+  The CLI runs on its own Node so it behaves the same from a terminal and from the app.
+  Your system Node, nvm and Homebrew are not read or changed.
+  ▸ downloading Node v22.23.2 (linux-arm64)…
+  ✓ installed Node v22.23.2 → /home/hx/.harness/runtime/node-v22.23.2-linux-arm64
+▸ Installing harness from https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/cli/metadata.json
+  ✓ installed harness 0.4.18 → /home/hx/.harness/cli
+▸ Installing the managed grid into /home/hx/.harness/runtime
+  ▸ downloading grid 0.3.59 (linux-arm64)…
+  ✓ installed grid 0.3.59 → /home/hx/.harness/runtime/grid-0.3.59-linux-arm64
+▸ Installing hn
+  ▸ downloading hn 0.1.36 (linux-arm64)…
+  ✓ installed hn 0.1.36 → /home/hx/.harness/bin/harness-tui
+  ✓ added ~/.local/bin to PATH in /home/hx/.bashrc
+  ✓ added ~/.local/bin to PATH in /home/hx/.profile
+
+    _
+   | |__   __ _ _ __ _ __   ___  ___ ___
+   | '_ \ / _` | '__| '_ \ / _ \/ __/ __|
+   | | | | (_| | |  | | | |  __/\__ \__ \
+   |_| |_|\__,_|_|  |_| |_|\___||___/___/
+
+  ✓ harness 0.4.18 installed.
+  ✓ hn 0.1.36 installed.
+
+  Start here — every harness on every machine, in this terminal:
+
+      ~/.local/bin/hn                # start locally; no login required
+
+  Or set this computer up step by step — three commands, in this order:
+
+      harness login                  # 1. sign in with your Autonomous account (opens a browser)
+      harness start                  # 2. connect this computer as a machine (runs in the background)
+      harness remote-password set    # 3. let your OTHER machines reach this one (asked once, kept)
+
+  Then, from a Harness terminal tile on any of your machines:
+
+      harness remote                 # pick a machine — the tile becomes a terminal on it
+
+  Useful:
+      harness machines               # this account's machines and their ids
+      harness status                 # is the daemon running, and which machine this is
+      harness --help                 # everything else
+
+  For an agent (Claude Code, Codex) that installed this:
+
+      Next: harness start      (starts Harness here; no account is needed)
+      Then: harness whoami     (whether you may start harnesses, and if not, what to ask the person)
+
+  Only the person can let an agent start harnesses: they sign in (harness login, in a browser)
+  and turn on agents starting agents (harness settings agents-start-agents on, in their own
+  terminal; an agent is refused). Ask them. How: https://harness.autonomous.ai/agents
+
+  'harness' is installed in ~/.local/bin. To run it in THIS terminal now:
+      export PATH="$HOME/.local/bin:$PATH"
+  New terminals already have it (or reload this one with:  exec $SHELL).

@@ -27,6 +27,7 @@ it.each(['linux', 'darwin'])('preserves the confirmed native model protocol on %
     for (const name of ['HOME', 'ADAPTER_DATA_DIR', 'ADAPTER_RUNTIME_DIR', 'OPENCODE_CONFIG_DIR', 'OPENCODE_DATA_DIR']) {
       const path = join(root, name); mkdirSync(path); vi.stubEnv(name, path)
     }
+    vi.stubEnv('USERPROFILE', join(root, 'HOME'))
     vi.stubEnv('OPENCODE_PATH', '/fixture/bin/opencode'); vi.stubEnv('TZ', 'UTC'); vi.resetModules()
     const { applyOpencodeSessionModel } = await import('./launchControl.js')
     for (const checkCatalog of [false, true]) for (const variant of [false, true]) {

@@ -24,6 +24,8 @@ describe('what the core tells the devices', () => {
     port.card({ type: 'commander_event', agentId: 'a1' })
     port.desk(['a1'], false)
     port.swarms(null)
+    port.swarmCards([])
+    port.swarmCardRecap({ tabId: 't1', leadId: 'l1', text: 'Shipped', at: 1, none: false })
     port.unread([])
     port.appFocus('m1', 'a1')
     port.seen('a1')
@@ -40,6 +42,8 @@ describe('what the core tells the devices', () => {
       { kind: 'card', frame: { type: 'commander_event', agentId: 'a1' } },
       { kind: 'desk', agentIds: ['a1'], foreground: false },
       { kind: 'swarms', swarms: null },
+      { kind: 'swarmCards', items: [] },
+      { kind: 'swarmCardRecap', recap: { tabId: 't1', leadId: 'l1', text: 'Shipped', at: 1, none: false } },
       { kind: 'unread', items: [] },
       { kind: 'appFocus', machineId: 'm1', agentId: 'a1' },
       { kind: 'seen', agentId: 'a1' },
@@ -214,5 +218,22 @@ describe('what the devices tell the core', () => {
     createDevicesLink({ core: fakeCore(), notify: () => true, call: async () => ({}), state: () => STATE }).notice({ kind: 'shout' })
     expect(warn).toHaveBeenCalledWith('[services] devices said shout, which the core does not hear')
     warn.mockRestore()
+  })
+})
+
+describe('the devices\' Swarm card requests to the Super Tab service', () => {
+  it('hands the core only the fields of the three card requests (the core allows those and no other action)', async () => {
+    const superTabRequest = vi.fn(async (payload: Record<string, unknown>) => ({ ok: true, echoed: payload }))
+    const core = fakeCore()
+    core.superTabRequest = superTabRequest
+    const devices = createDevicesLink({ core, notify: () => true, call: vi.fn(), state: () => STATE })
+    expect(await devices.answer('super_tabs', { action: 'cardsWanted', on: true, include: ['t1'], extra: 1 })).toMatchObject({ echoed: { action: 'cardsWanted', on: true, include: ['t1'] } })
+    expect(await devices.answer('super_tabs', { action: 'cardsWanted', on: 'yes' })).toMatchObject({ echoed: { action: 'cardsWanted', on: false } })
+    expect(await devices.answer('super_tabs', { action: 'cardRecap', tabId: 't1', leadId: 'l1', extra: 1 })).toMatchObject({ echoed: { action: 'cardRecap', tabId: 't1', leadId: 'l1' } })
+    expect(await devices.answer('super_tabs', { action: 'cardOpen', session: 'c1', tabId: 't1', leadId: null })).toMatchObject({ echoed: { action: 'cardOpen', session: 'c1', tabId: 't1', leadId: null } })
+    expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', tabId: 't1' })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it' })
+    // A core with no way to the service says so.
+    const bare = createDevicesLink({ core: fakeCore(), notify: () => true, call: vi.fn(), state: () => STATE })
+    expect(await bare.answer('super_tabs', { action: 'cardsWanted', on: true })).toEqual({ error: 'SERVICE_UNAVAILABLE' })
   })
 })

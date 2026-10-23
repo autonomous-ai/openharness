@@ -25,7 +25,11 @@ import { FakeDial, type DialMessage } from './harness/fakeDial.js'
 const FROM = process.env.COMPAT_FROM
 
 /** Differences on purpose, by key, each with why. */
-const CHANGED: Record<string, string> = {}
+const CHANGED: Record<string, string> = {
+  // A device watches in this scenario, so the recaps decide each news turn's tier and the windows' recap
+  // carries it as `payload.tier`, which the phone announces by (services/recaps.ts).
+  'window turn_summary': 'carries the tier the recaps decide once for every screen',
+}
 
 /** Types that one run may hear and the other not, by timing alone, each with why. */
 const TIMING: Record<string, string> = {

@@ -73,6 +73,7 @@ void main() {
       onEvent: (_) {},
       onStatus: (_) {},
       transportKind: WsTransportKind.localPlaintext,
+      allowLocalTcpFixture: true,
       localWsUri: hub.uri,
     );
   });

@@ -878,9 +878,28 @@ it.each(['bad pid', 'bad start', 'missing file', 'bad json', 'different pid', 'd
   mkdirSync(join(home, 'sessions'))
   if (mode !== 'missing file') writeFileSync(join(home, 'sessions', '77.json'), mode === 'bad json' ? '{' : JSON.stringify(record))
   const result = processSessionOf('claude', mode === 'bad pid' ? -1 : 77, CWD, mode === 'bad start' ? NaN : STARTED_AT)
-  if (['bad json', 'different cwd', 'missing start', 'missing cwd', 'missing id', 'invalid id', 'missing history'].includes(mode)) {
+  if (['bad json', 'different cwd', 'missing start', 'missing cwd', 'missing id', 'invalid id'].includes(mode)) {
     await expect(result).rejects.toThrow('Conversation identity is held')
   } else await expect(result).resolves.toBeNull()
+})
+
+// Claude Code names its session in the record at once but writes the transcript only with the first prompt: a
+// harness opened and never used held its binding, and Change agent waited on it forever (2026-10-21). Its own
+// record is the whole answer: no conversation yet. A sibling's newer file in the same folder never stands in.
+it('reads a Claude process whose conversation is not written yet as having none, never as a sibling\'s', async () => {
+  const home = tempRoot(); const root = join(home, 'projects')
+  const id = '11111111-2222-4333-8444-555555555556'
+  writeTranscript(root, 'project', '11111111-2222-4333-8444-555555555557', CWD, STARTED_AT + 5_000)
+  mkdirSync(join(home, 'sessions'))
+  writeFileSync(join(home, 'sessions', '77.json'), JSON.stringify({ pid: 77, cwd: CWD, sessionId: id, procStart: new Date(STARTED_AT).toUTCString() }))
+  const { findLiveSession, processSessionEvidence, processSessionOf } = await load(root)
+  const proof = await processSessionEvidence('claude', 77, CWD, STARTED_AT)
+  expect(proof).toMatchObject({ session: null, unwritten: id })
+  expect(() => proof.verify()).not.toThrow()
+  await expect(processSessionOf('claude', 77, CWD, STARTED_AT)).resolves.toBeNull()
+  await expect(findLiveSession('claude', CWD, STARTED_AT, { pid: 77, bornOnly: true })).resolves.toBeNull()
+  // Without the process's own record the folder scan still finds the newer file: that is the guess refused above.
+  await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true })).resolves.toMatchObject({ sessionId: '11111111-2222-4333-8444-555555555557' })
 })
 
 /**

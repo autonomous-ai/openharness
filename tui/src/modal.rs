@@ -1033,14 +1033,18 @@ mod theme_row_tests {
         // Never twice: copy-mode, new-window, clone-harness are hn's own already.
         for name in ["copy-mode", "new-window", "clone-harness", "kill-pane"] { assert!(!tmux.iter().any(|r| r.label == name), "{name} twice") }
         assert!(tmux.iter().any(|r| r.label == "select-layout"));
-        // Searched: hn's matches before tmux's, whatever they score.
+        // Searched: rows whose name shows what you typed first, hn's before tmux's whatever they
+        // score; then the rows only their hidden words name.
         let mut p = crate::picker::Picker::new("Commands", "");
         p.search_extra = true; // as the panel opens it: a row's hint is searched, not shown
         p.set_rows(command_rows_for(&app, true, false));
         p.set_query("lay");
-        let shown: Vec<&str> = p.visible.iter().map(|(i, _)| p.rows[*i].id.as_str()).collect();
-        let first_tmux = shown.iter().position(|id| id.starts_with("tmux:")).unwrap();
-        assert!(shown[..first_tmux].contains(&"cmd:layout") && shown[first_tmux..].iter().all(|id| id.starts_with("tmux:")), "{shown:?}");
+        let shown: Vec<(&str, bool)> = p.visible.iter().map(|(i, _)| (p.rows[*i].id.as_str(), p.rows[*i].label.to_lowercase().contains("lay"))).collect();
+        let named = shown.iter().take_while(|(_, says)| *says).count();
+        assert!(named > 1 && shown[named..].iter().all(|(_, says)| !says), "every row named `lay…` comes first: {shown:?}");
+        let first_tmux = shown[..named].iter().position(|(id, _)| id.starts_with("tmux:")).unwrap_or(named);
+        assert!(shown[first_tmux..named].iter().all(|(id, _)| id.starts_with("tmux:")), "hn's before tmux's: {shown:?}");
+        assert_eq!(shown.first().map(|(id, _)| *id), Some("cmd:layout"), "{shown:?}");
     }
 
     /// The list is names and keys: no description beside a row. Account is one row (Sign out is in

@@ -1,14 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { clearPaneRemainOnExit, resolvePaneEngineProcess, tmuxPaneState } from '../../lib/tmux.js'
+import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
+import type { TerminalBackend } from '../../lib/terminalBackend.js'
 import { createPaneWatcher, type PaneWatcherDeps } from './newPane.js'
 
-vi.mock('../../lib/tmux.js', async (real) => ({
+vi.mock('../../lib/paneEngineProcess.js', async (real) => ({
   ...await real<object>(),
   resolvePaneEngineProcess: vi.fn(async () => null),
-  clearPaneRemainOnExit: vi.fn(async () => {}),
-  tmuxPaneState: vi.fn(async () => ({ dead: false, engineExit: null })),
 }))
 vi.mock('../../lib/engineLaunch.js', async (real) => ({ ...await real<object>(), commandAvailableInInteractiveShell: vi.fn(async () => true) }))
 
@@ -16,6 +15,13 @@ const pending = { agentId: 'a1', sessionId: '', engine: 'claude', runtimes: [{ b
 const runtime = { backend: 'tmux', paneId: '%7' }
 const spawned = { runtime } as never
 const identity = { pid: 99, startMarker: 'now' }
+// The pane's backend: what the watcher asks about the pane it opened.
+const paneState = vi.fn<TerminalBackend['paneState']>(async () => ({ dead: false, engineExit: null }) as never)
+const releaseHold = vi.fn<TerminalBackend['releaseHold']>(async () => {})
+const backend = { paneState, releaseHold } as unknown as TerminalBackend
+
+/** The pane's own backend, answering whether it holds the launch's inert shell (`TerminalBackend.isHeld`). */
+const holding = (isHeld: TerminalBackend['isHeld']): Partial<PaneWatcherDeps> => ({ terminals: { backendFor: vi.fn(() => ({ ...backend, isHeld }) as TerminalBackend) } })
 
 function setup(over: Partial<PaneWatcherDeps> = {}) {
   const rows = new Map<string, RegisteredSession>([['a1', pending]])
@@ -31,6 +37,7 @@ function setup(over: Partial<PaneWatcherDeps> = {}) {
     triggerHint: vi.fn(async () => {}),
     captureTerminal: vi.fn(async () => 'error: unknown flag --plan'),
     retainExitedSession: vi.fn(),
+    terminals: { backendFor: vi.fn(() => backend) },
     ...over,
   }
   return { deps, rows, watch: createPaneWatcher(deps) }
@@ -40,7 +47,7 @@ describe('watching a new pane', () => {
   it.each(['held', 'row removed', 'not held', 'unknown', 'no probe'] as const)('retains a post-rc native guard hold without failing or archiving: %s', async result => {
     const entry = { ...pending, launch: { state: 'starting', nativeToken: 'fixture-native' } } as RegisteredSession
     const waitingPane = vi.fn(async () => result === 'unknown' ? 'unknown' as const : result === 'held' || result === 'row removed')
-    const { deps, rows, watch } = setup(result === 'no probe' ? {} : { waitingPane })
+    const { deps, rows, watch } = setup(result === 'no probe' ? {} : holding(waitingPane))
     rows.set('a1', entry)
     if (result === 'row removed') vi.mocked(deps.registry.setLaunch).mockReturnValue(null)
     const watching = watch('claude', entry, spawned, ['claude'], undefined, 1)
@@ -59,17 +66,31 @@ describe('watching a new pane', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.mocked(resolvePaneEngineProcess).mockReset().mockResolvedValue(null)
-    vi.mocked(tmuxPaneState).mockReset().mockResolvedValue({ dead: false, engineExit: null } as never)
-    vi.mocked(clearPaneRemainOnExit).mockClear()
+    paneState.mockReset().mockResolvedValue({ dead: false, engineExit: null } as never)
+    releaseHold.mockClear()
     vi.mocked(commandAvailableInInteractiveShell).mockReset().mockResolvedValue(true)
   })
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
+
+  it('asks a ptyhost pane\'s own backend whether it holds the launch, never tmux', async () => {
+    const pty = { backend: 'ptyhost' as const, instance: 'p1', paneId: '%7' }
+    const entry = { ...pending, runtimes: [pty], launch: { state: 'starting', nativeToken: 'fixture-native' } } as RegisteredSession
+    const isHeld = vi.fn(async () => true as const)
+    const ptyBackend = { ...backend, isHeld } as TerminalBackend
+    const backendFor = vi.fn(() => ptyBackend)
+    const { deps, rows, watch } = setup({ terminals: { backendFor } })
+    rows.set('a1', entry)
+    await watch('claude', entry, { runtime: pty }, ['claude'], undefined, 1)
+    expect(backendFor).toHaveBeenCalledWith(pty)
+    expect(isHeld).toHaveBeenCalledExactlyOnceWith(pty, 'fixture-native')
+    expect(deps.registry.setLaunch).toHaveBeenCalledWith('a1', expect.objectContaining({ state: 'held', service: 'native', nativeToken: 'fixture-native' }))
+  })
 
   it.each(['token', 'route', 'binding', 'removed', 'stopped', 'ready'] as const)('discards a delayed native hold after its %s changes', async change => {
     const entry = { ...pending, launch: { state: 'starting', nativeToken: 'original' } } as RegisteredSession
     let finish!: (waiting: true) => void
     const waitingPane = vi.fn(() => new Promise<true>(done => { finish = done }))
-    const { deps, rows, watch } = setup({ waitingPane })
+    const { deps, rows, watch } = setup(holding(waitingPane))
     rows.set('a1', entry)
     const watching = watch('claude', entry, spawned, ['claude'], undefined)
     await vi.advanceTimersByTimeAsync(0)
@@ -96,15 +117,15 @@ describe('watching a new pane', () => {
       const replace = () => rows.set('a1', { ...entry, launch: { state: 'starting', nativeToken: 'replacement' } })
       if (stage === 'before probe') replace()
       if (stage === 'process') vi.mocked(resolvePaneEngineProcess).mockImplementationOnce(async () => { replace(); return identity as never })
-      if (stage === 'state') vi.mocked(tmuxPaneState).mockImplementationOnce(async () => { replace(); return 'gone' })
+      if (stage === 'state') paneState.mockImplementationOnce(async () => { replace(); return 'gone' })
       if (stage === 'installed') {
-        vi.mocked(tmuxPaneState).mockResolvedValueOnce({ dead: true, engineExit: null } as never)
+        paneState.mockResolvedValueOnce({ dead: true, engineExit: null } as never)
         vi.mocked(commandAvailableInInteractiveShell).mockImplementationOnce(async () => { replace(); return false })
       }
       if (stage === 'capture' || stage === 'clear') {
-        vi.mocked(tmuxPaneState).mockResolvedValueOnce({ dead: false, engineExit: 2 } as never)
+        paneState.mockResolvedValueOnce({ dead: false, engineExit: 2 } as never)
         if (stage === 'capture') vi.mocked(deps.captureTerminal).mockImplementationOnce(async () => { replace(); return 'old exit' })
-        else vi.mocked(clearPaneRemainOnExit).mockImplementationOnce(async () => { replace() })
+        else releaseHold.mockImplementationOnce(async () => { replace() })
       }
       const watching = watch('claude', entry, spawned, ['claude'], undefined, 1)
       await vi.advanceTimersByTimeAsync(0)
@@ -125,7 +146,10 @@ describe('watching a new pane', () => {
     await done
     expect(deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', identity)
     expect(deps.registry.setLaunch).toHaveBeenCalledWith('a1', { state: 'ready' })
-    expect(clearPaneRemainOnExit).toHaveBeenCalledWith('%7')
+    expect(deps.terminals.backendFor).toHaveBeenCalledWith(runtime)
+    expect(resolvePaneEngineProcess).toHaveBeenCalledWith(backend, runtime, 'claude')
+    expect(paneState).toHaveBeenCalledWith(runtime)
+    expect(releaseHold).toHaveBeenCalledWith(runtime)
     expect(deps.announceSession).toHaveBeenCalledWith(expect.objectContaining({ launch: { state: 'ready' } }))
     expect(deps.triggerHint).toHaveBeenCalledWith(runtime, 'claude')
   })
@@ -158,7 +182,7 @@ describe('watching a new pane', () => {
 
   it('marks the terminal unavailable when the pane is gone', async () => {
     const { deps, watch } = setup()
-    vi.mocked(tmuxPaneState).mockResolvedValueOnce('gone')
+    paneState.mockResolvedValueOnce('gone')
     await watch('claude', pending, spawned, ['claude'], undefined)
     expect(deps.registry.setTerminalAvailable).toHaveBeenCalledWith('a1', false)
     expect(deps.announceSession).toHaveBeenCalledWith(pending)
@@ -167,7 +191,7 @@ describe('watching a new pane', () => {
   it('asks again when tmux could not say, and finds the engine once it can', async () => {
     // A read that timed out while the daemon's event loop was held, then the engine it was looking for.
     const { deps, watch } = setup()
-    vi.mocked(tmuxPaneState).mockResolvedValueOnce('unknown')
+    paneState.mockResolvedValueOnce('unknown')
     vi.mocked(resolvePaneEngineProcess).mockResolvedValueOnce(null).mockResolvedValueOnce({ pid: 7, executable: 'claude', startMarker: 'm' })
     const done = watch('claude', pending, spawned, ['claude'], undefined)
     await vi.advanceTimersByTimeAsync(50)
@@ -178,7 +202,7 @@ describe('watching a new pane', () => {
 
   it('fails a launch whose pane died: not installed, or did not start', async () => {
     const { deps, watch } = setup()
-    vi.mocked(tmuxPaneState).mockResolvedValue({ dead: true, engineExit: null } as never)
+    paneState.mockResolvedValue({ dead: true, engineExit: null } as never)
     await watch('claude', pending, spawned, ['claude'], undefined)
     vi.mocked(commandAvailableInInteractiveShell).mockResolvedValueOnce(false)
     await watch('claude', pending, spawned, ['claude'], undefined)
@@ -192,11 +216,11 @@ describe('watching a new pane', () => {
   it('keeps a pane whose engine started and exited before it was seen as a terminal, saying why', async () => {
     const warn = vi.mocked(console.warn)
     const { deps, rows, watch } = setup()
-    vi.mocked(tmuxPaneState).mockResolvedValue({ dead: false, engineExit: 2 } as never)
+    paneState.mockResolvedValue({ dead: false, engineExit: 2 } as never)
     await watch('claude', pending, spawned, ['claude'], undefined)
     expect(deps.registry.releaseEngine).toHaveBeenCalledWith('a1')
     expect(deps.announceSession).toHaveBeenCalledWith(expect.objectContaining({ engine: 'terminal' }))
-    expect(clearPaneRemainOnExit).toHaveBeenCalledWith('%7', expect.any(Function))
+    expect(releaseHold).toHaveBeenCalledWith(runtime, expect.any(Function))
     expect(warn.mock.calls.map(([line]) => String(line)).some((line) => line.includes('exited (2) before ready · agent a1 kept as a terminal'))).toBe(true)
     // A hook bound a conversation meanwhile: that conversation is kept, the engine not released.
     rows.set('a1', { ...pending, sessionId: 's1' } as RegisteredSession)
@@ -228,6 +252,15 @@ describe('watching a new pane', () => {
     vi.mocked(deps.announceSession).mockClear()
     await watch('claude', pending, spawned, ['claude'], undefined, 0)
     expect(deps.announceSession).not.toHaveBeenCalled()
+  })
+
+  it('reports a pane no configured backend holds, and asks nothing about it', async () => {
+    const warn = vi.mocked(console.warn)
+    const { deps, watch } = setup({ terminals: { backendFor: vi.fn(() => undefined) } })
+    await watch('claude', pending, spawned, ['claude'], undefined)
+    expect(resolvePaneEngineProcess).not.toHaveBeenCalled()
+    expect(deps.registry.setLaunch).not.toHaveBeenCalled()
+    expect(warn.mock.calls.map(([line]) => String(line))).toEqual(['[agent] create watch failed · claude · no terminal backend for tmux:%7'])
   })
 
   it('reports a watch that fails', async () => {

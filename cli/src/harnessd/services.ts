@@ -12,8 +12,8 @@
  * bind and no update to prove; it beats, or it is restarted. Everything that touches the operating
  * system is injected, so every decision here is tested without one.
  */
-import { SERVICE_EXIT_RESTART, heartbeatGraceMs, isCoreMessage, isUpdaterMessage } from './protocol.js'
-import type { CoreHandle } from './supervisor.js'
+import { SERVICE_EXIT_RESTART, describeStaged, heartbeatGraceMs, isCoreMessage, isUpdaterMessage, type StagedUpdate } from './protocol.js'
+import { describeExit, type CoreHandle } from './supervisor.js'
 
 export interface ServiceSpec {
   /** The process's name: what the master logs it as and the process is titled (`harnessd <name>`). */
@@ -42,8 +42,11 @@ export interface ServiceSupervisorDeps {
   setTimer(run: () => void, ms: number): unknown
   clearTimer(timer: unknown): void
   log(line: string): void
-  /** The updater staged `version` on disk (`harnessd:staged`): the core is to hand over for it. */
-  staged?(version: string): void
+  /** The updater staged a CLI build, a terminal host or both on disk (`harnessd:staged`): the core is to hand over. */
+  staged?(staged: StagedUpdate): void
+  /** Stop a service with `harnessd:shutdown` rather than SIGTERM: Windows, where Node's `kill` is TerminateProcess
+   *  and the service's own stop never runs (./supervisor.ts `SupervisorDeps.stopByMessage`). */
+  stopByMessage?: boolean
 }
 
 export interface ServiceSupervisorOptions {
@@ -93,8 +96,6 @@ export interface ServiceStatus {
 }
 
 const MIB = 1024 * 1024
-const describeExit = (code: number | null, signal: NodeJS.Signals | null): string =>
-  signal ? `signal ${signal}` : `code ${code}`
 
 /** One service's process, restarted for as long as the master runs. */
 class Service {
@@ -189,9 +190,12 @@ class Service {
   private onMessage(child: CoreHandle, message: unknown): void {
     if (isUpdaterMessage(message)) {
       // It restarts the core: from any other service than the updater, a bug or worse, said once and ignored.
-      if (this.spec.name !== UPDATER_PROCESS) { if (!this.refusedStaged) this.deps.log(`[harnessd] service ${this.spec.name} said it staged ${message.version}, which only the updater may — ignored`); this.refusedStaged = true; return }
-      this.deps.log(`[harnessd] service ${this.spec.name} staged ${message.version}`)
-      this.deps.staged?.(message.version)
+      const staged: StagedUpdate = {
+        ...(message.version ? { version: message.version } : {}), ...(message.ptyVersion ? { ptyVersion: message.ptyVersion } : {}),
+      }
+      if (this.spec.name !== UPDATER_PROCESS) { if (!this.refusedStaged) this.deps.log(`[harnessd] service ${this.spec.name} said it staged ${describeStaged(staged)}, which only the updater may — ignored`); this.refusedStaged = true; return }
+      this.deps.log(`[harnessd] service ${this.spec.name} staged ${describeStaged(staged)}`)
+      this.deps.staged?.(staged)
       return
     }
     if (!isCoreMessage(message) || message.type !== 'harnessd:heartbeat') return
@@ -262,7 +266,9 @@ class Service {
     const child = this.child!
     this.ending = true
     this.clearTimer('heartbeatTimer')
-    child.kill(signal)
+    // Called with SIGTERM only: a stop, or a restart for memory.
+    if (this.deps.stopByMessage) child.send({ type: 'harnessd:shutdown' })
+    else child.kill(signal)
     this.armTimer('killTimer', () => {
       this.deps.log(`[harnessd] service ${this.spec.name} outlived its ${this.options.stopGraceMs} ms to stop — killing it`)
       child.kill('SIGKILL')

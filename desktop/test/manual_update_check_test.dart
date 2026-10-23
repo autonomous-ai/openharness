@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -31,6 +32,7 @@ class _Manifest {
 
   DesktopUpdater updater({bool enabled = true, bool releaseMode = true}) =>
       DesktopUpdater(
+        isWindows: false,
         enabled: enabled,
         dio: dio,
         releaseMode: releaseMode,
@@ -106,6 +108,26 @@ class _Installer extends DesktopUpdater {
     progress = onProgress;
     return staged.future;
   }
+}
+
+class _PartiallyPublishedInstaller extends _Installer {
+  _PartiallyPublishedInstaller({
+    this.launcherNeedsRepair = true,
+    this.publicationIncomplete = true,
+  });
+  final bool launcherNeedsRepair;
+  final bool publicationIncomplete;
+
+  @override
+  Future<bool> applyStaged(
+    StagedUpdate staged, {
+    required int selfPid,
+    String? runningBundlePath,
+  }) async => throw WindowsPartialUpdateException(
+    'publication failed',
+    launcherNeedsRepair: launcherNeedsRepair,
+    publicationIncomplete: publicationIncomplete,
+  );
 }
 
 const _reviewedUpdate = UpdateInfo(
@@ -523,6 +545,136 @@ void main() {
     expect(installer.refreshes, 1);
     expect(installer.requested?.version, '1.0.4');
     expect(app.availableUpdate?.version, '1.0.4');
+  });
+
+  testWidgets('a partially published Windows update gives repair guidance', (
+    tester,
+  ) async {
+    final installer = _PartiallyPublishedInstaller();
+    final app = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: null,
+      desktopUpdater: installer,
+    )..availableUpdate = _reviewedUpdate;
+    addTearDown(app.dispose);
+    final install = app.installAvailableUpdate();
+    await tester.pump();
+    installer.staged.complete(
+      const StagedUpdate(
+        version: '1.0.4',
+        bundlePath: 'fixture',
+        stagingDirPath: 'fixture',
+      ),
+    );
+    expect(await install, isFalse);
+    expect(app.updateError, contains('Harness.exe.old'));
+    expect(app.updateError, contains('Close'));
+    expect(app.updateError, isNot(contains('retry')));
+    await tester.binding.setSurfaceSize(const Size(360, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: UpdateNotice(notifier: app)),
+      ),
+    );
+    expect(find.byKey(const Key('retry-update-button')), findsNothing);
+    expect(find.text('Dismiss'), findsOneWidget);
+    final guidance = find.text(app.updateError!);
+    expect(guidance, findsOneWidget);
+    final text = tester.widget<Text>(guidance);
+    expect(text.maxLines, isNull);
+    expect(
+      tester.renderObject<RenderParagraph>(guidance).didExceedMaxLines,
+      isFalse,
+    );
+    expect(tester.getSize(guidance).height, greaterThan(40));
+    expect(
+      tester.getBottomRight(guidance).dy,
+      lessThanOrEqualTo(tester.getBottomRight(find.byType(UpdateNotice)).dy),
+    );
+    await tester.tap(find.text('Dismiss'));
+    await tester.pump();
+    expect(app.availableUpdate, isNull);
+    expect(await app.installAvailableUpdate(update: _reviewedUpdate), isFalse);
+  });
+
+  testWidgets('an untouched install failure keeps the ordinary retry', (
+    tester,
+  ) async {
+    final app = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: null,
+      desktopUpdater: _Installer(),
+    )..availableUpdate = _reviewedUpdate;
+    addTearDown(app.dispose);
+    app.updateError = 'Could not download this version.';
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: UpdateNotice(notifier: app)),
+      ),
+    );
+    expect(find.byKey(const Key('retry-update-button')), findsOneWidget);
+    await tester.tap(find.text('Dismiss'));
+    await tester.pump();
+    expect(app.availableUpdate, _reviewedUpdate);
+    expect(app.updateError, isNull);
+  });
+
+  testWidgets('a partial pointer write does not claim restart was attempted', (
+    tester,
+  ) async {
+    final installer = _PartiallyPublishedInstaller(launcherNeedsRepair: false);
+    final app = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: null,
+      desktopUpdater: installer,
+    )..availableUpdate = _reviewedUpdate;
+    addTearDown(app.dispose);
+    final install = app.installAvailableUpdate();
+    await tester.pump();
+    installer.staged.complete(
+      const StagedUpdate(
+        version: '1.0.4',
+        bundlePath: 'fixture',
+        stagingDirPath: 'fixture',
+      ),
+    );
+    expect(await install, isFalse);
+    expect(app.updateError, contains('may not be installed'));
+    expect(app.updateError, isNot(contains('could not restart')));
+  });
+
+  testWidgets('a completed Windows install that could not reopen says so', (
+    tester,
+  ) async {
+    final installer = _PartiallyPublishedInstaller(
+      launcherNeedsRepair: false,
+      publicationIncomplete: false,
+    );
+    final app = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: null,
+      desktopUpdater: installer,
+    )..availableUpdate = _reviewedUpdate;
+    addTearDown(app.dispose);
+    final install = app.installAvailableUpdate();
+    await tester.pump();
+    installer.staged.complete(
+      const StagedUpdate(
+        version: '1.0.4',
+        bundlePath: 'fixture',
+        stagingDirPath: 'fixture',
+      ),
+    );
+    expect(await install, isFalse);
+    expect(
+      app.updateError,
+      contains('installed update files but could not open'),
+    );
   });
 
   testWidgets('a build pulled from the channel is not installed', (

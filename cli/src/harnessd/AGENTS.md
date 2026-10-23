@@ -15,16 +15,24 @@ It keeps the core and the services running, and nothing else.
    unknown ones are ignored, because during an update an older master supervises a newer core.
 4. **The core is always restarted; a service may be parked.** Never let a failing service stop the
    core or the master.
-5. **Platform supervision is opt-in** (`platform.ts`, `harness service install`): launchd or systemd runs
-   the master in the foreground, and the CLI starts and stops it through the platform, never beside it.
-   Under systemd, never stop the unit with a stop job (`systemctl stop`, `restart`, `disable --now`):
-   tmux built with systemd support makes every pane PartOf the unit that started its server, so a stop
-   job ends every agent. `stop()` signals the master instead. The desktop app does not use it yet.
+5. **Platform supervision is opt-in** (`platform.ts`, `harness service install`): launchd or systemd runs the
+   master in the foreground, or, on Windows, Task Scheduler starts `harness start --if-down` at logon and
+   every five minutes (`platform.ts` `taskSchedulerXml`), which starts a master when none runs; and the CLI
+   starts and stops it through the platform, never beside it. Under systemd, never stop the unit with a stop
+   job (`systemctl stop`, `restart`, `disable --now`): tmux built with systemd support makes every pane PartOf
+   the unit that started its server, so a stop job ends every agent. `stop()` signals the master instead. The
+   desktop app does not use it yet.
 6. **The master replaces itself only in the gap before a core starts** (`reexec.ts`): no core running,
-   services stopped and reaped first, in place so the pid stays. Never exec with a child running: it
-   would lose its channel, and become an orphan or a zombie no one reaps. A master started on cli.js
-   does it once more, before it has started anything: onto the lean bundle cli.js carries, so the
-   master parses its own code and not the whole CLI's (`../masterProcess.ts`).
+   services stopped and reaped first, in place so the pid stays. Never exec with a child running: it would
+   lose its channel, and become an orphan or a zombie no one reaps. A master started on cli.js does it once
+   more, before it has started anything: onto the lean bundle cli.js carries, so the master parses its own
+   code and not the whole CLI's (`../masterProcess.ts`). Windows has no exec: there the master starts its
+   replacement through `harness-launch.exe` and leaves once it holds the pid file (`reexec.ts`
+   `HandOverDeps`), under the spawn lock (released as the old master leaves; the replacement does not take it)
+   and with a token in the marker, so a replacement that comes up after the old master gave up leaves rather
+   than run beside it. Windows has no SIGTERM either: the master stops its children with `harnessd:shutdown`
+   (`stopByMessage`). A bundle whose probe does not say it takes a handover (`PROBE_HANDOVER`) is not handed
+   over to.
 7. **The lean bundle is only ever an optimisation** (`leanBundle.ts`, `leanServices.ts`). A service is
    started from it only while its files are the ones its master started with and cli.js is the bundle
    they came from, and not after it died twice from it before beating; from cli.js otherwise. Other
@@ -41,7 +49,10 @@ It keeps the core and the services running, and nothing else.
 9. **Updates are the master's to run, never the core's.** The updater runs in a process the master starts
    (`UPDATER_HOST`, `../services/updaterProcess.ts`): it downloads, verifies, canaries and stages a build,
    then says so (`harnessd:staged`); the master asks the core to hand over (`harnessd:update`) and judges
-   the new core on probation, as before. Only the updater's process (`UPDATER_PROCESS`) can start this, or
+   the new core on probation, as before. On Windows it stages a terminal host payload too (`ptyVersion`,
+   only under a master that sets `HARNESSD_JUDGES_PTY`), and the same probation rolls back or keeps both
+   (`../lib/windows/ptyUpdate.ts`). A build that needs a host protocol above the installed host's is staged
+   only with a payload of that protocol, the host first, in one handover (spec §5's protocol and pairing rules). Only the updater's process (`UPDATER_PROCESS`) can start this, or
    exit 75 to be restarted at once. From any other service, `harnessd:staged` is logged once and ignored,
    and exit 75 counts as a crash. The master itself still makes no network call. Every core this
    master starts hears `HARNESSD_UPDATES=master`; a core under a master from before that runs the updater

@@ -6,6 +6,7 @@ import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { listenLocalSocket, localSocketPath } from './lib/localSocket.js'
+import { PTY_PROTOCOL } from './lib/ptyHost/protocol.js'
 import { fakePlatform } from './testing/fakePlatform.js'
 import { alive, SpawnedRuns } from './testing/spawnedRuns.js'
 
@@ -186,6 +187,16 @@ describe('CLI login/start command contract', () => {
 
     expect(result.status).toBe(1)
     expect(result.stderr).toContain('Unknown command: analytics')
+  }, ONE_RUN_TEST_MS)
+
+  it('version --json prints the version and the pty protocol', async () => {
+    // What the updater's canary reads (lib/selfUpdate.ts `runCanary`): the host protocol a build needs is the
+    // protocol rule's input, learned before the build is staged. `harness version` alone prints what it always did.
+    const [json, plain] = await Promise.all([run('version', '--json'), run('version')])
+    expect(json.status).toBe(0)
+    expect(plain.status).toBe(0)
+    expect(plain.stdout.trim()).toMatch(/^\S+$/)
+    expect(JSON.parse(json.stdout)).toEqual({ version: plain.stdout.trim(), ptyProtocol: PTY_PROTOCOL })
   }, ONE_RUN_TEST_MS)
 
   it('returns a nonzero status for an unknown command', async () => {
@@ -432,4 +443,34 @@ describe('harness service, through the CLI', () => {
     expect(uninstall.stdout).not.toContain('starting it the usual way')
     expect(existsSync(file)).toBe(false)
   }, 6 * ONE_RUN_TEST_MS) // six runs, one after another
+})
+
+describe('the daemon\'s control calls, through the CLI', () => {
+  // On Windows the daemon's control API is reached over its authenticated pipe (lib/daemonEndpoint.ts
+  // `localDaemonCall`), never by whoever holds the loopback port; a call made straight to TCP would skip it.
+  it('reaches the daemon only through localDaemonCall, never by a fetch of its loopback port', () => {
+    const direct = readFileSync(CLI_SOURCE, 'utf8').match(/fetch\(`http:\/\/127\.0\.0\.1:\$\{daemonPort\(\)\}\/api\/[^`]*`/g) ?? []
+    expect(direct).toEqual([])
+  })
+
+  it('on mac and Linux still makes them over the loopback, as before', async () => {
+    const root = freshRoot()
+    const got: string[] = []
+    const server = createServer((req, res) => {
+      got.push(`${req.method} ${req.url} local=${req.headers['x-adapter-local']}`)
+      res.setHeader('content-type', 'application/json')
+      res.end(req.url === '/api/remote-password/status' ? JSON.stringify({ hasPassword: true, fingerprint: 'fp-1', setAt: 7 }) : '{}')
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const PORT = String((server.address() as AddressInfo).port)
+
+    const status = await runAsync(root, ['remote-password', 'status', '--json'], { PORT })
+    expect(status.status, status.stderr).toBe(0)
+    expect(JSON.parse(status.stdout)).toEqual({ hasPassword: true, fingerprint: 'fp-1', setAt: 7 })
+    const sync = await runAsync(root, ['group', 'sync'], { PORT })
+    expect(sync.status, sync.stderr).toBe(0)
+    expect(sync.stdout).toContain('Comparing with every reachable member now.')
+    expect(got).toEqual(['GET /api/remote-password/status local=1', 'POST /api/group/sync local=1'])
+  }, 2 * ONE_RUN_TEST_MS)
 })

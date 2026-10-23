@@ -35,7 +35,7 @@ export function handoffCoreApi(dataDir: string, ask: (query: string, payload: Pa
       // The core may return the retained snapshot of this same intent after a lost reply.
       const file = `.harness/handoff/${handoffBaseName(prepared.request.agentId, prepared.request.changeId)}.md`
       if (!value || value.cwd !== prepared.result.cwd || value.file !== null && value.file !== file || typeof value.gitRepo !== 'boolean'
-        || !Array.isArray(value.degraded) || value.degraded.some(item => !['git', 'file', 'transcript'].includes(item))) throw new HandoffError('HANDOFF_UNAVAILABLE')
+        || !Array.isArray(value.degraded) || value.degraded.some(item => !['git', 'file', 'transcript', 'summary'].includes(item))) throw new HandoffError('HANDOFF_UNAVAILABLE')
       return value
     },
     resolve: async (id) => { const value = await read('resolve', { id }); if (value !== null && !isSession(value)) throw new HandoffError('IDENTITY_UNAVAILABLE'); return value as Awaited<ReturnType<CoreApi['conversations']['resolve']>> },
@@ -76,6 +76,7 @@ export interface HandoffServiceOptions {
 export function runHandoffService(options: HandoffServiceOptions): ServiceProcess {
   let connection: CoreConnection | null = null
   const core = handoffCoreApi(options.dataDir, (query, payload) => connection?.query(query, payload) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }))
+  core.daemon = { ...core.daemon, machineId: () => options.machineId }
   return (options.run ?? runServiceProcess)({
     name: 'handoff', socketPath: options.socketPath, machineId: options.machineId, token: options.token,
     requests: (options.start ?? startHandoff)(core),

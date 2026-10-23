@@ -15,6 +15,7 @@
  * the person stopped or closed meanwhile is no longer held, and is left alone.
  */
 import { sid } from '../../lib/log.js'
+import { windowsHeldPaneArgv } from '../../lib/windows/engineStart.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import type { RestoreSummary } from '../../lib/restoreAgents.js'
 
@@ -159,8 +160,10 @@ export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps)
 
 /**
  * What a held agent's pane runs while it waits: the reason, and nothing to type into. It survives the interrupt a
- * person might send it, and the agent's launch takes the pane over (`respawn`) once the service is ready.
+ * person might send it, and the agent's launch takes the pane over (`respawn`) once the service is ready. Windows has
+ * no `/bin/sh`: the daemon's Node waits there instead (lib/windows/engineStart.ts).
  */
-export function heldPaneArgv(detail: string, token?: string): string[] {
+export function heldPaneArgv(detail: string, token?: string, platform: NodeJS.Platform = process.platform): string[] {
+  if (platform === 'win32') return windowsHeldPaneArgv(detail, token)
   return ['/bin/sh', '-c', 'trap "" INT QUIT TSTP; printf "%s\\n" "$1"; while :; do sleep 3600; done', 'harness-held', detail, ...(token ? [token] : [])]
 }

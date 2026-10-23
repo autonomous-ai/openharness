@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -9,6 +9,7 @@ import { CableSession, type CableHost, type CablePort } from './cableSession.js'
 import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
 import { DialVerdicts } from './dialPortVerdicts.js'
+import { completeFlash } from '../lib/flashRecovery.js'
 import { createDarwinDialFinder, parseDarwinDialPorts, portInUse, type DialPort } from './serial.js'
 
 // Run the same two-device scenarios against the staged helper before deployment.
@@ -290,6 +291,10 @@ describe('USB dial fleet', () => {
       expect(f.host.onDialAttached).toHaveBeenCalledTimes(1)
       await f.fleet.turnStarted('a', 'Working')
       for (const port of f.ports) expect(port.sent).toContainEqual({ t: 'turn.started', agentId: 'a', text: 'Working' })
+      // The Swarm cards reach every session; a dial that did not name them is sent nothing.
+      await f.fleet.syncSwarmCards(true)
+      await f.fleet.swarmCardRecap({ tabId: 'st1', leadId: 'l1', text: 'x', at: 1, none: false })
+      for (const port of f.ports) expect(port.sent.some(m => String(m.t).startsWith('supertab'))).toBe(false)
       f.setPorts([device('/dev/tux', 'BB:02')]); await f.fleet['scan']()
       expect(f.ports[0].isOpen).toBe(false)
       expect(f.ports[1].isOpen).toBe(true)
@@ -382,6 +387,26 @@ describe('USB dial fleet', () => {
 })
 
 describe('a board that is not a dial', () => {
+  it('reopens only the successfully flashed board after a stopped daemon missed the flash and USB attachment stayed the same', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'fleet-flash-recovery-'))
+    const file = join(directory, 'dial-ports.json')
+    const a = { ...device('COM3', 'FLASH-A'), session: 'unchanged-a' }
+    const b = { ...device('COM4', 'OTHER-B'), session: 'unchanged-b' }
+    const previous = new DialVerdicts(file)
+    previous.markForeign(a); previous.markForeign(b)
+    // No fleet runs during the write, so it cannot observe a busy -> free edge.
+    await completeFlash('COM3', { verdictFile: file, findPorts: async () => [a, b], stopDiscovery: () => {} })
+    const f = fixture({ verdicts: new DialVerdicts(file) })
+    f.setPorts([a, b])
+    try {
+      f.fleet.start()
+      await vi.waitFor(() => expect(f.ports.map(port => port.path)).toEqual(['COM3']))
+      await f.greet(f.ports)
+      expect(f.fleet.isConnected).toBe(true)
+      expect(new DialVerdicts(file).isForeign(b)).toBe(true)
+    } finally { await f.fleet.stop(); rmSync(directory, { recursive: true, force: true }) }
+  })
+
   /**
    * Found on a desk with a second ESP32-S3 plugged in for its own work: it shares the dial's USB ids, so
    * the daemon opened it, heard nothing it understood, waited a minute and opened it again, for as long
@@ -482,6 +507,21 @@ describe('a board that is not a dial', () => {
       for (let i = 0; i < 3; i++) await second.scan()
       expect(second.opens()).not.toContain('/dev/other')
     } finally { await second.fleet.stop() }
+  })
+
+  it('remembers a board that greeted as a dial, so a later silent probe never marks it foreign', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'fleet-verdicts-')), 'dial-ports.json')
+    const s = scenario({ file })
+    try {
+      s.fleet.start()
+      await vi.waitFor(() => expect(s.f.ports.map(p => p.path)).toContain('/dev/tim'))
+      await s.f.greet(s.f.ports.filter(p => p.path === '/dev/tim'))
+      await vi.waitFor(() => expect(s.fleet.isConnected).toBe(true))
+    } finally { await s.fleet.stop() }
+    const dial = { ...device('/dev/tim', 'AA:01'), session: '201' }
+    const verdicts = new DialVerdicts(file)
+    verdicts.markForeign(dial)
+    expect(verdicts.isForeign(dial)).toBe(false)
   })
 
   it('is never opened while another program has it, and only then once that program is done', async () => {

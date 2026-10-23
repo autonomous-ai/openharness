@@ -52,6 +52,7 @@ describe('the Wi-Fi device pieces the core starts', () => {
       discover: async () => ({ devices: await runningDevicePart(missing, 'Wi-Fi device link').discover() }),
       pairStart: () => runningDevicePart(missing, 'Wi-Fi device link').pair('device', 'ABC234'),
       pairStatus: () => ({}), list: () => ({}), status: () => ({}), revoke: () => ({}), receipt: () => ({}),
+      addonState: () => ({}), addonPropose: () => ({}), addonProposal: () => ({}),
     }
     expect(await autonomousDeviceLocalRequest(management, 'GET', '/api/autonomous-device/discover', undefined)).toEqual({
       status: 503,

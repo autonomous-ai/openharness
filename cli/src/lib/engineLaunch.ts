@@ -11,10 +11,13 @@ import { baseNode } from '../harnessd/baseNode.js'
 import { env } from '../config/env.js'
 import { launchContract, launchField } from '../engines/launches.js'
 import { startupFunctions, startupNeedsScript, startupRuns } from '../engines/kit/launchStartup.js'
-import { screenArgs, screenEnvPrefix, screenPrelude } from '../engines/kit/launchScreen.js'
+import { screenArgs, screenEnvPrefix, screenPrelude, screenVariables } from '../engines/kit/launchScreen.js'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { isOpencodeV2 } from '../engines/opencode/contract.js'
 import { binaryOnPath, resolveBinaryOnPath } from './binaryOnPath.js'
+import { windowsEngineArgv } from './windows/launch.js'
+import { nativeLaunchConfirmed, windowsHeldPaneArgv, windowsStartupArgs } from './windows/engineStart.js'
+import { defaultWindowsShell } from './windows/shell.js'
 import { engineBin } from './engineBin.js'
 import { launchModelArgs, type LaunchModel } from './launchModel.js'
 import { engineInstallPaths, npmEnginePrefix, type EngineInstallRecipe } from './engineInstall.js'
@@ -360,7 +363,8 @@ export function supportsNativeFork(engine: AgentEngine): boolean {
 
 /** The executable argv, before the interactive-shell wrapper is applied. */
 export function buildEngineCommandArgv(engine: AgentEngine, opts: LaunchCommandOptions = {}): string[] {
-  const argv = [opts.native?.executable?.command ?? engineBin(engine)]
+  // Windows: the flags its declared startup puts first (Codex's `--no-daemon`), which a launch script probes for elsewhere.
+  const argv = [opts.native?.executable?.command ?? engineBin(engine), ...(process.platform === 'win32' ? windowsStartupArgs(engine, opts.native) : [])]
   // A fork is a resume that leaves the source alone; the two are exclusive, and the fork wins.
   const fork = opts.forkSessionId ? LAUNCH_FORK_FLAG[engine] : undefined
   const resumeFlag = fork ? fork.lead : opts.resumeSessionId ? LAUNCH_RESUME_FLAG[engine] : undefined
@@ -386,7 +390,9 @@ export function buildEngineCommandArgv(engine: AgentEngine, opts: LaunchCommandO
   if (opts.extraArgs?.length) argv.push(...opts.extraArgs)
   if (opts.launchModel) argv.push(...launchModelArgs(engine, opts.launchModel))
   if (opts.firstPrompt) argv.push(...firstPromptArgs(engine, opts.firstPrompt))
-  return argv
+  // Windows: the engine's .exe, or the node script its npm shim runs; never the .ps1 PowerShell would pick, and never
+  // a batch file cmd.exe would read the first message through (lib/windows/launch.ts).
+  return windowsEngineArgv(engine, argv)
 }
 
 export interface InteractiveEngineShell {
@@ -418,6 +424,11 @@ export function isPosixShell(path: string): boolean {
 }
 
 export function interactiveEngineShell(shell: string | undefined = undefined): InteractiveEngineShell | null {
+  // Windows has no shell that runs these scripts. Its SHELL, where one is set at all, is not one: OpenSSH for Windows
+  // sets `c:\windows\system32\cmd.exe`, and every launch, probe and environment read went to `cmd.exe -c`, which
+  // reads `-c` as nothing and the script as a command (measured on the Windows 11 VM, 2026-10-15). So never one there:
+  // each caller has its no-shell path (lib/windows/engineStart.ts).
+  if (process.platform === 'win32') return null
   const candidate = shell === undefined ? currentUserShell() : shell
   if (!candidate || !isAbsolute(candidate)) return null
   const name = basename(candidate).toLowerCase()
@@ -564,6 +575,14 @@ export function buildEngineLaunchArgv(
 ): string[] {
   if (isTerminalEngine(engine)) return buildTerminalLaunchArgv(opts, shell)
   const command = buildEngineCommandArgv(engine, opts)
+  // Windows has no POSIX shell to run the launch script in: the engine is the pane's command, and what the script does
+  // around it is the daemon's and the pty host's (lib/windows/engineStart.ts). A native launch whose prepared
+  // executable or settings changed since they were confirmed waits in a held pane instead, as the guard below does.
+  if (process.platform === 'win32') {
+    return opts.native?.executable && !nativeLaunchConfirmed(opts.native)
+      ? windowsHeldPaneArgv('Waiting for native launch preparation to be confirmed.', opts.native.token)
+      : command
+  }
   // An engine whose declared startup runs in the script gets one even where the daemon has no login shell.
   const interactive = interactiveEngineShell(shell)
     ?? (opts.native || startupNeedsScript(launchContract(engine)) ? { path: posixRunner(), args: ['-c'], label: 'shell' } : null)
@@ -614,6 +633,20 @@ export function buildEngineLaunchArgv(
   // Keep the nonce outside the one-time file, including non-POSIX and inline
   // launches. It is tmux's original launch identity, never a post-rc environment fact.
   return opts.native ? ['/usr/bin/env', `${NATIVE_LAUNCH_MARKER}=${opts.native.token}`, ...argv] : argv
+}
+
+/**
+ * The variables a launch sets around its engine on Windows, which has no `/usr/bin/env` to put in front of the argv
+ * (`buildEngineLaunchArgv` leaves it out there): the screen's (engines/kit/launchScreen.ts) and a native launch's
+ * marker. The caller sends them with the pane's env (the pty host's create and respawn env), which the engine
+ * inherits, after the launch's own so they win as the prefix did. None elsewhere, where they are in the argv. A screen's
+ * cleared variables cannot ride an env; no engine declares any (facets/launch.ts `clearEnvironment`).
+ */
+export function engineLaunchEnv(engine: AgentEngine, native?: Pick<NativeLaunch, 'token'>, platform: NodeJS.Platform = process.platform): Record<string, string> | undefined {
+  if (platform !== 'win32') return undefined
+  // As the prefix wrote it: `${token}`, which a native launch always has (nativeLaunch.ts).
+  const variables = { ...screenVariables(launchContract(engine)), ...(native ? { [NATIVE_LAUNCH_MARKER]: `${native.token}` } : {}) }
+  return Object.keys(variables).length ? variables : undefined
 }
 
 /**
@@ -877,6 +910,9 @@ export function buildTerminalLaunchArgv(
   opts: Pick<LaunchCommandOptions, 'cwd' | 'terminalHint' | 'clearEnv'> = {},
   shell: string | undefined = undefined,
 ): string[] {
+  // Windows: the shell a pane gets by default, started in the workspace (lib/windows/engineStart.ts `windowsPaneLaunch`).
+  // The banner needs a script to print it, and is left out.
+  if (process.platform === 'win32') return defaultWindowsShell()
   const candidate = shell === undefined ? currentUserShell() : shell
   const path = candidate && isAbsolute(candidate) ? candidate : '/bin/sh'
   const loginArgs = basename(path).toLowerCase() === 'zsh' ? ['-l'] : []
@@ -1268,6 +1304,8 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
  * no engine argv or first prompt is carried into the installer. */
 export function buildEngineInstallationArgv(engine: AgentEngine, recipe: EngineInstallRecipe,
   environment: Record<string, string>, runtimeNode: string = managedNodePath()): string[] {
+  // The installers are POSIX shell lines (`curl … | bash`, npm under a POSIX prelude): there is nothing to run them in.
+  if (process.platform === 'win32') throw new Error(`Harness cannot install ${engine} on Windows yet; install it, then try again.`)
   const shell = interactiveEngineShell(environment.SHELL) ?? { path: posixRunner(), args: ['-c'], label: 'shell' }
   if (Object.keys(environment).some(key => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key))) throw new Error('Invalid installation environment name')
   const locations = Object.entries(environment).map(([key, value]) => `export ${key}=${shellSingleQuote(value)}\n`).join('')
@@ -1297,35 +1335,46 @@ function availabilityScript(recipe: EngineInstallRecipe | undefined): string {
       `  for bin in ${names}; do [ -f "$npm_prefix/bin/$bin" ] && [ -x "$npm_prefix/bin/$bin" ] && exit 0; done`,
       'fi',
     ] : []),
-    'exit 1',
+    // An ordinary shell/profile failure may also exit 1. Only this value proves the probe ran to completion and found nothing.
+    'exit 42',
   ].join('\n')
 }
 
+export type CommandAvailability = { status: 'available' | 'missing' | 'unverified'; detail?: string }
 /**
  * Does the same interactive shell that launches a new agent resolve this CLI?
  *
  * The fallback is intentionally the daemon PATH: without a usable absolute
  * SHELL there is no safer context to consult and direct launch is used too.
  */
+export function commandAvailableInInteractiveShell(command: string, shell: string | undefined, recipe: EngineInstallRecipe | undefined, detailed: true): Promise<CommandAvailability>
+export function commandAvailableInInteractiveShell(command: string, shell?: string, recipe?: EngineInstallRecipe): Promise<boolean>
 export async function commandAvailableInInteractiveShell(
   command: string,
   shell: string | undefined = undefined,
   recipe: EngineInstallRecipe | undefined = undefined,
-): Promise<boolean> {
+  detailed = false,
+): Promise<boolean | CommandAvailability> {
   const interactive = interactiveEngineShell(shell)
   if (!interactive) {
-    return binaryOnPath(command)
-      || (recipe ? engineInstallPaths(recipe).some((candidate) => binaryOnPath(candidate)) : false)
+    const found = binaryOnPath(command) || (recipe ? engineInstallPaths(recipe).some((candidate) => binaryOnPath(candidate)) : false)
+    return detailed ? { status: found ? 'available' : 'missing' } : found
   }
   const [file, ...args] = engineShellArgv(interactive, [availabilityScript(recipe), 'harness-engine-probe', command])
-  return await new Promise((resolve) => {
+  const result = await new Promise<CommandAvailability>((resolve) => {
     execFile(
       file,
       args,
       { timeout: 5_000 },
-      (error) => resolve(!error),
+      (error) => {
+        if (!error) return resolve({ status: 'available' })
+        if (Number(error.code) === 42) return resolve({ status: 'missing' })
+        if (error.killed) return resolve({ status: 'unverified', detail: 'Interactive shell tool probe timed out after 5 seconds.' })
+        resolve({ status: 'unverified', detail: `Interactive shell tool probe failed (${String(error.code ?? error.signal ?? 'unknown error')}).` })
+      },
     )
   })
+  return detailed ? result : result.status === 'available'
 }
 
 export type CommandFlagSupport = 'supported' | 'unsupported' | 'unknown'

@@ -2,7 +2,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { opendir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
+import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
+import type { LaunchModel } from './launchModel.js'
 
 export type AgentCreationOutcome =
   | { state: 'created'; agentId: string; level?: 'native' | 'handoff'; resumed?: boolean }
@@ -108,6 +109,19 @@ export class AgentCreationReceipts {
     return receipt.outcome.state === 'pending' && !this.inFlight.has(id)
       ? { state: 'unconfirmed' }
       : receipt.outcome
+  }
+
+  /** The launch flags kept in a completed native intent, absent for legacy or fallback creates. */
+  createdLaunchModel(id: string): LaunchModel | null {
+    const receipt = this.read(id)
+    if (receipt?.version !== 2 || 'cancelled' in receipt || this.intentStatus(id, receipt).state !== 'created') return null
+    const saved = receipt.request
+    if (saved.kind !== 'native-create-v1' || !saved.input || typeof saved.input !== 'object') return null
+    const launchModel = (saved.input as Record<string, unknown>).launchModel
+    if (!launchModel || typeof launchModel !== 'object') return null
+    const { model, effort } = launchModel as Record<string, unknown>
+    return (model === null || typeof model === 'string') && (effort === null || typeof effort === 'string')
+      ? { model, effort } : null
   }
 
   /** Whose launch an id names: a guest's key, or null for the owner's, an intent's and an unknown id (which a
@@ -403,8 +417,7 @@ export class AgentCreationReceipts {
   }
 
   private syncDirectory(path = this.directory, ancestor = false): void {
-    const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | (ancestor ? 0 : constants.O_NOFOLLOW))
-    try { fsyncSync(fd) } finally { closeSync(fd) }
+    syncStateDirectory(path, constants.O_RDONLY | constants.O_DIRECTORY | (ancestor ? 0 : constants.O_NOFOLLOW))
   }
 
   private holdDirectory(): { verify(): void; close(): void } {
@@ -502,8 +515,7 @@ export class AgentCreationReceipts {
       try { writeFileSync(fd, JSON.stringify(receipt)); fsyncSync(fd) }
       finally { closeSync(fd) }
       if (!exclusive) renameSync(writing, file)
-      const directoryFd = openSync(dirname(file), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
-      try { fsyncSync(directoryFd) } finally { closeSync(directoryFd) }
+      syncStateDirectory(dirname(file), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
     } finally {
       // Failed reservations stay on disk so a partial write cannot permit a
       // duplicate. Only this write's private replacement file is disposable.

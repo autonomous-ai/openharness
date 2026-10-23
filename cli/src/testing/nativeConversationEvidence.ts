@@ -4,7 +4,7 @@ import { nativeUnavailable } from '../engines/kit/nativeEvidence.js'
 import type { NativeDescriptor } from '../engines/kit/nativeDescriptors.js'
 import type { NativeConversationSources } from '../lib/nativeConversation.js'
 import type { NativeProcessRow } from '../lib/processEvidence.js'
-import type { ProcessRow } from '../lib/tmux.js'
+import type { ProcessRow } from '../lib/processTable.js'
 import { sameProcessIdentity } from '../lib/terminalRuntime.js'
 import { controlDescriptors } from '../lib/nativeProcessControl.js'
 

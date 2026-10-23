@@ -2,15 +2,19 @@ import { createHash } from 'node:crypto'
 import type { Prisma, SuperTab, SuperTabNativeContext } from '@prisma/client'
 import { z } from 'zod'
 import type { AuthUser } from '../lib/ssoAuth.js'
-import { activeWork, agent, author, conversation, fail, stableId, SuperTabError,
-  type Actor, type Agent, type Author, type SuperTabState } from './model.js'
+import { activeWork, agent, appendPullRequestUrls, author, conversation, fail, isLeads, stableId, SuperTabError,
+  type Actor, type Agent, type Author, type Conversation, type SuperTabState } from './model.js'
+import { canReadProject, groupProject, readConversation } from './projects.js'
+import { noteProjectReports } from './projectUpdates.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 export const openNativeSchema = z.object({ operationId: id, conversationId: id, agentId: id }).strict()
 export const nativeEventSchema = z.object({
   turnId: id, kind: z.enum(['prompt', 'answer', 'gap']), previousEventId: id.nullable(),
   text: z.string().max(16_000), truncated: z.boolean(), interrupted: z.boolean(),
-}).strict()
+  gap: z.object({ incidentId: id, reason: z.enum(['recording_restarted', 'history_lost', 'unattributed_input', 'context_expired', 'agent_stopped', 'prompt_missing']),
+    detectedAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) }).strict().optional(),
+}).strict().refine(event => !event.gap || event.kind === 'gap', 'Recovery metadata belongs to a recording gap.')
 type NativeEvent = z.infer<typeof nativeEventSchema>
 type Transaction = Prisma.TransactionClient
 type Grant = { machineOwnerId: string; contributorId: string; hostGrant: string | null }
@@ -26,6 +30,18 @@ interface Deps {
 }
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
+interface Checkpoint { eventId: string | null; turnId: string | null; recordedAt: string | null; sequence: number }
+interface Recovery {
+  assignmentId: string; incidentId: string; reason: string; detectedAt: number; checkpoint: Checkpoint; required: boolean
+}
+const gapReasons = {
+  recording_restarted: 'The work was interrupted by a restart of the terminal recording.',
+  history_lost: 'Part of the recorded terminal history was lost.',
+  unattributed_input: 'Terminal input could not be attributed to this conversation.',
+  context_expired: 'Terminal recording expired before the activity was captured.',
+  agent_stopped: 'The agent stopped during an unfinished recorded turn.',
+  prompt_missing: 'A terminal answer was observed without its recorded prompt.',
+}
 
 /** A host reports what its native engine observed; it cannot create human-authored
  * messages. The human attached to the source is the authenticated opener of that
@@ -38,7 +54,7 @@ export class SuperTabNativeStore {
     const binding = record.binding as unknown as Binding
     const operator = author(state, { kind: 'person', userId: binding.operator.id, email: binding.operator.name }, true)
     const target = agent(state, record.agentId)
-    const group = conversation(state, record.conversationId)
+    const group = readConversation(state, { kind: 'person', userId: binding.operator.id, email: binding.operator.name }, record.conversationId)
     if (operator.membershipGeneration !== binding.operator.membershipGeneration || group.archived || !group.agentIds.includes(target.id)
       || target.harnessId !== binding.harnessId || target.machineId !== binding.machineId || target.machineOwnerId !== binding.machineOwnerId
       || target.contributorId !== binding.contributorId || target.membershipGeneration !== binding.contributionGeneration
@@ -62,7 +78,9 @@ export class SuperTabNativeStore {
     return this.deps.transaction(async tx => {
       const { state } = await this.deps.row(tx, user, tabId)
       const operator = author(state, { kind: 'person', userId: user.sub, email: user.email }, true)
-      const target = agent(state, request.agentId), group = conversation(state, request.conversationId)
+      const target = agent(state, request.agentId)
+      const group = readConversation(state, { kind: 'person', userId: user.sub, email: user.email }, request.conversationId)
+      groupProject(state, group) // A terminal opens only in a project's conversation, never in the Leads conversation.
       if (group.archived || !group.agentIds.includes(target.id)) fail('AGENT_UNAVAILABLE', 'Choose an agent in this conversation.')
       await this.deps.agentGrant(tx, state, target)
       const grant = await this.deps.contribution(tx, state, { kind: 'person', userId: user.sub, email: user.email }, target)
@@ -96,7 +114,9 @@ export class SuperTabNativeStore {
   async read(user: AuthUser, tabId: string, contextId: string) {
     return this.deps.transaction(async tx => {
       const { binding, record } = await this.hosted(tx, user, tabId, contextId)
-      return { contextId, ...binding, lastEventId: record.lastEventId }
+      // Old recorders ignore this. New recorders keep the old strict request
+      // shape until this backend explicitly advertises recovery support.
+      return { contextId, ...binding, lastEventId: record.lastEventId, recovery: { version: 1, serverTime: Date.now() } }
     })
   }
 
@@ -105,6 +125,46 @@ export class SuperTabNativeStore {
     if (!record) return false
     try { await this.validate(tx, state, record); return true }
     catch (error) { if (error instanceof SuperTabError) return false; throw error }
+  }
+
+  private async recovery(tx: Transaction, tabId: string, group: Conversation, target: Agent, record: SuperTabNativeContext,
+    event: NativeEvent, eventId: string, revision: number): Promise<{ source: Recovery; text: string } | null> {
+    const assignment = group.assignment
+    // A recording gap can also mean ordinary human typing or an expired view.
+    // Older recorders do not distinguish those, so only known interruptions wake the Lead.
+    if (event.kind !== 'gap' || !event.gap || !['recording_restarted', 'history_lost', 'agent_stopped'].includes(event.gap.reason)
+      || !assignment || !activeWork(group) || assignment.agentId !== target.id
+      || !group.leadId || group.leadId === target.id) return null
+    const previous = await tx.superTabMessage.findFirst({ where: { id: record.lastEventId ?? assignment.id, tabId, conversationId: group.id } })
+    const source = previous?.source as { turnId?: string; recovery?: Recovery } | null
+    // Preserve the original checkpoint through repeated gaps. A gap is not new work progress.
+    let checkpoint: Checkpoint = source?.recovery?.checkpoint ?? {
+      eventId: previous?.id ?? null, turnId: source?.turnId ?? null,
+      recordedAt: previous?.createdAt.toISOString() ?? null, sequence: previous?.sequence ?? 0,
+    }
+    const incidentId = event.gap.incidentId
+    const receiptId = stableId('native-recovery', assignment.id, incidentId)
+    const prior = await tx.superTabOperation.findUnique({ where: { id: receiptId } })
+    const progress = assignment.recordingProgress
+    const progressed = !!progress && progress.at >= event.gap.detectedAt
+    if (progress && !progressed && progress.revision > checkpoint.sequence) {
+      const latest = await tx.superTabMessage.findFirst({ where: { tabId, conversationId: group.id, sequence: progress.revision } })
+      if (latest) checkpoint = { eventId: latest.id, turnId: null, recordedAt: latest.createdAt.toISOString(), sequence: latest.sequence }
+    }
+    const required = !prior && !progressed && ['working', 'review'].includes(assignment.status)
+    const recovery: Recovery = { assignmentId: assignment.id, incidentId, reason: event.gap.reason,
+      detectedAt: event.gap.detectedAt, checkpoint, required }
+    const reason = assignment.status === 'review' && event.gap.reason === 'recording_restarted'
+      ? 'Terminal recording restarted while the task was in review.' : gapReasons[event.gap.reason]
+    const next = assignment.status === 'review' ? 'Keep this task in review while you check the agent’s session.'
+      : 'Check the agent’s session, then ask it to continue from the checkpoint and report working.'
+    const text = `Recovery needed for ${target.displayName ?? target.name} on “${group.title}”. ${reason}\n\n`
+      + `Last recorded checkpoint: ${checkpoint.recordedAt ?? 'time unavailable'}.\n\n`
+      + `${next} Do not replay earlier input or commands; they may already have taken effect.`
+    if (required && assignment.status === 'working') { assignment.status = 'blocked'; assignment.result = text }
+    if (!prior) await tx.superTabOperation.create({ data: { id: receiptId, tabId, actorKey: `agent:${target.id}`,
+      requestHash: digest([assignment.id, incidentId]), revision, result: json({ eventId, recovery }) } })
+    return { source: recovery, text }
   }
 
   async append(user: AuthUser, tabId: string, contextId: string, input: NativeEvent) {
@@ -123,15 +183,19 @@ export class SuperTabNativeStore {
         fail('NATIVE_PROMPT_MISSING', 'The terminal prompt was not recorded. Record the observation gap first.')
       }
       const revision = row.revision + 1
+      const recovery = await this.recovery(tx, tabId, group, target, record, event, eventId, revision)
       group.lastMessageSequence = revision
       const observedBy = author(state, { kind: 'agent', agentId: target.id, machineOwnerId: user.sub }, true)
-      const text = event.kind === 'gap' ? 'Some terminal activity could not be recorded. Check the native session for the full conversation.' : event.text
+      const text = recovery?.source.required ? recovery.text : event.kind === 'gap'
+        ? 'Some terminal activity could not be recorded. Check the native session for the full conversation.' : event.text
+      // Leave a legacy group's list absent so the next read can recover its older links too.
+      if (group.pullRequestUrls !== undefined) appendPullRequestUrls(group, [text])
       // Inform the coordinating lead without replaying this input into the agent
       // that already received it. Its resulting programmatic turn is not native input.
-      const recipients = event.kind !== 'gap' && group.leadId && group.leadId !== target.id ? [group.leadId] : []
+      const recipients = (event.kind !== 'gap' || recovery?.source.required) && group.leadId && group.leadId !== target.id ? [group.leadId] : []
       await tx.superTabMessage.create({ data: { id: eventId, tabId, conversationId: group.id, sequence: revision,
         author: json(observedBy), source: json({ kind: 'native', phase: event.kind, turnId: event.turnId,
-          operator: binding.operator, truncated: event.truncated, interrupted: event.interrupted }),
+          operator: binding.operator, truncated: event.truncated, interrupted: event.interrupted, ...(recovery ? { recovery: recovery.source } : {}) }),
         text, replyTo: event.kind === 'answer' ? promptId : null, recipientIds: recipients } })
       for (const recipient of recipients) {
         const lead = agent(state, recipient)
@@ -141,6 +205,8 @@ export class SuperTabNativeStore {
           membershipGeneration: lead.membershipGeneration, authorKind: 'person', authorId: binding.operator.id,
           authorGeneration: binding.operator.membershipGeneration } })
       }
+      noteProjectReports(state, [{ id: eventId, conversationId: group.id, author: observedBy, text,
+        replyTo: null, recipients }], revision, Date.now())
       await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: { revision, state: json(state) } })
       await tx.superTabNativeContext.update({ where: { id: contextId }, data: { lastEventId: eventId } })
       const result = { eventId, revision }
@@ -161,7 +227,13 @@ export async function revokeNativeContexts(tx: Transaction, before: SuperTabStat
   for (const group of before.conversations) {
     const current = after.conversations.find(c => c.id === group.id)
     if (!current || current.archived) conditions.push({ conversationId: group.id })
-    else {
+    // No terminal opens in the Leads conversation (open), so it holds no context to revoke.
+    else if (!isLeads(current)) {
+      for (const member of after.people) {
+        if (!canReadProject(after, { kind: 'person', userId: member.id, email: member.email }, groupProject(after, current))) {
+          conditions.push({ conversationId: group.id, userId: member.id })
+        }
+      }
       const removed = group.agentIds.filter(id => !current.agentIds.includes(id))
       if (removed.length) conditions.push({ conversationId: group.id, agentId: { in: removed } })
     }
@@ -171,6 +243,7 @@ export async function revokeNativeContexts(tx: Transaction, before: SuperTabStat
     const revoked = await tx.superTabNativeContext.findMany({ where, select: { id: true } })
     await tx.superTabNativeContext.updateMany({ where, data: { revoked: true } })
     if (revoked.length) await tx.superTabDelivery.updateMany({ where: { tabId: before.id,
-      nativeContextId: { in: revoked.map(r => r.id) }, status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled' } })
+      nativeContextId: { in: revoked.map(r => r.id) }, status: { in: ['queued', 'claimed', 'uncertain'] } },
+      data: { status: 'cancelled', holdReason: null, holdSince: null } })
   }
 }

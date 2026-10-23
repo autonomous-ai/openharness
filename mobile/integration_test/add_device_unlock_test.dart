@@ -52,6 +52,10 @@ void main() {
       ),
     );
 
+    // The steps first, nothing looked for until Find the device.
+    await waitFor(find.byKey(const Key('add-device-steps')));
+    await shot('steps');
+    await tester.tap(find.byKey(const Key('add-device-continue')));
     // A simulator joins no Wi-Fi by itself; the page finds the device as soon as it answers.
     await waitFor(find.byKey(const Key('add-device-unlock-password')));
     await shot('locked');

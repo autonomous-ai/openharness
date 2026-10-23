@@ -26,7 +26,7 @@ try {
     import { nativeProcessControl } from ${JSON.stringify(join(cli, 'src/lib/nativeProcessControl.ts'))};
     import { NativeEvidenceBudget } from ${JSON.stringify(join(cli, 'src/engines/kit/nativeEvidence.ts'))};
     import { bundledProcessImageHelper, nativeProcessImages } from ${JSON.stringify(join(cli, 'src/lib/nativeProcessImages.ts'))};
-    import { processRows, enrichProcessRows } from ${JSON.stringify(join(cli, 'src/lib/tmux.ts'))};
+    import { processRows, enrichProcessRows } from ${JSON.stringify(join(cli, 'src/lib/processTable.ts'))};
     env.ADAPTER_RUNTIME_DIR = process.argv[2];
     const native = await nativeProcessImages([process.pid], 3000);
     assert.equal(realpathSync(native.images.get(process.pid).path), realpathSync(process.execPath));

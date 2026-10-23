@@ -31,7 +31,7 @@ export function handoffSessionFact(session: RegisteredSession): HandoffSessionFa
 export const nativeContentVersion = (info: BigIntStats): string =>
   `${info.dev}:${info.ino}:${info.mode}:${info.uid}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
 export type HandoffIntent = { agentId: string; changeId: string; targetEngine: string }
-export type HandoffOutcome = { file: string | null; gitRepo: boolean; cwd: string; degraded: Array<'transcript' | 'git' | 'file'> }
+export type HandoffOutcome = { file: string | null; gitRepo: boolean; cwd: string; degraded: Array<'transcript' | 'git' | 'file' | 'summary'> }
 export type HandoffProject = { cwd: string; path: string; fileKey: string; route: NativePathFact[] }
 export type HandoffExclude = { path: string; before: string | null; after: string; route: NativePathFact[]; version: string | null }
 export type HandoffGit = { exclude: string | null; route: NativePathFact[]; files: Array<{ path: string; version: string }> }
@@ -48,9 +48,11 @@ export interface PreparedHandoff {
 /** In process this closure belongs to the trusted service request handler. Across processes
  * only the routed request id travels; core reconstructs its own live request witness. */
 export type HandoffPermit = { requestId?: string; current(request: HandoffIntent): boolean }
+/** Why an identity hold will not clear by retrying, as a code the reply may carry: PROGRAM_REPLACED needs a restart. */
+export type HandoffHold = 'PROGRAM_REPLACED'
 export class HandoffError extends Error {
   constructor(readonly code: 'UNKNOWN_AGENT' | 'NO_PROJECT' | 'BAD_CHANGE_ID' | 'BUSY' | 'TIMEOUT'
-    | 'IDENTITY_UNAVAILABLE' | 'HANDOFF_UNAVAILABLE' | 'CHANGE_CONFLICT') {
+    | 'IDENTITY_UNAVAILABLE' | 'HANDOFF_UNAVAILABLE' | 'CHANGE_CONFLICT', readonly hold?: HandoffHold) {
     super(`handoff: ${code}`)
     this.name = 'HandoffError'
   }

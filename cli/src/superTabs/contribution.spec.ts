@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import { ContributionPreparations, prepareContribution } from './contribution.js'
+import { mkdtemp, rm, stat } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const GiB = 1024 ** 3
 function fixture() {
@@ -23,12 +26,61 @@ function fixture() {
   return { run, state, deps, core, request, close }
 }
 describe('one-field machine preparation', () => {
+  it('contributes a swarm workspace without asking for a project or cloning one', async () => {
+    const f = fixture()
+    const dataDir = await mkdtemp(join(tmpdir(), 'harness-swarm-contribution-'))
+    try {
+      delete f.state.project
+      const core = fakeCore({ dataDir })
+      const result = await prepareContribution(core, { tabId: 'tab', scope: 'swarm' }, f.deps as never)
+      const cwd = join(homedir(), 'harnesses', 'swarms', 'tab')
+      expect(result).toMatchObject({ scope: 'swarm', cwd, engines: ['claude', 'codex'] })
+      expect((await stat(cwd)).isDirectory()).toBe(true)
+      expect(f.deps.prepare).not.toHaveBeenCalled()
+      expect(f.deps.capacity).toHaveBeenCalledWith({ cwd, tools: ['git'], devices: [] })
+    } finally {
+      await rm(join(homedir(), 'harnesses', 'swarms', 'tab'), { recursive: true, force: true })
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
   it('uses the lead project on its host and probes all engines without inventing authentication', async () => {
     const f = fixture()
-    expect(await f.run()).toEqual({ ok: true, state: 'ready', cwd: '/repo', engines: ['claude', 'pi'], maxAgents: 4 })
-    expect(f.request).toHaveBeenCalledWith('engines_probe', { accounts: true }, 20000)
+    expect(await f.run()).toEqual({ ok: true, state: 'ready', cwd: '/repo', engines: ['claude', 'codex'], maxAgents: 8, maxAvailableAgents: 16 })
+    expect(f.request).toHaveBeenCalledWith('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20000)
     expect(f.deps.prepare).not.toHaveBeenCalled()
     expect(f.close).toHaveBeenCalledOnce()
+  })
+  it('offers installed Claude and Codex even when the account probe reports no vendor login', async () => {
+    const f = fixture()
+    f.request.mockResolvedValueOnce({ engines: [
+      { engine: 'claude', installed: true, signedIn: false },
+      { engine: 'codex', installed: true, signedIn: false },
+      { engine: 'opencode', installed: true, signedIn: true },
+      { engine: 'kilo', installed: true, signedIn: true },
+    ] })
+    expect(await f.run()).toMatchObject({ engines: ['claude', 'codex'] })
+  })
+  it.each([
+    { totalGiB: 32, usedGiB: 30, maxAgents: 8, maxAvailableAgents: 16 },
+    { totalGiB: 16, usedGiB: 15, maxAgents: 4, maxAvailableAgents: 8 },
+    { totalGiB: 64, usedGiB: 63, maxAgents: 16, maxAvailableAgents: 16 },
+    { totalGiB: 2, usedGiB: 1, maxAgents: 1, maxAvailableAgents: 1 },
+  ])('suggests $maxAgents of $maxAvailableAgents slots from $totalGiB GiB total RAM', async ({ totalGiB, usedGiB, maxAgents, maxAvailableAgents }) => {
+    const f = fixture()
+    f.deps.capacity.mockResolvedValueOnce({ ok: true, resources: {
+      memoryTotalBytes: totalGiB * GiB, memoryUsedBytes: usedGiB * GiB, projectDiskFreeBytes: 100 * GiB,
+    } })
+    expect(await f.run()).toMatchObject({ maxAgents, maxAvailableAgents })
+  })
+  it('keeps the suggestion when free RAM changes but total RAM does not', async () => {
+    const f = fixture()
+    const slots = async (freeBytes: number) => {
+      f.deps.capacity.mockResolvedValueOnce({ ok: true, resources: { memoryTotalBytes: 32 * GiB, memoryUsedBytes: 32 * GiB - freeBytes, projectDiskFreeBytes: 100 * GiB } })
+      return (await f.run() as { maxAgents?: number }).maxAgents
+    }
+    expect(await slots(5.3 * GiB)).toBe(8)
+    expect(await slots(GiB)).toBe(8)
+    expect(await slots(30 * GiB)).toBe(8)
   })
   it('prepares the repository on another machine and reuses an existing contribution', async () => {
     const f = fixture(); (f.state.project as Record<string, unknown>).machineId = 'another'
@@ -50,7 +102,7 @@ describe('one-field machine preparation', () => {
   it('fails when no installed engine or project disk can be read and closes the connection', async () => {
     const f = fixture()
     f.request.mockResolvedValueOnce({ engines: [] })
-    await expect(f.run()).rejects.toThrow('Sign in')
+    await expect(f.run()).rejects.toThrow('Install Claude Code or Codex')
     f.deps.capacity.mockResolvedValueOnce({ error: 'INVALID_REQUEST' } as never)
     await expect(f.run()).rejects.toThrow('project folder')
     expect(f.close).toHaveBeenCalledTimes(2)

@@ -1,7 +1,9 @@
 /// What the app says when the daemon refuses to move an agent to another model.
 ///
-/// One sentence per refusal, in the app's own words. The daemon's `detail` is not shown: it is
-/// written for its log and names the grid, and the user's vocabulary is "Subscription" and "Local".
+/// One sentence per refusal, in the app's own words. The daemon's `detail` is not shown, except for
+/// `ENGINE_LAUNCH_REFUSED`: elsewhere it is written for its log and names the grid, and the user's
+/// vocabulary is "Subscription" and "Local". An engine launch refusal's detail is written for the
+/// person, so it is shown.
 /// Every code the daemon's `agent_retarget` can answer with is here, and an unknown one still gets a
 /// sentence rather than the code — a new refusal in a newer daemon must not surface as `SOME_CODE`.
 ///
@@ -10,7 +12,11 @@
 /// says why. Until this existed, picking a Local model for a Cursor agent simply did nothing.
 library;
 
-String retargetRefusalMessage(String code, {required String engineLabel}) {
+String retargetRefusalMessage(
+  String code, {
+  required String engineLabel,
+  String? detail,
+}) {
   return switch (code) {
     'GRID_ENGINE_UNSUPPORTED' =>
       '$engineLabel can only run on its own login, not a Local model.',
@@ -25,6 +31,12 @@ String retargetRefusalMessage(String code, {required String engineLabel}) {
     'TMUX_TOO_OLD_FOR_GRID' => "This machine's tmux is too old to move a harness to a Local model. Update tmux there.",
     'TMUX_UNAVAILABLE' || 'TMUX_FAILED' =>
       "This machine's tmux did not answer. Try again in a moment.",
+    'PTY_HOST_UNAVAILABLE' =>
+      "This machine's terminals did not answer. Run harness start there, then try again.",
+    'ENGINE_LAUNCH_REFUSED' =>
+      detail != null && detail.isNotEmpty
+      ? detail
+      : "$engineLabel cannot start on this machine with the new model.",
     // Changing model restarts the agent's process, which would cut off the
     // reply it is writing — so the daemon waits for the person, and the
     // sentence says what to do rather than naming the state ("mid-turn" read

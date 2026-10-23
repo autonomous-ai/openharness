@@ -686,3 +686,64 @@ describe('hn launcher migration', () => {
     expect(existsSync(hnPath())).toBe(false)
   })
 })
+
+describe('the managed runtimes on Windows', () => {
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'harness-runtime-windows-'))
+    runtimeDir = join(root, '.harness', 'runtime')
+    binDir = join(root, '.local', 'bin')
+    cliDir = join(root, '.harness', 'cli')
+    mkdirSync(runtimeDir, { recursive: true })
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    rmSync(root, { recursive: true, force: true })
+    for (const key of ['ADAPTER_RUNTIME_DIR', 'HARNESS_BIN_DIR', 'ADAPTER_CLI_DIR', 'ADAPTER_RUNTIME_METADATA_URL', 'ADAPTER_GRID_RUNTIME_METADATA_URL', 'HARNESS_GRID_BIN']) {
+      delete process.env[key]
+    }
+  })
+
+  it('names the Windows platforms the way the manifests key them, and nothing it publishes nothing for', async () => {
+    const { platformKey } = await load()
+    expect(platformKey('win32', 'x64')).toBe('win32-x64')
+    expect(platformKey('win32', 'arm64')).toBe('win32-arm64')
+    expect(platformKey('darwin', 'arm64')).toBe('darwin-arm64')
+    expect(platformKey('linux', 'x64')).toBe('linux-x64')
+    expect(platformKey('win32', 'ia32')).toBeNull()
+    expect(platformKey('freebsd', 'x64')).toBeNull()
+  })
+
+  it('unpacks with the tar.exe Windows ships, never a tar from PATH, and nodejs.org\'s tarball with /usr/bin/tar elsewhere', async () => {
+    const { unpackCommand } = await load()
+    expect(unpackCommand('C:\\r\\.node-staging-1\\node.zip', 'C:\\r\\.node-staging-1', 'win32', 'D:\\Windows')).toEqual({
+      file: 'D:\\Windows\\System32\\tar.exe',
+      args: ['-xf', 'C:\\r\\.node-staging-1\\node.zip', '-C', 'C:\\r\\.node-staging-1'],
+    })
+    // A scrubbed environment with no SystemRoot falls back to Windows' own folder, never to a relative tar.exe.
+    expect(unpackCommand('a.zip', 'b', 'win32', '').file).toBe('C:\\Windows\\System32\\tar.exe')
+    expect(unpackCommand('/r/node.tar.gz', '/r', 'darwin')).toEqual({ file: '/usr/bin/tar', args: ['-xzf', '/r/node.tar.gz', '-C', '/r'] })
+  })
+
+  it('lays Node out as nodejs.org ships it: a zip with node.exe at its root folder on Windows, bin/node in a tarball elsewhere', async () => {
+    const { runtimeLayout } = await load()
+    expect(runtimeLayout('win32')).toEqual({ archiveSuffix: '.zip', nodeBinary: 'node.exe', eol: '\r\n' })
+    expect(runtimeLayout('darwin')).toEqual({ archiveSuffix: '.tar.gz', nodeBinary: join('bin', 'node'), eol: '\n' })
+    expect(runtimeLayout('linux')).toEqual({ archiveSuffix: '.tar.gz', nodeBinary: join('bin', 'node'), eol: '\n' })
+  })
+
+  it('installs no grid on Windows: nothing is fetched and nothing is laid down, even with a pointer left behind', async () => {
+    installedGrid('0.3.47', 'win32-x64', true)
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const { ensureManagedGrid } = await load()
+    const platform = process.platform
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    try {
+      expect(await ensureManagedGrid()).toBeNull()
+    } finally {
+      Object.defineProperty(process, 'platform', { value: platform })
+    }
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+})

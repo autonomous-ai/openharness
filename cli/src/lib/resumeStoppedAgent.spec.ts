@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { resumeStoppedAgent, waitForResumedAgent } from './resumeStoppedAgent.js'
 import { AgentRestartCoordinator } from './restartAgent.js'
-import type { RuntimeCheck } from './tmux.js'
+import type { RuntimeCheck } from './paneEngineProcess.js'
 import type { RegisteredSession } from './registry.js'
 
 const saved = { agentId: 'saved-agent', sessionId: 'original-conversation', engine: 'codex', cwd: '/work', codexHome: '/profile', permissionMode: 'plan' } as RegisteredSession

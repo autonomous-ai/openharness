@@ -82,6 +82,37 @@ describe('which agent a hook belongs to', () => {
     expect(console.log).not.toHaveBeenCalled()
   })
 
+  it('the agent on a hinted pty host pane, with no tmux to resolve tmux hints', async () => {
+    const a1 = agent('a1', 100)
+    const { deps, hooks } = setup({ '%1': a1 }, { tmuxBackend: null, ptyHostBackend: {} })
+    vi.mocked(processRows).mockResolvedValueOnce(tree([300, 200], [200, 100], [100, 1]) as never)
+    const pty = { backend: 'ptyhost' as const, instance: 'p1', paneId: '%1' }
+    expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [pty], callerPid: 300 })).toEqual(a1)
+    expect(deps.agentReconciler.triggerHint).toHaveBeenCalledExactlyOnceWith(pty, 'claude')
+    expect(deps.registry.byRuntimeEngine).toHaveBeenCalledWith(pty, 'claude')
+  })
+
+  it('accepts tmux hints after the missing backend recovers in this daemon', async () => {
+    const a1 = agent('a1', 100)
+    const { deps, hooks } = setup({ '%1': a1 }, { tmuxBackend: null })
+    deps.tmuxBackend = {}
+    vi.mocked(processRows).mockResolvedValueOnce(tree([300, 200], [200, 100], [100, 1]) as never)
+    expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300 })).toEqual(a1)
+    expect(deps.agentReconciler.triggerHint).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%1' }, 'claude')
+  })
+
+  it.each([
+    ['no pty host backend', {}, { instance: 'p1', paneId: '%1' }],
+    ['an instance that is not one', { ptyHostBackend: {} }, { instance: 'p1\u0000x', paneId: '%1' }],
+    ['a pane that is not one', { ptyHostBackend: {} }, { instance: 'p1', paneId: '1' }],
+  ] as const)('ignores a pty host hint with %s, and never throws on it', async (_case, over, fields) => {
+    const { deps, hooks } = setup({ '%1': agent('a1', 100) }, { tmuxBackend: null, ...over })
+    vi.mocked(processRows).mockResolvedValueOnce(tree([300, 200], [200, 100], [100, 1]) as never)
+    expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [{ backend: 'ptyhost', ...fields }], callerPid: 300 })).toBeNull()
+    expect(deps.agentReconciler.triggerHint).not.toHaveBeenCalled()
+    expect(deps.registry.byRuntimeEngine).not.toHaveBeenCalled()
+  })
+
   it('does not give a delayed hook to a replacement with the same PID', async () => {
     const original = agent('original', 100)
     const replacement = { ...agent('replacement', 100), processIdentity: { pid: 100, startMarker: 'replacement' } } as RegisteredSession

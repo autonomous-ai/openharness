@@ -50,6 +50,7 @@ function setup(physical = false) {
   const registry = {
     byAgent: (id: string) => id === session?.agentId ? session : undefined,
     advertised: () => session ? [session] : [], list: () => session ? [session] : [],
+    afterTransaction: async <T>(action: () => T): Promise<T> => action(),
     setClosePlan: vi.fn((_id: string, plan: RegisteredSession['closePlan'] | null) => { session!.closePlan = plan ?? undefined; return session }),
   } as unknown as ClosingDeps['registry']
   const stopped = vi.fn()
@@ -64,7 +65,7 @@ function setup(physical = false) {
   const stopDeps: StopAgentServiceDeps = {
     registry: { resolve: () => session },
     stoppedAgents: { save: vi.fn(), finishResume: vi.fn() } as unknown as StopAgentServiceDeps['stoppedAgents'],
-    restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), tmuxBackend: new TmuxBackend(),
+    restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), backendFor: (() => { const tmux = new TmuxBackend(); return () => tmux })(),
     agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
     forgetSession: vi.fn(() => { stopped(); session = undefined }), markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: vi.fn(async () => {}),
   }

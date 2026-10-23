@@ -14,7 +14,7 @@ import subprocess
 
 
 CORE = {"cli", "desktop", "tui", "backend", "companions"}
-EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons"}
+EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons", "pty"}
 SUITES = CORE | EXTRA | {"pro"}
 JOBS = {
     "cli": {"cli-typecheck", "cli-tests"},
@@ -28,7 +28,16 @@ MANUAL = {"full": CORE, "all": SUITES, "process": set(), **{name: {name} for nam
 # scripts, store, fixtures) is covered by the plan's actionlint and process checks.
 COMPONENTS = {"cli": "cli", "tests": "cli", "desktop": "desktop", "tui": "tui", "backend": "backend",
               "companions": "companions", "website": "website", "os": "os", "provider": "provider",
-              "devices": "firmware", "mobile": "mobile", "daemons": "daemons"}
+              "devices": "firmware", "mobile": "mobile", "daemons": "daemons", "pty": "pty", "term": "pty",
+              # harness-install.exe's model and steps test on Linux; its Windows half runs in windows-desktop.yml.
+              "installer": "pty"}
+# Paths inside another component that also select a suite: the PTY host's suite runs the CLI's
+# ptyhost terminal contract against the host it builds, and the host builds on the vendored terminal.
+# The shipped TUI (`hn`) builds on term/ as the host does, so a term/ change runs its tests too.
+# The Windows pipe's shared proof vectors are read by the desktop app's test as well as the CLI's spec.
+ALSO = {"cli/src/lib/ptyHost/": "pty", "cli/src/lib/ptyHostBackend": "pty",
+        "cli/src/lib/terminalBackend.contract.ts": "pty", "tui/vendor/": "pty", "term/": "tui",
+        "cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json": "desktop"}
 # Narrower directories that add a suite on top of their component's (the ESP32-P4 build and golden screens).
 SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 
@@ -50,6 +59,7 @@ def select(paths):
             raise ValueError("invalid changed path")
         suite = COMPONENTS.get(path.split("/", 1)[0])
         scopes = {suite} if suite else set()
+        scopes |= {also for prefix, also in ALSO.items() if path.startswith(prefix)}
         scopes |= {extra for prefix, extra in SUBCOMPONENTS.items() if path.startswith(prefix)}
         selected |= scopes
         reasons[path] = sorted(scopes)

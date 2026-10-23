@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ProcessRow } from './tmux.js'
+import type { ProcessRow } from './processTable.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import type { TerminalRootObservation, TerminalRuntimeRef } from './terminalTypes.js'
 
@@ -18,8 +18,8 @@ const processRows = vi.hoisted(() => vi.fn())
 vi.mock('./gatewayRuntime.js', () => ({ probeGatewayRuntime }))
 vi.mock('./gridAssignment.js', () => ({ probeGridAssignment }))
 vi.mock('../engines/discoveries.js', async (real) => ({ ...await real<object>(), probeProfileHome }))
-vi.mock('./tmux.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('./tmux.js')>(),
+vi.mock('./processTable.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./processTable.js')>(),
   processRows,
 }))
 

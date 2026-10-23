@@ -1,0 +1,4 @@
+{"label":"idle-0","panes":0,"seconds":60,"tmuxPid":29811,"psCpuAvgPct":0.00,"cpuTimePct":0.00,"rssMB":1.5}
+{"label":"idle-4","panes":4,"seconds":60,"tmuxPid":29811,"psCpuAvgPct":0.00,"cpuTimePct":0.00,"rssMB":1.6}
+{"label":"idle-8","panes":8,"seconds":60,"tmuxPid":29811,"psCpuAvgPct":0.00,"cpuTimePct":0.00,"rssMB":2.3}
+{"label":"streaming-1","panes":1,"seconds":60,"tmuxPid":29811,"psCpuAvgPct":42.60,"cpuTimePct":43.45,"rssMB":4.6}

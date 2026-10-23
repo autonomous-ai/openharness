@@ -70,6 +70,8 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
     card: (frame) => event('card', { frame }),
     desk: (agentIds, foreground) => event('desk', { agentIds, foreground }),
     swarms: (swarms) => event('swarms', { swarms }),
+    swarmCards: (items) => event('swarmCards', { items }),
+    swarmCardRecap: (recap) => event('swarmCardRecap', { recap }),
     unread: (items) => event('unread', { items }),
     appFocus: (machineId, agentId) => event('appFocus', { machineId, agentId }),
     seen: (agentId, readToken) => event('seen', { agentId, ...(readToken === undefined ? {} : { readToken }) }),
@@ -120,6 +122,13 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
     models: async ({ agentId }) => ({ models: await core.agents.runtimeModels(text(agentId)) }),
     fork: async ({ agentId }) => ({ ...await core.agents.fork(text(agentId)) }),
     machines: () => core.account.machines(),
+    // The Swarm cards' requests (core/main.ts `superTabRequest` allows those and no other action of the Super Tab service).
+    super_tabs: async (payload) => {
+      if (!core.superTabRequest) return { error: 'SERVICE_UNAVAILABLE' }
+      const { action, tabId, leadId, on, include, session, harnessId, text } = payload
+      return core.superTabRequest(action === 'cardsWanted' ? { action, on: on === true, include }
+        : action === 'cardSay' ? { action, harnessId, text } : { action, tabId, leadId, session })
+    },
     // The transcriber's and the fleet's lane's sign-in, and the lane's sealing, asked of the core at every
     // use as every service in its own process asks them (core/accountQueries.ts): the devices hold no
     // credential and no E2EE identity.

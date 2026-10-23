@@ -15,13 +15,15 @@ const policy = { version: 1, floor: { low: 1, medium: 2, high: 3 }, quotaReserve
 const agents = [
   { id: 'a1', name: 'Multiply', machineId: 'm1', harnessId: 'h1', configuration: { engine: 'claude', model: 'sonnet', effort: 'medium' } },
   { id: 'lead', name: 'Lead', machineId: 'm1', harnessId: 'hl', configuration: { engine: 'claude', model: 'opus', effort: 'high' } },
+  // An engine the route does not offer: it only puts m2 in the Swarm's Machines list, as a person adding the machine does.
+  { id: 'a2', name: 'Elsewhere', machineId: 'm2', harnessId: 'h2', configuration: { engine: 'pi', model: 'default', effort: 'default' } },
 ]
 const conversations = (assignment: unknown = null) => [
   { id: 'lead', title: 'Lead', leadId: 'lead', agentIds: ['lead', 'a1'], archived: false, brief: '', checks: [], assignment: null },
   { id: 'g1', title: 'API', leadId: 'lead', agentIds: ['lead'], archived: false, brief: 'Add the endpoint.', checks: [{ description: 'Tests pass' }], assignment },
 ]
 const tab = (assignment: unknown = null) => ({ revision: 3, state: { id: 'tab', agents, conversations: conversations(assignment) } })
-const usage = { providers: [{ provider: 'claude', outcome: 'answered', httpStatus: 200, account: 'acct', body: { five_hour: { utilization: 40, resets_at: '2026-10-19T12:00:00Z' }, seven_day: { utilization: 10 } } }] }
+const usage = { providers: [{ provider: 'claude', outcome: 'answered', httpStatus: 200, account: 'acct', body: { five_hour: { utilization: 40, resets_at: new Date(Date.now() + 3 * 3_600_000).toISOString() }, seven_day: { utilization: 10 } } }] }
 function daemon(machineId: string, options: { agents?: string[]; frames?: Record<string, Record<string, unknown>>; capacity?: Record<string, unknown>; terminalAvailable?: boolean; tools?: Record<string, boolean>; devices?: Record<string, boolean>; usage?: unknown; listFails?: boolean; engines?: unknown } = {}) {
   return {
     machineId, close: vi.fn(),
@@ -38,16 +40,10 @@ function daemon(machineId: string, options: { agents?: string[]; frames?: Record
   }
 }
 type Answer = Record<string, unknown>
-function scoped(answers: { jev?: Answer; record?: Answer; tab?: unknown; context?: Answer; history?: Answer; historyHangs?: boolean; jevThrows?: boolean; recordThrows?: boolean } = {}) {
+function scoped(answers: { record?: Answer; tab?: unknown; context?: Answer; history?: Answer; historyHangs?: boolean; recordThrows?: boolean } = {}) {
   return vi.fn(async (payload: Record<string, any>): Promise<Record<string, unknown>> => {
     if (payload.action === 'routeContext') return answers.context ?? { ok: true, value: { agentId: 'lead', tab: answers.tab ?? tab(), policy: { policy, warnings: ['w'] }, machines: [{ machineId: 'm1', name: 'remote-1' }, { machineId: 'm2', name: 'mac' }] } }
-    if (payload.action === 'routeHistory') return answers.historyHangs ? new Promise(() => {}) : answers.history ?? { ok: true, value: { messages: [], decisions: [], attempts: [] } }
-    if (payload.action === 'routeJev') {
-      if (answers.jevThrows) throw new Error('socket closed')
-      // Jev answers over every candidate it was shown, as the real client's answers do.
-      const ids = Object.keys(payload.questions.who.criteria)
-      return answers.jev ?? { ok: true, value: { answers: { who: { choice: 'c1', probabilities: Object.fromEntries(ids.map(id => [id, id === 'c1' ? 0.9 : 0.1 / (ids.length - 1)])) } } } }
-    }
+    if (payload.action === 'routeHistory') return answers.historyHangs ? new Promise(() => {}) : answers.history ?? { ok: true, value: { decisions: [], attempts: [] } }
     if (payload.action === 'command') {
       if (answers.recordThrows) throw new Error('socket closed')
       return answers.record ?? { ok: true, value: { result: { routeDecisionId: 'd1' } } }
@@ -59,13 +55,35 @@ const where = { port: 1, dataDir: '/nonexistent', machineId: 'm1' }
 const input = { tabId: 'tab', conversationId: 'g1', assessment: { difficulty: 'medium', risk: 'low', why: 'Endpoint.' } }
 const opener = (make: (id: string) => ReturnType<typeof daemon> = id => daemon(id, { agents: id === 'm1' ? ['h1'] : [] })) => vi.fn(async (_w: unknown, id = '') => make(id)) as unknown as typeof openDaemon & Mock
 const recorded = (s: ReturnType<typeof scoped>) => s.mock.calls.find(c => c[0].action === 'command')![0]
-const jevCall = (s: ReturnType<typeof scoped>) => s.mock.calls.find(c => c[0].action === 'routeJev')![0]
+/** Each candidate's line, as the route log keeps it. */
+const labels = (s: ReturnType<typeof scoped>) => (recorded(s).command.decision.candidates as Array<{ label: string }>).map(c => c.label)
 
 describe('routeTask', () => {
-  it('collects members and new agents, asks Jev, records and returns the pick', async () => {
+  it('never offers OpenCode or Kilo even if an old policy enables them', async () => {
+    const oldPolicy = { ...policy, models: [...policy.models.map(model => ({ ...model, enabled: false })),
+      { engine: 'opencode', model: 'default', effort: 'default', quality: 3, cost: 1, enabled: true },
+      { engine: 'kilo', model: 'default', effort: 'default', quality: 3, cost: 1, enabled: true }] }
+    const oldTab = tab(); oldTab.state.agents = [agents[1]]
+    const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: oldTab, policy: { policy: oldPolicy },
+      machines: [{ machineId: 'm1', name: 'remote-1' }] } } })
+    const result = await routeTask(input, s, where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [],
+      engines: [{ engine: 'claude', installed: true }, { engine: 'opencode', installed: true }, { engine: 'kilo', installed: true }] })))
+    expect(result).toMatchObject({ error: 'NO_CANDIDATE' })
+  })
+  it('offers the same member after Change agent when only its replacement terminal is live', async () => {
+    const rebound = tab()
+    rebound.state.agents = agents.map(a => a.id === 'a1' ? { ...a, harnessId: 'replacement' } : a)
+    const s = scoped({ tab: rebound })
+    const result = await routeTask(input, s, where as never, opener(id => daemon(id, { agents: ['replacement'] })), () => 'op')
+    expect(result).toMatchObject({ ok: true, pick: { kind: 'member', agentId: 'a1' } })
+    expect(recorded(s).command.decision.excluded.some((c: { title: string }) => c.title.startsWith('Multiply'))).toBe(false)
+  })
+  it('collects members and new agents, records and returns the first in the order, and never asks Jev', async () => {
     const s = scoped()
     const result = await routeTask(input, s, where as never, opener(), () => 'op')
-    expect(result).toMatchObject({ ok: true, routeDecisionId: 'd1', via: 'jev', pick: { id: 'c1' }, warnings: ['w'] })
+    expect(result).toMatchObject({ ok: true, routeDecisionId: 'd1', via: 'order', p: null, pick: { id: 'c0' }, warnings: ['w'] })
+    expect(s.mock.calls.map(c => c[0].action)).toEqual(['routeContext', 'routeHistory', 'command'])
+    expect(recorded(s).command.decision).not.toHaveProperty('context')
     const record = recorded(s)
     expect(record).toMatchObject({ operationId: 'route-op', command: { type: 'route.record', conversationId: 'g1' } })
     // The idle Lead is not a candidate (neither the group's nor the tab's); the idle member Multiply is.
@@ -82,14 +100,58 @@ describe('routeTask', () => {
     expect(offered.length).toBeGreaterThan(0)
     expect(offered.some(c => /^(Lead|Multiply) ·/.test(c))).toBe(false)
   })
+  it('does not offer a member that is already working on a task', async () => {
+    const s = scoped({ tab: tab({ id: 'x', agentId: 'a1', status: 'working' }) })
+    await routeTask(input, s, where as never, opener(id => daemon(id, { agents: ['h1'] })))
+    expect((recorded(s).command.decision.candidates as Array<{ title: string }>).some(c => c.title.startsWith('Multiply'))).toBe(false)
+  })
+  it('leaves out what breaks the owner\'s rules in the tab, and ignores a rule it cannot read', async () => {
+    const ruled = tab(); (ruled.state as Record<string, unknown>).rules = [{ id: 'r1', rule: { kind: 'forbidModel', model: 'sonnet' }, text: 'No Sonnet.' }, { id: 'r2', text: 7 }]
+    const s = scoped({ tab: ruled })
+    const result = await routeTask(input, s, where as never, opener(), () => 'op')
+    expect(result).toMatchObject({ ok: true, pick: { model: 'opus' }, belowFloor: false })
+    const decision = recorded(s).command.decision
+    expect(decision.candidates.every((c: { model: string }) => c.model === 'opus')).toBe(true)
+    expect(decision.excluded).toEqual(expect.arrayContaining([{ title: 'Multiply · Claude sonnet medium · remote-1', reason: 'Breaks the owner\'s rule: No Sonnet.' }]))
+  })
+  it('applies only the rules of the group\'s project', async () => {
+    // 2026-10-23: one project's rules (three machines, no Haiku, high effort) left every other project's Lead without candidates.
+    const models = async (projectId: string) => {
+      const ruled = tab(); (ruled.state as Record<string, unknown>).rules = [{ id: 'r1', projectId, rule: { kind: 'forbidModel', model: 'sonnet' }, text: 'No Sonnet.' }]
+      const s = scoped({ tab: ruled })
+      await routeTask(input, s, where as never, opener(), () => 'op')
+      return new Set(recorded(s).command.decision.candidates.map((c: { model: string }) => c.model))
+    }
+    expect(await models('other')).toContain('sonnet')
+    expect(await models('lead')).not.toContain('sonnet')
+  })
+  it('offers a Reviewer only for a review group, and starts a new one as a Reviewer', async () => {
+    const offered = async (reviewer: boolean, reviewGroup: boolean) => {
+      const t = tab(); t.state.agents = agents.map(a => a.id === 'a1' && reviewer ? { ...a, role: 'reviewer' } : a)
+      if (reviewGroup) (t.state.conversations[1] as Record<string, unknown>).reviewOf = 'g0'
+      const s = scoped({ tab: t })
+      const result = await routeTask(input, s, where as never, opener(), () => 'op')
+      const titles = (recorded(s).command.decision.candidates as Array<{ title: string }>).map(c => c.title)
+      return { member: titles.some(c => c.startsWith('Multiply')), next: String(result.next) }
+    }
+    expect((await offered(true, false)).member).toBe(false)
+    expect((await offered(false, true)).member).toBe(false)
+    expect((await offered(true, true)).member).toBe(true)
+    const fresh = await offered(false, true)
+    expect(fresh.next).toContain('"name":"Reviewer","role":"reviewer"')
+    expect((await offered(false, false)).next).not.toContain('"role"')
+  })
   it('tells the Lead how to assign a member or start a new agent with the decision', async () => {
-    const member = await routeTask(input, scoped({ jev: { ok: true, value: { unavailable: 'BUSY' } } }), where as never, opener(), () => 'op')
+    const member = await routeTask(input, scoped(), where as never, opener(), () => 'op')
     // Cheapest first: the member on sonnet.
     expect(member).toMatchObject({ pick: { kind: 'member', agentId: 'a1' } })
     expect(member.next).toContain('"type":"work.assign","conversationId":"g1","agentId":"a1","routeDecisionId":"d1"')
-    const fresh = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'high' } }, scoped({ jev: { ok: true, value: { unavailable: 'BUSY' } } }), where as never, opener(), () => 'op')
+    const fresh = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'high' } }, scoped(), where as never, opener(), () => 'op')
     expect(fresh).toMatchObject({ pick: { kind: 'new', engine: 'claude', model: 'opus', effort: 'high' } })
     expect(fresh.next).toContain('"engine":"claude","model":"opus","effort":"high","routeDecisionId":"d1"')
+    // Without a branch the agent starts from the default one, and the hint says how to choose another.
+    expect(fresh.next).toContain('"branchRef":"refs/remotes/origin/BRANCH"')
+    expect(fresh.next).toContain('default branch, fetched first')
     // A complete start: every field its schema requires, with the defaults the help gives.
     const hint = JSON.parse(/start OPERATION_ID (\{.*\}), then/.exec(fresh.next as string)![1]!)
     expect(hint).toEqual({ conversationId: 'g1', name: 'Builder', cwd: '/absolute/repo/on/that/machine', worktree: true,
@@ -132,9 +194,57 @@ describe('routeTask', () => {
     const fine = await routeTask(input, scoped(), where as never, opener(), () => 'op')
     expect(fine.warnings).toEqual(['w'])
   })
+  it('considers only the account machines the Swarm lists, and always the Lead\'s own', async () => {
+    const context = { ok: true, value: { agentId: 'lead', tab: tab(), policy: { policy }, machines: [{ machineId: 'm1', name: 'remote-1' }, { machineId: 'm2', name: 'mac' }, { machineId: 'm9', name: 'vm' }] } }
+    const s = scoped({ context }), open = opener()
+    await routeTask(input, s, where as never, open, () => 'op')
+    // m9 is the account's but not in the Swarm's list: it is neither probed nor a candidate nor an exclusion.
+    expect(open.mock.calls.map(c => c[1]).sort()).toEqual(['m1', 'm2'])
+    const decision = recorded(s).command.decision
+    expect([...decision.candidates, ...decision.excluded].some((c: { title: string }) => c.title.includes('vm'))).toBe(false)
+    expect(decision.candidates.some((c: { machineId?: string; title: string }) => c.title.includes('mac'))).toBe(true)
+  })
+  it('offers new agents on the Lead\'s own machine when the account list could not be read', async () => {
+    const context = { ok: true, value: { agentId: 'lead', tab: tab(), policy: { policy }, machines: [], machinesUnreadable: true } }
+    const s = scoped({ context }), open = opener()
+    await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'high' } }, s, where as never, open, () => 'op')
+    expect(open.mock.calls.map(c => c[1])).toEqual(['m1'])
+    expect(recorded(s).command.decision.candidates.some((c: { title: string }) => c.title.startsWith('New agent') && c.title.includes('m1'))).toBe(true)
+  })
+  it('says a listed machine without the project folder needs it cloned, not that its disk could not be verified', async () => {
+    const needs = { cwd: '/repo/api' }
+    const noFolder = { ok: true, resources: { memoryTotalBytes: 8e9, memoryUsedBytes: 1e9, cpuPercent: 10 }, tools: {}, devices: {} }
+    const s = scoped()
+    await routeTask({ ...input, assessment: { ...input.assessment, needs } }, s, where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], capacity: id === 'm1' ? { ...noFolder, tools: { git: true } } : noFolder })), () => 'op')
+    const excluded = recorded(s).command.decision.excluded as Array<{ title: string; reason: string }>
+    const reasonOf = (machine: string) => excluded.filter(e => e.title.includes(machine)).map(e => e.reason)
+    expect(reasonOf('mac').some(r => r.includes('This machine does not have the project folder. Add it to the Swarm so it can clone the project.'))).toBe(true)
+    expect(reasonOf('mac').some(r => /Project disk space/.test(r))).toBe(false)
+    // Its other reasons stay.
+    expect(reasonOf('mac').some(r => /Required tool not verified: git/.test(r))).toBe(true)
+    // The Lead's own machine keeps the plain reason: its folder was named by the Lead itself.
+    expect(reasonOf('remote-1').some(r => r.includes('Project disk space could not be verified.'))).toBe(true)
+  })
+  it('offers a listed machine whose capacity read measured the project folder', async () => {
+    const s = scoped()
+    await routeTask({ ...input, assessment: { ...input.assessment, needs: { cwd: '/repo/api' } } }, s, where as never,
+      opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], capacity: { ok: true, resources: { memoryTotalBytes: 8e9, memoryUsedBytes: 1e9, cpuPercent: 10, projectDiskFreeBytes: 1e11 }, tools: { git: true }, devices: {} } })), () => 'op')
+    expect(recorded(s).command.decision.candidates.some((c: { title: string }) => c.title.startsWith('New agent') && c.title.includes('mac'))).toBe(true)
+  })
+  it('keeps "could not be verified" on a listed machine whose capacity read failed, because a failed read says nothing about the folder', async () => {
+    const s = scoped()
+    await routeTask({ ...input, assessment: { ...input.assessment, needs: { cwd: '/repo/api' } } }, s, where as never,
+      opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], ...(id === 'm2' ? { capacity: { ok: false, error: 'UNSUPPORTED' } } : {}) })), () => 'op')
+    const reasons = (recorded(s).command.decision.excluded as Array<{ title: string; reason: string }>).filter(e => e.title.includes('mac')).map(e => e.reason)
+    expect(reasons.length).toBeGreaterThan(0)
+    for (const reason of reasons) {
+      expect(reason).toContain('Project disk space could not be verified.')
+      expect(reason).not.toContain('does not have the project folder')
+    }
+  })
   it('names a member that has no name, model or effort of its own, and leaves the decision blank when it is unrecorded', async () => {
     const plain = tab(); plain.state.agents = [{ id: 'a1', machineId: 'm1', harnessId: 'h1', configuration: { engine: 'claude' } }, agents[1]] as never
-    const options = { tab: plain, record: { error: 'BACKEND_UNAVAILABLE' }, jev: { ok: true, value: { unavailable: 'BUSY' } } }
+    const options = { tab: plain, record: { error: 'BACKEND_UNAVAILABLE' } }
     const easy = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low' } }, scoped(options), where as never, opener())
     expect(easy).toMatchObject({ unrecorded: true, pick: { kind: 'member', title: 'Member · Claude default default · remote-1' } })
     expect(easy.next).not.toContain('routeDecisionId')
@@ -147,13 +257,6 @@ describe('routeTask', () => {
     const s = scoped({ context: { ok: true, value: { agentId: 'a1', tab: tab(), policy: { policy }, machines: [] } } })
     expect(await routeTask(input, s, where as never, open as never)).toMatchObject({ error: 'LEAD_REQUIRED' })
     expect(open).not.toHaveBeenCalled()
-  })
-  it('returns a Jev-stage refusal as the result instead of falling back to the policy order', async () => {
-    for (const error of ['RATE_LIMITED', 'LEAD_REQUIRED']) {
-      const s = scoped({ jev: { error, detail: 'no', status: 429 } })
-      expect(await routeTask(input, s, where as never, opener())).toMatchObject({ error })
-      expect(s.mock.calls.some(c => c[0].action === 'command')).toBe(false)
-    }
   })
   it('returns a record refusal as an error, and only a transport failure as unrecorded', async () => {
     expect(await routeTask(input, scoped({ record: { error: 'RATE_LIMITED', detail: 'slow down', status: 429 } }), where as never, opener()))
@@ -184,7 +287,7 @@ describe('routeTask', () => {
   })
   it('prefers a member whose capacity is known over one on a machine that cannot be read', async () => {
     const two = tab(); two.state.agents = [...agents, { id: 'a2', name: 'Collab', machineId: 'theirs', harnessId: 'h2', configuration: { engine: 'claude', model: 'sonnet', effort: 'medium' } }] as never
-    const s = scoped({ tab: two, jev: { ok: true, value: { unavailable: 'BUSY' } } })
+    const s = scoped({ tab: two })
     const open = vi.fn(async (_w: unknown, id: string) => id === 'theirs' ? Promise.reject(new Error('not yours')) : daemon(id, { agents: id === 'm1' ? ['h1'] : [] })) as never
     // theirs is not in the account's list, m1 is; the unknown collaborator member is shown only as a fallback.
     const result = await routeTask(input, s, where as never, open)
@@ -192,7 +295,9 @@ describe('routeTask', () => {
     const titles = (recorded(s).command.decision.candidates as Array<{ title: string }>).map(c => c.title)
     expect(titles.some(t => t.startsWith('Multiply'))).toBe(true)
     expect(titles.some(t => t.startsWith('Collab'))).toBe(false)
-    expect(recorded(s).command.decision.excluded.some((e: { title: string }) => e.title.startsWith('Collab'))).toBe(false)
+    // Left out because others' quota fits, which the log says.
+    expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([{ title: 'Collab · Claude sonnet medium · theirs',
+      reason: 'Its quota could not be read in full, and another candidate\'s quota fits this task.' }]))
   })
   it('opens a machine only members know and probes its members, but starts nothing new there', async () => {
     const two = tab(); two.state.agents = [{ ...agents[0], machineId: 'theirs' }, agents[1]] as never
@@ -210,36 +315,61 @@ describe('routeTask', () => {
       { id: 'a3', name: 'Sonnet hand', machineId: 'm1', harnessId: 'h3', configuration: { engine: 'claude', model: 'claude-sonnet-4-5[1m]', effort: 'medium' } },
       { id: 'a4', name: 'Codex hand', machineId: 'm1', harnessId: 'h4', configuration: { engine: 'codex', model: 'gpt-5.5', effort: 'high' } },
       agents[1]] as never
-    const s = scoped({ tab: working, jev: { ok: true, value: { unavailable: 'BUSY' } } })
+    const s = scoped({ tab: working })
     const open = opener(id => daemon(id, { agents: id === 'm1' ? ['h1', 'h3', 'h4'] : [], usage: { providers: [] }, engines: [{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: true }] }))
     await routeTask(input, s, where as never, open)
     const rated = Object.fromEntries((recorded(s).command.decision.candidates as Array<{ title: string; quality: number; cost: number }>)
       .filter(c => /hand/.test(c.title)).map(c => [c.title.split(' · ')[0], [c.quality, c.cost]]))
     expect(rated).toEqual({ 'Opus hand': [3, 3], 'Sonnet hand': [2, 2], 'Codex hand': [3, 2] })
   })
-  it('falls back to the policy order when Jev is unavailable, and still routes when recording fails', async () => {
-    const result = await routeTask(input, scoped({ jev: { ok: true, value: { unavailable: 'BUSY' } }, record: { error: 'BACKEND_UNAVAILABLE' } }), where as never, opener())
+  it('counts the quota open picks hold on the same account, and tells the Lead when nobody is expected to cover the task', async () => {
+    const pick = { conversationId: 'g1', title: 'Pick', outcome: null, assignmentId: 'as1', createdAt: new Date().toISOString(), final: { kind: 'new', engine: 'claude', model: 'opus' } }
+    const decisions = [{ ...pick, id: 'd1', account: 'acct', spend: { '5-hour': 45, weekly: 6 }, size: 'medium' },
+      // A finished pick, one not yet started and one from before phase 1 hold nothing.
+      { ...pick, id: 'd2', account: 'acct', spend: { '5-hour': 45 }, size: 'medium', outcome: 'done' }, { ...pick, id: 'd3', account: 'acct', spend: { '5-hour': 45 }, size: 'medium', final: null }, { ...pick, id: 'd4' }]
+    const s = scoped({ history: { ok: true, value: { messages: [], decisions, attempts: [] } } })
+    const result = await routeTask(input, s, where as never, opener(), () => 'op')
+    // 60% left less the 10% reserve and the 45% the open pick holds leaves 5% for a task that needs 30%.
+    expect(recorded(s).command.decision.candidates.every((c: { fit: { status: string; account: string } }) => c.fit.status === 'short' && c.fit.account === 'acct')).toBe(true)
+    expect(result.warnings).toEqual(['w', expect.stringMatching(/^No candidate is expected to cover this task; its 5-hour quota is expected to run out partway and resets in 3h\.$/)])
+  })
+  it('keeps a queued start in the reroute quota hold until its linked work finishes', async () => {
+    const queued = { id: 'queued', conversationId: 'g1', account: 'acct', spend: { '5-hour': 45 }, size: 'medium',
+      final: { kind: 'new', startId: 'start-1', engine: 'claude', model: 'opus' }, assignmentId: null,
+      outcome: null as string | null, createdAt: new Date().toISOString() }
+    const routeWith = async (decision: typeof queued) => {
+      const s = scoped({ history: { ok: true, value: { decisions: [decision], attempts: [] } } })
+      await routeTask(input, s, where as never, opener(), () => 'op')
+      return recorded(s).command.decision.candidates as Array<{ fit: { status: string } }>
+    }
+    expect((await routeWith(queued)).every(candidate => candidate.fit.status === 'short')).toBe(true)
+    expect((await routeWith({ ...queued, outcome: 'done' })).some(candidate => candidate.fit.status === 'fits')).toBe(true)
+  })
+  it('records again in the shape an older backend knows when it refuses the new fields as invalid', async () => {
+    const s = scoped(), base = s.getMockImplementation()!
+    let refused = 0
+    s.mockImplementation(async payload => payload.action === 'command' && !refused++ ? { error: 'VALIDATION_ERROR', detail: 'decision.candidates.0: Unrecognized key: "fit"', status: 400 } : base(payload))
+    expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
+    const [phase1, v1] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
+    expect(phase1.command.decision.assessment.size).toBe('medium')
+    expect(phase1.command.decision.candidates[0]).toHaveProperty('fit')
+    expect(v1.operationId).toBe(phase1.operationId)
+    expect(v1.command.decision.assessment).not.toHaveProperty('size')
+    expect(v1.command.decision.candidates.some((c: object) => 'fit' in c)).toBe(false)
+  })
+  it('still routes when recording fails or the connection is lost', async () => {
+    const result = await routeTask(input, scoped({ record: { error: 'BACKEND_UNAVAILABLE' } }), where as never, opener())
     expect(result).toMatchObject({ ok: true, via: 'order', unrecorded: true })
     expect(result).not.toHaveProperty('routeDecisionId')
-  })
-  it('treats a failed Jev answer or a lost connection as Jev unavailable and still routes', async () => {
-    const failed = await routeTask(input, scoped({ jev: { error: 'AGENT_UNAVAILABLE' } }), where as never, opener())
-    expect(failed).toMatchObject({ ok: true, via: 'order' })
-    expect(failed.why).toContain('UNAVAILABLE')
-    const lost = await routeTask(input, scoped({ jevThrows: true, recordThrows: true }), where as never, opener())
+    const lost = await routeTask(input, scoped({ recordThrows: true }), where as never, opener())
     expect(lost).toMatchObject({ ok: true, via: 'order', unrecorded: true })
-    const noAnswer = await routeTask(input, scoped({ jev: { ok: true, value: { answers: {} } } }), where as never, opener())
-    expect(noAnswer).toMatchObject({ ok: true, via: 'order' })
-    const s = scoped(); await routeTask(input, s, where as never, opener())
-    expect(jevCall(s).conversationId).toBe('g1')
   })
-  it('does not ask Jev when only one candidate can run the task', async () => {
+  it('says when the pick was the only candidate that can run the task', async () => {
     const s = scoped()
     // Only the member's machine answers, and its engine is not installed for a new agent.
     const open = vi.fn(async (_w: unknown, id: string) => id === 'm1'
       ? daemon(id, { agents: ['h1'], engines: [{ engine: 'claude', installed: false }] }) as never : Promise.reject(new Error('gone')))
     expect(await routeTask(input, s, where as never, open as never)).toMatchObject({ ok: true, via: 'only', pick: { agentId: 'a1' } })
-    expect(s.mock.calls.filter(c => c[0].action === 'routeJev')).toHaveLength(0)
   })
   it('refuses an invalid assessment, an unknown group and a failed context read', async () => {
     const open = vi.fn()
@@ -269,19 +399,6 @@ describe('routeTask', () => {
     await routeTask(input, t, where as never, opener(id => daemon(id, { listFails: true })))
     expect(recorded(t).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ reason: 'Its terminal is not running.' })]))
   })
-  it('gives the history of a group whose last attempt ended', async () => {
-    for (const [assignment, line] of [
-      [{ id: 'x', agentId: 'a1', status: 'stopped', result: 'Tests failed.' }, 'Multiply: stopped — Tests failed.'],
-      [{ id: 'x', agentId: 'gone', status: 'done' }, 'An agent: done'],
-    ] as const) {
-      const s = scoped({ tab: tab(assignment) })
-      await routeTask(input, s, where as never, opener())
-      expect(jevCall(s).state.history).toContain(`- ${line}`)
-    }
-    const s = scoped({ tab: tab({ id: 'x', agentId: 'a1', status: 'working' }) })
-    await routeTask(input, s, where as never, opener(id => daemon(id, { agents: ['h1'] })))
-    expect(jevCall(s).state.history).toContain('No earlier attempts in this group.')
-  })
   it('keeps a group without brief or checks routable', async () => {
     const odd = tab(); const group = odd.state.conversations[1] as Record<string, unknown>
     delete group.brief; group.title = undefined; group.checks = [{}]
@@ -297,7 +414,7 @@ describe('routeTask', () => {
     const result = await routeTask({ ...input, assessment: { ...input.assessment, needs } }, s, where as never, open)
     expect(result).toMatchObject({ error: 'NO_CANDIDATE' })
     const reasons = (result.excluded as Array<{ reason: string }>).map(e => e.reason)
-    expect(reasons).toContain('Required tool unavailable: git. Required device unavailable: /dev/ttyUSB0.')
+    expect(reasons).toContain('Required tool missing: git. Required device unavailable: /dev/ttyUSB0.')
     const d = open.mock.results[0] && await open.mock.results[0].value as ReturnType<typeof daemon>
     expect(d.request).toHaveBeenCalledWith('super_tabs', expect.objectContaining({ action: 'capacity', cwd: '/repo', tools: ['git'], devices: ['/dev/ttyUSB0'] }), 20_000)
   })
@@ -310,19 +427,30 @@ describe('routeTask', () => {
     await routeTask(input, t, where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], usage: { providers: [] } })))
     expect((recorded(t).command.decision.candidates as Array<{ title: string }>).some(c => c.title.startsWith('Multiply'))).toBe(true)
   })
+  it('skips a member whose screen showed a usage limit until its reset time, and offers it again after', async () => {
+    const limited = (until: string | null) => { const t = tab(); t.state.agents = agents.map(a => a.id === 'a1' ? { ...a, limitedUntil: until } : a); return t }
+    const s = scoped({ tab: limited(new Date(Date.now() + 30 * 60_000).toISOString()) })
+    await routeTask(input, s, where as never, opener())
+    expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([{ title: 'Multiply · Claude sonnet medium · remote-1', reason: expect.stringContaining('usage limit') }]))
+    for (const until of [new Date(Date.now() - 60_000).toISOString(), null]) {
+      const t = scoped({ tab: limited(until) })
+      await routeTask(input, t, where as never, opener())
+      expect((recorded(t).command.decision.candidates as Array<{ title: string }>).some(c => c.title.startsWith('Multiply'))).toBe(true)
+    }
+  })
   it('uses the real admission texts the member refusal filter keys on', () => {
     const quota = quotaOf({ providers: [{ provider: 'claude', outcome: 'answered', httpStatus: 200, body: { five_hour: { utilization: 100 } } }] }, 'claude', false)
     const requirements = { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: ['git'], devices: ['/dev/x'], quotaRequired: false }
     const { reasons } = admission({ resources: {}, tools: {}, devices: {} }, { installed: true, signedIn: true }, quota, requirements)
     expect(reasons).toEqual([
-      'Required tool unavailable: git.', 'Required device unavailable: /dev/x.',
+      'Required tool not verified: git. Ask the machine owner to check it and refresh the machine reading.', 'Required device unavailable: /dev/x.',
       'The subscription has an exhausted usage window. Wait for a fresh allowance reading or choose another account.'])
     const unknown = admission({ resources: {}, tools: {}, devices: {} }, { installed: true, signedIn: true }, quotaOf({}, 'claude', false), { ...requirements, tools: [], devices: [] })
     expect(unknown).toMatchObject({ allowed: true, reasons: [] })
   })
 })
 
-describe('the context routeTask gives Jev', () => {
+describe('what the route log says about each candidate', () => {
   const git = (patch: Record<string, unknown> = {}) => ({ kind: 'git', name: 'api', cwd: '/w/api', root: '/w/api', remote: 'github.com/acme/api', branch: 'main', ...patch })
   /** The Lead's machine, as the folder reader sees it: the folder is there (unless said otherwise) and the SCM describes it. */
   const describeGit = (found: unknown = git(), isDirectory = true) => ({ describe: vi.fn(async () => found) as unknown as typeof describeScmProject & Mock, isDirectory: vi.fn(async () => isDirectory) })
@@ -334,26 +462,20 @@ describe('the context routeTask gives Jev', () => {
   const world = (extra: Record<string, unknown> = {}, assignment: unknown = null) => {
     const { tab: given, ...past } = extra
     return { context: { ok: true, value: { agentId: 'lead', tab: given ?? tab(assignment), policy: { policy, warnings: [] }, machines: [{ machineId: 'm1', name: 'remote-1' }, { machineId: 'm2', name: 'mac' }] } },
-      history: { ok: true, value: { messages: [{ from: 'person', text: 'Please add the endpoint.' }, { from: 'Lead', text: 'On it.' }], decisions: [], attempts: [], ...past } } }
+      history: { ok: true, value: { decisions: [], attempts: [], ...past } } }
   }
-  const labels = (s: ReturnType<typeof scoped>) => Object.values(jevCall(s).questions.who.criteria as Record<string, string>)
   const memberLabel = (s: ReturnType<typeof scoped>) => labels(s).find(l => l.startsWith('Member Multiply'))!
   const newLabel = (s: ReturnType<typeof scoped>) => labels(s).find(l => l.startsWith('New agent'))!
 
-  it('reads the messages, the task folder, the member frames and the machines, and gives Jev what each says', async () => {
+  it('reads the task folder, the member frames and the machines, and labels each candidate with what they say', async () => {
     const s = scoped(world())
     const make = (id: string) => daemon(id, { agents: id === 'm1' ? ['h1', 'x', 'y'] : ['z'], frames: { h1: frame() } })
     const describeRepo = describeGit()
     await routeTask(withCwd, s, where as never, opener(make), () => 'op', describeRepo)
     expect(describeRepo.describe).toHaveBeenCalledWith('/w/api')
     expect(describeRepo.isDirectory).toHaveBeenCalledWith('/w/api')
-    expect(jevCall(s).state.task).toContain('Recent messages:\nperson: Please add the endpoint.\nLead: On it.')
-    expect(jevCall(s).state.lead).toContain('Task folder: api (git repository api)')
     expect(memberLabel(s)).toContain('same repo · on "Fix auth" · in api, branch feat/auth · last active 2h ago')
     expect(labels(s).some(l => /^New agent.*remote-1.*has the task folder · 3 agents running · 7\.0 GB memory free/.test(l))).toBe(true)
-    expect(recorded(s).command.decision.context).toEqual({ chars: expect.any(Number), missing: [] })
-    expect(recorded(s).command.decision.context.chars).toBeGreaterThan(1000)
-    expect(recorded(s).command.decision.context.chars).toBeLessThan(17_000 + 31 * 640)
   })
   it('marks a member in another repository, and one it cannot compare', async () => {
     const other = frame({ project: git({ name: 'web', remote: 'github.com/acme/web', root: '/w/web', cwd: '/w/web' }) })
@@ -366,7 +488,6 @@ describe('the context routeTask gives Jev', () => {
     const u = scoped(world())
     await routeTask(input, u, where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], frames: { h1: frame() } })), () => 'op')
     expect(memberLabel(u)).not.toMatch(/repo/)
-    expect(u.mock.calls.find(c => c[0].action === 'command')![0].command.decision.context.missing).toEqual([])
   })
   it('compares a member on another machine by remote only, and uses the branch the frame\'s project reports', async () => {
     const two = tab(); two.state.agents = [{ ...agents[0], machineId: 'm2' }, agents[1]] as never
@@ -381,20 +502,14 @@ describe('the context routeTask gives Jev', () => {
     await routeTask(withCwd, s, where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], frames: { h1: { title: 5, updatedAt: 'later', project: null } } })), () => 'op', describeGit({ kind: 'none', cwd: '/w/api', root: null, remote: null, name: 'api', branch: null }))
     expect(memberLabel(s)).toMatch(/repo unknown · last active unknown/)
     expect(memberLabel(s)).not.toMatch(/on "|branch/)
-    expect(jevCall(s).state.lead).toContain('Task folder: api (not a git repository)')
   })
-  it('tells Jev what the group and the Super Tab have tried: ended attempts from the state and the log, and the last five decisions', async () => {
+  it('labels a member with its earlier work in this Super Tab, from the state and the log', async () => {
     const decision = (id: string, conversationId: string, patch: Record<string, unknown> = {}) => ({ id, conversationId, title: `Pick ${id}`, via: 'jev', outcome: 'stopped', assignmentId: `as-${id}`,
       createdAt: '2026-10-19T10:00:00Z', final: { kind: 'new', engine: 'claude', model: 'opus' }, ...patch })
     const decisions = [{ ...decision('d7', 'g1', { outcome: null, assignmentId: null, final: null }), via: undefined }, decision('d6', 'g1', { outcome: 'done', assignmentId: 'x', final: { kind: 'member', agentId: 'a1' } }), decision('d5', 'g1'),
       decision('d4', 'other', { final: { kind: 'member', agentId: 'a1' }, outcome: 'done' }), decision('d3', 'g1', { final: null }), decision('d2', 'lead'), decision('d1', 'g1', { outcome: 'superseded' }), decision('d0', 'g1', { final: { kind: 'member', agentId: 'gone' } })]
     const s = scoped(world({ decisions }, { id: 'x', agentId: 'a1', status: 'done', result: 'Shipped.' }))
     await routeTask(input, s, where as never, opener())
-    const history = jevCall(s).state.history as string
-    // Oldest first: the log's attempt by an agent the tab no longer has, its stopped new-agent attempt, then the member's finished one with the result its assignment holds.
-    expect(history).toMatch(/Attempts in this group:\n- An agent: stopped\n- New agent \(claude opus\): stopped\n- Multiply: done — Shipped\./)
-    expect(history).toContain('Recent routing in this Super Tab:\n- Pick d7: open\n- Pick d6 (jev): done\n- Pick d5 (jev): stopped\n- Pick d4 (jev): done\n- Pick d3 (jev): stopped')
-    expect(history).not.toContain('Pick d2')
     // Multiply's earlier work in this Super Tab: the finished assignment (also in the log), and the log's one in a group this tab no longer has.
     expect(memberLabel(s)).toContain('earlier here: API done; another group done')
   })
@@ -419,52 +534,33 @@ describe('the context routeTask gives Jev', () => {
     await routeTask(input, s, where as never, opener())
     expect(memberLabel(s)).toContain('Claude opus high')
   })
-  it('keeps a stopped attempt in the history and in the member\'s earlier work after the group was defined again', async () => {
+  it('keeps a stopped attempt in the member\'s earlier work after the group was defined again', async () => {
     // `work.define` took the stopped assignment out of the state and no decision of the log names it (a person assigned it).
     // A row without an id names no assignment and is left out.
     const attempts = [{ agentId: 'a1', status: 'done' }, { id: 'as-2', agentId: 'a1', status: 'done', result: 'Shipped.' }, { id: 'as-1', agentId: 'a1', status: 'stopped', result: 'Tests failed.' }]
     const s = scoped(world({ attempts }))
     await routeTask(input, s, where as never, opener())
-    expect(jevCall(s).state.history).toContain('Attempts in this group:\n- Multiply: stopped — Tests failed.\n- Multiply: done — Shipped.')
     expect(memberLabel(s)).toContain('earlier here: API done; API stopped')
   })
-  it('orders the group\'s attempts oldest first, a person\'s assignment before a routed one, and keeps the newest for the member', async () => {
+  it('orders the member\'s attempts oldest first, a person\'s assignment before a routed one', async () => {
     // as-1 was assigned by a person (no decision); as-2 was routed. The log alone would list as-2 first.
     const decision = { id: 'd2', conversationId: 'g1', title: 'Pick', via: 'jev', outcome: 'done', assignmentId: 'as-2', createdAt: '2026-10-19T11:00:00Z', final: { kind: 'member', agentId: 'a1' } }
     const attempts = [{ id: 'as-2', agentId: 'a1', status: 'done', result: 'Second.', createdAt: '2026-10-19T11:00:00Z' }, { id: 'as-1', agentId: 'a1', status: 'stopped', result: 'First.', createdAt: '2026-10-19T10:00:00Z' }]
     const s = scoped(world({ decisions: [decision], attempts }, { id: 'as-3', agentId: 'a1', status: 'stopped', result: 'Third.' }))
     await routeTask(input, s, where as never, opener())
-    expect(jevCall(s).state.history).toContain('Attempts in this group:\n- Multiply: stopped — First.\n- Multiply: done — Second.\n- Multiply: stopped — Third.')
     expect(memberLabel(s)).toContain('earlier here: API stopped; API done; API stopped')
     // Without the attempts read the log's order stays.
     const old = scoped(world({ decisions: [decision], attempts: undefined, attemptsUnreadable: true }, { id: 'as-3', agentId: 'a1', status: 'stopped', result: 'Third.' }))
     await routeTask(input, old, where as never, opener())
-    expect(jevCall(old).state.history).toContain('Attempts in this group:\n- Multiply: done\n- Multiply: stopped — Third.')
+    expect(memberLabel(old)).toContain('earlier here: API stopped; API done')
   })
   it('lists an attempt once when the log and the attempts both know it', async () => {
     const decision = { id: 'd5', conversationId: 'g1', title: 'Pick', via: 'jev', outcome: 'stopped', assignmentId: 'as-1', createdAt: '2026-10-19T10:00:00Z', final: { kind: 'new', engine: 'claude', model: 'opus' } }
     const s = scoped(world({ decisions: [decision], attempts: [{ id: 'as-1', agentId: 'gone', status: 'stopped', result: 'Out of memory.' }] }, { id: 'as-2', agentId: 'a1', status: 'done', result: 'Shipped.' }))
     await routeTask(input, s, where as never, opener())
-    const history = jevCall(s).state.history as string
-    // The log names the started agent; the attempt gives the result.
-    expect(history).toContain('Attempts in this group:\n- New agent (claude opus): stopped — Out of memory.\n- Multiply: done — Shipped.')
-    expect(history.match(/Out of memory/g)).toHaveLength(1)
     expect(memberLabel(s)).toContain('earlier here: API done')
   })
-  it('cuts an attempt\'s result to 200 characters and scrubs it', async () => {
-    const result = `Key sk-${'a1'.repeat(20)} sent to minh@example.com. ${'x'.repeat(400)}`
-    const s = scoped(world({ attempts: [{ id: 'as-1', agentId: 'a1', status: 'stopped', result }] }))
-    await routeTask(input, s, where as never, opener())
-    const line = (jevCall(s).state.history as string).split('\n').find(l => l.startsWith('- Multiply: stopped'))!
-    expect(line).toContain('[secret] sent to [email]')
-    expect(line).not.toMatch(/@|sk-/)
-    expect(line.length).toBeLessThanOrEqual('- Multiply: stopped — '.length + 200)
-  })
-  it('keeps the log\'s name for a started agent whose assignment names an agent the tab no longer has', async () => {
-    const decision = { id: 'd5', conversationId: 'g1', title: 'Pick', via: 'jev', outcome: 'stopped', assignmentId: 'as-5', createdAt: '2026-10-19T10:00:00Z', final: { kind: 'new', engine: 'claude', model: 'opus' } }
-    const s = scoped(world({ decisions: [decision] }, { id: 'as-5', agentId: 'gone', status: 'stopped', result: 'Out of memory.' }))
-    await routeTask(input, s, where as never, opener())
-    expect(jevCall(s).state.history).toContain('- New agent (claude opus): stopped — Out of memory.')
+  it('finds nothing to admit on a machine that reports no capacity', async () => {
     // A machine that reports no capacity measured nothing, so nothing there can be admitted; the route says so.
     expect(await routeTask(withCwd, scoped(world()), where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], capacity: {} })), () => 'op', describeGit())).toMatchObject({ error: 'NO_CANDIDATE' })
   })
@@ -477,41 +573,29 @@ describe('the context routeTask gives Jev', () => {
     expect(memberLabel(s)).toContain('earlier here: Group 4 stopped; Group 3 stopped; Group 2 stopped')
     expect(memberLabel(s)).not.toContain('Group 1')
   })
-  it('still routes when a source cannot be read, and lists each one in the decision', async () => {
+  it('still routes when a source cannot be read', async () => {
     const run = async (extra: Record<string, unknown>, options: Record<string, unknown> = {}, describeRepo: ReturnType<typeof describeGit> = describeGit()) => {
       const s = scoped(world(extra))
       const answer = await routeTask(withCwd, s, where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], frames: { h1: frame() }, ...options })), () => 'op', describeRepo)
       expect(answer).toMatchObject({ ok: true })
-      return { s, missing: recorded(s).command.decision.context.missing as string[] }
+      return s
     }
-    expect((await run({})).missing).toEqual([])
-    const noMessages = await run({ messages: undefined, messagesUnreadable: true })
-    expect(jevCall(noMessages.s).state.task).toContain('Recent messages: unknown')
-    expect(noMessages.missing).toEqual(['messages'])
-    // An older backend (404) and a failed read both leave the attempts out: today's history, and a note in the decision.
-    const noAttempts = await run({ attempts: undefined, attemptsUnreadable: true })
-    expect(jevCall(noAttempts.s).state.history).toContain('No earlier attempts in this group.')
-    expect(noAttempts.missing).toEqual(['attempts'])
-    const noLog = await run({ decisions: undefined, decisionsUnreadable: true })
-    expect(jevCall(noLog.s).state.history).toContain('Recent routing in this Super Tab: unknown')
-    expect(noLog.missing).toEqual(['route log'])
+    expect(memberLabel(await run({}))).toContain('same repo')
+    // An older backend (404) and a failed read both leave the attempts and the log out.
+    expect(memberLabel(await run({ attempts: undefined, attemptsUnreadable: true }))).toContain('same repo')
+    expect(memberLabel(await run({ decisions: undefined, decisionsUnreadable: true }))).toContain('same repo')
     for (const failing of [vi.fn(async () => { throw new Error('git') }), vi.fn(async () => null)]) {
-      const noFolder = await run({}, {}, { ...describeGit(), describe: failing as never })
-      expect(jevCall(noFolder.s).state.lead).toContain('Task folder: api (repository unknown)')
-      expect(memberLabel(noFolder.s)).toContain('repo unknown')
-      expect(noFolder.missing).toEqual(['task folder'])
+      expect(memberLabel(await run({}, {}, { ...describeGit(), describe: failing as never }))).toContain('repo unknown')
     }
     // A folder read that never answers does not hold the route: it is given up after three seconds.
     vi.useFakeTimers()
     try {
       const pending = run({}, {}, { ...describeGit(), describe: vi.fn(() => new Promise(() => {})) as never })
       await vi.advanceTimersByTimeAsync(3000)
-      expect((await pending).missing).toEqual(['task folder'])
+      expect(memberLabel(await pending)).toContain('repo unknown')
     } finally { vi.useRealTimers() }
     // Without the agent list there is no machine load; the members there cannot run, so only new agents are shown.
-    const noList = await run({}, { listFails: true })
-    expect(noList.missing).toEqual(['machine load'])
-    expect(newLabel(noList.s)).toContain('agents running unknown')
+    expect(newLabel(await run({}, { listFails: true }))).toContain('agents running unknown')
   })
   it('finds a member in the task\'s folder when the Lead\'s machine does not have it', async () => {
     const two = tab(); two.state.agents = [{ ...agents[0], machineId: 'm2' }, agents[1]] as never
@@ -520,26 +604,25 @@ describe('the context routeTask gives Jev', () => {
     const reader = describeGit(git(), false)
     await routeTask(withCwd, s, where as never, opener(id => daemon(id, { agents: id === 'm2' ? ['h1'] : [], frames: { h1: there } })), () => 'op', reader)
     expect(memberLabel(s)).toContain('same repo')
-    expect(jevCall(s).state.lead).toContain('Task folder: api (not on the Lead\'s machine)')
     expect(reader.describe).not.toHaveBeenCalled()
-    expect(recorded(s).command.decision.context.missing).toEqual(['task folder'])
   })
   it('says a folder is unknown, not missing, when it cannot be told apart from a refusal', async () => {
     for (const code of ['EACCES', 'ENOTDIR']) {
       const s = scoped(world())
       await routeTask(withCwd, s, where as never, opener(), () => 'op', { describe: vi.fn() as never, isDirectory: async () => { throw Object.assign(new Error(code), { code }) } })
-      expect(jevCall(s).state.lead).toContain('Task folder: api (repository unknown)')
-      expect(recorded(s).command.decision.context.missing).toEqual(['task folder'])
+      expect(memberLabel(s)).toContain('repo unknown')
     }
   })
   it('reads the task folder on this machine when no reader is given', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'route-folder-'))
     try {
       await writeFile(join(dir, 'file'), 'x')
-      for (const [cwd, folder] of [[dir, 'not a git repository'], [join(dir, 'absent'), 'not on the Lead\'s machine'], [join(dir, 'file', 'inside'), 'repository unknown']] as const) {
+      // A member standing in the folder is in it when the folder is there or absent here; a broken path says nothing.
+      for (const [cwd, repo] of [[dir, 'same repo'], [join(dir, 'absent'), 'same repo'], [join(dir, 'file', 'inside'), 'repo unknown']] as const) {
         const s = scoped(world())
-        await routeTask({ ...input, assessment: { ...input.assessment, needs: { cwd } } }, s, where as never, opener(), () => 'op')
-        expect(jevCall(s).state.lead).toContain(folder)
+        const there = frame({ project: { name: 'x', cwd, root: null, remote: null } })
+        await routeTask({ ...input, assessment: { ...input.assessment, needs: { cwd } } }, s, where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], frames: { h1: there } })), () => 'op')
+        expect(memberLabel(s)).toContain(repo)
       }
     } finally { await rm(dir, { recursive: true, force: true }) }
   })
@@ -553,11 +636,9 @@ describe('the context routeTask gives Jev', () => {
       // Both context reads are still waiting, and the machines have already been opened.
       expect(s.mock.calls.some(c => c[0].action === 'routeHistory')).toBe(true)
       expect(open).toHaveBeenCalled()
-      expect(s.mock.calls.some(c => c[0].action === 'routeJev')).toBe(false)
       await vi.advanceTimersByTimeAsync(3000)
       expect(await pending).toMatchObject({ ok: true })
     } finally { vi.useRealTimers() }
-    expect(recorded(s).command.decision.context.missing).toEqual(expect.arrayContaining(['messages', 'route log', 'attempts', 'task folder']))
   })
   it('lists a member whose machine cannot be opened as one whose activity is unknown', async () => {
     const two = tab(); two.state.agents = [...agents, { id: 'a2', name: 'Collab', machineId: 'theirs', harnessId: 'h2', configuration: { engine: 'claude', model: 'sonnet', effort: 'medium' } }] as never
@@ -565,14 +646,6 @@ describe('the context routeTask gives Jev', () => {
     const open = vi.fn(async (_w: unknown, id: string) => id === 'theirs' ? Promise.reject(new Error('not yours')) : daemon(id, { agents: id === 'm1' ? ['h1'] : [], frames: { h1: frame() }, usage: { providers: [] } })) as never
     await routeTask(input, s, where as never, open)
     expect(labels(s).find(l => l.startsWith('Member Collab'))).toContain('activity unknown')
-    expect(recorded(s).command.decision.context.missing).toEqual(['member activity'])
-  })
-  it('records no context when Jev was not asked', async () => {
-    const s = scoped(world())
-    const open = vi.fn(async (_w: unknown, id: string) => id === 'm1'
-      ? daemon(id, { agents: ['h1'], engines: [{ engine: 'claude', installed: false }] }) as never : Promise.reject(new Error('gone')))
-    expect(await routeTask(input, s, where as never, open as never)).toMatchObject({ via: 'only' })
-    expect(recorded(s).command.decision).not.toHaveProperty('context')
   })
 })
 
@@ -580,9 +653,11 @@ describe('the context routeTask gives Jev', () => {
 describe('routing contributed capacity', () => {
   const healthy = () => ({ machineId: 'm1', name: 'Contributed laptop', cwd: '/owner/project', engines: ['claude'], paused: false,
     observation: { receivedAt: Date.now(), resources: { memoryTotalBytes: 32e9, memoryUsedBytes: 2e9, projectDiskFreeBytes: 200e9 },
-      tools: { git: true }, runningHarnessIds: [], quotas: [{ engine: 'claude', known: true, windows: [{ name: '5-hour', usedPercent: 20, resetsAt: Date.now() + 3600000 }] }] } })
-  async function runPool(pool: Record<string, any>, members = false, needs: Record<string, unknown> = {}) {
-    const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: members ? agents : [agents[1]], conversations: conversations(), machines: [pool] } }, policy: { policy, warnings: [] }, machines: [] } } })
+      tools: { git: true }, runningHarnessIds: ['h1'], quotas: [{ engine: 'claude', known: true, windows: [{ name: '5-hour', usedPercent: 20, resetsAt: Date.now() + 3600000 }] }] } })
+  async function runPool(pool: Record<string, any>, members = false, needs: Record<string, unknown> = {}, project?: Record<string, unknown>) {
+    const groups = conversations()
+    if (project) Object.assign(groups[1]!, { projectId: project.id })
+    const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: members ? agents : [agents[1]], conversations: groups, machines: [pool], ...(project ? { projects: [project] } : {}) } }, policy: { policy, warnings: [] }, machines: [] } } })
     const open = opener()
     const answer = await routeTask({ ...input, assessment: { ...input.assessment, needs } }, s, where, open)
     expect(open).not.toHaveBeenCalled()
@@ -594,6 +669,71 @@ describe('routing contributed capacity', () => {
     expect(answer.next).toContain('/owner/project')
     const member = await runPool(healthy(), true)
     expect(member.answer.ok).toBe(true)
+  })
+  it('reads an old OpenCode contribution as its installed Claude observation', async () => {
+    const pool = healthy()
+    pool.engines = ['opencode']
+    const { answer, s } = await runPool(pool)
+    expect(answer).toMatchObject({ ok: true, pick: { engine: 'claude' } })
+    expect(recorded(s).command.decision.candidates.every((c: { engine: string }) => c.engine === 'claude')).toBe(true)
+  })
+  it('keeps a healthy contributed member pickable', async () => {
+    const { answer, s } = await runPool(healthy(), true)
+    expect(answer.ok).toBe(true)
+    expect(recorded(s).command.decision.candidates).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply') })]))
+  })
+  it('withholds a contributed member whose engine account has an exhausted usage window', async () => {
+    const pool = healthy(); pool.observation.quotas[0]!.windows[0]!.usedPercent = 100
+    const { answer } = await runPool(pool, true)
+    expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+    expect(answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
+      reason: expect.stringContaining('exhausted usage window') })]))
+  })
+  it('withholds a contributed member when a required tool was reported missing', async () => {
+    const pool = healthy(); pool.observation.tools.git = false
+    const { answer } = await runPool(pool, true)
+    expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+    expect(answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
+      reason: expect.stringContaining('Required tool missing: git.') })]))
+  })
+  it('explains a contributed member tool probe that did not complete', async () => {
+    const pool = healthy()
+    delete (pool.observation.tools as Record<string, unknown>).git
+    Object.assign(pool.observation, { toolProbeErrors: { git: 'interactive shell timed out' } })
+    const { answer } = await runPool(pool, true)
+    expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+    expect(answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
+      reason: expect.stringMatching(/Required tool not verified: git.*interactive shell timed out.*check it/) })]))
+  })
+  it('withholds a contributed member absent from an explicit running-terminal list', async () => {
+    const pool = healthy(); pool.observation.runningHarnessIds = []
+    const { answer, s } = await runPool(pool, true)
+    expect(answer).toMatchObject({ ok: true, pick: { kind: 'new' } })
+    expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
+      reason: 'Its terminal is not running.' })]))
+  })
+  it('keeps a contributed member with no running-terminal list pickable and warns that its terminal is unverified', async () => {
+    const pool = healthy(); delete (pool.observation as Partial<typeof pool.observation>).runningHarnessIds
+    const { answer, s } = await runPool(pool, true)
+    expect(answer.ok).toBe(true)
+    expect(recorded(s).command.decision.candidates).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply') })]))
+    expect(answer.warnings).toEqual(expect.arrayContaining([expect.stringContaining('terminal could not be verified')]))
+  })
+  it('withholds a contributed member when a required device was not reported', async () => {
+    const { answer } = await runPool(healthy(), true, { devices: ['/dev/ttyUSB0'] })
+    expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+    expect(answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
+      reason: expect.stringContaining('Required device unavailable: /dev/ttyUSB0.') })]))
+  })
+  it('routes each swarm project to its own checkout and never widens an old folder grant', async () => {
+    const project = { id: 'project-two', repository: { machineId: 'other', cwd: '/elsewhere', repositoryUrl: 'https://github.com/example/two' } }
+    expect((await runPool(healthy(), false, {}, project)).answer.ok).not.toBe(true)
+    const shared = { ...healthy(), scope: 'swarm', cwd: '/swarm-root' }
+    expect((await runPool(shared, false, {}, project)).answer.next).toContain('/swarm-root/project-two')
+    project.repository.machineId = 'm1'
+    expect((await runPool(shared, false, {}, project)).answer.next).toContain('/elsewhere')
+    expect((await runPool(shared, false, {}, { id: 'project-two' })).answer.ok).not.toBe(true)
+    expect((await runPool(shared)).answer.ok).not.toBe(true)
   })
   it.each([
     ['stale', (p: any) => { p.observation.receivedAt = 0 }],
@@ -616,7 +756,31 @@ describe('routing contributed capacity', () => {
     expect((await runPool(p)).answer.ok).toBe(true)
     expect((await runPool({ ...p, observation: {} }, true)).answer.ok).not.toBe(true)
   })
+  it('lists API-key machines beside a subscription one, and offers the best row of every other machine as an alternative', async () => {
+    const keyed = (machineId: string) => ({ ...healthy(), machineId, name: `Keyed ${machineId}`, observation: { ...healthy().observation, runningHarnessIds: [],
+      quotas: [{ engine: 'claude', known: true, windows: [] }] } })
+    // The subscription machine has two engines, so its two best rows come before any other machine's.
+    const subscription = healthy(), reading = { usedPercent: 20, resetsAt: Date.now() + 5 * 86_400_000 }
+    Object.assign(subscription, { engines: ['claude', 'codex'] })
+    subscription.observation.quotas = ['claude', 'codex'].map(engine => ({ engine, known: true, windows: [{ ...reading, name: '5-hour' }, { ...reading, name: 'weekly' }] }))
+    const enabled = { ...policy, models: policy.models.map(m => ({ ...m, enabled: true })) }
+    const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: [agents[1]], conversations: conversations(), machines: [subscription, keyed('m2'), keyed('m3')] } },
+      policy: { policy: enabled, warnings: [] }, machines: [] } } })
+    const answer = await routeTask(input, s, where, opener())
+    expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm1', engine: 'codex' } })
+    expect((answer.alternatives as Array<{ machineId: string; engine: string }>).map(x => [x.machineId, x.engine])).toEqual([['m1', 'claude'], ['m2', 'claude'], ['m3', 'claude']])
+  })
   it('refuses unobserved tools and devices, without probing arbitrary paths on a teammate computer', async () => {
     expect((await runPool(healthy(), false, { tools: ['docker'], devices: ['/dev/fixture'] })).answer.ok).not.toBe(true)
+  })
+  it('distinguishes reported missing tools from unverified contributed probes in route reasons', async () => {
+    const missing = healthy(); missing.observation.tools.git = false
+    const absent = await runPool(missing)
+    expect(absent.answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringContaining('Required tool missing: git.') })]))
+
+    const unverified = healthy(); delete (unverified.observation.tools as Record<string, unknown>).git
+    Object.assign(unverified.observation, { toolProbeErrors: { git: 'interactive shell timed out' } })
+    const failed = await runPool(unverified)
+    expect(failed.answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringMatching(/Required tool not verified: git.*interactive shell timed out/) })]))
   })
 })

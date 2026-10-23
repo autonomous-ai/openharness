@@ -69,6 +69,7 @@ function published(version = '0.1.2', bytes = binary(version), overrides: Record
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'hn-update-test-'))
   vi.stubEnv('HOME', home)
+  vi.stubEnv('USERPROFILE', home)
   vi.stubEnv('HARNESS_TUI_BIN', undefined)
   vi.stubEnv('HARNESS_BIN_DIR', join(home, '.local', 'bin'))
   vi.stubEnv('ADAPTER_CLI_DIR', join(home, '.harness', 'cli'))

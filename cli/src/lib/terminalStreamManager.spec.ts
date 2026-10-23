@@ -13,6 +13,7 @@ import type { TerminalBackendCoordinator } from './terminalBackendCoordinator.js
 import { TerminalBinaryKind, TERMINAL_LOCAL_IMAGE_PASTE_MAX_PAYLOAD_BYTES, type TerminalBinaryClear } from './terminalBinary.js'
 import { writeImageToOsClipboard, type OsClipboardImageResult } from './osClipboard.js'
 import { writePasteDropFile, writePasteImageFile } from './pasteDropFiles.js'
+import { MoveGate } from './hostMove/gate.js'
 
 vi.mock('./osClipboard.js', () => ({ writeImageToOsClipboard: vi.fn() }))
 vi.mock('./pasteDropFiles.js', () => ({ writePasteImageFile: vi.fn(), writePasteDropFile: vi.fn() }))
@@ -45,12 +46,21 @@ class FakeStream implements TerminalStreamHandle {
   /** When set, every writeRaw parks on it instead of answering at once — a tmux that is slow to `%end`. */
   pendingWrites: Array<(result: TerminalActionResult) => void> = []
   holdWrites = false
+  /** Every write and paste, in the order they reached the pane. */
+  order: string[] = []
   async writeRaw(bytes: Uint8Array): Promise<TerminalActionResult> {
     this.writes.push(bytes)
+    this.order.push(`raw:${Buffer.from(bytes).toString()}`)
     if (!this.holdWrites) return TERMINAL_ACTION_SUCCEEDED
     return new Promise((resolve) => { this.pendingWrites.push(resolve) })
   }
-  async pasteRaw(text: string) { this.pastes.push(text); return TERMINAL_ACTION_SUCCEEDED }
+  /** When set, a paste waits on it, with the check the manager asked to be made as it lands. */
+  pasteLands: ((allowed: (() => boolean) | undefined) => Promise<TerminalActionResult>) | null = null
+  async pasteRaw(text: string, allowed?: () => boolean) {
+    this.pastes.push(text)
+    this.order.push(`paste:${text}`)
+    return this.pasteLands ? this.pasteLands(allowed) : TERMINAL_ACTION_SUCCEEDED
+  }
   async resize(size: { cols: number; rows: number }) { this.sizes.push(size); return TERMINAL_ACTION_SUCCEEDED }
   async scroll(direction: 'up' | 'down', lines: number) { this.scrolls.push({ direction, lines }); return TERMINAL_ACTION_SUCCEEDED }
   async pauseOutput() { this.pauses++; return TERMINAL_ACTION_SUCCEEDED }
@@ -130,6 +140,19 @@ describe('TerminalStreamManager', () => {
       bytes: Buffer.from('hello\r'), compressed: false, tabId: 'swarm-a' }
     await manager.handleBinary('web-1', frame)
     expect(stream.writes).toEqual([frame.bytes])
+  })
+
+  it('streams an agent on the PTY host as one on tmux', async () => {
+    agents.set('agent-pty', {
+      ...session('codex', 'agent-pty'),
+      runtimes: [{ backend: 'ptyhost', instance: 'p1', paneId: '%3' }],
+      primaryRuntimeKey: 'ptyhost:p1:%3',
+    } as unknown as RegisteredSession)
+    agents.set('agent-none', { ...session('codex', 'agent-none'), runtimes: [], primaryRuntimeKey: '' } as unknown as RegisteredSession)
+    await manager.handleFrame('web-1', 'terminal_open', { requestId: 'pty', protocolVersion: 3, agentId: 'agent-pty', cols: 100, rows: 30 })
+    expect(sent.findLast(f => f.payload.requestId === 'pty')?.type).toBe('terminal_ready')
+    await manager.handleFrame('web-1', 'terminal_open', { requestId: 'none', protocolVersion: 3, agentId: 'agent-none', cols: 100, rows: 30 })
+    expect(sent.findLast(f => f.payload.requestId === 'none')).toMatchObject({ type: 'terminal_error', payload: { code: 'TERMINAL_RUNTIME_UNAVAILABLE' } })
   })
 
   it('uses the same generic path for every current engine', async () => {
@@ -312,28 +335,33 @@ describe('TerminalStreamManager', () => {
       kind: TerminalBinaryKind.input, streamId, seq: 0, compressed: false, bytes: Buffer.from('abc'),
     })
     expect(Buffer.from(stream.writes[0]).toString()).toBe('abc')
+    // Ahead of seq 1, which may still be on its way over the slower wire: it waits for it, and nothing is said.
     await manager.handleBinary('web-1', {
       kind: TerminalBinaryKind.input, streamId, seq: 2, compressed: false, bytes: Buffer.from('out-of-order'),
     })
     expect(stream.writes).toHaveLength(1)
-    expect(sent.at(-1)?.payload.code).toBe('TERMINAL_INPUT_INVALID')
-    // …and says which seq it is still waiting for, so a client that skipped a number can realign
-    // instead of having every later keystroke refused.
-    expect(sent.at(-1)?.payload).toMatchObject({ reason: 'seq', expectedSeq: 1, streamId })
+    expect(sent.map((frame) => frame.payload.code)).not.toContain('TERMINAL_INPUT_INVALID')
 
-    // An oversized frame is refused the same way, with the counter untouched: the next accepted
-    // seq is still 1.
+    // An oversized frame is refused at once, with the counter untouched: the next accepted seq is still 1. The client
+    // numbers its next keys from there, so the one waiting under its old numbering goes: released after them, it
+    // would land after keys typed later than it.
     await manager.handleBinary('web-1', {
       kind: TerminalBinaryKind.input, streamId, seq: 1, compressed: false, bytes: Buffer.alloc(64 * 1024 + 1, 0x61),
     })
     expect(stream.writes).toHaveLength(1)
     expect(sent.at(-1)?.payload).toMatchObject({ code: 'TERMINAL_INPUT_INVALID', reason: 'size', expectedSeq: 1 })
 
+    // The realigned keys: seq 1, then 2, each written in turn.
     const mouse = Buffer.from('\u001b[<0;12;8M')
     await manager.handleBinary('web-1', {
       kind: TerminalBinaryKind.input, streamId, seq: 1, compressed: false, bytes: mouse,
     })
-    expect(Buffer.from(stream.writes.at(-1)!).equals(mouse)).toBe(true)
+    await manager.handleBinary('web-1', {
+      kind: TerminalBinaryKind.input, streamId, seq: 2, compressed: false, bytes: Buffer.from('typed after'),
+    })
+    expect(stream.writes.map((bytes) => Buffer.from(bytes).toString())).toEqual(['abc', mouse.toString(), 'typed after'])
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(sent.filter((frame) => frame.payload.code === 'TERMINAL_INPUT_INVALID')).toHaveLength(1)
 
     await manager.handleFrame('web-1', 'terminal_resize', {
       streamId, resizeSeq: 0, cols: 140, rows: 50,
@@ -478,6 +506,186 @@ describe('TerminalStreamManager', () => {
     expect(remote.kind).toBe(TerminalBinaryKind.output)
     expect(remote.compressed).toBe(true)
     expect(remote.bytes.length).toBeLessThan(big.length)
+  })
+
+  describe('keystrokes that come ahead of a missing one', () => {
+    // A client moving a stream from the relay onto its P2P channel sends key N over the relay and N+1 over the
+    // faster channel: N+1 came first, was refused, and the client's realignment lost two keys (2026-10-15).
+    const open = async () => {
+      await manager.handleFrame('web-1', 'terminal_open', { requestId: 'open-order', protocolVersion: 3, agentId: 'agent-1', cols: 120, rows: 40 })
+      const streamId = sent[0].payload.streamId as string
+      const key = (seq: number, text: string | Buffer = `k${seq}`) => manager.handleBinary('web-1', {
+        kind: TerminalBinaryKind.input, streamId, seq, compressed: false, bytes: typeof text === 'string' ? Buffer.from(text) : text,
+      })
+      const written = () => stream.writes.map((bytes) => Buffer.from(bytes).toString())
+      const refusals = () => sent.filter((frame) => frame.payload.code === 'TERMINAL_INPUT_INVALID').map((frame) => frame.payload)
+      return { streamId, key, written, refusals }
+    }
+
+    it('are written, in their order, as soon as the missing one arrives', async () => {
+      const { key, written, refusals } = await open()
+      await key(1)
+      await key(2)
+      expect(written()).toEqual([])
+      await key(0)
+      expect(written()).toEqual(['k0', 'k1', 'k2'])
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(refusals()).toEqual([])
+    })
+
+    it('go when the missing one does not come in time, and the client is told once what is expected', async () => {
+      const { streamId, key, written, refusals } = await open()
+      await key(0)
+      await key(2)
+      await key(3)
+      await vi.advanceTimersByTimeAsync(399)
+      expect(refusals()).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+      expect(written()).toEqual(['k0'])
+      expect(refusals()).toEqual([expect.objectContaining({ streamId, reason: 'seq', expectedSeq: 1 })])
+    })
+
+    it('are refused at once after a wait was given up, until the expected one arrives', async () => {
+      // The client realigns on the refusal and numbers its next keys from there: a frame it numbered under the
+      // old count must not wait to land among them.
+      const { key, written, refusals } = await open()
+      await key(0)
+      await key(2)
+      await vi.advanceTimersByTimeAsync(400)
+      await key(5)
+      expect(refusals()).toHaveLength(2)
+      expect(refusals()[1]).toMatchObject({ expectedSeq: 1 })
+      await key(1, 'realigned')
+      await key(3)
+      expect(refusals()).toHaveLength(2)
+      await key(2, 'next')
+      expect(written()).toEqual(['k0', 'realigned', 'next', 'k3'])
+    })
+
+    it('give each gap a full wait of its own', async () => {
+      const { key, written, refusals } = await open()
+      await key(0)
+      await key(2)
+      await key(4)
+      await vi.advanceTimersByTimeAsync(300)
+      await key(1)
+      expect(written()).toEqual(['k0', 'k1', 'k2'])
+      await vi.advanceTimersByTimeAsync(399)
+      expect(refusals()).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+      expect(refusals()).toEqual([expect.objectContaining({ expectedSeq: 3 })])
+      expect(written()).toEqual(['k0', 'k1', 'k2'])
+    })
+
+    it('are given up at once when more bytes wait than may be held', async () => {
+      const { key, written, refusals } = await open()
+      for (let seq = 1; seq <= 4; seq++) await key(seq, Buffer.alloc(64 * 1024, 0x61))
+      expect(refusals()).toEqual([])
+      await key(5, Buffer.alloc(1, 0x61))
+      expect(refusals()).toEqual([expect.objectContaining({ expectedSeq: 0 })])
+      await key(0)
+      expect(written()).toEqual(['k0'])
+    })
+
+    it('are given up at once when more frames wait than may be held', async () => {
+      const { key, written, refusals } = await open()
+      for (let seq = 1; seq <= 64; seq++) await key(seq)
+      expect(refusals()).toEqual([])
+      await key(65)
+      expect(refusals()).toEqual([expect.objectContaining({ expectedSeq: 0 })])
+      await key(0)
+      expect(written()).toEqual(['k0'])
+    })
+
+    it('go with any refusal, since the client numbers its next keys from what it is told', async () => {
+      // A number already written comes while one waits: the refusal realigns the client, and the key held under
+      // its old numbering would land among the new ones.
+      const { key, written, refusals } = await open()
+      await key(0)
+      await key(2)
+      await key(0, 'again')
+      expect(refusals()).toEqual([expect.objectContaining({ expectedSeq: 1 })])
+      await key(1, 'realigned')
+      await key(2, 'next')
+      expect(written()).toEqual(['k0', 'realigned', 'next'])
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(refusals()).toHaveLength(1)
+    })
+
+    it('keep the first of two frames under one number', async () => {
+      const { key, written, refusals } = await open()
+      await key(1, 'first')
+      await key(1, 'second')
+      await key(0)
+      expect(written()).toEqual(['k0', 'first'])
+      expect(refusals()).toEqual([])
+    })
+
+    it('are never written into a pane whose stream closed while they waited', async () => {
+      const { streamId, key, written, refusals } = await open()
+      await key(1)
+      await manager.handleFrame('web-1', 'terminal_close', { streamId })
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(written()).toEqual([])
+      expect(refusals()).toEqual([])
+    })
+
+    it('are traced, while tracing is on, by number and time and never by what was typed', async () => {
+      const lines: string[] = []
+      await manager.stop()
+      manager = newManager({ typingTrace: (line) => lines.push(line) })
+      const { streamId, key } = await open()
+      const short = streamId.slice(0, 8)
+      await key(1, 'secret-1')
+      await vi.advanceTimersByTimeAsync(30)
+      await key(0, 'secret-0')
+      sink!.onData(Buffer.from('echo'))
+      expect(lines).toEqual([
+        `stream=${short} seq=1 held: 0 has not come (1 waiting)`,
+        `stream=${short} seq=1..1 released after 30ms`,
+        `stream=${short} seq=1 first output out +0ms after it was written`,
+      ])
+      // A keystroke whose next screen goes out as a keyframe is said so.
+      await key(2, 'secret-2')
+      await manager.handleFrame('web-1', 'terminal_resize', { streamId, resizeSeq: 0, cols: 100, rows: 30 })
+      expect(lines.at(-1)).toBe(`stream=${short} seq=2 keyframe (resize) out +0ms after it was written`)
+      expect(lines.join('\n')).not.toContain('secret')
+    })
+
+    it('are given up before a paste, which never goes ahead of keys typed before it', async () => {
+      const { streamId, key, written, refusals } = await open()
+      await key(1)
+      await manager.handleBinary('web-1', { kind: TerminalBinaryKind.paste, streamId, seq: 0, compressed: false, bytes: Buffer.from('pasted') })
+      expect(refusals()).toEqual([expect.objectContaining({ expectedSeq: 0 })])
+      expect(stream.pastes).toEqual(['pasted'])
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(written()).toEqual([])
+    })
+  })
+
+  it('keeps a paste out of a pane whose stream closed while the paste was on its way, and says nothing', async () => {
+    // A stream's close no longer waits in line behind its paste (backendSocket.ts `enqueueTerminalBinary`):
+    // the paste must ask again as it lands, or it lands in a pane its client has let go.
+    await manager.handleFrame('web-1', 'terminal_open', {
+      requestId: 'open-paste-close', protocolVersion: 3, agentId: 'agent-1', cols: 120, rows: 40,
+    })
+    const streamId = sent[0].payload.streamId as string
+    let land!: () => void
+    let askedAsItLanded: boolean | undefined
+    stream.pasteLands = (allowed) => new Promise((resolve) => {
+      land = () => {
+        askedAsItLanded = allowed?.()
+        resolve(askedAsItLanded ? TERMINAL_ACTION_SUCCEEDED : { state: 'failed', dispatch: 'not_started', reason: 'tmux paste-buffer could not be sent' })
+      }
+    })
+    const pasting = manager.handleBinary('web-1', { kind: TerminalBinaryKind.paste, streamId, seq: 0, compressed: false, bytes: new TextEncoder().encode('rm -rf build') })
+    await vi.waitFor(() => expect(stream.pastes).toEqual(['rm -rf build']))
+    await manager.handleFrame('web-1', 'terminal_close', { streamId })
+    const before = sent.length
+    land()
+    await pasting
+    expect(askedAsItLanded).toBe(false)
+    expect(sent.slice(before).map((frame) => frame.payload.code)).not.toContain('TERMINAL_PASTE_FAILED')
   })
 
   it('routes a binary paste kind to pasteRaw as one unit, never through writeRaw', async () => {
@@ -1492,5 +1700,331 @@ describe('TerminalStreamManager', () => {
     sink!.onData(Buffer.from('tail'))
     await vi.advanceTimersByTimeAsync(2)
     expect(binarySent.length).toBe(afterLeadingEdge + 1)
+  })
+
+  describe('who is looking', () => {
+    const open = (connId: string, extra: Record<string, unknown> = {}) =>
+      manager.handleFrame(connId, 'terminal_open', {
+        requestId: `open-${connId}`, protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30, ...extra,
+      })
+    beforeEach(async () => {
+      await manager.stop()
+      manager = newManager({ isLoopback: (connId) => connId.startsWith('local:') })
+    })
+
+    it('a loopback stream whose window lists other agents is not looked at', async () => {
+      await open('local:desktop')
+      manager.setVisibleAgents('local:desktop', ['agent-other'])
+      expect(manager.isLookedAt('agent-1')).toBe(false)
+      manager.setVisibleAgents('local:desktop', ['agent-1'])
+      expect(manager.isLookedAt('agent-1')).toBe(true)
+    })
+
+    it('a loopback stream whose window never sent a list is looked at', async () => {
+      await open('local:desktop')
+      expect(manager.isLookedAt('agent-1')).toBe(true)
+      manager.setVisibleAgents('local:desktop', null)
+      expect(manager.isLookedAt('agent-1')).toBe(true)
+    })
+
+    it('a mobile or web stream is looked at, a takeover:false one included', async () => {
+      await open('web-1')
+      await open('web-2', { takeover: false })
+      expect(manager.isLookedAt('agent-1')).toBe(true)
+      await manager.closeConnection('web-1')
+      expect(manager.isLookedAt('agent-1')).toBe(true)
+      await manager.closeConnection('web-2')
+      expect(manager.isLookedAt('agent-1')).toBe(false)
+    })
+
+    it('a watch:true stream is never looked at', async () => {
+      await open('web-1', { watch: true })
+      await open('local:desktop', { watch: true })
+      expect(manager.isLookedAt('agent-1')).toBe(false)
+    })
+
+    it('a Share observer on a read-only manager counts even when it asks for watch:true', async () => {
+      await manager.stop()
+      manager = newManager({ readOnly: true })
+      await open('observer:ken', { watch: true })
+      expect(manager.isLookedAt('agent-1')).toBe(true)
+    })
+
+    it('a minimized window\'s empty list frees its agents', async () => {
+      await open('local:desktop')
+      manager.setVisibleAgents('local:desktop', [])
+      expect(manager.isLookedAt('agent-1')).toBe(false)
+    })
+
+    it('closing the connection forgets its list', async () => {
+      await open('local:desktop')
+      manager.setVisibleAgents('local:desktop', [])
+      await manager.closeConnection('local:desktop')
+      await open('local:desktop')
+      expect(manager.isLookedAt('agent-1')).toBe(true)
+    })
+  })
+
+  describe('while an agent changes host', () => {
+    const oldPane = { backend: 'ptyhost' as const, instance: 'p2', paneId: '%1' }
+    const newPane = { backend: 'ptyhost' as const, instance: 'p2-0.5.0', paneId: '%7' }
+    let gate: MoveGate
+    let opens: Array<{ runtimes: unknown; size: unknown; readOnly: boolean; sink: TerminalStreamSink; stream: FakeStream }>
+    let rawWrites: Array<{ runtime: unknown; bytes: string }>
+    let duringOpen: (() => void) | null
+    const paste = (connId: string, streamId: string, text: string) => manager.handleBinary(connId, {
+      kind: TerminalBinaryKind.paste, streamId, seq: 0, bytes: Buffer.from(text), compressed: false,
+    })
+    /** What the mover does at the swap: the row names the new pane, and the agent's streams follow it. */
+    const swap = async () => {
+      agents.set('agent-1', row('agent-1', newPane))
+      await manager.retarget('agent-1', newPane)
+    }
+    const row = (agentId: string, runtime: typeof oldPane) => ({
+      ...session('codex', agentId), runtimes: [runtime], primaryRuntimeKey: `ptyhost:${runtime.instance}:${runtime.paneId}`,
+    } as unknown as RegisteredSession)
+    const openFrame = (connId: string, agentId = 'agent-1') => manager.handleFrame(connId, 'terminal_open', {
+      requestId: `open-${connId}`, protocolVersion: 3, agentId, cols: 100, rows: 30,
+    })
+    const readyFor = (connId: string) => String(sent.findLast((f) => f.connId === connId && f.type === 'terminal_ready')!.payload.streamId)
+    const input = (connId: string, streamId: string, seq: number, text: string) => manager.handleBinary(connId, {
+      kind: TerminalBinaryKind.input, streamId, seq, bytes: Buffer.from(text), compressed: false,
+    })
+
+    beforeEach(async () => {
+      await manager.stop()
+      gate = new MoveGate()
+      opens = []
+      rawWrites = []
+      agents = new Map([['agent-1', row('agent-1', oldPane)], ['agent-2', row('agent-2', { ...oldPane, paneId: '%2' })]])
+      duringOpen = null
+      terminals = {
+        openStream: async (opened: RegisteredSession, size: unknown, nextSink: TerminalStreamSink, readOnly = false) => {
+          const next = new FakeStream()
+          opens.push({ runtimes: opened.runtimes, size, readOnly, sink: nextSink, stream: next })
+          duringOpen?.()
+          return { state: 'succeeded' as const, value: next }
+        },
+        backendFor: () => ({
+          writeInput: async (runtime: unknown, bytes: Uint8Array) => {
+            rawWrites.push({ runtime, bytes: Buffer.from(bytes).toString() })
+            return TERMINAL_ACTION_SUCCEEDED
+          },
+          pasteInput: async (runtime: unknown, text: string) => {
+            rawWrites.push({ runtime, bytes: `paste:${text}` })
+            return TERMINAL_ACTION_SUCCEEDED
+          },
+        }),
+      } as unknown as TerminalBackendCoordinator
+      manager = newManager({ moveGate: gate, isLoopback: (connId) => connId.startsWith('local:') })
+    })
+
+    it('input during a hold is delivered once, in order, after release', async () => {
+      const onInput = vi.fn()
+      await manager.stop()
+      manager = newManager({ moveGate: gate, onInput })
+      await openFrame('web-1')
+      const streamId = readyFor('web-1')
+      gate.hold('agent-1')
+      await input('web-1', streamId, 0, 'a')
+      await input('web-1', streamId, 1, 'b')
+      await input('web-1', streamId, 2, 'c')
+      // Taken as input at once (the prewarm, the quiet clock), but nothing reaches a pane yet.
+      expect(onInput).toHaveBeenCalledTimes(3)
+      expect(opens[0].stream.writes).toEqual([])
+      await swap()
+      expect(opens[1].stream.writes).toEqual([])
+      await gate.release('agent-1')
+      // Through the retargeted stream, onto the new pane; never the old one.
+      expect(opens[1].stream.order).toEqual(['raw:a', 'raw:b', 'raw:c'])
+      expect(opens[0].stream.writes).toEqual([])
+      expect(rawWrites).toEqual([])
+      expect(sent.filter((f) => f.type === 'terminal_error')).toEqual([])
+    })
+
+    it('held input whose stream closed during the move still reaches the row\'s pane', async () => {
+      await openFrame('web-1')
+      const streamId = readyFor('web-1')
+      gate.hold('agent-1')
+      await input('web-1', streamId, 0, 'a')
+      await paste('web-1', streamId, 'P')
+      await manager.closeConnection('web-1')
+      agents.set('agent-1', row('agent-1', newPane))
+      await gate.release('agent-1')
+      expect(rawWrites).toEqual([{ runtime: newPane, bytes: 'a' }, { runtime: newPane, bytes: 'paste:P' }])
+      expect(opens[0].stream.writes).toEqual([])
+    })
+
+    it('a paste during a hold is delivered after release, in order with keystrokes', async () => {
+      await openFrame('web-1')
+      const streamId = readyFor('web-1')
+      gate.hold('agent-1')
+      await input('web-1', streamId, 0, 'a')
+      await paste('web-1', streamId, 'P')
+      await input('web-1', streamId, 1, 'b')
+      expect(opens[0].stream.order).toEqual([])
+      await swap()
+      await gate.release('agent-1')
+      expect(opens[1].stream.order).toEqual(['raw:a', 'paste:P', 'raw:b'])
+      expect(opens[0].stream.order).toEqual([])
+    })
+
+    it('an image paste during a hold is delivered after release, in order with keystrokes', async () => {
+      await openFrame('web-1')
+      const streamId = readyFor('web-1')
+      gate.hold('agent-1')
+      const png = Uint8Array.of(0x89, 0x50, 0x4e, 0x47)
+      await input('web-1', streamId, 0, 'a')
+      await manager.handleFrame('web-1', 'terminal_chunked_upload_begin', { streamId, uploadKind: 'image', totalBytes: png.length })
+      await manager.handleBinary('web-1', { kind: TerminalBinaryKind.imagePaste, streamId, seq: 0, compressed: false, bytes: png })
+      await input('web-1', streamId, 1, 'b')
+      expect(writeImageToOsClipboard).not.toHaveBeenCalled()
+      expect(opens[0].stream.order).toEqual([])
+      await swap()
+      await gate.release('agent-1')
+      expect(writeImageToOsClipboard).toHaveBeenCalledTimes(1)
+      expect(opens[1].stream.order).toEqual(['raw:a', 'raw:\u0016', 'raw:b'])
+      expect(sent.findLast((f) => f.type === 'terminal_paste_image_result')?.payload).toMatchObject({ streamId, outcome: 'clipboard' })
+    })
+
+    it('a held agent counts as looked at from the moment input or an open arrives, until it is let go', async () => {
+      await openFrame('local:desktop')
+      manager.setVisibleAgents('local:desktop', ['agent-other'])
+      gate.hold('agent-1')
+      expect(manager.isLookedAt('agent-1')).toBe(false)
+      await input('local:desktop', readyFor('local:desktop'), 0, 'x')
+      expect(manager.isLookedAt('agent-1')).toBe(true)
+      await gate.release('agent-1')
+      expect(manager.isLookedAt('agent-1')).toBe(false)
+      // The next hold starts untouched.
+      gate.hold('agent-1')
+      expect(manager.isLookedAt('agent-1')).toBe(false)
+      await gate.release('agent-1')
+
+      manager.setVisibleAgents('local:other', ['agent-other'])
+      gate.hold('agent-2')
+      await openFrame('local:other', 'agent-2')
+      expect(manager.isLookedAt('agent-2')).toBe(true)
+      await gate.release('agent-2')
+      expect(manager.isLookedAt('agent-2')).toBe(false)
+    })
+
+    it('an open during a hold returns at once on the current runtime, and is moved by the retarget at swap', async () => {
+      gate.hold('agent-1')
+      await openFrame('web-1')
+      const streamId = readyFor('web-1')
+      expect(opens.map((o) => o.runtimes)).toEqual([[oldPane]])
+      await swap()
+      expect(opens.map((o) => o.runtimes)).toEqual([[oldPane], [newPane]])
+      expect(opens[0].stream.closed).toBe(true)
+      await gate.release('agent-1')
+      expect(sent.filter((f) => f.type === 'terminal_closed' || f.type === 'terminal_error')).toEqual([])
+      await input('web-1', streamId, 0, 'typed')
+      expect(opens[1].stream.order).toEqual(['raw:typed'])
+    })
+
+    it('an open the swap overtook follows the row on its own', async () => {
+      gate.hold('agent-1')
+      // The mover switches the row and retargets while this open is still reaching the old pane: the
+      // retarget finds no stream to move, so the open has to notice.
+      duringOpen = () => {
+        duringOpen = null
+        agents.set('agent-1', row('agent-1', newPane))
+        void manager.retarget('agent-1', newPane)
+      }
+      await openFrame('web-1')
+      expect(opens.map((o) => o.runtimes)).toEqual([[oldPane], [newPane]])
+      expect(opens[0].stream.closed).toBe(true)
+      expect(sent.filter((f) => f.type === 'terminal_closed' || f.type === 'terminal_error')).toEqual([])
+      await gate.release('agent-1')
+    })
+
+    it('a retarget opens the new pane at the size the client last asked for, even one the old pane refused', async () => {
+      await openFrame('web-1')
+      const streamId = readyFor('web-1')
+      opens[0].stream.resize = async () => ({ state: 'failed', dispatch: 'rejected', reason: 'no' })
+      await manager.handleFrame('web-1', 'terminal_resize', { streamId, resizeSeq: 1, cols: 90, rows: 20 })
+      await swap()
+      expect(opens[1].size).toEqual({ cols: 90, rows: 20 })
+    })
+
+    it('an open stream follows a retarget with no close, and gets the new pane\'s output', async () => {
+      await openFrame('web-1')
+      await openFrame('web-2')
+      const watcherOpen = manager.handleFrame('web-3', 'terminal_open', {
+        requestId: 'watch', protocolVersion: 3, agentId: 'agent-1', cols: 80, rows: 24, watch: true,
+      })
+      await watcherOpen
+      const streamId = readyFor('web-2')
+      await manager.handleFrame('web-2', 'terminal_resize', { streamId, resizeSeq: 1, cols: 120, rows: 40 })
+      const [, before, watcher] = opens
+      before.stream.snapshotBytes = Buffer.from('old pane')
+      const framesBefore = binarySent.length
+      sent = []
+
+      await manager.retarget('agent-1', newPane)
+
+      // Every open stream of the agent was re-subscribed on the new pane, at its own size and mode.
+      expect(opens.slice(3).map((o) => [o.runtimes, o.size, o.readOnly])).toEqual([
+        [[newPane], { cols: 120, rows: 40 }, false],
+        [[newPane], { cols: 80, rows: 24 }, true],
+      ])
+      expect(before.stream.closed).toBe(true)
+      expect(watcher.stream.closed).toBe(true)
+      expect(sent.filter((f) => f.type === 'terminal_closed' || f.type === 'terminal_error')).toEqual([])
+      const after = opens[3]
+      // The client's screen is reset through the keyframe it already knows, on its own stream id.
+      expect(after.stream.snapshots).toBe(1)
+      const keyframe = binarySent.slice(framesBefore).find((f) => f.connId === 'web-2' && f.frame.kind === TerminalBinaryKind.keyframe)
+      expect(keyframe?.frame.streamId).toBe(streamId)
+
+      // The old pane's late output is dropped; the new pane's reaches the same stream.
+      const sentNow = binarySent.length
+      before.sink.onData(Buffer.from('late old output'))
+      before.sink.onClose('old pane gone')
+      after.sink.onData(Buffer.from('new pane output'))
+      await vi.advanceTimersByTimeAsync(20)
+      const outputs = binarySent.slice(sentNow).filter((f) => f.connId === 'web-2' && f.frame.kind === TerminalBinaryKind.output)
+      expect(outputs.map((f) => [f.frame.streamId, Buffer.from(f.frame.bytes).toString()])).toEqual([[streamId, 'new pane output']])
+      expect(sent.filter((f) => f.type === 'terminal_closed')).toEqual([])
+
+      // Input on the same stream now goes to the new pane.
+      await input('web-2', streamId, 0, 'typed')
+      expect(after.stream.writes.map((b) => Buffer.from(b).toString())).toEqual(['typed'])
+      expect(before.stream.writes).toEqual([])
+    })
+
+    it('a keyframe being taken of the old pane when the stream moves is taken again of the new one', async () => {
+      await openFrame('web-1')
+      const streamId = readyFor('web-1')
+      const before = opens[0].stream
+      let finishOld!: () => void
+      before.snapshot = () => new Promise((resolve) => {
+        finishOld = () => resolve({ state: 'succeeded', value: { bytes: Buffer.from('old pane'), cols: 100, rows: 30 } })
+      })
+      const resync = manager.handleFrame('web-1', 'terminal_resync', { streamId })
+      await vi.advanceTimersByTimeAsync(0)
+      const framesBefore = binarySent.length
+      await manager.retarget('agent-1', newPane)
+      const after = opens[1].stream
+      after.snapshotBytes = Buffer.from('new pane')
+      finishOld()
+      await resync
+      const keyframes = binarySent.slice(framesBefore).filter((f) => f.frame.kind === TerminalBinaryKind.keyframe)
+      expect(keyframes.map((f) => [f.frame.streamId, Buffer.from(f.frame.bytes).toString()])).toEqual([[streamId, 'new pane']])
+      expect(after.snapshotBegins).toBe(after.snapshotEnds)
+      expect(sent.filter((f) => f.type === 'terminal_closed' || f.type === 'terminal_error')).toEqual([])
+    })
+
+    it('nothing is held for other agents', async () => {
+      await openFrame('web-1', 'agent-2')
+      const streamId = readyFor('web-1')
+      gate.hold('agent-1')
+      await input('web-1', streamId, 0, 'free')
+      expect(opens[0].stream.writes.map((b) => Buffer.from(b).toString())).toEqual(['free'])
+      await openFrame('web-2', 'agent-2')
+      expect(opens).toHaveLength(2)
+      expect(rawWrites).toEqual([])
+    })
   })
 })

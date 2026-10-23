@@ -16,17 +16,18 @@ const id = (n: number) => `fixture-creation-${n}`
 const input = (n = 1, memory = 60, disk = 60) => ({ creationId: id(n), cwd: '/fixture/repo', requirements: { memoryBytes: memory, diskBytes: disk, maxCpuPercent: 80 } })
 function setup() {
   const directory = mkdtempSync(join(tmpdir(), 'super-tab-capacity-')); folders.push(directory)
-  const native = new Map<string, CreationObservation | null>(), stopped = new Set<string>()
+  const native = new Map<string, CreationObservation | null>(), stopped = new Set<string>(), gone = new Set<string>()
   const core = fakeCore({ dataDir: directory, agents: {
     creationStatus: vi.fn(async key => native.has(key) ? native.get(key)! : { creationId: key, state: 'missing' as const }),
     stopped: vi.fn(async key => stopped.has(key)),
+    gone: vi.fn(async key => gone.has(key)),
   } })
   const resources: MachineResources = { cpuPercent: 20, memoryTotalBytes: 150, memoryUsedBytes: 50 }
   const deps = { resources: vi.fn(async () => resources),
     disk: vi.fn(async (cwd: string) => ({ freeBytes: 100, volume: cwd === '/second-volume' ? 'second' : 'first', path: cwd })),
     sqlite: () => builtinSqlite() as never }
   const open = () => { const book = new CapacityReservations(core, 'machine-1', deps); books.push(book); return book }
-  return { directory, file: join(directory, 'super-tabs/capacity.sqlite'), core, native, stopped, resources, deps, open }
+  return { directory, file: join(directory, 'super-tabs/capacity.sqlite'), core, native, stopped, gone, resources, deps, open }
 }
 
 it('serializes simultaneous starts across books and accounts for their declared budgets', async () => {
@@ -81,6 +82,19 @@ it('retains a learned harness identity after its native window disappears and re
   expect(await restarted.observe(id(1))).toMatchObject({ harnessId: 'native', released: true })
 })
 
+// The review of #1635: the backend's closeSession row names only the harness, so the host finds the Swarm's own start of
+// it here, the receipt every start confirmed against the core before it reported success.
+it('names the start that created a harness, even after it stopped, and none for a harness it never started', async () => {
+  const f = setup(), book = f.open()
+  await book.reserve(input())
+  expect(book.creationOf('native')).toBeNull()
+  f.native.set(id(1), { creationId: id(1), state: 'created', agentId: 'native' })
+  f.stopped.add('native')
+  expect(await book.observe(id(1))).toMatchObject({ harnessId: 'native', released: true })
+  expect(book.creationOf('native')).toBe(id(1))
+  expect(book.creationOf('another')).toBeNull()
+})
+
 it('recovers a harness that started and stopped before the service observed its creation', async () => {
   const f = setup(), book = f.open()
   await book.reserve(input())
@@ -88,6 +102,38 @@ it('recovers a harness that started and stopped before the service observed its 
   f.stopped.add('already-closed')
   expect(await book.observe(id(1))).toMatchObject({ harnessId: 'already-closed', released: true })
   expect(await book.reserve(input(2))).toMatchObject({ ok: true })
+})
+
+it('releases the memory of an agent the person closed by hand, on the next reserve, and keeps a running one', async () => {
+  const f = setup(), book = f.open()
+  await book.reserve(input(1, 100))
+  f.native.set(id(1), { creationId: id(1), state: 'created', agentId: 'closed-by-hand' })
+  expect(await book.reserve(input(2, 100))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE', detail: expect.stringContaining('memory') })
+  f.gone.add('closed-by-hand')
+  expect(await book.reserve(input(2, 100))).toMatchObject({ ok: true })
+  expect(await book.observe(id(1))).toMatchObject({ harnessId: 'closed-by-hand', released: true })
+  f.native.set(id(2), { creationId: id(2), state: 'pending' })
+  f.gone.add('never-asked')
+  expect(await book.reserve(input(3, 100))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE' })
+})
+
+it('frees the disk of an agent the person closed by hand together with its memory', async () => {
+  const f = setup(), book = f.open()
+  await book.reserve(input(1, 0, 60))
+  f.native.set(id(1), { creationId: id(1), state: 'created', agentId: 'closed-by-hand' })
+  expect(await book.reserve(input(2, 0, 60))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE', detail: expect.stringContaining('disk') })
+  f.gone.add('closed-by-hand')
+  expect(await book.reserve(input(2, 0, 60))).toMatchObject({ ok: true })
+})
+
+it('does not release on a gone answer that fails or that an older core cannot give', async () => {
+  const f = setup(), book = f.open()
+  await book.reserve(input(1, 100))
+  f.native.set(id(1), { creationId: id(1), state: 'created', agentId: 'native' })
+  vi.mocked(f.core.agents.gone!).mockRejectedValueOnce(new Error('offline'))
+  expect(await book.reserve(input(2, 100))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE' })
+  delete (f.core.agents as { gone?: unknown }).gone
+  expect(await book.reserve(input(2, 100))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE' })
 })
 
 it('reserves disk on its destination volume and keeps separate volumes independent', async () => {

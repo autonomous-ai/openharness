@@ -8,15 +8,26 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/new_harness_attachments.dart';
+import '../widgets/new_harness_paste.dart';
 import '../state/app_state.dart';
+import '../state/harness_attachments.dart';
 import 'roster.dart';
+import 'recording_notice.dart';
 import 'pull_requests.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
 import 'message_row.dart';
+import 'message_receipt.dart';
 import 'route_row.dart';
+import 'terminal_row.dart';
 import 'work_details.dart';
+import 'project_sidebar.dart';
+import 'project_options.dart';
+import 'pane_layout.dart';
+
+typedef _ComposerChoice = ({String label, String? detail, VoidCallback choose});
 
 /// The contents of one app tab. Its title stays in the app's existing tab bar.
 /// [terminal] is the existing native pane, with its own controls and input.
@@ -33,6 +44,8 @@ class SuperTabView extends StatefulWidget {
     this.onOpenGroupTerminals,
     this.terminalsVisible = false,
     this.app,
+    this.onNewProject,
+    this.onChooseAgentTerminal,
   });
   final SuperTabController controller;
   final VoidCallback onInvite;
@@ -43,14 +56,18 @@ class SuperTabView extends StatefulWidget {
   final VoidCallback? onCloseTerminal, onOpenGroupTerminals;
   final bool terminalsVisible;
   final AppNotifier? app;
+  final VoidCallback? onNewProject;
+  final ValueChanged<SuperTabAgent>? onChooseAgentTerminal;
 
   @override
   State<SuperTabView> createState() => _SuperTabViewState();
 }
 
-class _SuperTabViewState extends State<SuperTabView> {
+class _SuperTabViewState extends State<SuperTabView>
+    with WidgetsBindingObserver {
   final _composer = TextEditingController();
-  final _focus = FocusNode(debugLabel: 'Super Tab message');
+  final _focus = FocusNode(debugLabel: 'Swarm message');
+  final _pullRequestsFocus = FocusNode(debugLabel: 'Project pull requests');
   final _scroll = <String, ScrollController>{};
   final _latest = <String, int>{};
   final _following = <String, bool>{};
@@ -62,10 +79,18 @@ class _SuperTabViewState extends State<SuperTabView> {
   bool _sidebarOpen = false;
   bool _rosterOpen = false;
   bool _showPullRequests = false;
+  bool _viewEnabled = true;
+  bool _chatCovered = false;
   final _loadingOlder = <String>{};
   int _mentionIndex = 0;
   String? _dismissedMention;
+  String? _completionPrefix;
+  final _completionKeys = List.generate(6, (_) => GlobalKey());
   SuperTabController get c => widget.controller;
+  bool get _devicesVisible =>
+      c.devicesSelected &&
+      widget.app?.devicesEnabled == true &&
+      !c.accessRevoked;
 
   String _agentName(SuperTabAgent agent) =>
       c.snapshot?.agentName(agent.id, fallback: agent.name) ?? agent.name;
@@ -82,8 +107,24 @@ class _SuperTabViewState extends State<SuperTabView> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _composer.addListener(_composerMoved);
     c.addListener(_changed);
     _changed();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _viewEnabled =
+        TickerMode.valuesOf(context).enabled &&
+        ModalRoute.isCurrentOf(context) != false;
+    _readVisibleTailAfterFrame();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _readVisibleTailAfterFrame();
   }
 
   @override
@@ -102,6 +143,10 @@ class _SuperTabViewState extends State<SuperTabView> {
       _replies.clear();
       _selected = null;
       _changed();
+    } else {
+      // The cached transcript is laid out even while a terminal is in front.
+      // Returning to Chat need not fetch or append a message to make it read.
+      _readVisibleTailAfterFrame();
     }
   }
 
@@ -111,6 +156,9 @@ class _SuperTabViewState extends State<SuperTabView> {
       _replies.clear();
       _newAfter.clear();
     }
+    final visible =
+        c.snapshot?.conversations.map((g) => g.id).toSet() ?? <String>{};
+    _replies.removeWhere((id, _) => !visible.contains(id));
     final id = c.selectedId;
     final firstView = !_scroll.containsKey(id);
     final scroll = _scroll.putIfAbsent(id, ScrollController.new);
@@ -137,11 +185,14 @@ class _SuperTabViewState extends State<SuperTabView> {
     setState(() {});
     if (firstView || (grew && atEnd)) {
       _followEnd(id);
+    } else if (atEnd) {
+      _readVisibleTailAfterFrame();
     }
   }
 
   void _followEnd(String id) {
     final request = ++_scrollRequest;
+    final sequence = _latest[id] ?? 0;
     _jumpingToEnd = true;
     void advance(int attempt) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -168,7 +219,7 @@ class _SuperTabViewState extends State<SuperTabView> {
           } else {
             _jumpingToEnd = false;
             if (scroll.position.extentAfter < 40) {
-              _readToEnd(id, _latest[id] ?? 0);
+              _readToEnd(id, sequence);
             }
           }
         });
@@ -180,12 +231,58 @@ class _SuperTabViewState extends State<SuperTabView> {
     advance(0);
   }
 
+  bool get _chatIsVisible {
+    if (!mounted ||
+        !_viewEnabled ||
+        _chatCovered ||
+        c.accessRevoked ||
+        _devicesVisible ||
+        _terminalsVisible ||
+        _showPullRequests) {
+      return false;
+    }
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    if (lifecycle != null && lifecycle != AppLifecycleState.resumed) {
+      return false;
+    }
+    final app = widget.app;
+    if (app != null &&
+        (!app.inForeground ||
+            app.currentUser?.id != c.accountId ||
+            app.activeSwarm.superTabId != c.tabId)) {
+      return false;
+    }
+    var hidden = false;
+    context.visitAncestorElements((element) {
+      if (element.widget case Offstage(offstage: true)) hidden = true;
+      return !hidden;
+    });
+    return !hidden;
+  }
+
+  void _readVisibleTailAfterFrame() {
+    final id = c.selectedId;
+    final sequence = c.messages(id).lastOrNull?.sequence ?? 0;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_jumpingToEnd) _readToEnd(id, sequence);
+    });
+    // Widget updates already have a frame in progress. Reuse it so routine
+    // polling does not request an otherwise unnecessary frame after each build.
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
   void _readToEnd(String id, int sequence) {
+    final scroll = _scroll[id];
+    if (c.selectedId != id ||
+        !_chatIsVisible ||
+        scroll == null ||
+        !scroll.hasClients ||
+        scroll.position.extentAfter >= 40) {
+      return;
+    }
     _following[id] = true;
     if (_newAfter.containsKey(id)) setState(() => _newAfter.remove(id));
-    if (!_terminalsVisible && !_showPullRequests) {
-      c.markRead(id, through: sequence);
-    }
+    c.markRead(id, through: sequence);
   }
 
   void _jumpToLatest() {
@@ -195,27 +292,32 @@ class _SuperTabViewState extends State<SuperTabView> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     c.removeListener(_changed);
     _composer.dispose();
     _focus.dispose();
+    _pullRequestsFocus.dispose();
     for (final scroll in _scroll.values) {
       scroll.dispose();
     }
     super.dispose();
   }
 
+  HarnessAttachments get _files => c.attachments(c.selectedId);
+
   Future<void> _send() async {
-    final mentions = _mentionChoices;
-    if (mentions.isNotEmpty) {
-      _chooseMention(mentions[_mentionIndex.clamp(0, mentions.length - 1)]);
+    final choices = _completionChoices;
+    if (choices.isNotEmpty) {
+      choices[_mentionIndex.clamp(0, choices.length - 1)].choose();
       return;
     }
     if (!c.canWrite ||
         c.selected == null ||
         c.selected!.archived ||
         c.saving ||
+        c.uploading ||
         c.hasPendingAction ||
-        _composer.text.trim().isEmpty) {
+        (_composer.text.trim().isEmpty && _files.isEmpty)) {
       return;
     }
     final id = c.selectedId;
@@ -223,15 +325,153 @@ class _SuperTabViewState extends State<SuperTabView> {
     if (mounted && result != null) setState(() => _replies.remove(id));
   }
 
+  void _composerMoved() {
+    if (!mounted) return;
+    final value = _composer.value;
+    final prefix = value.selection.isValid
+        ? value.text.substring(0, value.selection.baseOffset)
+        : null;
+    setState(() {
+      if (_completionPrefix != prefix) _mentionIndex = 0;
+      _completionPrefix = prefix;
+    });
+  }
+
+  ({int start, int end, String query})? get _workgroupAtCursor {
+    final value = _composer.value;
+    if (!value.selection.isValid ||
+        !value.selection.isCollapsed ||
+        (value.composing.isValid && !value.composing.isCollapsed)) {
+      return null;
+    }
+    final end = value.selection.baseOffset;
+    final prefix = value.text.substring(0, end);
+    if (prefix == _dismissedMention) return null;
+    final match = RegExp(r'(?:^|[\s(])#([^\s#`()]*)$').firstMatch(prefix);
+    if (match == null) return null;
+    // A reference picker must not interrupt Markdown code or URL fragments.
+    String? fence;
+    for (final line in prefix.split('\n')) {
+      final delimiter = RegExp(r'^ {0,3}(`{3,}|~{3,})').firstMatch(line)?[1];
+      if (delimiter == null) continue;
+      if (fence == null) {
+        fence = delimiter;
+      } else if (delimiter[0] == fence[0] && delimiter.length >= fence.length) {
+        fence = null;
+      }
+    }
+    if (fence != null) return null;
+    int? ticks;
+    for (final run in RegExp(
+      r'(?<!\\)`+',
+    ).allMatches(prefix.split('\n').last)) {
+      if (ticks == null) {
+        ticks = run[0]!.length;
+      } else if (ticks == run[0]!.length) {
+        ticks = null;
+      }
+    }
+    if (ticks != null) return null;
+    // When editing inside a reference, replace the unfinished token after the
+    // caret too, while leaving sentence punctuation and following text intact.
+    final continuation = RegExp(r'^[^\s#`()\[\]{},.!?;:]*')
+        .firstMatch(value.text.substring(end))![0]!;
+    return (
+      start: prefix.lastIndexOf('#'),
+      end: end + continuation.length,
+      query: match[1]!.toLowerCase(),
+    );
+  }
+
+  List<_ComposerChoice> get _completionChoices {
+    if (!c.canWrite || c.selected?.archived != false) return const [];
+    final reference = _workgroupAtCursor;
+    final snapshot = c.snapshot;
+    if (reference != null && snapshot != null) {
+      final projectId = c.selected?.projectId;
+      final groups = snapshot.conversations
+          .where(
+            (group) =>
+                group.number != null &&
+                !snapshot.isProjectLead(group.id) &&
+                (group.number.toString().startsWith(reference.query) ||
+                    group.title.toLowerCase().contains(reference.query)),
+          )
+          .toList();
+      groups.sort((a, b) {
+        final active = (a.archived ? 1 : 0).compareTo(b.archived ? 1 : 0);
+        if (active != 0) return active;
+        final project = (a.projectId == projectId ? 0 : 1).compareTo(
+          b.projectId == projectId ? 0 : 1,
+        );
+        return project != 0 ? project : a.number!.compareTo(b.number!);
+      });
+      return groups.take(6).map((group) {
+        final context = <String>[
+          if (group.projectId != projectId)
+            snapshot.projectFor(group.id)?.name ?? 'Project',
+          if (group.archived) 'Archived',
+        ];
+        return (
+          label: group.label,
+          detail: context.isEmpty ? null : context.join(' — '),
+          choose: () => _chooseWorkgroup(group),
+        );
+      }).toList();
+    }
+    return _mentionChoices
+        .map(
+          (agent) => (
+            label: _agentName(agent),
+            detail: '${agent.engine}  ${widget.machineName(agent.machineId)}',
+            choose: () => _chooseMention(agent),
+          ),
+        )
+        .toList();
+  }
+
+  void _chooseWorkgroup(SuperTabConversation group) {
+    final at = _workgroupAtCursor;
+    if (at == null || group.number == null) return;
+    final suffix = _composer.text.substring(at.end);
+    final boundary = suffix.startsWith(RegExp(r'[\s)\]}.,!?;:]'));
+    final token = '#${group.number}${boundary ? '' : ' '}';
+    final text = _composer.text.replaceRange(at.start, at.end, token);
+    final caret = at.start + token.length;
+    c.setDraft(c.selectedId, text);
+    setState(() => _dismissedMention = text.substring(0, caret));
+    _composer.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: caret),
+    );
+    _focus.requestFocus();
+  }
+
+  void _moveCompletion(int index) {
+    setState(() => _mentionIndex = index);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final context = _completionKeys[index].currentContext;
+      if (mounted && context != null) {
+        Scrollable.ensureVisible(context, alignment: .5);
+      }
+    });
+  }
+
   void _closeRoster() {
     setState(() => _rosterOpen = false);
-    if (!_terminalsVisible) _focus.requestFocus();
+    if (!_terminalsVisible && !_devicesVisible) _focus.requestFocus();
   }
 
   void _closeSidebar() {
     setState(() => _sidebarOpen = false);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && !_sidebarOpen) _focus.requestFocus();
+      if (mounted &&
+          !_sidebarOpen &&
+          !_devicesVisible &&
+          !_terminalsVisible &&
+          !_showPullRequests) {
+        _focus.requestFocus();
+      }
     });
   }
 
@@ -307,6 +547,15 @@ class _SuperTabViewState extends State<SuperTabView> {
 
   Future<void> _groupAction(String action, SuperTabConversation group) async {
     final c = this.c;
+    if (action == 'routing') {
+      await showSuperTabRouting(context, c);
+      return;
+    }
+    if (c.snapshot?.isProjectLead(group.id) == true && action != 'archived') {
+      final project = c.snapshot!.projectFor(group.id);
+      if (project != null) await showProjectAction(context, c, project, action);
+      return;
+    }
     if (action == 'archived') {
       await _archived();
       return;
@@ -328,6 +577,7 @@ class _SuperTabViewState extends State<SuperTabView> {
       context: context,
       builder: (context) => SuperTabDialogScope(
         controller: c,
+        conversationId: group.id,
         child: StatefulBuilder(
           builder: (context, update) => AlertDialog(
             title: const Text('Rename conversation'),
@@ -385,6 +635,7 @@ class _SuperTabViewState extends State<SuperTabView> {
                       .where(
                         (group) =>
                             group.archived &&
+                            group.projectId == c.selected?.projectId &&
                             group.title.toLowerCase().contains(query),
                       )
                       .toList() ??
@@ -443,96 +694,28 @@ class _SuperTabViewState extends State<SuperTabView> {
     c.select(selected);
   }
 
-  Widget _sidebar() => Material(
-    color: DesktopChrome.surface,
-    child: Column(
-      children: [
-        Expanded(
-          child: ListView(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-            children: [
-              for (final group
-                  in c.snapshot?.conversations ?? <SuperTabConversation>[])
-                if (!group.archived)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 2),
-                    child: Semantics(
-                      selected: c.selectedId == group.id,
-                      child: ListTile(
-                        key: ValueKey('super-group-${group.id}'),
-                        dense: true,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(
-                            DesktopChrome.rowRadius,
-                          ),
-                        ),
-                        selected: c.selectedId == group.id,
-                        selectedTileColor: DesktopChrome.activeSelection,
-                        title: Text(
-                          group.label,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: DesktopChrome.control(
-                            medium: c.unread(group),
-                            color: c.selectedId == group.id
-                                ? DesktopChrome.onSelection
-                                : null,
-                          ),
-                        ),
-                        trailing: _needsHuman(group).isNotEmpty
-                            ? Tooltip(
-                                message: 'Needs a human',
-                                child: Text(
-                                  '? ${_needsHuman(group).length}',
-                                  style: DesktopChrome.control(
-                                    medium: true,
-                                    color: grid.AppPalette.warn,
-                                  ),
-                                ),
-                              )
-                            : c.unread(group)
-                            ? Semantics(
-                                label: 'Unread messages',
-                                child: Container(
-                                  width: 6,
-                                  height: 6,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: c.selectedId == group.id
-                                        ? DesktopChrome.onSelection
-                                        : DesktopChrome.accent,
-                                  ),
-                                ),
-                              )
-                            : null,
-                        onTap: () {
-                          c.select(group.id);
-                          _closeSidebar();
-                        },
-                      ),
-                    ),
-                  ),
-            ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: AppIconButton(
-              icon: AppIcons.settings,
-              tooltip: 'Super Tab settings',
-              onPressed: c.snapshot == null
-                  ? null
-                  : () {
-                      _closeSidebar();
-                      unawaited(showSuperTabRouting(context, c));
-                    },
-            ),
-          ),
-        ),
-      ],
-    ),
+  Widget _sidebar() => ProjectSidebar(
+    controller: c,
+    app: widget.app,
+    onAddAgent: widget.onAddAgent,
+    onNewProject: widget.onNewProject,
+    devicesSelected: _devicesVisible,
+    onOpenAgent: (agent) {
+      _closeSidebar();
+      setState(() => _showPullRequests = false);
+      (widget.onChooseAgentTerminal ?? widget.onOpenTerminal)(agent);
+    },
+    onYourDevices: widget.app?.devicesEnabled != true
+        ? null
+        : () {
+            _closeSidebar();
+            widget.app!.openDevices();
+          },
+    needsHuman: (group) => _needsHuman(group).length,
+    onSelect: (id) {
+      c.select(id);
+      _closeSidebar();
+    },
   );
 
   List<SuperTabAgent> _needsHuman(SuperTabConversation group) =>
@@ -542,7 +725,7 @@ class _SuperTabViewState extends State<SuperTabView> {
                 group.agentIds.contains(agent.id) &&
                 (widget.app?.questionFor(agent.machineId, agent.harnessId) !=
                         null ||
-                    (group.assignment?['status'] == 'needs_human' &&
+                    (superTabWorkWaits(group.assignment?['status']) &&
                         group.assignment?['agentId'] == agent.id)),
           )
           .toList() ??
@@ -556,240 +739,214 @@ class _SuperTabViewState extends State<SuperTabView> {
     widget.onOpenTerminal(agent);
   }
 
+  void _leaveResize() {
+    if (_terminalsVisible || _devicesVisible) {
+      FocusManager.instance.primaryFocus?.unfocus();
+      final app = widget.app, paneId = widget.app?.focusedPaneId;
+      if (app != null && paneId != null) app.focusPane(paneId, reveal: true);
+    } else if (_showPullRequests) {
+      _pullRequestsFocus.requestFocus();
+    } else {
+      _focus.requestFocus();
+    }
+  }
+
   bool get _terminalsVisible =>
-      widget.terminalsVisible || widget.terminal != null;
+      !_devicesVisible && (widget.terminalsVisible || widget.terminal != null);
 
-  Widget _header(
-    SuperTabConversation? group,
-    bool narrow,
-    bool showRoster,
-  ) => Container(
-    constraints: const BoxConstraints(minHeight: 52),
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-    decoration: BoxDecoration(
-      border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
-    ),
-    child: Row(
-      children: [
-        if (narrow)
-          AppIconButton(
-            icon: AppIcons.columns2,
-            tooltip: 'Conversations',
-            onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
-          ),
-        Expanded(
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: group == null
-                ? Text('Loading conversation…', style: DesktopChrome.text())
-                : PopupMenuButton<String>(
-                    key: const ValueKey('super-group-options'),
-                    tooltip: 'Workgroup options',
-                    position: PopupMenuPosition.under,
-                    onSelected: (action) =>
-                        unawaited(_groupAction(action, group)),
-                    itemBuilder: (_) => [
-                      const PopupMenuItem(
-                        value: 'work',
-                        child: Text('Work details'),
-                      ),
-                      if (c.snapshot?.conversations.any((g) => g.archived) ==
-                          true)
-                        const PopupMenuItem(
-                          value: 'archived',
-                          child: Text('Archived conversations'),
-                        ),
-                      if (c.canWrite && !c.hasPendingAction && !c.saving) ...[
-                        const PopupMenuItem(
-                          value: 'rename',
-                          child: Text('Rename'),
-                        ),
-                        if (group.id != 'lead')
-                          PopupMenuItem(
-                            value: 'archive',
-                            enabled:
-                                group.assignment == null ||
-                                const [
-                                  'done',
-                                  'stopped',
-                                ].contains(group.assignment!['status']),
-                            child: Text(
-                              group.archived
-                                  ? 'Reopen conversation'
-                                  : 'Archive',
-                            ),
-                          ),
-                      ],
-                    ],
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 4,
-                        vertical: 8,
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Flexible(
-                            child: Text(
-                              group.label,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: DesktopChrome.text(medium: true),
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          Icon(
-                            AppIcons.chevronDown,
-                            size: 16,
-                            color: DesktopChrome.muted,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-          ),
+  Widget _header(SuperTabConversation? group, bool narrow, bool showRoster) =>
+      Container(
+        constraints: const BoxConstraints(minHeight: 52),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
         ),
-        AppIconButton(
-          key: const ValueKey('super-chat'),
-          icon: AppIcons.messageSquareText,
-          size: 20,
-          tooltip: 'Chat',
-          selected: !_terminalsVisible && !_showPullRequests,
-          color: !_terminalsVisible && !_showPullRequests
-              ? DesktopChrome.accent
-              : DesktopChrome.muted,
-          onPressed: () {
-            setState(() => _showPullRequests = false);
-            widget.onCloseTerminal?.call();
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) _focus.requestFocus();
-            });
-          },
-        ),
-        const SizedBox(width: 4),
-        AppIconButton(
-          key: const ValueKey('super-terminals'),
-          icon: AppIcons.terminal,
-          size: 20,
-          tooltip: 'Group terminals (${group?.agentIds.length ?? 0})',
-          selected: _terminalsVisible,
-          color: _terminalsVisible ? DesktopChrome.accent : DesktopChrome.muted,
-          onPressed: group?.agentIds.isNotEmpty == true
-              ? () {
-                  setState(() => _showPullRequests = false);
-                  widget.onOpenGroupTerminals?.call();
-                }
-              : null,
-        ),
-        const SizedBox(width: 4),
-        AppIconButton(
-          key: const ValueKey('super-pull-requests'),
-          icon: AppIcons.gitPullRequest,
-          size: 20,
-          tooltip: 'Pull requests',
-          selected: !_terminalsVisible && _showPullRequests,
-          color: !_terminalsVisible && _showPullRequests
-              ? DesktopChrome.accent
-              : DesktopChrome.muted,
-          onPressed: () {
-            widget.onCloseTerminal?.call();
-            setState(() => _showPullRequests = true);
-          },
-        ),
-        if (!showRoster)
-          AppIconButton(
-            icon: AppIcons.users,
-            tooltip: 'Members and machines',
-            selected: _rosterOpen,
-            onPressed: () => setState(() => _rosterOpen = !_rosterOpen),
-          ),
-      ],
-    ),
-  );
-
-  Future<void> _reviewDelivery(
-    SuperTabMessage message,
-    Map<String, dynamic> delivery,
-  ) async {
-    final c = this.c;
-    final agent = c.snapshot?.agent(delivery['agentId'] as String);
-    final resolution = await showAppDialog<String>(
-      context: context,
-      builder: (context) => ListenableBuilder(
-        listenable: c,
-        builder: (context, _) => !c.canWrite
-            ? AlertDialog(
-                content: const Text(
-                  'This delivery is no longer available to change.',
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Close'),
-                  ),
-                ],
-              )
-            : AlertDialog(
-                title: DesktopDialogHeader(
-                  title:
-                      'Check delivery to ${agent == null ? 'agent' : _agentName(agent)}',
-                  padding: EdgeInsets.zero,
-                  onClose: () => Navigator.pop(context),
-                ),
-                content: SizedBox(
-                  width: 440,
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (agent != null) ...[
-                          TextButton(
-                            onPressed: () => Navigator.pop(context, 'open'),
-                            child: const Text('Open terminal'),
-                          ),
-                          const SizedBox(height: 16),
-                        ],
-                        const Text(
-                          'This instruction may already have reached the terminal. Inspect it before sending again.',
-                        ),
-                        const SizedBox(height: 16),
-                        SelectableText(message.text),
-                      ],
-                    ),
-                  ),
-                ),
-                actions: [
-                  Wrap(
-                    spacing: DesktopChrome.controlGap,
-                    runSpacing: DesktopChrome.controlGap,
-                    alignment: WrapAlignment.end,
-                    children: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, 'cancel'),
-                        child: const Text('Dismiss warning'),
-                      ),
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, 'received'),
-                        child: const Text('Already received'),
-                      ),
-                      FilledButton(
-                        onPressed: () => Navigator.pop(context, 'resend'),
-                        child: const Text('Send again'),
-                      ),
-                    ],
-                  ),
-                ],
+        child: Row(
+          children: [
+            if (narrow)
+              AppIconButton(
+                icon: AppIcons.columns2,
+                tooltip: 'Conversations',
+                onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
               ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _devicesVisible
+                          ? 'Your devices'
+                          : group == null
+                          ? c.snapshot?.projects.isEmpty == true
+                                ? c.snapshot!.name
+                                : 'Choose a project'
+                          : c.snapshot!.isProjectLead(group.id)
+                          ? c.snapshot!.projectFor(group.id)!.name
+                          : group.id == c.snapshot!.leadsConversationId
+                          ? 'Product Managers'
+                          : group.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: DesktopChrome.text(medium: true),
+                    ),
+                    if (!_devicesVisible)
+                      if (c.reviewLine(group) case final line?)
+                        Text(
+                          line,
+                          key: const ValueKey('super-review-line'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: DesktopChrome.metadata(),
+                        ),
+                  ],
+                ),
+              ),
+            ),
+            if (group != null && !_devicesVisible) ...[
+              AppIconButton(
+                key: const ValueKey('super-chat'),
+                icon: AppIcons.messageSquare,
+                size: AppIcons.inlineSize,
+                tooltip: 'Chat',
+                selected: !_terminalsVisible && !_showPullRequests,
+                color: !_terminalsVisible && !_showPullRequests
+                    ? DesktopChrome.foreground
+                    : DesktopChrome.muted,
+                onPressed: () {
+                  setState(() => _showPullRequests = false);
+                  widget.onCloseTerminal?.call();
+                  _readVisibleTailAfterFrame();
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) _focus.requestFocus();
+                  });
+                },
+              ),
+              const SizedBox(width: 4),
+              AppIconButton(
+                key: const ValueKey('super-terminals'),
+                icon: AppIcons.terminal,
+                size: AppIcons.inlineSize,
+                tooltip: 'Group terminals (${group.agentIds.length})',
+                selected: _terminalsVisible,
+                color: _terminalsVisible
+                    ? DesktopChrome.foreground
+                    : DesktopChrome.muted,
+                // A read-only viewer's terminal reads are refused.
+                onPressed: group.agentIds.isNotEmpty && c.canWrite
+                    ? () {
+                        setState(() => _showPullRequests = false);
+                        widget.onOpenGroupTerminals?.call();
+                      }
+                    : null,
+              ),
+              const SizedBox(width: 4),
+              AppIconButton(
+                key: const ValueKey('super-pull-requests'),
+                focusNode: _pullRequestsFocus,
+                icon: AppIcons.gitPullRequest,
+                size: AppIcons.inlineSize,
+                tooltip: 'Pull requests',
+                selected: !_terminalsVisible && _showPullRequests,
+                color: !_terminalsVisible && _showPullRequests
+                    ? DesktopChrome.foreground
+                    : DesktopChrome.muted,
+                onPressed: () {
+                  widget.onCloseTerminal?.call();
+                  setState(() => _showPullRequests = true);
+                },
+              ),
+              // Not a workgroup: nothing to rename, archive or detail.
+              if (group.id != c.snapshot!.leadsConversationId) _options(group),
+            ],
+            if (!showRoster)
+              AppIconButton(
+                icon: AppIcons.users,
+                tooltip: 'Members and machines',
+                selected: _rosterOpen,
+                onPressed: () => setState(() => _rosterOpen = !_rosterOpen),
+              ),
+          ],
+        ),
+      );
+
+  Widget _options(SuperTabConversation group) {
+    final project = c.snapshot?.projectFor(group.id);
+    final isProject = c.snapshot?.isProjectLead(group.id) == true;
+    final editable = c.canWrite && !c.saving && !c.hasPendingAction;
+    Widget item(String label, VoidCallback? action) => MenuItemButton(
+      style: const ButtonStyle(
+        minimumSize: WidgetStatePropertyAll(Size(208, 32)),
+        side: WidgetStatePropertyAll(BorderSide.none),
+        padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 12)),
+        alignment: Alignment.centerLeft,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      onPressed: action,
+      child: Text(label),
+    );
+    return MenuAnchor(
+      style: const MenuStyle(
+        minimumSize: WidgetStatePropertyAll(Size(220, 0)),
+        padding: WidgetStatePropertyAll(EdgeInsets.all(6)),
+      ),
+      menuChildren: [
+        if (isProject) ...[
+          if (editable && project?.ownerId == c.accountId)
+            item('Rename project', () => _groupAction('rename', group)),
+          item('Project details', () => _groupAction('details', group)),
+          if (editable && project?.ownerId == c.accountId)
+            item('Sharing', () => _groupAction('sharing', group)),
+          if (editable && project?.ownerId == c.accountId)
+            item('Skills', () => _groupAction('skills', group)),
+          if (editable)
+            item('Update cadence', () => _groupAction('cadence', group)),
+          item('Swarm routing', () => _groupAction('routing', group)),
+          if (editable && project?.ownerId == c.accountId)
+            item('Delete Project', () => _groupAction('delete', group)),
+        ] else ...[
+          item('Work details', () => _groupAction('work', group)),
+          if (editable) ...[
+            item('Rename', () => _groupAction('rename', group)),
+            item(
+              group.archived ? 'Reopen conversation' : 'Archive',
+              group.assignment == null ||
+                      const [
+                        'done',
+                        'stopped',
+                        'cancelled',
+                      ].contains(group.assignment!['status'])
+                  ? () => _groupAction('archive', group)
+                  : null,
+            ),
+          ],
+        ],
+        if (c.snapshot?.conversations.any(
+              (g) => g.archived && g.projectId == group.projectId,
+            ) ==
+            true)
+          item('Archived conversations', () => _groupAction('archived', group)),
+      ],
+      builder: (context, menu, _) => AppIconButton(
+        key: const ValueKey('super-group-options'),
+        icon: AppIcons.ellipsisVertical,
+        tooltip: isProject ? 'Project options' : 'Workgroup options',
+        onPressed: () => menu.isOpen ? menu.close() : menu.open(),
       ),
     );
-    if (!mounted ||
-        widget.controller != c ||
-        resolution == null ||
-        !c.canWrite) {
-      return;
-    }
+  }
+
+  Future<void> _resolveDelivery(
+    SuperTabMessage message,
+    SuperTabDelivery delivery,
+    String resolution,
+  ) async {
+    final c = this.c;
+    if (!c.canWrite || c.saving || delivery.id == null) return;
     if (resolution == 'open') {
+      final agent = c.snapshot?.agent(delivery.agentId);
       if (agent != null) {
         c.select(message.conversationId);
         widget.onOpenTerminal(agent);
@@ -798,7 +955,7 @@ class _SuperTabViewState extends State<SuperTabView> {
     }
     await c.command({
       'type': 'delivery.resolve',
-      'deliveryId': delivery['id'],
+      'deliveryId': delivery.id,
       'resolution': resolution,
     });
   }
@@ -806,8 +963,15 @@ class _SuperTabViewState extends State<SuperTabView> {
   Widget _message(
     SuperTabMessage message,
     bool grouped,
-    Map<String, SuperTabMessage> byId,
-  ) {
+    Map<String, SuperTabMessage> byId, {
+    bool showReceipt = false,
+  }) {
+    if (message.terminalEvent || message.source['kind'] == 'overlap') {
+      return SuperTabTerminalRow(
+        key: ValueKey('super-message-${message.id}'),
+        message: message,
+      );
+    }
     final route = message.route;
     if (route != null) {
       return SuperTabRouteRow(
@@ -859,28 +1023,25 @@ class _SuperTabViewState extends State<SuperTabView> {
               style: DesktopChrome.metadata(),
             ),
           ),
-        if (message.queued)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Text('Queued', style: DesktopChrome.metadata()),
-          ),
-        for (final delivery in message.deliveries.where(
-          (d) => d['status'] == 'uncertain',
-        ))
-          TextButton(
-            onPressed: c.canWrite && delivery['id'] is String
-                ? () => _reviewDelivery(message, delivery)
-                : null,
-            child: Text(
-              'Check delivery to ${c.snapshot?.agentName(delivery['agentId'] as String, fallback: 'agent') ?? 'agent'}',
-            ),
+        if (showReceipt)
+          SuperTabMessageReceipt(
+            key: ValueKey('super-message-receipt-${message.id}'),
+            message: message,
+            controller: c,
+            app: widget.app,
+            machineName: widget.machineName,
+            onResolve: (delivery, resolution) =>
+                unawaited(_resolveDelivery(message, delivery, resolution)),
+            onAddLead: () {
+              if (c.selected case final group?) widget.onAddAgent(group);
+            },
           ),
       ],
     );
   }
 
   Widget _date(DateTime time) => Padding(
-    padding: const EdgeInsets.fromLTRB(20, 20, 20, 4),
+    padding: const EdgeInsets.fromLTRB(24, 20, 24, 4),
     child: Row(
       children: [
         Expanded(child: Divider(color: DesktopChrome.rim)),
@@ -897,8 +1058,51 @@ class _SuperTabViewState extends State<SuperTabView> {
   );
 
   Widget _conversation(bool narrow) {
+    if (c.snapshot?.projects.isEmpty == true && !c.accessRevoked) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Create a project to get started.',
+                style: DesktopChrome.text(color: DesktopChrome.muted),
+              ),
+              if (c.operationError != null) ...[
+                const SizedBox(height: 12),
+                Text(c.operationError!, style: DesktopChrome.metadata()),
+              ],
+              if (c.hasPendingAction)
+                TextButton(
+                  onPressed: c.saving ? null : c.retry,
+                  child: const Text('Check pending action'),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
     final group = c.selected;
-    final messages = c.messages(c.selectedId);
+    final writable = c.canWrite && group != null && !group.archived;
+    final busy = c.saving || c.uploading;
+    final allMessages = c.messages(c.selectedId);
+    final latestOwn = allMessages.reversed
+        .where(
+          (m) => !m.fromAgent && !m.fromTerminal && m.authorId == c.accountId,
+        )
+        .firstOrNull;
+    // Older Desktops still show this plain notice. The inline receipt owns the
+    // same explanation here, including after delivery settles, so it never resurfaces stale.
+    final messages = allMessages
+        .where(
+          (m) =>
+              !(m.source['kind'] == 'delivery-hold' &&
+                  m.source['messageId'] == latestOwn?.id &&
+                  m.source['deliveryId'] == latestOwn?.receiptDelivery?.id),
+        )
+        .toList();
+    final entries = superTabTranscriptEntries(messages);
     final byId = {for (final message in messages) message.id: message};
     final grouped = SuperTabMessageRow.consecutiveUpdates(messages);
     final newAfter = _newAfter[c.selectedId];
@@ -906,7 +1110,7 @@ class _SuperTabViewState extends State<SuperTabView> {
         ? 0
         : messages.where((message) => message.sequence > newAfter).length;
     final reply = _replies[c.selectedId];
-    final mentions = _mentionChoices;
+    final choices = _completionChoices;
     return Column(
       children: [
         if (c.error != null)
@@ -933,8 +1137,8 @@ class _SuperTabViewState extends State<SuperTabView> {
                         ? 'Conversation unavailable.'
                         : group == null
                         ? 'Loading conversation…'
-                        : group.id == 'lead'
-                        ? 'Discuss the plan with your lead.'
+                        : c.snapshot!.isProjectLead(group.id)
+                        ? 'Discuss the plan with your product manager.'
                         : 'Start the conversation.',
                     style: DesktopChrome.text(color: DesktopChrome.muted),
                   ),
@@ -970,7 +1174,7 @@ class _SuperTabViewState extends State<SuperTabView> {
                             'super-messages-${c.tabId}-${c.selectedId}',
                           ),
                           padding: const EdgeInsets.symmetric(vertical: 8),
-                          itemCount: messages.length + 1,
+                          itemCount: entries.length + 1,
                           itemBuilder: (context, index) {
                             if (index == 0) {
                               return c.hasOlder(c.selectedId)
@@ -982,9 +1186,13 @@ class _SuperTabViewState extends State<SuperTabView> {
                                     )
                                   : const SizedBox.shrink();
                             }
-                            final message = messages[index - 1];
+                            final entry = entries[index - 1];
+                            final message = entry.message;
+                            final agent = message.fromAgent
+                                ? c.snapshot?.agent(message.authorId)
+                                : null;
                             final previous = index > 1
-                                ? messages[index - 2]
+                                ? entries[index - 2].message
                                 : null;
                             final time = message.createdAt;
                             return Column(
@@ -996,11 +1204,24 @@ class _SuperTabViewState extends State<SuperTabView> {
                                       previous?.createdAt?.toLocal(),
                                     ))
                                   _date(time),
-                                _message(
-                                  message,
-                                  grouped.contains(message.id),
-                                  byId,
-                                ),
+                                if (entry.interruptions > 0)
+                                  SuperTabRecordingNotice(
+                                    key: ValueKey(
+                                      'super-message-${message.id}',
+                                    ),
+                                    author: _shownAuthor(c, message),
+                                    count: entry.interruptions,
+                                    onOpenTerminal: agent == null
+                                        ? null
+                                        : () => _openAgent(agent),
+                                  )
+                                else
+                                  _message(
+                                    message,
+                                    grouped.contains(message.id),
+                                    byId,
+                                    showReceipt: message.id == latestOwn?.id,
+                                  ),
                               ],
                             );
                           },
@@ -1068,7 +1289,7 @@ class _SuperTabViewState extends State<SuperTabView> {
         if (group != null)
           for (final agent in _needsHuman(group))
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 6, 20, 0),
+              padding: const EdgeInsets.fromLTRB(24, 6, 24, 0),
               child: ListTile(
                 key: ValueKey('super-needs-human-${agent.id}'),
                 dense: true,
@@ -1089,156 +1310,279 @@ class _SuperTabViewState extends State<SuperTabView> {
                 onTap: () => _openAgent(agent),
               ),
             ),
-        if (mentions.isNotEmpty)
+        if (choices.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
             child: Material(
               color: DesktopChrome.surface,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (var i = 0; i < mentions.length; i++)
-                    ListTile(
-                      dense: true,
-                      selected:
-                          i == _mentionIndex.clamp(0, mentions.length - 1),
-                      title: Text(_agentName(mentions[i])),
-                      subtitle: Text(
-                        '${mentions[i].engine} · ${widget.machineName(mentions[i].machineId)}',
-                      ),
-                      onTap: () => _chooseMention(mentions[i]),
-                    ),
-                ],
-              ),
-            ),
-          ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-          child: Focus(
-            onKeyEvent: (node, event) {
-              final keys = HardwareKeyboard.instance;
-              final composing = _composer.value.composing;
-              if (_focus.hasFocus &&
-                  event is KeyDownEvent &&
-                  mentions.isNotEmpty &&
-                  !keys.isControlPressed &&
-                  !keys.isMetaPressed &&
-                  !keys.isAltPressed &&
-                  !keys.isShiftPressed &&
-                  !(composing.isValid && !composing.isCollapsed)) {
-                final key = event.logicalKey;
-                if (key == LogicalKeyboardKey.arrowDown ||
-                    key == LogicalKeyboardKey.arrowUp) {
-                  setState(
-                    () => _mentionIndex =
-                        (_mentionIndex +
-                            (key == LogicalKeyboardKey.arrowDown ? 1 : -1)) %
-                        mentions.length,
-                  );
-                  return KeyEventResult.handled;
-                }
-                if (key == LogicalKeyboardKey.tab ||
-                    key == LogicalKeyboardKey.enter) {
-                  _chooseMention(
-                    mentions[_mentionIndex.clamp(0, mentions.length - 1)],
-                  );
-                  return KeyEventResult.handled;
-                }
-                if (key == LogicalKeyboardKey.escape) {
-                  setState(
-                    () => _dismissedMention = _composer.text.substring(
-                      0,
-                      _composer.selection.baseOffset,
-                    ),
-                  );
-                  return KeyEventResult.handled;
-                }
-              }
-              if (_focus.hasFocus &&
-                  event is KeyDownEvent &&
-                  event.logicalKey == LogicalKeyboardKey.enter &&
-                  !keys.isShiftPressed &&
-                  !keys.isControlPressed &&
-                  !keys.isMetaPressed &&
-                  !keys.isAltPressed &&
-                  !(composing.isValid && !composing.isCollapsed)) {
-                unawaited(_send());
-                return KeyEventResult.handled;
-              }
-              return KeyEventResult.ignored;
-            },
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: DesktopChrome.field,
+              shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(
                   DesktopChrome.controlRadius,
                 ),
-                border: Border.all(color: DesktopChrome.rim),
+                side: BorderSide(color: DesktopChrome.rim),
               ),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+              clipBehavior: Clip.antiAlias,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.sizeOf(context).height * .3,
+                ),
+                child: ListView(
+                  key: const ValueKey('super-composer-completions'),
+                  shrinkWrap: true,
+                  padding: const EdgeInsets.symmetric(vertical: 4),
                   children: [
-                    Expanded(
-                      child: TextField(
-                        key: const ValueKey('super-message-composer'),
-                        controller: _composer,
-                        focusNode: _focus,
-                        autofocus: !_terminalsVisible,
-                        enabled: c.canWrite && group != null && !group.archived,
-                        minLines: 1,
-                        maxLines: MediaQuery.sizeOf(context).height < 600
-                            ? 3
-                            : 8,
-                        maxLength: 32000,
-                        keyboardType: TextInputType.multiline,
-                        style: DesktopChrome.text(),
-                        decoration: InputDecoration(
-                          hintText: group == null
-                              ? 'Loading conversation…'
-                              : c.canWrite
-                              ? 'Message ${group.title}'
-                              : 'Read-only conversation',
-                          border: InputBorder.none,
-                          enabledBorder: InputBorder.none,
-                          focusedBorder: InputBorder.none,
-                          disabledBorder: InputBorder.none,
-                          filled: false,
-                          counterText: '',
+                    for (var i = 0; i < choices.length; i++)
+                      ListTile(
+                        key: _completionKeys[i],
+                        dense: true,
+                        selected:
+                            i == _mentionIndex.clamp(0, choices.length - 1),
+                        selectedTileColor: grid.AppSurface.selectedFill,
+                        selectedColor: DesktopChrome.foreground,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
                         ),
-                        onChanged: (text) {
-                          c.setDraft(c.selectedId, text);
-                          setState(() {
-                            _mentionIndex = 0;
-                            _dismissedMention = null;
-                          });
-                        },
+                        title: Text(
+                          choices[i].label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: DesktopChrome.control(),
+                        ),
+                        subtitle: choices[i].detail == null
+                            ? null
+                            : Text(
+                                choices[i].detail!,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: DesktopChrome.metadata(),
+                              ),
+                        onTap: choices[i].choose,
                       ),
-                    ),
-                    ValueListenableBuilder(
-                      valueListenable: _composer,
-                      builder: (context, value, _) => AppIconButton(
-                        icon: AppIcons.arrowUp,
-                        tooltip: 'Send message',
-                        color: DesktopChrome.accent,
-                        onPressed:
-                            c.canWrite &&
-                                group != null &&
-                                !group.archived &&
-                                !c.saving &&
-                                !c.hasPendingAction &&
-                                value.text.trim().isNotEmpty
-                            ? () => unawaited(_send())
-                            : null,
-                      ),
-                    ),
                   ],
                 ),
               ),
             ),
           ),
-        ),
+        if (group != null && group.archived)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'This group is closed. You can read it but not write.',
+                    style: DesktopChrome.metadata(),
+                  ),
+                ),
+                if (c.canWrite)
+                  TextButton(
+                    key: const ValueKey('super-group-reopen'),
+                    onPressed: c.saving
+                        ? null
+                        : () => _groupAction('archive', group),
+                    child: const Text('Reopen'),
+                  ),
+              ],
+            ),
+          )
+        else
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
+            child: Focus(
+              onKeyEvent: (node, event) {
+                final keys = HardwareKeyboard.instance;
+                final composing = _composer.value.composing;
+                if (_focus.hasFocus &&
+                    event is KeyDownEvent &&
+                    choices.isNotEmpty &&
+                    !keys.isControlPressed &&
+                    !keys.isMetaPressed &&
+                    !keys.isAltPressed &&
+                    !keys.isShiftPressed &&
+                    !(composing.isValid && !composing.isCollapsed)) {
+                  final key = event.logicalKey;
+                  if (key == LogicalKeyboardKey.arrowDown ||
+                      key == LogicalKeyboardKey.arrowUp) {
+                    _moveCompletion(
+                      (_mentionIndex +
+                              (key == LogicalKeyboardKey.arrowDown ? 1 : -1)) %
+                          choices.length,
+                    );
+                    return KeyEventResult.handled;
+                  }
+                  if (key == LogicalKeyboardKey.tab ||
+                      key == LogicalKeyboardKey.enter) {
+                    choices[_mentionIndex.clamp(0, choices.length - 1)]
+                        .choose();
+                    return KeyEventResult.handled;
+                  }
+                  if (key == LogicalKeyboardKey.escape) {
+                    setState(
+                      () => _dismissedMention = _composer.text.substring(
+                        0,
+                        _composer.selection.baseOffset,
+                      ),
+                    );
+                    return KeyEventResult.handled;
+                  }
+                }
+                if (_focus.hasFocus &&
+                    event is KeyDownEvent &&
+                    event.logicalKey == LogicalKeyboardKey.enter &&
+                    !keys.isShiftPressed &&
+                    !keys.isControlPressed &&
+                    !keys.isMetaPressed &&
+                    !keys.isAltPressed &&
+                    !(composing.isValid && !composing.isCollapsed)) {
+                  unawaited(_send());
+                  return KeyEventResult.handled;
+                }
+                return KeyEventResult.ignored;
+              },
+              child: DecoratedBox(
+                key: const ValueKey('super-message-composer-surface'),
+                decoration: BoxDecoration(
+                  color: DesktopChrome.field,
+                  borderRadius: BorderRadius.circular(
+                    DesktopChrome.controlRadius,
+                  ),
+                  border: Border.all(color: DesktopChrome.rim),
+                ),
+                child: NewHarnessDropZone(
+                  attachments: _files,
+                  enabled: writable && !busy,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onTap: writable ? _focus.requestFocus : null,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          ListenableBuilder(
+                            listenable: _files,
+                            builder: (context, _) => _files.isEmpty
+                                ? const SizedBox.shrink()
+                                : Padding(
+                                    padding: const EdgeInsets.only(
+                                      bottom: 8,
+                                      right: 8,
+                                    ),
+                                    child: NewHarnessAttachmentChips(
+                                      attachments: _files,
+                                      enabled: !c.saving,
+                                      isUploading: c.isUploading,
+                                      progressOf: c.uploadProgress,
+                                    ),
+                                  ),
+                          ),
+                          ConstrainedBox(
+                            constraints: BoxConstraints(
+                              minHeight: grid.AppControl.heightFieldScaled,
+                            ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Expanded(
+                                  child: NewHarnessPasteTarget(
+                                    attachments: _files,
+                                    enabled: writable && !busy,
+                                    focusNode: _focus,
+                                    child: TextField(
+                                      key: const ValueKey(
+                                        'super-message-composer',
+                                      ),
+                                      controller: _composer,
+                                      focusNode: _focus,
+                                      autofocus: !_terminalsVisible,
+                                      enabled: writable,
+                                      minLines: 1,
+                                      maxLines:
+                                          MediaQuery.sizeOf(context).height <
+                                              600
+                                          ? 3
+                                          : 8,
+                                      maxLength: 32000,
+                                      keyboardType: TextInputType.multiline,
+                                      textAlignVertical:
+                                          TextAlignVertical.center,
+                                      style: DesktopChrome.text(),
+                                      decoration: InputDecoration(
+                                        // The row centers the line. Inheriting a decorated
+                                        // field's minimum height leaves slack below its text.
+                                        isCollapsed: true,
+                                        constraints: const BoxConstraints(),
+                                        visualDensity: VisualDensity.standard,
+                                        hintStyle: DesktopChrome.text(
+                                          color: DesktopChrome.muted,
+                                        ),
+                                        contentPadding: EdgeInsets.zero,
+                                        hintText: group == null
+                                            ? 'Loading conversation…'
+                                            : c.canWrite
+                                            ? c.snapshot!.isProjectLead(
+                                                    group.id,
+                                                  )
+                                                  ? 'Message Product Manager'
+                                                  : group.id ==
+                                                        c
+                                                            .snapshot!
+                                                            .leadsConversationId
+                                                  ? 'Message Product Managers'
+                                                  : 'Message ${group.title}'
+                                            : 'Read-only conversation',
+                                        border: InputBorder.none,
+                                        enabledBorder: InputBorder.none,
+                                        focusedBorder: InputBorder.none,
+                                        disabledBorder: InputBorder.none,
+                                        filled: false,
+                                        counterText: '',
+                                      ),
+                                      onChanged: (text) {
+                                        c.setDraft(c.selectedId, text);
+                                        setState(() {
+                                          _mentionIndex = 0;
+                                          _dismissedMention = null;
+                                        });
+                                      },
+                                    ),
+                                  ),
+                                ),
+                                NewHarnessAttachButton(
+                                  attachments: _files,
+                                  enabled: writable && !busy,
+                                ),
+                                ListenableBuilder(
+                                  listenable: Listenable.merge([
+                                    _composer,
+                                    _files,
+                                  ]),
+                                  builder: (context, _) => AppIconButton(
+                                    icon: AppIcons.arrowUp,
+                                    tooltip: 'Send message',
+                                    color: DesktopChrome.accent,
+                                    onPressed:
+                                        writable &&
+                                            !busy &&
+                                            !c.hasPendingAction &&
+                                            (_composer.text.trim().isNotEmpty ||
+                                                !_files.isEmpty)
+                                        ? () => unawaited(_send())
+                                        : null,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -1252,11 +1596,25 @@ class _SuperTabViewState extends State<SuperTabView> {
           constraints.maxWidth < MediaQuery.textScalerOf(context).scale(720);
       final showRoster =
           constraints.maxWidth >= MediaQuery.textScalerOf(context).scale(1080);
+      final chatCovered =
+          (narrow && _sidebarOpen) || (!showRoster && _rosterOpen);
+      if (_chatCovered && !chatCovered) {
+        // Both dismissing a drawer and widening the window reveal the cached
+        // transcript without loading another message.
+        _readVisibleTailAfterFrame();
+      }
+      _chatCovered = chatCovered;
       final roster = SuperTabRoster(
         controller: c,
         app: widget.app,
         onInvite: widget.onInvite,
-        onOpenAgent: _openAgent,
+        onOpenAgent: (agent) {
+          setState(() {
+            _showPullRequests = false;
+            _rosterOpen = false;
+          });
+          (widget.onChooseAgentTerminal ?? widget.onOpenTerminal)(agent);
+        },
         onAddAgent: (group) {
           setState(() => _rosterOpen = false);
           widget.onAddAgent(group);
@@ -1265,44 +1623,41 @@ class _SuperTabViewState extends State<SuperTabView> {
       return Stack(
         children: [
           ExcludeFocus(
-            excluding: (narrow && _sidebarOpen) || (!showRoster && _rosterOpen),
-            child: Row(
-              children: [
-                if (!narrow) ...[
-                  SizedBox(width: 220, child: _sidebar()),
-                  VerticalDivider(width: 1, color: DesktopChrome.rim),
-                ],
-                Expanded(
-                  child: Column(
-                    children: [
-                      _header(c.selected, narrow, showRoster),
-                      Expanded(
-                        child: IndexedStack(
-                          index: _terminalsVisible
-                              ? 1
-                              : _showPullRequests
-                              ? 2
-                              : 0,
-                          children: [
-                            _conversation(narrow),
-                            terminal ?? const SizedBox.shrink(),
-                            _showPullRequests
-                                ? SuperTabPullRequests(
-                                    controller: c,
-                                    app: widget.app,
-                                  )
-                                : const SizedBox.shrink(),
-                          ],
-                        ),
-                      ),
-                    ],
+            excluding: chatCovered,
+            child: SuperTabPaneLayout(
+              storage: widget.app?.localStore,
+              onLeave: _leaveResize,
+              left: narrow ? null : _sidebar(),
+              right: showRoster ? roster : null,
+              center: Column(
+                children: [
+                  _header(c.selected, narrow, showRoster),
+                  Expanded(
+                    child: IndexedStack(
+                      index: _devicesVisible
+                          ? 1
+                          : c.snapshot?.projects.isEmpty == true
+                          ? 0
+                          : _terminalsVisible
+                          ? 1
+                          : _showPullRequests
+                          ? 2
+                          : 0,
+                      children: [
+                        _conversation(narrow),
+                        terminal ?? const SizedBox.shrink(),
+                        _showPullRequests
+                            ? SuperTabPullRequests(
+                                controller: c,
+                                app: widget.app,
+                                visible: !_terminalsVisible,
+                              )
+                            : const SizedBox.shrink(),
+                      ],
+                    ),
                   ),
-                ),
-                if (showRoster) ...[
-                  VerticalDivider(width: 1, color: DesktopChrome.rim),
-                  SizedBox(width: 288, child: roster),
                 ],
-              ],
+              ),
             ),
           ),
           if (!showRoster && _rosterOpen)
@@ -1324,7 +1679,12 @@ class _SuperTabViewState extends State<SuperTabView> {
                       color: grid.AppDesktop.veil(Theme.of(context).brightness),
                       child: Align(
                         alignment: Alignment.centerRight,
-                        child: SizedBox(width: 288, child: roster),
+                        child: SizedBox(
+                          width: SuperTabPaneLayout.drawerWidth(
+                            constraints.maxWidth,
+                          ),
+                          child: roster,
+                        ),
                       ),
                     ),
                   ),

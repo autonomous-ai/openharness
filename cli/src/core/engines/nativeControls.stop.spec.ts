@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { CodexControl } from '../../engines/codex/nativeControl.js'
 import { registry, type RegisteredSession } from '../../lib/registry.js'
-import type { ProcessRow } from '../../lib/tmux.js'
+import type { ProcessRow } from '../../lib/processTable.js'
 import { composedCodex } from '../../testing/inlineNativeControls.js'
 
 interface CodexStopDeps {

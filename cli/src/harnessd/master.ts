@@ -14,7 +14,8 @@ import { platformFromEnv, type PlatformName } from './platform.js'
 import { baseNode, namedNode } from './processName.js'
 import { LEAN_CORE_SCRIPT_ENV, type MasterMessage } from './protocol.js'
 import {
-  PROBE_ANSWER, RESUME_ENV, createReexec, decodeResume, fingerprint, readMarker, recoverFailedReexec, removeMarker, runProbe, writeMarker,
+  PROBE_ANSWER, PROBE_HANDOVER, RESUME_ENV, createReexec, decodeResume, fingerprint, mayClaimPidFile, readHandoverClaimant, readMarker, recoverFailedReexec,
+  removeMarker, runProbe, sweepHandovers, takeBackHandover, takeHandover, writeMarker, type HandOverDeps, type ReexecMarker,
 } from './reexec.js'
 import { SERVICE_HOSTS, ServiceSupervisor, UPDATER_HOST, UPDATER_PROCESS, serviceOptions, serviceProcessesEnv, serviceSpecs } from './services.js'
 import {
@@ -69,7 +70,29 @@ export interface MasterConfig {
   unjudgedUpdate?: (bundle: string | null) => string | null
   /** Run the updater (`UPDATER_HOST`): the installed copy, with updates on (masterProcess.ts). */
   updater?: boolean
+  /** The file the core, the services and a replacement start from, when it is not `scriptPath`: on Windows the build
+   *  `cli\current` names (lib/windows/installLayout.ts `currentCli`), read before every start. An update is judged on
+   *  it. Null falls back on `scriptPath`. The lean bundle is not used with it (../masterProcess.ts). */
+  currentScript?: () => string | null
+  /** Windows: how this master hands over to its replacement (./reexec.ts `HandOverDeps`). */
+  handOver?: MasterHandOver
+  /** Windows: stop the core and the services with `harnessd:shutdown` (./supervisor.ts `stopByMessage`). */
+  stopByMessage?: boolean
+  /** Where the core's and the services' output goes, a file descriptor: on Windows the launcher gives a master
+   *  none, so it opens the daemon's log itself (../masterProcess.ts). Their own output otherwise. */
+  output?: number
 }
+
+/**
+ * What a master that hands over is given (../masterProcess.ts). The rest is this file's: the pid file is written as
+ * every claim of it is, the handover is decided in the marker's folder (./reexec.ts `readHandoverClaimant`,
+ * `takeBackHandover`), and leaving is this process's end. The lock waits a bounded while (../masterProcess.ts
+ * `HANDOVER_LOCK_WAIT_MS`) for a start or a stop under way: null when it is still busy, or on any throw. The launch is bounded well inside the 45 s a `harness stop` waits on the lock. Each token is fresh. `readPid`
+ * throws when the pid file cannot be read: null says it names no pid, and on that this master stays at the bound
+ * (./reexec.ts `taken`), where a file it could not read is a new master it must leave to. This file's own pid-file
+ * read, which takes a failure for null, is never given to it.
+ */
+export type MasterHandOver = Omit<HandOverDeps, 'claim' | 'claimant' | 'takeBack' | 'leave'>
 
 export type Execve = (file: string, args: string[], env: NodeJS.ProcessEnv) => void
 
@@ -230,7 +253,7 @@ export function probeMaster(config: { env: NodeJS.ProcessEnv; execArgv: string[]
     serviceSpecs(config.env, SERVICE_HOSTS)
     const inert = { wallClock: () => Date.now() } as unknown as SupervisorDeps
     const status = new Supervisor(inert, supervisorOptions(config.env, config.execArgv), { version: config.version, resume }).status()
-    say(`${PROBE_ANSWER} · protocol ${status.protocol} · v${status.masterVersion}`)
+    say(`${PROBE_ANSWER} · protocol ${status.protocol} · v${status.masterVersion} · ${PROBE_HANDOVER}`)
     return 0
   } catch (error) {
     say(`harnessd-probe failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -249,14 +272,12 @@ export function runMaster(config: MasterConfig): Supervisor {
   const resume = decodeResume(given[RESUME_ENV])
   const env: NodeJS.ProcessEnv = { ...given }
   delete env[RESUME_ENV]
+  const writePidFile = (pid = process.pid): void => { writeFileSync(config.pidFile, `${pid}\n`) }
   const readPid = (): number | null => {
     try { return Number.parseInt(readFileSync(config.pidFile, 'utf8').trim(), 10) || null } catch { return null }
   }
   const options = supervisorOptions(env, config.execArgv)
   const execArgv = coreExecArgv(config.execArgv, options.heapLimitMiB)
-  // Trimmed here rather than by the core: the master outlives every core, and two trimmers rewriting
-  // one file in place would race.
-  const stopTrimming = trimLogEvery(config.logFile)
   // The core's stamp, local time (lib/log.ts): in UTC, the master's lines sat hours away from the core's
   // lines around them in the one log they share.
   const log = (line: string) => console.log(`${ts()} ${line}`)
@@ -266,17 +287,54 @@ export function runMaster(config: MasterConfig): Supervisor {
   // Set by the launchd agent or systemd unit `harness service install` writes (./platform.ts).
   const platform = platformFromEnv(env)
   if (platform) log(`[harnessd] run by ${platform}, which starts this master again if it dies`)
-  if (resume) log(`[harnessd] master re-executed (pid ${process.pid})${config.version ? ` · now v${config.version}` : ''}`)
+  // Started by a master handing over (Windows, ./reexec.ts): not a re-execution, which keeps its pid.
+  const handover = resume?.handover
+  if (resume && !handover) log(`[harnessd] master re-executed (pid ${process.pid})${config.version ? ` · now v${config.version}` : ''}`)
   if (config.serviceScriptPath && config.serviceScriptPath !== config.scriptPath) {
     log(`[harnessd] services run from ${config.serviceScriptPath}${config.bundleFingerprint ? ', as this master does' : ''}`)
   }
   // The bundle this master's code came from, read once, as it starts; the bundle on disk is read
   // again before every core starts.
   const own = config.bundleFingerprint ?? fingerprint(config.scriptPath)
-  const bundle = () => fingerprint(config.scriptPath)
+  // What the next core, service or replacement starts from: the current build (Windows), else this master's bundle.
+  const script = (): string => config.currentScript?.() ?? config.scriptPath
+  const bundle = () => fingerprint(script())
+  const output = config.output ?? 'inherit'
   const markerFile = config.reexecMarkerFile
   const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true } catch { return false } }
-  if (markerFile) {
+  /**
+   * Started by a master handing over (Windows, ./reexec.ts): this process is the master only once it took the handover
+   * and, while it still may, wrote the pid file, as an exec would have kept it. Otherwise that master stayed, or is
+   * about to (it gave up waiting, took the handover back, or is past the cutoff), and this one leaves at once, having
+   * started nothing, rolled nothing back, and taken no spawn lock: that master holds it, and releases it as it leaves.
+   * The marker stays as it is, naming that master, which reads it until it leaves; this one's core coming up ends it.
+   * Refused once the pid file is written, this one leaves too: a pid file naming a process that ended is the master
+   * that handed over staying, and no master at all is what `harness start --if-down` recovers; two would go unnoticed.
+   */
+  const takeOver = ({ from, token }: { from: number; token: string }): boolean => {
+    const leaving = (why: string): false => { log(`[harnessd] ${why} — leaving`); return false }
+    const stopped = `the master that started this one (pid ${from}) stopped waiting for it`
+    const write = (pid: number): string | null => { try { writePidFile(pid); return null } catch (error) { return (error as Error).message } }
+    if (!markerFile || !takeHandover(markerFile, token, process.pid) || !mayClaimPidFile(markerFile, token)) return leaving(stopped)
+    const failed = write(process.pid)
+    if (failed !== null) return leaving(`could not take over from pid ${from} (${failed})`)
+    if (!mayClaimPidFile(markerFile, token)) {
+      // That master may have settled on the pid file naming it before this write: still running, it is the master, and
+      // a pid file naming this process, about to end, would have `harness start --if-down` start a second one.
+      if (readPid() === process.pid && alive(from)) write(from)
+      return leaving(`${stopped} as this one took over`)
+    }
+    log(`[harnessd] took over from the master before it (pid ${from})`)
+    return true
+  }
+  const tookOver = handover ? takeOver(handover) : true
+  // Trimmed here rather than by the core: the master outlives every core, and two trimmers rewriting
+  // one file in place would race. Not by a master handed over to until it took over: the one before
+  // trims the log until then.
+  const stopTrimming = tookOver ? trimLogEvery(config.logFile) : () => {}
+  // The marker is this master's: its own re-execution's, or the handover it took, which names the master before it.
+  const ownMarker = (marker: ReexecMarker | null): boolean => !!marker && (marker.pid === process.pid || (!!handover && marker.handover === handover.token))
+  if (markerFile && !handover) {
     // A re-execution before this start that never brought a core up: back to the previous bundle,
     // which the supervisor then re-executes this master on before it starts anything.
     recoverFailedReexec({
@@ -284,6 +342,8 @@ export function runMaster(config: MasterConfig): Supervisor {
       restoreUpdate: config.restoreUpdate, removeMarker: () => removeMarker(markerFile), log,
     })
   }
+  // Windows: the decisions of handovers over and done, all but this one's and the one a marker still names.
+  if (markerFile && tookOver && (handover || config.handOver)) sweepHandovers(markerFile, [handover?.token, readMarker(markerFile)?.handover])
   // Started fresh on an update the master judging it never finished with (it died: a crash, a kill, a
   // power cut): this master judges it. A re-executed master was handed its own. Asked of the bundle on
   // disk now, which the first core runs, not of this master's own: a recovery just above may have put
@@ -306,25 +366,32 @@ export function runMaster(config: MasterConfig): Supervisor {
   let supervisor: Supervisor | null = null
   const services = new ServiceSupervisor(processes, {
     spawnService: (spec, extra) => {
-      const script = lean.scriptFor(spec.name)
+      // From the lean bundle when it can be (./leanServices.ts); with a current build (Windows), from that.
+      const file = config.currentScript ? script() : lean.scriptFor(spec.name)
       // One process for every service it hosts, each on its own link to the core (services/process.ts).
-      const handle = coreHandle(spawn(named(`harnessd-${spec.name}`), [...coreExecArgv(config.execArgv, spec.heapLimitMiB), script, '__service', spec.services.join(',')], {
+      const handle = coreHandle(spawn(named(`harnessd-${spec.name}`), [...coreExecArgv(config.execArgv, spec.heapLimitMiB), file, '__service', spec.services.join(',')], {
         env: { ...env, ...extra },
-        stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+        stdio: ['ignore', output, output, 'ipc'],
       }))
-      lean.started(spec.name, script, handle)
+      if (!config.currentScript) lean.started(spec.name, file, handle)
       return handle
     },
+    stopByMessage: config.stopByMessage,
     now: () => performance.now(),
     wallClock: () => Date.now(),
     setTimer: (run, ms) => setTimeout(run, ms),
     clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
     log,
-    // The updater staged a build: the core is asked to hand over for it, and the new core judged.
-    staged: (version) => supervisor?.updateStaged(version),
-  }, serviceOptions(env), { HARNESSD_SERVICE_TOKEN: token })
+    // The updater staged a build, a terminal host or both: the core is asked to hand over, and the new core judged.
+    staged: (staged) => supervisor?.updateStaged(staged),
+    // HARNESSD_JUDGES_PTY: this master takes a terminal host's staging and judges it on its probation (Windows,
+    // services/updaterProcess.ts). An updater under a master from before stages no host: no one would roll it back.
+  }, serviceOptions(env), { HARNESSD_SERVICE_TOKEN: token, HARNESSD_JUDGES_PTY: '1' })
+  // The pid file is this master's to remove as it ends: the supervisor says so once it claimed it, and so does a claim
+  // as this master hands over (Windows), which the supervisor does not know of.
+  let releaseOnExit = false
   const reexec = markerFile ? createReexec({
-    own, current: bundle, nodePath: named('harnessd'), execArgv: config.execArgv, scriptPath: config.scriptPath, env, pid: process.pid,
+    own, current: bundle, nodePath: named('harnessd'), execArgv: config.execArgv, get scriptPath() { return script() }, env, pid: process.pid,
     execve, exists: existsSync,
     probe: (args, probeEnv) => runProbe(node, args, probeEnv),
     stopChildren: (done) => services.stop(done),
@@ -334,23 +401,44 @@ export function runMaster(config: MasterConfig): Supervisor {
     stopping: () => stopping,
     now: () => Date.now(),
     log,
+    // Windows, which has no exec: a replacement started beside this master, the handover decided in the marker's folder.
+    ...(config.handOver ? {
+      handOver: {
+        ...config.handOver,
+        claim: () => { writePidFile(); releaseOnExit = true },
+        claimant: (handed: string) => readHandoverClaimant(markerFile, handed),
+        takeBack: (handed: string) => takeBackHandover(markerFile, handed, process.pid),
+        // This master's end once its replacement holds the pid file: nothing of the daemon's left to stop.
+        leave: () => { stopTrimming(); exit(0) },
+      },
+    } : {}),
   }) : null
+  // A stop, from a signal or from the core (`harnessd:stop`, `harness stop` on Windows): the services go beside the
+  // core, inside the same grace `harness stop` gives the whole daemon.
+  const stopAll = (why: string): void => {
+    stopping = true
+    reexec?.cancel()
+    services.stop(() => {})
+    supervisor!.stop(why)
+  }
   supervisor = new Supervisor({
     spawnCore: (extra) => {
       // From the lean bundle on the core's own code when it can be, as a service is, by the same rules
       // (./leanServices.ts), and from cli.js otherwise. The supervisor judges the core it is given the
       // same either way: an update's first core, lean or not, is on probation as before.
-      const script = lean.scriptFor(CORE)
-      const handle = coreHandle(spawn(named('harnessd-core'), [...execArgv, script, '__run'], {
+      // With a current build (Windows), from that, and never from the lean bundle.
+      const leanCore = config.currentScript ? null : lean.scriptFor(CORE)
+      const file = leanCore ?? script()
+      const handle = coreHandle(spawn(named('harnessd-core'), [...execArgv, file, '__run'], {
         // Told which services this master runs, so it routes to exactly those and runs the rest itself;
         // and, from the lean bundle, which cli.js is its CLI (leanCoreEntry.ts).
         env: {
           ...env, ...extra, HARNESSD_SERVICE_TOKEN: token, ...serviceProcessesEnv(specs, process.pid),
-          ...(script === config.scriptPath ? {} : { [LEAN_CORE_SCRIPT_ENV]: config.scriptPath }),
+          ...(leanCore !== null && leanCore !== config.scriptPath ? { [LEAN_CORE_SCRIPT_ENV]: config.scriptPath } : {}),
         },
-        stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+        stdio: ['ignore', output, output, 'ipc'],
       }))
-      lean.started(CORE, script, handle)
+      if (leanCore !== null) lean.started(CORE, leanCore, handle)
       return handle
     },
     now: () => performance.now(),
@@ -361,9 +449,10 @@ export function runMaster(config: MasterConfig): Supervisor {
     // On a full disk the claim fails, and the master carries on without it: it was thrown out of the
     // core's `bound` message, and took the master down.
     claimPidFile: () => {
-      try { writeFileSync(config.pidFile, `${process.pid}\n`) } catch (error) { log(`[harnessd] could not write the pid file: ${(error as Error).message}`) }
+      try { writePidFile() } catch (error) { log(`[harnessd] could not write the pid file: ${(error as Error).message}`) }
     },
-    releasePidFile: () => { if (readPid() === process.pid) rmSync(config.pidFile, { force: true }) },
+    // Removed as this master exits, below: once a handover under way (Windows) is decided.
+    releasePidFile: () => { releaseOnExit = true },
     restoreUpdate: config.restoreUpdate,
     confirmUpdate: config.confirmUpdate,
     bundle,
@@ -371,18 +460,28 @@ export function runMaster(config: MasterConfig): Supervisor {
     // A process on demand, started once the core asks (./services.ts `onDemand`), or as a core too old to ask binds.
     want: (service) => services.want(service),
     unasked: (protocol) => services.unasked(protocol),
+    stopByMessage: config.stopByMessage,
+    stopRequested: stopAll,
     // The services go with the master, after the core: none is left holding the core's socket.
     exit: (code) => {
       stopping = true
       reexec?.cancel()
-      // A master stopped before its first core came up has not failed to come up: its own marker goes
-      // with it. Left behind by a stop, a sign-out or a shutdown in the seconds after a re-execution, it
-      // made the next start roll a good update back and reject its version (recoverFailedReexec).
-      if (markerFile && readMarker(markerFile)?.pid === process.pid) removeMarker(markerFile)
-      services.stop(() => {
-        stopTrimming()
-        exit(code)
-      })
+      // Stopped as it handed over (Windows), and the new master took over: the pid file and the marker are its.
+      const end = (handedOver: boolean): void => {
+        if (!handedOver) {
+          if (releaseOnExit && readPid() === process.pid) rmSync(config.pidFile, { force: true })
+          // A master stopped before its first core came up has not failed to come up: its own marker goes
+          // with it. Left behind by a stop, a sign-out or a shutdown in the seconds after a re-execution, it
+          // made the next start roll a good update back and reject its version (recoverFailedReexec).
+          if (markerFile && ownMarker(readMarker(markerFile))) removeMarker(markerFile)
+        }
+        services.stop(() => {
+          stopTrimming()
+          exit(code)
+        })
+      }
+      if (reexec) reexec.settled(end)
+      else end(false)
     },
     ...(reexec && markerFile ? {
       reexec: reexec.reexec,
@@ -390,14 +489,11 @@ export function runMaster(config: MasterConfig): Supervisor {
       coreUp: () => removeMarker(markerFile),
     } : {}),
   }, options, { version: config.version, resume, unjudgedUpdate: unjudged })
-  // Services stop beside the core, inside the same grace `harness stop` gives the whole daemon.
-  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
-    onSignal(signal, () => {
-      stopping = true
-      reexec?.cancel()
-      services.stop(() => {})
-      supervisor.stop(signal)
-    })
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) onSignal(signal, () => stopAll(signal))
+  if (!tookOver) {
+    stopTrimming()
+    exit(0)
+    return supervisor
   }
   supervisor.start()
   // Not waiting on the core: a service reaches it through its socket, and retries until it answers.

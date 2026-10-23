@@ -16,7 +16,7 @@ on:
       scope:
         description: 'Affected component; full for core suites, all for every component'
         type: choice
-        options: [full, cli, tui, backend, desktop, process, all, companions, website, os, provider, firmware, pro, mobile, daemons]
+        options: [full, cli, tui, backend, desktop, process, all, companions, website, os, provider, firmware, pro, mobile, daemons, pty]
         default: full
   workflow_call:
     inputs:
@@ -35,6 +35,9 @@ env:
 
 # Supersede individual PR jobs, not the whole workflow: an always-running final
 # gate on an obsolete revision must not hold the next revision's scheduling lock.
+# Keep PR event actions separate: synchronize and ready_for_review can arrive
+# together for the same head, and must each complete their own required checks.
+# New synchronize events still supersede older synchronize jobs.
 # Every matrix row has its own group. Explicit runs and merge candidates use run
 # IDs, so their requested validation is preserved. Summaries and the final gate
 # have no lock: an older aggregate can finish after newer work without cancelling it.
@@ -42,7 +45,7 @@ env:
 jobs:
   plan:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-plan
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-plan
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -65,6 +68,7 @@ jobs:
       pro: ${{ steps.select.outputs.pro }}
       mobile: ${{ steps.select.outputs.mobile }}
       daemons: ${{ steps.select.outputs.daemons }}
+      pty: ${{ steps.select.outputs.pty }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -87,7 +91,7 @@ jobs:
           .github/workflows/ci.yml .github/workflows/cli-e2e.yml .github/workflows/ci-health.yml
           .github/workflows/website-checks.yml .github/workflows/experience-checks.yml
           .github/workflows/authoring-browser-checks.yml .github/workflows/home-assistant-checks.yml
-          .github/workflows/desktop-logging-checks.yml
+          .github/workflows/desktop-logging-checks.yml .github/workflows/windows.yml
       - id: select
         env:
           CI_SCOPE: ${{ inputs.scope || 'full' }}
@@ -102,7 +106,7 @@ jobs:
 
   process-checks:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-process-checks
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-process-checks
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     runs-on: ubuntu-latest
@@ -145,7 +149,7 @@ jobs:
 
   desktop-tests:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-desktop-tests-${{ strategy.job-index }}
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-desktop-tests-${{ strategy.job-index }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.desktop == 'true'
@@ -213,7 +217,7 @@ jobs:
   # deliberately checks core without installing or building this package.
   companion-subsystems:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-companion-subsystems
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-companion-subsystems
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.companions == 'true'
@@ -245,7 +249,7 @@ jobs:
 
   cli-typecheck:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-cli-typecheck
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-cli-typecheck
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
@@ -268,7 +272,7 @@ jobs:
 
   cli-tests:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-cli-tests-${{ strategy.job-index }}
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-cli-tests-${{ strategy.job-index }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
@@ -313,7 +317,7 @@ jobs:
   # Unit tests only. Native fixtures and connected-shell checks run in the release workflow.
   tui-test:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-tui-test
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-tui-test
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.tui == 'true'
@@ -341,7 +345,7 @@ jobs:
 
   backend-desk:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-backend-desk
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-backend-desk
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.backend == 'true'
@@ -365,7 +369,7 @@ jobs:
 
   website-checks:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-website-checks
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-website-checks
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.website == 'true'
@@ -373,7 +377,7 @@ jobs:
 
   os-checks:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-os-checks
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-os-checks
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.os == 'true'
@@ -388,7 +392,7 @@ jobs:
 
   provider-checks:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-provider-checks-${{ strategy.job-index }}
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-provider-checks-${{ strategy.job-index }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.provider == 'true'
@@ -416,7 +420,7 @@ jobs:
 
   firmware-checks:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-firmware-checks
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-firmware-checks
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.firmware == 'true'
@@ -473,7 +477,7 @@ jobs:
 
   pro-firmware-build:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-pro-firmware-build
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-pro-firmware-build
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.pro == 'true'
@@ -510,7 +514,7 @@ jobs:
 
   pro-golden:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-pro-golden
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-pro-golden
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.pro == 'true'
@@ -532,7 +536,7 @@ jobs:
 
   mobile-checks:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-mobile-checks
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-mobile-checks
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.mobile == 'true'
@@ -559,7 +563,7 @@ jobs:
 
   daemons-checks:
     concurrency:
-      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-daemons-checks
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-daemons-checks
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.daemons == 'true'
@@ -574,11 +578,56 @@ jobs:
           node-version: ${{ env.CLI_NODE_VERSION }}
       - run: node --test daemons/tools/card.test.mjs
 
+  # The Harness PTY host (pty/, on term/): its Rust tests, then the CLI's terminal contract for the
+  # ptyhost backend against the host just built (tmux's half needs tmux and runs locally). Selected by
+  # pty/, term/, the vendored terminal and the CLI's ptyhost files (scripts/ci-plan.py ALSO), and by installer/, whose
+  # model and steps (harness-install.exe) are plain Rust that tests here.
+  pty-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-pty-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.pty == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            pty
+            term
+            installer
+          shared-key: pty-pr
+          cache-bin: false
+      - name: Terminal and host unit tests
+        run: |
+          cargo test --locked --manifest-path term/Cargo.toml
+          cargo build --locked --manifest-path pty/Cargo.toml
+          cargo test --locked --manifest-path pty/Cargo.toml
+          cargo test --locked --manifest-path installer/Cargo.toml
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: cli
+      - name: ptyhost terminal contract
+        working-directory: cli
+        env:
+          RUN_TERMINAL_CONTRACT: '1'
+          HARNESS_PTY_BIN: ${{ github.workspace }}/pty/target/debug/harness-pty
+        run: npx vitest run src/lib/ptyHostBackend.contract.spec.ts --maxWorkers=1
+
   required:
     name: ci/required
     needs: [plan, process-checks, desktop-tests, companion-subsystems, cli-typecheck, cli-tests, tui-test,
             backend-desk, website-checks, os-checks, provider-checks, firmware-checks, pro-firmware-build, pro-golden,
-            mobile-checks, daemons-checks]
+            mobile-checks, daemons-checks, pty-checks]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 3

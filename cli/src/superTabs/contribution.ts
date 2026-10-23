@@ -1,11 +1,12 @@
 import type { CoreApi } from '../core/api.js'
 import { openDaemon } from '../agentClient/daemon.js'
 import { parseProjectFolder, prepareProjectFolder } from '../lib/projectFolder.js'
-import { readCapabilities } from './capacity.js'
+import { readCapabilities, START_REQUIREMENTS } from './capacity.js'
 import { backend, identifier, object } from './host.js'
+import { mkdir } from 'node:fs/promises'
+import { repairSwarmCloneTrust, swarmCloneRoot, swarmCloneRoots } from './cloneTrust.js'
 
 type Json = Record<string, unknown>
-const GiB = 1024 ** 3
 
 /** Owner-only setup. Reuses the regular checkout preparation and engine probe;
  * it neither launches an agent nor grants the team access to the computer. */
@@ -17,7 +18,12 @@ export async function prepareContribution(core: CoreApi, input: Json, deps = {
   const state = object(answer.state), project = object(state.project)
   const machineId = core.daemon.machineId()
   const existing = (Array.isArray(state.machines) ? state.machines.map(object) : []).find(m => m.machineId === machineId)
-  let cwd = existing?.cwd
+  const swarm = input.scope === 'swarm' || Array.isArray(state.projects)
+  let cwd = swarm ? swarmCloneRoot(core.dataDir, input.tabId, existing?.cwd) ?? swarmCloneRoots(core.dataDir, input.tabId)[0] : existing?.cwd
+  if (swarm) {
+    await mkdir(cwd as string, { recursive: true })
+    await repairSwarmCloneTrust(core, { tabId: input.tabId, machine: { scope: 'swarm', cwd } })
+  }
   if (typeof cwd !== 'string') {
     if (project.machineId === machineId && typeof project.cwd === 'string') cwd = project.cwd
     else {
@@ -30,21 +36,21 @@ export async function prepareContribution(core: CoreApi, input: Json, deps = {
   const connection = await deps.open({ dataDir: core.dataDir, port: core.daemon.port, machineId })
   try {
     const [probe, capability] = await Promise.all([
-      connection.request('engines_probe', { accounts: true }, 20_000),
+      connection.request('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000),
       deps.capacity({ cwd, tools: ['git'], devices: [] }),
     ])
     const engines = (Array.isArray(probe.engines) ? probe.engines.map(object) : [])
-      .filter(e => identifier(e.engine) && e.engine !== 'terminal' && e.installed === true && e.signedIn !== false)
+      .filter(e => (e.engine === 'claude' || e.engine === 'codex') && e.installed === true)
       .map(e => e.engine as string)
-    if (!engines.length) throw new Error('Sign in to an agent on this machine, then try again.')
+    if (!engines.length) throw new Error('Install Claude Code or Codex on this machine, then try again.')
     const resources = object('resources' in capability ? capability.resources : null)
     if (capability.ok !== true || typeof resources.projectDiskFreeBytes !== 'number') throw new Error('The project folder is unavailable on this machine.')
-    const available = typeof resources.memoryTotalBytes === 'number' && typeof resources.memoryUsedBytes === 'number'
-      ? Math.max(0, resources.memoryTotalBytes - resources.memoryUsedBytes) : 0
-    // A conservative ceiling; each actual start still reserves measured memory
-    // and disk and rechecks the engine's current subscription allowance.
-    const maxAgents = Math.max(1, Math.min(8, Math.floor(available / (4 * GiB))))
-    return { ok: true, state: 'ready', cwd, engines: [...new Set(engines)], maxAgents }
+    const total = typeof resources.memoryTotalBytes === 'number' ? resources.memoryTotalBytes : 0
+    // Free memory is checked again for every start. It must not shrink the machine's
+    // configured limit just because other work happens to be running during setup.
+    const maxAvailableAgents = Math.max(1, Math.min(16, Math.floor(total / START_REQUIREMENTS.memoryBytes)))
+    const maxAgents = Math.max(1, Math.min(16, Math.floor(total / (2 * START_REQUIREMENTS.memoryBytes))))
+    return { ok: true, state: 'ready', cwd, engines: [...new Set(engines)], maxAgents, maxAvailableAgents, ...(swarm ? { scope: 'swarm' } : {}) }
   } finally { connection.close() }
 }
 

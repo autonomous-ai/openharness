@@ -1,16 +1,26 @@
 /// Backend records are independent of the desktop's visible panes and tab layout.
 Map<String, dynamic> superTabMap(Object? value) => value is Map
     ? Map<String, dynamic>.from(value)
-    : throw const FormatException('Invalid Super Tab response.');
+    : throw const FormatException('Invalid Swarm response.');
 
 String _text(Map<String, dynamic> value, String key) => value[key] is String
     ? value[key] as String
-    : throw FormatException('Missing Super Tab $key.');
+    : throw FormatException('Missing Swarm $key.');
 
 List<T> _list<T>(Object? value, T Function(Map<String, dynamic>) read) =>
     value is List
     ? List.unmodifiable(value.map((row) => read(superTabMap(row))))
-    : throw const FormatException('Invalid Super Tab list.');
+    : throw const FormatException('Invalid Swarm list.');
+
+/// Work that waits on a person: the agent needs a decision (`needs_human`) or
+/// is stuck (`blocked`). Both stay active work until the agent moves on.
+bool superTabWorkWaits(Object? status) =>
+    status == 'needs_human' || status == 'blocked';
+
+/// How a work status reads in the app. `blocked` is what the agent calls it;
+/// people read Stuck. Statuses this build does not know read as sent.
+String superTabWorkStatusLabel(String status) =>
+    status == 'blocked' ? 'stuck' : status.replaceAll('_', ' ');
 
 class SuperTabPerson {
   SuperTabPerson.fromJson(Map<String, dynamic> row)
@@ -24,19 +34,54 @@ class SuperTabPerson {
 class SuperTabAgent {
   SuperTabAgent.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
+      hasProjectId = row['projectId'] != null,
+      projectId = row['projectId'] as String? ?? 'lead',
       name = _text(row, 'name'),
+      displayName = row['displayName'] as String?,
       machineId = _text(row, 'machineId'),
       harnessId = _text(row, 'harnessId'),
       contributorId = _text(row, 'contributorId'),
+      machineOwnerId =
+          row['machineOwnerId'] as String? ?? _text(row, 'contributorId'),
+      role = row['role'] as String?,
+      limitedUntil = DateTime.tryParse(row['limitedUntil'] as String? ?? ''),
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
-  final String id, name, machineId, harnessId, contributorId;
+  final String id, projectId, name, machineId, harnessId, contributorId;
+
+  /// Until when routing skips it: its machine saw a usage limit on its screen
+  /// (spec/2026-10-23-lead-sees-agent-terminal.md). Null when none was seen.
+  final DateTime? limitedUntil;
+
+  /// The account whose computer runs it; a contributor may run agents on a computer another account shared with them.
+  final String machineOwnerId;
+  // Keep the legacy default for callers while allowing group-based roster ownership.
+  final bool hasProjectId;
+  final String? displayName;
+  // Absent until the backend sends one; an agent without a role is a Builder.
+  final String? role;
+  bool get isReviewer => role == 'reviewer';
   final Map<String, dynamic> configuration;
   String get engine => configuration['engine'] as String? ?? '';
+}
+
+class SuperTabTask {
+  SuperTabTask.fromJson(Map<String, dynamic> row)
+    : goal = _text(row, 'goal'),
+      changes = _text(row, 'changes'),
+      constraints = _text(row, 'constraints'),
+      owns = List.unmodifiable((row['owns'] as List).cast<String>());
+
+  final String goal, changes, constraints;
+  final List<String> owns;
 }
 
 class SuperTabConversation {
   SuperTabConversation.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
+      // The Product Managers' conversation belongs to no project; a group from
+      // before projects belongs to the first.
+      projectId =
+          row['projectId'] as String? ?? (row['kind'] == 'leads' ? '' : 'lead'),
       number = (row['number'] as num?)?.toInt(),
       title = _text(row, 'title'),
       leadId = row['leadId'] as String?,
@@ -46,20 +91,55 @@ class SuperTabConversation {
         row['checks'] ?? const [],
         (check) => Map<String, dynamic>.unmodifiable(check),
       ),
+      pullRequestUrls = List.unmodifiable(
+        (row['pullRequestUrls'] as List?)?.whereType<String>() ??
+            const <String>[],
+      ),
       brief = _text(row, 'brief'),
+      task = row['task'] is Map
+          ? SuperTabTask.fromJson(superTabMap(row['task']))
+          : null,
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       assignment = row['assignment'] == null
           ? null
           : Map.unmodifiable(superTabMap(row['assignment']));
-  final String id, title, brief;
+  final String id, projectId, title, brief;
+  final SuperTabTask? task;
   final int? number;
   String get label => number == null ? title : '#$number $title';
   final String? leadId;
   final List<String> agentIds;
   final bool archived;
   final List<Map<String, dynamic>> checks;
+
+  /// Persisted links may be absent on older backends; loaded messages still supply links.
+  final List<String> pullRequestUrls;
   final int lastMessageSequence;
   final Map<String, dynamic>? assignment;
+}
+
+class SuperTabProject {
+  SuperTabProject.fromJson(Map<String, dynamic> row)
+    : id = _text(row, 'id'),
+      name = _text(row, 'name'),
+      ownerId = _text(row, 'ownerId'),
+      leadConversationId = _text(row, 'leadConversationId'),
+      skillMode = row['skillMode'] == 'default' ? 'default' : 'orchestration',
+      isPrivate = row['visibility'] == 'private',
+      memberIds = [
+        for (final member in row['members'] as List? ?? const [])
+          superTabMap(member)['id'] as String,
+      ],
+      updateMinutes = (row['updateMinutes'] as num?)?.toInt() ?? 5,
+      repository = row['repository'] is Map
+          ? Map.unmodifiable(superTabMap(row['repository']))
+          : null;
+  final String id, name, ownerId, leadConversationId;
+  final String skillMode;
+  final bool isPrivate;
+  final List<String> memberIds;
+  final int updateMinutes;
+  final Map<String, dynamic>? repository;
 }
 
 class SuperTabSnapshot {
@@ -84,10 +164,27 @@ class SuperTabSnapshot {
       invitations = _list(
         row['invitations'],
         (row) => Map<String, dynamic>.unmodifiable(row),
-      ) {
+      ),
+      leadsConversationId = row['leadsConversationId'] as String? {
     if (row['version'] != 1) {
-      throw const FormatException('Update Harness to open this Super Tab.');
+      throw const FormatException('Update Harness to open this Swarm.');
     }
+    projects = _list(
+      row['projects'] ??
+          [
+            {
+              'id': 'lead',
+              'name': name,
+              'ownerId': ownerId,
+              'leadConversationId': 'lead',
+              'visibility': 'public',
+              'members': <Object>[],
+              'updateMinutes': 5,
+              if (project != null) 'repository': project,
+            },
+          ],
+      SuperTabProject.fromJson,
+    );
   }
   final String id, name, ownerId;
   final Map<String, dynamic>? project;
@@ -96,20 +193,50 @@ class SuperTabSnapshot {
   final List<SuperTabAgent> agents;
   final List<Map<String, dynamic>> machines;
   final List<SuperTabConversation> conversations;
+  late final List<SuperTabProject> projects;
   final List<Map<String, dynamic>> invitations;
+
+  /// Where the projects' Product Managers talk, Swarm-wide; null in a Swarm
+  /// from before it (spec 2026-10-23-leads-see-and-talk.md).
+  final String? leadsConversationId;
   SuperTabConversation? conversation(String id) =>
       conversations.where((c) => c.id == id).firstOrNull;
   SuperTabAgent? agent(String id) =>
       agents.where((a) => a.id == id).firstOrNull;
 
-  bool isLead(String agentId) => conversation('lead')?.leadId == agentId;
+  SuperTabProject? projectFor(String conversationId) {
+    final group = conversation(conversationId);
+    return projects.where((p) => p.id == group?.projectId).firstOrNull;
+  }
+
+  bool isProjectLead(String conversationId) =>
+      projects.any((p) => p.leadConversationId == conversationId);
+
+  SuperTabProject? leadProjectForAgent(String agentId) => projects
+      .where((p) => conversation(p.leadConversationId)?.leadId == agentId)
+      .firstOrNull;
+
+  bool isLead(String agentId) => leadProjectForAgent(agentId) != null;
+
+  String? leadProtectionReason(String agentId) {
+    final project = leadProjectForAgent(agentId);
+    if (project == null) return null;
+    return '${agentName(agentId)} is the Product Manager of project ${project.name}. Delete the project first.';
+  }
+
+  /// The agents of a workgroup whose role is Reviewer.
+  List<SuperTabAgent> reviewers(SuperTabConversation group) => [
+    for (final id in group.agentIds)
+      if (agent(id) case final a? when a.isReviewer) a,
+  ];
 
   String agentName(String id, {String fallback = 'Agent'}) =>
-      isLead(id) ? 'Lead' : agent(id)?.name ?? fallback;
+      agent(id)?.displayName ?? agent(id)?.name ?? fallback;
 
-  String authorName(SuperTabMessage message) =>
-      message.fromAgent && isLead(message.authorId)
-      ? 'Lead'
+  // Resolve the person shown in chat from the same identity as the roster.
+  // Recorded labels remain the fallback for agents no longer in the Swarm.
+  String authorName(SuperTabMessage message) => message.fromAgent
+      ? agentName(message.authorId, fallback: message.authorName)
       : message.authorName;
 }
 
@@ -170,6 +297,72 @@ class SuperTabRoute {
   final List<SuperTabRouteChoice> alternatives;
 }
 
+/// A file sent with a message. The chat never loads [url] by itself.
+class SuperTabAttachment {
+  SuperTabAttachment.fromJson(Map<String, dynamic> row)
+    : id = _text(row, 'id'),
+      name = _text(row, 'name'),
+      mime = _text(row, 'mime'),
+      size = (row['size'] as num).toInt(),
+      url = _text(row, 'url');
+  final String id, name, mime, url;
+  final int size;
+
+  /// The kinds the backend serves to be seen in place; every other kind is
+  /// served as a download.
+  bool get isImage => const {
+    'image/png',
+    'image/jpeg',
+    'image/gif',
+    'image/webp',
+  }.contains(mime);
+}
+
+/// A message's files. A row that does not read is left out, so one bad row
+/// cannot hide the page of messages it came in.
+List<SuperTabAttachment> _attachments(Object? rows) => List.unmodifiable([
+  if (rows is List)
+    for (final row in rows) ?_tryAttachment(row),
+]);
+
+SuperTabAttachment? _tryAttachment(Object? row) {
+  try {
+    return SuperTabAttachment.fromJson(superTabMap(row));
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Optional timing/hold fields keep messages from older backends readable.
+class SuperTabDelivery {
+  SuperTabDelivery.fromJson(Map<String, dynamic> row)
+    : id = row['id'] as String?,
+      agentId = row['agentId'] as String? ?? '',
+      status = row['status'] as String? ?? '',
+      holdReason = row['holdReason'] as String?,
+      holdSince = _date(row['holdSince']),
+      deliveredAt = _date(row['deliveredAt']),
+      answeredAt = _date(row['answeredAt']),
+      updatedAt = _date(row['updatedAt']);
+  final String? id, holdReason;
+  final String agentId, status;
+  final DateTime? holdSince, deliveredAt, answeredAt, updatedAt;
+  static DateTime? _date(Object? value) =>
+      value is String ? DateTime.tryParse(value) : null;
+  bool get pending => status == 'queued' || status == 'claimed';
+  bool get delivered => status == 'delivered' || status == 'confirmed';
+
+  // One line cannot promise arrival while another recipient still waits.
+  int get receiptOrder => switch (status) {
+    'uncertain' => 0,
+    'queued' || 'claimed' => 1,
+    'cancelled' => 2,
+    'delivered' || 'confirmed' => 3,
+    'answered' => 4,
+    _ => 5,
+  };
+}
+
 class SuperTabMessage {
   SuperTabMessage.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -180,6 +373,7 @@ class SuperTabMessage {
       author = Map.unmodifiable(superTabMap(row['author'])),
       source = Map.unmodifiable(superTabMap(row['source'] ?? const {})),
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
+      attachments = _attachments(row['attachments']),
       deliveries = _list(
         row['deliveries'] ?? const [],
         (d) => Map<String, dynamic>.unmodifiable(d),
@@ -190,13 +384,23 @@ class SuperTabMessage {
   final Map<String, dynamic> author;
   final Map<String, dynamic> source;
   final DateTime? createdAt;
+  final List<SuperTabAttachment> attachments;
   final List<Map<String, dynamic>> deliveries;
-  String get authorName => author['name'] as String? ?? 'Unknown';
+  // Preserve the recorded identity for history and for removed agents. Views
+  // with a current roster resolve the visible name through Snapshot.authorName.
+  String get authorName =>
+      (fromAgent ? author['displayName'] as String? : null) ??
+      author['name'] as String? ??
+      'Unknown';
   String get authorId => author['id'] as String? ?? '';
   bool get fromAgent => author['kind'] == 'agent';
   bool get fromTerminal => source['kind'] == 'native';
   SuperTabRoute? get route => SuperTabRoute.fromSource(source);
   bool get routeOverride => source['kind'] == 'route-override';
+
+  /// A note the backend writes about a terminal: a Lead's typing, or an alert.
+  bool get terminalEvent =>
+      source['kind'] == 'terminal-input' || source['kind'] == 'terminal-alert';
   String? get terminalNote {
     if (!fromTerminal) return null;
     final phase = source['phase'];
@@ -208,17 +412,31 @@ class SuperTabMessage {
         : 'Terminal answer';
   }
 
-  bool get queued => deliveries.any(
-    (d) => d['status'] == 'queued' || d['status'] == 'claimed',
-  );
-  bool get uncertain => deliveries.any((d) => d['status'] == 'uncertain');
+  SuperTabDelivery? get receiptDelivery {
+    final rows = deliveries.map(SuperTabDelivery.fromJson).toList();
+    rows.sort((a, b) => a.receiptOrder.compareTo(b.receiptOrder));
+    return rows.firstOrNull;
+  }
 }
 
+/// The `remote` a daemon reports for a project: `host/owner/repo`, already
+/// without credentials or transport (the CLI's `canonicalRepository`). A port
+/// there may be SSH's, so only a plain host is read as an HTTPS address.
+final _canonicalRemote = RegExp(
+  r'^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}/\S+$',
+  caseSensitive: false,
+);
+
 /// A remote may contain a developer's embedded credential. Never share it.
+/// Contributed machines clone this address, so a daemon's canonical remote
+/// becomes the HTTPS URL that Harness's GitHub project source also clones.
 String? superTabRepositoryUrl(String? remote) {
   if (remote == null || remote.isEmpty) return null;
   if (remote.startsWith('git@') && !remote.contains('://')) return remote;
-  final uri = Uri.tryParse(remote);
+  final address = _canonicalRemote.hasMatch(remote)
+      ? 'https://$remote'
+      : remote;
+  final uri = Uri.tryParse(address);
   if (uri == null ||
       uri.host.isEmpty ||
       !['https', 'http', 'ssh', 'git'].contains(uri.scheme)) {
@@ -228,5 +446,5 @@ String? superTabRepositoryUrl(String? remote) {
       !(uri.scheme == 'ssh' && uri.userInfo == 'git')) {
     return null;
   }
-  return remote;
+  return address;
 }

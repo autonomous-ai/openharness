@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { autonomousDeviceLocalRequest, type AutonomousDeviceManagement } from './deviceManagementHttp.js'
+import { autonomousDeviceLocalRequest, deviceAddonRoutes, type AutonomousDeviceManagement } from './deviceManagementHttp.js'
 
 const id = Buffer.alloc(32, 255).toString('base64')
 function fixture() {
@@ -11,6 +11,9 @@ function fixture() {
     status: vi.fn().mockReturnValue({ proto: 1 }),
     revoke: vi.fn().mockReturnValue({ revoked: 1 }),
     receipt: vi.fn().mockReturnValue({ receipt: null }),
+    addonState: vi.fn().mockReturnValue({ devices: [] }),
+    addonPropose: vi.fn().mockReturnValue({ proposal: { proposalId: 'p' } }),
+    addonProposal: vi.fn().mockReturnValue({ proposal: null }),
   } satisfies AutonomousDeviceManagement
 }
 
@@ -104,5 +107,62 @@ describe('device local management validation', () => {
       expect((await autonomousDeviceLocalRequest(service, method, `/api/autonomous-device/${path}`)).status).toBe(200)
       expect(service[name]).toHaveBeenCalledOnce()
     }
+  })
+})
+
+describe('device add-on local routes', () => {
+  it('reads state with an optional device, a proposal by id, and posts a proposal as given', async () => {
+    const service = fixture()
+    expect(await autonomousDeviceLocalRequest(service, 'GET', '/api/autonomous-device/addon/state')).toEqual({ status: 200, body: { devices: [] } })
+    expect(service.addonState).toHaveBeenLastCalledWith({})
+    await autonomousDeviceLocalRequest(service, 'GET', '/api/autonomous-device/addon/state?deviceId=lamp')
+    expect(service.addonState).toHaveBeenLastCalledWith({ deviceId: 'lamp' })
+    const id = '0b6c3c3e-8f3a-4f5a-9d2b-6f1e2a3b4c5d'
+    expect((await autonomousDeviceLocalRequest(service, 'GET', `/api/autonomous-device/addon/proposal?proposalId=${id}`)).status).toBe(200)
+    expect(service.addonProposal).toHaveBeenCalledWith({ proposalId: id })
+    const body = { addon: 'x', idempotencyKey: 'k', act: 'light', holdsMs: 5000 }
+    expect(await autonomousDeviceLocalRequest(service, 'POST', '/api/autonomous-device/addon/propose', body)).toEqual({ status: 200, body: { proposal: { proposalId: 'p' } } })
+    expect(service.addonPropose).toHaveBeenCalledWith(body)
+  })
+
+  it('refuses a wrong method, a stray or repeated parameter, and a missing or malformed proposal id', async () => {
+    const service = fixture()
+    for (const [method, target] of [
+      ['POST', '/api/autonomous-device/addon/state'],
+      ['GET', '/api/autonomous-device/addon/propose'],
+    ] as const) expect((await autonomousDeviceLocalRequest(service, method, target, method === 'POST' ? {} : undefined)).status).toBe(405)
+    for (const target of [
+      '/api/autonomous-device/addon/state?device=lamp',
+      '/api/autonomous-device/addon/state?deviceId=a&deviceId=b',
+      '/api/autonomous-device/addon/state?deviceId=',
+      '/api/autonomous-device/addon/proposal',
+      '/api/autonomous-device/addon/proposal?proposalId=nope',
+    ]) expect((await autonomousDeviceLocalRequest(service, 'GET', target)).status).toBe(400)
+    expect((await autonomousDeviceLocalRequest(service, 'POST', '/api/autonomous-device/addon/propose?x=1', {})).status).toBe(400)
+    expect(service.addonState).not.toHaveBeenCalled()
+    expect(service.addonPropose).not.toHaveBeenCalled()
+    expect(service.addonProposal).not.toHaveBeenCalled()
+  })
+
+  it('maps the add-on layer and the service being down to HTTP answers', async () => {
+    const answers = [
+      { error: { code: 'RATE_LIMITED', message: 'slow down' } },
+      { error: { code: 'MISSING_TARGET', message: 'name one' } },
+      { error: { code: 'PAYLOAD_TOO_LARGE', message: 'too big' } },
+      { unavailable: true as const },
+      { error: { code: 'OUTCOME_UNKNOWN', message: 'maybe sent' } },
+      { error: { code: 'PROPOSAL_UNKNOWN', message: 'aged out' } },
+      { result: { proposal: null } },
+    ]
+    const routes = deviceAddonRoutes(async () => answers.shift()!)
+    const service = { ...fixture(), ...routes }
+    const post = () => autonomousDeviceLocalRequest(service, 'POST', '/api/autonomous-device/addon/propose', {})
+    expect(await post()).toEqual({ status: 429, body: { error: { code: 'RATE_LIMITED', message: 'slow down' } } })
+    expect((await post()).status).toBe(409)
+    expect((await post()).status).toBe(413)
+    expect((await post()).body).toMatchObject({ error: { code: 'UNAVAILABLE' } })
+    expect((await post()).status).toBe(504)
+    expect((await post()).status).toBe(404)
+    expect(await post()).toEqual({ status: 200, body: { proposal: null } })
   })
 })

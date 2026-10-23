@@ -109,6 +109,7 @@ pro_touch_sample_t pro_touch_poll(int *x, int *y) { (void)x; (void)y; return PRO
 // The cable: what pro_app and pro_voice send.
 static struct { int opens, cancels; char cancel_id[24]; } CAB;
 bool pro_cable_send_open(const char *id) { CHECK(LOCK_DEPTH == 0); (void)id; CAB.opens++; return true; }
+bool pro_cable_supertab_send(const char *t, const char *tab, const char *lead) { CHECK(LOCK_DEPTH == 0); (void)t; (void)tab; (void)lead; return true; }
 bool pro_cable_send_scroll(pro_scroll_phase_t p, int dy, int v) { CHECK(LOCK_DEPTH == 0); (void)p; (void)dy; (void)v; return true; }
 bool pro_cable_request_library(int offset, uint32_t request) { CHECK(LOCK_DEPTH == 0); (void)offset; (void)request; return true; }
 bool pro_cable_library_supported(void) { return false; }
@@ -272,7 +273,7 @@ static void booting(void) {   // no machines.end yet: the gate does not wait for
 }
 static void question_agent_says_why(void) {
     situation(); to_agent(1);
-    pro_app_question("a2", "r1", "Which one?");
+    pro_app_question("a2", "r1", "Which one?", NULL, POD_ATTN_NONE);
     render();
     CHECK(!hit(POD_A_TALK, 0));
     press_stale();

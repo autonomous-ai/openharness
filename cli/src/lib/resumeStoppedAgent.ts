@@ -3,7 +3,7 @@ import { isTerminalEngine } from '../engines/types.js'
 import type { RegisteredSession, ProcessIdentity } from './registry.js'
 import { resumesConversation } from './resumeCapability.js'
 import type { RestartAgentReply } from './restartAgent.js'
-import type { RuntimeCheck } from './tmux.js'
+import type { RuntimeCheck } from './paneEngineProcess.js'
 
 export interface ResumeStoppedDeps {
   live: () => RegisteredSession | undefined

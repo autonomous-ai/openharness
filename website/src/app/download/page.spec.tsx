@@ -37,6 +37,7 @@ describe("/download", () => {
       "href",
       "/desktop/download/linux-arm64",
     );
+    expect(screen.getByRole("link", { name: /Windows/ })).toHaveAttribute("href", "/desktop/download/windows");
     // No install script for the desktop app any more — direct links only. (The CLI section below
     // still has its own `cli/install.sh` script, which is intentional and covered separately.)
     expect(document.body).not.toHaveTextContent("desktop/install.sh");

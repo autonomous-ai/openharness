@@ -25,9 +25,8 @@ String formatDownloadSize(int bytes) {
 /// The band across the top of the app when a newer build is out.
 ///
 /// It carries three states off one flag pair on [AppNotifier]: an offer, the
-/// install running, and a failed install. The failure keeps the offer alive —
-/// nothing was changed on disk, so the only honest thing to show is a way to
-/// try again.
+/// install running, and a failed install. An untouched-install failure can be
+/// retried; a partially published Windows update gives restart/repair guidance.
 class UpdateNotice extends StatelessWidget {
   final AppNotifier notifier;
 
@@ -46,6 +45,7 @@ class UpdateNotice extends StatelessWidget {
     final percent = installing ? notifier.updateDownloadPercent : null;
     final error = notifier.updateError;
     final failed = error != null && !installing;
+    final partialRecovery = failed && notifier.windowsUpdatePartiallyPublished;
 
     // Amber for a failure, the accent wash otherwise. Deliberately NOT green:
     // green is "machine online" everywhere else in this window, and a second
@@ -121,17 +121,19 @@ class UpdateNotice extends StatelessWidget {
                     // between them, which leaves the actions stranded
                     // mid-band instead of anchored to the right edge.
                     //
-                    // Inside it the sentence yields before the size does: a
-                    // truncated sentence still leaves both readable, whereas
-                    // wrapping one would push the buttons out of the band.
+                    // Ordinary notices stay a single line. Partial Windows
+                    // publication carries recovery instructions that must
+                    // remain readable even in a narrow window.
                     Expanded(
                       child: Row(
                         children: [
                           Flexible(
                             child: Text(
                               message,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                              maxLines: partialRecovery ? null : 1,
+                              overflow: partialRecovery
+                                  ? TextOverflow.visible
+                                  : TextOverflow.ellipsis,
                               style: grid.AppType.body(
                                 color: grid.AppPalette.textPrimary,
                               ),
@@ -169,15 +171,17 @@ class UpdateNotice extends StatelessWidget {
                         label: 'Dismiss',
                         onPressed: notifier.dismissUpdateError,
                       ),
-                      const SizedBox(width: 6),
-                      _NoticeAction(
-                        key: const Key('retry-update-button'),
-                        label: 'Try again',
-                        kind: _ActionKind.ghost,
-                        onPressed: () => unawaited(
-                          notifier.installAvailableUpdate(update: update),
+                      if (!notifier.windowsUpdatePartiallyPublished) ...[
+                        const SizedBox(width: 6),
+                        _NoticeAction(
+                          key: const Key('retry-update-button'),
+                          label: 'Try again',
+                          kind: _ActionKind.ghost,
+                          onPressed: () => unawaited(
+                            notifier.installAvailableUpdate(update: update),
+                          ),
                         ),
-                      ),
+                      ],
                     ] else ...[
                       _NoticeAction(
                         key: const Key('skip-update-button'),
@@ -432,6 +436,10 @@ Future<void> showUpdateCheckDialog(
                               // A successful install never returns — the process is
                               // replaced. Reaching here means it did not happen.
                               if (!context.mounted || installed) return;
+                              if (notifier.windowsUpdatePartiallyPublished) {
+                                Navigator.of(dialogContext).pop();
+                                return;
+                              }
                               // The install re-reads the manifest, and the build
                               // can be gone from it by then. There is no error to
                               // show for that and no offer left to carry one, so

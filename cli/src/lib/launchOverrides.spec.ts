@@ -29,7 +29,7 @@ function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
   const d: LaunchOverridesDeps = {
     machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(),
     writeGridConfigDir: async (key) => { calls.push(`writeConfig:${key}`); return `/state/grid-engine-config/${key}` },
-    tmuxSupportsSessionEnv: async () => true,
+    capabilities: async () => ({ sessionEnv: true }),
     installCodexHooks: (home) => { calls.push(`hooks:${home}`); return true },
     // No Codex configuration unless a test says so — otherwise every relaunch built here would
     // consult the config.toml of whoever is running the suite.
@@ -168,14 +168,14 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
 
   it('refuses rather than falling back when the grid cannot be honoured', async () => {
     expect(await buildLaunchOverrides(deps().d, 'cursor', { gridLaunch: GRID }, 'a')).toMatchObject({ ok: false, error: 'GRID_ENGINE_UNSUPPORTED' })
-    expect(await buildLaunchOverrides(deps({ tmuxSupportsSessionEnv: async () => false }).d, 'claude', { gridLaunch: GRID }, 'a'))
+    expect(await buildLaunchOverrides(deps({ capabilities: async () => ({ sessionEnv: false }) }).d, 'claude', { gridLaunch: GRID }, 'a'))
       .toMatchObject({ ok: false, error: 'TMUX_TOO_OLD_FOR_GRID', detail: expect.stringContaining('Team grid') })
     expect(await buildLaunchOverrides(deps({ writeGridConfigDir: async () => { throw new Error('disk full') } }).d, 'pi', { gridLaunch: GRID }, 'a'))
       .toMatchObject({ ok: false, error: 'GRID_CONFIG_FAILED', detail: expect.stringContaining('disk full') })
   })
 
   it('validation refuses the same launches without writing anything', async () => {
-    const { d, calls } = deps({ tmuxSupportsSessionEnv: async () => false })
+    const { d, calls } = deps({ capabilities: async () => ({ sessionEnv: false }) })
     expect(await validateLaunchOverrides(d, 'claude', { gridLaunch: GRID })).toMatchObject({ ok: false, error: 'TMUX_TOO_OLD_FOR_GRID' })
     expect(await validateLaunchOverrides(d, 'cursor', { gridLaunch: GRID })).toMatchObject({ ok: false, error: 'GRID_ENGINE_UNSUPPORTED' })
     expect(await validateLaunchOverrides(d, 'pi', { gridLaunch: null, codexHome: '/x' })).toEqual({ ok: true })

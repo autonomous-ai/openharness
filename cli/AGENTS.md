@@ -23,7 +23,7 @@ they show as `harnessd`, `harnessd-core` and `harnessd-<process>` (`src/harnessd
 
 | Process | Runs | Started |
 |---|---|---|
-| master | supervision only (`src/harnessd/`) | by `harness start`, `harness start -f`, or launchd or systemd after `harness service install` |
+| master | supervision only (`src/harnessd/`) | by `harness start`, `harness start -f`, or launchd or systemd after `harness service install`; on Windows through `harness-launch.exe`, and by Task Scheduler's `harness start --if-down` after `harness service install` |
 | core | sessions (`src/core/`) | always |
 | engine-claude, engine-codex | history, last-turn readers, live transcript parsers, runtime profiles/catalogs, screen interpretation, submission verification readings, model control, question navigation, and (Codex) the shared app-server connection | on demand: an attach or read for that engine |
 | search | session search | always |
@@ -32,7 +32,7 @@ they show as `harnessd`, `harnessd-core` and `harnessd-<process>` (`src/harnessd
 | gateway | the relay and its E2EE (`src/gateway/`) | on demand: as the core starts when signed in or anything is paired here, or when something needs it (a pairing, a window's E2EE request, a key command, the Wi-Fi device) |
 | models | grid, local models, the Model Manager | on demand: once grid is in use here (a managed grid, saved grid pictures, local models), or on a models request |
 | updater | checks, downloads and stages a new build (`src/services/updaterProcess.ts`) | by the master, for the installed copy only |
-| devices | the dials, the window bridges, the fleet, the voice router, the Wi-Fi device | on demand: once there is a device |
+| devices | the dials, the window bridges, the fleet, the voice router, the Wi-Fi device; on Windows the dial's port through `harness-serial.exe` (`cable/windowsSerial.ts`) | on demand: once there is a device; on Windows, starts unconditionally with the core when inline, or is requested once at startup by `core/devicesWake.ts` when out of process and cable support is enabled |
 | orchestrator, sharing, memory, router, cloud (cloud agents) | the experiments | on demand: on a request, or saved state at start |
 
 `HARNESSD_SERVICES` names a subset to run in their own processes, by service or by process.

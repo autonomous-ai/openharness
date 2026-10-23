@@ -44,7 +44,7 @@ def main():
                 publisher.publish(uri, version, parts, allow_initialize=True)
                 receipt = publisher.verification.verify(version, f"https://storage.googleapis.com/{bucket}/{prefix}/metadata.json")
                 assert receipt["status"] == "passed", receipt
-                print(f"PASS: publish and verify all six {version} fixtures", flush=True)
+                print(f"PASS: publish and verify all {len(entries)} {version} fixtures", flush=True)
 
             live, generation = publisher.read_live(uri)
             for version in ("0.0.2", "0.0.3"):
@@ -70,7 +70,8 @@ def main():
             # Use the production shell helper AND each actual upload call site.
             # Bypass the advisory exists check to exercise the atomic race guard.
             payload = root / "artifact"
-            for script, variable in (("upload-desktop.sh", "ZIP"), ("upload-desktop.sh", "DMG"), ("upload-desktop-linux.sh", "OUTPUT")):
+            for script, variable in (("upload-desktop.sh", "ZIP"), ("upload-desktop.sh", "DMG"), ("upload-desktop-linux.sh", "OUTPUT"),
+                                     ("upload-desktop-windows.sh", "FILE")):
                 payload.write_text("original fixture bytes")
                 path = f"{prefix}/immutable-{variable}"
                 env = dict(os.environ, **{variable: str(payload)}, GCS_BUCKET=bucket, GCS_PATH=path, DMG_GCS_PATH=path)
@@ -80,10 +81,10 @@ def main():
                 result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=90)
                 assert result.returncode != 0, result.stdout
                 assert publisher.gcloud("storage", "cat", f"gs://{bucket}/{path}") == "original fixture bytes"
-            print("PASS: macOS ZIP/DMG and Linux upload commands refuse immutable overwrites", flush=True)
+            print("PASS: macOS ZIP/DMG, Linux and Windows upload commands refuse immutable overwrites", flush=True)
         if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
             with open(summary, "a") as stream:
-                stream.write("Desktop publication contract passed against disposable GCS fixtures: six-platform publication/downloads, superseded and duplicate versions, incomplete builds, concurrent manifest writes, and immutable artifacts.\n")
+                stream.write("Desktop publication contract passed against disposable GCS fixtures: every platform's publication/downloads, superseded and duplicate versions, incomplete builds, concurrent manifest writes, and immutable artifacts.\n")
     finally:
         # The prefix is constructed above from numeric run/attempt IDs, never user
         # input or the production metadata_path. An empty/root cleanup is impossible.

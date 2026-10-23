@@ -42,6 +42,8 @@ vi.mock('../cable/cableFleet.js', async (real) => {
     stop = recorder('stop')
     syncAgents = recorder('syncAgents')
     syncSwarms = recorder('syncSwarms')
+    syncSwarmCards = recorder('syncSwarmCards')
+    swarmCardRecap = recorder('swarmCardRecap')
     syncMachines = recorder('syncMachines')
     followApp = recorder('followApp')
     replaceNotifications = recorder('replaceNotifications')
@@ -121,7 +123,17 @@ vi.mock('../lib/voiceRouter.js', () => ({
 }))
 
 const jevMade = vi.hoisted(() => vi.fn())
-vi.mock('../lib/jev/jevClient.js', async (orig) => ({ ...(await orig<object>()), createJevDecide: (...a: unknown[]) => { jevMade(...a); return async () => { throw new Error('no jev here') } } }))
+vi.mock('../lib/jev/jevClient.js', async (orig) => {
+  const actual = await orig<typeof import('../lib/jev/jevClient.js')>()
+  return {
+    ...actual,
+    createJevDecide: (options: Parameters<typeof actual.createJevDecide>[0]) => {
+      jevMade(options)
+      // Keep the real hosted request and answer parsing, without discovering a key or calling OpenRouter.
+      return actual.createJevDecide({ ...options, key: async () => null })
+    },
+  }
+})
 
 const { startDevices } = await import('./devices.js')
 
@@ -143,6 +155,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
   const core = over.core ?? fakeCore({ dataDir })
   const ports: CorePorts = emptyPorts()
   const onExit = vi.fn()
+  const reconnected: Array<() => void> = []
   const requests = startDevices(core, ports, {
     logsDir: join(dataDir, 'logs'),
     petsDir: join(dataDir, 'pets'),
@@ -155,8 +168,9 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     faults: new Set(over.faults ?? []),
     log: (line) => { logs.push(line) },
     onExit,
+    onCoreConnected: (run) => { reconnected.push(run) },
   })
-  return { core, ports, port: ports.devices as DevicesPort, requests, onExit }
+  return { core, ports, port: ports.devices as DevicesPort, requests, onExit, reconnected }
 }
 
 const calls = (name: string) => seen.cable.calls.filter(([called]) => called === name).map(([, args]) => args)
@@ -261,6 +275,11 @@ describe('the dial\'s host, wired to the core', () => {
     expect(core.agents.setRuntime).toHaveBeenCalledWith('a1', 'opus', 'high')
     expect(core.agents.runtimeModels).toHaveBeenCalledWith('a1')
     expect(core.agents.fork).toHaveBeenCalledWith('a1')
+    // A Super Tab wait is shown, never answered: nothing reaches the pane.
+    w.answer('a1', 'supertab:as-1:needs_human', { q: 'Yes' })
+    expect(await w.answerReviewed!({ agentId: 'a1', requestId: 'supertab:as-1:needs_human' } as never)).toBe(false)
+    expect(core.questions.answer).toHaveBeenCalledTimes(1)
+    expect(core.questions.answerReviewed).toHaveBeenCalledTimes(1)
   })
 
   it('tells the windows on this computer what a hand at this desk did, and the owner\'s apps the device status', () => {
@@ -390,6 +409,39 @@ describe('what the windows say, reaching the dial', () => {
       expect(jevMade).toHaveBeenCalledTimes(1)
     })
 
+    it('asks the signed-in backend for a default tier, sends its answer to the dial, and tallies it', async () => {
+      delete process.env.HARNESS_NOTIFY_SMART
+      const backend = vi.fn(async () => ({ status: 200, body: { data: { answers: {
+        tier: { choice: 'alert', probabilities: { alert: 0.8, list: 0.15, silent: 0.05 } },
+      } } } }))
+      const core = fakeCore({ dataDir, account: { backend } })
+      const { port } = start({ core, decideTier: null })
+      port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'done', recap: 'The requested build is ready.' } })
+      await vi.waitFor(() => expect(calls('summary')).toEqual([
+        ['a1', 'The requested build is ready.', 'done', 'alert', undefined, false],
+      ]))
+      expect(backend).toHaveBeenCalledExactlyOnceWith('POST', '/api/route/jev', {
+        state: {
+          agent: 'an agent', recap: 'The requested build is ready.', turn: 'duration unknown',
+          recent: '0 alerts and 0 list entries in the last 30 minutes',
+        },
+        questions: { tier: {
+          type: 'choice', instructions: expect.any(String),
+          criteria: { alert: expect.any(String), list: expect.any(String), silent: expect.any(String) },
+        } },
+      })
+      expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · .* · alert · jev · p=alert=0\.80,list=0\.15,silent=0\.05 · \d+ms$/))
+      expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · day \d{4}-\d\d-\d\d · alert 1 · list 0 · silent 0$/))
+    })
+
+    it('keeps a recap in the list when the decider rejects', async () => {
+      const { port } = start({ decideTier: async () => { throw new Error('decision unavailable') } })
+      port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'done', recap: 'The requested build is ready.', fullText: 'The full build report.' } })
+      await vi.waitFor(() => expect(calls('summary')).toEqual([
+        ['a1', 'The requested build is ready.', 'done', 'list', 'The full build report.', false],
+      ]))
+    })
+
     it('keeps the next turn behind a recap still waiting on the decider', async () => {
       vi.useFakeTimers()
       try {
@@ -424,6 +476,19 @@ describe('what the windows say, reaching the dial', () => {
         await vi.waitFor(() => expect(decideTier).toHaveBeenCalledTimes(2))
       } finally { vi.useRealTimers() }
       expect(decideTier.mock.calls.map(([i]) => i.durationS)).toEqual([60, 10])
+    })
+
+    it('follows a tier the recaps already decided, asking nobody again, and still silences the agent on screen', () => {
+      const decideTier = vi.fn()
+      const { port } = start({ decideTier })
+      port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'done', recap: 'Deployed', tier: 'list' } })
+      expect(calls('summary')).toEqual([['a1', 'Deployed', 'done', 'list', undefined, false]])
+      expect(decideTier).not.toHaveBeenCalled()
+      expect(logs).toContainEqual(expect.stringMatching(/^\[cable\] notify · .* · list · recaps · decided upstream · 0ms$/))
+      port.desk(['a2'], true)
+      port.card({ type: 'commander_event', agentId: 'a2', payload: { kind: 'summary', text: 'done', tier: 'alert' } })
+      expect(calls('summary').at(-1)).toEqual(['a2', 'done', 'done', 'silent', undefined, false])
+      expect(decideTier).not.toHaveBeenCalled()
     })
 
     const summaryCalls = () => calls('summary')
@@ -482,9 +547,111 @@ describe('what the windows say, reaching the dial', () => {
     port.unread([{ agentId: 'a1', machineId: 'm1', text: 'done', question: false }])
     port.appFocus('m1', 'a1')
     port.seen('a1', 'tok')
-    expect(seen.cable.calls.map(([name]) => name)).toEqual(['start', 'syncSwarms', 'syncAgents', 'replaceNotifications', 'followApp', 'agentSeen'])
+    expect(seen.cable.calls.map(([name]) => name)).toEqual(['start', 'syncSwarms', 'syncAgents', 'syncSwarmCards', 'replaceNotifications', 'followApp', 'agentSeen'])
     expect(calls('followApp')).toEqual([['m1', 'a1']])
     expect(calls('agentSeen')).toEqual([['a1', 'tok']])
+  })
+
+  describe('the Swarm cards for a Harness Pro', () => {
+    const lead = { id: 'lead1', projectId: 'proj1', project: 'mobile', engine: 'claude', owner: '', local: '', state: 'work' as const }
+    const cards = [{ id: 'st1', name: 'openharness', count: 1, leads: [lead] }]
+    const withRequest = (superTabRequest?: CoreApi['superTabRequest']) => start({ core: { ...fakeCore({ dataDir }), ...(superTabRequest ? { superTabRequest } : {}) } as CoreApi })
+
+    it('keeps the list for the cable and tells every device when it changes; a recap is passed on', () => {
+      const { port } = start()
+      port.swarmCards(cards)
+      expect(seen.dial).toMatchObject({ cards })
+      expect(calls('syncSwarmCards')).toEqual([[]])
+      const recap = { tabId: 'st1', leadId: 'lead1', text: 'hi', at: 1, none: false }
+      port.swarmCardRecap(recap)
+      expect(calls('swarmCardRecap')).toEqual([[recap]])
+    })
+
+    it('asks the service for cards when the first capable device attaches and stops when the last leaves', () => {
+      const superTabRequest = vi.fn(async () => ({ ok: true }))
+      withRequest(superTabRequest)
+      seen.host.swarmCardsWanted!(true)
+      seen.host.swarmCardsWanted!(true)
+      expect(superTabRequest.mock.calls).toEqual([[{ action: 'cardsWanted', on: true, include: [] }]])
+      seen.host.swarmCardsWanted!(false)
+      expect(superTabRequest).toHaveBeenCalledTimes(1)
+      seen.host.swarmCardsWanted!(false)
+      expect(superTabRequest.mock.calls[1]).toEqual([{ action: 'cardsWanted', on: false, include: [] }])
+      // A stray "gone" never counts below none.
+      seen.host.swarmCardsWanted!(false)
+      seen.host.swarmCardsWanted!(true)
+      expect(superTabRequest.mock.calls[2]).toEqual([{ action: 'cardsWanted', on: true, include: [] }])
+    })
+
+    it('sends the Swarms the desktop has tabs for with the wish, again when they change, and says it all again when the core reconnects', () => {
+      const superTabRequest = vi.fn(async () => ({ ok: true }))
+      const { port, reconnected } = withRequest(superTabRequest)
+      const tabs = (...ids: string[]) => ({ active: 'a', tiles: [], swarms: [{ id: 'plain', name: 'plain', agentIds: [], panes: 0 }, ...ids.map((id) => ({ id: `tab-${id}`, name: id, agentIds: [], panes: 0, superTabId: id }))] })
+      // Nobody wants cards yet: nothing is said, but the tabs are remembered.
+      port.swarms(tabs('st1', 'st2', 'st1'))
+      expect(superTabRequest).not.toHaveBeenCalled()
+      seen.host.swarmCardsWanted!(true)
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1', 'st2'] })
+      port.swarms(tabs('st1', 'st2'))
+      expect(superTabRequest).toHaveBeenCalledTimes(1)
+      port.swarms(tabs('st2'))
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st2'] })
+      // The window gone leaves no Swarm tab to read first.
+      port.swarms(null)
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: [] })
+      port.swarms(tabs('st2'))
+      // A core that connects anew has forgotten: the current count is said again, and nothing with no device.
+      superTabRequest.mockClear()
+      reconnected.forEach((run) => run())
+      expect(superTabRequest.mock.calls).toEqual([[{ action: 'cardsWanted', on: true, include: ['st2'] }]])
+      seen.host.swarmCardsWanted!(false)
+      superTabRequest.mockClear()
+      reconnected.forEach((run) => run())
+      expect(superTabRequest).not.toHaveBeenCalled()
+    })
+
+    it('reads a recap through the service, cut to 1,500 bytes on a character; anything unusable is null', async () => {
+      const answers: Array<Record<string, unknown> | 'throw'> = [
+        { ok: true, tabId: 'st1', leadId: 'lead1', text: 'é'.repeat(1000), at: 1792560000, none: false },
+        { ok: true, text: 'none', at: 0, none: true },
+        { error: 'NOT_FOUND' }, { ok: true, text: 5, at: 1, none: false }, { ok: true, text: 'x', at: 1.5, none: false },
+        { ok: true, text: 'x', at: -1, none: false }, { ok: true, text: 'x', at: 1, none: 'no' }, 'throw',
+      ]
+      const superTabRequest = vi.fn(async () => { const next = answers.shift()!; if (next === 'throw') throw new Error('gone'); return next })
+      withRequest(superTabRequest)
+      const got = await seen.host.swarmCardRecap!('st1', 'lead1')
+      expect(superTabRequest).toHaveBeenCalledWith({ action: 'cardRecap', tabId: 'st1', leadId: 'lead1' })
+      expect(got).toMatchObject({ tabId: 'st1', leadId: 'lead1', at: 1792560000, none: false })
+      expect(got!.text).toBe('é'.repeat(750))
+      expect(await seen.host.swarmCardRecap!('st1', 'lead2')).toEqual({ tabId: 'st1', leadId: 'lead2', text: 'none', at: 0, none: true })
+      for (let i = 0; i < 6; i++) expect(await seen.host.swarmCardRecap!('st1', 'lead1')).toBeNull()
+    })
+
+    it('posts words for a Lead through the service; anything but said: true sends the turn instead', async () => {
+      const answers: Array<Record<string, unknown> | 'throw'> = [{ ok: true, said: true }, { ok: true, said: false }, { error: 'NOT_FOUND' }, 'throw']
+      const superTabRequest = vi.fn(async () => { const next = answers.shift()!; if (next === 'throw') throw new Error('gone'); return next })
+      withRequest(superTabRequest)
+      expect(await seen.host.swarmSay!('h1', 'ship it')).toBe(true)
+      expect(superTabRequest).toHaveBeenCalledWith({ action: 'cardSay', harnessId: 'h1', text: 'ship it' })
+      for (let i = 0; i < 3; i++) expect(await seen.host.swarmSay!('h1', 'ship it')).toBe(false)
+    })
+
+    it('answers no recap when the core has no service to ask', async () => {
+      start()
+      expect(await seen.host.swarmCardRecap!('st1', 'lead1')).toBeNull()
+      seen.host.swarmCardOpen!('c1', 'st1', 'lead1')   // nothing to tell, and nothing thrown
+    })
+
+    it('tells the service which Lead is open, and opens a picked Lead on the desktop', () => {
+      const superTabRequest = vi.fn(async () => ({ ok: true }))
+      const { core } = withRequest(superTabRequest)
+      seen.host.swarmCardOpen!('c1', 'st1', 'lead1')
+      seen.host.swarmCardOpen!('c1', 'st1', null)
+      expect(superTabRequest.mock.calls).toEqual([
+        [{ action: 'cardOpen', session: 'c1', tabId: 'st1', leadId: 'lead1' }], [{ action: 'cardOpen', session: 'c1', tabId: 'st1', leadId: null }]])
+      seen.host.superTabSelected!('st1', 'proj1')
+      expect(vi.mocked(core.clients.sendLocal)).toHaveBeenCalledWith({ type: 'dial_super_tab', payload: { superTabId: 'st1', projectId: 'proj1' } })
+    })
   })
 
   it('changes one device\'s settings, and logs a refusal', async () => {
@@ -504,6 +671,15 @@ describe('what the windows say, reaching the dial', () => {
     port.card({ type: 'commander_question_close', agentId: 'a1', payload: { requestId: 'r1' } })
     port.card({ type: 'agent_deleted', payload: {} })
     expect(seen.cable.calls.map(([name]) => name)).toEqual(['start', 'turnStarted', 'turnDone', 'turnError', 'turnStep', 'question', 'questionClose'])
+  })
+
+  it('hands the dial a Super Tab wait with its tab and what it needs, as an alert', () => {
+    const { port } = start()
+    port.card({ type: 'commander_question', agentId: 'a1', payload: { requestId: 'supertab:as-1:blocked', questions: [{ q: 'Stuck: no key' }], superTab: 'Pilot', attention: 'stuck' } })
+    port.card({ type: 'commander_question', agentId: 'a2', payload: { requestId: 'r2', questions: [], superTab: 'Pilot', attention: 'urgent' } })
+    expect(calls('question')).toEqual([['a1', 'supertab:as-1:blocked', [{ q: 'Stuck: no key' }], { superTab: 'Pilot', attention: 'stuck' }],
+      ['a2', 'r2', [], undefined]])
+    expect(logs.some((l) => /notify · .* · alert · rule:super-tab · question/.test(l))).toBe(true)
   })
 
   it('hands the dial a tool card as a step, and a processing card\'s latest sentence beside the status', () => {

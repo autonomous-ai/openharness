@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { NativeProcessImage } from './nativeProcessImages.js'
-import type { ProcessRow } from './tmux.js'
+import type { ProcessRow } from './processTable.js'
 
 const execFile = vi.hoisted(() => vi.fn())
 const nativeImages = vi.hoisted(() => vi.fn())
@@ -11,7 +11,7 @@ vi.mock('child_process', async original => ({
 vi.mock('node:os', async original => ({
   ...await original<typeof import('node:os')>(), platform: () => 'darwin',
 }))
-const { createDeletedImageMemo, enrichProcessRows } = await import('./tmux.js')
+const { createDeletedImageMemo, enrichProcessRows } = await import('./processTable.js')
 
 const row = (pid: number): ProcessRow => ({
   pid, parentPid: 1, executable: 'unidentified', args: 'unidentified',

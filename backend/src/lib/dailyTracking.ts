@@ -4,7 +4,8 @@
  * during their bounded expiry window; their historical metrics must not be mixed with these totals.
  */
 import { utcDayKey } from '../types/analytics.js'
-import { markActivity, recordRelayUsage } from './productUsage.js'
+import { releaseBucket } from '../types/productHealthContract.js'
+import { markActivity, recordRelayUsage, type RelayUsageMetric } from './productUsage.js'
 
 export interface PresenceTouchOpts { isNewConnection: boolean; countryCode?: string }
 
@@ -48,12 +49,27 @@ export const CLIENT_SURFACES: ReadonlySet<string> = new Set<ClientSurface>(['tui
 /** Known terminal surfaces retain their platform distinction in fleet connection totals. */
 export const TUI_SURFACES: ReadonlySet<string> = new Set<ClientSurface>(['tui', 'harness-os', 'harness-os-pi'])
 
+/** What the phone says of the build that opened a socket (`?release=` and `?debug=1`, webWs.ts). */
+export interface ClientBuild { release?: string | null; debug?: boolean }
+
+/** What a phone open adds beside `relay_mobile_opens`, which still counts every one of them: a debug or
+ *  simulator build's open under `relay_mobile_debug_opens`, any other under its release's margin, the way
+ *  phone reports split by release (`breakdown:release:phone:<release>:`). The release is the public
+ *  x.y.z only; an older app that sends none, or anything else, is `unknown`. The two never overlap, so a
+ *  simulator left open cannot pass for a release. */
+export function mobileOpenMetrics(build: ClientBuild = {}): RelayUsageMetric[] {
+  return [build.debug === true ? 'relay_mobile_debug_opens'
+    : `breakdown:release:phone:${releaseBucket(build.release)}:relay_mobile_opens`]
+}
+
 /** Keep old protocol entry points while reducing only new connection events into fleet totals. */
 export async function touchClientOnlineDay(
-  userId: string, surface: ClientSurface, now: Date, opts: { isNewConnection: boolean },
+  userId: string, surface: ClientSurface, now: Date, opts: { isNewConnection: boolean; build?: ClientBuild },
 ): Promise<void> {
   void markActivity(userId, now, { surface }).catch(() => {})
-  if (opts.isNewConnection) await recordRelayUsage(userId, now, `relay_${surface}_opens`)
+  if (!opts.isNewConnection) return
+  if (surface === 'mobile') await recordRelayUsage(userId, now, 'relay_mobile_opens', mobileOpenMetrics(opts.build))
+  else await recordRelayUsage(userId, now, `relay_${surface}_opens`)
 }
 
 /**

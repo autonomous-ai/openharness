@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from './registry.js'
 import type { TerminalBackend } from './terminalBackend.js'
-import { TerminalBackendCoordinator } from './terminalBackendCoordinator.js'
+import { prepareTerminalBackends, TerminalBackendCoordinator } from './terminalBackendCoordinator.js'
 import { terminalRouteKey } from './terminalRuntime.js'
 import type { TerminalRuntimeRef, TerminalStreamHandle, TerminalStreamSink } from './terminalTypes.js'
 
@@ -20,11 +20,12 @@ function session(): RegisteredSession {
 
 function backend(instanceId: string, submit: TerminalBackend['submitText']): TerminalBackend {
   return {
-    name: 'tmux', instanceId,
+    name: 'tmux', instanceId, prepare: vi.fn(), capabilities: vi.fn(),
     create: vi.fn(), kill: vi.fn(), inventory: vi.fn(),
     titles: vi.fn(async () => ({ state: 'succeeded' as const, value: new Map() })),
     validate: vi.fn(async () => ({ state: 'alive' as const })), capture: vi.fn(), typeLiteral: vi.fn(), submitText: submit,
     sendKey: vi.fn(), setTitle: vi.fn(), notify: vi.fn(),
+    releaseHold: vi.fn(), paneState: vi.fn(), paneInfo: vi.fn(), rootProcess: vi.fn(),
   }
 }
 
@@ -347,5 +348,36 @@ describe('TerminalBackendCoordinator', () => {
       await expect(gone.coordinator.submitText(current, 'hello')).resolves.toMatchObject({ dispatch: 'not_started' })
       expect(waits).toEqual([])
     })
+  })
+})
+
+describe('prepareTerminalBackends', () => {
+  it('prepares every backend at once, each with its own panes, and keeps their answers in order', async () => {
+    const tmux = { name: 'tmux', prepare: vi.fn(async () => ({ state: 'ready' as const })) } as unknown as TerminalBackend
+    const ptyhost = {
+      name: 'ptyhost',
+      prepare: vi.fn(async () => ({ state: 'unavailable' as const, code: 'PTY_HOST_UNAVAILABLE', reason: 'not installed' })),
+    } as unknown as TerminalBackend
+    const owned = (backend: TerminalBackend) => new Map([[`%${backend.name}`, 'claude' as const]])
+    expect(await prepareTerminalBackends([tmux, ptyhost], owned)).toEqual([
+      { backend: tmux, result: { state: 'ready' } },
+      { backend: ptyhost, result: { state: 'unavailable', code: 'PTY_HOST_UNAVAILABLE', reason: 'not installed' } },
+    ])
+    expect(tmux.prepare).toHaveBeenCalledWith({ ownedPanes: new Map([['%tmux', 'claude']]) })
+    expect(ptyhost.prepare).toHaveBeenCalledWith({ ownedPanes: new Map([['%ptyhost', 'claude']]) })
+  })
+
+  it('a backend whose prepare throws is unavailable, and the others still start', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const tmux = { name: 'tmux', prepare: async () => { throw new Error('spawn tmux ENOMEM') } } as unknown as TerminalBackend
+    const ptyhost = { name: 'ptyhost', prepare: async () => { throw 'odd' } } as unknown as TerminalBackend
+    const fine = { name: 'tmux', prepare: async () => ({ state: 'ready' as const }) } as unknown as TerminalBackend
+    expect((await prepareTerminalBackends([tmux, ptyhost, fine], () => new Map())).map((p) => p.result)).toEqual([
+      { state: 'unavailable', code: 'TMUX_UNAVAILABLE', reason: 'could not prepare tmux: spawn tmux ENOMEM' },
+      { state: 'unavailable', code: 'PTY_HOST_UNAVAILABLE', reason: 'could not prepare ptyhost: odd' },
+      { state: 'ready' },
+    ])
+    expect(error).toHaveBeenCalledWith('[terminal] tmux: could not prepare tmux: spawn tmux ENOMEM')
+    error.mockRestore()
   })
 })

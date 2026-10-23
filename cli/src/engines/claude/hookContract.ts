@@ -38,6 +38,10 @@ export const hooks: HookContract = {
         'Bash(harness {verb}:*)', 'Bash({launcher} {verb}:*)', 'mcp__harness__{tool}', 'mcp__plugin_harness_harness__{tool}'],
     },
     commandNamesHome: false,
+    // Windows: exec form, `command` (the managed node.exe) and `args`, run without a shell. In shell form Claude Code runs
+    // Git Bash, or PowerShell when Git Bash is missing, and no one quoting serves both. Claude Code 2.1.300's schema
+    // tip says: "For exec form (no shell), set `command` to the executable and `args` to its arguments".
+    win32Runner: 'argv',
     upToDate: { command: 'first-ours', matcher: false },
     messages: {
       current: '[hooks] Claude session + turn (Stop/StopFailure) hooks already installed',

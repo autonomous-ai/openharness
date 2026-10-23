@@ -19,7 +19,7 @@
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
-import { DEVICES_REQUESTS, type CoreApi, type CorePorts, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
+import { DEVICES_REQUESTS, SUPER_TAB_REQUEST_PREFIX, type CoreApi, type CorePorts, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/cableFleet.js'
 import { isLocalOnly } from '../lib/cardUpdate.js'
 import { TurnStats, type TurnStatsFields } from '../cable/turnStats.js'
@@ -34,6 +34,7 @@ import { WindowSelection } from '../cable/windowSelection.js'
 import { WindowVisit } from '../cable/windowVisit.js'
 import { MachineListCache } from '../device/machineList.js'
 import { harnessDevicesRequest } from '../lib/harnessDevices.js'
+import { truncateUtf8 } from '../lib/deviceRecentTrim.js'
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
 import { createJevDecide } from '../lib/jev/jevClient.js'
 import { createTally, createTierDecider, type Tier, type TierDecision, type TierInput } from '../lib/notifyTier.js'
@@ -66,6 +67,9 @@ export interface DevicesDeps {
   /** Read this computer's agents again before a list is built from them: in their own process the devices
    *  keep a copy, asked of the core as the dial's tick or ⌘K needs it (services/devicesProcess.ts). */
   refresh?: () => Promise<void>
+  /** Called with a function this part runs whenever it (re)connects to the core, which has forgotten what the devices
+   *  told it (services/devicesProcess.ts): the cards wanted are said again. */
+  onCoreConnected?: (run: () => void) => void
   /** An agent's conversation token totals, read fresh (not the 15 s cache); null when unknown or remote.
    *  Defaults to the core's `usageFresh`. */
   readUsage?: (agentId: string) => Promise<{ input?: number; cached?: number; output?: number } | null>
@@ -82,11 +86,12 @@ const sid = (id: string): string => id.slice(0, 8)
 export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps): ServiceRequests {
   const log = deps.log ?? ((line: string) => console.log(line))
   const monotonic = deps.now ?? (() => performance.now())
+  const superTabWait = (requestId: unknown): boolean => typeof requestId === 'string' && requestId.startsWith(SUPER_TAB_REQUEST_PREFIX)
   const tally = createTally((line) => log(`[cable] ${line}`))
   const tierOf = deps.decideTier ?? createTierDecider({
     tally,
     jev: process.env.HARNESS_NOTIFY_SMART === '0' ? null : createJevDecide({ backend: (method, path, body) => core.account.backend(method, path, body) }),
-    log: (line) => log(`[cable] ${line}`),
+    log,
   })
   const part = createPartGuard({ log, faults: deps.faults })
 
@@ -154,6 +159,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const pets = new PetStore(deps.petsDir ?? join(env.HARNESS_DEVICES_DIR, 'pets'))
   // The assistant's latest paragraph per agent, as the processing cards carry it; gone when the turn ends.
   const latestUpdate = new Map<string, string>()
+  // The Swarm cards' requests to the Super Tab service, through the core (core/devicesLink.ts). An error is an answer too.
+  const askCards = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    try { return await core.superTabRequest!(payload) } catch { return { error: 'SERVICE_UNAVAILABLE' } }
+  }
+  // How many attached devices asked for Swarm cards, and which Swarms the desktop has tabs for (read first). The core keeps
+  // whether they are wanted (core/superTabCards.ts); this says it on a change and again when the core connects anew.
+  let cardDevices = 0
+  let cardInclude: string[] = []
+  const tellCards = (): void => { void askCards({ action: 'cardsWanted', on: cardDevices > 0, include: cardDevices > 0 ? cardInclude : [] }) }
+  deps.onCoreConnected?.(() => { if (cardDevices > 0) tellCards() })
   const cableHost = new DaemonCableHost({
     // The cloud harnesses too, where the core offers them: tiles on the desk the dial walks like any other.
     sessions: () => [...core.agents.advertised(), ...core.agents.cloud?.() ?? []],
@@ -180,8 +195,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // these only when it routes by itself, with the fleet off.
     sendTurn: (agentId, text) => core.turns.send(agentId, text),
     stopTurn: (agentId) => core.turns.stop(agentId),
-    answer: (agentId, requestId, answers) => core.questions.answer(agentId, requestId, answers),
-    answerReviewed: (answer) => core.questions.answerReviewed(answer),
+    // A Super Tab wait is shown, never answered here: its id is no pane's, and nothing is typed for it.
+    answer: (agentId, requestId, answers) => { if (!superTabWait(requestId)) core.questions.answer(agentId, requestId, answers) },
+    answerReviewed: (answer) => superTabWait(answer.requestId) ? Promise.resolve(false) : core.questions.answerReviewed(answer),
     recent: (agentId, n) => core.turns.recent(agentId, n),
     recentAsks: (agentId) => core.turns.asks(agentId),
     runtimeProfile: (session) => core.agents.runtimeProfile(session),
@@ -201,6 +217,22 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     forkAgent: (agentId) => core.agents.fork(agentId),
     focused: (machineId, agentId) => core.clients.sendLocal({ type: 'dial_focus', payload: { machineId, agentId } }),
     swarmSelected: (swarmId) => core.clients.sendLocal({ type: 'dial_swarm', payload: { swarmId } }),
+    swarmCardsWanted: (on) => {
+      const before = cardDevices
+      cardDevices = Math.max(0, cardDevices + (on ? 1 : -1))
+      if ((before === 0) !== (cardDevices === 0)) tellCards()
+    },
+    // The text is the service's to read and not validated by the core: cut here, on a character, to what the Pro takes.
+    swarmCardRecap: async (tabId, leadId) => {
+      const r = await askCards({ action: 'cardRecap', tabId, leadId })
+      if (r.ok !== true || typeof r.text !== 'string' || typeof r.at !== 'number' || !Number.isInteger(r.at) || r.at < 0 || typeof r.none !== 'boolean') return null
+      return { tabId, leadId, text: truncateUtf8(r.text, 1500), at: r.at, none: r.none }
+    },
+    swarmCardOpen: (session, tabId, leadId) => { void askCards({ action: 'cardOpen', session, tabId, leadId }) },
+    // An error (no service, a refused post) is not `said`: the words go to the harness instead, never lost.
+    swarmSay: async (harnessId, text) => (await askCards({ action: 'cardSay', harnessId, text })).said === true,
+    // The Pro picked a Lead: the window opens that Swarm tab and project. Harmless with no window.
+    superTabSelected: (superTabId, projectId) => core.clients.sendLocal({ type: 'dial_super_tab', payload: { superTabId, projectId } }),
     scrolled: (phase, dy, velocity) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } }),
     // Gestures stay at this desk. The device inventory and its settings also reach the owner's other
     // machines, through the encrypted device-management event.
@@ -312,6 +344,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       const turn = ended.get(agentId) // a sub-agent's summary leaves the main turn's numbers alone
       ended.delete(agentId)
       const who = cableHost.describe(agentId)
+      // Decided once already, by the recaps (services/recaps.ts), for the phone as well: the dial follows it and
+      // nobody is asked again. A card without one (a cloud agent's, a recaps from before) is decided here.
+      if (event.tier) {
+        tally(who?.name ?? '', event.tier, 'recaps', 'decided upstream', 0)
+        void cable.summary(agentId, recap, event.text, event.tier, event.fullText, false)
+        return
+      }
       // Returned, so the agent's next card waits behind this one (inOrder): a late recap must not follow turn.started.
       return tierOf({ agent: who?.name ?? '', engine: who?.engine ?? '', recap, durationS: turn?.durationS ?? null,
         stats: turn?.stats ?? {}, subagent: false, onScreen: false, failed: event.failed === true })
@@ -402,7 +441,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       const close = cableQuestionCloseFor(frame as Parameters<typeof cableQuestionCloseFor>[0])
       if (close) { inOrder(close.agentId, () => { void cable.questionClose(close.agentId, close.requestId) }); return }
       const question = cableQuestionFor(frame as Parameters<typeof cableQuestionFor>[0])
-      if (question) { tally(cableHost.describe(question.agentId)?.name ?? '', 'alert', 'rule:question', 'question', 0); inOrder(question.agentId, () => { void cable.question(question.agentId, question.requestId, question.questions) }); return }
+      // A Super Tab member waiting on a person (core/superTabAttention.ts) is an alert as any question is.
+      if (question) { tally(cableHost.describe(question.agentId)?.name ?? '', 'alert', question.superTab ? 'rule:super-tab' : 'rule:question', 'question', 0); inOrder(question.agentId, () => { void cable.question(question.agentId, question.requestId, question.questions, question.superTab) }); return }
       // A shell result is only the stats' input: the dial is told the sums when the turn ends.
       const ran = frame as { type?: string; agentId?: string; payload?: { kind?: string; id?: string; command?: string; isError?: boolean; outputTail?: string } }
       if (ran.payload?.kind === 'reply_text' && ran.agentId) {
@@ -449,9 +489,20 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // Null is the window gone: an empty desk with a window behind it is an empty tab, with none a shut app.
     swarms: (swarms) => part.call('dial', () => {
       cableHost.setSwarms(swarms)
+      // The Swarms the window has tabs for are read first; said again to the core only when they change.
+      const include = [...new Set((swarms?.swarms ?? []).map((s) => s.superTabId).filter((id): id is string => !!id))].slice(0, 16)
+      if (include.join(',') !== cardInclude.join(',')) { cardInclude = include; if (cardDevices > 0) tellCards() }
       void cable.syncSwarms()
       void cable.syncAgents()
+      // The Swarm cards link to their desk tab and follow its open project.
+      void cable.syncSwarmCards()
     }),
+    // The Swarms' cards and a Lead's recap for the Harness Pro: the cable carries them once it speaks the frames.
+    swarmCards: (items) => part.call('dial', () => {
+      cableHost.setSwarmCards(items)
+      void cable.syncSwarmCards()
+    }),
+    swarmCardRecap: (recap) => part.call('dial', () => { void cable.swarmCardRecap(recap) }),
     // Held rather than acted on: the dial is handed it when it attaches, the one moment its drawer is known
     // to be empty.
     unread: (items) => part.call('dial', () => {

@@ -1,4 +1,6 @@
-import type { ProcessIdentity, TerminalRuntimeRef } from './terminalTypes.js'
+import type { AgentEngine } from '../engines/types.js'
+import { PTY_HOST_PANE } from './ptyHost/instance.js'
+import type { ProcessIdentity, TerminalBackendName, TerminalRuntimeRef } from './terminalTypes.js'
 
 const SEP = '\u0000'
 
@@ -7,18 +9,57 @@ function assertKeyPart(value: string, field: string): string {
   return value
 }
 
-/** Stable route key. */
-export function terminalRouteKey(runtime: TerminalRuntimeRef): string {
-  return `tmux${SEP}${assertKeyPart(runtime.paneId, 'tmux pane id')}`
+/**
+ * The panes [sessions] hold on [backend] (pane id → the row's engine), for that backend's `prepare`. Only
+ * its own: pane ids are per backend (`%N` on tmux and on ptyhost alike), and tmux renames the legacy
+ * session of any pane it is handed.
+ */
+export function ownedPanesOf(
+  sessions: Iterable<{ engine: AgentEngine; runtimes: readonly TerminalRuntimeRef[] }>,
+  backend: TerminalBackendName,
+): Map<string, AgentEngine> {
+  const owned = new Map<string, AgentEngine>()
+  for (const session of sessions) {
+    for (const runtime of session.runtimes) if (runtime.backend === backend) owned.set(runtime.paneId, session.engine)
+  }
+  return owned
 }
 
-export function terminalInstanceId(_runtime: TerminalRuntimeRef): string {
-  return 'tmux:default'
+/** Stable route key. A ptyhost pane id is only unique within its host instance, so the instance is part of it. */
+export function terminalRouteKey(runtime: TerminalRuntimeRef): string {
+  const pane = assertKeyPart(runtime.paneId, 'pane id')
+  return runtime.backend === 'tmux'
+    ? `tmux${SEP}${pane}`
+    : `ptyhost${SEP}${assertKeyPart(runtime.instance, 'pty host instance')}${SEP}${pane}`
+}
+
+/** The backend instance that holds [runtime]: `<backend>:<instance>`, as `TerminalBackend.instanceId`. */
+export function terminalInstanceId(runtime: TerminalRuntimeRef): string {
+  return runtime.backend === 'tmux' ? 'tmux:default' : `ptyhost:${runtime.instance}`
 }
 
 /** Human-readable locator label for status and logs. */
 export function terminalRuntimeLabel(runtime: TerminalRuntimeRef): string {
-  return `tmux:${runtime.paneId}`
+  return runtime.backend === 'tmux' ? `tmux:${runtime.paneId}` : `ptyhost:${runtime.instance}:${runtime.paneId}`
+}
+
+/**
+ * The runtime a session is reached through first. Rows keep at least one (registry.ts `strictPersistedRow`).
+ * First in sort order (`mergeTerminalRuntimes`), not the registry's `primaryRuntimeKey`.
+ */
+export function primaryRuntime(session: { readonly runtimes: readonly TerminalRuntimeRef[] }): TerminalRuntimeRef {
+  return session.runtimes[0]
+}
+
+/**
+ * The row a shell's own word about its pane names (`harness remote`, `harness send`). A bare `%N` is `$TMUX_PANE`,
+ * so a tmux pane and nothing else: a pty host's `%N` is another pane, which only its own `<instance>:%N`
+ * (`$HARNESS_PANE`) names. Never the bare `tmuxPane`, which is a ptyhost pane's id on a ptyhost row.
+ */
+export function sessionForPaneId<S extends { readonly runtimes: readonly TerminalRuntimeRef[] }>(sessions: readonly S[], pane: string): S | undefined {
+  const pty = PTY_HOST_PANE.exec(pane)
+  if (pty) return sessions.find((session) => session.runtimes.some((runtime) => runtime.backend === 'ptyhost' && runtime.instance === pty[1] && runtime.paneId === pty[2]))
+  return sessions.find((session) => session.runtimes.some((runtime) => runtime.backend === 'tmux' && runtime.paneId === pane))
 }
 
 /** Stable placement key. For tmux the pane id is both the route and the placement identity. */

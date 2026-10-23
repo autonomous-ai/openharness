@@ -18,6 +18,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { isolatedTmux, type IsolatedTmux } from '../../src/testing/isolatedTmux.js'
+import { localCredentialHeaders } from '../../src/lib/localCredential.js'
 import { artifactLog, artifactsEnabled } from './artifacts.js'
 import { daemonEnvironment } from '../../src/testing/daemonEnvironment.js'
 import { GH_FORBIDDEN_STUB } from '../../src/testing/ghStub.js'
@@ -56,6 +57,8 @@ export interface EngineConfig {
   updateAvailable?: string
   /** Ask whether to trust a folder the engine's own config has no answer for, as the real CLIs do. */
   trustPrompt?: boolean
+  /** Send Claude Code's kitty graphics query on start, then set this title [titleAfterMs] later (fakeEngine.mjs). */
+  graphicsQuery?: { title: string; titleAfterMs: number }
 }
 
 export interface DaemonOptions {
@@ -92,6 +95,8 @@ export interface DaemonOptions {
   port?: number
   /** The fake engines ask whether to trust a folder their config has no answer for (fakeEngine.mjs). */
   trustPrompt?: boolean
+  /** The fake engines send Claude Code's kitty graphics query on start, then set a title (fakeEngine.mjs). */
+  graphicsQuery?: { title: string; titleAfterMs: number }
 }
 
 async function freePort(): Promise<number> {
@@ -248,6 +253,7 @@ export class IsolatedDaemon {
       ...(options.submissionGate ? { submissionGate: true } : {}),
       root, hookLog: join(own, 'fake-engine-hooks.log'),
       ...(options.trustPrompt ? { trustPrompt: true } : {}),
+      ...(options.graphicsQuery ? { graphicsQuery: options.graphicsQuery } : {}),
     }
     const engine = pathToFileURL(join(here, 'fakeEngine.mjs')).href
     for (const name of ['claude', 'codex']) {
@@ -438,6 +444,11 @@ export class IsolatedDaemon {
 
   hookCredential(): string {
     return readFileSync(join(this.dataDir, 'hook-credential'), 'utf8').trim()
+  }
+
+  /** Credentials for this daemon's loopback TCP API; its Unix socket needs none. */
+  localHeaders(extra: Record<string, string> = {}): Record<string, string> {
+    return { ...extra, ...localCredentialHeaders(this.dataDir) }
   }
 
   /**

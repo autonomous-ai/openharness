@@ -317,14 +317,28 @@ class ForkProjectImporter {
       );
       final target = Directory(folder);
       if (oldType == FileSystemEntityType.directory) {
-        if (await FileSystemEntity.type(folder, followLinks: false) !=
-                FileSystemEntityType.directory ||
-            !await target.list().isEmpty) {
+        final targetType = await FileSystemEntity.type(
+          folder,
+          followLinks: false,
+        );
+        // A saved Windows move may have stopped after releasing its empty
+        // reservation. rename below still refuses any racing destination.
+        final releasedReservation =
+            Platform.isWindows && targetType == FileSystemEntityType.notFound;
+        if (!releasedReservation &&
+            (targetType != FileSystemEntityType.directory ||
+                !await target.list().isEmpty)) {
           throw const FormatException(
             'The reserved fork folder changed. Your existing files were kept.',
           );
         }
-        // rename refuses a nonempty destination; the reservation is exclusive.
+        if (Platform.isWindows && !releasedReservation) {
+          // Windows cannot rename onto even an empty directory. Never remove
+          // recursively: an occupant added since the check must abort the move.
+          await target.delete();
+        }
+        // POSIX replaces the empty reservation atomically. Windows requires an
+        // absent destination and aborts if another occupant appeared meanwhile.
         await Directory(oldFolder).rename(folder);
       } else if (oldType != FileSystemEntityType.notFound &&
           oldType != FileSystemEntityType.link) {

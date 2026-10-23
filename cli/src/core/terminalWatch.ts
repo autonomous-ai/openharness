@@ -10,8 +10,10 @@
  * process that sent the viewer's frames (`tell`). A terminal's bytes go as `binary`, base64 of the local
  * binary frame (lib/terminalBinary.ts `encodeTerminalLocal`), as Share already carried them to its observers.
  */
+import type { MoveGate } from '../lib/hostMove/gate.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { TerminalBackendCoordinator } from '../lib/terminalBackendCoordinator.js'
+import type { TerminalRuntimeRef } from '../lib/terminalTypes.js'
 import { encodeTerminalLocal } from '../lib/terminalBinary.js'
 import { TerminalStreamManager } from '../lib/terminalStreamManager.js'
 import type { TerminalWatch, TerminalWatchOutput } from './api.js'
@@ -28,9 +30,14 @@ export interface TerminalWatchDeps {
   tell: (service: string, viewer: string, output: TerminalWatchOutput) => boolean
   /** The processes that may watch: a viewer is only ever an experiment's. */
   watchers: ReadonlySet<string>
+  /** The core's gate for an agent changing host (hostMove/gate.ts): a viewer that opens during a move counts as
+   *  someone using the agent, and its stream is moved with the agent's others (`retarget`). */
+  moveGate?: MoveGate
   /** Swapped in tests for a manager they can drive. */
-  manager?: (deps: ConstructorParameters<typeof TerminalStreamManager>[0]) => Pick<TerminalStreamManager, 'handleFrame' | 'closeConnection' | 'stop'>
+  manager?: (deps: ConstructorParameters<typeof TerminalStreamManager>[0]) => WatchManager
 }
+
+type WatchManager = Pick<TerminalStreamManager, 'handleFrame' | 'closeConnection' | 'stop' | 'isLookedAt' | 'retarget'>
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
@@ -47,13 +54,14 @@ export function createTerminalWatch(deps: TerminalWatchDeps) {
     }
     return shown
   }
-  let manager: Pick<TerminalStreamManager, 'handleFrame' | 'closeConnection' | 'stop'> | null = null
+  let manager: WatchManager | null = null
   /** Built at the first viewer: a daemon no one shares costs no stream manager. */
   const streams = () => manager ??= (deps.manager ?? ((d) => new TerminalStreamManager(d)))({
     readOnly: true,
     terminals: deps.terminals as TerminalBackendCoordinator,
     resolveAgent: deps.resolve,
     streamingAvailable: true,
+    ...(deps.moveGate ? { moveGate: deps.moveGate } : {}),
     sendTarget: (viewer, type, payload) => show(viewer, { type, payload }),
     sendBinaryTarget: (viewer, frame) => {
       const bytes = encodeTerminalLocal(frame)
@@ -76,6 +84,12 @@ export function createTerminalWatch(deps: TerminalWatchDeps) {
   return {
     /** The watch of the core's own `CoreApi`, for a feature in this process. */
     watch,
+
+    /** Whether a Share viewer has this agent's terminal open (a viewer is a person, never a `watch: true` reader). */
+    isWatched(agentId: string): boolean { return manager?.isLookedAt(agentId) ?? false },
+
+    /** Move the viewers' streams of [agentId] to [to]: the agent changed host (`TerminalStreamManager.retarget`). */
+    async retarget(agentId: string, to: TerminalRuntimeRef): Promise<void> { await manager?.retarget(agentId, to) },
 
     /** A process's viewer's frame (`watch_frame`) or its end (`watch_close`): null for any other query. */
     async answer(service: string, query: string, payload: Payload): Promise<Payload | null> {

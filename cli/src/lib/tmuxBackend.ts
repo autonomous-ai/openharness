@@ -2,7 +2,8 @@ import { execFile } from 'node:child_process'
 import { shellSingleQuote } from './shellQuote.js'
 import { heldPaneFormat } from './nativePaneHold.js'
 import { patientExec } from './patientExec.js'
-import type { TerminalBackend } from './terminalBackend.js'
+import type { TerminalBackend, TerminalBackendPrepared } from './terminalBackend.js'
+import type { AgentEngine } from '../engines/types.js'
 import {
   TERMINAL_ACTION_SUCCEEDED,
   terminalActionNotStarted,
@@ -10,11 +11,14 @@ import {
   terminalEnterWithheld,
   type SubmitOptions,
   type TerminalActionResult,
+  type TerminalBackendCapabilities,
   type TerminalCaptureOptions,
   type TerminalCreateRequest,
   type TerminalCreateResult,
   type TerminalInventoryResult,
   type TerminalLogicalKey,
+  type TerminalPaneInfo,
+  type TerminalPaneRead,
   type TerminalProcessExpectation,
   type TerminalReadResult,
   type TerminalRespawnRequest,
@@ -28,10 +32,9 @@ import { inTmuxRoom } from './tmuxControlGate.js'
 import { TmuxControlStream } from './tmuxStream.js'
 import {
   captureTmuxPane,
+  clearPaneRemainOnExit,
   ENGINE_EXIT_PANE_OPTION,
   listPaneTitles,
-  LSTART_MARKER_RE,
-  lookupPaneEngineProcess,
   sendKeyToTmux,
   sendLiteralToTmux,
   paneOptionScope,
@@ -39,54 +42,39 @@ import {
   sendToTmux,
   setPaneMouseOn,
   setPaneStyle,
+  tmuxPaneInfo,
+  tmuxPanePid,
+  tmuxPaneState,
 } from './tmux.js'
+import { lookupPaneEngineProcess } from './paneEngineProcess.js'
+import { LSTART_MARKER_RE } from './processTable.js'
 import { env } from '../config/env.js'
 import { HARNESS_OWNER_OPTION, harnessPaneOwner, ownerCommand } from './harnessSessionLabel.js'
-import { tmuxFeatures, type TmuxFeatures } from './tmuxVersion.js'
+import {
+  TMUX_FEATURE_MIN,
+  tmuxFeatures,
+  tmuxSupportsSessionEnv,
+  tmuxTooOldForEnv,
+  tmuxTooOldForSessionEnv,
+  type TmuxFeatures,
+} from './tmuxVersion.js'
+
+import { ensureTmuxOnPath, type TmuxPathOutcome } from './tmuxOnPath.js'
+import { isHarnessdVariable } from './harnessdEnv.js'
+import { isAgentSessionVariable } from './agentSessionEnv.js'
 import { DEFAULT_HOST_THEME, windowStyleOf, type HostTheme } from './hostTheme.js'
 import { machineNames } from './machineNames.js'
-import { isNoTmuxServerError, listTmuxPanes } from './tmuxAgentDiscovery.js'
+import { adoptLegacyHarnessSessions, isNoTmuxServerError, listTmuxPanes } from './tmuxAgentDiscovery.js'
 import { sameProcessIdentity, terminalRouteKey } from './terminalRuntime.js'
+import { TMUX_KEYS } from './terminalKeys.js'
 
 // Every tmux call here: a held event loop must not turn a timeout into a failure, or into an empty
 // answer that reads as a pane that was never made (patientExec.ts).
 const run = patientExec(execFile)
 
-const TMUX_KEYS: Record<TerminalLogicalKey, string> = {
-  enter: 'Enter',
-  escape: 'Escape',
-  tab: 'Tab',
-  backtab: 'BTab',
-  up: 'Up',
-  down: 'Down',
-  left: 'Left',
-  right: 'Right',
-  home: 'Home',
-  end: 'End',
-  backspace: 'BSpace',
-  delete: 'DC',
-  pageup: 'PPage',
-  pagedown: 'NPage',
-  'ctrl-c': 'C-c',
-  'ctrl-d': 'C-d',
-  'ctrl-u': 'C-u',
-  'ctrl-w': 'C-w',
-  space: 'Space',
-  '0': '0',
-  '1': '1',
-  '2': '2',
-  '3': '3',
-  '4': '4',
-  '5': '5',
-  '6': '6',
-  '7': '7',
-  '8': '8',
-  '9': '9',
-}
-
-/** Why a launch with its own environment was refused on this tmux, in words a person can act on. */
-function tmuxTooOldForEnv(version: string, what: string): string {
-  return `this machine's tmux is older than ${version}, the first version that can give ${what} its own environment. Upgrade tmux.`
+/** Test seams for `prepare`: where tmux is looked for (`ensureTmuxOnPath`). */
+export interface TmuxBackendPrepareSeams {
+  ensureOnPath?: () => Promise<TmuxPathOutcome>
 }
 
 function legacyActionResult(ok: boolean, operation: string): TerminalActionResult {
@@ -146,7 +134,51 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     /** What this machine's tmux can do (`tmuxVersion.ts`): a command an older tmux does not know fails
      *  the whole command list it is chained into, and every agent create with it. */
     private readonly features: () => Promise<TmuxFeatures> = tmuxFeatures,
+    private readonly seams: TmuxBackendPrepareSeams = {},
   ) {}
+
+  async prepare({ ownedPanes }: { ownedPanes: ReadonlyMap<string, AgentEngine> }): Promise<TerminalBackendPrepared> {
+    // Before ANY tmux call: a daemon that came up outside a terminal (the usual shape after a reboot)
+    // has a minimal PATH, and every `execFile('tmux', …)` below would ENOENT. Ask the user's own login
+    // shell where tmux is and adopt that directory, the same way the engine launch already consults it.
+    // The daemon starts this alongside its own login-shell capture (`warmLoginShellEnvironment`), so
+    // their wall-clock cost overlaps instead of adding up.
+    const tmuxPath = await (this.seams.ensureOnPath ?? (() => ensureTmuxOnPath()))()
+    // Missing tmux is a STATE, not a reason to refuse to start. The daemon already models a machine
+    // without it — no backend to make panes on whenever the config omits tmux, every caller tests it, and
+    // the create/restart/resume paths answer `TMUX_UNAVAILABLE` — so it can still serve its status, the
+    // local socket and the backend link, leave for an update, and say what is missing. Refusing instead left a
+    // machine whose PATH lost tmux with a daemon that could not start and therefore could not be fixed.
+    if (tmuxPath.state === 'absent') {
+      console.error(`[tmux] unavailable: ${tmuxPath.reason} · install tmux and verify \`tmux -V\`,`
+        + ' then restart — agents cannot be created or restored until then')
+      return { state: 'unavailable', code: 'TMUX_UNAVAILABLE', reason: tmuxPath.reason }
+    }
+    if (tmuxPath.state === 'adopted') {
+      console.log(`[tmux] not on the daemon PATH · adopted ${tmuxPath.path} · ${tmuxPath.from}`)
+    }
+    // Before the first inventory: sessions a pre-prefix build named `<engine>-<ts>` are renamed to
+    // `harness-<engine>-<ts>` so discovery's whitelist sees the registry's own panes again.
+    for (const adopted of await adoptLegacyHarnessSessions(ownedPanes)) {
+      console.log(`[terminal] renamed tmux session ${adopted.from} → ${adopted.to} (pane ${adopted.paneId}) · named by a build before the harness- prefix`)
+    }
+    // Before the first pane this boot makes or restarts: a server an earlier core started still has that
+    // core's HARNESSD_* (the service token among them) in the environment it gives every new pane, and one
+    // started from an agent's shell that agent's session (lib/agentSessionEnv.ts).
+    const forgotten = await this.unsetServerEnvironment((name) => isHarnessdVariable(name) || isAgentSessionVariable(name))
+    if (forgotten.length) console.log(`[terminal] tmux: removed ${forgotten.join(', ')} from the environment new panes start with`)
+    // A first inventory that cannot be read is said, not fatal: tmux is there, and the next scan asks again.
+    const startup = await this.inventory()
+    console.log(startup.state === 'available'
+      ? '[terminal] tmux: available'
+      : `[terminal] tmux: ${startup.state} (${startup.reason})`)
+    return { state: 'ready' }
+  }
+
+  /** `sessionEnv`: whether `create` can be given an `env` — tmux 3.2 (`TMUX_SESSION_ENV_MIN`), probed once per process. */
+  async capabilities(): Promise<TerminalBackendCapabilities> {
+    return { sessionEnv: await tmuxSupportsSessionEnv() }
+  }
 
   async create(request: TerminalCreateRequest): Promise<TerminalCreateResult<TmuxRuntimeRef>> {
     // tmux titles the pane it is about to make with the machine's name as it is now, and an engine
@@ -157,10 +189,10 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     const variables = Object.entries(request.env ?? {})
     // `-e` (tmux 3.2+) puts these in the SESSION environment rather than the launch argv, so a grid
     // relay key never lands in `ps` output for the life of the agent. Callers refuse a grid or a
-    // harness on an older tmux by name (`tmuxSupportsSessionEnv()`); whatever else reaches here with
+    // harness on an older tmux by name (`capabilities().sessionEnv`); whatever else reaches here with
     // variables on one is refused here, saying why, rather than handed to tmux to answer with its
     // usage text — and never moved into the argv, where a secret would show.
-    if (variables.length && !features.sessionEnv) return terminalActionNotStarted(tmuxTooOldForEnv('3.2', 'a new session'))
+    if (variables.length && !features.sessionEnv) return terminalActionNotStarted(tmuxTooOldForEnv(TMUX_FEATURE_MIN.sessionEnv, 'a new session'))
     const owner = this.owner()
     const args = ['new-session', '-d', '-P', '-F', '#{pane_id}']
     if (request.cwd) args.push('-c', request.cwd)
@@ -252,7 +284,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
    */
   async respawnRefusal(request: Pick<TerminalRespawnRequest, 'env'>): Promise<string | null> {
     // `respawn-pane -e` is tmux 3.0; refused before, for the reason `create` gives.
-    return Object.keys(request.env ?? {}).length && !(await this.features()).respawnEnv ? tmuxTooOldForEnv('3.0', 'a respawned pane') : null
+    return Object.keys(request.env ?? {}).length && !(await this.features()).respawnEnv ? tmuxTooOldForEnv(TMUX_FEATURE_MIN.respawnEnv, 'a respawned pane') : null
   }
 
   async respawn(runtime: TmuxRuntimeRef, request: TerminalRespawnRequest): Promise<TerminalActionResult> {
@@ -480,7 +512,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
 
   async validate(runtime: TmuxRuntimeRef, expected: TerminalProcessExpectation): Promise<RuntimeValidation> {
     try {
-      const found = await lookupPaneEngineProcess(runtime.paneId, expected.engine)
+      const found = await lookupPaneEngineProcess(this, runtime, expected.engine)
       if (!found.ok) return { state: found.unknown ? 'unknown' : 'gone', reason: found.reason }
       const live = found.identity
       // A saved marker that is not a C-locale `lstart` stamp was written either by the pre-fix parser,
@@ -503,6 +535,23 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     }
   }
 
+  /** Hand the pane back to tmux's default disposal (`clearPaneRemainOnExit`). */
+  releaseHold(runtime: TmuxRuntimeRef, current?: () => boolean): Promise<void> {
+    return clearPaneRemainOnExit(runtime.paneId, current)
+  }
+
+  paneState(runtime: TmuxRuntimeRef): Promise<TerminalPaneRead> {
+    return tmuxPaneState(runtime.paneId)
+  }
+
+  paneInfo(runtime: TmuxRuntimeRef): Promise<TerminalPaneInfo | null> {
+    return tmuxPaneInfo(runtime.paneId)
+  }
+
+  rootProcess(runtime: TmuxRuntimeRef): Promise<number | 'missing' | null> {
+    return tmuxPanePid(runtime.paneId)
+  }
+
   async capture(runtime: TmuxRuntimeRef, options: TerminalCaptureOptions = {}): Promise<TerminalReadResult<string>> {
     const captured = await captureTmuxPane(runtime.paneId, options.historyLines, {
       visible: options.mode === 'visible',
@@ -519,7 +568,9 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
 
   async submitText(runtime: TmuxRuntimeRef, text: string, options?: SubmitOptions): Promise<TerminalActionResult> {
     const sent = await sendToTmux(runtime.paneId, text, options?.beforeEnter, options?.allowed)
-    return typeof sent === 'boolean' ? legacyActionResult(sent, 'tmux submission') : terminalEnterWithheld(sent.withheld)
+    if (typeof sent === 'boolean') return legacyActionResult(sent, 'tmux submission')
+    if ('notPasted' in sent) return terminalActionNotStarted(sent.notPasted)
+    return terminalEnterWithheld(sent.withheld)
   }
 
   async sendKey(runtime: TmuxRuntimeRef, key: TerminalLogicalKey): Promise<TerminalActionResult> {

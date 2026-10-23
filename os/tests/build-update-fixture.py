@@ -80,13 +80,17 @@ def probe_versions(folder, architecture, expected, cli_name):
 
 
 def copy_tui(source, destination):
-    # Compile tracked source only; ignored files cannot quietly enter a fixture.
-    paths = subprocess.check_output(['git', '-C', str(source), 'ls-files', '-z', '--', 'tui'], timeout=30)
+    # Compile tracked source only; ignored files cannot quietly enter a fixture. The crates tui
+    # depends on by path (`../term`, #1470) go beside it, where its Cargo.toml looks for them.
+    paths = subprocess.check_output(['git', '-C', str(source), 'ls-files', '-z', '--', 'tui', 'term'], timeout=30)
     for value in paths.split(b'\0'):
         if not value:
             continue
         relative = Path(os.fsdecode(value))
-        target = destination / relative.relative_to('tui')
+        if relative.parts[0] == 'tui':
+            target = destination / relative.relative_to('tui')
+        else:
+            target = destination.parent / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source / relative, target, follow_symlinks=False)
     manifest, lock = destination / 'Cargo.toml', destination / 'Cargo.lock'
@@ -132,8 +136,9 @@ def main(argv=None):
         parser.error('Node must match the native Linux build architecture.')
     started = time.time()
     commit = clean_source(ROOT)
+    # As build-runtime.sh names them: the CLI as the newest published one this source contains.
     versions = {'hn': tomllib.loads((ROOT / 'tui/Cargo.toml').read_text())['package']['version'],
-                'cli': json.loads((ROOT / 'cli/package.json').read_text())['version']}
+                'cli': command(sys.executable, ROOT / 'os/tools/runtime-baseline.py', '--cli-version')}
     baselines = json.loads(command(sys.executable, ROOT / 'os/tools/runtime-baseline.py'))
     baseline = baselines.get('cli', {}).get('version')
     if not isinstance(baseline, str) or not re.fullmatch(r'\d+\.\d+\.\d+', baseline):

@@ -29,6 +29,7 @@ import { formatNext, type NextStep } from './next.js'
 import { AgentClientError, openDaemon, whereFor, type Daemon, type Where } from './daemon.js'
 import { Ledger, ledgerPath, type Pending, type Started } from './ledger.js'
 import { messagesRpc, type Rpc } from '../messages/rpc.js'
+import { sendPane } from '../messages/command.js'
 import { asSaid, callerOf, clip, cloudTurn, forAgent, isAgent, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type Frame, type HistoryEvent, type Row, type State } from './model.js'
 
 export interface ClientDeps {
@@ -153,10 +154,11 @@ interface Opened {
 }
 
 function setup(deps: ClientDeps) {
+  const pane = 'pane' in deps ? deps.pane : sendPane(deps.env ?? process.env)
   return {
-    pane: 'pane' in deps ? deps.pane : process.env.TMUX_PANE,
+    pane,
     env: deps.env ?? process.env,
-    where: deps.where ?? (() => whereFor('pane' in deps ? deps.pane : process.env.TMUX_PANE)),
+    where: deps.where ?? (() => whereFor(pane)),
     open: deps.open ?? ((where: Where, machineId?: string) => openDaemon(where, machineId)),
     ledger: deps.ledger ?? ((dataDir: string) => new Ledger(ledgerPath(dataDir))),
     out: deps.out ?? ((line: string) => console.log(line)),

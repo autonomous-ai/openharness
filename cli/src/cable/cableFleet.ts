@@ -22,7 +22,7 @@ export interface CableFleetOptions {
   verdicts?: DialVerdicts
   /** Does another process have this tty open? A port somebody else is using is not looked at. */
   inUse?: (path: string) => Promise<boolean>
-  /** Only the foreground macOS account may automatically own physical USB. */
+  /** Only the account at the screen may automatically own physical USB (macOS: the console user; Windows: the console session). */
   canUseUsb?: () => boolean
   /** How often a board ruled out is checked for another program working on it. */
   watchEveryMs?: number
@@ -148,7 +148,7 @@ export class CableFleet {
 
   private async reconcile(): Promise<void> {
     if (!this.canUseUsb()) {
-      if (!this.waitingForConsole) this.host.log('cable: USB belongs to the active macOS account — releasing this connection')
+      if (!this.waitingForConsole) this.host.log('cable: USB belongs to the account at this computer\'s screen — releasing this connection')
       this.waitingForConsole = true
       await Promise.allSettled([...this.entries.values()].map(entry => entry.session.stop()))
       if (this.entries.size) { this.entries.clear(); this.publish() }
@@ -191,6 +191,7 @@ export class CableFleet {
       if (this.stopped) return
       const entry: Entry = { port, attached: false, status: { attached: false }, session: undefined!, faults: [] }
       const attached = () => {
+        this.verdicts.markDial(port)
         if (entry.attached) return
         const first = ![...this.entries.values()].some(e => e.attached)
         entry.attached = true
@@ -322,6 +323,8 @@ export class CableFleet {
   syncAgents(...args: Parameters<Surface['syncAgents']>) { return this.send('syncAgents', ...args) }
   syncSwarms(...args: Parameters<Surface['syncSwarms']>) { return this.send('syncSwarms', ...args) }
   syncMachines(...args: Parameters<Surface['syncMachines']>) { return this.send('syncMachines', ...args) }
+  syncSwarmCards(...args: Parameters<Surface['syncSwarmCards']>) { return this.send('syncSwarmCards', ...args) }
+  swarmCardRecap(...args: Parameters<Surface['swarmCardRecap']>) { return this.send('swarmCardRecap', ...args) }
   followApp(...args: Parameters<Surface['followApp']>) { return this.send('followApp', ...args) }
   replaceNotifications(...args: Parameters<Surface['replaceNotifications']>) { return this.send('replaceNotifications', ...args) }
   agentSeen(...args: Parameters<Surface['agentSeen']>) { return this.send('agentSeen', ...args) }

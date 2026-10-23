@@ -163,7 +163,8 @@ class DesktopPublicationTests(unittest.TestCase):
                 self.assertEqual(state["objects"][URI]["data"], payload)
 
     def test_real_artifact_upload_commands_cannot_overwrite_existing_bytes(self):
-        for script, variable in (("upload-desktop.sh", "ZIP"), ("upload-desktop.sh", "DMG"), ("upload-desktop-linux.sh", "OUTPUT")):
+        for script, variable in (("upload-desktop.sh", "ZIP"), ("upload-desktop.sh", "DMG"), ("upload-desktop-linux.sh", "OUTPUT"),
+                                 ("upload-desktop-windows.sh", "FILE")):
             with self.subTest(script=script, variable=variable):
                 payload = self.root / "artifact"
                 payload.write_text("original bytes")

@@ -35,7 +35,7 @@ static int checks;
 
 // ---- the recorder --------------------------------------------------------------------------------------
 enum { EV_STATS, EV_LINK, EV_AGENTS, EV_SWARMS, EV_LIBRARY, EV_CONTEXT, EV_TURN, EV_SUMMARY, EV_QUESTION, EV_QCLOSE, EV_FOCUS,
-       EV_VOICE, EV_MACHINES, EV_NREPLACE, EV_NSEEN };
+       EV_VOICE, EV_MACHINES, EV_NREPLACE, EV_NSEEN, EV_STIDS, EV_SUPERTAB, EV_STRECAP, EV_STFOCUS };
 typedef struct { int kind; char id[64]; char a[2400], b[2400], c[2400], d[128]; long n1, n2, n3, n4, n5; } ev_t;
 #define EV_MAX 64
 static ev_t evs[EV_MAX];
@@ -74,6 +74,25 @@ void pro_app_swarms(const cable_swarm_t *items, int n, const cable_swarm_members
     if (members) memcpy(&rec_members, members, sizeof rec_members);
     memcpy(rec_tiles, tiles, (size_t)tile_n * sizeof *tiles);
 }
+static pod_swarm_t rec_card;
+static char rec_ids[SWARMS_CARD_MAX][ID_MAX];
+void pro_app_supertab_ids(const char (*ids)[ID_MAX], int n)
+{
+    ev_t *e = add(EV_STIDS, NULL);
+    e->n1 = n;
+    memcpy(rec_ids, ids, (size_t)n * sizeof *ids);
+}
+void pro_app_supertab(const pod_swarm_t *sw)
+{
+    ev_t *e = add(EV_SUPERTAB, sw->id);
+    rec_card = *sw;
+    e->n1 = sw->lead_n;
+}
+void pro_app_supertab_recap(const char *tab, const char *lead, const char *text, uint32_t at, bool none)
+{
+    ev_t *e = add(EV_STRECAP, tab); put(e->a, lead); put(e->b, text); e->n1 = at; e->n2 = none;
+}
+void pro_app_supertab_focus(const char *tab, const char *lead) { ev_t *e = add(EV_STFOCUS, tab); put(e->a, lead); }
 void pro_app_library(const pro_library_row_t *rows, int count, int offset, int total)
 {
     ev_t *e = add(EV_LIBRARY, NULL);
@@ -106,7 +125,10 @@ void pro_app_notif_seen(const char *id, const char *token)
 {
     ev_t *e = add(EV_NSEEN, id); put(e->a, token ? token : "(none)");
 }
-void pro_app_question(const char *id, const char *request, const char *text) { (void)request; put(add(EV_QUESTION, id)->a, text); }
+void pro_app_question(const char *id, const char *request, const char *text, const char *super_tab, pod_attention_t attention)
+{
+    ev_t *e = add(EV_QUESTION, id); (void)request; put(e->a, text); put(e->b, super_tab); e->n1 = attention;
+}
 void pro_app_question_close(const char *id) { add(EV_QCLOSE, id); }
 void pro_app_focus(const char *id) { add(EV_FOCUS, id); }
 void pro_app_voice_result(int kind, const char *text) { ev_t *e = add(EV_VOICE, NULL); e->n1 = kind; put(e->a, text); }
@@ -582,6 +604,30 @@ static void test_session_machines_library_voice(void)
     feed("{\"t\":\"question.close\",\"agentId\":\"a\",\"id\":\"q1\"}");
     feed("{\"t\":\"question.close\",\"agentId\":\"a\"}");
     CHECK(nev == 3 && !strcmp(evs[0].a, "Proceed?") && !strcmp(evs[1].a, "Needs your answer") && evs[2].kind == EV_QCLOSE);
+    CHECK(!strcmp(evs[0].b, "<null>") && evs[0].n1 == POD_ATTN_NONE && !strcmp(evs[1].b, "<null>") && evs[1].n1 == POD_ATTN_NONE);   // a plain question: as before
+
+    // a Super Tab's question: superTab names the project, attention says decision or stuck (an unknown one is a decision)
+    reset();
+    feed("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"q1\",\"questions\":[{\"q\":\"Staging or prod?\"}],\"superTab\":\"Launch v2\",\"attention\":\"decision\"}");
+    feed("{\"t\":\"question\",\"agentId\":\"b\",\"id\":\"q2\",\"questions\":[{\"q\":\"Stuck: no write access\"}],\"superTab\":\"Launch v2\",\"attention\":\"stuck\"}");
+    feed("{\"t\":\"question\",\"agentId\":\"c\",\"id\":\"q3\",\"questions\":[{\"q\":\"Which?\"}],\"superTab\":\"Launch v2\",\"attention\":\"blocked-ish\"}");
+    feed("{\"t\":\"question\",\"agentId\":\"d\",\"id\":\"q4\",\"questions\":[{\"q\":\"Which?\"}],\"superTab\":\"Launch v2\"}");
+    CHECK(nev == 4 && evs[0].kind == EV_QUESTION && !strcmp(evs[0].a, "Staging or prod?") && !strcmp(evs[0].b, "Launch v2") && evs[0].n1 == POD_ATTN_DECISION);
+    CHECK(!strcmp(evs[1].id, "b") && !strcmp(evs[1].a, "Stuck: no write access") && !strcmp(evs[1].b, "Launch v2") && evs[1].n1 == POD_ATTN_STUCK);
+    CHECK(evs[2].n1 == POD_ATTN_DECISION && evs[3].n1 == POD_ATTN_DECISION && !strcmp(evs[3].b, "Launch v2"));
+    reset();   // attention without a Super Tab, an empty or a non-string superTab: a plain question
+    feed("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"q1\",\"questions\":[{\"q\":\"x\"}],\"attention\":\"stuck\"}");
+    feed("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"q1\",\"questions\":[{\"q\":\"x\"}],\"superTab\":\"\",\"attention\":\"stuck\"}");
+    feed("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"q1\",\"questions\":[{\"q\":\"x\"}],\"superTab\":7,\"attention\":\"stuck\"}");
+    CHECK(nev == 3);
+    for (int i = 0; i < 3; i++) CHECK(!strcmp(evs[i].b, "<null>") && evs[i].n1 == POD_ATTN_NONE);
+    {   // a long Super Tab name is cut to SUPER_TAB_MAX - 1 bytes on a UTF-8 boundary
+        char *tab = repeat("\xC3\xA9", 40);
+        reset();
+        feedf("{\"t\":\"question\",\"agentId\":\"a\",\"id\":\"q1\",\"questions\":[{\"q\":\"x\"}],\"superTab\":\"%s\",\"attention\":\"stuck\"}", tab);
+        CHECK(nev == 1 && strlen(evs[0].b) <= SUPER_TAB_MAX - 1 && strlen(evs[0].b) >= SUPER_TAB_MAX - 2 && utf8_ok(evs[0].b) && evs[0].n1 == POD_ATTN_STUCK);
+        free(tab);
+    }
 
     // player.context is delivered (pro_app ignores it)
     reset();
@@ -1045,6 +1091,117 @@ static void seq_gaps(void)
     end_session();
 }
 
+// The Swarm cards (the hello's swarmCard:v1 is checked in test_pro_hello.py): supertabs {ids} + one supertab per Swarm +
+// supertab.recap / supertab.focus in, pro_app_supertab* out.
+static void test_swarm_cards(void)
+{
+    welcome();
+    // the id list: order kept, a bad / repeated id skipped, 20 -> 16
+    reset();
+    feed("{\"t\":\"supertabs\",\"ids\":[\"S1\",\"S2\",7,\"\",\"S1\",\"S3\"]}");
+    CHECK(nev == 1 && evs[0].kind == EV_STIDS && evs[0].n1 == 3 && !strcmp(rec_ids[0], "S1") && !strcmp(rec_ids[2], "S3"));
+    reset();
+    char big[4096];
+    int w = snprintf(big, sizeof big, "{\"t\":\"supertabs\",\"ids\":[");
+    for (int i = 0; i < 20; i++) w += snprintf(big + w, sizeof big - (size_t)w, "%s\"s%d\"", i ? "," : "", i);
+    snprintf(big + w, sizeof big - (size_t)w, "]}");
+    feed(big);
+    CHECK(nev == 1 && evs[0].n1 == SWARMS_CARD_MAX && !strcmp(rec_ids[SWARMS_CARD_MAX - 1], "s15"));
+    reset();   // not an array: dropped
+    feed("{\"t\":\"supertabs\",\"ids\":{}}");
+    CHECK(nev == 0);
+
+    // one Swarm with 3 Leads: every field
+    reset();
+    feed("{\"t\":\"supertab\",\"id\":\"S1\",\"tab\":\"T1\",\"name\":\"openharness\",\"count\":4,\"leads\":["
+         "{\"id\":\"L1\",\"projectId\":\"P1\",\"project\":\"mobile\",\"engine\":\"claude\",\"owner\":\"\",\"local\":\"H1\",\"state\":\"ask\",\"since\":134},"
+         "{\"id\":\"L2\",\"project\":\"web\",\"engine\":\"codex\",\"owner\":\"Mai\",\"local\":\"\",\"state\":\"stuck\",\"since\":0},"
+         "{\"id\":\"L3\",\"project\":\"api\",\"engine\":\"gemini\",\"owner\":\"\",\"local\":\"H3\",\"state\":\"work\",\"since\":9}]}");
+    CHECK(nev == 1 && evs[0].kind == EV_SUPERTAB && !strcmp(evs[0].id, "S1") && evs[0].n1 == 3);
+    CHECK(!strcmp(rec_card.tab, "T1") && !strcmp(rec_card.name, "openharness") && rec_card.count == 4 && rec_card.lead_n == 3);
+    CHECK(!strcmp(rec_card.leads[0].id, "L1") && !strcmp(rec_card.leads[0].projectId, "P1") && !strcmp(rec_card.leads[0].project, "mobile") &&
+          !strcmp(rec_card.leads[0].engine, "claude") && !strcmp(rec_card.leads[0].local, "H1") &&
+          rec_card.leads[0].state == POD_LEAD_ASK && rec_card.leads[0].since_s == 134 &&
+          rec_card.leads[0].recap == POD_RECAP_NONE && rec_card.leads[0].text == NULL);
+    CHECK(rec_card.leads[1].state == POD_LEAD_STUCK && !strcmp(rec_card.leads[1].owner, "Mai") && rec_card.leads[1].projectId[0] == 0 &&
+          rec_card.leads[2].state == POD_LEAD_WORK && rec_card.leads[2].since_s == 9);
+
+    // 15 Leads -> 12; count absent -> the Leads listed
+    reset();
+    w = snprintf(big, sizeof big, "{\"t\":\"supertab\",\"id\":\"s\",\"name\":\"n\",\"count\":15,\"leads\":[");
+    for (int i = 0; i < 15; i++) w += snprintf(big + w, sizeof big - (size_t)w, "%s{\"id\":\"l%d\",\"state\":\"work\"}", i ? "," : "", i);
+    snprintf(big + w, sizeof big - (size_t)w, "]}");
+    feed(big);
+    CHECK(nev == 1 && rec_card.lead_n == SWARM_LEADS_MAX && !strcmp(rec_card.leads[11].id, "l11") && rec_card.count == 15);
+    reset();
+    feed("{\"t\":\"supertab\",\"id\":\"s\",\"leads\":[{\"id\":\"a\"},{\"id\":\"b\"}]}");
+    CHECK(nev == 1 && rec_card.count == 2);
+
+    // a 60-byte name is cut to 48 on a UTF-8 boundary (the two-byte letter straddles byte 48)
+    reset();
+    feedf("{\"t\":\"supertab\",\"id\":\"s\",\"name\":\"%s\xc3\xa9%s\",\"leads\":[{\"id\":\"l\",\"project\":\"%s\xc3\xa9%s\"}]}",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbb", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbb");
+    CHECK(nev == 1 && strlen(rec_card.name) == 47 && strlen(rec_card.leads[0].project) == 47);
+
+    // unknown state -> done; a malformed or repeated Lead is skipped, not the frame; a Swarm without an id is dropped
+    reset();
+    feed("{\"t\":\"supertab\",\"id\":\"s\",\"name\":\"ok\",\"leads\":[{\"id\":\"a\",\"state\":\"weird\"},"
+         "5,{\"project\":\"no id\"},{\"id\":\"b\",\"state\":\"ask\"},{\"id\":\"b\"}]}");
+    CHECK(nev == 1 && rec_card.lead_n == 2 && rec_card.leads[0].state == POD_LEAD_DONE &&
+          !strcmp(rec_card.leads[1].id, "b") && rec_card.leads[1].state == POD_LEAD_ASK);
+    reset();
+    feed("{\"t\":\"supertab\",\"name\":\"no id\",\"leads\":[]}");
+    CHECK(nev == 0);
+
+    // worst case: 16 Swarms x 12 Leads with every field full is 1 + 16 frames, each inside the JSON guard
+    reset();
+    int frames = 0;
+    w = snprintf(big, sizeof big, "{\"t\":\"supertabs\",\"ids\":[");
+    for (int i = 0; i < 16; i++) w += snprintf(big + w, sizeof big - (size_t)w, "%s\"%032d\"", i ? "," : "", i);
+    snprintf(big + w, sizeof big - (size_t)w, "]}");
+    feed(big); frames++;
+    for (int i = 0; i < 16; i++) {
+        w = snprintf(big, sizeof big, "{\"t\":\"supertab\",\"id\":\"%032d\",\"tab\":\"%032d\",\"name\":\"%048d\",\"count\":12,\"leads\":[", i, i, i);
+        for (int j = 0; j < 12; j++)
+            w += snprintf(big + w, sizeof big - (size_t)w,
+                          "%s{\"id\":\"%032d\",\"projectId\":\"%032d\",\"project\":\"project-%d\",\"engine\":\"claude\",\"owner\":\"\",\"local\":\"%032d\",\"state\":\"work\",\"since\":134}",
+                          j ? "," : "", j, j, j, j);
+        snprintf(big + w, sizeof big - (size_t)w, "]}");
+        CHECK(strlen(big) < CABLE_MAX_PAYLOAD);
+        feed(big); frames++;
+    }
+    CHECK(frames == 17 && nev == 17 && evs[0].kind == EV_STIDS && evs[16].kind == EV_SUPERTAB && evs[16].n1 == 12);
+
+    // supertab.recap: text stored (cut at 1500), none:true
+    reset();
+    char *txt = repeat("\xc3\xa9", 1000);   // 2000 bytes
+    feedf("{\"t\":\"supertab.recap\",\"tab\":\"S1\",\"lead\":\"L1\",\"text\":\"%s\",\"at\":1792560000,\"none\":false}", txt);
+    free(txt);
+    CHECK(nev == 1 && evs[0].kind == EV_STRECAP && !strcmp(evs[0].id, "S1") && !strcmp(evs[0].a, "L1") &&
+          strlen(evs[0].b) == 1500 && evs[0].n1 == 1792560000L && evs[0].n2 == 0);
+    reset();
+    feed("{\"t\":\"supertab.recap\",\"tab\":\"S1\",\"lead\":\"L1\",\"text\":\"\",\"at\":5,\"none\":true}");
+    CHECK(nev == 1 && evs[0].n2 == 1 && !strcmp(evs[0].b, ""));
+    reset();   // no tab / no lead: dropped
+    feed("{\"t\":\"supertab.recap\",\"lead\":\"L1\",\"text\":\"x\"}");
+    feed("{\"t\":\"supertab.recap\",\"tab\":\"S1\",\"text\":\"x\"}");
+    CHECK(nev == 0);
+
+    // supertab.focus
+    reset();
+    feed("{\"t\":\"supertab.focus\",\"tab\":\"S1\",\"lead\":\"L2\"}");
+    feed("{\"t\":\"supertab.focus\",\"tab\":\"S1\"}");
+    CHECK(nev == 1 && evs[0].kind == EV_STFOCUS && !strcmp(evs[0].id, "S1") && !strcmp(evs[0].a, "L2"));
+
+    // the send helper
+    reset();
+    CHECK(pro_cable_supertab_send("supertab.recap.get", "S1", "L1"));
+    CHECK(pro_cable_supertab_send("supertab.open", "S1", NULL));
+    CHECK(!pro_cable_supertab_send("bogus", "S1", "L1"));   // not one of the three: nothing goes out
+    CHECK(nsent == 2 && strstr(sent[0], "\"t\":\"supertab.recap.get\"") && strstr(sent[0], "\"tab\":\"S1\"") && strstr(sent[0], "\"lead\":\"L1\""));
+    CHECK(strstr(sent[1], "\"t\":\"supertab.open\"") && strstr(sent[1], "\"lead\":\"\""));
+}
+
 int main(void)
 {
     pro_cable_start();   // the lock and the machine table; no tasks run on the host
@@ -1068,6 +1225,7 @@ int main(void)
     send_shapes();
     link_resync();
     seq_gaps();
+    test_swarm_cards();
     printf("test_pro_cable: %d checks passed\n", checks);
     return 0;
 }

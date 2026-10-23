@@ -1,0 +1,3 @@
+{"machineId":"7e92c45a…","computerId":"e5f27bf2…","workspaceId":null,"planId":"<redacted>","autonomousEnv":"prod","authMode":"remote","planName":"Remote","billingStatus":"not_required","createdAt":"2026-10-18T01:49:57.701Z","status":"running","agentCount":0,"engine":"claude","name":"WIN-TESTVM","hostname":"WIN-TESTVM","current":false}
+# the Mac (signed in to the same account): harness machines --json, the VM's row (08:52:27)
+{"machineId":"7e92c45a…","computerId":"e5f27bf2…","workspaceId":null,"planId":"<redacted>","autonomousEnv":"prod","authMode":"remote","planName":"Remote","billingStatus":"not_required","createdAt":"2026-10-18T01:49:57.701Z","status":"running","agentCount":0,"engine":"claude","name":"WIN-TESTVM","hostname":"WIN-TESTVM","current":false}

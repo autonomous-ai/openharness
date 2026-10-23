@@ -3,7 +3,9 @@ import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parseProjectFolder, prepareProjectFolder, ProjectFolderError, projectsRoot, repositoryIdentity } from './projectFolder.js'
+import {
+  cloneFailure, otherGitHubTransport, parseProjectFolder, prepareProjectFolder, ProjectFolderError, projectsRoot, repositoryIdentity, RepositoryAccessError,
+} from './projectFolder.js'
 
 /** A checkout at [folder] whose origin is [origin] (none when null), made by the real git, with no network. */
 function checkout(folder: string, origin: string | null): void {
@@ -115,6 +117,41 @@ describe('project folder preparation', () => {
     expect(repositoryIdentity('https://gitlab.com/owner/repo.git')).toBe('gitlab.com/owner/repo')
     for (const address of ['/srv/git/repo.git', './repo', 'file:///srv/git/repo.git', 'not a url', '', 'https://github.com/']) {
       expect(repositoryIdentity(address), address).toBeNull()
+    }
+  })
+
+  it('tells a refused clone from one that failed for another reason, keeping the code the apps know', () => {
+    for (const diagnostic of [
+      "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+      'ERROR: Repository not found.\nfatal: Could not read from remote repository.',
+      'git@github.com: Permission denied (publickey).',
+      'remote: Invalid username or token. Password authentication is not supported.\nfatal: Authentication failed',
+    ]) {
+      const error = cloneFailure(diagnostic)
+      expect(error, diagnostic).toBeInstanceOf(RepositoryAccessError)
+      expect(error.code).toBe('CLONE_FAILED')
+      expect(error.message).toContain('GitHub access on the selected machine')
+    }
+    for (const diagnostic of ['fatal: unable to access: Could not resolve host: github.com', 'Host key verification failed.', '']) {
+      const error = cloneFailure(diagnostic)
+      expect(error, diagnostic).not.toBeInstanceOf(RepositoryAccessError)
+      expect(error).toMatchObject({ code: 'CLONE_FAILED', message: 'Could not clone the repository. Check the URL and connection, then retry.' })
+    }
+  })
+
+  it('names the same GitHub repository over the other transport, and nothing for another address', () => {
+    expect(otherGitHubTransport('https://github.com/owner/repo.git')).toBe('git@github.com:owner/repo.git')
+    expect(otherGitHubTransport('git@github.com:owner/repo.git')).toBe('https://github.com/owner/repo.git')
+    for (const url of ['owner/repo', 'https://gitlab.com/owner/repo.git', 'https://github.com/owner/repo/extra', 'ssh://git@github.com/owner/repo', '']) {
+      expect(otherGitHubTransport(url), url).toBeNull()
+    }
+    // Both forms parseProjectFolder makes round-trip to each other.
+    for (const url of ['https://github.com/owner/repo', 'git@github.com:owner/repo']) {
+      const parsed = parseProjectFolder({ projectSource: 'remote', repositoryUrl: url })
+      if (parsed?.source !== 'remote') throw new Error('expected a remote project')
+      const other = otherGitHubTransport(parsed.repositoryUrl)!
+      expect(otherGitHubTransport(other)).toBe(parsed.repositoryUrl)
+      expect(repositoryIdentity(other)).toBe(repositoryIdentity(parsed.repositoryUrl))
     }
   })
 

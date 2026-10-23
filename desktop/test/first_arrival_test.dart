@@ -111,6 +111,8 @@ class _OpeningApp extends _PreparingApp {
     String? name,
     String? agent,
     String? swarmId,
+    String? swarmRole,
+    String? swarmSkillMode,
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
     HarnessPlacement? placement,

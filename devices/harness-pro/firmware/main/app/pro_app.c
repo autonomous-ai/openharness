@@ -154,6 +154,25 @@ static void perform(const pod_out_t *o)
     }
 }
 
+// The Swarm cards' select / open / recap.get frames the Lead view owes the daemon (pod_ui_take_supertab reconciles them with what is on screen). Taken under the
+// lock, sent after it. Its own frame: the queue is too big for leave()'s (1 KB cap).
+static __attribute__((noinline)) void send_supertabs(void)
+{
+    pod_supertab_out_t q[POD_SUPERTAB_OUT_MAX];
+    pro_app_lock();
+    const uint32_t rev = s_pod.model.revision;
+    const int n = pod_ui_take_supertab(&s_pod, q, POD_SUPERTAB_OUT_MAX);
+    if (s_pod.model.revision != rev) change();   // asking for a recap puts it LOADING: a change no feed announced (the flag is the model's revision: not consumed here)
+    pro_app_unlock();
+    bool lost[POD_SUPERTAB_OUT_MAX] = {0};
+    bool any = false;
+    for (int i = 0; i < n; i++) any |= lost[i] = !pro_cable_supertab_send(q[i].t, q[i].tab, q[i].lead);
+    if (!any) return;
+    pro_app_lock();   // a frame the link dropped is owed again (open / recap.get are retried)
+    for (int i = 0; i < n; i++) if (lost[i]) pod_ui_supertab_unsent(&s_pod, q[i].t);
+    pro_app_unlock();
+}
+
 // Release the lock, then do what the feeds asked for. Every entry that took the lock ends here.
 static void leave(void)
 {
@@ -172,6 +191,7 @@ static void leave(void)
     pro_app_unlock();
     for (int i = 0; i < n; i++) perform(&q[i]);
     for (int i = 0; i < read_n; i++) pro_cable_send_notif_read(reads[i].agent, reads[i].token);
+    send_supertabs();
     if (wake) pro_app_wake();   // an alert: light a dark glass so its banner is seen
     if (beep && !pro_settings_muted() && !atomic_load(&s_updating)) audio_beep();   // and chime, unless muted
     if (lib) send_library(lib_request, lib_offset);
@@ -352,6 +372,36 @@ void pro_app_swarms(const cable_swarm_t *items, int n, const cable_swarm_members
     leave();
 }
 
+// The Swarm cards. The model copies the list and keeps the Lead recap texts (pod_model_supertab); a recap lands on its Lead.
+// supertab.focus is recorded by the model (focus_*) and acted on by the glue after the feed (apply_lead_focus): the Lead view opens.
+void pro_app_supertab_ids(const char (*ids)[ID_MAX], int n)
+{
+    pro_app_lock();
+    settle(pod_ui_supertab_ids(&s_pod, ids, n));
+    leave();
+}
+
+void pro_app_supertab(const pod_swarm_t *sw)
+{
+    pro_app_lock();
+    settle(pod_ui_supertab(&s_pod, sw, ms()));
+    leave();
+}
+
+void pro_app_supertab_recap(const char *tab, const char *lead, const char *text, uint32_t at, bool none)
+{
+    pro_app_lock();
+    settle(pod_ui_supertab_recap(&s_pod, tab, lead, text, at, none));
+    leave();
+}
+
+void pro_app_supertab_focus(const char *tab, const char *lead)
+{
+    pro_app_lock();
+    settle(pod_ui_supertab_focus(&s_pod, tab, lead, ms()));
+    leave();
+}
+
 _Static_assert(sizeof(pro_library_row_t) == sizeof(pod_library_row_t) &&
                offsetof(pro_library_row_t, id) == offsetof(pod_library_row_t, id) &&
                offsetof(pro_library_row_t, name) == offsetof(pod_library_row_t, name) &&
@@ -447,7 +497,9 @@ static void turn_locked(const char *id, const char *kind, const char *text, int 
         // R1: only a NEW turn starts the clock; a heartbeat refreshes the word it carries.
         const bool new_turn = set_find(s_busy, id) < 0;
         if (!set_add(s_busy, id)) return;
-        set_remove(s_quest, id);   // only turn.started or question.close ends a question
+        // Only turn.started or question.close ends a question; a Super Tab's survives the turn (pod_model set_state).
+        const pod_agent_t *asked = pod_model_find(&s_pod.model, id);
+        if (!(asked && asked->state == POD_ASKING && asked->super_tab[0])) set_remove(s_quest, id);
         if (new_turn) settle(pod_ui_turn(&s_pod, id, "started", "", 0, now));
         feed_verb(id, text, now);
     } else if (!strcmp(kind, "verb")) {
@@ -534,13 +586,13 @@ void pro_app_notif_seen(const char *id, const char *token)
     leave();
 }
 
-void pro_app_question(const char *id, const char *request, const char *text)
+void pro_app_question(const char *id, const char *request, const char *text, const char *super_tab, pod_attention_t attention)
 {
     if (!id_ok(id)) return;
     pro_app_lock();
     if (s_linked && held(id) && set_add(s_quest, id)) {
         const char *q = text && text[0] ? text : "Needs your answer";
-        settle(pod_ui_question(&s_pod, id, q));
+        settle(pod_ui_question(&s_pod, id, q, super_tab, attention));
         uint32_t h = 2166136261u;   // FNV-1a of the request id and the prompt: a lost close must not mute the next one
         for (const char *c = request ? request : ""; *c; c++) h = (h ^ (uint8_t)*c) * 16777619u;
         h = (h ^ 0u) * 16777619u;
@@ -622,7 +674,8 @@ const char *pro_app_voice_block_reason(const char *agent_id)
         if (!strcmp(pa->engine, "terminal")) why = "Choose an agent pane.";
         else if (mach && !strcmp(mach->state, "offline")) why = "This computer is offline.";
         else if (mach && !strcmp(mach->state, "needs-link")) why = "Link this computer in Harness.";
-        else if (set_find(s_quest, agent_id) >= 0) why = "Answer its question first.";
+        // A Super Tab wait is not answered here: talking to the agent is how a person unblocks it.
+        else if (set_find(s_quest, agent_id) >= 0 && !pa->super_tab[0]) why = "Answer its question first.";
     }
     pro_app_unlock();
     return why;   // a literal, valid after the unlock

@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, wr
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { RETENTION_LAPSE_MS, retainContributions, retainedHarnesses, retentionFile } from './retention.js'
+import { mayBeLead, RETENTION_LAPSE_MS, retainContributions, retainedHarnesses, retainedLeads, retentionFile } from './retention.js'
 
 const roots: string[] = []
 const root = () => { const dir = mkdtempSync(join(tmpdir(), 'super-retention-')); roots.push(dir); return dir }
@@ -56,5 +56,55 @@ it('pauses cleanup on corrupt or oversized retention until the host rewrites it 
   retainContributions(dir, 'machine', [row('multiply')], now)
   expect([...retainedHarnesses(dir, now)]).toEqual(['multiply'])
   unlinkSync(file)
+  expect([...retainedHarnesses(dir, now)]).toEqual([])
+})
+
+// The owner, 2026-10-23: the Lead of an active project is never stopped, in any case. It is kept from cleanup even when
+// its groups read as archived, and never lapses: a machine signed out for a week still keeps its Lead.
+it('keeps a Lead apart, never lapses it, and releases it only when a confirmed roster no longer marks it', () => {
+  const dir = root(), now = Date.now()
+  expect([...retainedLeads(dir)]).toEqual([])
+  retainContributions(dir, 'machine', [row('lead', { lead: true, active: false }), row('worker'), row('foreign-lead', { lead: true }, 'other')], now)
+  expect([...retainedLeads(dir)]).toEqual(['lead'])
+  expect([...retainedHarnesses(dir, now)]).toEqual(['lead', 'worker'])
+  expect([...retainedHarnesses(dir, now + RETENTION_LAPSE_MS + 1000)]).toEqual(['lead'])
+  retainContributions(dir, 'machine', [row('lead', { closeSession: true }), row('worker')], now)
+  expect([...retainedLeads(dir)]).toEqual([])
+})
+
+it('reopens no Lead from an unreadable file', () => {
+  const dir = root()
+  retainContributions(dir, 'machine', [row('lead', { lead: true })])
+  writeFileSync(retentionFile(dir), '{')
+  expect([...retainedLeads(dir)]).toEqual([])
+})
+
+// The review of #1635: a file from before Leads were kept, or one that cannot be read, must not let a stop through to a
+// Lead. Until a roster says which members are Leads, each member may be one; a file nobody can read protects them all.
+it('treats a stop as possibly of a Lead until a valid roster says otherwise', () => {
+  const dir = root(), file = retentionFile(dir)
+  expect(mayBeLead(dir, 'anyone')).toBe(false)
+  retainContributions(dir, 'machine', [row('lead', { lead: true }), row('worker')])
+  expect([mayBeLead(dir, 'lead'), mayBeLead(dir, 'worker'), mayBeLead(dir, 'personal')]).toEqual([true, false, false])
+  writeFileSync(file, JSON.stringify({ version: 2, machineId: 'machine', harnesses: ['old-member'] }))
+  expect([mayBeLead(dir, 'old-member'), mayBeLead(dir, 'personal')]).toEqual([true, false])
+  writeFileSync(file, '{')
+  expect([mayBeLead(dir, 'old-member'), mayBeLead(dir, 'personal')]).toEqual([true, true])
+  retainContributions(dir, 'machine', [row('worker')])
+  expect([mayBeLead(dir, 'old-member'), mayBeLead(dir, 'worker')]).toEqual([false, false])
+})
+
+// A session the backend ends is closed by the host, and only one it already kept as a member: the retention is that proof,
+// across host restarts, for the host and for the core's close alike.
+it('keeps a session the backend ends only while it was already a member', () => {
+  const dir = root(), now = Date.now()
+  retainContributions(dir, 'machine', [row('stranger', { closeSession: true, active: false })], now)
+  expect([...retainedHarnesses(dir, now)]).toEqual([])
+  retainContributions(dir, 'machine', [row('member')], now)
+  retainContributions(dir, 'machine', [row('member', { closeSession: true, active: false }), row('stranger', { closeSession: true })], now)
+  expect([...retainedHarnesses(dir, now)]).toEqual(['member'])
+  retainContributions(dir, 'machine', [row('member', { closeSession: true })], now)
+  expect([...retainedHarnesses(dir, now)]).toEqual(['member'])
+  retainContributions(dir, 'machine', [], now)
   expect([...retainedHarnesses(dir, now)]).toEqual([])
 })

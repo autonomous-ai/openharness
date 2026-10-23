@@ -1,12 +1,12 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { homedir, tmpdir, uptime, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { fakePlatform, type FakePlatform } from '../testing/fakePlatform.js'
 import {
-  COMMAND_TIMEOUT_MS, LAUNCHD_LABEL, OS_SYSTEMD_UNIT, OS_UNIT_FILE, PLATFORM_ENV, PlatformService, RESTART_THROTTLE_S, STOP_TIMEOUT_S, SYSTEMD_UNIT,
-  currentUid, defaultPlatformDeps, launchdPlist, platformFor, platformFromEnv, systemdUnit,
+  COMMAND_TIMEOUT_MS, LAUNCHD_LABEL, OS_SYSTEMD_UNIT, OS_UNIT_FILE, PLATFORM_ENV, PLATFORM_LABEL, PlatformService, RESTART_THROTTLE_S, STOP_TIMEOUT_S, SYSTEMD_UNIT,
+  TASK_REPEAT, WHOAMI_ARGS, currentUid, defaultPlatformDeps, launchdPlist, logonTaskName, platformFor, platformFromEnv, stoppedThisBoot, systemdUnit, taskName, taskSchedulerXml, whoamiSid,
   type CommandResult, type PlatformDeps, type ServiceDefinition,
 } from './platform.js'
 
@@ -22,6 +22,8 @@ const definition = (over: Partial<ServiceDefinition> = {}): ServiceDefinition =>
 /** An in-memory PlatformDeps whose commands answer from a table, for what the fakes do not say. */
 function stubDeps(answers: Record<string, CommandResult>, files: Record<string, string> = {}, over: Partial<PlatformDeps> = {}) {
   const calls: string[] = []
+  /** The encoding each file was asked to be written in, where one was. */
+  const encodings: Record<string, string> = {}
   const deps: PlatformDeps = {
     run: (command, args) => {
       const call = [command, ...args].join(' ')
@@ -30,23 +32,27 @@ function stubDeps(answers: Record<string, CommandResult>, files: Record<string, 
       return key ? answers[key] : { status: 0, stdout: '', stderr: '' }
     },
     readFile: (path) => files[path] ?? null,
-    writeFile: (path, content) => { files[path] = content },
+    writeFile: (path, content, encoding) => {
+      files[path] = content
+      if (encoding) encodings[path] = encoding
+    },
     removeFile: (path) => { delete files[path] },
     uid: 501,
     home: '/Users/demo',
     ...over,
   }
-  return { deps, calls, files }
+  return { deps, calls, files, encodings }
 }
 
 const ok = (stdout = ''): CommandResult => ({ status: 0, stdout, stderr: '' })
 const fail = (status: number | null, stderr = '', stdout = ''): CommandResult => ({ status, stdout, stderr })
 
 describe('which platform', () => {
-  it('is launchd on macOS, systemd on Linux, and none elsewhere', () => {
+  it('is launchd on macOS, systemd on Linux, Task Scheduler on Windows, and none elsewhere', () => {
     expect(platformFor('darwin')).toBe('launchd')
     expect(platformFor('linux')).toBe('systemd')
-    expect(platformFor('win32')).toBeNull()
+    expect(platformFor('win32')).toBe('taskscheduler')
+    expect(platformFor('freebsd')).toBeNull()
   })
 
   it('runs the master only when its definition says so', () => {
@@ -197,6 +203,17 @@ describe('the default dependencies', { timeout: FAKE_COMMANDS_TIMEOUT_MS }, () =
     expect(existsSync(file)).toBe(false)
   })
 
+  it('write UTF-16 with its byte order mark when asked, as schtasks takes a task, and read either back as text', () => {
+    const deps = defaultPlatformDeps({ env: { PATH: fake.bin }, uid: 501, home: join(dir, 'home') })
+    const file = join(dir, 'home', 'data', 'task.xml')
+    deps.writeFile(file, '<Task>Nguy\u1ec5n</Task>', 'utf16le')
+    expect(readFileSync(file)).toEqual(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('<Task>Nguy\u1ec5n</Task>', 'utf16le')]))
+    expect(deps.readFile(file)).toBe('<Task>Nguy\u1ec5n</Task>')
+    deps.writeFile(file, 'plain \u00e9')
+    expect(readFileSync(file, 'utf8')).toBe('plain \u00e9')
+    expect(deps.readFile(file)).toBe('plain \u00e9')
+  })
+
   it('take this process\'s user, home and environment unless told otherwise, and an absolute XDG_CONFIG_HOME only', () => {
     const own = defaultPlatformDeps()
     expect(own.uid).toBe(process.getuid!())
@@ -204,6 +221,13 @@ describe('the default dependencies', { timeout: FAKE_COMMANDS_TIMEOUT_MS }, () =
     expect(defaultPlatformDeps({ env: { XDG_CONFIG_HOME: '/x/config' }, uid: 1, home: '/h' }).configHome).toBe('/x/config')
     expect(defaultPlatformDeps({ env: { XDG_CONFIG_HOME: 'relative' }, uid: 1, home: '/h' }).configHome).toBeUndefined()
     expect(defaultPlatformDeps({ env: {}, uid: 1, home: '/h' }).configHome).toBeUndefined()
+    // The bare name, whatever USERDOMAIN says: OpenSSH sets it to WORKGROUP, and `WORKGROUP\admin` is no account.
+    const windows = defaultPlatformDeps({ env: { USERDOMAIN: 'WORKGROUP', USERNAME: 'Demo' }, home: '/h', dataDir: '/h/data' })
+    expect(windows.user).toBe('Demo')
+    expect(windows.dataDir).toBe('/h/data')
+    expect(defaultPlatformDeps({ env: { USERNAME: 'Demo' } }).user).toBe('Demo')
+    expect(defaultPlatformDeps({ env: {} }).user).toBeUndefined()
+    expect(Math.abs(windows.bootTime!() - (Date.now() - uptime() * 1000))).toBeLessThan(2_000)
   })
 })
 
@@ -453,5 +477,296 @@ describe('reading what the platform says', () => {
     expect(service.start(false)).toEqual({ ok: false, detail: 'launchctl kickstart gui/501/ai.autonomous.harness.harnessd failed (exit none)' })
     const { deps: unloaded } = stubDeps({ 'launchctl print': fail(113), 'launchctl bootstrap': fail(5, '', 'on stdout\nmore') })
     expect(new PlatformService('launchd', unloaded).start(false)).toEqual({ ok: false, detail: 'launchctl bootstrap gui/501 /Users/demo/Library/LaunchAgents/ai.autonomous.harness.harnessd.plist failed (exit 5): on stdout' })
+  })
+})
+
+const task = {
+  launcherPath: 'C:\\Users\\Demo User\\.harness\\bin\\harness-launch.exe',
+  root: 'C:\\Users\\Demo User\\.harness',
+  home: 'C:\\Users\\Demo User',
+  logFile: 'C:\\Users\\Demo User\\.harness\\cli\\data\\harness.log',
+  sid: 'S-1-5-21-1000000001-1000000002-1000000003-1001',
+}
+/** What `whoami /user /fo csv /nh` printed on the Windows 11 VM (2026-10-16). */
+const WHOAMI = '"win-testvm\\admin","S-1-5-21-1000000001-1000000002-1000000003-1001"\r\n'
+
+describe('the scheduled task', () => {
+  // Task names are machine-wide, and a task folder one user creates can refuse another standard user: a fixed
+  // `\Harness\harnessd` would let only the first user on a computer install (Review Focus 1).
+  it('is named per user, in the root folder', () => {
+    expect(taskName('alice')).toBe('Harness harnessd (alice)')
+    expect(taskName('DESKTOP-1\\Demo User')).toBe('Harness harnessd (Demo User)')
+    expect(taskName('Nguy\u1ec5n V\u0103n A')).toBe('Harness harnessd (Nguy\u1ec5n V\u0103n A)')
+    expect(taskName('bob')).not.toBe(taskName('alice'))
+    expect(taskName('DESKTOP-1\\alice')).not.toContain('\\')
+    // The logon task beside it, named the same way.
+    expect(logonTaskName('DESKTOP-1\\Demo User')).toBe('Harness harnessd at sign-in (Demo User)')
+    expect(logonTaskName('alice')).not.toBe(taskName('alice'))
+  })
+
+  it('starts `harness start --if-down` every five minutes, once at a time, with no time limit', () => {
+    const text = taskSchedulerXml(task)
+    // schtasks /Create /XML takes UTF-16 only: a UTF-8 file, with or without a BOM, is "malformed" (Windows 11, 2026-10-16).
+    expect(text).toMatch(/^<\?xml version="1\.0" encoding="UTF-16"\?>/)
+    // The logon start is the other task's: Task Scheduler runs a task's action whatever trigger fired.
+    expect(text).not.toContain('<LogonTrigger>')
+    // The principal names nobody: schtasks registers it for the user who creates it, exactly (Principal, task-B3.12-report.md).
+    expect(text).toMatch(/<Principal id="Author">\s*<LogonType>InteractiveToken<\/LogonType>\s*<RunLevel>LeastPrivilege<\/RunLevel>\s*<\/Principal>/)
+    expect(text).not.toContain('<UserId>')
+    expect(text).toMatch(new RegExp(`<TimeTrigger>[\\s\\S]*<Repetition>\\s*<Interval>${TASK_REPEAT}</Interval>\\s*<StopAtDurationEnd>false</StopAtDurationEnd>\\s*</Repetition>[\\s\\S]*</TimeTrigger>`))
+    expect(text).toContain('<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>')
+    expect(text).toContain('<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>')
+    // Normal priority: Task Scheduler's default, 7, starts the task below normal, and the daemon and every agent it
+    // starts inherit that class (R1b-1, final review).
+    expect(text).toMatch(/<Settings>[\s\S]*<Priority>4<\/Priority>[\s\S]*<\/Settings>/)
+    expect(text).toMatch(/<LogonType>InteractiveToken<\/LogonType>\s*<RunLevel>LeastPrivilege<\/RunLevel>/)
+    expect(text).toContain('<Command>C:\\Users\\Demo User\\.harness\\bin\\harness-launch.exe</Command>')
+    expect(text).toContain('<Arguments>--root &quot;C:\\Users\\Demo User\\.harness&quot; -- start --if-down</Arguments>')
+    expect(text).toContain('<WorkingDirectory>C:\\Users\\Demo User</WorkingDirectory>')
+    expect(text).toContain('<Description>harnessd, the Harness daemon. Its log: C:\\Users\\Demo User\\.harness\\cli\\data\\harness.log</Description>')
+    // An XML comment may not hold two hyphens in a row: the whole text must parse as one.
+    expect(text.match(/<!--([\s\S]*?)-->/g)!.every((comment) => !comment.slice(4, -3).includes('--'))).toBe(true)
+    expect(taskSchedulerXml(task)).toBe(text)
+  })
+
+  // Final review R1b-2: with Fast Startup a Shut down keeps the uptime, so a stop read against the boot time outlived
+  // the next power-on. The logon task's own argument forgets it, as launchd loads an agent booted out at the next login.
+  it('starts `harness start --if-down --at-logon` at this user\'s logon, from the logon task, and nothing else differs', () => {
+    const text = taskSchedulerXml({ ...task, atLogon: true })
+    // The logon trigger names this user by SID; without one it would fire at anyone's logon.
+    expect(text).toMatch(/<LogonTrigger>\s*<Enabled>true<\/Enabled>\s*<UserId>S-1-5-21-1000000001-1000000002-1000000003-1001<\/UserId>\s*<\/LogonTrigger>/)
+    expect(text.match(/<UserId>/g)).toHaveLength(1)
+    expect(text).not.toContain('<TimeTrigger>')
+    expect(text).toContain('<Arguments>--root &quot;C:\\Users\\Demo User\\.harness&quot; -- start --if-down --at-logon</Arguments>')
+    expect(text).toContain('<Description>harnessd, the Harness daemon, at sign-in. Its log: C:\\Users\\Demo User\\.harness\\cli\\data\\harness.log</Description>')
+    expect(text).toMatch(/<Settings>[\s\S]*<Priority>4<\/Priority>[\s\S]*<\/Settings>/)
+    expect(text).toContain('<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>')
+    expect(text.match(/<!--([\s\S]*?)-->/g)!.every((comment) => !comment.slice(4, -3).includes('--'))).toBe(true)
+    const strip = (xml: string) => xml.replace(/<Triggers>[\s\S]*<\/Triggers>/, '').replace(/<Description>.*<\/Description>/, '').replace(/<Arguments>.*<\/Arguments>/, '')
+    expect(strip(text)).toBe(strip(taskSchedulerXml(task)))
+  })
+
+  it('escapes what XML would misread, and refuses a relative path, a path across lines or no user', () => {
+    expect(taskSchedulerXml({ ...task, home: 'C:\\A&B <x>' })).toContain('<WorkingDirectory>C:\\A&amp;B &lt;x&gt;</WorkingDirectory>')
+    expect(() => taskSchedulerXml({ ...task, launcherPath: 'bin\\harness-launch.exe' })).toThrow(/must be absolute/)
+    expect(() => taskSchedulerXml({ ...task, home: 'C:\\a\nb' })).toThrow(/must be absolute/)
+    expect(() => taskSchedulerXml({ ...task, root: 'C:\\a"b' })).toThrow(/cannot hold a quote/)
+    expect(() => taskSchedulerXml({ ...task, sid: '' })).toThrow(/the user it runs for/)
+    expect(() => taskSchedulerXml({ ...task, sid: 'admin' })).toThrow(/the user it runs for/)
+    expect(() => taskSchedulerXml({ ...task, sid: `${task.sid}\nS-1-5-18` })).toThrow(/the user it runs for/)
+  })
+
+  it('reads this user\'s SID from what whoami prints, whatever the name before it holds', () => {
+    expect(WHOAMI_ARGS).toEqual(['/user', '/fo', 'csv', '/nh'])
+    expect(whoamiSid(WHOAMI)).toBe(task.sid)
+    expect(whoamiSid('"CORP\\Smith, Jo","S-1-5-21-1-2-3-1104"\n')).toBe('S-1-5-21-1-2-3-1104')
+    expect(whoamiSid('"WORKGROUP\\admin","not a sid"\r\n')).toBeNull()
+    expect(whoamiSid('')).toBeNull()
+  })
+
+  it('remembers a stop for as long as this computer runs, and not past its next start', () => {
+    const boot = Date.parse('2026-10-16T08:00:00Z')
+    expect(stoppedThisBoot(JSON.stringify({ boot: boot + 3_000 }), boot)).toBe(true)
+    expect(stoppedThisBoot(JSON.stringify({ boot: boot - 86_400_000 }), boot)).toBe(false)
+    expect(stoppedThisBoot('not json', boot)).toBe(false)
+    expect(stoppedThisBoot(JSON.stringify({}), boot)).toBe(false)
+    expect(stoppedThisBoot(null, boot)).toBe(false)
+  })
+})
+
+describe('PlatformService over schtasks', () => {
+  const data = '/home/demo/.harness/cli/data'
+  const definition = (): ServiceDefinition => ({
+    nodePath: 'C:\\h\\runtime\\node\\node.exe', scriptPath: 'C:\\h\\cli\\0.5.0\\cli.js', logFile: task.logFile, home: task.home,
+    env: {}, launcherPath: task.launcherPath,
+  })
+  const make = (answers: Record<string, CommandResult> = {}, files: Record<string, string> = {}) => {
+    const made = stubDeps({ whoami: ok(WHOAMI), ...answers }, files, { user: 'Demo User', dataDir: data, bootTime: () => 1_000 })
+    return { ...made, service: new PlatformService('taskscheduler', made.deps) }
+  }
+  // The name as stubDeps records it: its arguments joined by spaces, unquoted, as spawnSync passes them.
+  const NAME = taskName('Demo User')
+  const LOGON = logonTaskName('Demo User')
+  const WHOAMI_CALL = `whoami ${WHOAMI_ARGS.join(' ')}`
+
+  it('keeps its definition in the data folder, registers it under this user\'s name, and knows it as this data folder\'s by its log', () => {
+    const made = make()
+    const { service, files, calls } = made
+    expect(service.file).toBe(join(data, 'harnessd-task.xml'))
+    expect(service.target).toBe(NAME)
+    expect(NAME).toBe('Harness harnessd (Demo User)')
+    expect(PLATFORM_LABEL[service.platform]).toBe('Task Scheduler')
+    expect(service.write(definition())).toBe(true)
+    expect(service.write(definition())).toBe(false)
+    expect(service.ownedBy(task.logFile)).toBe(true)
+    expect(service.ownedBy('C:\\other\\harness.log')).toBe(false)
+    expect(service.current(definition())).toBe(true)
+    expect(files[service.file]).toBe(taskSchedulerXml(task))
+    expect(made.encodings[service.file]).toBe('utf16le')
+    // The logon task beside it, written and registered with it.
+    expect(service.logonFile).toBe(join(data, 'harnessd-logon-task.xml'))
+    expect(service.logonTarget).toBe(LOGON)
+    expect(files[service.logonFile]).toBe(taskSchedulerXml({ ...task, atLogon: true }))
+    expect(made.encodings[service.logonFile]).toBe('utf16le')
+    expect(service.register()).toEqual({ ok: true })
+    // whoami once: the SID is this process's for as long as it runs.
+    expect(calls).toEqual([WHOAMI_CALL, `schtasks /Create /TN ${NAME} /XML ${service.file} /F`, `schtasks /Create /TN ${LOGON} /XML ${service.logonFile} /F`])
+  })
+
+  it('takes an install from before the logon task for one to rewrite, and writes both again when either differs', () => {
+    // The single task of before: its file alone, as it was written.
+    const older = taskSchedulerXml(task).replace('<Triggers>', '<Triggers>\n    <LogonTrigger>\n      <Enabled>true</Enabled>\n    </LogonTrigger>')
+    const { service, files } = make({}, { [join(data, 'harnessd-task.xml')]: older })
+    expect(service.current(definition())).toBe(false)
+    expect(service.write(definition())).toBe(true)
+    expect(files[service.file]).toBe(taskSchedulerXml(task))
+    expect(files[service.logonFile]).toBe(taskSchedulerXml({ ...task, atLogon: true }))
+    expect(service.current(definition())).toBe(true)
+    delete files[service.logonFile]
+    expect(service.current(definition())).toBe(false)
+    expect(service.write(definition())).toBe(true)
+    expect(service.current(definition())).toBe(true)
+    // The logon task is refused: the five-minute one just registered goes again, so a refusal leaves no half (re-review
+    // N4), and what schtasks said of the logon task is the outcome.
+    const refused = make({ [`schtasks /Create /TN ${LOGON}`]: fail(1, 'ERROR: Access is denied.') })
+    expect(refused.service.register()).toEqual({ ok: false, detail: `schtasks /Create /TN ${LOGON} /XML ${refused.service.logonFile} /F failed (exit 1): ERROR: Access is denied.` })
+    expect(refused.calls.slice(-1)).toEqual([`schtasks /Delete /TN ${NAME} /F`])
+  })
+
+  it('finds this data folder\'s task by what schtasks has registered, when its file is gone', () => {
+    const query = `schtasks /Query /TN ${NAME} /XML`
+    // As schtasks prints it into a pipe: UTF-16, so NULs between the characters.
+    const registered = taskSchedulerXml(task).split('').join('\u0000')
+    const found = make({ [query]: ok(registered) })
+    expect(found.service.installed()).toBe(false)
+    expect(found.service.registeredFor(task.logFile)).toBe(true)
+    expect(found.calls).toEqual([query])
+    // Another data folder's task under the same user's name is not this one's.
+    expect(found.service.registeredFor('C:\\other\\harness.log')).toBe(false)
+    // schtasks may print an apostrophe in a path as it is, where Harness wrote &apos;.
+    const quoted = "C:\\Users\\O'Neil & Co\\.harness\\cli\\data\\harness.log"
+    expect(make({ [query]: ok(`<Description>harnessd, the Harness daemon. Its log: C:\\Users\\O'Neil &amp; Co\\.harness\\cli\\data\\harness.log</Description>`) }).service.registeredFor(quoted)).toBe(true)
+    // No task, or schtasks could not be asked: no.
+    expect(make({ [query]: fail(1, 'ERROR: The system cannot find the file specified.') }).service.registeredFor(task.logFile)).toBe(false)
+    expect(make({ [query]: { status: null, stdout: '', stderr: '', error: 'spawn schtasks ENOENT' } }).service.registeredFor(task.logFile)).toBe(false)
+    // launchd and systemd have no registration without the file.
+    expect(new PlatformService('launchd', stubDeps({}).deps).registeredFor(task.logFile)).toBe(false)
+  })
+
+  it('cannot render a task when whoami cannot say who this is', () => {
+    const gone = make({ whoami: { status: null, stdout: '', stderr: '', error: 'spawn whoami ENOENT' } })
+    expect(() => gone.service.render(definition())).toThrow(`Harness could not tell which Windows user this is: whoami /user /fo csv /nh could not be run: spawn whoami ENOENT`)
+    const odd = make({ whoami: ok('"WORKGROUP\\admin"\r\n') })
+    expect(() => odd.service.render(definition())).toThrow(/could not tell which Windows user this is: whoami \/user \/fo csv \/nh printed no SID/)
+    const refused = make({ whoami: fail(1, 'ERROR: Access is denied.') })
+    expect(() => refused.service.render(definition())).toThrow(/whoami \/user \/fo csv \/nh failed \(exit 1\): ERROR: Access is denied\./)
+  })
+
+  it('runs the task to start, rewriting it first when it changed, and forgets a stop', () => {
+    const { service, calls, files } = make({}, { [join(data, 'harnessd-stopped.json')]: '{"boot":1000}\n' })
+    expect(service.start(true)).toEqual({ ok: true })
+    expect(calls).toEqual([`schtasks /Create /TN ${NAME} /XML ${service.file} /F`, `schtasks /Create /TN ${LOGON} /XML ${service.logonFile} /F`, `schtasks /Run /TN ${NAME}`])
+    expect(files[join(data, 'harnessd-stopped.json')]).toBeUndefined()
+    calls.length = 0
+    expect(service.start(false)).toEqual({ ok: true })
+    expect(calls).toEqual([`schtasks /Run /TN ${NAME}`])
+    const refused = make({ 'schtasks /Create': fail(1, 'ERROR: The task XML is malformed.') })
+    expect(refused.service.start(true)).toEqual({ ok: false, detail: `schtasks /Create /TN ${NAME} /XML ${refused.service.file} /F failed (exit 1): ERROR: The task XML is malformed.` })
+    expect(refused.calls).toHaveLength(1)
+  })
+
+  it('stops by writing the stop down — the task does not run the master, it starts it — and asks nothing', () => {
+    const made = make()
+    const { service, calls, files } = made
+    expect(service.stop()).toEqual({ ok: true })
+    expect(calls).toEqual([])
+    expect(JSON.parse(files[join(data, 'harnessd-stopped.json')]!)).toEqual({ boot: 1_000 })
+    expect(made.encodings).toEqual({})
+  })
+
+  it('says what Task Scheduler has: registered and enabled, disabled, not there, or unreachable', () => {
+    const enabled = make({ 'schtasks /Query': ok('<Task><Settings><Enabled>true</Enabled></Settings></Task>') })
+    expect(enabled.service.inspect()).toMatchObject({ registered: true, state: 'enabled', pid: null, failed: false, unreachable: null })
+    // schtasks may write its XML as UTF-16 into a pipe.
+    const utf16 = make({ 'schtasks /Query': ok('<\u0000S\u0000e\u0000t\u0000t\u0000i\u0000n\u0000g\u0000s\u0000>\u0000<Enabled>false</Enabled></Settings>') })
+    expect(utf16.service.inspect()).toMatchObject({ registered: true, state: 'disabled' })
+    expect(make({ 'schtasks /Query': fail(1, 'ERROR: The system cannot find the file specified.') }).service.inspect()).toMatchObject({ registered: false, unreachable: null })
+    const gone = make({ 'schtasks /Query': { status: null, stdout: '', stderr: '', error: 'spawn schtasks ENOENT' } })
+    expect(gone.service.inspect().unreachable).toBe(`schtasks /Query /TN ${NAME} /XML could not be run: spawn schtasks ENOENT`)
+    expect(gone.service.preflight()).toEqual({ ok: false, detail: `schtasks /Query /TN ${NAME} could not be run: spawn schtasks ENOENT — Task Scheduler could not be asked` })
+    expect(enabled.service.preflight()).toEqual({ ok: true })
+    expect(make({ 'schtasks /Query': fail(1) }).service.preflight()).toEqual({ ok: true })
+  })
+
+  // Re-review N5: registered means both tasks, so a logon task deleted by hand is registered again, and status says so.
+  it('counts the tasks as registered only when the logon task is there too', () => {
+    const main = ok('<Task><Settings><Enabled>true</Enabled></Settings></Task>')
+    const alone = make({ [`schtasks /Query /TN ${NAME} /XML`]: main, [`schtasks /Query /TN ${LOGON}`]: fail(1, 'ERROR: The system cannot find the file specified.') })
+    expect(alone.service.inspect()).toMatchObject({ registered: false, state: 'enabled', unreachable: null })
+    expect(alone.calls).toEqual([`schtasks /Query /TN ${NAME} /XML`, `schtasks /Query /TN ${LOGON}`])
+    const both = make({ [`schtasks /Query /TN ${NAME} /XML`]: main, [`schtasks /Query /TN ${LOGON}`]: ok() })
+    expect(both.service.inspect()).toMatchObject({ registered: true, state: 'enabled' })
+    const unknown = make({ [`schtasks /Query /TN ${NAME} /XML`]: main, [`schtasks /Query /TN ${LOGON}`]: { status: null, stdout: '', stderr: '', error: 'spawnSync schtasks ETIMEDOUT' } })
+    expect(unknown.service.inspect()).toMatchObject({ registered: false, unreachable: `schtasks /Query /TN ${LOGON} could not be run: spawnSync schtasks ETIMEDOUT` })
+  })
+
+  it('finds this data folder\'s logon task left alone, when the five-minute task and both files are gone', () => {
+    const description = `<Description>harnessd, the Harness daemon, at sign-in. Its log: ${task.logFile}</Description>`
+    const found = make({ [`schtasks /Query /TN ${NAME} /XML`]: fail(1), [`schtasks /Query /TN ${LOGON} /XML`]: ok(description) })
+    expect(found.service.registeredFor(task.logFile)).toBe(true)
+    expect(found.service.registeredFor('C:\\other\\harness.log')).toBe(false)
+  })
+
+  it('unregisters by deleting the tasks and their files, and leaves the running daemon alone', () => {
+    const { service, calls, files } = make({ 'schtasks /Query': ok('<Task/>') }, {
+      [join(data, 'harnessd-task.xml')]: 'x', [join(data, 'harnessd-logon-task.xml')]: 'z', [join(data, 'harnessd-stopped.json')]: 'y',
+    })
+    expect(service.unregister()).toEqual({ ok: true })
+    expect(calls).toEqual([`schtasks /Query /TN ${NAME} /XML`, `schtasks /Delete /TN ${NAME} /F`, `schtasks /Query /TN ${LOGON}`, `schtasks /Delete /TN ${LOGON} /F`])
+    expect(files).toEqual({})
+    const absent = make({ 'schtasks /Query': fail(1) }, { [join(data, 'harnessd-task.xml')]: 'x' })
+    expect(absent.service.unregister()).toEqual({ ok: true })
+    expect(absent.calls).toEqual([`schtasks /Query /TN ${NAME} /XML`, `schtasks /Query /TN ${LOGON}`])
+    // An install from before the logon task: only the five-minute task is there, and it goes.
+    const single = make({ [`schtasks /Query /TN ${NAME}`]: ok('<Task/>'), [`schtasks /Query /TN ${LOGON}`]: fail(1) })
+    expect(single.service.unregister()).toEqual({ ok: true })
+    expect(single.calls).toEqual([`schtasks /Query /TN ${NAME} /XML`, `schtasks /Delete /TN ${NAME} /F`, `schtasks /Query /TN ${LOGON}`])
+    // The logon task left by an install that stopped half way goes too, and one schtasks cannot ask about keeps the files.
+    const half = make({ [`schtasks /Query /TN ${NAME}`]: fail(1), [`schtasks /Query /TN ${LOGON}`]: ok() }, { [join(data, 'harnessd-logon-task.xml')]: 'z' })
+    expect(half.service.unregister()).toEqual({ ok: true })
+    expect(half.calls).toContain(`schtasks /Delete /TN ${LOGON} /F`)
+    expect(half.files).toEqual({})
+    const logonUnknown = make({ [`schtasks /Query /TN ${NAME}`]: fail(1), [`schtasks /Query /TN ${LOGON}`]: { status: null, stdout: '', stderr: '', error: 'spawnSync schtasks ETIMEDOUT' } }, { [join(data, 'harnessd-logon-task.xml')]: 'z' })
+    expect(logonUnknown.service.unregister()).toEqual({ ok: false, detail: `schtasks /Query /TN ${LOGON} could not be run: spawnSync schtasks ETIMEDOUT` })
+    expect(logonUnknown.files).toEqual({ [join(data, 'harnessd-logon-task.xml')]: 'z' })
+    const logonRefused = make({ [`schtasks /Query /TN ${NAME}`]: fail(1), [`schtasks /Query /TN ${LOGON}`]: ok(), [`schtasks /Delete /TN ${LOGON}`]: fail(1, 'ERROR: Access is denied.') })
+    expect(logonRefused.service.unregister()).toEqual({ ok: false, detail: `schtasks /Delete /TN ${LOGON} /F failed (exit 1): ERROR: Access is denied.` })
+    const refused = make({ 'schtasks /Query': ok('<Task/>'), 'schtasks /Delete': fail(1, 'ERROR: Access is denied.') })
+    expect(refused.service.unregister()).toEqual({ ok: false, detail: `schtasks /Delete /TN ${NAME} /F failed (exit 1): ERROR: Access is denied.` })
+    // schtasks could not be asked (gone, or past its timeout): the task may still be there, so nothing is removed.
+    const unknown = make({ 'schtasks /Query': { status: null, stdout: '', stderr: '', error: 'spawnSync schtasks ETIMEDOUT' } }, { [join(data, 'harnessd-task.xml')]: 'x' })
+    expect(unknown.service.unregister()).toEqual({ ok: false, detail: `schtasks /Query /TN ${NAME} /XML could not be run: spawnSync schtasks ETIMEDOUT` })
+    expect(unknown.files).toEqual({ [join(data, 'harnessd-task.xml')]: 'x' })
+    expect(unknown.calls).toEqual([`schtasks /Query /TN ${NAME} /XML`])
+    const discarded = make({}, { [join(data, 'harnessd-task.xml')]: 'x', [join(data, 'harnessd-logon-task.xml')]: 'z' })
+    discarded.service.discard()
+    expect(discarded.files).toEqual({})
+    expect(discarded.calls).toEqual([])
+  })
+
+  it('cannot render a task without a launcher, and takes this process\'s user and the home\'s data folder by default', () => {
+    const { service } = make()
+    expect(() => service.render({ ...definition(), launcherPath: undefined })).toThrow(/must be absolute/)
+    const stub = stubDeps({ whoami: ok(WHOAMI) })
+    const plain = new PlatformService('taskscheduler', stub.deps)
+    expect(plain.file).toBe(join('/Users/demo', '.harness', 'cli', 'data', 'harnessd-task.xml'))
+    // No user given: the name is this process's user's; the XML names the user by the SID whoami gives.
+    expect(plain.target).toBe(taskName(userInfo().username))
+    expect(plain.render(definition())).toContain('<TimeTrigger>')
+    plain.write(definition())
+    expect(plain.logonTarget).toBe(logonTaskName(userInfo().username))
+    expect(stub.files[plain.logonFile]).toContain(`<UserId>${task.sid}</UserId>`)
+    // Without a clock of its own, the stop is written against this computer's boot.
+    expect(plain.stop()).toEqual({ ok: true })
   })
 })

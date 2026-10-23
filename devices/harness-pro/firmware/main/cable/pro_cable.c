@@ -221,6 +221,8 @@ static void send_hello(void)
     msg_string(&root, "activity", "steps-v1");
     msg_string(&root, "stats", "turn-v1");
     msg_string(&root, "player", "library-v1");
+    msg_string(&root, "superTab", "wait-v1");   // a question with superTab + attention is shown as a wait (handle_question)
+    msg_string(&root, "swarmCard", "v1");       // supertabs / supertab.recap / supertab.focus: the Swarm cards (handle_supertab)
     msg_string(&root, "ota", "v1");
     char mac[24] = "";
     device_mac_str(mac, sizeof(mac));
@@ -262,6 +264,16 @@ bool pro_cable_send_open(const char *agent_id)
     cJSON *root = msg("agent.open");
     msg_string(&root, "agentId", agent_id);
     return send_json(root);
+}
+
+bool pro_cable_supertab_send(const char *t, const char *tab, const char *lead)
+{
+    if (!t || !tab || !tab[0]) return false;
+    if (strcmp(t, "supertab.recap.get") && strcmp(t, "supertab.open") && strcmp(t, "supertab.select")) return false;
+    cJSON *root = msg(t);
+    msg_string(&root, "tab", tab);
+    msg_string(&root, "lead", lead ? lead : "");
+    return send_json_with(root, false);   // false: dropped on a busy link (the caller retries)
 }
 
 bool pro_cable_send_scroll(pro_scroll_phase_t phase, int dy, int velocity)
@@ -522,6 +534,115 @@ static void handle_swarms(const cJSON *p)
     pro_app_swarms(s_swarm_rows, n, has_ids ? &s_swarm_members : NULL, selected, s_tiles, tn);
 }
 
+// ── the Swarm cards ─────────────────────────────────────────────────────────────────────────────────
+// Two frames, so each stays under the JSON guard's token budget: `supertabs` {ids} is the set and order, `supertab` one Swarm with its
+// Leads (about 200 tokens at 12). A Swarm or Lead that is not an object, has no usable id, or repeats an id is skipped (the
+// frame survives); an unknown `state` reads as done. Parsed into PSRAM staging: the model copies it and keeps the cached recap
+// texts, so the Lead `text` pointers stay NULL here.
+
+static EXT_RAM_BSS_ATTR pod_swarm_t s_card;
+static char s_card_ids[SWARMS_CARD_MAX][ID_MAX];
+static char s_card_text[SWARM_TEXT_MAX];
+
+static bool id_fits(const char *s) { return s && s[0] && strlen(s) < ID_MAX; }
+
+static pod_lead_state_t lead_state(const char *s)
+{
+    if (s && !strcmp(s, "ask")) return POD_LEAD_ASK;
+    if (s && !strcmp(s, "stuck")) return POD_LEAD_STUCK;
+    if (s && !strcmp(s, "work")) return POD_LEAD_WORK;
+    return POD_LEAD_DONE;
+}
+
+static void read_leads(const cJSON *it, pod_swarm_t *sw)
+{
+    const cJSON *l = NULL;
+    cJSON_ArrayForEach(l, cJSON_GetObjectItemCaseSensitive(it, "leads")) {
+        if (sw->lead_n >= SWARM_LEADS_MAX) break;
+        const char *id = str_of(l, "id");
+        if (!id_fits(id)) continue;
+        bool duplicate = false;
+        for (int i = 0; i < sw->lead_n; i++) if (!strcmp(sw->leads[i].id, id)) duplicate = true;
+        if (duplicate) continue;
+        pod_lead_t *ld = &sw->leads[sw->lead_n++];
+        memset(ld, 0, sizeof *ld);
+        snprintf(ld->id, sizeof ld->id, "%s", id);
+        const char *pid = str_of(l, "projectId");
+        if (pid && strlen(pid) < sizeof ld->projectId) snprintf(ld->projectId, sizeof ld->projectId, "%s", pid);   // whole or none
+        cut_of(l, "project", ld->project, sizeof ld->project);
+        cut_of(l, "engine", ld->engine, sizeof ld->engine);
+        cut_of(l, "owner", ld->owner, sizeof ld->owner);
+        const char *local = str_of(l, "local");
+        if (local && strlen(local) < sizeof ld->local) snprintf(ld->local, sizeof ld->local, "%s", local);   // a harness id: whole or none
+        ld->state = lead_state(str_of(l, "state"));
+        const cJSON *since = cJSON_GetObjectItemCaseSensitive(l, "since");
+        if (cJSON_IsNumber(since) && since->valuedouble > 0) ld->since_s = since->valuedouble > 2592000 ? 2592000u : (uint32_t)since->valuedouble;
+        ld->recap = POD_RECAP_NONE;
+    }
+}
+
+static void handle_supertabs(const cJSON *p)
+{
+    const cJSON *ids = cJSON_GetObjectItemCaseSensitive(p, "ids");
+    if (!cJSON_IsArray(ids)) return;
+    int n = 0;
+    const cJSON *it = NULL;
+    cJSON_ArrayForEach(it, ids) {
+        if (n >= SWARMS_CARD_MAX) break;
+        if (!cJSON_IsString(it) || !id_fits(it->valuestring)) continue;
+        bool duplicate = false;
+        for (int i = 0; i < n; i++) if (!strcmp(s_card_ids[i], it->valuestring)) duplicate = true;
+        if (duplicate) continue;
+        snprintf(s_card_ids[n++], ID_MAX, "%s", it->valuestring);
+    }
+    ESP_LOGI(TAG, "supertabs: %d", n);
+    pro_app_supertab_ids(s_card_ids, n);
+}
+
+static void handle_supertab(const cJSON *p)
+{
+    const char *id = str_of(p, "id");
+    if (!id_fits(id)) return;
+    pod_swarm_t *sw = &s_card;
+    memset(sw, 0, sizeof *sw);
+    snprintf(sw->id, sizeof sw->id, "%s", id);
+    const char *tab = str_of(p, "tab");
+    if (tab && strlen(tab) < sizeof sw->tab) snprintf(sw->tab, sizeof sw->tab, "%s", tab);
+    cut_of(p, "name", sw->name, sizeof sw->name);
+    read_leads(p, sw);
+    const cJSON *count = cJSON_GetObjectItemCaseSensitive(p, "count");   // absent: the Leads listed
+    sw->count = cJSON_IsNumber(count) ? (count->valuedouble > 0 ? (count->valuedouble > 65535 ? 65535 : (uint16_t)count->valuedouble) : 0)
+                                      : sw->lead_n;
+    pro_app_supertab(sw);
+}
+
+// `supertab.recap`: one Lead's last message, cut to 1,500 bytes on a UTF-8 boundary. `none` (or no text) is "No message yet".
+static void handle_supertab_recap(const cJSON *p)
+{
+    char tab[ID_MAX], lead[ID_MAX];
+    const char *t = str_of(p, "tab"), *l = str_of(p, "lead");
+    if (!id_fits(t) || !id_fits(l)) return;
+    snprintf(tab, sizeof tab, "%s", t);
+    snprintf(lead, sizeof lead, "%s", l);
+    const cJSON *none = cJSON_GetObjectItemCaseSensitive(p, "none"), *at = cJSON_GetObjectItemCaseSensitive(p, "at");
+    const char *text = cut_of(p, "text", s_card_text, sizeof s_card_text);
+    if (!text) s_card_text[0] = 0;
+    const bool empty = cJSON_IsTrue(none);
+    if (empty) s_card_text[0] = 0;
+    const double secs = cJSON_IsNumber(at) && at->valuedouble > 0 ? at->valuedouble : 0;
+    pro_app_supertab_recap(tab, lead, s_card_text, secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs, empty);
+}
+
+static void handle_supertab_focus(const cJSON *p)
+{
+    char tab[ID_MAX], lead[ID_MAX];
+    const char *t = str_of(p, "tab"), *l = str_of(p, "lead");
+    if (!id_fits(t) || !id_fits(l)) return;
+    snprintf(tab, sizeof tab, "%s", t);
+    snprintf(lead, sizeof lead, "%s", l);
+    pro_app_supertab_focus(tab, lead);
+}
+
 // ── the machine list ────────────────────────────────────────────────────────────────────────────────
 // Streamed like the agents. cable_machines_end() answers "did anything change" before pro_app is touched, so the
 // daemon re-sending an identical list (its own diff key resets on every port reopen) costs one comparison.
@@ -667,14 +788,21 @@ static void handle_notif_seen(const cJSON *p)
     pro_app_notif_seen(id, token ? token->valuestring : NULL);
 }
 
+// question {agentId, id, questions:[{q}], superTab?, attention?}. A Super Tab's question names the project (`superTab`, cut to
+// SUPER_TAB_MAX - 1 bytes) and what it needs (`attention`: "stuck", else a decision, whatever an unknown value says). Without
+// a non-empty superTab it is a plain question, attention or not.
 static void handle_question(const char *id, const cJSON *p)
 {
+    static char s_tab[SUPER_TAB_MAX];
     const char *request = str_of(p, "id");   // the request this question belongs to
     if (!request) return;
     const cJSON *questions = cJSON_GetObjectItemCaseSensitive(p, "questions");
     const char *prompt = str_of(cJSON_GetArrayItem(questions, 0), "q");
     copy_cut(s_text, PRO_QUESTION_BYTES, prompt ? prompt : "Needs your answer");
-    pro_app_question(id, request, s_text);
+    const char *tab = cut_of(p, "superTab", s_tab, sizeof s_tab), *attn = str_of(p, "attention");
+    if (tab && !tab[0]) tab = NULL;
+    const pod_attention_t a = !tab ? POD_ATTN_NONE : attn && !strcmp(attn, "stuck") ? POD_ATTN_STUCK : POD_ATTN_DECISION;
+    pro_app_question(id, request, s_text, tab, a);
 }
 
 static void handle_question_close(const char *id, const cJSON *p)
@@ -866,6 +994,10 @@ static void handle_message(const cJSON *root)
     if (!strcmp(t, "machines.end")) { handle_machines_end(p); return; }
     if (!strcmp(t, "machine.updated")) { handle_machine_updated(p); return; }
     if (!strcmp(t, "swarms")) { handle_swarms(p); return; }
+    if (!strcmp(t, "supertabs")) { handle_supertabs(p); return; }
+    if (!strcmp(t, "supertab")) { handle_supertab(p); return; }
+    if (!strcmp(t, "supertab.recap")) { handle_supertab_recap(p); return; }
+    if (!strcmp(t, "supertab.focus")) { handle_supertab_focus(p); return; }
     if (!strcmp(t, "player.library")) { handle_library(p); return; }
     if (!strcmp(t, "player.context")) { handle_context(p); return; }
     if (!strcmp(t, "settings.set")) { handle_settings_set(p); return; }

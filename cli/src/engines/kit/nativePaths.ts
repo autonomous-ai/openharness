@@ -1,8 +1,9 @@
 /** Canonical path evidence for a bounded native descriptor pool, including excluded candidates. */
 import { lstatSync, readlinkSync, type BigIntStats } from 'node:fs'
 import { lstat, readlink } from 'node:fs/promises'
-import { dirname, isAbsolute, join } from 'node:path'
+import { dirname, isAbsolute, join, win32 } from 'node:path'
 import { NativeEvidenceBudget, nativeUnavailable } from './nativeEvidence.js'
+import { hostPlatform } from './windowsFiles.js'
 
 export const nativeFileKey = (info: Pick<BigIntStats, 'dev' | 'ino'>) => `${info.dev}:${info.ino}`
 const identity = (info: BigIntStats | null) => info && `${nativeFileKey(info)}:${info.mode}:${info.uid}`
@@ -38,9 +39,14 @@ export function verifyNativePathFacts(facts: readonly NativePathFact[]): void {
   }
 }
 
+/** NativePaths walks the paths node:path produces, so by default it walks Windows paths when the path module is
+ * Windows' and POSIX ones otherwise, not by `process.platform`: a spec that fakes win32 on a POSIX host still has POSIX paths. */
 export class NativePaths {
   private readonly parts = new Map<string, Part>()
-  constructor(private readonly budget: NativeEvidenceBudget) {}
+  private readonly windows: boolean
+  constructor(private readonly budget: NativeEvidenceBudget, platform?: NodeJS.Platform) {
+    this.windows = (platform ?? hostPlatform()) === 'win32'
+  }
 
   async resolve(path: string, missingOkay = false): Promise<Location> {
     const steps = this.walk(path, missingOkay)
@@ -91,15 +97,17 @@ export class NativePaths {
    * Retain only immutable route facts; every later check receives a fresh bounded budget. */
   retainOutside(removedPath: string): () => void {
     this.budget.step()
-    const retained = [...this.parts].filter(([path]) => path !== removedPath && !path.startsWith(removedPath + '/'))
+    const separator = this.windows ? '\\' : '/'
+    const retained = [...this.parts].filter(([path]) => path !== removedPath && !path.startsWith(removedPath + separator))
     return () => {
-      const fresh = new NativePaths(new NativeEvidenceBudget())
+      const fresh = new NativePaths(new NativeEvidenceBudget(), this.windows ? 'win32' : 'linux')
       for (const [path, part] of retained) fresh.parts.set(path, part)
       fresh.verify()
     }
   }
 
   private *walk(path: string, missingOkay: boolean): Generator<string, Location, Part> {
+    if (this.windows) return yield* this.walkWindows(path, missingOkay)
     if (!isAbsolute(path) || path.includes('\0') || Buffer.byteLength(path) > 4096) return nativeUnavailable('a native location is invalid or exceeds its limit')
     // Follow links in component order. Normalizing bridge/../home first would skip bridge.
     let prefix = '/', pending = path.slice(1).split('/').filter(Boolean), links = 0
@@ -136,17 +144,55 @@ export class NativePaths {
     return { path: prefix, info: info! }
   }
 
+  /**
+   * A Windows path: drive-absolute only (`C:\…`), never a UNC share, a device path (`\\?\`, `\\.\`) or a drive-relative
+   * one. NTFS gives Node no owner or mode bits to trust a hook file by. What protects it is the profile's ACL and the
+   * route itself, so no step may be a link: Harness refuses what Node reports as a symbolic link (symlinks and
+   * junctions), and never follows it (spec section 4). `..` is then lexical. A `:` after the drive (an alternate data
+   * stream) is refused.
+   */
+  private *walkWindows(path: string, missingOkay: boolean): Generator<string, Location, Part> {
+    if (!/^[A-Za-z]:[\\/]/.test(path) || path.includes('\0') || Buffer.byteLength(path) > 4096) {
+      return nativeUnavailable('a native location is invalid or exceeds its limit')
+    }
+    const steps = [`${path[0].toUpperCase()}:\\`]
+    for (const part of path.slice(3).split(/[\\/]/).filter(Boolean)) {
+      if (steps.length > 256) return nativeUnavailable('the native path component limit was reached')
+      if (part.includes(':')) return nativeUnavailable('a native location is invalid or exceeds its limit')
+      if (part === '.') continue
+      if (part === '..') { if (steps.length > 1) steps.pop(); continue }
+      steps.push(win32.join(steps.at(-1)!, part))
+    }
+    let info: BigIntStats | null = null
+    for (const [index, next] of steps.entries()) {
+      this.budget.step()
+      let proof = this.parts.get(next)
+      if (!proof) {
+        proof = yield next
+        this.parts.set(next, proof)
+      }
+      info = proof.info
+      if (!info) return missingOkay ? null : nativeUnavailable('a native location is missing')
+      if (proof.target !== undefined) return nativeUnavailable('a native location on Windows is a reparse point (a link or junction), which Harness does not follow')
+      if (index < steps.length - 1 && !info.isDirectory()) return nativeUnavailable('a native path ancestor is not a directory')
+    }
+    this.budget.step()
+    return { path: steps.at(-1)!, info: info! }
+  }
+
   /** Case/normalization aliases and bind mounts can have different spellings for
    * the same directory. Only the observed physical ancestor chain proves membership. */
   within(path: string, roots: readonly BigIntStats[]): boolean {
     const keys = new Set(roots.map(nativeFileKey))
-    for (let parent = dirname(path);;) {
+    const parentOf = this.windows ? win32.dirname : dirname
+    for (let parent = parentOf(path);;) {
       this.budget.step()
       const part = this.parts.get(parent)
       if (part?.info && !part.target && part.info.isDirectory() && keys.has(nativeFileKey(part.info))) return true
-      if (parent === '/') return false
+      // The root (`/`, or a drive's `C:\`) is its own parent.
+      if (parentOf(parent) === parent) return false
       if (!part?.info || part.target !== undefined || !part.info.isDirectory()) return nativeUnavailable('the native directory ancestry is incomplete')
-      parent = dirname(parent)
+      parent = parentOf(parent)
     }
   }
 

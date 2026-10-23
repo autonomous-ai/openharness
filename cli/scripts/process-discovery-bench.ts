@@ -12,7 +12,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
 import type { AgentCommandOwnershipSnapshot } from '../src/lib/engineBin.js'
-import type { ProcessRow } from '../src/lib/tmux.js'
+import type { ProcessRow } from '../src/lib/processTable.js'
 import type { TerminalRootObservation } from '../src/lib/terminalTypes.js'
 
 const BASELINE = 'c1ab7ff1c9a26dba7fb6a27c45e6abd76b90b92d'
@@ -25,18 +25,19 @@ const ownership: AgentCommandOwnershipSnapshot = {
   cursorFileKeys: new Set(), grokFileKeys: new Set(), conflictingFileKeys: new Set(),
   agentCandidates: [], cursorAgentCandidates: [], grokCandidates: [],
 }
-const modules = ['tmux.ts', 'terminalAgentDiscovery.ts']
+// The matching code has since moved from tmux.ts to processTable.ts; the baseline still reads it from tmux.ts.
+const modules = ['tmux.ts', 'processTable.ts', 'terminalAgentDiscovery.ts']
 const previousDataDir = process.env.ADAPTER_DATA_DIR
 process.env.ADAPTER_DATA_DIR = join(temporary, 'state')
 
-type Api = typeof import('../src/lib/tmux.js') & typeof import('../src/lib/terminalAgentDiscovery.js') & typeof import('../src/engines/types.js')
+type Api = typeof import('../src/lib/processTable.js') & typeof import('../src/lib/terminalAgentDiscovery.js') & typeof import('../src/engines/types.js')
 
 async function bundle(mode: 'previous' | 'current'): Promise<Api> {
   const outfile = join(temporary, `${mode}.mjs`)
   await build({
     stdin: {
       contents: `export { discoverTerminalAgentsFromSnapshot } from './src/lib/terminalAgentDiscovery.ts';
-        export { engineProcessMatch, ambiguousAgentProcess, argvTokens } from './src/lib/tmux.ts';
+        export { engineProcessMatch, ambiguousAgentProcess, argvTokens } from './src/lib/${mode === 'previous' ? 'tmux' : 'processTable'}.ts';
         export { PROCESS_ENGINES } from './src/engines/types.ts';`,
       resolveDir: cli, loader: 'ts',
     },

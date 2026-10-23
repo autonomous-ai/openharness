@@ -35,11 +35,12 @@ export default function (pi: ExtensionAPI) {
 
   const register = async (ctx: any) => {
     const pane = process.env.TMUX_PANE;
+    const ptyPane = pane ? null : /^(p\\d{1,4}(?:-(?:[0-9A-Za-z.-]{1,32}|h[0-9a-f]{12}))?):(%\\d{1,9})$/.exec(process.env.HARNESS_PANE || "");
     let token = "";
     try { token = readFileSync(`,
 { argument: 'credential' },
 `, "utf8").trim(); } catch {}
-    if (!pane || !token) return;
+    if ((!pane && !ptyPane) || !token) return;
     // Pi knows the session file path immediately but only WRITES it once the first assistant message
     // lands. Sending a path that isn't on disk yet is rejected by the daemon (it validates the file),
     // so announce without one first and attach the real path on a later turn.
@@ -66,6 +67,7 @@ export default function (pi: ExtensionAPI) {
           callerPid: process.pid,
           runtimeHints: [
             ...(pane ? [{ backend: "tmux", paneId: pane }] : []),
+            ...(ptyPane ? [{ backend: "ptyhost", instance: ptyPane[1], paneId: ptyPane[2] }] : []),
           ],
         }),
       });

@@ -69,7 +69,7 @@ void main() {
     usage.firstRunWork('m', 'a');
     usage.firstRunResponse('m', 'a');
     await usage.flush();
-    usage.proxyVocabulary = 4;
+    usage.proxyVocabulary = 5;
     await usage.flush();
     expect(totals()['health_desktop_first_run_started'], 1);
     expect(totals()['health_desktop_first_run_ready'], 1);
@@ -87,7 +87,7 @@ void main() {
     await usage.flush();
     choice = {'enabled': true, 'revision': 1};
     await usage.flush();
-    usage.proxyVocabulary = 4;
+    usage.proxyVocabulary = 5;
     usage.firstRunWork('m', 'a');
     usage.firstRunResponse('m', 'a');
     await usage.flush();
@@ -96,7 +96,7 @@ void main() {
 
   test('first-run response follows only the opened harness and never counts retries twice', () async {
     await usage.flush();
-    usage.proxyVocabulary = 4;
+    usage.proxyVocabulary = 5;
     usage.firstRunStarted();
     usage.firstRunStarted();
     usage.firstRunReady('PRIVATE_MACHINE', 'PRIVATE_AGENT');
@@ -117,23 +117,42 @@ void main() {
     expect(jsonEncode(reports), isNot(contains('PRIVATE')));
   });
 
-  test('first-run counters wait for an upgraded proxy instead of dropping the report', () async {
+  test('first-run counters wait for vocabulary 5 while version 4 still sends phone offers', () async {
     await usage.flush();
+    usage.proxyVocabulary = 4;
+    usage.begin(ProductFlow.phoneOfferAfterWork)(ProductOutcome.ok);
     usage.firstRunStarted();
     usage.firstRunReady('m', 'a');
     usage.firstRunWork('m', 'a');
     usage.firstRunResponse('m', 'a');
     await usage.flush();
     expect(totals().keys.where((name) => name.contains('first_run')), isEmpty);
-    usage.proxyVocabulary = 4;
+    expect(totals()['ui_desktop_phone_offer_after_work_ok'], 1);
+    usage.proxyVocabulary = 5;
     await usage.flush();
     expect(totals()['health_desktop_first_run_started'], 1);
     expect(totals()['health_desktop_first_run_response'], 1);
   });
 
-  test('first-run stages cross midnight on their start day and stop after 24 hours', () async {
+  test('invite counters wait for vocabulary 5', () async {
     await usage.flush();
     usage.proxyVocabulary = 4;
+    usage.begin(ProductFlow.shareInvite)(ProductOutcome.ok);
+    usage.begin(ProductFlow.shareAccept)(ProductOutcome.ok);
+    usage.sharedInvites(sent: 2, refused: 1);
+    await usage.flush();
+    expect(totals().keys.where((name) => name.contains('share')), isEmpty);
+    usage.proxyVocabulary = 5;
+    await usage.flush();
+    expect(totals()['ui_desktop_share_invite_ok'], 1);
+    expect(totals()['ui_desktop_share_accept_ok'], 1);
+    expect(totals()['health_desktop_shared_invites_sent'], 2);
+    expect(totals()['health_desktop_shared_invites_refused'], 1);
+  });
+
+  test('first-run stages cross midnight on their start day and stop after 24 hours', () async {
+    await usage.flush();
+    usage.proxyVocabulary = 5;
     now = DateTime.utc(2026, 10, 14, 23, 59);
     usage.firstRunStarted();
     usage.firstRunReady('m', 'a');
@@ -166,7 +185,7 @@ void main() {
     usage.savedChoice({'enabled': false, 'revision': 1});
     choice = {'enabled': true, 'revision': 2};
     usage.savedChoice(choice);
-    usage.proxyVocabulary = 4;
+    usage.proxyVocabulary = 5;
     usage.firstRunWork('PRIVATE_MACHINE', 'PRIVATE_AGENT');
     usage.firstRunResponse('PRIVATE_MACHINE', 'PRIVATE_AGENT');
     await usage.flush();
@@ -605,6 +624,75 @@ void main() {
         expect(totals()['ui_desktop_add_phone_menu'], 1);
       },
     );
+
+    test(
+      'the card offered after work waits for a CLI that forwards it, at 4',
+      () async {
+        await usage.flush();
+        usage.begin(ProductFlow.phoneOfferAfterWork)(ProductOutcome.ok);
+        usage.begin(ProductFlow.phoneOffer)(ProductOutcome.cancelled);
+        // A CLI at 3 forwards the first card's names, not this one's.
+        usage.proxyVocabulary = 3;
+        await usage.flush();
+        expect(addPhoneNames(), {
+          'ui_desktop_phone_offer_started',
+          'ui_desktop_phone_offer_cancelled',
+          'ui_desktop_phone_offer_under_1s',
+        });
+        usage.proxyVocabulary = 4;
+        await usage.flush();
+        expect(
+          {
+            for (final name in addPhoneNames())
+              if (name.contains('after_work')) name: totals()[name],
+          },
+          {
+            'ui_desktop_phone_offer_after_work_started': 1,
+            'ui_desktop_phone_offer_after_work_ok': 1,
+            'ui_desktop_phone_offer_after_work_under_1s': 1,
+          },
+        );
+      },
+    );
+
+    test('the cards after time away wait for 4, each read as itself', () async {
+      await usage.flush();
+      usage.begin(ProductFlow.phoneOfferAwayWaited)(ProductOutcome.ok);
+      usage.begin(ProductFlow.phoneOfferAwayFinished)(ProductOutcome.unknown);
+      usage.proxyVocabulary = 3;
+      await usage.flush();
+      expect(addPhoneNames().where((name) => name.contains('away')), isEmpty);
+      usage.proxyVocabulary = 4;
+      await usage.flush();
+      expect(
+        {
+          for (final name in addPhoneNames())
+            if (name.contains('away') && !name.contains('under_1s'))
+              name: totals()[name],
+        },
+        {
+          'ui_desktop_phone_offer_away_waited_started': 1,
+          'ui_desktop_phone_offer_away_waited_ok': 1,
+          'ui_desktop_phone_offer_away_finished_started': 1,
+          'ui_desktop_phone_offer_away_finished_unknown': 1,
+        },
+      );
+      expect(ProductFlow.phoneOfferAwayWaited.unbounded, isTrue);
+      expect(ProductFlow.phoneOfferAwayFinished.unbounded, isTrue);
+    });
+
+    test('the card offered after work is not ended by the 15-minute bound', () async {
+      await usage.flush();
+      usage.proxyVocabulary = 4;
+      final card = usage.begin(ProductFlow.phoneOfferAfterWork);
+      now = now.add(const Duration(minutes: 40));
+      await usage.flush();
+      await usage.flush();
+      expect(totals()['ui_desktop_phone_offer_after_work_unknown'], isNull);
+      card(ProductOutcome.cancelled);
+      await usage.flush();
+      expect(totals()['ui_desktop_phone_offer_after_work_cancelled'], 1);
+    });
 
     test('the card is not ended by the 15-minute observation bound', () async {
       await usage.flush();

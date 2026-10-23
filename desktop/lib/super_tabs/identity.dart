@@ -44,6 +44,7 @@ class SuperTabAvatar extends StatelessWidget {
       ),
       child: Text(
         initial,
+        textScaler: TextScaler.noScaling,
         style: DesktopChrome.control(
           medium: true,
           color: color,
@@ -54,3 +55,12 @@ class SuperTabAvatar extends StatelessWidget {
 }
 
 String superTabPersonName(String email) => email.split('@').first;
+
+/// A computer as it calls itself: a Bonjour hostname without its `.local` suffix ("MacBookPro2021"), never mapped
+/// to a model name, so two machines of one model stay told apart. A name a person chose stays as it is.
+String superTabMachineName(String name) {
+  const suffix = '.local';
+  return name.length > suffix.length && name.toLowerCase().endsWith(suffix)
+      ? name.substring(0, name.length - suffix.length)
+      : name;
+}

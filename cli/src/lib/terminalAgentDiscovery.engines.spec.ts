@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentEngine } from '../engines/types.js'
 import { agentCommandOwnershipSnapshot, type AgentCommandOwnershipSnapshot } from './engineBin.js'
-import type { ProcessRow } from './tmux.js'
+import type { ProcessRow } from './processTable.js'
 import { discoverTerminalAgentsFromSnapshot, type DiscoveredTerminalAgent } from './terminalAgentDiscovery.js'
 import { terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import type { TerminalRootObservation } from './terminalTypes.js'

@@ -1,0 +1,338 @@
+# Task B4.15: hooks on in the Windows run. Claude Code, Codex and Kilo bind their panes' conversations on the
+# Windows VM (admin@192.168.65.3, Win11 ARM64 26100, node v24.20.0, npm 11.19.0), 2026-10-17 VM local time
+# 11:27-12:06 PDT (UTC 18:27-19:06).
+#
+# Build: the B4 install in C:\work\b4 (port 18475), bundles v0.4.18-dev.1046a953f.dirty (first run),
+# v0.4.18-dev.bc5c2a870.dirty (after fix 1), then bc5c2a870 plus fix 2 (61a3c18b2's change, final run). harness-pty.exe
+# reused from the VM's 2026-10-17 build (pty/ unchanged since 2026-10-16). Driver e2e.mjs re-pathed to C:\work\b4 and
+# ws://127.0.0.1:18475 (no C:\work\e2e or 18473 left in it). env.cmd is this task's (no DISABLE_HOOK_INSTALL), re-pathed,
+# plus `set PORT=18475`.
+# Engines: Claude Code 2.1.301 (signed in, Claude Max), Codex 0.162.1 (signed in), Kilo 7.8.12 (Free Kilo Gateway, no
+# sign-in needed). OpenCode: outcome C (B4.12), not run here.
+#
+# Controller rulings applied (task-B4.15-carries.md):
+# 1. Full backup with sha256 before the daemon started (table at the end). Restored and verified byte-identical.
+# 2. No npm -g. Kilo: `npm i --prefix C:\work\b4\kilo @kilocode/cli`. npm 11.19 refuses `--allow-scripts` for a prefix
+#    install (EALLOWSCRIPTS: "not allowed in project-scoped installs"), so the prefix's package.json carried
+#    {"allowScripts":{"@kilocode/cli":true}} instead. C:\work\b4\kilo\node_modules\.bin went first on the B4 daemon's
+#    PATH for this run only. `npm ls -g` before and after: @openai/codex@0.162.1, opencode-ai@1.19.0.
+#    Run-only env line also: DISABLE_AUTOUPDATER=1, so Claude Code could not replace the person's claude.exe mid-run.
+# 3. C:\work\e2e's daemon was not running (nothing on 18473), before and after (section 9). The B4 daemon reused
+#    C:\work\b4\computer-id 757a170d…; its log has no machine registration line.
+# 4. No sign-in was done. Claude Code's first-run screens (security notes, folder trust) and Codex's Windows sandbox
+#    choice ("Use non-admin sandbox") were answered; neither is a sign-in.
+# 5. Log checks, Copilot and Command Code: sections 5-7.
+
+## 1. Daemon start with hooks on (harness.log, every [hooks] line of this task's starts; 11:28:50 first start,
+## 11:49:32 after fix 1, 11:55:54 after fix 2)
+2026-10-17 11:28:50.227 [hooks] listening on 127.0.0.1:18475 (SessionStart/SessionEnd callbacks)
+2026-10-17 11:28:50.228 [hooks] listening on \\.\pipe\harness-92bf8d1a2e1906e0bf5bbf2932c87357
+2026-10-17 11:28:50.300 [hooks] cursor hooks are not installed on Windows yet
+2026-10-17 11:28:50.303 [hooks] hermes hooks are not installed on Windows yet
+2026-10-17 11:28:50.303 [hooks] devin hooks are not installed on Windows yet
+2026-10-17 11:28:50.303 [hooks] grok hooks are not installed on Windows yet
+2026-10-17 11:28:50.303 [hooks] agy hooks are not installed on Windows yet
+2026-10-17 11:28:50.440 [hooks] updated (path/port changed) → C:\work\b4\dist\notify.mjs --port 18475 in C:\Users\admin\.claude\settings.json
+2026-10-17 11:28:50.440 [hooks] (takes effect on the next claude session start)
+2026-10-17 11:28:50.448 [hooks] installed Codex SessionStart/UserPromptSubmit hooks → C:\Users\admin\.codex\hooks.json
+2026-10-17 11:28:50.448 [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed
+2026-10-17 11:28:50.477 [hooks] installed Kilo discovery plugin → C:\Users\admin\.config\kilo\plugin\launcher-register.js
+2026-10-17 11:28:50.477 [hooks] (takes effect on the next kilo session start)
+2026-10-17 11:28:50.485 [hooks] installed Pi discovery extension → C:\Users\admin\.pi\agent\extensions\launcher-register.ts
+2026-10-17 11:28:50.485 [hooks] (takes effect on the next pi session start)
+2026-10-17 11:28:50.493 [hooks] installed Amp plugin → C:\Users\admin\.config\amp\plugins\launcher-register.ts
+2026-10-17 11:28:50.493 [hooks] a NEW amp session picks this up automatically; for one already open, run
+2026-10-17 11:28:50.493 [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)
+2026-10-17 11:28:50.510 [hooks] installed Command Code SessionStart/Stop hooks → C:\Users\admin\.commandcode\settings.json
+2026-10-17 11:28:50.510 [hooks] (takes effect on the next commandcode session start)
+2026-10-17 11:28:50.520 [hooks] installed Copilot lifecycle hooks → C:\Users\admin\.copilot\hooks\harness.json
+2026-10-17 11:28:50.520 [hooks] (takes effect on the next copilot session start)
+2026-10-17 11:28:50.528 [hooks] recorded Harness's own Codex hooks as reviewed → C:\Users\admin\.codex\config.toml
+2026-10-17 11:28:51.524 [hooks] installed OpenCode discovery plugin → C:\Users\admin\.config\opencode\plugin\launcher-register.js
+2026-10-17 11:28:51.524 [hooks] (takes effect on the next opencode session start)
+2026-10-17 11:28:51.555 [hooks] installed OpenCode 2 TUI discovery plugin → C:\Users\admin\.config\opencode\plugins\launcher-register\tui.js
+2026-10-17 11:28:51.556 [hooks] (takes effect on the next opencode session start)
+2026-10-17 11:30:12.206 [hooks] Claude session + turn (Stop/StopFailure) hooks already installed
+2026-10-17 11:32:15.535 [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → C:\Users\admin\.codex\hooks.json
+2026-10-17 11:34:18.437 [hooks] Kilo discovery plugin already installed
+2026-10-17 11:37:33.452 [hooks] ses_eb4d session-start · engine=kilo · isNew=true
+2026-10-17 11:49:32.009 [hooks] listening on 127.0.0.1:18475 (SessionStart/SessionEnd callbacks)
+2026-10-17 11:49:32.010 [hooks] listening on \\.\pipe\harness-cf65949fb62f124c5e1bbd1fb089453d
+2026-10-17 11:49:32.083 [hooks] cursor hooks are not installed on Windows yet
+2026-10-17 11:49:32.086 [hooks] hermes hooks are not installed on Windows yet
+2026-10-17 11:49:32.086 [hooks] devin hooks are not installed on Windows yet
+2026-10-17 11:49:32.087 [hooks] grok hooks are not installed on Windows yet
+2026-10-17 11:49:32.087 [hooks] agy hooks are not installed on Windows yet
+2026-10-17 11:49:32.151 [hooks] Claude session + turn (Stop/StopFailure) hooks already installed
+2026-10-17 11:49:32.160 [hooks] installed Codex SessionStart/UserPromptSubmit hooks → C:\Users\admin\.codex\hooks.json
+2026-10-17 11:49:32.160 [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed
+2026-10-17 11:49:32.191 [hooks] installed Kilo discovery plugin → C:\Users\admin\.config\kilo\plugin\launcher-register.js
+2026-10-17 11:49:32.191 [hooks] (takes effect on the next kilo session start)
+2026-10-17 11:49:32.199 [hooks] installed Pi discovery extension → C:\Users\admin\.pi\agent\extensions\launcher-register.ts
+2026-10-17 11:49:32.199 [hooks] (takes effect on the next pi session start)
+2026-10-17 11:49:32.207 [hooks] installed Amp plugin → C:\Users\admin\.config\amp\plugins\launcher-register.ts
+2026-10-17 11:49:32.207 [hooks] a NEW amp session picks this up automatically; for one already open, run
+2026-10-17 11:49:32.207 [hooks]   ctrl+o → 'plugins: reload'   (or restart that pane)
+2026-10-17 11:49:32.211 [hooks] Command Code session hooks already installed
+2026-10-17 11:49:32.217 [hooks] Copilot lifecycle hooks already installed
+2026-10-17 11:49:32.226 [hooks] recorded Harness's own Codex hooks as reviewed → C:\Users\admin\.codex\config.toml
+2026-10-17 11:49:33.061 [hooks] installed OpenCode discovery plugin → C:\Users\admin\.config\opencode\plugin\launcher-register.js
+2026-10-17 11:49:33.061 [hooks] (takes effect on the next opencode session start)
+2026-10-17 11:49:33.087 [hooks] installed OpenCode 2 TUI discovery plugin → C:\Users\admin\.config\opencode\plugins\launcher-register\tui.js
+2026-10-17 11:49:33.087 [hooks] (takes effect on the next opencode session start)
+2026-10-17 11:50:10.989 [hooks] Claude session + turn (Stop/StopFailure) hooks already installed
+2026-10-17 11:50:16.777 [hooks] e2d47f66 SessionStart held · Waiting for durable hook admission: Conversation identity is held: the announced transcript is not yet available.
+2026-10-17 11:50:19.877 [hooks] e2d47f66 SessionStart · engine=claude · isNew=true
+2026-10-17 11:50:19.948 [hooks] e2d47f66 UserPromptSubmit · engine=claude · isNew=false
+2026-10-17 11:50:21.220 [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → C:\Users\admin\.codex\hooks.json
+2026-10-17 11:50:24.124 [hooks] e2d47f66 turn-stop
+2026-10-17 11:52:24.960 [hooks] Kilo discovery plugin already installed
+2026-10-17 11:52:42.158 [hooks] ses_eb4c session-start · engine=kilo · isNew=true
+2026-10-17 11:53:14.846 [hooks] 01a14b33 SessionStart held · Waiting for durable hook admission: Conversation identity is held: the native rollout header is invalid.
+2026-10-17 11:55:54.996 [hooks] listening on 127.0.0.1:18475 (SessionStart/SessionEnd callbacks)
+2026-10-17 11:55:54.997 [hooks] listening on \\.\pipe\harness-ab891e6780458eea818395fed0d000c2
+2026-10-17 11:55:55.188 [hooks] cursor hooks are not installed on Windows yet
+2026-10-17 11:55:55.191 [hooks] hermes hooks are not installed on Windows yet
+2026-10-17 11:55:55.191 [hooks] devin hooks are not installed on Windows yet
+2026-10-17 11:55:55.191 [hooks] grok hooks are not installed on Windows yet
+2026-10-17 11:55:55.191 [hooks] agy hooks are not installed on Windows yet
+2026-10-17 11:55:55.245 [hooks] Claude session + turn (Stop/StopFailure) hooks already installed
+2026-10-17 11:55:55.247 [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → C:\Users\admin\.codex\hooks.json
+2026-10-17 11:55:55.249 [hooks] Kilo discovery plugin already installed
+2026-10-17 11:55:55.255 [hooks] Pi discovery extension already installed
+2026-10-17 11:55:55.288 [hooks] Amp plugin already installed
+2026-10-17 11:55:55.292 [hooks] Command Code session hooks already installed
+2026-10-17 11:55:55.297 [hooks] Copilot lifecycle hooks already installed
+2026-10-17 11:55:56.848 [hooks] OpenCode discovery plugin already installed
+2026-10-17 11:55:56.857 [hooks] OpenCode 2 TUI discovery plugin already installed
+2026-10-17 11:56:19.344 [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → C:\Users\admin\.codex\hooks.json
+2026-10-17 11:56:24.435 [hooks] 01a14b38 SessionStart · engine=codex · isNew=true
+2026-10-17 11:56:25.153 [hooks] 01a14b38 UserPromptSubmit · engine=codex · isNew=false
+2026-10-17 11:56:37.683 [hooks] Claude session + turn (Stop/StopFailure) hooks already installed
+2026-10-17 11:56:42.453 [hooks] 30d63cb5 SessionStart held · Waiting for durable hook admission: Conversation identity is held: the announced transcript is not yet available.
+2026-10-17 11:56:45.429 [hooks] 30d63cb5 SessionStart · engine=claude · isNew=true
+2026-10-17 11:56:45.459 [hooks] 30d63cb5 UserPromptSubmit · engine=claude · isNew=false
+2026-10-17 11:56:46.229 [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → C:\Users\admin\.codex\hooks.json
+2026-10-17 11:56:48.494 [hooks] 30d63cb5 turn-stop
+2026-10-17 11:56:52.432 [hooks] 01a14b39 SessionStart · engine=codex · isNew=true
+2026-10-17 11:56:52.773 [hooks] Kilo discovery plugin already installed
+2026-10-17 11:56:53.384 [hooks] 01a14b39 UserPromptSubmit · engine=codex · isNew=false
+2026-10-17 11:57:10.192 [hooks] ses_eb4c session-start · engine=kilo · isNew=true
+2026-10-17 11:58:31.368 [hooks] Claude session + turn (Stop/StopFailure) hooks already installed
+2026-10-17 11:58:32.369 [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → C:\Users\admin\.codex\hooks.json
+2026-10-17 11:58:34.013 [hooks] 30d63cb5 SessionStart · engine=claude · isNew=false
+
+## 2. First run: `run.cmd hooks claude codex kilo` (bundle 1046a953f) -> SUMMARY 0/3
+18:30:12.387 create claude → 3de624a5… launch=starting (200 ms)
+18:32:15.227 FAIL claude: its hook binds the pane's conversation — timeout (120000 ms): claude sessionId; last=undefined
+18:32:15.615 create codex → 6838f995… launch=starting (386 ms)
+18:34:18.408 FAIL codex: its hook binds the pane's conversation — timeout (120000 ms): codex sessionId; last=undefined
+18:34:18.502 create kilo → b7b09b11… launch=starting (92 ms)
+18:36:34.607 FAIL kilo: its hook binds the pane's conversation — timeout (120000 ms): kilo sessionId; last=undefined
+18:36:34.608 SUMMARY 0/3 passed
+# Why, from the panes:
+# - Claude: its first-run screens (~\.claude.json has no hasCompletedOnboarding): "Security notes ... Press Enter to
+#   continue". enginePrompt's `^\s*[>❯]\s` matched a selection line too early, and the typed prompt went to the screens.
+# - Codex: "Set up the Codex agent sandbox ... 1. Set up default sandbox (requires Administrator permissions)
+#   2. Use non-admin sandbox 3. Quit". After "2", the prompt submitted, and Codex showed twice:
+#     • Hook failed
+#       └ hook exited with code 1
+#   No "Hooks need review" (Harness's review records matched).
+# - Kilo: its TUI drew on Arm ("Ask anything...", "Auto Free Kilo Gateway"). The text and Enter written in one input frame
+#   stayed in the box. Typed again with Enter apart, Kilo answered "ok" and the row bound:
+#   sessionId ses_eb4d854f2ffeL92YMdL8SCQpUf (the scenario now sends Enter on its own).
+# Codex's "Hook failed": a process trace (WMI Win32_ProcessStartTrace/StopTrace) while a prompt was submitted:
+#   START powershell.exe pid=10128 ppid=6276(codex.exe) cmd=[]
+#   START conhost.exe pid=4608 ppid=10128() cmd=[]
+#   STOP  powershell.exe pid=10128 exit=1
+#   Codex 0.162.1 runs a hook in its session shell, PowerShell (`powershell.exe -NoProfile -Command <line>`: codex-rs
+#   rust-v0.162.1 core/src/session/mod.rs build_hooks_config; shell-command/src/shell_detect.rs default_user_shell
+#   picks PowerShell on Windows). `%COMSPEC% /C "<line>"` is only its fallback with no session shell. Harness wrote a
+#   cmd.exe line ("C:\Program Files\nodejs\node.exe" "C:\work\b4\dist\notify.mjs" --port ...), a PowerShell parse
+#   error. The same line run by hand through `cmd /C "<line>"` exited 0.
+#   -> Fix 1 (bc5c2a870): Codex's win32Runner is 'powershell'. The restart rewrote the line in place:
+#      & 'C:\Program Files\nodejs\node.exe' 'C:\work\b4\dist\notify.mjs' --port 18475 --data-dir 'C:\work\b4\data' ... --engine codex
+#      and recorded new review hashes in config.toml.
+
+## 3. Second run (after fix 1): SUMMARY 2/3
+18:50:11.149 create claude → 97c8d32f… launch=starting (192 ms)
+18:50:20.345 PASS claude: its hook binds the pane's conversation — agent 97c8d32f session e2d47f66… status active
+18:50:21.472 create codex → a21a0aaf… launch=starting (1127 ms)
+18:52:24.930 FAIL codex: its hook binds the pane's conversation — timeout (120000 ms): codex sessionId; last=undefined
+18:52:25.013 create kilo → fe76ccc9… launch=starting (82 ms)
+18:52:43.087 PASS kilo: its hook binds the pane's conversation — agent fe76ccc9 session ses_eb4ca770effer68rCSYtlxT9GY status active
+18:52:43.088 SUMMARY 2/3 passed
+# Codex: the hook now ran (no "Hook failed") and reached the daemon, which held it:
+#   2026-10-17 11:53:14.846 [hooks] 01a14b33 SessionStart held · Waiting for durable hook admission: Conversation
+#   identity is held: the native rollout header is invalid.
+#   kit/nativeHeader.ts nativeSessionMeta took only a POSIX path (`startsWith('/')`) as the rollout's absolute cwd; a
+#   Windows rollout names C:\work\b4\proj.
+#   -> Fix 2 (61a3c18b2): the cwd is absolute as the platform reads a path (as readIdentityFirstRecord already checks it).
+# (In that run the scenario typed into Codex before its input box took text: the box stayed empty. Not seen again.)
+
+## 4. Final runs (fix 1 + fix 2)
+# run.cmd hooks codex
+18:56:19.393 create codex → c09c979a… launch=starting (266 ms)
+18:56:24.488 PASS codex: its hook binds the pane's conversation — agent c09c979a session 01a14b38… status active
+18:56:24.489 SUMMARY 1/1 passed
+# run.cmd hooks claude codex kilo
+18:56:37.809 create claude → 7902cdf2… launch=starting (150 ms)
+18:56:46.033 PASS claude: its hook binds the pane's conversation — agent 7902cdf2 session 30d63cb5… status active
+18:56:46.293 create codex → 3fb8100e… launch=starting (259 ms)
+18:56:52.722 PASS codex: its hook binds the pane's conversation — agent 3fb8100e session 01a14b39… status active
+18:56:52.916 create kilo → 333b69ef… launch=starting (194 ms)
+18:57:11.037 PASS kilo: its hook binds the pane's conversation — agent 333b69ef session ses_eb4c66078ffe3vEXN6mnUaCvZq status active
+18:57:11.038 SUMMARY 3/3 passed
+# OpenCode: outcome C (B4.12): "OpenCode does not run on Windows on Arm yet". Not verified on the VM. Handed to B5's
+# windows-latest (x64) install job, which creates an OpenCode agent there and checks its sessionId. This phase's
+# evidence names three engines: Claude Code, Codex and Kilo.
+
+## 5. Checks
+# Codex review: no "Hooks need review" in any Codex pane, before or after fix 1 (the review records Harness wrote
+# matched Codex's keys: [hooks.state."C:\\Users\\admin\\.codex\\hooks.json:session_start:0:0"] and
+# ...:user_prompt_submit:0:0). The win32 `settingsFile` spelling in prepareReviewed needs no change.
+# The final Codex pane (3fb8100e):
+#   › Reply with the single word ok.
+#   • ok
+#     Worked for 6s • 11:56 AM
+#   › Ask Codex to do anything
+# Log checks over every B4 harness.log line of this task:
+#   "unmatched ... hook": 0. "HookPreparationHeld" / "path limit" / stack traces: 0 (B3.21 F3 not seen).
+#   "hooks are not installed:" (a held install, B4.10 F1): 0. The engines with no Windows runner say so in one line each,
+#   once per start: cursor, hermes, devin, grok, agy ("hooks are not installed on Windows yet"). None of the four
+#   section-6 engines is among them. Expected install lines present: Codex "installed Codex SessionStart/UserPromptSubmit
+#   hooks", "recorded Harness's own Codex hooks as reviewed"; Claude "updated (path/port changed)" at the first start
+#   (the profile already held a Harness hook from a test run, see the report), then "Claude session + turn
+#   (Stop/StopFailure) hooks already installed".
+# F5/F6 (needed a bound sessionId):
+#   F5 run.cmd delete 7902cdf2 (claude) → {"deleted":true}; run.cmd delete 3fb8100e (codex) → {"deleted":true}.
+#      Not refused. A pane with no sessionId is still refused as before: delete 6838f995 / a21a0aaf (the unbound Codex
+#      rows of runs 1-2) → IDENTITY_UNAVAILABLE "the native ps probe did not complete"; ended in the pane with /quit.
+#      Kilo (bound) b7b09b11 → {"deleted":true}.
+#   F6 run.cmd resume 7902cdf2 → "resumed":true, sessionId 30d63cb5… (same), new pane %2011;
+#      run.cmd resume 3fb8100e → "resumed":true, sessionId 01a14b39… (same), pane %2012.
+#      harness.log: "[resume] 7902cdf2 confirmed · engine=claude · hook=no · same conversation", the same for 3fb8100e.
+#      Both resumed panes show the earlier "> Reply with the single word ok." and its "ok".
+# Plugin folders (B4.11 step 5): dir /b %USERPROFILE%\.config\opencode\plugin %USERPROFILE%\.config\kilo\plugin
+#   launcher-register.js
+#   launcher-register.js
+#   (and %USERPROFILE%\.config\opencode\plugins\launcher-register\tui.js)
+
+## 6. Copilot (B4.10 F3)
+# Copilot CLI is not installed on the VM (`where copilot`: not found), so whether its hook ran is not checked. Open
+# question kept: its docs allow exec form (command + args, no shell); Harness writes a PowerShell line. The runner is
+# not changed here. Harness did write ~\.copilot\hooks\harness.json at start (removed by the restore).
+
+## 7. Command Code (B4.13)
+# Harness's Command Code hook file is <env.COMMANDCODE_HOME>\settings.json (commandcode/contract.ts), and at a launch
+# <COMMANDCODE_HOME || HOME\.commandcode> (kit/nativeLocations.ts). Command Code 1.84.0 builds every path as
+# ${HOME ?? USERPROFILE}/.commandcode in platform-neutral code (B4.13), so it never reads COMMANDCODE_HOME on any
+# platform: a person who sets COMMANDCODE_HOME gets hooks where Command Code does not look, on mac and Linux too. On
+# Windows a second mismatch: Harness's default is os.homedir() (USERPROFILE) while Command Code prefers HOME when set.
+# Finding only, no fix. Command Code is not installed and not signed in on the VM: not run.
+
+## 8. Cleanup
+# Agents: stopped (agent_delete) and purged (agent_purge inspect -> delete, session data selected only for this run's
+# own transcripts: ~\.claude\projects\C--work-b4-proj\{e2d47f66,30d63cb5}.jsonl and two Codex rollouts of
+# 2026\10\17, none present before). The three stopped Kilo rows could not be purged: "Other engine data references
+# this conversation store. Use the engine to delete its conversation.", and after the Kilo store was removed
+# "ENOENT: no such file or directory, lstat 'C:\Users\admin\.local\share\kilo\kilo.db'" (a purge-only start with
+# hooks off). They are left, stopped, in C:\work\b4\data (the B4 install's state, not the profile).
+# Daemon: C:\work\b4\stop.cmd. The B4 pty host this task started (pid 8548, created 11:28:49, no children, serve --home
+# C:\work\b4\ptyhome) was ended after that identity check with Stop-Process on that one pid, no /T.
+# Profile: every ruling-1 target restored and verified (table below). Also removed, all created after the backup:
+#   ~\.claude\backups\.claude.json.backup.* (5), ~\.claude\sessions\{1276,11468}.*, ~\.claude\session-env\{2 dirs},
+#   ~\.claude\projects\C--work-b4-proj, AppData\Local\claude-cli-nodejs\Cache\C--work-b4-proj,
+#   ~\.codex\sessions\2026\10\17, ~\.codex\thread-writer-locks\01a14b3{8,9}*.lock, ~\.codex\tmp\arg0\codex-arg0* (2),
+#   ~\.local\state\kilo\{model.json,prompt-history.jsonl}, ~\.local\state\kilo-sandbox-policy, ~\.local\share\opentui.
+#   Left as the engines changed them (their own runtime state; credentials must not be rolled back):
+#   ~\.claude\.credentials.json, ~\.harness\auth\session.json, Claude's cache/plugins/skills sync files, Codex's sqlite
+#   stores and their -wal/-shm, logs, caches, models_cache.json, version.json, session_index.jsonl, ~\.local\share\opencode
+#   \opencode.db-shm (the daemon's OpenCode store read).
+# C:\work\b4: removed kilo\ (the prefix install), backup\, hooks.out, the data dir's new summaries*.json,
+#   agent-token-usage\ and voice-route-scratch\; state.json restored. Kept: the B4 install with this task's scripts
+#   (env.cmd without the run-only lines), bundle and driver.
+
+## 9. C:\work\e2e (never touched)
+# before (11:27:16): time 2026-10-17T11:27:16.5527251-07:00 | listen 18473:  | listen 18475:  | processes mentioning C:\work\e2e: 0  | C:\work\e2e LastWriteTime 2026-10-15T06:06:34.5351437-07:00 | C:\work\e2e\daemon.log 251011 bytes, LastWriteTime 2026-10-15T06:31:41.9115772-07:00
+# after  (12:05:56): time 2026-10-17T12:05:56.9053534-07:00 | listen 18473:  | listen 18475:  | processes mentioning C:\work\e2e: 0  | C:\work\e2e LastWriteTime 2026-10-15T06:06:34.5351437-07:00 | C:\work\e2e\daemon.log 251011 bytes, LastWriteTime 2026-10-15T06:31:41.9115772-07:00
+
+## 9b. Specs on the VM (C:\work\oh\cli, synced by vm-sync.sh --cli, after fix 1)
+# npx vitest run src/lib/windows/hookFiles.real.spec.ts src/engines/kit/windowsHooks.spec.ts src/lib/windows/hooksOn.spec.ts
+#  ✓ src/lib/windows/hooksOn.spec.ts (2 tests)
+#  ✓ src/engines/kit/windowsHooks.spec.ts (23 tests)
+#  ✓ src/lib/windows/hookFiles.real.spec.ts (7 tests)
+#    ✓ delivers every argument whole the way each engine runs its line, from a profile named Thảo Nguyễn
+#    ✓ refuses a home with & ( ) for the cmd.exe engine with its reason, and the PowerShell engines pass it whole
+#  Test Files 3 passed (3), Tests 32 passed (32)
+
+## 10. Backup / restore (sha256). Line: target|file in it|bytes|SHA256, or ABSENT. "after" is the final check
+## (VM, then the same manifest diffed on the Mac: identical, 30 lines).
+# Procedure: before the first hooks-on start, list every target below, copy what exists to a backup folder and check
+# the copies' manifest against the originals. After the run, restore each pre-existing target from the backup, delete
+# each one that was absent, and compare the new manifest with the first line by line: every pre-existing file must be
+# byte-identical (same size and SHA256).
+# The adoption journal: the daemon keeps it beside C:\work\b4\data\engine-homes.json, as the siblings
+# engine-homes.json.adoptions\, engine-homes.json.confirmations\ and engine-homes.json.adopted (kit/homeAdoption.ts).
+# The manifest's second journal line names `engine-homes`, which is not one of them. The siblings were checked through
+# the data folder's listings instead: no engine-homes* entry before the run (before.toplevel) or after the cleanup.
+~\.claude\settings.json|.|6241|951558812963DCC81ECF1B96DDC60F2DBA1077D7069890140D89616E451C7A00
+    after: .|6241|951558812963DCC81ECF1B96DDC60F2DBA1077D7069890140D89616E451C7A00   [restored from backup]
+~\.claude.json|.|852|7A247B72E2A4CBC4026C376C1B17BA89C1B4DAE1311E3D47619FD1418598E2AF
+    after: .|852|7A247B72E2A4CBC4026C376C1B17BA89C1B4DAE1311E3D47619FD1418598E2AF   [restored from backup]
+~\.claude\history.jsonl|.|2060|B7B9ECE0F5FDF527331D69D94A197DD4DB1738CD4302F9387B46A4C484658C27
+    after: .|2060|B7B9ECE0F5FDF527331D69D94A197DD4DB1738CD4302F9387B46A4C484658C27   [restored from backup]
+~\.codex\hooks.json|-|ABSENT
+    after: -|ABSENT   [created by the run, deleted]
+~\.codex\config.toml|-|ABSENT
+    after: -|ABSENT   [created by the run, deleted]
+~\.codex\history.jsonl|.|57664|8B4752F59618B369B33A44CBBF3E208DFB7711E400EB131E24BDD349FBD0DEE7
+    after: .|57664|8B4752F59618B369B33A44CBBF3E208DFB7711E400EB131E24BDD349FBD0DEE7   [restored from backup]
+~\.config\opencode|/|DIR files=1 dirs=0
+    after: /|DIR files=1 dirs=0   [restored from backup (plugin\ and plugins\ gone)]
+~\.config\opencode|\opencode.jsonc|50|4E901F9E457C8D52AB31F9FB4EA637A8C9104EBDBF23FE8B3600F35AD46D4A61
+    after: \opencode.jsonc|50|4E901F9E457C8D52AB31F9FB4EA637A8C9104EBDBF23FE8B3600F35AD46D4A61   [file of the folder above]
+~\.config\kilo|-|ABSENT
+    after: -|ABSENT   [created by the run (Kilo plugin + Kilo config), deleted]
+~\.local\share\kilo|-|ABSENT
+    after: -|ABSENT   [created by the run (Kilo store), deleted]
+~\.cache\kilo|/|DIR files=2 dirs=1
+    after: /|DIR files=2 dirs=1   [restored from backup (models.json was rewritten by Kilo)]
+~\.cache\kilo|\bin\|DIR
+    after: \bin\|DIR   [file of the folder above]
+~\.cache\kilo|\bin\rg.exe|3930112|F7799D737B520E00B10DFA72DEF23904FE66FB03315636A7B78549845EE9609C
+    after: \bin\rg.exe|3930112|F7799D737B520E00B10DFA72DEF23904FE66FB03315636A7B78549845EE9609C   [file of the folder above]
+~\.cache\kilo|\models.json|5666819|EF42D629F52A67D6145E101814954A27FBC80D4B1F6F18D6E003E3A738C37D73
+    after: \models.json|5666819|EF42D629F52A67D6145E101814954A27FBC80D4B1F6F18D6E003E3A738C37D73   [file of the folder above]
+~\.pi|-|ABSENT
+    after: -|ABSENT   [created by the run (Pi extension), deleted]
+~\.copilot|-|ABSENT
+    after: -|ABSENT   [created by the run (Copilot hooks), deleted]
+~\.commandcode|-|ABSENT
+    after: -|ABSENT   [created by the run (Command Code hooks), deleted]
+~\.cursor|-|ABSENT
+    after: -|ABSENT   [absent before and after]
+~\.grok|-|ABSENT
+    after: -|ABSENT   [absent before and after]
+~\.devin|-|ABSENT
+    after: -|ABSENT   [absent before and after]
+~\.hermes|-|ABSENT
+    after: -|ABSENT   [absent before and after]
+~\.gemini|-|ABSENT
+    after: -|ABSENT   [absent before and after]
+~\.config\devin|-|ABSENT
+    after: -|ABSENT   [absent before and after]
+~\.config\amp|-|ABSENT
+    after: -|ABSENT   [created by the run (Amp plugin), deleted]
+~\.config\cursor|-|ABSENT
+    after: -|ABSENT   [absent before and after]
+~\.local\share\devin|-|ABSENT
+    after: -|ABSENT   [absent before and after]
+~\.local\share\opencode\plugin|-|ABSENT
+    after: -|ABSENT   [absent before and after]
+C:\work\b4\data\engine-homes.json|-|ABSENT
+    after: -|ABSENT   [absent before and after]
+C:\work\b4\data\engine-homes|-|ABSENT
+    after: -|ABSENT   [absent before and after]
+C:\work\b4\data\hook-credential|.|44|4D350669CE44C9770E6ED83696ECA271FE14F008BCBF264A915CD9BBFF4D9AE4
+    after: .|44|4D350669CE44C9770E6ED83696ECA271FE14F008BCBF264A915CD9BBFF4D9AE4   [unchanged]

@@ -30,6 +30,7 @@ import type { HookTerminalHint } from './lib/terminalTypes.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import { isTrustedLocal, listenLocalSocket, type LocalSocketServer } from './lib/localSocket.js'
+import { PTY_HOST_INSTANCE } from './lib/ptyHost/instance.js'
 
 /**
  * Which agent does a hook belong to, given the two grades of evidence?
@@ -162,6 +163,10 @@ export interface HookServerHandlers {
   /** POST /api/auth/handoff — a one-time code that signs a phone in to this account (the desktop's
    *  Add Phone QR), minted by backend against this daemon's own session. */
   onAuthHandoff?: () => Promise<PairOutcome>
+  /** POST /api/daemon/stop — `harness stop` on Windows (core/daemonStopRoute.ts). Trusted local only: over TCP any
+   *  process on the machine, another user's included, could stop this user's daemon. Given on Windows only; without
+   *  it the route does not exist (404), as before on a Mac or Linux. */
+  onDaemonStop?: () => Promise<PairOutcome>
   onSharedHarnesses?: () => Promise<PairOutcome>
   /** GET /api/desk — the account's tabs, the same on every computer; proxied like the machine list. */
   onDeskRead?: () => Promise<PairOutcome>
@@ -188,6 +193,9 @@ export interface HookServerHandlers {
   /** The phone half of a sign-in (backend routes/qrSignIn.ts) for the desktop and web apps: approve a device
    *  that says its code aloud (a lamp, #1410) with this computer's own session, as the phone does. */
   onSignInAnswer?: (action: 'lookup' | 'approve' | 'deny', body: { code: string }) => Promise<PairOutcome>
+  /** A Super Tab chat file from the native desktop, streamed on to the backend with this computer's account
+   *  (lib/superTabAttachmentProxy.ts): the app's REST client holds no token of its own. Answers on `res` itself. */
+  onSuperTabAttachment?: (req: http.IncomingMessage, res: http.ServerResponse, path: string) => Promise<void>
   onProductUsageReport?: (body: unknown) => Promise<PairOutcome>
   onProductUsageRead?: () => Promise<PairOutcome>
   onProductUsageWrite?: (body: unknown) => Promise<PairOutcome>
@@ -258,6 +266,12 @@ function validHookBody(value: unknown): value is BoundHookBody {
       if (hint.backend === 'tmux') {
         if (Object.keys(hint).some((field) => field !== 'backend' && field !== 'paneId')
           || typeof hint.paneId !== 'string' || !/^%\d+$/.test(hint.paneId)) return false
+      } else if (hint.backend === 'ptyhost') {
+        // A Harness pty host pane, as its shell names itself (`HARNESS_PANE=<instance>:%N`, hook/notify.mjs): the
+        // instance and the pane, nothing else.
+        if (Object.keys(hint).some((field) => !['backend', 'instance', 'paneId'].includes(field))
+          || typeof hint.instance !== 'string' || !PTY_HOST_INSTANCE.test(hint.instance)
+          || typeof hint.paneId !== 'string' || !/^%\d{1,9}$/.test(hint.paneId)) return false
       } else if (hint.backend === 'herdr') {
         // A hook script installed by an earlier build still sends these from inside a Herdr pane. The
         // backend is retired and `normalizedRuntimeHints` drops the hint, but the rest of the body is
@@ -293,6 +307,9 @@ function normalizedRuntimeHints(body: RegisterInput): HookTerminalHint[] {
   if (Array.isArray(body.runtimeHints) && body.runtimeHints.length <= 4) {
     for (const hint of body.runtimeHints) {
       if (hint?.backend === 'tmux' && /^%\d+$/.test(hint.paneId)) hints.push({ backend: 'tmux', paneId: hint.paneId })
+      else if (hint?.backend === 'ptyhost' && PTY_HOST_INSTANCE.test(hint.instance) && /^%\d{1,9}$/.test(hint.paneId)) {
+        hints.push({ backend: 'ptyhost', instance: hint.instance, paneId: hint.paneId })
+      }
     }
   }
   if (body.tmuxPane && /^%\d+$/.test(body.tmuxPane)
@@ -375,8 +392,10 @@ async function inspectHermesKind(sessionId: string, knownHome?: string): Promise
 }
 
 export interface HookServerOptions {
-  /** Also serve on this Unix socket (see lib/localSocket.ts). Null or absent: TCP only. */
+  /** Also serve on this Unix socket, or with pipeToken the Windows pipe (see lib/localSocket.ts). Null or absent: TCP only. */
   socketPath?: string | null
+  /** Windows: the daemon's token. When given, `socketPath` is a pipe whose every request proves it (lib/localSocket.ts). */
+  pipeToken?: Buffer | null
   /** A private socket identifies this user's daemon even when another OS user holds the TCP port. */
   allowPortFallback?: boolean
   /** Completed acknowledgements are retained for a live process, never evicted to admit another hook. */
@@ -429,8 +448,9 @@ export function startHookServer(
         res.writeHead(code, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify(body))
       }
-      // Over the daemon's own socket the filesystem already said who this is, and no browser can get
-      // there; everything else must prove it was addressed to this loopback server.
+      // Over the daemon's own socket the filesystem already said who this is, and over its Windows pipe the request
+      // proved the daemon's token; no browser can get to either. Everything else must prove it was addressed to
+      // this loopback server.
       const trustedLocal = isTrustedLocal(req)
       // Before any route, reads included. See lib/loopbackRequest.ts.
       if (!trustedLocal && !isLoopbackRequest(req, hosts)) {
@@ -701,7 +721,9 @@ export function startHookServer(
           if (!current()) return { kind: 'reject', reason: 'stale_hook' }
           if (handlers.hookAdmissionBlocked?.(processAgent.agentId)) return { kind: 'hold', reason: 'Waiting for Stop to settle before admitting the hook.' }
           const row = live()!
-          if (!runtimeHints.some(hint => row.runtimes.some(runtime => runtime.backend === hint.backend && runtime.paneId === hint.paneId))) {
+          if (!runtimeHints.some(hint => row.runtimes.some(runtime => runtime.backend === hint.backend && runtime.paneId === hint.paneId
+            // A paneId is only unique within one pty host.
+            && (hint.backend !== 'ptyhost' || (runtime.backend === 'ptyhost' && runtime.instance === hint.instance))))) {
             return { kind: 'hold', reason: 'Waiting for the original hook pane to belong to its engine process.' }
           }
           inspectionIdentity = paneReadIdentity(row)
@@ -1083,6 +1105,16 @@ export function startHookServer(
         } catch { json(502, { success: false, error: { code: 'USAGE_UNAVAILABLE', message: 'Product usage unavailable' } }) }
         return
       }
+      const attachment = req.method === 'POST' ? /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/attachments$/.exec(url) : null
+      if (attachment) {
+        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        if (!handlers.onSuperTabAttachment) { json(503, { error: 'UNAVAILABLE' }); return }
+        // The body is the file, read by the handler as a stream: never readBody, which holds 256 KiB of text. An agent's
+        // `post --attach` names itself; the backend checks that this account runs that agent.
+        const asAgentId = new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('asAgentId')
+        const agent = asAgentId && /^[A-Za-z0-9_-]{1,160}$/.test(asAgentId) ? `?asAgentId=${asAgentId}` : ''
+        await handlers.onSuperTabAttachment(req, res, `${url}${agent}`); return
+      }
       const signInAnswer = req.method === 'POST' ? /^\/api\/auth\/qr\/(lookup|approve|deny)$/.exec(url) : null
       if (signInAnswer) {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
@@ -1146,6 +1178,13 @@ export function startHookServer(
         if (!trustedLocal || !localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onAuthHandoff) { json(503, { error: 'UNAVAILABLE' }); return }
         await proxied(handlers.onAuthHandoff); return
+      }
+      // Stopping the daemon ends every agent's link to it: like the phone code above, the daemon's own trusted
+      // endpoint only (the owner's socket; on Windows its pipe, with the token's proof, lib/localSocket.ts).
+      // Windows only: the route exists when its handler is given (core/daemonStopRoute.ts daemonStopRoute).
+      if (req.method === 'POST' && url === '/api/daemon/stop' && handlers.onDaemonStop) {
+        if (!trustedLocal || !localOk) { json(403, { error: 'FORBIDDEN' }); return }
+        await proxied(handlers.onDaemonStop); return
       }
       if (req.method === 'PATCH' && url.startsWith('/api/machines/')) {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
@@ -1242,7 +1281,7 @@ export function startHookServer(
       if (!socketPath) { resolve({ server, port: actual, localSocket: null }); return }
       // The private socket is mandatory when opting into multi-user startup. A duplicate daemon
       // must not survive on a random port while another one owns this user's socket.
-      listenLocalSocket(handle, socketPath).then(
+      listenLocalSocket(handle, socketPath, { token: options.pipeToken ?? undefined }).then(
         (localSocket) => {
           console.log(`[hooks] listening on ${socketPath}`)
           resolve({ server, port: actual, localSocket })

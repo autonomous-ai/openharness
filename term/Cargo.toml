@@ -1,0 +1,11 @@
+[package]
+name = "harness-term"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+alacritty_terminal = "0.26.0"
+
+[patch.crates-io]
+alacritty_terminal = { path = "../tui/vendor/alacritty_terminal" }
+vte = { path = "../tui/vendor/vte" }

@@ -77,6 +77,12 @@ export interface CoreLink {
   /** The master's updater staged a build: hand over for it (`harnessd:update`). Heard from the start, as
    *  a staged update may arrive while start-up is still under way. */
   onUpdate(listener: (version: string) => void): void
+  /** Ask the master to stop everything and exit (`harnessd:stop`, protocol 6): `harness stop` on Windows. False
+   *  when no master runs this core: the caller stops it alone. */
+  stopAll(): boolean
+  /** The master asks this core to leave (`harnessd:shutdown`): Windows, where it has no signal to send. Heard
+   *  from the start, as `onUpdate` is, and once. */
+  onShutdown(listener: () => void): void
   /** What the master last said about itself (restarts, the last exit), for `/api/status`. */
   status(): SupervisorStatus | null
   close(): void
@@ -111,10 +117,19 @@ export function connectToMaster(
   // but a master can stage one before, and a request missed is an update never applied.
   let update: string | null = null
   let updateListener: ((version: string) => void) | null = null
+  // Asked to leave before anything listened (a stop during start-up): remembered, as an update is.
+  let shutdownAsked = false
+  const shutdownListeners: Array<() => void> = []
   if (supervised) {
     channel.on('message', (message) => {
       if (!isMasterMessage(message)) return
       if (message.type === 'harnessd:status') { status = message.status; return }
+      if (message.type === 'harnessd:shutdown') {
+        if (shutdownAsked) return
+        shutdownAsked = true
+        for (const listener of shutdownListeners.splice(0)) listener()
+        return
+      }
       if (updateListener) updateListener(message.version)
       else update = message.version
     })
@@ -164,6 +179,16 @@ export function connectToMaster(
         update = null
         queueMicrotask(() => listener(version))
       }
+    },
+    stopAll: () => {
+      if (!supervised) return false
+      send({ type: 'harnessd:stop' })
+      return true
+    },
+    onShutdown: (listener) => {
+      if (!supervised) return
+      if (shutdownAsked) queueMicrotask(listener)
+      else shutdownListeners.push(listener)
     },
     status: () => status,
     close: () => {

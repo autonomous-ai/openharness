@@ -54,6 +54,17 @@ describe('the Wi-Fi device in the devices\' process, as the core sees it', () =>
     expect(await link({ error: 'SERVICE_UNAVAILABLE' }).wifi.port.receipt('dev', 'k')).toEqual({ unavailable: true })
   })
 
+  it('asks it about device add-ons with a deadline, and passes the add-on layer\'s own refusal through', async () => {
+    const answered = link({ result: { devices: [] } })
+    expect(await answered.wifi.port.addon('state', { deviceId: 'lamp' })).toEqual({ result: { devices: [] } })
+    expect(answered.call).toHaveBeenCalledWith('addon', { op: 'state', input: { deviceId: 'lamp' } }, WIFI_WAIT_MS)
+    const refused = { error: { code: 'RATE_LIMITED', message: 'slow down' } }
+    expect(await link(refused).wifi.port.addon('propose', {})).toEqual(refused)
+    expect(await link({ error: 'SERVICE_UNAVAILABLE' }).wifi.port.addon('proposal', { proposalId: 'p' })).toEqual({ unavailable: true })
+    // A proposal with no answer in time may have been sent: unknown, retried with its key, never "not running".
+    expect(await link({ error: 'SERVICE_UNAVAILABLE' }).wifi.port.addon('propose', {})).toMatchObject({ error: { code: 'OUTCOME_UNKNOWN' } })
+  })
+
   it('answers what it asks through the core\'s Wi-Fi doors', async () => {
     const { wifi, core } = link()
     expect(await wifi.answer('machine', {})).toEqual({ id: 'machine-1' })

@@ -8,6 +8,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/state/swarm.dart';
+import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/super_tabs/client.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -47,6 +48,22 @@ class _Catalog {
   }
 }
 
+class _RestoringStore extends MemoryStore {
+  final readingLayout = Completer<void>();
+  final releaseLayout = Completer<void>();
+  bool holdLayout = false;
+
+  @override
+  Future<String?> read(String key) async {
+    final value = await super.read(key);
+    if (holdLayout && key == 'swarm_layout_v1') {
+      readingLayout.complete();
+      await releaseLayout.future;
+    }
+    return value;
+  }
+}
+
 class _Connection extends WsConn {
   _Connection(this.catalog)
     : super(
@@ -78,7 +95,11 @@ class _Connection extends WsConn {
   }
 }
 
-AppNotifier _computer(_Catalog catalog, MemoryStore store) {
+AppNotifier _computer(
+  _Catalog catalog,
+  MemoryStore store, {
+  bool enteredSuperTabs = true,
+}) {
   final connection = _Connection(catalog);
   final app = createApp(
     store: store,
@@ -91,6 +112,7 @@ AppNotifier _computer(_Catalog catalog, MemoryStore store) {
     id: 'owner',
     email: 'owner@example.invalid',
   );
+  if (enteredSuperTabs) app.enterSuperTabs();
   addTearDown(app.dispose);
   return app;
 }
@@ -106,6 +128,63 @@ Future<void> _close(AppNotifier app, Swarm tab) async {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('account membership cannot reveal SuperTabs before deliberate entry', () async {
+    final store = MemoryStore();
+    final app = _computer(_Catalog(), store, enteredSuperTabs: false);
+    app.newSwarm(name: 'Regular work');
+    final regular = app.activeSwarm;
+    await app.superTabs.refreshTabs();
+    expect(app.swarms.where((s) => s.isSuperTab), isEmpty);
+    expect(app.activeSwarm, same(regular));
+    // The hidden shortcut marks a draft. It permits discovery without replacing
+    // or navigating away from the existing regular work.
+    app.newSwarm(newTabPage: true);
+    app.markSuperTabDraft(app.activeSwarmId);
+    final draft = app.activeSwarm;
+    await app.superTabs.refreshTabs();
+    expect(app.swarms, contains(regular));
+    expect(app.activeSwarm, same(draft));
+    expect(app.swarms.where((s) => s.superTabId != null).single.name, 'Pilot');
+  });
+
+  test(
+    'restoring an already-open SuperTab keeps discovery available',
+    () async {
+      final store = MemoryStore();
+      await PaneLayoutStore(storage: store).saveSwarms([
+        Swarm(id: 'work', name: 'Regular work'),
+        Swarm(id: 'pilot', name: 'Pilot', kind: 'superTab')
+          ..superTabId = '0123456789abcdef01234567',
+      ], 'work');
+      final app = _computer(_Catalog(), store, enteredSuperTabs: false);
+      app.currentUser = null;
+      await app.restorePaneLayoutForTest();
+      app.currentUser = const CurrentUserProfile(
+        id: 'owner',
+        email: 'owner@example.invalid',
+      );
+      await app.superTabs.refreshTabs();
+      expect(app.swarms.map((s) => s.id), ['work', 'pilot']);
+      expect(app.activeSwarmId, 'work');
+    },
+  );
+
+  test(
+    'entering SuperTabs for one account does not reveal them to another',
+    () async {
+      final app = _computer(_Catalog(), MemoryStore());
+      app.currentUser = const CurrentUserProfile(
+        id: 'other',
+        email: 'other@example.invalid',
+      );
+      await app.superTabs.refreshTabs();
+      expect(app.swarms.where((s) => s.isSuperTab), isEmpty);
+      app.enterSuperTabs();
+      await app.superTabs.refreshTabs();
+      expect(app.swarms.where((s) => s.isSuperTab), hasLength(1));
+    },
+  );
 
   testWidgets(
     'another computer opens the discovered tab and its shared messages',
@@ -155,6 +234,43 @@ void main() {
       expect(app.swarms.where((s) => s.isSuperTab), hasLength(1));
     },
   );
+
+  test('discovery cannot replace regular tabs during an authenticated layout restore', () async {
+    final store = _RestoringStore();
+    final layout = PaneLayoutStore(storage: store);
+    await layout.saveSwarms([
+      Swarm(id: 'work', name: 'Existing work')
+        ..panes.add(TerminalPane(id: 1, machineId: 'm', agentId: 'a0')),
+      Swarm(id: 'notes', name: 'Notes')
+        ..panes.add(TerminalPane(id: 2, machineId: 'm', agentId: 'a1')),
+    ], 'notes');
+    final saved = store.values['swarm_layout_v1'];
+    final app = _computer(_Catalog(), store);
+    store.holdLayout = true;
+    final restoring = app.restorePaneLayoutForTest();
+    await store.readingLayout.future;
+    List<Swarm>? discoveredDuringRestore;
+    String? savedDuringRestore;
+    try {
+      // Re-seating a signed-in machine restores through the same path while
+      // the workspace is already authenticated. The boot status is no fence.
+      await app.superTabs.refreshTabs();
+      discoveredDuringRestore = app.swarms.where((s) => s.isSuperTab).toList();
+      savedDuringRestore = store.values['swarm_layout_v1'];
+    } finally {
+      store.holdLayout = false;
+      store.releaseLayout.complete();
+      await restoring;
+    }
+    expect(app.swarms.map((s) => s.id), ['work', 'notes']);
+    expect(app.activeSwarmId, 'notes');
+    expect(app.allPanes.map((p) => p.agentId), ['a0', 'a1']);
+    expect(discoveredDuringRestore, isEmpty);
+    expect(savedDuringRestore, saved);
+    await app.superTabs.refreshTabs();
+    expect(app.swarms.map((s) => s.name), ['Existing work', 'Notes', 'Pilot']);
+    expect(app.activeSwarmId, 'notes');
+  });
 
   test(
     'two computers discover the same tab without navigation or a local copy',
@@ -212,27 +328,30 @@ void main() {
     expect(restarted.activeSwarm.superTabId, tab.superTabId);
   });
 
-  test('a hidden Super Tab is listed after a restart and opening it shows it', () async {
-    final catalog = _Catalog();
-    final store = MemoryStore();
-    final first = _computer(catalog, store);
-    await first.superTabs.refreshTabs();
-    expect(first.closedSuperTabs, isEmpty);
-    final tab = first.swarms.singleWhere((s) => s.isSuperTab);
-    await _close(first, tab);
-    final restarted = _computer(catalog, store);
-    // Before discovery the app cannot tell which hidden tabs are still ours.
-    expect(restarted.closedSuperTabs, isEmpty);
-    await restarted.superTabs.refreshTabs();
-    expect(restarted.closedSuperTabs.map((t) => (t.id, t.name)), [
-      (tab.superTabId, 'Pilot'),
-    ]);
-    restarted.openSuperTab(tab.superTabId!, 'Pilot');
-    expect(restarted.closedSuperTabs, isEmpty);
-    expect(restarted.activeSwarm.superTabId, tab.superTabId);
-  });
+  test(
+    'a hidden Swarm is listed after a restart and opening it shows it',
+    () async {
+      final catalog = _Catalog();
+      final store = MemoryStore();
+      final first = _computer(catalog, store);
+      await first.superTabs.refreshTabs();
+      expect(first.closedSuperTabs, isEmpty);
+      final tab = first.swarms.singleWhere((s) => s.isSuperTab);
+      await _close(first, tab);
+      final restarted = _computer(catalog, store);
+      // Before discovery the app cannot tell which hidden tabs are still ours.
+      expect(restarted.closedSuperTabs, isEmpty);
+      await restarted.superTabs.refreshTabs();
+      expect(restarted.closedSuperTabs.map((t) => (t.id, t.name)), [
+        (tab.superTabId, 'Pilot'),
+      ]);
+      restarted.openSuperTab(tab.superTabId!, 'Pilot');
+      expect(restarted.closedSuperTabs, isEmpty);
+      expect(restarted.activeSwarm.superTabId, tab.superTabId);
+    },
+  );
 
-  test('a hidden Super Tab the person left is not offered', () async {
+  test('a hidden Swarm the person left is not offered', () async {
     final catalog = _Catalog();
     final app = _computer(catalog, MemoryStore());
     await app.superTabs.setTabVisible('0123456789abcdef01234567', false);
@@ -241,7 +360,7 @@ void main() {
     expect(app.closedSuperTabs, isEmpty);
   });
 
-  testWidgets('closing a Super Tab offers Reopen and Reopen shows it again', (
+  testWidgets('closing a Swarm offers Reopen and Reopen shows it again', (
     tester,
   ) async {
     final catalog = _Catalog();
@@ -252,12 +371,15 @@ void main() {
     final tab = app.swarms.singleWhere((s) => s.isSuperTab);
     await app.requestCloseSwarm(tab.id);
     await tester.pump();
-    expect(find.text('Super Tab closed. Its agents keep running.'), findsOneWidget);
+    expect(find.text('Swarm closed. Its agents keep running.'), findsOneWidget);
     expect(app.swarms.where((s) => s.isSuperTab), isEmpty);
     await tester.pump(const Duration(milliseconds: 400));
     await tester.tap(find.text('Reopen'));
     await tester.pump();
-    expect(app.swarms.where((s) => s.superTabId == tab.superTabId), hasLength(1));
+    expect(
+      app.swarms.where((s) => s.superTabId == tab.superTabId),
+      hasLength(1),
+    );
     expect(app.closedSuperTabs, isEmpty);
     expect(app.superTabs.hiddenIds, isEmpty);
     await tester.pumpAndSettle();
@@ -266,7 +388,7 @@ void main() {
     await tester.pump();
   });
 
-  testWidgets('the command palette brings a closed Super Tab back by name', (
+  testWidgets('the command palette brings a closed Swarm back by name', (
     tester,
   ) async {
     final catalog = _Catalog();
@@ -285,7 +407,7 @@ void main() {
       '>Pilot',
     );
     await tester.pumpAndSettle();
-    expect(find.text('Closed Super Tabs'), findsWidgets);
+    expect(find.text('Recent Swarms'), findsWidgets);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
     expect(app.activeSwarm.superTabId, tab.superTabId);
@@ -295,7 +417,7 @@ void main() {
     await tester.pump();
   });
 
-  testWidgets('the New Tab page shows a closed Super Tab after a restart', (
+  testWidgets('the New Tab page shows a closed Swarm after a restart', (
     tester,
   ) async {
     final catalog = _Catalog();
@@ -306,10 +428,10 @@ void main() {
     await _close(first, tab);
     final app = _computer(catalog, store)..newSwarm(newTabPage: true);
     await mount(tester, app);
-    expect(find.text('Closed Super Tabs'), findsNothing);
+    expect(find.text('Recent Swarms'), findsNothing);
     await app.superTabs.refreshTabs();
     await tester.pump();
-    expect(find.text('Closed Super Tabs'), findsOneWidget);
+    expect(find.text('Recent Swarms'), findsOneWidget);
     await tester.tap(
       find.byKey(ValueKey('welcome-closed-super-tab-${tab.superTabId}')),
     );
@@ -338,9 +460,7 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('closing an ordinary tab shows no Super Tab notice', (
-    tester,
-  ) async {
+  testWidgets('closing an ordinary tab shows no Swarm notice', (tester) async {
     final app = _computer(_Catalog(), MemoryStore());
     await mount(tester, app);
     await app.superTabs.refreshTabs();
@@ -359,62 +479,74 @@ void main() {
     await tester.pump();
   });
 
-  test('opening a closed Super Tab twice, from any entry, keeps one view', () async {
-    final catalog = _Catalog();
-    final app = _computer(catalog, MemoryStore());
-    await app.superTabs.refreshTabs();
-    final tab = app.swarms.singleWhere((s) => s.isSuperTab);
-    final id = tab.superTabId!;
-    await _close(app, tab);
-    final historyId = app.closedHistory.single.historyId;
-    // List first, then Reopen on the notice.
-    expect(app.openClosedSuperTab(id), isTrue);
-    app.reopenClosedSwarm(historyId: historyId);
-    expect(app.swarms.where((s) => s.superTabId == id), hasLength(1));
-    expect(app.closedHistory, isEmpty);
-    // Reopen first, then the list or Settings.
-    await _close(app, app.swarms.singleWhere((s) => s.superTabId == id));
-    app.reopenClosedSwarm();
-    app.openSuperTab(id, 'Pilot');
-    expect(app.openClosedSuperTab(id), isFalse);
-    expect(app.swarms.where((s) => s.superTabId == id), hasLength(1));
-    expect(app.activeSwarm.superTabId, id);
-  });
+  test(
+    'opening a closed Swarm twice, from any entry, keeps one view',
+    () async {
+      final catalog = _Catalog();
+      final app = _computer(catalog, MemoryStore());
+      await app.superTabs.refreshTabs();
+      final tab = app.swarms.singleWhere((s) => s.isSuperTab);
+      final id = tab.superTabId!;
+      await _close(app, tab);
+      final historyId = app.closedHistory.single.historyId;
+      // List first, then Reopen on the notice.
+      expect(app.openClosedSuperTab(id), isTrue);
+      app.reopenClosedSwarm(historyId: historyId);
+      expect(app.swarms.where((s) => s.superTabId == id), hasLength(1));
+      expect(app.closedHistory, isEmpty);
+      // Reopen first, then the list or Settings.
+      await _close(app, app.swarms.singleWhere((s) => s.superTabId == id));
+      app.reopenClosedSwarm();
+      app.openSuperTab(id, 'Pilot');
+      expect(app.openClosedSuperTab(id), isFalse);
+      expect(app.swarms.where((s) => s.superTabId == id), hasLength(1));
+      expect(app.activeSwarm.superTabId, id);
+    },
+  );
 
-  test('a closed Super Tab opens in the empty New Tab it was chosen from', () async {
-    final catalog = _Catalog();
-    final app = _computer(catalog, MemoryStore());
-    await app.superTabs.refreshTabs();
-    final tab = app.swarms.singleWhere((s) => s.isSuperTab);
-    await _close(app, tab);
-    app.newSwarm(newTabPage: true);
-    final page = app.activeSwarm;
-    final count = app.swarms.length;
-    expect(app.openClosedSuperTab(tab.superTabId!, intoSwarmId: page.id), isTrue);
-    expect(app.swarms, hasLength(count));
-    expect(page.superTabId, tab.superTabId);
-    expect(page.isNewTabPage, isFalse);
-    expect(app.activeSwarm, same(page));
-  });
+  test(
+    'a closed Swarm opens in the empty New Tab it was chosen from',
+    () async {
+      final catalog = _Catalog();
+      final app = _computer(catalog, MemoryStore());
+      await app.superTabs.refreshTabs();
+      final tab = app.swarms.singleWhere((s) => s.isSuperTab);
+      await _close(app, tab);
+      app.newSwarm(newTabPage: true);
+      final page = app.activeSwarm;
+      final count = app.swarms.length;
+      expect(
+        app.openClosedSuperTab(tab.superTabId!, intoSwarmId: page.id),
+        isTrue,
+      );
+      expect(app.swarms, hasLength(count));
+      expect(page.superTabId, tab.superTabId);
+      expect(page.isNewTabPage, isFalse);
+      expect(app.activeSwarm, same(page));
+    },
+  );
 
-  test('a tab the person has left is not offered after an account switch', () async {
-    final catalog = _Catalog();
-    final store = MemoryStore();
-    final app = _computer(catalog, store);
-    await app.superTabs.refreshTabs();
-    final tab = app.swarms.singleWhere((s) => s.isSuperTab);
-    await _close(app, tab);
-    expect(app.closedSuperTabs, hasLength(1));
-    store.values['super_tab.hidden.other'] = '["${tab.superTabId}"]';
-    catalog.fail = '/api/super-tabs';
-    app.currentUser = const CurrentUserProfile(
-      id: 'other',
-      email: 'other@example.invalid',
-    );
-    await app.superTabs.refreshTabs();
-    expect(app.superTabs.hiddenIds, {tab.superTabId});
-    expect(app.closedSuperTabs, isEmpty);
-  });
+  test(
+    'a tab the person has left is not offered after an account switch',
+    () async {
+      final catalog = _Catalog();
+      final store = MemoryStore();
+      final app = _computer(catalog, store);
+      await app.superTabs.refreshTabs();
+      final tab = app.swarms.singleWhere((s) => s.isSuperTab);
+      await _close(app, tab);
+      expect(app.closedSuperTabs, hasLength(1));
+      store.values['super_tab.hidden.other'] = '["${tab.superTabId}"]';
+      catalog.fail = '/api/super-tabs';
+      app.currentUser = const CurrentUserProfile(
+        id: 'other',
+        email: 'other@example.invalid',
+      );
+      await app.superTabs.refreshTabs();
+      expect(app.superTabs.hiddenIds, {tab.superTabId});
+      expect(app.closedSuperTabs, isEmpty);
+    },
+  );
 
   Future<(AppNotifier, List<Swarm>)> threeTabs(WidgetTester tester) async {
     final catalog = _Catalog()
@@ -436,7 +568,7 @@ void main() {
     await tester.pump();
   }
 
-  final closedNotice = find.text('Super Tab closed. Its agents keep running.');
+  final closedNotice = find.text('Swarm closed. Its agents keep running.');
 
   testWidgets('two closes in the same frame leave one notice for the last', (
     tester,
@@ -463,50 +595,53 @@ void main() {
     await finishTest(tester, app);
   });
 
-  testWidgets('closing three Super Tabs 20 ms apart leaves one notice for the last', (
-    tester,
-  ) async {
-    final (app, tabs) = await threeTabs(tester);
-    for (final tab in tabs) {
-      await app.requestCloseSwarm(tab.id);
-      await tester.pump(const Duration(milliseconds: 20));
-    }
-    for (var i = 0; i < 12; i++) {
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(closedNotice.evaluate(), hasLength(lessThanOrEqualTo(1)));
-    }
-    expect(tester.takeException(), isNull);
-    expect(find.text('Reopen'), findsOneWidget);
-    await tester.tap(find.text('Reopen'));
-    await tester.pump();
-    expect(app.swarms.where((s) => s.isSuperTab).map((s) => s.name), [
-      tabs.last.name,
-    ]);
-    await finishTest(tester, app);
-  });
+  testWidgets(
+    'closing three Swarms 20 ms apart leaves one notice for the last',
+    (tester) async {
+      final (app, tabs) = await threeTabs(tester);
+      for (final tab in tabs) {
+        await app.requestCloseSwarm(tab.id);
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+      for (var i = 0; i < 12; i++) {
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(closedNotice.evaluate(), hasLength(lessThanOrEqualTo(1)));
+      }
+      expect(tester.takeException(), isNull);
+      expect(find.text('Reopen'), findsOneWidget);
+      await tester.tap(find.text('Reopen'));
+      await tester.pump();
+      expect(app.swarms.where((s) => s.isSuperTab).map((s) => s.name), [
+        tabs.last.name,
+      ]);
+      await finishTest(tester, app);
+    },
+  );
 
-  testWidgets('a close behind an unrelated notice leaves it and then shows ours', (
-    tester,
-  ) async {
-    final (app, tabs) = await threeTabs(tester);
-    ScaffoldMessenger.of(tester.element(find.byType(SwarmScreen))).showSnackBar(
-      const SnackBar(content: Text('Something else'), persist: false),
-    );
-    await tester.pump(const Duration(milliseconds: 400));
-    await app.requestCloseSwarm(tabs[0].id);
-    await app.requestCloseSwarm(tabs[1].id);
-    await tester.pump(const Duration(milliseconds: 400));
-    expect(find.text('Something else'), findsOneWidget);
-    expect(closedNotice, findsNothing);
-    // The unrelated one runs its 4 s; ours follows, once.
-    await tester.pump(const Duration(seconds: 4));
-    await tester.pump(const Duration(seconds: 1));
-    await tester.pump(const Duration(milliseconds: 400));
-    expect(find.text('Something else'), findsNothing);
-    expect(closedNotice, findsOneWidget);
-    expect(tester.takeException(), isNull);
-    await finishTest(tester, app);
-  });
+  testWidgets(
+    'a close behind an unrelated notice leaves it and then shows ours',
+    (tester) async {
+      final (app, tabs) = await threeTabs(tester);
+      ScaffoldMessenger.of(tester.element(find.byType(SwarmScreen)))
+          .showSnackBar(
+            const SnackBar(content: Text('Something else'), persist: false),
+          );
+      await tester.pump(const Duration(milliseconds: 400));
+      await app.requestCloseSwarm(tabs[0].id);
+      await app.requestCloseSwarm(tabs[1].id);
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('Something else'), findsOneWidget);
+      expect(closedNotice, findsNothing);
+      // The unrelated one runs its 4 s; ours follows, once.
+      await tester.pump(const Duration(seconds: 4));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('Something else'), findsNothing);
+      expect(closedNotice, findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await finishTest(tester, app);
+    },
+  );
 
   testWidgets('a close after the notice timed out shows a fresh one', (
     tester,

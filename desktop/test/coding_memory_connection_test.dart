@@ -86,6 +86,7 @@ void main() {
       });
     });
     connection = LocalCodingMemoryConnection(
+      allowLocalTcpFixtureForTest: true,
       endpoint: LocalCliEndpoint(
         computerId: 'local-fixture',
         wsUri: Uri.parse('ws://127.0.0.1:${server.port}/api/web-ws'),

@@ -1,3 +1,4 @@
+import '../core/home_dir.dart';
 import '../measurement/product_measurement.dart';
 import '../measurement/product_runtime_health.dart';
 import '../measurement/product_connections.dart';
@@ -35,6 +36,7 @@ import 'essential_harness_controller.dart';
 import 'agent_handoff_file.dart';
 import 'agent_switch_handoff.dart';
 import '../agent_messages/agent_messages.dart';
+import '../finder/finder_roots.dart';
 import '../agent_messages/shared_tab_errors.dart';
 import '../agent_messages/shared_tab_placement.dart';
 import '../agent_messages/shared_tabs.dart';
@@ -57,6 +59,7 @@ import '../auth/cli_login.dart';
 import '../bootstrap/agent_prefetch.dart';
 import '../bootstrap/environment_provisioner.dart';
 import '../bootstrap/setup_progress.dart';
+import '../bootstrap/windows_self_install.dart';
 import '../core/viewer_mode.dart';
 import '../core/config.dart';
 import '../core/sleep_aware.dart';
@@ -71,6 +74,7 @@ import '../core/browser_label.dart';
 import '../core/local_hostname.dart';
 import '../core/local_git_projects.dart';
 import '../core/test_run.dart';
+import '../core/runtime_platform.dart';
 import '../core/agent_activity.dart';
 import '../core/models.dart';
 import '../core/harness_resources.dart';
@@ -84,11 +88,13 @@ import '../core/repository_clone.dart';
 import '../core/retry.dart';
 import '../core/process_responsibility.dart';
 import '../core/serial_port_lease.dart';
+import '../core/uninstall_marker.dart';
 import '../autonomous_device/autonomous_device_cli.dart';
 import '../settings/config_store.dart';
 import '../settings/experimental_features.dart';
 import '../core/local_key_value_store.dart';
 import '../core/harness_file_store.dart';
+import '../super_tabs/attachment_upload.dart';
 import '../super_tabs/client.dart';
 import '../super_tabs/controller.dart';
 import '../measurement/setup_preference_store.dart';
@@ -273,6 +279,7 @@ class _AgentChange {
   bool handoffFailed = false;
   String? companionTarget;
   bool launchFailed = false;
+  bool replacementReported = false;
 }
 
 class AgentCreationAttempt {
@@ -802,10 +809,25 @@ class AppNotifier extends ChangeNotifier {
       if (!machine.usesLocalTransport) continue;
       final connection = _pool?[machine.machine.machineId];
       if (connection == null || !connection.isReady) return false;
+      // Windows accepts these frames only over its private pipe.
+      if (connection.trustedPipeMissing) {
+        return false;
+      }
       unawaited(
         connection.sendTerminalFrame(type, payload).catchError((_) => false),
       );
       return true;
+    }
+    return false;
+  }
+
+  /// Whether this computer's daemon pipe was missing or failed proof at the
+  /// last connection attempt. Never true on macOS or Linux.
+  bool get daemonTrustedConnectionMissing {
+    for (final machine in machineStates.values) {
+      if (!machine.usesLocalTransport) continue;
+      final connection = _pool?[machine.machine.machineId];
+      return connection != null && connection.trustedPipeMissing;
     }
     return false;
   }
@@ -827,6 +849,7 @@ class AppNotifier extends ChangeNotifier {
     connection = LocalCodingMemoryConnection(
       endpoint: endpoint,
       machineId: id,
+      localTransport: localDaemonTransport,
       isCurrent: () =>
           _authWorkCurrent(auth) &&
           currentUser?.id == owner &&
@@ -873,8 +896,9 @@ class AppNotifier extends ChangeNotifier {
       ? DaemonOwnerGuard(
           probe: MacResponsibilityProbe(),
           ownPid: pid,
+          // An uninstall at work as well: this restart is a `harness stop` and a start beside it.
           paused: () =>
-              SerialPortLease.held || SerialPortLease.heldByAnotherProcess(),
+              SerialPortLease.heldByAnotherProcess() || UninstallMarker.held(),
           restart: () async {
             final probe = await _discovery.restart();
             return probe.ready ? probe.pid : null;
@@ -907,6 +931,10 @@ class AppNotifier extends ChangeNotifier {
   /// unless a test passes one, so nothing there runs `curl`.
   final AgentPrefetch? agentPrefetch;
   final DesktopUpdater? desktopUpdater;
+
+  /// Windows release builds hand a zip copy to its launcher before setup.
+  final WindowsSelfInstall? windowsSelfInstall;
+  final void Function(int code) _exitApp;
   @visibleForTesting
   final WsConn Function(String machineId)? connectionForTest;
   final Map<String, Timer> _turnActivityWatchdogs = {};
@@ -934,8 +962,23 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed) return;
     final wasForeground = foreground.value;
     foreground.value = state == null || state == AppLifecycleState.resumed;
+    // Every transition, not only the three the listener has callbacks for: hidden -> inactive fires
+    // onShow, and a window shown again without focus must not keep telling the daemon it shows nothing.
+    _announceVisibleAgents();
+    if (wasForeground && !foreground.value) {
+      _awaySince = phoneOfferClock();
+      _missedWhileAway = null;
+    }
     // Back in front: a viewer reads the device log again, and joins it if the boot never got in.
     if (foreground.value && !wasForeground) {
+      final away = _awaySince, missed = _missedWhileAway;
+      _awaySince = null;
+      _missedWhileAway = null;
+      if (away != null &&
+          missed != null &&
+          phoneOfferClock().difference(away) >= phoneOfferAwayAfter) {
+        unawaited(_offerPhoneAway(missed));
+      }
       if (_notificationOfferDue) {
         _notificationOfferDue = false;
         unawaited(notificationOfferStoreForTest.set(true));
@@ -1078,6 +1121,8 @@ class AppNotifier extends ChangeNotifier {
   // Update checks do not depend on the daemon or SSO. A signed-out user should
   // still be able to replace a broken desktop build from the login screen.
   Timer? _updateCheckTimer;
+  // A zip copy whose installer did not start can run, but cannot update itself.
+  bool _selfInstallUnavailable = false;
 
   /// Ends the window in which a restored tile may still claim its terminal —
   /// see [TerminalPane.claimOnFirstAttach]. Without it a machine that only
@@ -1087,7 +1132,8 @@ class AppNotifier extends ChangeNotifier {
   late final DesktopUpdater _updater = desktopUpdater ?? DesktopUpdater();
   Future<ManualUpdateCheck>? _manualUpdateCheckInFlight;
   DesktopUpdateCheck? lastUpdateCheck;
-  bool get updateChecksEnabled => viewer == null && _updater.canCheck;
+  bool get updateChecksEnabled =>
+      viewer == null && !_selfInstallUnavailable && _updater.canCheck;
   String? _skippedDesktopUpdateVersion;
   UpdateInfo? availableUpdate;
   bool isCheckingForUpdate = false;
@@ -1099,6 +1145,7 @@ class AppNotifier extends ChangeNotifier {
   /// than sitting at a 100% that has not finished anything.
   double? updateDownloadFraction;
   String? updateError;
+  bool windowsUpdatePartiallyPublished = false;
   final Set<String> _offlinePollsInFlight = {};
   final Map<String, Object> _offlineRecoveryInFlight = {};
   bool _disposed = false;
@@ -1118,6 +1165,11 @@ class AppNotifier extends ChangeNotifier {
     // A card a sign-out or another sign-in takes away went neither way.
     _endPhoneOffer(ProductOutcome.unknown);
     _phoneOffer = false;
+    _phoneOfferAway = null;
+    _missedWhileAway = null;
+    _phoneOfferAfterWorkAsked = false;
+    _phoneOfferAfterWorkUnanswered = 0;
+    _accountHasPhone = false;
     _closeOwnerMemories();
     _stopMachineRecovery();
     api.resetAccountCache();
@@ -1378,6 +1430,9 @@ class AppNotifier extends ChangeNotifier {
   CurrentUserProfile? get currentUser => _currentUser;
   set currentUser(CurrentUserProfile? profile) {
     if (_currentUser?.id != profile?.id) {
+      // Initial identity loading may follow a restored Swarm; leaving a known
+      // account must not reveal the feature to the next one.
+      if (_currentUser != null) _superTabsEntered = false;
       _closeAttachmentSessions();
       _closeOwnerMemories();
       deviceHosts.clear();
@@ -1659,12 +1714,17 @@ class AppNotifier extends ChangeNotifier {
 
   late final superTabs = SuperTabClient(
     storage: localStore ?? HarnessFileStore.shared,
+    upload: uploadWith(() => api),
     discoveryInterval: kUnderTest ? Duration.zero : const Duration(seconds: 15),
     onTabs: (tabs, hidden) {
-      // The browser can learn its account before the saved layout finishes
-      // loading. Discovery must not persist over that workspace during boot.
+      // Discovery can finish while an already signed-in machine is re-seating
+      // its saved desk, too. Publishing a SuperTab then advances the layout
+      // revision and replaces regular tabs before their restore can finish.
       if (_disposed ||
           status != AppStatus.authenticated ||
+          _paneLayoutRestores != 0 ||
+          _workspaceCleanup != null ||
+          !_superTabsEntered ||
           currentUser?.id == null) {
         return;
       }
@@ -1675,7 +1735,9 @@ class AppNotifier extends ChangeNotifier {
       final namesChanged = !mapEquals(names, _superTabNames);
       _superTabNames = names;
       for (final tab in tabs) {
-        final existing = swarms.where((s) => s.superTabId == tab.id).firstOrNull;
+        final existing = swarms
+            .where((s) => s.superTabId == tab.id)
+            .firstOrNull;
         if (existing != null) {
           if (existing.name != tab.name || !existing.nameIsCustom) {
             existing.name = tab.name;
@@ -1698,8 +1760,19 @@ class AppNotifier extends ChangeNotifier {
       // The closed list is read from these names, so it can change on its own.
       if (changed || namesChanged) notifyListeners();
     },
-    onSnapshot: (controller) {
+    onSelection: (controller) {
       if (_disposed || controller.accountId != currentUser?.id) return;
+      // The Harness Pro shows the open project's Leads, so a project change
+      // is a change to the desk it was told about.
+      _announceOpenPanesToDial();
+    },
+    onSnapshot: (controller) {
+      if (_disposed ||
+          _paneLayoutRestores != 0 ||
+          _workspaceCleanup != null ||
+          controller.accountId != currentUser?.id) {
+        return;
+      }
       var shown = false;
       for (final tab in swarms.where((s) => s.superTabId == controller.tabId)) {
         if (tab.name != controller.snapshot!.name || !tab.nameIsCustom) {
@@ -1716,7 +1789,7 @@ class AppNotifier extends ChangeNotifier {
       if (target == null) {
         throw const SuperTabFailure(
           'MACHINE_UNAVAILABLE',
-          'Connect one of your machines to open Super Tab.',
+          'Connect one of your machines to open Swarm.',
         );
       }
       final result = await superTabMachineRequest(target.machine.machineId, {
@@ -1730,14 +1803,20 @@ class AppNotifier extends ChangeNotifier {
   );
 
   Map<String, String> _superTabNames = {};
+  bool _superTabsEntered = false;
+
+  /// Membership alone must not reveal the hidden feature in a regular workspace.
+  /// The hidden shortcut, an explicit open, or a restored Swarm supplies that intent.
+  void enterSuperTabs() => _superTabsEntered = true;
+
   final StreamController<String> _superTabClosures =
       StreamController<String>.broadcast();
 
-  /// Closing a Super Tab only hides it here, which looks like losing it. Each
+  /// Closing a Swarm only hides it here, which looks like losing it. Each
   /// closure announces its history id so the screen can offer to reopen it.
   Stream<String> get superTabClosures => _superTabClosures.stream;
 
-  /// Super Tabs hidden on this computer that the account still belongs to,
+  /// Swarms hidden on this computer that the account still belongs to,
   /// by name. Saved with the hidden set, so a restart keeps them.
   List<({String id, String name})> get closedSuperTabs {
     final open = {for (final s in swarms) s.superTabId};
@@ -1747,7 +1826,7 @@ class AppNotifier extends ChangeNotifier {
           (
             id: id,
             name: _superTabNames[id]!.trim().isEmpty
-                ? 'Super Tab'
+                ? 'Swarm'
                 : _superTabNames[id]!,
           ),
     ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
@@ -1758,19 +1837,53 @@ class AppNotifier extends ChangeNotifier {
     Map<String, dynamic> payload,
   ) async {
     final revision = _authRevision;
-    final result = await _conn(machineId).request(
-      'super_tabs',
-      payload: payload,
-      timeout: const Duration(seconds: 30),
-    );
+    SuperTabFailure refusal(String code, String? detail, int status) {
+      if (!_authWorkCurrent(revision)) {
+        return const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+      }
+      final body = payload['body'];
+      final command = body is Map ? body['command'] : null;
+      if (payload['action'] == 'backend' &&
+          command is Map &&
+          command['type'] == 'project.create' &&
+          code == 'VALIDATION_ERROR' &&
+          detail?.contains('command.type') == true &&
+          detail?.contains('discriminator') == true) {
+        return SuperTabFailure(
+          'UPDATE_REQUIRED',
+          'The Swarm service needs an update before you can create a project. Your draft is saved.',
+          statusCode: status,
+        );
+      }
+      return SuperTabFailure(
+        code,
+        detail ?? 'Could not reach this Swarm.',
+        statusCode: status,
+      );
+    }
+
+    final Map<String, dynamic> result;
+    try {
+      result = await _conn(machineId).request(
+        'super_tabs',
+        payload: payload,
+        timeout: const Duration(seconds: 30),
+      );
+    } on WsRequestFailure catch (failure) {
+      throw refusal(
+        failure.code,
+        failure.detail,
+        (failure.payload['status'] as num?)?.toInt() ?? 0,
+      );
+    }
     if (!_authWorkCurrent(revision)) {
       throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
     }
     if (result['error'] != null) {
-      throw SuperTabFailure(
+      throw refusal(
         result['error'].toString(),
-        result['detail'] as String? ?? 'Could not reach this Super Tab.',
-        statusCode: (result['status'] as num?)?.toInt() ?? 0,
+        result['detail'] as String?,
+        (result['status'] as num?)?.toInt() ?? 0,
       );
     }
     return result;
@@ -1786,11 +1899,13 @@ class AppNotifier extends ChangeNotifier {
   void bindSuperTab(String swarmId, String tabId, String name) {
     final swarm = swarms.where((s) => s.id == swarmId).firstOrNull;
     if (swarm == null) return;
+    enterSuperTabs();
     // A discovery response can beat the creation response back to this
     // computer. Keep the lead form's tab and retain any already-open panes.
-    for (final duplicate in swarms
-        .where((s) => s.id != swarmId && s.superTabId == tabId)
-        .toList()) {
+    for (final duplicate
+        in swarms
+            .where((s) => s.id != swarmId && s.superTabId == tabId)
+            .toList()) {
       for (final pane in duplicate.panes) {
         if (!swarm.panes.contains(pane)) swarm.panes.add(pane);
       }
@@ -1809,11 +1924,12 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// The one way to show a Super Tab: focus its view if it is open, else give
+  /// The one way to show a Swarm: focus its view if it is open, else give
   /// it one. An untouched New Tab page named by [intoSwarmId] becomes the view
   /// instead of being left behind. Any history entry for the tab is dropped, so
   /// Reopen later cannot add a second view.
   void openSuperTab(String tabId, String name, {String? intoSwarmId}) {
+    enterSuperTabs();
     _rememberSuperTabVisibility(tabId, true);
     _closedHistory.removeWhere(
       (entry) => entry is ClosedSwarm && entry.superTabId == tabId,
@@ -1851,14 +1967,17 @@ class AppNotifier extends ChangeNotifier {
 
   void _rememberSuperTabVisibility(String tabId, bool visible) {
     if (localStore == null) return;
-    unawaited(superTabs.setTabVisible(tabId, visible).catchError((Object error) {
-      appLog.warn('super-tab', 'Could not save tab visibility: $error');
-    }));
+    unawaited(
+      superTabs.setTabVisible(tabId, visible).catchError((Object error) {
+        appLog.warn('super-tab', 'Could not save tab visibility: $error');
+      }),
+    );
   }
 
   void markSuperTabDraft(String swarmId) {
     final swarm = swarms.where((s) => s.id == swarmId).firstOrNull;
     if (swarm == null) return;
+    enterSuperTabs();
     swarm.kind = 'superTab';
     _persistLayout();
     notifyListeners();
@@ -1881,16 +2000,40 @@ class AppNotifier extends ChangeNotifier {
 
   Future<Agent> recoverSuperTabCreation(
     String machineId,
-    String creationId,
-  ) async {
-    final revision = _authRevision;
-    final result = await _conn(machineId).request(
+    String creationId, {
+    bool cancelIfMissing = false,
+  }) async {
+    final revision = _authRevision, account = currentUser?.id;
+    var result = await _conn(machineId).request(
       'agent_create_status',
       payload: {'creationId': creationId},
       timeout: const Duration(seconds: 10),
     );
-    if (!_authWorkCurrent(revision)) {
+    if (!_authWorkCurrent(revision) || currentUser?.id != account) {
       throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+    }
+    // Older Swarm bootstraps exceeded the native prompt limit, which rejects
+    // before writing a receipt. Fence that exact missing intent durably before
+    // allowing a retry; an uncertain/mismatched response must stay locked.
+    if (cancelIfMissing &&
+        result['creationId'] == creationId &&
+        result['state'] == 'missing') {
+      result = await _conn(machineId).request(
+        'agent_create_cancel',
+        payload: {'creationId': creationId},
+        timeout: const Duration(seconds: 10),
+      );
+      if (!_authWorkCurrent(revision) || currentUser?.id != account) {
+        throw const SuperTabFailure('ACCOUNT_CHANGED', 'The account changed.');
+      }
+    }
+    if (cancelIfMissing &&
+        result['creationId'] == creationId &&
+        result['state'] == 'cancelled') {
+      throw const SuperTabFailure(
+        'CREATION_FAILED',
+        'The previous startup request was cancelled. Try again to start this project.',
+      );
     }
     if (result['creationId'] == creationId && result['state'] == 'failed') {
       final failure = result['failure'] is Map
@@ -2722,9 +2865,38 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// One utility tab for physical devices.
+  /// Devices stays inside an active Swarm; ordinary workspaces keep their
+  /// existing utility tab. Opening it never changes the Swarm's membership.
   void openDevices() {
     if (!devicesEnabled) return;
+    final swarm = activeSwarm;
+    if (swarm.isSuperTab && swarm.superTabId != null) {
+      final account = currentUser?.id;
+      final controller = superTabs.peek(swarm.superTabId!);
+      if (controller != null) {
+        controller.selectDevices();
+      } else {
+        unawaited(
+          superTabs
+              .open(swarm.superTabId!)
+              .then((controller) {
+                if (!_disposed &&
+                    currentUser?.id == account &&
+                    identical(activeSwarm, swarm)) {
+                  controller.selectDevices();
+                }
+              })
+              .catchError((Object error) {
+                if (!_disposed &&
+                    currentUser?.id == account &&
+                    identical(activeSwarm, swarm)) {
+                  debugPrint('Could not open Devices in the Swarm: $error');
+                }
+              }),
+        );
+      }
+      return;
+    }
     final existing = swarms.where((s) => s.isDevices).firstOrNull;
     if (existing != null) {
       _ensureDevicesViewer(existing);
@@ -2768,6 +2940,23 @@ class AppNotifier extends ChangeNotifier {
       tab.panes.insert(0, pane);
       tab.focusedPaneId ??= pane.id;
     }
+    if (tab.isSuperTab) {
+      // Your devices is a dashboard in the Swarm, without its own agent.
+      // Clear ownership left by an earlier embedded conversation so closing
+      // that old agent elsewhere cannot remove this independent viewer.
+      final viewer = tab.panes.firstWhere((pane) => pane.isDevices)
+        ..machineId = ''
+        ..ownerAgentId = null
+        ..fixedWidth = null;
+      tab
+        ..focusedPaneId = viewer.id
+        ..previousPaneId = null
+        ..zoomedPaneId = null
+        ..arranged = null
+        ..arrangedKey = null
+        ..arrangedMinimum = null;
+      return;
+    }
     // Reserve the conversation before any network or launch work. Setup and
     // failures belong in this same right-hand pane, never above the dashboard.
     if (!tab.panes.any((pane) => !pane.isViewer)) {
@@ -2779,9 +2968,33 @@ class AppNotifier extends ChangeNotifier {
     );
   }
 
-  Future<void> showDevicesTerminal(String machineId, String agentId) async {
+  bool isDevicesWorkspace(Swarm tab) =>
+      tab.isDevices ||
+      (tab.isSuperTab &&
+          tab.superTabId != null &&
+          superTabs.peek(tab.superTabId!)?.devicesSelected == true);
+
+  /// Called only after the Swarm has detached its previous group's views.
+  void prepareSuperTabDevices(String swarmId) {
+    final tab = swarms.where((tab) => tab.id == swarmId).firstOrNull;
+    if (tab == null || !tab.isSuperTab || !isDevicesWorkspace(tab)) return;
+    _ensureDevicesViewer(tab);
+    notifyListeners();
+  }
+
+  Future<void> showDevicesTerminal(
+    String machineId,
+    String agentId, {
+    String? swarmId,
+  }) async {
     if (!devicesEnabled) return;
-    final tab = swarms.where((tab) => tab.isDevices).firstOrNull;
+    final tab = swarms
+        .where(
+          (tab) =>
+              (swarmId == null ? tab.isDevices : tab.id == swarmId) &&
+              tab.isDevices,
+        )
+        .firstOrNull;
     if (tab == null) return;
     _ensureDevicesViewer(tab);
     final viewer = tab.panes.firstWhere((pane) => pane.isDevices);
@@ -3186,26 +3399,42 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// Close removes these views. Super Tabs own work independently of their
+  /// Close removes these views. Swarms own work independently of their
   /// views; ordinary tabs stop a session only when its last view closes.
   Future<void> requestCloseSwarm(String id) {
     final tab = swarms.where((s) => s.id == id).firstOrNull;
     if (tab == null) return Future.value();
     final captured = tab.panes.toList();
-    return _requestViewClose(
-      'tab:$id',
-      tab,
+    return _afterCloseGuards(
       captured,
-      () async {
-        if (tab.panes.length != captured.length ||
-            !captured.every(tab.panes.contains)) {
-          return;
-        }
-        await closeSwarm(id);
-      },
-      tabName: tab.name,
-      wholeTab: true,
+      () => _requestViewClose(
+        'tab:$id',
+        tab,
+        captured,
+        () async {
+          if (tab.panes.length != captured.length ||
+              !captured.every(tab.panes.contains)) {
+            return;
+          }
+          await closeSwarm(id);
+        },
+        tabName: tab.name,
+        wholeTab: true,
+      ),
     );
+  }
+
+  /// Runs [close] once every pane in [panes] with a close check has passed
+  /// it — a Finder tile asks about its unsaved tabs (`TerminalPane.beforeClose`),
+  /// one tile at a time. A tile kept open keeps the whole close from happening.
+  Future<void> _afterCloseGuards(
+    List<TerminalPane> panes,
+    Future<void> Function() close,
+  ) async {
+    for (final pane in panes) {
+      if (pane.beforeClose case final guard? when !await guard()) return;
+    }
+    await close();
   }
 
   Future<void> requestClosePane(int paneId) {
@@ -3214,19 +3443,35 @@ class AppNotifier extends ChangeNotifier {
     final pane = tab.panes.where((p) => p.id == paneId).firstOrNull;
     if (pane == null) return Future.value();
     if (tab.isCompanions || tab.isDevices) return requestCloseSwarm(tab.id);
+    // A Finder and its chat are one group: closing the Finder closes the chat,
+    // which takes the Finder with it, exactly as the chat's own Close does.
+    if (pane.isFinder && pane.ownerAgentId != null) {
+      final chat = tab.panes
+          .where(
+            (p) =>
+                !p.isViewer &&
+                p.machineId == pane.machineId &&
+                p.agentId == pane.ownerAgentId,
+          )
+          .firstOrNull;
+      if (chat != null) return requestClosePane(chat.id);
+    }
     final captured = tab.panes
         .where(
           (p) =>
               identical(p, pane) ||
-              (!pane.isWeb &&
-                  p.isWeb &&
-                  p.machineId == pane.machineId &&
-                  p.ownerAgentId == pane.agentId),
+              p.viewsAgent(pane.machineId, pane.agentId),
         )
         .toList();
-    return _requestViewClose('pane:${tab.id}:$paneId', tab, captured, () async {
-      if (tab.panes.contains(pane)) await closePane(paneId, swarmId: tab.id);
-    });
+    return _afterCloseGuards(
+      captured,
+      () =>
+          _requestViewClose('pane:${tab.id}:$paneId', tab, captured, () async {
+            if (tab.panes.contains(pane)) {
+              await closePane(paneId, swarmId: tab.id);
+            }
+          }),
+    );
   }
 
   Future<void> _requestViewClose(
@@ -3240,10 +3485,15 @@ class AppNotifier extends ChangeNotifier {
     if (_disposed) return Future.value();
     if (_viewCloseRequests[key] case final pending?) return pending;
     bool canStop(String machineId, String agentId) {
-      // A Super Tab pane is only a view into shared work. This guard also covers
+      // A Swarm pane is only a view into shared work. This guard also covers
       // the close shortcut, native menu and whole-tab dismissal, including a
-      // regular tab becoming a Super Tab while a close review is pending.
-      if (tab.isSuperTab) return false;
+      // regular tab becoming a Swarm while a close review is pending.
+      // A Product Manager keeps running when its ordinary view closes too.
+      if (tab.isSuperTab ||
+          superTabs.leadProtectionReasonForHarness(machineId, agentId) !=
+              null) {
+        return false;
+      }
       if (!swarms.contains(tab) ||
           (wholeTab &&
               (tab.panes.length != closing.length ||
@@ -3786,6 +4036,48 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  Future<void> _openSuperTabProject(
+    MachineState source,
+    String tabId,
+    String projectId,
+  ) async {
+    final open = swarms.where((s) => s.superTabId == tabId).firstOrNull;
+    final name = open?.name ?? _superTabNames[tabId];
+    // A tab this account does not belong to is nobody's to open.
+    if (name == null) return;
+    _requestDeviceWindow(source);
+    // Every announce until the project lands says the device caused it: the
+    // open and the refresh can take longer than the daemon's echo window, and
+    // an announce naming the tab's old project would pull the device off the
+    // Lead it just picked.
+    final pick = ++_devicePick;
+    _announceFromDevice = true;
+    final abandon = Timer(const Duration(seconds: 5), () {
+      if (_devicePick == pick) _announceFromDevice = false;
+    });
+    try {
+      _fromDevice(
+        () => open == null ? openSuperTab(tabId, name) : selectSwarm(open.id),
+      );
+      final controller = await superTabs.open(tabId);
+      if (_disposed || _devicePick != pick || !_announceFromDevice) return;
+      if (controller.snapshot == null) await controller.refresh();
+      if (_disposed || _devicePick != pick || !_announceFromDevice) return;
+      final project = controller.snapshot?.projects
+          .where((p) => p.id == projectId)
+          .firstOrNull;
+      if (project == null) return;
+      controller.select(project.leadConversationId);
+      // Selecting what is already selected announces nothing by itself.
+      _announceOpenPanesToDial();
+    } catch (error) {
+      appLog.warn('super-tab', 'Could not open the picked project: $error');
+    } finally {
+      abandon.cancel();
+      if (_devicePick == pick) _announceFromDevice = false;
+    }
+  }
+
   void _noteNavigation() {
     _paneFocusByUser = !_navigatingFromDevice;
     // A device's move is not a person opening anything — but it does leave a
@@ -3998,6 +4290,8 @@ class AppNotifier extends ChangeNotifier {
     this.environmentProvisioner,
     AgentPrefetch? agentPrefetch,
     this.desktopUpdater,
+    WindowsSelfInstall? windowsSelfInstall,
+    void Function(int code)? exitApp,
     this.connectionForTest,
     ProductMeasurement? productMeasurement,
     SignInClient? cliLogin,
@@ -4017,6 +4311,12 @@ class AppNotifier extends ChangeNotifier {
            (kUnderTest
                ? null
                : AgentPrefetch(log: (line) => appLog.info('setup', line))),
+       windowsSelfInstall =
+           windowsSelfInstall ??
+           (RuntimePlatform.isWindows && kReleaseMode && !kUnderTest && !kViewerMode
+               ? WindowsSelfInstall()
+               : null),
+       _exitApp = exitApp ?? exit,
        alerts = alerts ?? AlertSounds(store: alertSoundStore),
        agentAlerts = agentAlerts ?? AgentAlerts(),
        systemNotifications =
@@ -4335,9 +4635,12 @@ class AppNotifier extends ChangeNotifier {
   bool Function() harnessInstalledBefore = kUnderTest
       ? () => false
       : () {
-          final home = Platform.environment['HOME'];
+          final home = maybeHomeDir();
           return home == null ||
-              FileSystemEntity.typeSync('$home/.harness/cli') !=
+              FileSystemEntity.typeSync(
+                    '$home${Platform.pathSeparator}.harness'
+                    '${Platform.pathSeparator}cli',
+                  ) !=
                   FileSystemEntityType.notFound;
         };
 
@@ -4745,7 +5048,9 @@ class AppNotifier extends ChangeNotifier {
     // restarted — has never been told what is on the grid. Without this
     // the dial goes back to beeping about tiles in plain sight until the
     // next time a pane happens to change.
+    _announcedVisible.remove(machineId);
     _announceOpenPanesToDial();
+    _announceVisibleAgents();
     _announceUnreadToDial();
     // ...nor which tile this window is looking at. The daemon repeats that to the dial after every
     // list push, which is what keeps the two screens from drifting apart — but it can only repeat
@@ -4806,7 +5111,71 @@ class AppNotifier extends ChangeNotifier {
     if (previousMachineId != null && previousMachineId != machineId) {
       _sendAppFocus(previousMachineId, null);
     }
+    _announcedFocusAgentId = machineId == null ? null : agentId;
     if (machineId != null) _sendAppFocus(machineId, agentId);
+    // The selected pane moved with a tab switch or a close, and the tiles on screen moved with it.
+    _announceVisibleAgents();
+  }
+
+  String? _announcedFocusAgentId;
+
+  /// The signature of the `visibleAgents` last sent to each machine's daemon, so a change in what is
+  /// on screen is sent once and a repeat is not. Forgotten on (re)connect: a new daemon has no list.
+  final Map<String, String> _announcedVisible = {};
+
+  /// Whether the super tab [swarmId] shows its terminal canvas (it hides it behind chat or the
+  /// member list, with the panes still mounted `Offstage`). Only the workspace knows.
+  String? _superTerminalsShownSwarm;
+
+  void setSuperTabTerminalsShown(String swarmId, bool shown) {
+    final next = shown ? swarmId : null;
+    if (_superTerminalsShownSwarm == next ||
+        (!shown && _superTerminalsShownSwarm != swarmId)) {
+      return;
+    }
+    _superTerminalsShownSwarm = next;
+    _announceVisibleAgents();
+  }
+
+  /// The agents on [machineId] whose tiles a person can see in this window right now: the active
+  /// tab's mounted, non-`Offstage` tiles (the zoomed one alone while zoomed), and none while the
+  /// window is minimized or hidden to the tray. A window that is merely behind another app still
+  /// shows its tiles, so it still lists them; only hidden/paused/detached empty the list.
+  List<String> visibleAgentIds(String machineId) {
+    switch (lifecycle()) {
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        return const [];
+      case AppLifecycleState.resumed:
+      case AppLifecycleState.inactive:
+      case null:
+        break;
+    }
+    final tab = activeSwarm;
+    if (tab.isStore || tab.isOrchestrator) return const [];
+    if (tab.isSuperTab && _superTerminalsShownSwarm != tab.id) return const [];
+    return [
+      for (final pane in tab.panes)
+        if (pane.machineId == machineId &&
+            (tab.zoomedPaneId == null || pane.id == tab.zoomedPaneId))
+          ?pane.agentId,
+    ];
+  }
+
+  /// Tell each daemon on this computer which terminals are on screen, when that changed.
+  void _announceVisibleAgents() {
+    final pool = _pool;
+    if (pool == null) return;
+    for (final machineId in pool.machineIds) {
+      final list = visibleAgentIds(machineId);
+      if (_announcedVisible[machineId] == list.join(',')) continue;
+      if (_deskConnection(machineId) == null) continue;
+      _sendAppFocus(
+        machineId,
+        machineId == _announcedFocusMachineId ? _announcedFocusAgentId : null,
+      );
+    }
   }
 
   /// The socket [machineId]'s desk frames ride — `app_focus`, `app_panes`, `app_swarms`, `app_unread`,
@@ -4823,10 +5192,15 @@ class AppNotifier extends ChangeNotifier {
     // Never create a socket just to move focus, and never queue stale focus
     // across a reconnect. The connected callback reasserts the current pane.
     final send = focusFrameSenderForTest;
+    final visible = visibleAgentIds(machineId);
+    _announcedVisible[machineId] = visible.join(',');
     final pending = send != null
         ? send(machineId, agentId)
         : _deskConnection(machineId)?.sendTerminalFrame('app_focus', {
             'agentId': agentId,
+            // Every terminal of this machine that is on screen; [] for a hidden window. An older
+            // daemon ignores it.
+            'visibleAgents': visible,
             if (_deviceFocusRevision != null)
               'focusRevision': _deviceFocusRevision,
           });
@@ -4927,7 +5301,13 @@ class AppNotifier extends ChangeNotifier {
   /// Re-send the tile roster because the WINDOW moved, not because the tiles
   /// did. Public so the lifecycle listener can say so; the roster itself is
   /// unchanged and the `foreground` flag riding with it is the point.
-  void announceWindowForeground() => _announceOpenPanesToDial();
+  void announceWindowForeground() {
+    _announceOpenPanesToDial();
+    _announceVisibleAgents();
+  }
+
+  bool _announceFromDevice = false;
+  int _devicePick = 0;
 
   /// The tile roster and the tabs, to every daemon this window reaches over
   /// its loopback ([_deskConnection]) — never a relayed machine's.
@@ -4984,11 +5364,22 @@ class AppNotifier extends ChangeNotifier {
           ];
     // The swarms travel with the tiles: the dial names the one on screen above the agent and offers
     // the others, and a pick there comes back as `dial_swarm`.
+    final fromDevice = _announceFromDevice;
     final swarmRows = [
       for (final swarm in swarms)
         {
           'id': swarm.id,
           'name': swarm.name,
+          // The backend tab and the project open in it, for a device that
+          // draws the Swarm's Leads and asks for one by these ids. Left out
+          // while the tab has not loaded: a project is not guessed.
+          if (swarm.superTabId case final tabId?) ...{
+            'superTabId': tabId,
+            if (superTabs.peek(tabId) case final controller?)
+              if (controller.snapshot?.projectFor(controller.selectedId)
+                  case final project?)
+                'projectId': project.id,
+          },
           'agentIds': [
             for (final pane in swarm.panes)
               if (onDial(pane)) pane.agentId!,
@@ -5034,6 +5425,9 @@ class AppNotifier extends ChangeNotifier {
             .sendTerminalFrame('app_swarms', {
               'active': activeSwarmId,
               'swarms': swarmRows,
+              // Set on the announces a device's pick caused, so the daemon
+              // does not send the pick back to the device as a new focus.
+              if (fromDevice) 'fromDevice': true,
               // Only the active one's. It is the only grid the device draws, and sending every tab's
               // geometry would be two dozen shapes to carry one.
               'tiles': activeTiles,
@@ -5515,7 +5909,10 @@ class AppNotifier extends ChangeNotifier {
       // serve a computer that runs the harness CLI. The updater is not merely useless there — it
       // throws on an architecture it has no channel for (`ios_arm64`), from inside bootstrap.
       if (viewer == null) {
-        _startUpdateChecking();
+        if (await _selfInstallTookOver()) return;
+        if (!_selfInstallUnavailable) {
+          _startUpdateChecking();
+        }
         final environmentReady = await _prepareEnvironment();
         if (!environmentReady) return;
       }
@@ -5528,6 +5925,25 @@ class AppNotifier extends ChangeNotifier {
         _lastError = 'Could not complete sign-in. Please sign in again.';
       }
       notifyListeners();
+    }
+  }
+
+  /// A zip copy yields to Harness.exe; installed copies schedule cleanup.
+  Future<bool> _selfInstallTookOver() async {
+    final selfInstall = windowsSelfInstall;
+    if (selfInstall == null) return false;
+    switch (await selfInstall.ensureInstalled()) {
+      case Relaunching():
+        appLog.info('setup', 'handing over to Harness.exe --install');
+        flushAppLog(durable: true);
+        _exitApp(0);
+        return true;
+      case SelfInstallFailed(:final message):
+        _selfInstallUnavailable = true;
+        appLog.warn('setup', message);
+        return false;
+      case AlreadyInstalled():
+        return false;
     }
   }
 
@@ -6827,6 +7243,7 @@ class AppNotifier extends ChangeNotifier {
   void _recordUpdateCheck(DesktopUpdateCheck result, {bool manual = false}) {
     if (_disposed) return;
     lastUpdateCheck = result;
+    if (windowsUpdatePartiallyPublished) return;
     if (isInstallingUpdate) return;
     final info = result.update;
     if (info != null) {
@@ -6854,7 +7271,7 @@ class AppNotifier extends ChangeNotifier {
   Future<ManualUpdateCheck> checkForUpdates() {
     // Viewer builds are updated by their app store. Do not even construct a
     // desktop updater there: those platforms have no desktop artifact channel.
-    if (viewer != null) {
+    if (viewer != null || _selfInstallUnavailable) {
       return Future.value(
         const ManualUpdateCheck(check: DesktopUpdateCheck.disabled()),
       );
@@ -6939,7 +7356,8 @@ class AppNotifier extends ChangeNotifier {
     return result.status == DesktopUpdateCheckStatus.upToDate ? null : captured;
   }
 
-  /// Clears a failed install without burying the offer.
+  /// Clears an untouched-install failure without burying the offer. A partial
+  /// Windows publication clears the offer so it cannot prompt the same retry.
   ///
   /// Skipping is permanent — it records the version so the background check
   /// stops raising it. A failure is not a decision about the version, so the
@@ -6947,6 +7365,7 @@ class AppNotifier extends ChangeNotifier {
   void dismissUpdateError() {
     if (updateError == null) return;
     updateError = null;
+    if (windowsUpdatePartiallyPublished) availableUpdate = null;
     notifyListeners();
   }
 
@@ -6964,10 +7383,16 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// Downloads, verifies, and installs only after an explicit user action.
-  /// A failed operation leaves the running app untouched and retryable.
+  /// A Windows publication failure may leave installed files changed and
+  /// requires a restart or launcher repair before another attempt.
   Future<bool> installAvailableUpdate({UpdateInfo? update}) async {
     final chosen = update ?? availableUpdate;
-    if (_disposed || viewer != null || chosen == null || isInstallingUpdate) {
+    if (_disposed ||
+        viewer != null ||
+        _selfInstallUnavailable ||
+        chosen == null ||
+        isInstallingUpdate ||
+        windowsUpdatePartiallyPublished) {
       return false;
     }
     // Reassigned once the manifest has been re-read below; the failure messages
@@ -7049,6 +7474,17 @@ class AppNotifier extends ChangeNotifier {
       flushAppLog(durable: true);
       productRuntimeHealth?.cleanExit();
       exit(0);
+    } on WindowsPartialUpdateException catch (error) {
+      finish(ProductOutcome.failed);
+      finishApply?.call(ProductOutcome.failed);
+      productRuntimeHealth?.cancelUpdate();
+      windowsUpdatePartiallyPublished = true;
+      updateError = error.launcherNeedsRepair
+          ? 'Harness changed update files but could not finish. Close Harness, rename Harness.exe.old to Harness.exe in the install folder, then open Harness again.'
+          : error.publicationIncomplete
+          ? 'Harness changed update files but could not finish. Close Harness and open it again. The update may not be installed.'
+          : 'Harness installed update files but could not open. Close Harness and open it again.';
+      return false;
     } catch (error) {
       finish(ProductOutcome.failed);
       finishApply?.call(ProductOutcome.failed);
@@ -7169,8 +7605,21 @@ class AppNotifier extends ChangeNotifier {
   /// launch, which a new install makes as a guest ([_offerPhoneAtLaunch]), or else after the first
   /// sign-in by hand ([_offerPhoneAfterSignIn]) — never again once Add Phone has been opened here,
   /// the card put away, or the account found to have a phone ([_phoneOfferDone]).
+  ///
+  /// A computer that opened signed in was marked offered without ever showing the card, so it gets
+  /// that one showing after work instead ([_offerPhoneAfterWork], [_phoneOfferSeen]).
   bool get phoneOfferShowing => _phoneOffer;
   bool _phoneOffer = false;
+
+  /// Which offer [_phoneOffer] is: the first one's, the one after work ([_offerPhoneAfterWork]) or
+  /// the one after time away ([_offerPhoneAway]), each counted as its own flow.
+  ProductFlow _phoneOfferFlow = ProductFlow.phoneOffer;
+
+  /// What the card says when it is offered after time away ([_offerPhoneAway]): the harness, whether
+  /// it waited on the person or finished, and how many minutes ago. Null for the card's usual words.
+  ({String agent, bool waited, int minutes})? get phoneOfferAway =>
+      _phoneOffer ? _phoneOfferAway : null;
+  ({String agent, bool waited, int minutes})? _phoneOfferAway;
 
   /// The card's observation ([ProductFlow.phoneOffer]): begun once it is on screen
   /// ([phoneOfferShown]), ended once — ok by its Add Phone, cancelled by its ×, unknown when the
@@ -7182,7 +7631,9 @@ class AppNotifier extends ChangeNotifier {
   /// offer, however often the card is built again.
   void phoneOfferShown() {
     if (!_phoneOffer || _phoneOfferMeasure != null) return;
-    _phoneOfferMeasure = productMeasurement.begin(ProductFlow.phoneOffer);
+    _markPhoneOfferSeen();
+    _countPhoneOfferShown();
+    _phoneOfferMeasure = productMeasurement.begin(_phoneOfferFlow);
   }
 
   void _endPhoneOffer(ProductOutcome outcome) {
@@ -7196,12 +7647,14 @@ class AppNotifier extends ChangeNotifier {
   void addPhoneOpened(AddPhoneOpening from) {
     productMeasurement.addPhoneOpened(from);
     if (from == AddPhoneOpening.offer) _endPhoneOffer(ProductOutcome.ok);
+    _stopPhoneOffers();
     dropPhoneOffer();
   }
 
-  /// The card's ×: put away for good ([dropPhoneOffer]).
+  /// The card's ×: put away for good ([dropPhoneOffer]), and no card after time away either.
   void dismissPhoneOffer() {
     _endPhoneOffer(ProductOutcome.cancelled);
+    _stopPhoneOffers();
     dropPhoneOffer();
   }
 
@@ -7213,7 +7666,9 @@ class AppNotifier extends ChangeNotifier {
     _endPhoneOffer(ProductOutcome.unknown);
     final showing = _phoneOffer;
     _phoneOffer = false;
+    _phoneOfferAway = null;
     _markPhoneOfferDone();
+    _markPhoneOfferSeen();
     if (showing) notifyListeners();
   }
 
@@ -7248,6 +7703,228 @@ class AppNotifier extends ChangeNotifier {
     _paneLayout?.storage.write(_phoneOfferDoneKey, '1').catchError((_) {});
   }
 
+  /// This computer's record that the card has been on its screen, or Add Phone opened here: unlike
+  /// [_phoneOfferDoneKey], never written by a launch that only skipped the offer. What
+  /// [_offerPhoneAfterWork] reads, so a computer sees the card once, whichever way it came.
+  static const _phoneOfferSeenKey = 'phone_offer_seen';
+
+  /// [_phoneOfferSeenKey], once read or written.
+  bool? _phoneOfferSeenHere;
+
+  /// Whether the card has had its one showing on this computer. Nowhere to remember it is taken as
+  /// seen, as for [_phoneOfferDone].
+  Future<bool> _phoneOfferSeen() async {
+    if (_phoneOfferSeenHere case final seen?) return seen;
+    final storage = _paneLayout?.storage;
+    if (storage == null) return true;
+    try {
+      return _phoneOfferSeenHere =
+          (await storage.read(_phoneOfferSeenKey)) == '1';
+    } catch (_) {
+      return true;
+    }
+  }
+
+  void _markPhoneOfferSeen() {
+    if (_phoneOfferSeenHere == true) return;
+    _phoneOfferSeenHere = true;
+    // Never awaited: a write that fails costs one more card on a later run.
+    _paneLayout?.storage.write(_phoneOfferSeenKey, '1').catchError((_) {});
+  }
+
+  /// [_offerPhoneAfterWork] has been asked in this run, for this account: one devices read a run.
+  bool _phoneOfferAfterWorkAsked = false;
+
+  /// Device reads [_offerPhoneAfterWork] has had in this run that gave no list to judge by. An
+  /// older CLI with no device list answers none at every finished turn, so it stops asking after
+  /// [_phoneOfferUnansweredReads] rather than read at each one for the rest of the run.
+  int _phoneOfferAfterWorkUnanswered = 0;
+  static const _phoneOfferUnansweredReads = 3;
+
+  /// A devices read in this run found a phone or a browser on this account: no card, and no read to
+  /// find that out again at each return to the window ([_offerPhoneAway]) — each one reaches the
+  /// backend through the daemon, for the many accounts that already have a phone.
+  bool _accountHasPhone = false;
+
+  /// The card for a computer that has never shown it ([_phoneOfferSeen]), on an account with no phone
+  /// or browser yet: once, after one of the person's own harnesses here finished a turn — beside work
+  /// that just went well, not over a launch.
+  ///
+  /// ⚠️ **Every computer that opened signed in was marked offered at launch and never saw the card**
+  /// ([_offerPhoneAtLaunch]): in the week to 2026-10-19, 59 of the 103 people working on Desktop used
+  /// no phone, with only the title bar's icon to find Add Phone by. Still once per computer: a computer that
+  /// showed the first card, or opened Add Phone, has seen it.
+  Future<void> _offerPhoneAfterWork() async {
+    if (_phoneOfferAfterWorkAsked ||
+        _accountHasPhone ||
+        _phoneOffer ||
+        viewer != null ||
+        !signedIn ||
+        status != AppStatus.authenticated) {
+      return;
+    }
+    _phoneOfferAfterWorkAsked = true;
+    final revision = _authRevision;
+    if (await _phoneOfferSeen()) return;
+    // No list to judge by: asked again at a later finished turn, a few times a run at most.
+    void unanswered() => _phoneOfferAfterWorkAsked =
+        ++_phoneOfferAfterWorkUnanswered >= _phoneOfferUnansweredReads;
+    bool hasPhone;
+    try {
+      final devices = await loadDevices();
+      if (devices == null) {
+        unanswered();
+        return;
+      }
+      hasPhone = devices.devices.any(
+        (device) => !device.isMachine && !device.self,
+      );
+    } catch (_) {
+      unanswered();
+      return;
+    }
+    if (!_authWorkCurrent(revision) || !signedIn || _phoneOffer) return;
+    if (hasPhone) {
+      _accountHasPhone = true;
+      _markPhoneOfferSeen();
+      return;
+    }
+    _phoneOfferFlow = ProductFlow.phoneOfferAfterWork;
+    _phoneOfferAway = null;
+    _phoneOffer = true;
+    notifyListeners();
+  }
+
+  /// [_offerPhoneAfterWork], as a finished turn runs it.
+  @visibleForTesting
+  Future<void> offerPhoneAfterWorkForTest() => _offerPhoneAfterWork();
+
+  /// This computer's record that the person said no to the card (its ×) or opened Add Phone: no card
+  /// after time away from then on ([_offerPhoneAway]).
+  static const _phoneOfferStoppedKey = 'phone_offer_stopped';
+
+  /// How many times a card has been on this computer's screen, every kind together ([phoneOfferShown]).
+  static const _phoneOfferShowsKey = 'phone_offer_shows';
+
+  /// The most cards a computer is shown, every kind together: a card left unanswered may come back
+  /// after time away, but not forever.
+  static const phoneOfferMaxShows = 3;
+
+  /// How long the window must have been away for a harness's news to offer Add Phone: long enough to
+  /// have left the computer, not only to have looked at another window.
+  static const phoneOfferAwayAfter = Duration(minutes: 5);
+
+  /// The clock time away is measured by. Injected so a test can move it.
+  @visibleForTesting
+  DateTime Function() phoneOfferClock = DateTime.now;
+
+  /// When the window last left the front ([appLifecycleChanged]); null while it is in front.
+  DateTime? _awaySince;
+
+  /// The news a person away from the window missed that says best what a phone is for: a harness
+  /// waiting on them first, else the first to finish, with when it happened ([_noteMissedWhileAway]).
+  ({String agent, bool waited, DateTime at})? _missedWhileAway;
+
+  void _stopPhoneOffers() {
+    // Never awaited: a write that fails costs, at most, one more card after time away.
+    _paneLayout?.storage.write(_phoneOfferStoppedKey, '1').catchError((_) {});
+  }
+
+  /// Whether this computer is done with cards after time away: said no, opened Add Phone, or shown
+  /// [phoneOfferMaxShows]. Nowhere to remember it is taken as done, as for [_phoneOfferDone].
+  Future<bool> _phoneOfferAwayDone() async {
+    final storage = _paneLayout?.storage;
+    if (storage == null) return true;
+    try {
+      if ((await storage.read(_phoneOfferStoppedKey)) == '1') return true;
+      final shows = int.tryParse(await storage.read(_phoneOfferShowsKey) ?? '');
+      return (shows ?? 0) >= phoneOfferMaxShows;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  void _countPhoneOfferShown() {
+    final storage = _paneLayout?.storage;
+    if (storage == null) return;
+    // Never awaited, and best effort: a count that is not kept costs one more card at most.
+    unawaited(() async {
+      try {
+        final shows =
+            int.tryParse(await storage.read(_phoneOfferShowsKey) ?? '') ?? 0;
+        await storage.write(_phoneOfferShowsKey, '${shows + 1}');
+      } catch (_) {}
+    }());
+  }
+
+  /// [kind] of the harness [agent], called [title], told while the window was not in front: kept for
+  /// the card when the person is back ([_offerPhoneAway]). Only one of the person's own harnesses here
+  /// — not a shared computer's, not a plain terminal.
+  void _noteMissedWhileAway(
+    MachineState machine,
+    Agent? agent,
+    AlertKind kind,
+    String title,
+  ) {
+    if (kind != AlertKind.done && kind != AlertKind.needsYou) return;
+    if (agent == null ||
+        machine.machine.isShared ||
+        isTerminalEngine(agent.engine)) {
+      return;
+    }
+    final waited = kind == AlertKind.needsYou;
+    final missed = _missedWhileAway;
+    // The longest wait or the earliest finish is the truest "while you were away"; a wait outranks
+    // a finish, since that harness could not go on without the person.
+    if (missed != null && (missed.waited || !waited)) return;
+    _missedWhileAway = (agent: title, waited: waited, at: phoneOfferClock());
+  }
+
+  /// The card for a person back after [phoneOfferAwayAfter] or more away from the window, to a harness
+  /// that waited on them or finished meanwhile ([missed]): what a phone would have told them where
+  /// they were. On an account with no phone or browser yet, at most [phoneOfferMaxShows] cards a
+  /// computer, and none once its card was put away or Add Phone opened ([_phoneOfferAwayDone]).
+  Future<void> _offerPhoneAway(
+    ({String agent, bool waited, DateTime at}) missed,
+  ) async {
+    if (_phoneOffer ||
+        _accountHasPhone ||
+        viewer != null ||
+        !signedIn ||
+        status != AppStatus.authenticated) {
+      return;
+    }
+    final revision = _authRevision;
+    if (await _phoneOfferAwayDone()) return;
+    bool hasPhone;
+    try {
+      final devices = await loadDevices();
+      // No list to judge by: nothing this time; the next time away asks again.
+      if (devices == null) return;
+      hasPhone = devices.devices.any(
+        (device) => !device.isMachine && !device.self,
+      );
+    } catch (_) {
+      return;
+    }
+    if (!_authWorkCurrent(revision) || !signedIn || _phoneOffer) return;
+    if (hasPhone) {
+      _accountHasPhone = true;
+      return;
+    }
+    final minutes = phoneOfferClock().difference(missed.at).inMinutes;
+    _phoneOfferFlow = missed.waited
+        ? ProductFlow.phoneOfferAwayWaited
+        : ProductFlow.phoneOfferAwayFinished;
+    _phoneOfferAway = (
+      agent: missed.agent,
+      waited: missed.waited,
+      minutes: minutes < 1 ? 1 : minutes,
+    );
+    _phoneOffer = true;
+    notifyListeners();
+  }
+
   /// The launch's half of the offer.
   ///
   /// ⚠️ **A new install opens as a guest**, on its desk, with no sign-in asked for — so "after the
@@ -7263,6 +7940,8 @@ class AppNotifier extends ChangeNotifier {
     }
     if (!isGuest || await _phoneOfferDone()) return;
     if (!_authWorkCurrent(revision) || !isGuest) return;
+    _phoneOfferFlow = ProductFlow.phoneOffer;
+    _phoneOfferAway = null;
     _phoneOffer = true;
     notifyListeners();
   }
@@ -7291,6 +7970,8 @@ class AppNotifier extends ChangeNotifier {
       _markPhoneOfferDone();
       return;
     }
+    _phoneOfferFlow = ProductFlow.phoneOffer;
+    _phoneOfferAway = null;
     _phoneOffer = true;
     notifyListeners();
   }
@@ -10245,7 +10926,12 @@ class AppNotifier extends ChangeNotifier {
         timeout: const Duration(seconds: 30),
       );
     } on WsRequestFailure catch (failure) {
-      _reportRetargetRefusal(machineId, agentId, failure.code);
+      _reportRetargetRefusal(
+        machineId,
+        agentId,
+        failure.code,
+        detail: failure.detail,
+      );
     } catch (_) {
       // A transport failure or a timeout: the daemon may well have done the move, and the frame
       // that follows says where the agent is. A guess here would tell a story the pane contradicts.
@@ -10302,7 +10988,12 @@ class AppNotifier extends ChangeNotifier {
         timeout: const Duration(seconds: 30),
       );
     } on WsRequestFailure catch (failure) {
-      _reportRetargetRefusal(machineId, agentId, failure.code);
+      _reportRetargetRefusal(
+        machineId,
+        agentId,
+        failure.code,
+        detail: failure.detail,
+      );
     } catch (_) {
       // See `clearAgentGrid`: a transport failure is not a refusal, and the next frame is the truth.
     }
@@ -10752,6 +11443,9 @@ class AppNotifier extends ChangeNotifier {
                 machineStates[machineId]?.isLocalMachine == true
                 ? localDaemonReconnectDelay
                 : null,
+            // This computer's window connection carries the daemon_* frames, which on Windows the
+            // daemon takes only over its pipe (WsConn.trustedLocal). A relayed machine needs no trust.
+            trustedLocal: machineStates[machineId]?.isLocalMachine == true,
           );
     _wireConnectionHooks(connection, machineId);
     return connection;
@@ -11838,8 +12532,7 @@ class AppNotifier extends ChangeNotifier {
     for (final pane in allPanes.toList()) {
       final owned =
           pane.machineId == machineId &&
-          (pane.agentId == agentId ||
-              (pane.isWeb && pane.ownerAgentId == agentId));
+          (pane.agentId == agentId || pane.viewsAgent(machineId, agentId));
       if (!owned) continue;
       // The explicit Close owns these panes until its disk-safe acknowledgement,
       // so it can preserve recently-closed layout and composer history normally.
@@ -11857,6 +12550,7 @@ class AppNotifier extends ChangeNotifier {
     }
     _closeTabsEmptiedByStop(affected);
     _dismissedViewers.remove(_viewerKey(machineId, agentId));
+    finderRoots.forget(machineId, agentId);
     _persistLayout();
     _announceAppFocus();
     try {
@@ -11899,7 +12593,7 @@ class AppNotifier extends ChangeNotifier {
     final dismissed =
         viewerState != null &&
         _dismissedViewers[_viewerKey(machineId, agent.id)] == viewerState;
-    var changed = false;
+    var changed = _syncFinderPane(machineId, agent.id);
     // Tab by tab: wherever this agent's terminal is, its viewer is beside it,
     // and nowhere else. A terminal opened in a second tab gets a second
     // viewer; a tab whose terminal went loses its viewer.
@@ -11949,28 +12643,33 @@ class AppNotifier extends ChangeNotifier {
         viewerError: agent.viewerError,
         ownerAgentId: agent.id,
       );
-      swarm.panes.insert(insertion, pane);
+      _insertViewer(swarm, insertion, pane);
       // Counts opening a pane with a URL or a known launch error, not rendering its private page.
       productMeasurement.begin(ProductFlow.viewerOpen)(
         agent.viewerError == null ? ProductOutcome.ok : ProductOutcome.failed,
       );
-      // The same bookkeeping a split does when it grows the grid by one:
-      // pins past the insertion slide right, and the shape is re-derived.
-      swarm.pinnedSlots.updateAll(
-        (_, slot) => slot >= insertion ? slot + 1 : slot,
-      );
-      swarm.arranged = null;
-      swarm.arrangedKey = null;
-      // Alone with its terminal, the viewer takes 70% of the tab and the
-      // assistant keeps 30%. Only when nobody has sized this pair
-      // by hand: a manual layout is the user's.
-      if (swarm.panes.length == 2 && swarm.paneSizes['2:manual'] == null) {
-        swarm.savePaneSizes('2:manual', PaneArrangement.viewerBesideTerminal);
-      }
       changed = true;
     }
     if (changed) _persistLayout();
     return changed;
+  }
+
+  /// Puts a viewer into [swarm] at [insertion], beside its terminal.
+  void _insertViewer(Swarm swarm, int insertion, TerminalPane viewer) {
+    swarm.panes.insert(insertion, viewer);
+    // The same bookkeeping a split does when it grows the grid by one:
+    // pins past the insertion slide right, and the shape is re-derived.
+    swarm.pinnedSlots.updateAll(
+      (_, slot) => slot >= insertion ? slot + 1 : slot,
+    );
+    swarm.arranged = null;
+    swarm.arrangedKey = null;
+    // Alone with its terminal, the viewer takes 70% of the tab and the
+    // assistant keeps 30%. Only when nobody has sized this pair
+    // by hand: a manual layout is the user's.
+    if (swarm.panes.length == 2 && swarm.paneSizes['2:manual'] == null) {
+      swarm.savePaneSizes('2:manual', PaneArrangement.viewerBesideTerminal);
+    }
   }
 
   /// Opening an essential (Harness Monitor, Memories) reveals its ordinary DSH pair: its viewer is
@@ -12325,6 +13024,7 @@ class AppNotifier extends ChangeNotifier {
     if (lifecycle() != AppLifecycleState.resumed) {
       systemNotifications.post(alert);
       _noteNotificationOffer(kind);
+      _noteMissedWhileAway(machine, agent, kind, alert.title);
     }
   }
 
@@ -12992,6 +13692,31 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// Linked Swarm PRs are read by this window's own computer, using its GitHub login.
+  /// An agent changing branch or stopping must not change whose account reads a link.
+  Future<Map<String, dynamic>> readPullRequestsStatus(List<String> urls) async {
+    final machine = localMachineState, revision = _authRevision;
+    if (machine == null) return {'error': 'LOCAL_GITHUB_UNAVAILABLE'};
+    try {
+      final result = await _conn(machine.machine.machineId).request(
+        'git_pull_requests_status',
+        payload: {'urls': urls},
+        timeout: const Duration(seconds: 120),
+      );
+      if (!_machineWorkCurrent(machine, revision)) {
+        return {'error': 'UNAVAILABLE'};
+      }
+      return result;
+    } on WsRequestFailure catch (error) {
+      if (!_machineWorkCurrent(machine, revision)) {
+        return {'error': 'UNAVAILABLE'};
+      }
+      return {...error.payload, 'error': error.code};
+    } catch (_) {
+      return {'error': 'UNAVAILABLE'};
+    }
+  }
+
   /// PR lookup runs on the agent's machine using that machine's GitHub access.
   Future<Map<String, dynamic>> readAgentPullRequest(
     String machineId,
@@ -13148,6 +13873,8 @@ class AppNotifier extends ChangeNotifier {
     String? permissionMode,
     String? codexHome,
     String? dsh,
+    String? swarmRole,
+    String? swarmSkillMode,
     GridModel? model,
     String? prompt,
     String? name,
@@ -13170,6 +13897,10 @@ class AppNotifier extends ChangeNotifier {
       // The harness this agent is created from. `engine` above is its BASE —
       // the machine refuses the pair when they disagree (`INVALID_DSH`).
       'dsh': ?dsh,
+      if (engine == 'claude' || engine == 'codex') ...{
+        'swarmRole': ?swarmRole,
+        'swarmSkillMode': ?swarmSkillMode,
+      },
       'gridModel': ?model?.id,
       'gridName': ?model?.grid,
       // A first message the engine is opened with, and the pane's name before
@@ -13442,6 +14173,17 @@ class AppNotifier extends ChangeNotifier {
     'TMUX_UNAVAILABLE' =>
       'Harness needs tmux to start harnesses on $machine. '
           'Install tmux there, then try again.',
+    // Windows: the terminal service (the pty host) did not answer. Its own
+    // reason is written for the log; the person needs the one fix.
+    'PTY_HOST_UNAVAILABLE' =>
+      'Harness could not open a terminal on $machine. '
+          'Run harness start on that computer, then try again.',
+    // Refused before any pane opened, in words the machine wrote for the
+    // person (an engine Windows cannot start as asked).
+    'ENGINE_LAUNCH_REFUSED' =>
+      detail != null && detail.isNotEmpty
+      ? detail
+      : 'This engine cannot start on $machine. Nothing was started.',
     'CODEX_CLI_TOO_OLD' =>
       detail ??
           'The installed Codex CLI on $machine is too old for Auto approvals. '
@@ -13496,7 +14238,7 @@ class AppNotifier extends ChangeNotifier {
   /// from the apps. The form offers "Use the existing folder" beside this.
   String _projectExistsMessage(String folder, String machine) {
     final name = folder
-        .split('/')
+        .split(RegExp(r'[\\/]'))
         .lastWhere((part) => part.isNotEmpty, orElse: () => folder);
     return '“$name” already exists on $machine. '
         'Choose another name, or use the existing folder.';
@@ -13776,6 +14518,8 @@ class AppNotifier extends ChangeNotifier {
         'INVALID_AGENT',
         'INVALID_PERMISSION_MODE',
         'TMUX_UNAVAILABLE',
+        'PTY_HOST_UNAVAILABLE',
+        'ENGINE_LAUNCH_REFUSED',
         'CODEX_CLI_TOO_OLD',
         'TMUX_TOO_OLD_FOR_GRID',
         'GRID_CONFIG_FAILED',
@@ -13891,7 +14635,9 @@ class AppNotifier extends ChangeNotifier {
         // open (CLI `existingFolder`): said so, and offered to the person.
         if (failure['existingFolder'] case final String folder
             when failure['code'] == 'PROJECT_EXISTS' &&
-                folder.startsWith('/')) {
+                (folder.startsWith('/') ||
+                    RegExp(r'^[A-Za-z]:[\\/]').hasMatch(folder) ||
+                    folder.startsWith(r'\\'))) {
           creation._existingFolder = folder;
           return creation._complete(_projectExistsMessage(folder, machineName));
         }
@@ -14944,7 +15690,10 @@ class AppNotifier extends ChangeNotifier {
     String code,
     Object? detail, {
     bool resuming = false,
-  }) => detail is String && detail.isNotEmpty &&
+  }) => code == 'PTY_HOST_UNAVAILABLE'
+      // Its detail is written for the log.
+      ? 'Harness could not open a terminal on this machine. Run harness start on it, then try again.'
+      : detail is String && detail.isNotEmpty &&
           !const {
             'IDENTITY_UNAVAILABLE',
             'CWD_NOT_FOUND',
@@ -14955,6 +15704,10 @@ class AppNotifier extends ChangeNotifier {
           }.contains(code)
       ? detail
       : switch (code) {
+          'ENGINE_LAUNCH_REFUSED' =>
+            resuming
+                ? 'This engine cannot start on this machine. Nothing was started.'
+                : 'This engine cannot start on this machine. Nothing was stopped.',
           'UNSUPPORTED_ON_REMOTE' || 'UNSUPPORTED' =>
             resuming
                 ? 'Update the harness CLI on this machine to open saved harnesses.'
@@ -15203,6 +15956,25 @@ class AppNotifier extends ChangeNotifier {
     ).whenComplete(() => change.pending = null);
   }
 
+  /// Keep explicit protocol refusals available to the compatibility and hold
+  /// handling below. WsConn throws them; transport failures must still throw.
+  Future<Map<String, dynamic>> _agentHandoffRequest(
+    String machineId,
+    String type, {
+    required Map<String, dynamic> payload,
+    required Duration timeout,
+  }) async {
+    try {
+      return await _conn(machineId).request(
+        type,
+        payload: payload,
+        timeout: timeout,
+      );
+    } on WsRequestFailure catch (failure) {
+      return {...failure.payload, 'error': failure.code};
+    }
+  }
+
   /// Fill [change].handoff for the new agent, or return why the switch must not go on.
   ///
   /// First choice: the machine writes a record of the whole conversation into the project and the
@@ -15219,7 +15991,8 @@ class AppNotifier extends ChangeNotifier {
   ) async {
     change.handoffHeld = true;
     try {
-      final reply = await _conn(machineId).request(
+      final reply = await _agentHandoffRequest(
+        machineId,
         'agent_handoff_prepare',
         payload: {
           'agentId': source.id,
@@ -15249,7 +16022,11 @@ class AppNotifier extends ChangeNotifier {
         return 'The conversation changed. Choose the agent again to start a new switch.';
       }
       if (reply['error'] != 'UNSUPPORTED') {
-        return 'Waiting for the conversation handoff. Try switching again.';
+        return agentHandoffHeldMessage(
+          reply['error'],
+          reply['hold'],
+          engineIdentity(source.engine).label,
+        );
       }
     } catch (_) {
       return 'Waiting for the conversation handoff. Try switching again.';
@@ -15395,6 +16172,30 @@ class AppNotifier extends ChangeNotifier {
       return target?.launchDetail ??
           'The new terminal is not available yet. Choose the agent again to check.';
     }
+    if (!change.replacementReported && source.dsh != 'autonomous/pair') {
+      try {
+        final reported = await _agentHandoffRequest(
+          machineId,
+          'agent_handoff_complete',
+          payload: {
+            'agentId': source.id,
+            'replacementId': nextId,
+            'changeId': change.creation._id,
+            'targetEngine': change.engine,
+          },
+          timeout: const Duration(seconds: 5),
+        );
+        if (reported['ok'] != true && reported['error'] != 'UNSUPPORTED') {
+          return 'The new agent started. Choose it again to finish the switch.';
+        }
+        change.replacementReported = true;
+      } catch (_) {
+        return 'The new agent started. Choose it again to finish the switch.';
+      }
+      if (!_machineWorkCurrent(machine, change.revision)) {
+        return 'This switch is no longer active.';
+      }
+    }
     final terminals = allPanes
         .where((p) => p.machineId == machineId && p.agentId == source.id)
         .toList();
@@ -15434,6 +16235,7 @@ class AppNotifier extends ChangeNotifier {
     for (final pane in viewers) {
       if (allPanes.contains(pane)) pane.ownerAgentId = nextId;
     }
+    finderRoots.move(machineId, source.id, nextId);
     for (final swarm in swarms) {
       if (swarm.titleMachineId == machineId &&
           swarm.titleAgentId == source.id) {
@@ -16729,6 +17531,78 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Which folder each chat's Finder shows, kept so a Finder comes back
+  /// beside its chat after a restart.
+  late final finderRoots = FinderRoots(() => localStore);
+
+  /// Opens a Finder tile on [root] LEFT of [agentId]'s terminal, where a
+  /// harness's viewer sits: New Harness's Finder is a folder with a chat
+  /// beside it, never a folder alone. It is that chat's viewer from then on
+  /// ([TerminalPane.viewsAgent]) — it moves and closes with the terminal, and
+  /// comes back with it ([finderRoots]). Returns why it could not open, or null.
+  String? openFinderBeside(String machineId, String agentId, String root) {
+    finderRoots.set(machineId, agentId, root);
+    final shown = swarms.any(
+      (swarm) => swarm.panes.any(
+        (pane) =>
+            !pane.isViewer &&
+            pane.machineId == machineId &&
+            pane.agentId == agentId,
+      ),
+    );
+    if (!shown) return 'The chat closed before its Finder could open.';
+    if (!_syncFinderPane(machineId, agentId)) {
+      return 'This tab is full, so the Finder could not open beside the chat.';
+    }
+    notifyListeners();
+    return null;
+  }
+
+  /// A tile's own pixel width ([TerminalPane.fixedWidth]), or null to give
+  /// it back its share of the tab.
+  void setPaneFixedWidth(int paneId, double? width) {
+    final pane = allPanes.where((p) => p.id == paneId).firstOrNull;
+    if (pane == null || pane.fixedWidth == width) return;
+    pane.fixedWidth = width;
+    notifyListeners();
+  }
+
+  /// Puts [agentId]'s Finder, if it has one, beside its terminal in every
+  /// tab that shows that terminal without it. Whether one went in.
+  bool _syncFinderPane(String machineId, String agentId) {
+    final root = finderRoots.rootOf(machineId, agentId);
+    if (root == null) return false;
+    var changed = false;
+    for (final swarm in swarms) {
+      final at = swarm.panes.indexWhere(
+        (pane) =>
+            !pane.isViewer &&
+            pane.machineId == machineId &&
+            pane.agentId == agentId,
+      );
+      if (at < 0 ||
+          swarm.panes.length >= maxPanes ||
+          swarm.panes.any(
+            (pane) => pane.isFinder && pane.viewsAgent(machineId, agentId),
+          )) {
+        continue;
+      }
+      _insertViewer(
+        swarm,
+        at,
+        TerminalPane(
+          id: _nextPaneId++,
+          machineId: machineId,
+          kind: PaneKind.finder,
+          finderRoot: root,
+          ownerAgentId: agentId,
+        ),
+      );
+      changed = true;
+    }
+    return changed;
+  }
+
   Future<void> assignAgentToPane(
     int? paneId,
     String machineId,
@@ -17450,6 +18324,7 @@ class AppNotifier extends ChangeNotifier {
     if (id == null || panes.length < 2) return;
     zoomedPaneId = zoomedPaneId == id ? null : id;
     _persistLayout();
+    _announceVisibleAgents();
     notifyListeners();
   }
 
@@ -17614,9 +18489,7 @@ class AppNotifier extends ChangeNotifier {
     final viewers = <TerminalPane>[];
     if (!pane.isWeb && pane.agentId != null) {
       for (final viewer in source.panes.toList()) {
-        if (viewer.isWeb &&
-            viewer.machineId == pane.machineId &&
-            viewer.ownerAgentId == pane.agentId) {
+        if (viewer.viewsAgent(pane.machineId, pane.agentId)) {
           source.remove(viewer);
           viewers.add(viewer);
         }
@@ -17685,6 +18558,10 @@ class AppNotifier extends ChangeNotifier {
       await closeSwarm(tab.id, persist: persist);
       return;
     }
+    // A Finder closed by hand stays closed: its chat no longer brings it back.
+    if (pane.isFinder && pane.ownerAgentId != null) {
+      finderRoots.forget(pane.machineId, pane.ownerAgentId!);
+    }
     if (pane.isWeb) {
       // A viewer closed by hand stays closed for THIS page: the agent's next
       // frame carries the same URL and must not reopen it. A different URL —
@@ -17697,11 +18574,7 @@ class AppNotifier extends ChangeNotifier {
     }
     bool closesWithPane(TerminalPane candidate) =>
         candidate == pane ||
-        (!pane.isWeb &&
-            pane.agentId != null &&
-            candidate.isWeb &&
-            candidate.machineId == pane.machineId &&
-            candidate.ownerAgentId == pane.agentId);
+        candidate.viewsAgent(pane.machineId, pane.agentId);
     if (tab.kind == 'harness' &&
         tab.panes.every(closesWithPane) &&
         !_activeAgentCreations.any((attempt) => attempt._targetId == tab.id)) {
@@ -17738,9 +18611,7 @@ class AppNotifier extends ChangeNotifier {
     // viewer's own close above is different — it is a choice about the page.
     if (!pane.isWeb && pane.agentId != null) {
       for (final viewer in tab.panes.toList()) {
-        if (viewer.isWeb &&
-            viewer.machineId == pane.machineId &&
-            viewer.ownerAgentId == pane.agentId) {
+        if (viewer.viewsAgent(pane.machineId, pane.agentId)) {
           tab.remove(viewer);
         }
       }
@@ -17776,6 +18647,7 @@ class AppNotifier extends ChangeNotifier {
   }
 
   int _layoutRevision = 0;
+  int _paneLayoutRestores = 0;
 
   Future<void> flushPaneLayout() => workspaceEnabled?.call() == false
       ? Future<void>.value()
@@ -18209,9 +19081,7 @@ class AppNotifier extends ChangeNotifier {
         swarm.remove(pane);
         released.add(pane);
         for (final viewer in swarm.panes.toList()) {
-          if (viewer.isWeb &&
-              viewer.machineId == pane.machineId &&
-              viewer.ownerAgentId == pane.agentId) {
+          if (viewer.viewsAgent(pane.machineId, pane.agentId)) {
             swarm.remove(viewer);
           }
         }
@@ -18428,6 +19298,7 @@ class AppNotifier extends ChangeNotifier {
     });
     _layoutRevision++;
     _announceOpenPanesToDial();
+    _announceVisibleAgents();
     _freezeDeskLayouts();
     _deskQueueDiff();
     final saved = swarms.where((swarm) => !isDraftSwarm(swarm.id)).toList();
@@ -18475,6 +19346,20 @@ class AppNotifier extends ChangeNotifier {
     if (workspaceEnabled?.call() == false) return;
     final store = _paneLayout;
     if (store == null) return;
+    _paneLayoutRestores++;
+    try {
+      await _readPaneLayout(store, claimOnAttach: claimOnAttach);
+    } finally {
+      _paneLayoutRestores--;
+    }
+  }
+
+  Future<void> _readPaneLayout(
+    PaneLayoutStore store, {
+    required bool claimOnAttach,
+  }) async {
+    // Before any chat is restored: its Finder comes back with its agent.
+    await finderRoots.load();
     final initialSwarm = activeSwarm;
     final revision = _layoutRevision;
     final authRevision = _authRevision;
@@ -18656,6 +19541,7 @@ class AppNotifier extends ChangeNotifier {
         swarms
           ..clear()
           ..addAll(restored);
+        if (restored.any((swarm) => swarm.isSuperTab)) enterSuperTabs();
         _activeSwarmId = restored.any((s) => s.id == saved['activeId'])
             ? saved['activeId'] as String
             : restored.first.id;
@@ -19609,6 +20495,15 @@ class AppNotifier extends ChangeNotifier {
           _fromDevice(() => selectSwarm(swarmId));
         }
         break;
+      case 'dial_super_tab':
+        // The Harness Pro picked a Lead's project. Show that Swarm, then the
+        // project's Lead chat as a click on its row in the sidebar does.
+        final tabId = payload['superTabId'];
+        final projectId = payload['projectId'];
+        if (tabId is String && projectId is String) {
+          await _openSuperTabProject(machine, tabId, projectId);
+        }
+        break;
       case 'dial_forked':
         // The dial forked an agent; the daemon already opened the pane on its
         // machine. Land it beside its source and focus it, as the window's own
@@ -20090,6 +20985,7 @@ class AppNotifier extends ChangeNotifier {
                 model: agent.gridModel,
               ));
               machine.completedHarnessTurns++;
+              unawaited(_offerPhoneAfterWork());
             } else if (ownWork) {
               machine.failedHarnessTurns++;
             }

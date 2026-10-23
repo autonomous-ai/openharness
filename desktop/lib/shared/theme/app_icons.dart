@@ -31,6 +31,7 @@ abstract final class AppIcons {
   static const arrowRightLeft = LucideIcons.arrowRightLeft400;
   static const arrowRightToLine = LucideIcons.arrowRightToLine400;
   static const arrowUp = LucideIcons.arrowUp400;
+  static const arrowDown = LucideIcons.arrowDown400;
   static const arrowUpRight = LucideIcons.arrowUpRight400;
   static const bell = LucideIcons.bell400;
   static const bellRing = LucideIcons.bellRing400;
@@ -43,6 +44,7 @@ abstract final class AppIcons {
   static const calendarDays = LucideIcons.calendarDays400;
   static const chartNoAxesColumn = LucideIcons.chartNoAxesColumn400;
   static const check = LucideIcons.check400;
+  static const checkCheck = LucideIcons.checkCheck400;
   static const chevronDown = LucideIcons.chevronDown400;
   static const chevronLeft = LucideIcons.chevronLeft400;
   static const chevronRight = LucideIcons.chevronRight400;
@@ -66,6 +68,8 @@ abstract final class AppIcons {
   static const code = LucideIcons.code400;
   static const coins = LucideIcons.coins400;
   static const columns2 = LucideIcons.columns2400;
+  static const caseSensitive = LucideIcons.caseSensitive400;
+  static const chevronsDownUp = LucideIcons.chevronsDownUp400;
   static const command = LucideIcons.command400;
   static const copy = LucideIcons.copy400;
   static const copyPlus = LucideIcons.copyPlus400;
@@ -76,6 +80,7 @@ abstract final class AppIcons {
   static const dot = LucideIcons.dot400;
   static const download = LucideIcons.download400;
   static const ellipsis = LucideIcons.ellipsis400;
+  static const ellipsisVertical = LucideIcons.ellipsisVertical400;
   static const externalLink = LucideIcons.externalLink400;
   static const eye = LucideIcons.eye400;
   static const eyeOff = LucideIcons.eyeOff400;
@@ -83,6 +88,7 @@ abstract final class AppIcons {
   static const fileArchive = LucideIcons.fileArchive400;
   static const fileBraces = LucideIcons.fileBraces400;
   static const fileCode = LucideIcons.fileCode400;
+  static const filePlus = LucideIcons.filePlus400;
   static const fileDiff = LucideIcons.fileDiff400;
   static const fileDown = LucideIcons.fileDown400;
   static const fileImage = LucideIcons.fileImage400;
@@ -124,17 +130,21 @@ abstract final class AppIcons {
   static const messageCircleQuestionMark =
       LucideIcons.messageCircleQuestionMark400;
   static const messagesSquare = LucideIcons.messagesSquare400;
+  static const messageSquare = LucideIcons.messageSquare400;
   static const messageSquareText = LucideIcons.messageSquareText400;
   static const minimize = LucideIcons.minimize400;
   static const minus = LucideIcons.minus400;
   static const monitor = LucideIcons.monitor400;
   static const monitorOff = LucideIcons.monitorOff400;
+  static const monitorSmartphone = LucideIcons.monitorSmartphone400;
   static const music = LucideIcons.music400;
   static const packageCheck = LucideIcons.packageCheck400;
   static const packageOpen = LucideIcons.packageOpen400;
   static const palette = LucideIcons.palette400;
   static const paperclip = LucideIcons.paperclip400;
   static const panelLeft = LucideIcons.panelLeft400;
+  static const panelLeftClose = LucideIcons.panelLeftClose400;
+  static const panelLeftOpen = LucideIcons.panelLeftOpen400;
   static const panelsTopLeft = LucideIcons.panelsTopLeft400;
   static const pause = LucideIcons.pause400;
   static const pencil = LucideIcons.pencil400;
@@ -146,6 +156,8 @@ abstract final class AppIcons {
   static const radioTower = LucideIcons.radioTower400;
   static const refreshCw = LucideIcons.refreshCw400;
   static const rocket = LucideIcons.rocket400;
+  static const regex = LucideIcons.regex400;
+  static const replace = LucideIcons.replace400;
   static const rotateCcw = LucideIcons.rotateCcw400;
   static const rotateCw = LucideIcons.rotateCw400;
   static const rows2 = LucideIcons.rows2400;
@@ -176,11 +188,11 @@ abstract final class AppIcons {
   static const trash2 = LucideIcons.trash2400;
   static const triangleAlert = LucideIcons.triangleAlert400;
   static const type = LucideIcons.type400;
+  static const undo2 = LucideIcons.undo2400;
   static const unlink = LucideIcons.unlink400;
   static const unplug = LucideIcons.unplug400;
-  static const usb = LucideIcons.usb400;
   static const user = LucideIcons.user400;
   static const users = LucideIcons.users400;
   static const waypoints = LucideIcons.waypoints400;
-  static const zap = LucideIcons.zap400;
+  static const wrapText = LucideIcons.wrapText400;
 }

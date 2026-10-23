@@ -24,6 +24,21 @@ void main() {
     expect(asked.hear(a, 'q2'), isTrue, reason: 'asked again after its end');
   });
 
+  test('says what each of one machine\'s agents was asked, and no other machine\'s', () {
+    const other = (machineId: 'm2', agentId: 'a');
+    final asked = AskedQuestions()
+      ..hear(a, 'q1')
+      ..hear(b, 'q2')
+      ..hear(other, 'q3');
+    expect(asked.askedOn('m'), {a: 'q1', b: 'q2'});
+    expect(asked.askedOn('m2'), {other: 'q3'});
+    expect(asked.askedOn('nobody'), isEmpty);
+    expect(asked.asking(a), isTrue);
+    asked.forget(a);
+    expect(asked.asking(a), isFalse);
+    expect(asked.askedOn('m'), {b: 'q2'});
+  });
+
   test('a repeat is silent; a new one escalates like a finished turn', () {
     for (final inFront in [true, false]) {
       expect(
@@ -37,7 +52,7 @@ void main() {
     );
     expect(
       decideQuestionNotice(isNew: true, inFront: true, watching: false),
-      AgentNotice.mark,
+      AgentNotice.alert,
     );
     expect(
       decideQuestionNotice(isNew: true, inFront: false, watching: true),

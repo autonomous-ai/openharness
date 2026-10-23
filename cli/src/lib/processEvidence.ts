@@ -1,7 +1,7 @@
 /** Complete process topology for native conversation control; ordinary discovery remains best effort. */
 import { readlink } from 'node:fs/promises'
 import { NativeEvidenceBudget, nativeBytes, nativeProbe, nativeText, nativeUnavailable } from '../engines/kit/nativeEvidence.js'
-import type { ProcessRow } from './tmux.js'
+import type { ProcessRow } from './processTable.js'
 import type { ProcessIdentity } from './terminalTypes.js'
 import { sameProcessIdentity } from './terminalRuntime.js'
 import type { NativeDescriptor } from '../engines/kit/nativeDescriptors.js'

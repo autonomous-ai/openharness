@@ -1,8 +1,18 @@
-import { linkSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync } from 'node:fs'
+import { chmodSync, copyFileSync, linkSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { baseNode, namedNode, nodeFs, resetNamedNodeReports, type NamedNodeFs } from './processName.js'
+
+/** This test's Node at [path]: a hard link of the running one, or a copy where the temp folder is on
+ *  another filesystem than the Node install (EXDEV: the Linux CI runner's toolcache, 2026-10-22). */
+function placeNode(path: string) {
+  try { linkSync(process.execPath, path) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error
+    copyFileSync(process.execPath, path)
+    chmodSync(path, 0o755)
+  }
+}
 
 const runtime = '/home/u/.harness/runtime'
 const node = `${runtime}/node-v22/bin/node`
@@ -105,10 +115,10 @@ describe('namedNode', () => {
       const bin = join(dir, 'node-v1', 'bin')
       mkdirSync(bin, { recursive: true })
       const fakeNode = join(bin, 'node')
-      linkSync(process.execPath, fakeNode)
+      placeNode(fakeNode)
       const link = namedNode(fakeNode, 'harnessd-search', dir)
       expect(link).toBe(join(dir, 'node-v1', 'libexec', 'harnessd', 'harnessd-search'))
-      expect(statSync(link).ino).toBe(statSync(process.execPath).ino)
+      expect(statSync(link).ino).toBe(statSync(fakeNode).ino)
       expect(namedNode(fakeNode, 'harnessd-search', dir, { fs: nodeFs })).toBe(link)
       expect(baseNode(link)).toBe(fakeNode)
     } finally { rmSync(dir, { recursive: true, force: true }) }

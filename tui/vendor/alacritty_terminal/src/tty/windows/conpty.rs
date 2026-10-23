@@ -10,7 +10,10 @@ use windows_sys::Win32::Foundation::{HANDLE, S_OK};
 use windows_sys::Win32::System::Console::{
     COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole,
 };
-use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+use windows_sys::Win32::System::LibraryLoader::{
+    GetProcAddress, LOAD_LIBRARY_SEARCH_APPLICATION_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
+    LoadLibraryExW,
+};
 use windows_sys::core::{HRESULT, PWSTR};
 use windows_sys::{s, w};
 
@@ -19,6 +22,10 @@ use windows_sys::Win32::System::Threading::{
     InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION,
     STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW, UpdateProcThreadAttribute,
 };
+// hn: the child's Job Object (`Options::job`).
+use windows_sys::Win32::Foundation::CloseHandle;
+use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+use windows_sys::Win32::System::Threading::{CREATE_SUSPENDED, ResumeThread, TerminateProcess};
 
 use crate::event::{OnResize, WindowSize};
 use crate::tty::Options;
@@ -35,8 +42,10 @@ const PIPE_CAPACITY: usize = crate::event_loop::READ_BUFFER_SIZE;
 /// supports loading OpenConsole.exe, which offers many improvements and
 /// bugfixes compared to the standard conpty that ships with Windows.
 ///
-/// The conpty.dll and OpenConsole.exe files will be searched in PATH and in
-/// the directory where Alacritty's executable is located.
+/// hn: conpty.dll is loaded only from the directory of the executable (or
+/// System32), never through PATH or the current directory, where anyone who can
+/// write a folder on PATH could plant one; upstream used `LoadLibraryW`.
+/// conpty.dll finds OpenConsole.exe beside itself.
 type CreatePseudoConsoleFn =
     unsafe extern "system" fn(COORD, HANDLE, HANDLE, u32, *mut HPCON) -> HRESULT;
 type ResizePseudoConsoleFn = unsafe extern "system" fn(HPCON, COORD) -> HRESULT;
@@ -71,7 +80,12 @@ impl ConptyApi {
     fn load_conpty() -> Option<Self> {
         type LoadedFn = unsafe extern "system" fn() -> isize;
         unsafe {
-            let hmodule = LoadLibraryW(w!("conpty.dll"));
+            // hn: no PATH search (see above).
+            let hmodule = LoadLibraryExW(
+                w!("conpty.dll"),
+                std::ptr::null_mut(),
+                LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
+            );
             if hmodule.is_null() {
                 return None;
             }
@@ -96,10 +110,11 @@ pub struct Conpty {
 
 impl Drop for Conpty {
     fn drop(&mut self) {
-        // XXX: This will block until the conout pipe is drained. Will cause a deadlock if the
-        // conout pipe has already been dropped by this point.
+        // hn: this may block until the conout pipe is drained or broken. `Pty` drops its
+        // `conout` first (the deliberate field order in windows/mod.rs), which breaks the pipe,
+        // so the close never waits for a drain.
         //
-        // See PR #3084 and https://docs.microsoft.com/en-us/windows/console/closepseudoconsole.
+        // See https://docs.microsoft.com/en-us/windows/console/closepseudoconsole.
         unsafe { (self.api.close)(self.handle) }
     }
 }
@@ -131,6 +146,10 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
 
     assert_eq!(result, S_OK);
 
+    // hn: every failure from here to the running child closes the pseudoconsole (after the pipes,
+    // so the close cannot wait for a drain). Left open, its console process (OpenConsole.exe)
+    // outlives a failed spawn: a host that is asked for a missing program would leak one per try.
+    let spawned = (|| -> Result<PROCESS_INFORMATION> {
     let mut success;
 
     // Prepare child process startup info.
@@ -205,7 +224,7 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
     let cmdline = win32_string(&cmdline(config));
     let cwd = config.working_directory.as_ref().map(win32_string);
     let mut creation_flags = EXTENDED_STARTUPINFO_PRESENT;
-    let custom_env_block = convert_custom_env(&config.env);
+    let custom_env_block = convert_custom_env(&config.env, &config.env_remove);
     let custom_env_block_pointer = match &custom_env_block {
         Some(custom_env_block) => {
             creation_flags |= CREATE_UNICODE_ENVIRONMENT;
@@ -213,6 +232,12 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
         },
         None => ptr::null_mut(),
     };
+
+    // hn: a child for a Job Object starts suspended, so it is in the job before it can start
+    // anything.
+    if config.job.is_some() {
+        creation_flags |= CREATE_SUSPENDED;
+    }
 
     let mut proc_info: PROCESS_INFORMATION = unsafe { mem::zeroed() };
     unsafe {
@@ -234,6 +259,35 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
         }
     }
 
+    // hn: put the suspended child in the job, then let it run. A child that cannot join the job
+    // never runs: it is terminated, and the pseudoconsole closed (after its output pipe, so the
+    // close cannot wait for a drain).
+    if let Some(job) = config.job {
+        unsafe {
+            if AssignProcessToJobObject(job as HANDLE, proc_info.hProcess) == 0
+                || ResumeThread(proc_info.hThread) == u32::MAX
+            {
+                let err = Error::last_os_error();
+                TerminateProcess(proc_info.hProcess, 1);
+                CloseHandle(proc_info.hThread);
+                CloseHandle(proc_info.hProcess);
+                return Err(err);
+            }
+            CloseHandle(proc_info.hThread);
+        }
+    }
+    Ok(proc_info)
+    })();
+    let proc_info = match spawned {
+        Ok(info) => info,
+        Err(err) => {
+            drop(conout);
+            drop(conin);
+            unsafe { (api.close)(pty_handle) };
+            return Err(err);
+        },
+    };
+
     let conin = UnblockedWriter::new(conin, PIPE_CAPACITY);
     let conout = UnblockedReader::new(conout, PIPE_CAPACITY);
 
@@ -247,9 +301,15 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
 // deduplicating environment variables, so do that here while converting.
 //
 // https://learn.microsoft.com/en-us/previous-versions/troubleshoot/windows/win32/createprocess-cannot-eliminate-duplicate-variables#environment-variables
-fn convert_custom_env(custom_env: &HashMap<String, String>) -> Option<Vec<u16>> {
+//
+// hn: `remove` names inherited variables the child must not get (`Options::env_remove`): they are
+// taken as already present, so the inherited pass below skips them, whatever their case.
+fn convert_custom_env(
+    custom_env: &HashMap<String, String>,
+    remove: &[String],
+) -> Option<Vec<u16>> {
     // Windows inherits parent's env when no `lpEnvironment` parameter is specified.
-    if custom_env.is_empty() {
+    if custom_env.is_empty() && remove.is_empty() {
         return None;
     }
 
@@ -269,6 +329,10 @@ fn convert_custom_env(custom_env: &HashMap<String, String>) -> Option<Vec<u16>> 
                  '{custom_key}={custom_value}'"
             );
         }
+    }
+
+    for name in remove {
+        all_env_keys.insert(OsStr::new(name).to_ascii_uppercase());
     }
 
     // Pull the current process environment after, to avoid overwriting the user provided one.
@@ -312,5 +376,38 @@ impl From<WindowSize> for COORD {
         let lines = window_size.num_lines;
         let columns = window_size.num_cols;
         COORD { X: columns as i16, Y: lines as i16 }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn variables(block: &[u16]) -> Vec<String> {
+        String::from_utf16(block)
+            .unwrap()
+            .split('\0')
+            .filter(|entry| !entry.is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
+
+    // hn: `Options::env_remove` takes names out of what is inherited, whatever their case; what the
+    // caller sets is still set.
+    #[test]
+    fn env_remove_leaves_out_inherited_names_in_any_case() {
+        // SAFETY: a name of this test's own, set before any thread it starts reads the environment.
+        unsafe { std::env::set_var("HN_REMOVED_SECRET", "secret") };
+        assert!(convert_custom_env(&HashMap::new(), &[]).is_none());
+        let custom = HashMap::from([("HN_SET".to_owned(), "set".to_owned())]);
+        let block = convert_custom_env(&custom, &["hn_removed_secret".to_owned(), "HN_SET".to_owned()]).unwrap();
+        let vars = variables(&block);
+        assert!(vars.iter().all(|v| !v.to_ascii_uppercase().starts_with("HN_REMOVED_SECRET=")), "{vars:?}");
+        assert!(vars.contains(&"HN_SET=set".to_owned()));
+        assert!(vars.iter().any(|v| v.to_ascii_uppercase().starts_with("PATH=")));
+        // Removal alone still builds a block, without the name.
+        let block = convert_custom_env(&HashMap::new(), &["HN_REMOVED_SECRET".to_owned()]).unwrap();
+        assert!(variables(&block).iter().all(|v| !v.starts_with("HN_REMOVED_SECRET=")));
+        unsafe { std::env::remove_var("HN_REMOVED_SECRET") };
     }
 }

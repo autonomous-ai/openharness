@@ -34,8 +34,10 @@ Super Tab membership protects an agent from automatic idle and parent cleanup,
 including while the host is offline and while the Super Tab is paused. Membership
 only in archived conversations does not, and protection lapses after a week without a
 confirmed roster (for example after sign-out). If the agent is already stopped,
-only **Open terminal** (in Participants or on a message) resumes its saved conversation; a restored
-or revisited terminal selection closes instead, so an explicit stop stays stopped.
+opening its Swarm pane shows retained terminal output or its saved conversation
+when that machine permits history access. Only the pane's explicit **Resume**
+action restarts it; navigation and restoration never undo a stop. Swarm membership
+does not grant access to machine-wide history.
 
 A Lead routes each delegation with `harness super-tab route`. The decision appears in the
 conversation as one row (who, how — Jev's confidence or the policy order — and why); owners and

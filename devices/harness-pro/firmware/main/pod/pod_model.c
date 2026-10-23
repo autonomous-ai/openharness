@@ -34,7 +34,8 @@ static bool same(const char *a, const char *b) { return a && b && !strcmp(a, b);
 
 // ── model ────────────────────────────────────────────────────────────────────────────────────────────
 
-void pod_model_reset(pod_model_t *m) { memset(m, 0, sizeof *m); }
+static void swarms_free(pod_model_t *m);
+void pod_model_reset(pod_model_t *m) { swarms_free(m); memset(m, 0, sizeof *m); }
 
 static uint32_t (*s_random)(void);
 void pod_model_random(uint32_t (*rnd)(void)) { s_random = rnd; }
@@ -166,6 +167,8 @@ static uint64_t agent_sig(const pod_agent_t *a, bool with_event) {
     h = fnv_bytes(h, &a->tokens_in, sizeof a->tokens_in);
     h = fnv_bytes(h, &a->tokens_out, sizeof a->tokens_out);
     h = fnv_str(h, a->question);
+    h = fnv_str(h, a->super_tab);
+    h = fnv_bytes(h, &a->attention, sizeof a->attention);
     h = fnv_bytes(h, &a->state, sizeof a->state);
     h = fnv_bytes(h, &a->since_ms, sizeof a->since_ms);
     h = fnv_bytes(h, &a->elapsed_s, sizeof a->elapsed_s);
@@ -450,9 +453,14 @@ static pod_agent_t *fresh_agent(pod_model_t *m, const char *id, uint32_t now_ms)
 }
 
 static void set_state(pod_model_t *m, pod_agent_t *a, pod_state_t s, uint32_t now_ms) {
+    // A Super Tab's question is the agent's work waiting on a person, not a dialog in its pane: a turn that starts or
+    // ends, a library sweep or a send does not end it. Only question.close (or the link going) does.
+    if (a->state == POD_ASKING && a->super_tab[0] && s != POD_ASKING) { a->wait_after = (uint8_t)s; return; }
     if (s == POD_WORKING && a->state != POD_WORKING) a->since_ms = now_ms;
     if (s != POD_ASKING) {
         a->question[0] = 0;
+        a->super_tab[0] = 0;
+        a->attention = POD_ATTN_NONE;
         if (a->state == POD_ASKING) {   // the question is over, however: its toast entry is stale
             int u = unread_idx(m, a->id);
             if (u >= 0 && m->unread[u].ask) unread_drop(m, u);
@@ -568,24 +576,44 @@ void pod_model_turn_stats(pod_model_t *m, const char *id, int32_t passed, int32_
 
 // question / question_close carry no clock, so they leave event_ms alone (the library status that
 // accompanies a question refreshes it).
-void pod_model_question(pod_model_t *m, const char *id, const char *text) {
+void pod_model_question(pod_model_t *m, const char *id, const char *text) { pod_model_question_tab(m, id, text, NULL, POD_ATTN_NONE); }
+
+void pod_model_question_tab(pod_model_t *m, const char *id, const char *text, const char *super_tab, pod_attention_t attention) {
     int i = find_idx(m, id);
     if (i < 0) return;
     pod_agent_t *a = &m->agents[i];
     uint64_t before = agent_sig(a, true);
     if (a->state != POD_ASKING && m->clock_set) { a->act_ms = m->clock_ms; a->has_act = true; }
     a->sent = false;
+    const bool tab = super_tab && super_tab[0];
+    // A plain question that ends goes back to work (question_close); a Super Tab wait to what it held back.
+    if (tab && !(a->state == POD_ASKING && a->super_tab[0]))
+        a->wait_after = (uint8_t)(a->state == POD_ASKING ? POD_WORKING : a->state);
     a->state = POD_ASKING;
     a->activity[0] = 0;
     copy_str(a->question, sizeof a->question, text);
+    copy_str(a->super_tab, sizeof a->super_tab, tab ? super_tab : "");
+    a->attention = (uint8_t)(!tab ? POD_ATTN_NONE : attention == POD_ATTN_STUCK ? POD_ATTN_STUCK : POD_ATTN_DECISION);
     if (before != agent_sig(a, true)) m->revision++;
+}
+
+pod_attention_t pod_model_attention(const pod_model_t *m, const pod_agent_t *a) {
+    if (!a || !a->super_tab[0] || pod_model_eff(m, a) != POD_ASKING) return POD_ATTN_NONE;
+    return a->attention == POD_ATTN_STUCK ? POD_ATTN_STUCK : POD_ATTN_DECISION;
 }
 
 void pod_model_question_close(pod_model_t *m, const char *id) {
     int i = find_idx(m, id);
     if (i < 0 || m->agents[i].state != POD_ASKING) return;
-    m->agents[i].state = POD_WORKING;
+    pod_agent_t *a = &m->agents[i];
+    // A plain question is answered mid-turn: the turn goes on. A Super Tab wait outlived its turns, so the agent takes
+    // the state they left it in: idle or done, not a Working nobody is doing.
+    const pod_state_t next = a->super_tab[0] ? (pod_state_t)a->wait_after : POD_WORKING;
+    a->state = next == POD_ASKING ? POD_WORKING : next;
+    if (a->state != POD_WORKING) { a->activity[0] = 0; a->verb[0] = 0; a->step_count = 0; a->turn_started = false; }
     m->agents[i].question[0] = 0;
+    m->agents[i].super_tab[0] = 0;
+    m->agents[i].attention = POD_ATTN_NONE;
     int u = unread_idx(m, id);
     if (u >= 0 && m->unread[u].ask) unread_drop(m, u);   // answered: its toast entry is stale
     m->revision++;
@@ -673,9 +701,177 @@ void pod_model_recap(pod_model_t *m, const char *id, const char *recap, bool res
 void pod_model_link(pod_model_t *m, bool up) {
     if (m->linked == up) return;
     m->linked = up;
-    if (!up)   // a drop forgets every open question (pro_app clears them): the daemon re-sends what is still owed
+    if (!up) {   // a drop forgets every open question (pro_app clears them): the daemon re-sends what is still owed
         for (int i = m->unread_count - 1; i >= 0; i--)
             if (m->unread[i].ask) unread_drop(m, i);
+        // A Super Tab wait becomes a plain question, which the next turn or sweep ends as any other: nothing vouches
+        // for it with the cable gone, and the daemon asks it again on the next link if it still waits.
+        for (int i = 0; i < m->agent_count; i++) {
+            m->agents[i].super_tab[0] = 0;
+            m->agents[i].attention = POD_ATTN_NONE;
+        }
+        swarms_free(m);   // the daemon sends the Swarm list again on the next link, and the open recap is asked for again
+        m->swarm_n = 0;
+        m->want_n = 0;
+        m->swarm_ids = false;
+        m->focus_pending = false;
+    }
+    m->revision++;
+}
+
+// ---- the Swarm cards ----
+#include "pod/pod_mem.h"   // pod_big_alloc: a Lead's recap text lives in PSRAM
+#ifndef ESP_PLATFORM
+int pod_big_alloc_fail;
+#endif
+
+static void lead_free_text(pod_lead_t *l) { free(l->text); l->text = NULL; }
+static void swarms_free(pod_model_t *m) {
+    for (int i = 0; i < m->swarm_n && i < SWARMS_CARD_MAX; i++)
+        for (int j = 0; j < m->swarms[i].lead_n && j < SWARM_LEADS_MAX; j++) lead_free_text(&m->swarms[i].leads[j]);
+}
+
+int pod_model_lead_index(const pod_swarm_t *s, const char *lead_id) {
+    if (!s || !lead_id || !*lead_id) return -1;
+    for (int j = 0; j < s->lead_n; j++)
+        if (!strcmp(s->leads[j].id, lead_id)) return j;
+    return -1;
+}
+
+const pod_swarm_t *pod_model_swarm(const pod_model_t *m, const char *swarm_id) {
+    if (!swarm_id || !*swarm_id) return NULL;
+    for (int i = 0; i < m->swarm_n; i++)
+        if (!strcmp(m->swarms[i].id, swarm_id)) return &m->swarms[i];
+    return NULL;
+}
+
+const pod_swarm_t *pod_model_swarm_for_tab(const pod_model_t *m, const char *tab_id) {
+    if (!tab_id || !*tab_id) return NULL;
+    for (int i = 0; i < m->swarm_n; i++)
+        if (!strcmp(m->swarms[i].tab, tab_id)) return &m->swarms[i];
+    return NULL;
+}
+
+static int want_idx(const pod_model_t *m, const char *id) {
+    for (int i = 0; i < m->want_n; i++)
+        if (!strcmp(m->want[i], id)) return i;
+    return -1;
+}
+
+void pod_model_supertab_ids(pod_model_t *m, const char (*ids)[ID_MAX], int n) {
+    static EXT_RAM_BSS_ATTR pod_swarm_t tmp;   // one Swarm (3 KB) is too much for the cable_link stack
+    if (!ids || n < 0) n = 0;
+    m->swarm_ids = true;
+    m->want_n = 0;
+    for (int i = 0; i < n && m->want_n < SWARMS_CARD_MAX; i++) {
+        if (!ids[i][0] || memchr(ids[i], 0, ID_MAX) == NULL || want_idx(m, ids[i]) >= 0) continue;
+        memcpy(m->want[m->want_n++], ids[i], ID_MAX);
+    }
+    int k = 0;   // keep the listed ones, free the rest
+    for (int i = 0; i < m->swarm_n; i++) {
+        if (want_idx(m, m->swarms[i].id) < 0) {
+            for (int j = 0; j < m->swarms[i].lead_n; j++) lead_free_text(&m->swarms[i].leads[j]);
+            continue;
+        }
+        if (k != i) m->swarms[k] = m->swarms[i];   // ownership of the texts moves with the struct
+        k++;
+    }
+    if (k < m->swarm_n) memset(&m->swarms[k], 0, (size_t)(m->swarm_n - k) * sizeof m->swarms[0]);
+    m->swarm_n = (uint8_t)k;
+    for (int t = 0; t < m->swarm_n; t++) {   // selection sort by the list's order
+        int best = t;
+        for (int i = t + 1; i < m->swarm_n; i++)
+            if (want_idx(m, m->swarms[i].id) < want_idx(m, m->swarms[best].id)) best = i;
+        if (best == t) continue;
+        tmp = m->swarms[t]; m->swarms[t] = m->swarms[best]; m->swarms[best] = tmp;
+    }
+    m->revision++;
+}
+
+void pod_model_supertab(pod_model_t *m, const pod_swarm_t *s, uint32_t now_ms) {
+    if (!s || !s->id[0]) return;
+    const int w = want_idx(m, s->id);
+    if (w < 0) return;   // not in the last id list (the list comes first)
+    pod_model_clock(m, now_ms);
+    int at = -1;
+    for (int i = 0; i < m->swarm_n; i++)
+        if (!strcmp(m->swarms[i].id, s->id)) at = i;
+    if (at < 0) {   // new: slot it in before the first received Swarm that the list puts after it
+        at = m->swarm_n;
+        for (int i = 0; i < m->swarm_n; i++)
+            if (want_idx(m, m->swarms[i].id) > w) { at = i; break; }
+        if (m->swarm_n >= SWARMS_CARD_MAX) return;
+        memmove(&m->swarms[at + 1], &m->swarms[at], (size_t)(m->swarm_n - at) * sizeof m->swarms[0]);
+        memset(&m->swarms[at], 0, sizeof m->swarms[0]);
+        m->swarm_n++;
+    }
+    pod_swarm_t *d = &m->swarms[at];
+    struct { pod_recap_state_t recap; char *text; uint32_t text_at; } carry[SWARM_LEADS_MAX];
+    memset(carry, 0, sizeof carry);
+    const int ln = s->lead_n > SWARM_LEADS_MAX ? SWARM_LEADS_MAX : s->lead_n;
+    for (int j = 0; j < ln; j++) {
+        const int k = pod_model_lead_index(d, s->leads[j].id);
+        if (k < 0) continue;
+        pod_lead_t *ol = &d->leads[k];   // taken over: the old copy no longer owns the text
+        carry[j].recap = ol->recap; carry[j].text = ol->text; carry[j].text_at = ol->text_at;
+        ol->text = NULL;
+    }
+    for (int j = 0; j < d->lead_n; j++) lead_free_text(&d->leads[j]);   // the ones that left
+    *d = *s;
+    d->lead_n = (uint8_t)ln;
+    for (int j = 0; j < SWARM_LEADS_MAX; j++) {
+        pod_lead_t *l = &d->leads[j];
+        if (j >= ln) { memset(l, 0, sizeof *l); continue; }
+        l->text = carry[j].text;
+        l->recap = carry[j].recap;
+        l->text_at = carry[j].text_at;
+        l->since_at_ms = now_ms;
+    }
+    m->revision++;
+}
+
+void pod_model_supertab_recap(pod_model_t *m, const char *tab, const char *lead, const char *text, uint32_t at, bool none) {
+    const pod_swarm_t *s = pod_model_swarm(m, tab);
+    const int j = pod_model_lead_index(s, lead);
+    if (j < 0) return;
+    pod_lead_t *l = &((pod_swarm_t *)s)->leads[j];
+    if (l->recap == POD_RECAP_NONE) return;   // a Lead nobody asked for or has left: a late reply would only sit there stale
+    lead_free_text(l);
+    l->text_at = at;
+    if (none || !text) {
+        l->recap = POD_RECAP_EMPTY;
+    } else {
+        l->text = pod_big_alloc(SWARM_TEXT_MAX);
+        if (!l->text) { l->recap = POD_RECAP_LOADING; m->revision++; return; }   // out of memory: still waiting, so the retry asks again
+        pod_copy_str(l->text, SWARM_TEXT_MAX, text);
+        l->recap = POD_RECAP_LOADED;
+    }
+    m->revision++;
+}
+
+void pod_model_supertab_loading(pod_model_t *m, const char *tab, const char *lead) {
+    const pod_swarm_t *s = pod_model_swarm(m, tab);
+    const int j = pod_model_lead_index(s, lead);
+    if (j < 0 || s->leads[j].recap != POD_RECAP_NONE) return;
+    ((pod_swarm_t *)s)->leads[j].recap = POD_RECAP_LOADING;
+    m->revision++;
+}
+
+void pod_model_supertab_close(pod_model_t *m, const char *tab, const char *lead) {
+    const pod_swarm_t *s = pod_model_swarm(m, tab);
+    const int j = pod_model_lead_index(s, lead);
+    if (j < 0 || s->leads[j].recap == POD_RECAP_NONE) return;
+    pod_lead_t *l = &((pod_swarm_t *)s)->leads[j];
+    lead_free_text(l);
+    l->recap = POD_RECAP_NONE;
+    m->revision++;
+}
+
+void pod_model_supertab_focus(pod_model_t *m, const char *tab, const char *lead) {
+    if (!tab || !*tab || !lead || !*lead) return;
+    pod_copy_str(m->focus_tab, sizeof m->focus_tab, tab);
+    pod_copy_str(m->focus_lead, sizeof m->focus_lead, lead);
+    m->focus_pending = true;
     m->revision++;
 }
 

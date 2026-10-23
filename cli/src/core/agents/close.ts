@@ -35,6 +35,8 @@ export interface ClosingDeps {
   engineReady: (engine: string, ms: number) => Promise<void>
   /** The agents stopped and kept: a close of one already closed is answered closed. */
   stoppedAgents?: Pick<StoppedAgentStore, 'get' | 'resumeReservedAt'>
+  /** Whether the agent may be the Lead of an active Swarm project: never closed (superTabs/retention.ts `mayBeLead`). */
+  leadProtected?: (agentId: string) => boolean
 }
 
 /** How long a close waits for an engine worker that restarted under its read, before reading once more. */
@@ -42,7 +44,7 @@ export const CLOSE_READ_RECONNECT_MS = 10_000
 
 export function createAgentClosing({
   readScreen, registry, cleanupTabs, watcher, captureTerminal, sessionTurnState, openQuestions, terminals, sessionCheckpoints,
-  stopAgent, announceSession, engineReady, stoppedAgents, nativeRecoveryReady = () => true,
+  stopAgent, announceSession, engineReady, stoppedAgents, nativeRecoveryReady = () => true, leadProtected,
 }: ClosingDeps) {
   const ready = (s: RegisteredSession): boolean =>
     !s.identityHold && !s.admissionHold && !s.interpretationHold && nativeRecoveryReady(s)
@@ -96,6 +98,7 @@ export function createAgentClosing({
     },
     stop: stopAgent,
     changed: announceSession,
+    leadProtected,
     // Not live, not being resumed, and kept as stopped with the conversation the close names: it was closed. A record
     // that cannot be read says nothing, and the close is answered as changed, as before.
     closedAlready: request => {

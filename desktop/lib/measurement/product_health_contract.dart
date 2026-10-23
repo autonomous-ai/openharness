@@ -105,7 +105,7 @@ enum ProductHealthMeasure {
     firstRunResponse1mTo5m ||
     firstRunResponseOver5m ||
     sharedInvitesSent ||
-    sharedInvitesRefused => 4,
+    sharedInvitesRefused => 5,
     _ => 1,
   };
 }

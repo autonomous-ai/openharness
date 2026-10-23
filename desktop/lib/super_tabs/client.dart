@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import '../core/local_key_value_store.dart';
+import 'attachment_upload.dart';
 import 'controller.dart';
 import 'model.dart';
 
@@ -21,12 +22,18 @@ class SuperTabClient {
     required this.storage,
     this.onSnapshot,
     this.onTabs,
+    this.onSelection,
+    this.upload = refuseUpload,
     this.discoveryInterval = const Duration(seconds: 15),
   });
   final SuperTabTransport transport;
   final LocalKeyValueStore storage;
   final void Function(SuperTabController)? onSnapshot;
   final void Function(List<SuperTabListing>, Set<String> hidden)? onTabs;
+
+  /// A tab's selected conversation changed, by a click here or by a device.
+  final void Function(SuperTabController)? onSelection;
+  final SuperTabUpload upload;
   final Duration discoveryInterval;
   String? _account;
   int _generation = 0;
@@ -40,6 +47,24 @@ class SuperTabClient {
   final _controllers = <String, Future<SuperTabController>>{};
   final _loaded = <String, SuperTabController>{};
   SuperTabController? peek(String id) => _loaded[id];
+  Iterable<SuperTabController> get loadedControllers => _loaded.values;
+
+  /// Native close actions name the machine's harness id, not the Swarm agent id.
+  String? leadProtectionReasonForHarness(String machineId, String harnessId) {
+    for (final controller in loadedControllers) {
+      final snapshot = controller.snapshot;
+      if (snapshot == null) continue;
+      for (final agent in snapshot.agents) {
+        if (agent.machineId != machineId || agent.harnessId != harnessId) {
+          continue;
+        }
+        if (snapshot.leadProtectionReason(agent.id) case final reason?) {
+          return reason;
+        }
+      }
+    }
+    return null;
+  }
 
   /// The tabs closed on this computer. Only discovery says which of them the
   /// account still belongs to.
@@ -57,9 +82,7 @@ class SuperTabClient {
     _visibility.clear();
     discoveryError = null;
     for (final controller in _loaded.values) {
-      controller.revokeAccess(
-        'The account changed. Open this Super Tab again.',
-      );
+      controller.revokeAccess('The account changed. Open this Swarm again.');
     }
     for (final future in _controllers.values) {
       unawaited(
@@ -187,14 +210,14 @@ class SuperTabClient {
     Map<String, dynamic>? body,
   }) async {
     if (_account == null) {
-      throw const SuperTabFailure('SIGNED_OUT', 'Sign in to use Super Tab.');
+      throw const SuperTabFailure('SIGNED_OUT', 'Sign in to use Swarm.');
     }
     final generation = _generation;
     final result = await transport(method, path, body: body);
     if (generation != _generation) {
       throw const SuperTabFailure(
         'ACCOUNT_CHANGED',
-        'The account changed. Open this Super Tab again.',
+        'The account changed. Open this Swarm again.',
       );
     }
     return result;
@@ -219,7 +242,7 @@ class SuperTabClient {
     final account = _account;
     final generation = _generation;
     if (account == null) {
-      throw const SuperTabFailure('SIGNED_OUT', 'Sign in to use Super Tab.');
+      throw const SuperTabFailure('SIGNED_OUT', 'Sign in to use Swarm.');
     }
     final key = 'super_tab.$account.$id';
     final raw = await storage.read(key);
@@ -240,9 +263,15 @@ class SuperTabClient {
         return map(method, path, body: body);
       },
       save: (state) => storage.write(key, jsonEncode(state)),
+      upload: upload,
     );
     var seenRevision = -1;
+    var seenSelected = controller.selectedId;
     controller.addListener(() {
+      if (controller.selectedId != seenSelected) {
+        seenSelected = controller.selectedId;
+        onSelection?.call(controller);
+      }
       if (controller.snapshot != null && controller.revision != seenRevision) {
         seenRevision = controller.revision;
         onSnapshot?.call(controller);

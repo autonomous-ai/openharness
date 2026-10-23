@@ -71,7 +71,7 @@ void main() {
       },
     );
     await usage.flush();
-    usage.proxyVocabulary = 4;
+    usage.proxyVocabulary = 5;
     var pending = true;
     final c = SharedTabsController(
       foreground: ValueNotifier(true),

@@ -34,7 +34,9 @@ void pod_ui_render(pod_ui_t *u, ht_scene_t *scene, uint32_t now_ms)
     pod_nav_flip_recaps(&u->nav, &u->model);   // the clock alone can end a stale Working: show the recap it opens on
     // The banner shows while its entry is still unread, the time has not run out, the cable is up and nobody is recording.
     const pod_unread_t *ban = NULL;
-    if (u->ban_on && (int32_t)(now_ms - u->ban_until) >= 0) u->ban_on = false;
+    // A Super Tab question's toast does not run out; Notices lists it, so once Notices is on screen it has been seen.
+    if (u->ban_on && !u->ban_stay && (int32_t)(now_ms - u->ban_until) >= 0) u->ban_on = false;
+    if (u->ban_on && u->ban_stay && top(u) && top(u)->view == POD_V_INBOX) u->ban_on = false;
     if (u->ban_on && !(ban = pod_model_unread_find(&u->model, u->ban_agent))) u->ban_on = false;
     u->frame.banner = ban && u->model.linked && !pod_ui_talking(u) && toast_fits(u);   // the toast, only over a room
     pod_render(&u->frame, &u->nav, &u->model, now_ms);
@@ -58,10 +60,12 @@ void pod_ui_render(pod_ui_t *u, ht_scene_t *scene, uint32_t now_ms)
 }
 
 static void apply_pending_focus(pod_ui_t *u);
+static void apply_lead_focus(pod_ui_t *u);
 static pod_out_t synced(pod_ui_t *u)
 {
     pod_out_t o = pod_nav_sync(&u->nav, &u->model);
     apply_pending_focus(u);
+    apply_lead_focus(u);
     return o;
 }
 
@@ -69,6 +73,11 @@ pod_out_t pod_ui_link(pod_ui_t *u, bool up)
 {
     if (up && !u->model.linked) u->sweep.restart = true;
     if (!up) pod_ui_sweep_abort(u);
+    if (!up || !u->model.linked) {   // the daemon forgets the open recap and any focus with its link: nothing queued or open carries over
+        u->sup_qn = 0;
+        u->sup_tab[0] = u->sup_lead[0] = 0;
+        u->lead_wait = false;
+    }
     if (up && !u->model.linked) {   // a real down -> up transition: the start runs again on this link on swarms this link brings
         u->started = false;
         u->fresh_swarms = false;
@@ -168,15 +177,40 @@ pod_out_t pod_ui_sent(pod_ui_t *u, const char *id, uint32_t now_ms)
     return synced(u);
 }
 
-pod_out_t pod_ui_question(pod_ui_t *u, const char *id, const char *text)
+pod_out_t pod_ui_question(pod_ui_t *u, const char *id, const char *text, const char *super_tab, pod_attention_t attention)
 {
-    pod_model_question(&u->model, id, text);
+    pod_model_question_tab(&u->model, id, text, super_tab, attention);
     return synced(u);
 }
 
 pod_out_t pod_ui_question_close(pod_ui_t *u, const char *id)
 {
     pod_model_question_close(&u->model, id);
+    return synced(u);
+}
+
+pod_out_t pod_ui_supertab_ids(pod_ui_t *u, const char (*ids)[ID_MAX], int n)
+{
+    pod_model_supertab_ids(&u->model, ids, n);
+    return synced(u);
+}
+
+pod_out_t pod_ui_supertab(pod_ui_t *u, const pod_swarm_t *s, uint32_t now_ms)
+{
+    pod_model_supertab(&u->model, s, now_ms);
+    return synced(u);
+}
+
+pod_out_t pod_ui_supertab_recap(pod_ui_t *u, const char *tab, const char *lead, const char *text, uint32_t at, bool none)
+{
+    pod_model_supertab_recap(&u->model, tab, lead, text, at, none);
+    return synced(u);
+}
+
+pod_out_t pod_ui_supertab_focus(pod_ui_t *u, const char *tab, const char *lead, uint32_t now_ms)
+{
+    pod_model_clock(&u->model, now_ms);
+    pod_model_supertab_focus(&u->model, tab, lead);
     return synced(u);
 }
 
@@ -211,8 +245,8 @@ static bool scrolls(const pod_ui_t *u)
 {
     const pod_frame_t *f = top(u);
     if (!f) return false;
-    // Home pages sideways; the Inbox scrolls by rows; on a room or a recap a drag scrolls the host's pane
-    return f->view == POD_V_INBOX || f->view == POD_V_AGENT || f->view == POD_V_RECAP;
+    // Home pages sideways; the Inbox and a long Lead message scroll by rows; on a room or a recap a drag scrolls the host's pane
+    return f->view == POD_V_INBOX || f->view == POD_V_LEAD || f->view == POD_V_AGENT || f->view == POD_V_RECAP;
 }
 // Whether a vertical drag on this screen scrolls the host's terminal pane (the scroll sink): Agent and Recap. The top band and the bottom zone keep their swipes (u->bar, u->edge).
 static bool host_scrolls(const pod_ui_t *u)
@@ -230,20 +264,27 @@ static bool swipes(const pod_ui_t *u)
 {
     const pod_frame_t *f = top(u);
     return f && (f->view == POD_V_AGENT || f->view == POD_V_RECAP || f->view == POD_V_TALK ||
-                 f->view == POD_V_TABS || f->view == POD_V_INBOX);   // Home pages, the Inbox goes back
+                 f->view == POD_V_TABS || f->view == POD_V_INBOX || f->view == POD_V_LEAD);   // Home pages, the Inbox goes back, a Lead view steps Leads
 }
 // Tap to talk: only on the agent's own screens (Agent, Recap). Not in the top band, not on the back crumb or the
 // Notices hit, not on an agent that asks (voice stays refused there, so the tap does not arm and no notice fires).
 // Returns the agent id the tap would talk to, or NULL.
+// An agent with a question to answer here, which talking must not go around. A Super Tab wait is not one: nobody answers
+// it on the Pro, and talking to the agent is how a person unblocks it.
+static bool asks_here(const pod_model_t *m, const pod_agent_t *a)
+{
+    return pod_model_eff(m, a) == POD_ASKING && pod_model_attention(m, a) == POD_ATTN_NONE;
+}
+
 static const char *talk_target(const pod_ui_t *u)
 {
     const pod_frame_t *f = top(u);
     if (!f || u->ban_touch) return NULL;
     if (u->start_y < POD_BAR_H) return NULL;   // nothing in the top band talks
     if (u->hit_valid && (u->hit.action == POD_A_BACK || u->hit.action == POD_A_INBOX)) return NULL;
-    const char *id = f->view == POD_V_AGENT || f->view == POD_V_RECAP ? f->agent : NULL;
+    const char *id = f->view == POD_V_AGENT || f->view == POD_V_RECAP || f->view == POD_V_LEAD ? f->agent : NULL;   // a Lead view's agent is its local harness (empty for a remote Lead: no talk)
     const pod_agent_t *a = id ? pod_model_find(&u->model, id) : NULL;
-    return a && pod_model_eff(&u->model, a) != POD_ASKING ? id : NULL;
+    return a && !asks_here(&u->model, a) ? id : NULL;
 }
 static bool wide(int dx, int dy) { return iabs(dx) * 2 > iabs(dy) * 3; }
 static bool inside(const pod_hit_t *h, int x, int y)
@@ -293,7 +334,7 @@ static pod_out_t talk_fire(pod_ui_t *u, uint32_t now_ms)
     char id[ID_MAX];
     pod_copy_str(id, sizeof id, u->talk_agent);
     const pod_agent_t *ag = pod_model_find(&u->model, id);
-    if (!ag || pod_model_eff(&u->model, ag) == POD_ASKING) return none;
+    if (!ag || asks_here(&u->model, ag)) return none;
     if (ag->state == POD_OFFLINE) {
         pod_ui_notice(u, "That machine is offline", now_ms);
         return none;
@@ -306,6 +347,27 @@ static pod_out_t talk_fire(pod_ui_t *u, uint32_t now_ms)
     u->hands_free = true;   // a later tap sends
     u->dirty = true;
     return o;
+}
+
+// ---- the Lead view's frames for the daemon ----
+static bool sup_push(pod_ui_t *u, const char *t, const char *tab, const char *lead)
+{
+    if (u->sup_qn >= POD_SUPERTAB_OUT_MAX) return false;   // a burst past the queue is lost, like any frame on a busy link: the caller counts it as not sent
+    pod_supertab_out_t *o = &u->sup_q[u->sup_qn++];
+    o->t = t;
+    pod_copy_str(o->tab, sizeof o->tab, tab);
+    pod_copy_str(o->lead, sizeof o->lead, lead);
+    return true;
+}
+
+// PREV / NEXT on the Lead view; when it landed on another Lead the daemon is told to select it.
+static void lead_step(pod_ui_t *u, int dir, uint32_t now_ms)
+{
+    char before[ID_MAX];
+    pod_copy_str(before, sizeof before, top(u)->lead_id);
+    pod_nav_act(&u->nav, &u->model, dir > 0 ? POD_A_NEXT : POD_A_PREV, 0, now_ms);
+    const pod_frame_t *f = top(u);
+    if (f->view == POD_V_LEAD && strcmp(before, f->lead_id)) sup_push(u, "supertab.select", f->swarm, f->lead_id);
 }
 
 pod_out_t pod_ui_touch(pod_ui_t *u, bool down, int x, int y, uint32_t now_ms, bool *changed)
@@ -335,7 +397,7 @@ pod_out_t pod_ui_touch(pod_ui_t *u, bool down, int x, int y, uint32_t now_ms, bo
         // There is no transport line: a contact from anywhere may swipe sideways, or up (Home),
         // decided on the lift by which direction dominates.
         u->sw_ok = !u->hands_free && swipes(u);
-        u->edge = !u->hands_free && (top(u)->view == POD_V_AGENT || top(u)->view == POD_V_RECAP) && y >= POD_BOTTOM_Y;
+        u->edge = !u->hands_free && (top(u)->view == POD_V_AGENT || top(u)->view == POD_V_RECAP || top(u)->view == POD_V_LEAD) && y >= POD_BOTTOM_Y;
         u->sw_on = false;
         u->sw_vx = 0;
         u->sw_last_x = x;
@@ -432,7 +494,7 @@ pod_out_t pod_ui_touch(pod_ui_t *u, bool down, int x, int y, uint32_t now_ms, bo
         int dx = x - u->start_x, dy = y - u->start_y;
         const bool up = dy <= -POD_EDGE_SWIPE && iabs(dy) * 2 > iabs(dx) * 3;
         // From anywhere else a vertical drag on a room scrolls the host's terminal pane and never goes Home.
-        if (up && u->edge && (tv == POD_V_AGENT || tv == POD_V_RECAP)) {
+        if (up && u->edge && (tv == POD_V_AGENT || tv == POD_V_RECAP || tv == POD_V_LEAD)) {
             u->edge = false;
             *changed = true;
             return pod_nav_act(&u->nav, &u->model, POD_A_TABS, 0, now_ms);
@@ -458,8 +520,15 @@ pod_out_t pod_ui_touch(pod_ui_t *u, bool down, int x, int y, uint32_t now_ms, bo
                     if (to >= 0 && to < wp) u->nav.work_page = (uint8_t)to;
                     return none;
                 }
-                int16_t pg[POD_TABS_MAX + 2];
-                const int n = pod_home_pages(&u->model, pg, POD_TABS_MAX + 2), cur = pod_home_clamp(&u->model, top(u)->scroll);
+                // The Swarm card's pet band pages the Leads the same way, but past either end of the Leads the swipe goes on to the neighbouring card.
+                const pod_swarm_t *sw = u->nav.depth == 1 ? pod_home_swarm(&u->model, pod_home_clamp(&u->model, top(u)->scroll)) : NULL;
+                const int sp = sw ? (sw->lead_n + 2) / 3 : 0;
+                if (sp > 1 && u->start_y >= 256 && u->start_y <= 536) {
+                    const int to = (int)u->nav.swarm_page + (dx < 0 ? 1 : -1);
+                    if (to >= 0 && to < sp) { u->nav.swarm_page = (uint8_t)to; return none; }
+                }
+                int16_t pg[POD_HOME_PAGES_MAX];
+                const int n = pod_home_pages(&u->model, pg, POD_HOME_PAGES_MAX), cur = pod_home_clamp(&u->model, top(u)->scroll);
                 int at = 0;
                 while (at < n - 1 && pg[at] < cur) at++;
                 const int want = at + (dx < 0 ? 1 : -1);
@@ -468,6 +537,10 @@ pod_out_t pod_ui_touch(pod_ui_t *u, bool down, int x, int y, uint32_t now_ms, bo
             }
             if (top(u)->view == POD_V_INBOX)   // the Inbox: either way goes back to where it was opened
                 return pod_nav_act(&u->nav, &u->model, POD_A_BACK, 1, now_ms);
+            if (top(u)->view == POD_V_LEAD) {   // the previous / next Lead: the desktop is told which one
+                lead_step(u, dx < 0 ? 1 : -1, now_ms);
+                return none;
+            }
             return pod_nav_act(&u->nav, &u->model, dx < 0 ? POD_A_NEXT : POD_A_PREV, 0, now_ms);
         }
     }
@@ -492,6 +565,18 @@ pod_out_t pod_ui_touch(pod_ui_t *u, bool down, int x, int y, uint32_t now_ms, bo
     } else if (u->hit.id[0] && (u->hit.action == POD_A_OPEN_TAB || u->hit.action == POD_A_ENTER_TAB)) {
         arg = -1;
         for (int i = 0; i < u->model.tab_count; i++) if (!strcmp(u->model.tabs[i].id, u->hit.id)) { arg = i; break; }
+    }
+    // A Swarm card's Lead pet (POD_A_LEAD: arg = the Lead's index, id = its Swarm's id): the Swarm is resolved by id now (the list can change between the draw
+    // and the tap) and must still hold that index. The Lead view opens over Home and the desktop is told to select that Lead.
+    if (u->hit.id[0] && u->hit.action == POD_A_LEAD) {
+        const pod_swarm_t *sw = pod_model_swarm(&u->model, u->hit.id);
+        arg = sw && arg >= 0 && arg < sw->lead_n ? arg : -1;
+        if (arg >= 0 && pod_nav_open_lead(&u->nav, &u->model, u->hit.id, arg)) {
+            sup_push(u, "supertab.select", sw->id, sw->leads[arg].id);
+            u->scroll_px = 0;
+            *changed = true;
+            return none;
+        }
     }
     if (arg == -1 && u->hit.id[0]) { *changed = true; return none; }   // what it named is gone: redraw, open nothing
     if (u->hit.action == POD_A_TALK && u->nav.depth) {   // an agent of an offline machine cannot be talked to: say why
@@ -557,6 +642,7 @@ bool pod_ui_pet_on_screen(const pod_ui_t *u)
     if (!u->model.linked || !f) return false;
     // The hero pet is drawn on Agent and Recap (nothing when the agent has left the roster), the listening pet on Talk and, on Home, the equaliser (not a pet; it moves like one)
     if (f->view == POD_V_TALK) return true;
+    if (f->view == POD_V_LEAD) return pod_nav_lead(&u->nav, &u->model, NULL) != NULL;   // the Lead's pet, once the model holds the Lead
     if (f->view == POD_V_TABS || f->view == POD_V_TAB) return ph_home_moves(&u->nav, &u->model);
     return (f->view == POD_V_AGENT || f->view == POD_V_RECAP) && pod_model_find(&u->model, f->agent);
 }
@@ -585,13 +671,16 @@ static uint32_t edge_ms(const pod_ui_t *u, uint32_t now_ms)
         if (left < 1) left = 1;
         if ((uint32_t)left < edge) edge = (uint32_t)left;
     }
-    if (u->ban_on) {   // so does the banner
+    if (u->ban_on && !u->ban_stay) {   // so does the banner
         int32_t left = (int32_t)(u->ban_until - now_ms);
         if (left < 1) left = 1;
         if ((uint32_t)left < edge) edge = (uint32_t)left;
         if (u->model.linked && !pod_ui_talking(u) && !u->ota && toast_fits(u)) {   // the timer line shrinks (only while the toast is drawn): 66 ms (Home, Notices and Talk keep their own beat)
             if (edge > 66) edge = 66;
         }
+    } else if (u->ban_on && u->model.linked && !pod_ui_talking(u) && !u->ota && toast_fits(u) &&
+               (int32_t)(now_ms - pod_ui_banner_shown_ms(u)) < POD_TOAST_SLIDE_MS) {   // a toast that stays: its bar is still, only the slide-in moves
+        if (edge > 66) edge = 66;
     }
     return edge;
 }
@@ -770,6 +859,10 @@ bool pod_ui_notify_text(pod_ui_t *u, const char *agent_id, pod_tier_t tier, cons
     pod_model_clock(&u->model, now_ms);
     const pod_agent_t *a = pod_model_find(&u->model, agent_id);
     if (!a || tier == POD_TIER_SILENT) return false;
+    // A Super Tab's question is the agent's notice until it closes: what its turns say meanwhile is on its card, and
+    // replaces neither the wait's entry nor its toast. The wait alerted once.
+    // A failed turn still alerts: a crash while it waits is news.
+    if (!question && !a->failed && pod_model_attention(&u->model, a) != POD_ATTN_NONE) return false;
     const pod_frame_t *t = top(u);
     const bool looking = awake && t && (t->view == POD_V_AGENT || t->view == POD_V_RECAP) && !strcmp(t->agent, a->id);
     char joined[POD_UNREAD_TEXT];
@@ -801,6 +894,7 @@ bool pod_ui_notify_text(pod_ui_t *u, const char *agent_id, pod_tier_t tier, cons
             pod_copy_str(u->ban_agent, sizeof u->ban_agent, a->id);
             u->ban_until = now_ms + POD_TOAST_MS;
             u->ban_on = true;
+            u->ban_stay = question && pod_model_attention(&u->model, a) != POD_ATTN_NONE;   // a Super Tab's question waits for you
         }
     }
     return tier == POD_TIER_ALERT;
@@ -824,3 +918,104 @@ bool pod_ui_notif_seen(pod_ui_t *u, const char *agent_id, const char *token)
 }
 
 int pod_ui_take_reads(pod_ui_t *u, pod_read_out_t out[], int max) { return pod_model_take_reads(&u->model, out, max); }
+
+// ---- the Swarm cards: following the desktop, and what the daemon is told ---------------------------------------------
+
+// supertab.focus (the model's focus_pending): open that Lead's recap the way a host focus opens an agent. Dropped, not kept, while recording or updating or when the
+// person is driving (a touch within the quiet window, a finger down); a Lead the Swarm list does not hold yet waits POD_FOLLOW_PENDING_MS for it.
+static void apply_lead_focus(pod_ui_t *u)
+{
+    pod_model_t *m = &u->model;
+    if (!m->focus_pending) return;
+    const uint32_t now_ms = m->clock_ms;
+    if (!u->lead_wait) { u->lead_wait = true; u->lead_wait_ms = now_ms; }
+    if (pod_model_lead_index(pod_model_swarm(m, m->focus_tab), m->focus_lead) < 0) {
+        if ((int32_t)(now_ms - u->lead_wait_ms) > (int32_t)POD_FOLLOW_PENDING_MS) { m->focus_pending = false; u->lead_wait = false; }
+        return;
+    }
+    char tab[ID_MAX], lead[ID_MAX];
+    memcpy(tab, m->focus_tab, ID_MAX);
+    memcpy(lead, m->focus_lead, ID_MAX);
+    m->focus_pending = false;
+    u->lead_wait = false;
+    if (pod_ui_talking(u) || u->ota || u->down) return;
+    const uint32_t quiet = u->nav.depth <= 1 ? POD_FOLLOW_ECHO_MS : POD_FOLLOW_QUIET_MS;   // as follow_now: the device's own selection comes back as a focus
+    if (u->touched && (int32_t)(now_ms - u->last_touch_ms) < (int32_t)quiet) return;
+    if (pod_nav_follow_lead(&u->nav, m, tab, lead)) {
+        u->scroll_px = 0;
+        u->dirty = true;
+        u->started = true;   // a focus that landed: the start never overrides it
+    }
+}
+
+// Make the daemon's idea of the open recap match the screen. The screen's Lead is the Lead view's, or the one a talk opened from it (the frame is the same).
+static void sup_sync(pod_ui_t *u)
+{
+    pod_model_t *m = &u->model;
+    if (!m->linked) { u->sup_tab[0] = u->sup_lead[0] = 0; return; }
+    const pod_frame_t *f = top(u);
+    const bool on = f && f->swarm[0] && (f->view == POD_V_LEAD || f->view == POD_V_TALK);
+    const pod_swarm_t *sw = NULL;
+    const pod_lead_t *l = on ? pod_nav_lead(&u->nav, m, &sw) : NULL;
+    if (on && !l) return;   // its Lead is not in the model (yet): neither open nor closed, wait for it
+    const char *lead = l ? l->id : "";
+    if (!strcmp(u->sup_lead, lead) && (!l || !strcmp(u->sup_tab, sw->id))) {   // already what the daemon was told: a frame that may have been lost is re-sent
+        if (!l) return;
+        const uint32_t now_ms = m->clock_ms;
+        if ((uint32_t)(now_ms - u->sup_at) < POD_SUPERTAB_RETRY_MS || u->sup_qn + 2 > POD_SUPERTAB_OUT_MAX) return;
+        if (l->recap == POD_RECAP_LOADING) {   // no reply yet: ask again, a few times; then the "…" stays and nothing more is sent
+            if (u->sup_tries >= POD_SUPERTAB_RETRIES) return;
+            u->sup_tries++;
+            sup_push(u, "supertab.open", sw->id, lead);
+            sup_push(u, "supertab.recap.get", sw->id, lead);
+            u->sup_at = now_ms;
+        } else if (!u->sup_reopened) {   // answered, but the open itself might have been the lost frame: say it once more
+            u->sup_reopened = true;
+            sup_push(u, "supertab.open", sw->id, lead);
+            u->sup_at = now_ms;
+        }
+        return;
+    }
+    if (!l) {   // closed: the frame still names the Swarm it was open in
+        if (!sup_push(u, "supertab.open", u->sup_tab, "")) return;   // no room: still open as far as the daemon knows, the next sync closes it
+        if (u->sup_lead[0]) pod_model_supertab_close(m, u->sup_tab, u->sup_lead);   // only the open Lead is pushed to: a closed one's text would go stale
+        u->sup_tab[0] = u->sup_lead[0] = 0;
+        return;
+    }
+    const char *tab = sw->id;
+    const bool ask = l->recap != POD_RECAP_LOADED;
+    if (u->sup_qn + (ask ? 2 : 1) > POD_SUPERTAB_OUT_MAX) return;   // no room for the frames this needs: nothing is recorded, the next sync tries again
+    if (u->sup_lead[0]) pod_model_supertab_close(m, u->sup_tab, u->sup_lead);
+    sup_push(u, "supertab.open", tab, lead);
+    if (ask) {   // a cold Lead: ask for its last message (the daemon's cache makes a repeat free)
+        sup_push(u, "supertab.recap.get", tab, lead);
+        pod_model_supertab_loading(m, tab, lead);
+    }
+    pod_copy_str(u->sup_tab, sizeof u->sup_tab, tab);
+    pod_copy_str(u->sup_lead, sizeof u->sup_lead, lead);
+    u->sup_at = m->clock_ms;
+    u->sup_tries = 0;
+    u->sup_reopened = false;
+}
+
+int pod_ui_take_supertab(pod_ui_t *u, pod_supertab_out_t out[], int max)
+{
+    sup_sync(u);
+    int n = u->sup_qn < max ? u->sup_qn : max;
+    if (n > 0) memcpy(out, u->sup_q, (size_t)n * sizeof out[0]);
+    if (n < u->sup_qn) memmove(u->sup_q, u->sup_q + n, (size_t)(u->sup_qn - n) * sizeof u->sup_q[0]);
+    u->sup_qn = (uint8_t)(u->sup_qn - n);
+    return n;
+}
+
+void pod_ui_supertab_unsent(pod_ui_t *u, const char *t)
+{
+    if (!t || !u->sup_lead[0]) return;
+    if (!strcmp(t, "supertab.recap.get")) {
+        if (u->sup_tries) u->sup_tries--;   // a failed retry does not use one up
+        u->sup_at = u->model.clock_ms;      // and the next waits the usual 3 s
+    } else if (!strcmp(t, "supertab.open")) {
+        u->sup_reopened = false;
+        u->sup_at = u->model.clock_ms;
+    }
+}

@@ -989,6 +989,8 @@ model SuperTab {
   memberIds      String[]
   invitedEmails  String[]
   machineIds     String[]
+  /// Machines whose host still has to clean up after their removal: read apart from the 100-Swarm host poll.
+  cleanupMachineIds String[] @default([])
   revision       Int      @default(0)
   state          Json
   createdAt      DateTime @default(now())
@@ -997,6 +999,25 @@ model SuperTab {
   @@index([autonomousEnv, memberIds])
   @@index([autonomousEnv, invitedEmails])
   @@index([autonomousEnv, machineIds])
+  @@index([autonomousEnv, cleanupMachineIds])
+}
+
+// A terminal retains its history when removed from a roster. These bindings
+// prevent contributing a private session to another project's audience later.
+model SuperTabSessionScope {
+  /// Administrative retirement belongs only to the Swarm that withdrew this session.
+  releasedTabIds String[] @default([])
+  /// A bounded native close may finish after membership is withdrawn.
+  closeLeaseId String?
+  closeLeaseUntil DateTime?
+  closeLeaseGeneration String?
+  /// Serializes contribution changes with stop intent across public Swarms.
+  stopReleaseId String?
+  id           String   @id @map("_id")
+  scopeIds     String[]
+  privateScope String?
+
+  @@index([scopeIds])
 }
 
 model SuperTabMessage {
@@ -1007,11 +1028,29 @@ model SuperTabMessage {
   author          Json
   source          Json?
   text            String
+  /// Files posted with the message (superTabs/attachments.ts); the bytes live in the attachments bucket.
+  attachments     Json?
   replyTo         String?
   recipientIds    String[]
   createdAt       DateTime @default(now())
 
   @@index([tabId, conversationId, sequence])
+}
+
+/// One uploaded file, which one message of the actor that uploaded it can send once.
+model SuperTabAttachment {
+  id             String   @id @map("_id")
+  tabId          String
+  conversationId String
+  actorKey       String
+  name           String
+  mime           String
+  size           Int
+  objectKey      String
+  usedBy         String?
+  createdAt      DateTime @default(now())
+
+  @@index([tabId, actorKey, createdAt])
 }
 
 model SuperTabOperation {
@@ -1060,6 +1099,11 @@ model SuperTabDelivery {
   status                String   @default("queued")
   claimId               String?
   receipt               String?
+  // Optional on older records: backend first, then Desktop's inline receipt.
+  holdReason            String?
+  holdSince             DateTime?
+  deliveredAt           DateTime?
+  answeredAt            DateTime?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
@@ -1130,6 +1174,19 @@ model SuperTabStopReceipt {
   @@unique([tabId, assignmentId])
 }
 
+// A custom role's skill text (superTabs/projects.ts ProjectRole), outside the tab snapshot: the snapshot keeps only
+// its version, so tab reads and host rosters stay small. Hosts fetch the text when the version changes.
+model SuperTabRoleText {
+  id        String @id @map("_id")
+  tabId     String
+  projectId String
+  roleId    String
+  version   String
+  text      String
+
+  @@index([tabId, projectId])
+}
+
 // Configuration observations stay outside the tab snapshot so a long-running
 // assignment keeps its complete history without making every tab read grow.
 model SuperTabConfiguration {
@@ -1143,6 +1200,33 @@ model SuperTabConfiguration {
   observedAt     DateTime
 
   @@index([tabId, agentId, revision])
+}
+
+// A Lead's read of, or input to, an agent's terminal, relayed to the host of the agent's machine
+// (backend/src/superTabs/terminal.ts). Outside the tab snapshot and history: a screen can show secrets,
+// so its text is kept only until the requester reads it.
+model SuperTabTerminalRequest {
+  id             String    @id @map("_id")
+  tabId          String
+  agentId        String
+  machineId      String
+  machineOwnerId String
+  harnessId      String
+  requesterKey   String
+  kind           String
+  scrollback     Int?
+  text           String?
+  keys           String[]  @default([])
+  /// pending -> claimed (handed to the host once) -> done
+  status         String    @default("pending")
+  ok             Boolean?
+  result         String?
+  error          String?
+  createdAt      DateTime
+  claimedAt      DateTime?
+
+  @@index([machineId, status])
+  @@index([tabId, createdAt])
 }
 
 model ExperimentalSettings {

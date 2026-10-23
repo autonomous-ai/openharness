@@ -1,0 +1,71 @@
+[
+  {
+    "profile": "computer, cable",
+    "firstFrameMs": 1207,
+    "settledMs": 1224,
+    "transferredMB": 7.29,
+    "runs": [
+      {
+        "firstFrame": 1543,
+        "signIn": 1564,
+        "megabytes": 7.29
+      },
+      {
+        "firstFrame": 1191,
+        "signIn": 1209,
+        "megabytes": 7.29
+      },
+      {
+        "firstFrame": 1207,
+        "signIn": 1224,
+        "megabytes": 7.29
+      }
+    ]
+  },
+  {
+    "profile": "phone, slow 4G",
+    "firstFrameMs": 39827,
+    "settledMs": 40810,
+    "transferredMB": 7.29,
+    "runs": [
+      {
+        "firstFrame": 39692,
+        "signIn": 40684,
+        "megabytes": 7.29
+      },
+      {
+        "firstFrame": 39827,
+        "signIn": 40810,
+        "megabytes": 7.29
+      },
+      {
+        "firstFrame": 39932,
+        "signIn": 40891,
+        "megabytes": 7.29
+      }
+    ]
+  },
+  {
+    "profile": "phone, fast 4G",
+    "firstFrameMs": 8048,
+    "settledMs": 8516,
+    "transferredMB": 7.29,
+    "runs": [
+      {
+        "firstFrame": 8048,
+        "signIn": 8541,
+        "megabytes": 7.29
+      },
+      {
+        "firstFrame": 8218,
+        "signIn": 8516,
+        "megabytes": 7.29
+      },
+      {
+        "firstFrame": 7878,
+        "signIn": 8341,
+        "megabytes": 7.29
+      }
+    ]
+  }
+]

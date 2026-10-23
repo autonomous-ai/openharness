@@ -1,7 +1,7 @@
 import * as fs from 'node:fs'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
 import {
@@ -13,6 +13,15 @@ import {
 // The login shell's environment, as the daemon captured it at start-up: none, unless a test says so.
 const shell = vi.hoisted(() => ({ env: {} as NodeJS.ProcessEnv }))
 vi.mock('./loginShellEnv.js', () => ({ loginShellEnvironment: () => shell.env }))
+const host = vi.hoisted(() => ({ win32: false }))
+vi.mock('../engines/kit/windowsFiles.js', async original => {
+  const actual = await original<typeof import('../engines/kit/windowsFiles.js')>()
+  return { ...actual, hostPlatform: () => host.win32 ? 'win32' : actual.hostPlatform() }
+})
+vi.mock('../engines/kit/homeAdoption.js', async original => {
+  const actual = await original<typeof import('../engines/kit/homeAdoption.js')>()
+  return { ...actual, homeIsNetworkOrDevice: (path: string, platform?: NodeJS.Platform) => path.startsWith('//net/') || actual.homeIsNetworkOrDevice(path, platform) }
+})
 const clock = vi.hoisted(() => ({ remaining: Infinity }))
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => --clock.remaining < 0 ? 3_001 : 0 } })) // past NATIVE_EVIDENCE_MS
 vi.mock('node:fs', async original => {
@@ -51,6 +60,46 @@ describe('the homes the person moved', () => {
     expect(claudeProjectsRoots('/own/projects')).toEqual(['/own/projects', join(claude, 'projects')])
     expect(codexHomeRoots('/own/codex')).toEqual(['/own/codex', codex])
     expect(movedEngineHomes()).toEqual({ claude: [claude], codex: [codex] })
+  })
+
+  it.each(['\\\\server\\share\\.claude', '\\\\?\\C:\\Users\\u\\.claude', '//server/share/.claude', '\\\\.\\pipe\\x'])(
+    'on Windows drops the network or device path %s for that engine alone, says so once, and writes nothing', (path) => {
+      host.win32 = true
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        expect(adoptEngineHomes({ CODEX_HOME: path }, defaults)).toEqual({ claude: null, codex: null })
+        expect(adoptEngineHomes({ CODEX_HOME: path }, defaults)).toEqual({ claude: null, codex: null })
+        expect(confirmHomes({ CODEX_HOME: path })).toEqual({ claude: null, codex: null })
+        expect(warn).toHaveBeenCalledTimes(1)
+        expect(String(warn.mock.calls[0][0])).toContain('CODEX_HOME names a network or device path, which Harness does not use for an engine home on Windows. Set it to')
+        expect(existsSync(saved())).toBe(false)
+      } finally { host.win32 = false; warn.mockRestore() }
+    })
+
+  it('drops a network Codex home alone: the valid Claude home beside it is adopted', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const claude = join(root, 'claude-work')
+      expect(adoptEngineHomes({ CLAUDE_CONFIG_DIR: claude, CODEX_HOME: '//net/x' }, defaults)).toEqual({ claude, codex: null })
+      expect(movedEngineHomes().claude).toEqual([claude])
+      expect(movedEngineHomes().codex).toEqual([])
+    } finally { warn.mockRestore() }
+  })
+
+  it('reads stay lenient on Windows: a network CODEX_HOME never throws from the read paths', () => {
+    host.win32 = true
+    try {
+      const environment = { CODEX_HOME: '\\\\server\\share\\x', CLAUDE_CONFIG_DIR: '\\\\server\\share\\y' }
+      expect(() => sessionCodexHome({})).not.toThrow()
+      expect(() => sessionClaudeHome({})).not.toThrow()
+      expect(() => launchCodexHome(null, environment)).not.toThrow()
+      expect(() => launchClaudeConfigDir(environment)).not.toThrow()
+    } finally { host.win32 = false }
+  })
+
+  it('does not change on mac or Linux: a leading double slash is an ordinary path there', () => {
+    const odd = '//server/share/.codex'
+    expect(adoptEngineHomes({ CODEX_HOME: odd }, defaults).codex).toBe(resolve(odd))
   })
 
   it('takes no relative, `~`, empty or unset path, and not the daemon\'s own home', () => {

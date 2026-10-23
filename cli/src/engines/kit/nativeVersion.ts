@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process'
 import { realpathSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
+import { windowsEngineArgv } from '../../lib/windows/launch.js'
 
 export interface VersionRule { output: RegExp; args: readonly string[]; timeoutMs: number }
 export interface VersionProbe { identity(): string | null; read(): string | Promise<string> }
@@ -49,8 +50,11 @@ export function nativeVersionProbe(rule: VersionRule, binary: () => string, envi
     read: () => new Promise<string>((done, failed) => {
       const file = path()
       if (!file) { failed(new Error('Native executable is unavailable')); return }
-      const child = execFile(file, [...rule.args], {
-        env: environment, encoding: 'utf8', timeout: rule.timeoutMs, killSignal: 'SIGKILL', maxBuffer: 64 * 1024,
+      let argv: string[]
+      // Windows: an npm shim's script under node, never the shim through cmd.exe (lib/windows/launch.ts).
+      try { argv = windowsEngineArgv('the engine', [file, ...rule.args], { environment: environment ?? process.env }) } catch (error) { failed(error); return }
+      const child = execFile(argv[0]!, argv.slice(1), {
+        env: environment, encoding: 'utf8', timeout: rule.timeoutMs, killSignal: 'SIGKILL', maxBuffer: 64 * 1024, windowsHide: true,
       }, (error, stdout) => { if (error) failed(error); else done(stdout) })
       child.stdin?.end()
     }),

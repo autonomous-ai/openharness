@@ -80,12 +80,11 @@ Future<bool?> noticesEnabled(SystemNotices notices) =>
 /// What the phone's notices are about, in the words Settings ▸ Notifications and Focus's tips use —
 /// one source, so the two never promise different things.
 ///
-/// ⚠️ **Not "when a harness needs you"** (2026-10-14). That notice ([NoticeKind.question]) is fed
-/// by `commander_question`, which the daemon sends only to the dial and to its own computer
-/// (`cli/src/core/questions.ts`: `sendCommander`, `sendLocal`) — never to a phone over the relay.
-/// What does reach one is a turn's end and a device joining the account. Say questions again here
-/// once that frame is carried to phones.
-const noticesWhen = 'a harness finishes, or a new device joins your account';
+/// "Needs you" since 2026-10-21: `commander_question` ([NoticeKind.question]) reaches a phone over the
+/// relay (`cli/src/core/questions.ts` `sendRemote`). From 2026-10-14 until then the daemon sent it only
+/// to the dial and its own computer, and this did not promise it.
+const noticesWhen =
+    'a harness finishes or needs you, or a new device joins your account';
 
 /// What a device notice's payload starts with; the device's key follows. An agent notice's payload
 /// is `machine\nagent`, so the two never read as each other.

@@ -4,6 +4,18 @@ import { z } from 'zod'
 const level = z.enum(['low', 'medium', 'high'])
 const candidateId = z.string().regex(/^c\d{1,2}$/)
 const machine = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
+const amount = z.number().finite().nonnegative()
+/** How the candidate's quota fits the task (phase 1 routing), kept so committed spend and pick quality can be read back. */
+const fit = z.object({
+  status: z.enum(['fits', 'unknown', 'short']),
+  /** Usable over needed on the tightest window; negative when committed spend already exceeds what is left. */
+  coverage: z.number().finite().nullable(),
+  effectiveCost: amount,
+  expiring: amount,
+  spend: z.object({ '5-hour': amount.optional(), weekly: amount.optional() }).strict(),
+  /** The hashed usage key, or `machineId:engine` when the machine reports none. */
+  account: z.string().min(1).max(200).optional(),
+}).strict()
 export const routeCandidateSchema = z.object({
   id: candidateId,
   kind: z.enum(['member', 'new']),
@@ -18,9 +30,11 @@ export const routeCandidateSchema = z.object({
   title: z.string().trim().min(1).max(160),
   /** The criterion line Jev was shown. */
   label: z.string().trim().min(1).max(640),
+  fit: fit.optional(),
 }).strict().refine(c => (c.kind === 'member') === !!c.agentId, 'Members name their agent; new agents do not.')
 export const routeRecordSchema = z.object({
-  assessment: z.object({ difficulty: level, risk: level, why: z.string().trim().min(1).max(300) }).strict(),
+  assessment: z.object({ difficulty: level, risk: level, why: z.string().trim().min(1).max(300),
+    size: z.enum(['small', 'medium', 'large']).optional() }).strict(),
   candidates: z.array(routeCandidateSchema).min(1).max(12),
   excluded: z.array(z.object({ title: z.string().trim().min(1).max(160), reason: z.string().trim().min(1).max(500) }).strict()).max(200),
   floor: z.number().int().min(1).max(3),

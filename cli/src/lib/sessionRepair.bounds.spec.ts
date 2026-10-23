@@ -23,11 +23,11 @@ vi.mock('node:child_process', async original => {
   const actual = await original<typeof import('node:child_process')>()
   return { ...actual, execFile: vi.fn(actual.execFile) }
 })
-vi.mock('./tmux.js', async original => ({ ...await original<object>(), processRows: vi.fn() }))
+vi.mock('./processTable.js', async original => ({ ...await original<object>(), processRows: vi.fn() }))
 vi.mock('../engines/kit/nativeDescriptors.js', async original => ({ ...await original<object>(), readDescriptorEvidence: vi.fn() }))
 vi.mock('./processEvidence.js', async () => {
   const { nativeConversationFixture } = await import('../testing/nativeConversationEvidence.js')
-  const { processRows } = await import('./tmux.js')
+  const { processRows } = await import('./processTable.js')
   const { readDescriptorEvidence } = await import('../engines/kit/nativeDescriptors.js')
   return { readProcessEvidence: (...args: Parameters<typeof import('./processEvidence.js')['readProcessEvidence']>) => {
     const sources = nativeConversationFixture(async () => [], processRows)
@@ -179,6 +179,24 @@ describe('complete bounded evidence before choosing a conversation', () => {
     await expect(scan()).rejects.toThrow('Conversation identity is held')
   })
 
+  it.each([
+    ['a long session opening with checkpoint snapshots', 60, 88 * 1024, 'resolves'],
+    ['snapshots past the byte bound', 400, 88 * 1024, 'held'],
+  ] as const)('reads past %s to its cwd', async (_name, count, bytes, outcome) => {
+    const path = transcript()
+    const snapshot = JSON.stringify({ type: 'file-history-snapshot', messageId: 'm', snapshot: { trackedFileBackups: 'x'.repeat(bytes) } }) + '\n'
+    const head = ['ai-title', 'agent-name', 'mode', 'permission-mode'].map(type => JSON.stringify({ type, sessionId: 'resumed' }) + '\n').join('')
+    file(join(root, 'claude', 'projects', 'work', 'resumed.jsonl'), head + snapshot.repeat(count) + body('/elsewhere') + 'later\n')
+    if (outcome === 'resolves') await expect(scan()).resolves.toEqual({ sessionId: SID, transcriptPath: path })
+    else await expect(scan()).rejects.toThrow('header exceeds the read limit')
+  })
+
+  it('still holds on a large record that is not a skipped snapshot', async () => {
+    transcript()
+    file(join(root, 'claude', 'projects', 'work', 'big.jsonl'), JSON.stringify({ type: 'user', text: 'x'.repeat(300 * 1024) }) + '\n' + body('/elsewhere'))
+    await expect(scan()).rejects.toThrow('header exceeds the read limit')
+  })
+
   it('can exclude a confirmed different cwd without reading its remaining history', async () => {
     const path = transcript()
     file(join(root, 'claude', 'projects', 'other.jsonl'), JSON.stringify({ cwd: '/elsewhere' }) + '\n' + 'x'.repeat(2 * 1024 * 1024))
@@ -194,7 +212,7 @@ describe('complete bounded evidence before choosing a conversation', () => {
     const other = codex ? file(join(moved, 'sessions', `rollout-${OTHER}.jsonl`), header(OTHER))
       : file(join(moved, 'projects', 'work', `${OTHER}.jsonl`), body())
     if (codex) {
-      const { processRows } = await import('./tmux.js')
+      const { processRows } = await import('./processTable.js')
       const { readDescriptorEvidence } = await import('../engines/kit/nativeDescriptors.js')
       vi.mocked(processRows).mockResolvedValue([{ pid: 77, parentPid: 1, executable: 'codex', args: 'codex', startMarker: new Date(START).toString() }])
       vi.mocked(readDescriptorEvidence).mockImplementation(nativeConversationFixture(async () => [own, other]).descriptors)
@@ -304,7 +322,10 @@ describe('bounded native metadata', () => {
         return actual.open(name, flags, mode)
       })
     }
-    await expect(repair.findLiveSession('claude', CWD, START, { pid: 77 })).rejects.toThrow('Conversation identity is held')
+    const found = repair.findLiveSession('claude', CWD, START, { pid: 77 })
+    // A valid record whose conversation is not written yet names no session: still never the sibling's.
+    if (mode === 'missing transcript') await expect(found).resolves.toBeNull()
+    else await expect(found).rejects.toThrow('Conversation identity is held')
   })
 
   it.each(['unreadable', 'conflicting'])('does not accept the first home before checking a %s moved-home record', async mode => {
@@ -411,7 +432,7 @@ it.each(['Stop', 'checkpointed Stop', 'unknown process', 'unknown descriptors', 
     runtimes: [{ backend: 'tmux', paneId: '%77' }],
     processIdentity: { pid: 77, executable: 'claude', startMarker: new Date(START).toISOString() },
   } as RegisteredSession
-  const tmux = await import('./tmux.js')
+  const tmux = await import('./processTable.js')
   vi.mocked(tmux.processRows).mockResolvedValue([{ ...row.processIdentity!, parentPid: 1, args: 'claude' }])
   let reason = 'process record is incomplete'
   if (action === 'Claude record switch' || action === 'Claude new record') {
@@ -438,10 +459,10 @@ it.each(['Stop', 'checkpointed Stop', 'unknown process', 'unknown descriptors', 
   const { AgentRestartCoordinator } = await import('./restartAgent.js')
   const { createStopAgentService } = await import('./stopAgentService.js')
   const { terminateDeletedAgent } = await import('./deleteAgentFallback.js')
-  const checkpoint = vi.fn(), save = vi.fn()
+  const checkpoint = vi.fn(), save = vi.fn(), kill = vi.fn()
   const deps: StopAgentServiceDeps = {
     registry: { resolve: () => row }, stoppedAgents: { save } as unknown as StopAgentServiceDeps['stoppedAgents'],
-    restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), tmuxBackend: { kill: vi.fn() },
+    restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), backendFor: () => ({ kill }),
     agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn() },
     forgetSession: vi.fn(), markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: vi.fn(),
   }
@@ -449,7 +470,7 @@ it.each(['Stop', 'checkpointed Stop', 'unknown process', 'unknown descriptors', 
     .rejects.toThrow(reason)
   expect(save).not.toHaveBeenCalled(); expect(checkpoint).not.toHaveBeenCalled()
   expect(deps.stopNative).not.toHaveBeenCalled(); expect(terminateDeletedAgent).not.toHaveBeenCalled()
-  expect(deps.tmuxBackend!.kill).not.toHaveBeenCalled(); expect(deps.forgetSession).not.toHaveBeenCalled()
+  expect(kill).not.toHaveBeenCalled(); expect(deps.forgetSession).not.toHaveBeenCalled()
   expect(deps.markDeleted).not.toHaveBeenCalled(); expect(deps.registry.resolve(row.agentId)).toBe(row)
   expect(deps.stopJobs.size).toBe(0)
 })

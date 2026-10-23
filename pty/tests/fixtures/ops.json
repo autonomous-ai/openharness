@@ -1,0 +1,20 @@
+[
+  {"id": 1, "op": "create", "command": ["sh", "-l"], "cwd": "/tmp", "env": {"A": "1"}, "cols": 120, "rows": 40, "owner": "harness:o", "label": "agent", "hold": true, "afterExit": {"command": ["pwsh.exe", "-NoLogo"], "env": {"N": "codex"}}, "clearInherited": ["ANTHROPIC_API_KEY"], "seed": "a\r\nb"},
+  {"id": 2, "op": "kill", "pane": "%1", "graceMs": 1500},
+  {"id": 3, "op": "inventory"},
+  {"id": 4, "op": "titles"},
+  {"id": 5, "op": "paneState", "pane": "%1"},
+  {"id": 6, "op": "paneInfo", "pane": "%1"},
+  {"id": 7, "op": "capture", "pane": "%1", "historyLines": 40, "ansi": true, "visible": false},
+  {"id": 8, "op": "write", "pane": "%1", "data": "aA=="},
+  {"id": 9, "op": "paste", "pane": "%1", "text": "hi", "bracketed": true},
+  {"id": 10, "op": "key", "pane": "%1", "key": "Enter"},
+  {"id": 11, "op": "setTitle", "pane": "%1", "title": "t"},
+  {"id": 12, "op": "holdOpen", "pane": "%1"},
+  {"id": 13, "op": "releaseHold", "pane": "%1"},
+  {"id": 14, "op": "respawn", "pane": "%1", "command": ["sh"], "cwd": "/var", "env": {"B": "2"}, "expectedHeldToken": "u", "clearEnv": ["C"], "clearInherited": ["OPENAI_API_KEY"], "afterExit": {"command": ["cmd.exe"], "env": {"M": "claude"}}},
+  {"id": 15, "op": "jobPids", "pane": "%1"},
+  {"id": 16, "op": "processes"},
+  {"id": 17, "op": "setEngineExit", "pane": "%1", "status": -1},
+  {"id": 18, "op": "shutdown"}
+]

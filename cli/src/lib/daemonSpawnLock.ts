@@ -40,6 +40,7 @@ import { join } from 'path'
 import { env } from '../config/env.js'
 import { lockOwnerAlive, lockStartMarker, processLockIdentity } from './processLiveness.js'
 import { secureStateDirectory } from './secureState.js'
+import { startMarkerMs } from './processProof.js'
 
 /** `login` is a forced sign-in: the daemon is stopped and the session on disk is about to change
  *  hands, so nothing may start a daemon — on the OLD session — until the new one is written. */
@@ -135,15 +136,18 @@ function uid(): number | null {
  * account's directory, a loose mode). Returns null when there is no readable owner — which callers
  * must NOT take as "free": it is also what a lock mid-creation looks like.
  */
-export function readSpawnLockOwner(): SpawnLockOwner | null {
+export function readSpawnLockOwner(platform: NodeJS.Platform = process.platform): SpawnLockOwner | null {
   const me = uid()
+  // Windows has no modes worth the name (it reports 0666 or 0777) and no uid: the data folder is in the user's
+  // profile, checked when the lock is made (secureStateDirectory), and its ACL is what keeps others out.
+  const windows = platform === 'win32'
   try {
     const dir = lstatSync(SPAWN_LOCK_DIR)
-    if (!dir.isDirectory() || dir.isSymbolicLink() || (me !== null && dir.uid !== me) || (dir.mode & 0o777) !== 0o700) {
+    if (!dir.isDirectory() || dir.isSymbolicLink() || (!windows && ((me !== null && dir.uid !== me) || (dir.mode & 0o777) !== 0o700))) {
       throw new Error(`daemon spawn lock ${SPAWN_LOCK_DIR} has an unsafe owner, mode, or type`)
     }
     const file = lstatSync(ownerPath())
-    if (!file.isFile() || file.isSymbolicLink() || (me !== null && file.uid !== me) || (file.mode & 0o777) !== 0o600) {
+    if (!file.isFile() || file.isSymbolicLink() || (!windows && ((me !== null && file.uid !== me) || (file.mode & 0o777) !== 0o600))) {
       throw new Error(`daemon spawn lock owner ${ownerPath()} has an unsafe owner, mode, or type`)
     }
     const raw = JSON.parse(readFileSync(ownerPath(), 'utf8')) as Partial<Record<keyof SpawnLockOwner, unknown>>
@@ -228,6 +232,36 @@ function reclaimIfStale(owner: SpawnLockOwner): boolean {
 }
 
 /**
+ * Windows: whether the lock's owner pid now runs another process, one that started after the lock was taken. A pid
+ * is all Windows gives the owner record (lib/processLiveness.ts), and Windows reuses pids quickly: a holder that
+ * crashed left a lock its pid's next process "held" for good, and `harness start --if-down`, which the scheduled
+ * task runs every five minutes, never started the daemon again. [row] is the pid's row in the process table, null
+ * when there is none or the table could not be read; without a readable start there is no proof.
+ */
+export function spawnLockOwnerReused(owner: SpawnLockOwner, row: { startMarker: string } | null): boolean {
+  if (!row) return false
+  const started = startMarkerMs(row.startMarker)
+  return started !== null && started > owner.since + 2_000
+}
+
+/**
+ * Remove a lock judged abandoned, only while it is still the lock that was judged: re-read, and judged again against
+ * [row] (the owner pid's row in the process table) right before it goes. A lock that changed hands meanwhile has
+ * another token, and a live holder that must keep it.
+ */
+export function releaseAbandonedSpawnLock(owner: SpawnLockOwner, row: { pid: number; startMarker: string }): boolean {
+  try {
+    const current = readSpawnLockOwner()
+    if (!current || current.token !== owner.token || current.pid !== owner.pid || current.since !== owner.since) return false
+    if (row.pid !== current.pid || !spawnLockOwnerReused(current, row)) return false
+    rmSync(SPAWN_LOCK_DIR, { recursive: true, force: true })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
  * Remove a lock that names no one once it is clearly debris: a directory with no owner record, or one
  * whose record names no process (empty or cut short: a crash, or a full disk, between the O_EXCL create
  * and the write). Called only when the record could not be read as an owner. Fresh, either is a lock
@@ -305,6 +339,41 @@ export async function acquireSpawnLock(
     }
     if (Date.now() >= deadline) throw new SpawnLockBusyError(owner)
     await sleep(POLL_MS)
+  }
+}
+
+/** How long `tryAcquireSpawnLockSync` waits by default: a sweep, an install or a stage holds the lock for moments. */
+export const SPAWN_LOCK_SYNC_WAIT_MS = 5_000
+
+/**
+ * `acquireSpawnLock` for the one caller that cannot wait asynchronously: harnessd's master, whose probation verdicts are
+ * synchronous (harnessd/supervisor.ts `restoreUpdate`, `confirmUpdate`), the next core started right after. Re-entrant
+ * as it is, and a dead holder's lock reclaimed as it is, but the wait blocks this process's event loop (`Atomics.wait`)
+ * for at most [waitMs], so it stays short. The release, or null when a live holder keeps the lock that long or
+ * something that is not a lock sits at its path: the caller decides whether to go on without it.
+ */
+export function tryAcquireSpawnLockSync(purpose: SpawnLockPurpose, waitMs: number = SPAWN_LOCK_SYNC_WAIT_MS): (() => void) | null {
+  if (held) {
+    held.depth += 1
+    return release
+  }
+  const deadline = Date.now() + waitMs
+  const pause = new Int32Array(new SharedArrayBuffer(4))
+  for (;;) {
+    try {
+      const token = tryCreate(purpose)
+      if (token) {
+        held = { token, purpose, depth: 1 }
+        installExitHook()
+        return release
+      }
+      const owner = readSpawnLockOwner()
+      if (owner ? reclaimIfStale(owner) : reclaimIfOwnerless()) continue
+    } catch {
+      return null
+    }
+    if (Date.now() >= deadline) return null
+    Atomics.wait(pause, 0, 0, POLL_MS)
   }
 }
 

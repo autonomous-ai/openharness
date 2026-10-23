@@ -12,7 +12,7 @@ import { env } from './config/env.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
 import { harnessdEnv, holdHarnessdEnv } from './lib/harnessdEnv.js'
 import { readOrMintComputerId } from './lib/computerIdentity.js'
-import { localSocketPath } from './lib/localSocket.js'
+import { unixSocketPath } from './lib/localSocket.js'
 import { ignoreLogWriteErrors, installTimestampedConsole } from './lib/log.js'
 import { hostServices, type ServiceHost, type ServiceHostOptions, type ServiceProcess } from './services/process.js'
 
@@ -83,7 +83,7 @@ export async function startServiceProcess(named: string | undefined, deps: Servi
   const runners = deps.runners ?? SERVICE_RUNNERS
   const exit = deps.exit ?? ((code: number) => process.exit(code))
   const names = [...new Set((named ?? '').split(',').map((name) => name.trim()).filter(Boolean))]
-  const socketPath = localSocketPath(env.ADAPTER_DATA_DIR, env.PORT)
+  const socketPath = unixSocketPath(env.ADAPTER_DATA_DIR, env.PORT)
   const unknown = names.length ? names.find((name) => !runners.has(name)) : '(none)'
   if (unknown !== undefined) {
     console.error(`[service] ${unknown}: no such service in this build`)

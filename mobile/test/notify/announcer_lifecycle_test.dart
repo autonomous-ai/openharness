@@ -17,6 +17,7 @@ void main() {
     replay: false,
     subagent: false,
     reply: 'Fixed the login screen.',
+    tier: null,
   );
 
   // First, and deliberately before any `testWidgets`: with no binding at all
@@ -28,7 +29,7 @@ void main() {
     expect(announcer.inFront, isTrue);
   });
 
-  testWidgets('in front while resumed; a pocketed phone gets the notice', (
+  testWidgets('in front while resumed; an agent not on screen gets the notice, in front or pocketed', (
     tester,
   ) async {
     final system = _Recording();
@@ -37,13 +38,13 @@ void main() {
 
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     expect(announcer.inFront, isTrue);
-    // In front, elsewhere: the haptic tap and a mark — the default chime must
-    // never throw, even where no platform answers it.
+    // In front, elsewhere: the haptic tap, a mark and the OS's banner over the
+    // app — the default chime must never throw, even where no platform answers it.
     expect(
       announcer.turnEnded(agent, news, watching: () => false),
-      AgentNotice.mark,
+      AgentNotice.alert,
     );
-    expect(system.shown, isEmpty);
+    expect(system.shown, hasLength(1));
 
     for (final state in [
       AppLifecycleState.inactive,
@@ -57,7 +58,8 @@ void main() {
       announcer.turnEnded(agent, news, watching: () => true),
       AgentNotice.alert,
     );
-    expect(system.shown.single.body, 'Fixed the login screen.');
+    expect(system.shown, hasLength(2));
+    expect(system.shown.last.body, 'Fixed the login screen.');
 
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);

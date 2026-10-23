@@ -148,7 +148,7 @@ mod notices {
         for block in lock.split("[[package]]").skip(1) {
             let field = |k: &str| block.lines().find_map(|l| l.strip_prefix(&format!("{k} = \"")).and_then(|v| v.strip_suffix('"')).map(str::to_string));
             let (Some(name), Some(version)) = (field("name"), field("version")) else { continue };
-            if name == "harness-tui" { continue }
+            if name == "harness-tui" || name == "harness-term" { continue }
             if !super::NOTICES.contains(&format!("| {name} | {version} |")) { missing.push(format!("{name} {version}")) }
         }
         assert!(missing.is_empty(), "not in THIRD_PARTY_NOTICES.md (run python3 scripts/notices.py): {missing:?}");

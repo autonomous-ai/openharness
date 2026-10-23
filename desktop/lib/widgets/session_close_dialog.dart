@@ -11,11 +11,13 @@ class SessionCloseItem {
     required this.name,
     required this.activity,
     this.machineName,
+    this.protectionReason,
   });
 
   final String name;
   final String activity;
   final String? machineName;
+  final String? protectionReason;
 
   bool get completed => activity == 'stopped' || activity == 'deferred';
 }
@@ -104,8 +106,14 @@ class _SessionClosePromptState extends State<_SessionClosePrompt> {
     final scope = widget.tabName == null
         ? 'this pane'
         : 'the tab “${widget.tabName}”';
-    final description = widget.error ?? _summary(attention);
-    final visible = widget.error == null ? attention : widget.sessions;
+    final protectionReason = widget.sessions
+        .map((item) => item.protectionReason)
+        .whereType<String>()
+        .firstOrNull;
+    final description = widget.error ?? protectionReason ?? _summary(attention);
+    final visible = widget.error == null && protectionReason == null
+        ? attention
+        : widget.sessions;
     final completed = widget.sessions.where((item) => item.completed).length;
     return TerminalPromptKeys(
       focusNode: _keys,
@@ -123,7 +131,9 @@ class _SessionClosePromptState extends State<_SessionClosePrompt> {
                 Text(description, style: DesktopChrome.text(size: 13)),
                 const SizedBox(height: DesktopChrome.controlGap),
                 Text(
-                  widget.error == null
+                  protectionReason != null
+                      ? 'You can close $scope. The Product Manager will keep running.'
+                      : widget.error == null
                       ? 'Stopping ${count == 1 ? 'this session' : 'all $count sessions'} will close $scope. History will be saved.'
                       : widget.tabName == null
                       ? 'You can close this pane. The session may still be running.'
@@ -173,9 +183,19 @@ class _SessionClosePromptState extends State<_SessionClosePrompt> {
               FilledButton(
                 key: const Key('session-close-now'),
                 style: grid.dangerButtonStyle(),
-                onPressed: () => _choose('now'),
+                onPressed: protectionReason == null
+                    ? () => _choose('now')
+                    : null,
                 child: const Text('Stop'),
               ),
+              if (protectionReason != null)
+                FilledButton(
+                  key: const Key('session-close-view'),
+                  onPressed: () => _choose('close_view'),
+                  child: Text(
+                    widget.tabName == null ? 'Close pane' : 'Close Tab',
+                  ),
+                ),
             ] else
               FilledButton(
                 key: const Key('session-close-view'),

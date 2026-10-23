@@ -101,7 +101,7 @@ class MainFlutterWindow: NSWindow {
   }
 
   /// Puts Check for Updates… in the application menu; [HarnessAppMenu.arrange]
-  /// gives it its place. Keyboard Shortcuts… and Flash Firmware… live in Help.
+  /// gives it its place. Keyboard Shortcuts… lives in Help.
   ///
   /// Added here rather than in MainMenu.xib so the whole menu bar keeps coming
   /// from the nib — declaring it in Dart with PlatformMenuBar would replace the
@@ -131,8 +131,7 @@ class MainFlutterWindow: NSWindow {
   /// and AppKit prints ⌘/ beside it, which is how people learn the chord.
   /// Export Logs… is the bug-report zip, from a menu every build has (Settings
   /// ▸ Debug carries the same action but is hidden in a shipped app, and the
-  /// person whose dial got stuck is running a shipped app). Flash Firmware…
-  /// is that dial's, and is here for the same reason.
+  /// person whose dial got stuck is running a shipped app).
   private func installHelpMenuItems() {
     guard let helpMenu = NSApp.mainMenu?.item(withTitle: "Help")?.submenu else { return }
     guard helpMenu.indexOfItem(withTag: exportLogsMenuItemTag) == -1 else { return }
@@ -149,7 +148,6 @@ class MainFlutterWindow: NSWindow {
       ),
       NSMenuItem.separator(),
       menuItem(title: "Export Logs…", action: #selector(exportLogs(_:)), symbol: "doc.zipper", tag: exportLogsMenuItemTag),
-      menuItem(title: "Flash Firmware…", action: #selector(flashFirmware(_:)), symbol: "bolt.circle", tag: flashMenuItemTag),
       NSMenuItem.separator(),
     ]
     for (index, item) in items.enumerated() { helpMenu.insertItem(item, at: index) }
@@ -194,7 +192,7 @@ class MainFlutterWindow: NSWindow {
     // key equivalent it is handled by the responder chain first, so it works
     // wherever the focus happens to be.
     //
-    // Cmd-Shift-L matches the workspace keymap; Cmd-S opens the Store.
+    // Cmd-Shift-L matches the workspace keymap.
     viewMenu.insertItem(
       menuItem(
         title: "Layout…",
@@ -290,7 +288,6 @@ class MainFlutterWindow: NSWindow {
   }
 
   private var updateMenuItemTag: Int { 7301 }
-  private var flashMenuItemTag: Int { 7302 }
   private var shortcutsMenuItemTag: Int { 7303 }
   private var resetFontMenuItemTag: Int { 7304 }
   private var biggerFontMenuItemTag: Int { 7305 }
@@ -301,10 +298,6 @@ class MainFlutterWindow: NSWindow {
 
   @objc private func checkForUpdates(_ sender: Any?) {
     menuChannel?.invokeMethod("checkForUpdates", arguments: nil)
-  }
-
-  @objc private func flashFirmware(_ sender: Any?) {
-    menuChannel?.invokeMethod("flashFirmware", arguments: nil)
   }
 
   @objc private func exportLogs(_ sender: Any?) {

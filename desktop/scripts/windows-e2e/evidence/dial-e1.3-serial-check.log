@@ -1,0 +1,120 @@
+E1.3 serial measurement record — 2026-10-20
+
+Scope: owner-authorized isolated COM3 measurements on the x64 Dell test PC.
+Dial serial: 28:84:85:... (shortened); console session: False.
+No address, account, credential, full serial, attachment session or process ID is retained here.
+This record normalizes the captured output's blank lines and adds provenance and verdicts.
+
+OLD ASSERTED-LINES MODE — FAILED AUTOMATED GATE
+DCB_RAW=0x1011: fBinary, DTR_CONTROL_ENABLE, RTS_CONTROL_ENABLE.
+Source: 38d13b52195971ad122b45628789aa83c0be3e5b
+Artifact: harness-pty-windows-x64
+Run: https://github.com/autonomous-ai/openharness/actions/runs/39362659040
+harness-serial.exe SHA-256: acc27e27fb8b415f82301ebde2b5af57f58576277e823bb5cedbe5fa52493fc5
+
+Second automated attempt:
+opened: True (open)
+stayed open for 10 s: True
+bytes read: 3976
+ESP-ROM banner seen: True
+exit at end of stdin: 0
+session unchanged: True
+measurement exit: 1
+
+Controlled immediate repetition, unchanged binary:
+opened: True (open)
+stayed open for 10 s: True
+bytes read: 3976
+ESP-ROM banner seen: True
+exit at end of stdin: 0
+session unchanged: True
+measurement exit: 1
+
+RELEASED-LINES FALLBACK — INITIAL PAIR MIXED, FINAL PAIR PASSED
+DCB_RAW=1: fBinary, DTR_CONTROL_DISABLE, RTS_CONTROL_DISABLE.
+Both lines configured in one SetCommState; no later control-line change.
+Source: 86398c252ab16ad285120f9a0b0303c2922ff7a1
+Artifact: harness-pty-windows-x64, artifact ID 12246489651, PE machine 0x8664.
+Run: https://github.com/autonomous-ai/openharness/actions/runs/39383869283
+harness-serial.exe: 307712 bytes
+harness-serial.exe SHA-256: 3efe833879dcc25de881fd945a3c7b7152e29308eb88ec3c0c42992a0342c035
+Measured source SHA-256 (before the later comment-only documentation update):
+serial/src/model.rs: 72bfdbd3d091c17ce863ab047556869d4c8bc47337538f9bbf738e46edceccbe
+serial/src/windows.rs: b8dbe8149a01b603718cd0149bab636342197a0c53d9a581a04c38e0b54669d4
+serial/Cargo.lock: 708452090df80ab3f54c511800af72c0827402b380a4cbed54e06f1dd300c41f
+
+Initial released-lines pair, open 1 — FAILED:
+opened: True (open)
+stayed open for 10 s: True
+bytes read: 3976
+ESP-ROM banner seen: True
+exit at end of stdin: 0
+session unchanged: True
+measurement exit: 1
+
+Initial released-lines pair, open 2 — PASSED:
+opened: True (open)
+stayed open for 10 s: True
+bytes read: 2370
+ESP-ROM banner seen: False
+exit at end of stdin: 0
+session unchanged: True
+measurement exit: 0
+
+Final consecutive pair, unchanged binary, open 1 — PASSED:
+opened: True (open)
+stayed open for 10 s: True
+bytes read: 3822
+ESP-ROM banner seen: False
+exit at end of stdin: 0
+session unchanged: True
+measurement exit: 0
+
+Final consecutive pair, unchanged binary, open 2 — PASSED:
+opened: True (open)
+stayed open for 10 s: True
+bytes read: 1975
+ESP-ROM banner seen: False
+exit at end of stdin: 0
+session unchanged: True
+measurement exit: 0
+
+NATIVE TOOL VALIDATION
+Windows PowerShell 5.1 parser, both released-lines pairs:
+ok   dial-state.ps1
+ok   harness-cli.ps1
+ok   hold-port.ps1
+ok   install-build.ps1
+ok   parse-check.ps1
+ok   serial-check.ps1
+0 file(s) with parse errors
+Parsing the E5 tools did not execute their install, CLI or port-holding actions.
+Existing native serial-check fixture suite: 7 test methods passed in 109.357 s.
+Existing x64 Rust evidence for source 86398c252: 8 model, 2 CLI and 2 native Windows tests passed.
+Those fixture/model tests do not prove real-dial screen or protocol behavior.
+
+ISOLATION AND CLEANUP
+The PC had preexisting Harness processes; it was not assumed clean.
+All 5/5 preexisting process identities were preserved; none was stopped or changed.
+Captured cleanup after the initial released-lines pair:
+E own processes: 0
+E scratch removed: True
+Preexisting process identities changed: []
+Captured cleanup after the final released-lines pair:
+E own processes: 0
+E scratch removed: True
+Preexisting process identities changed: []
+The old asserted-lines attempt cleanup also reported own processes 0, scratch removed True and no identity changes.
+No SSH key was installed. Password authentication used hidden getpass outside the repository.
+Only E-owned temporary files/processes were created and removed; existing app, daemon and user state were preserved.
+
+VERDICT AND LIMITS
+The final two consecutive released-lines opens pass every automated E1.3 predicate.
+Together with initial pair open 2, three consecutive released-lines opens were banner-free.
+The initial released-lines banner is retained as a failed measurement; it is not discarded or called a pass.
+The exact reset edge and the initial banner's origin (including whether buffered) are unproven.
+An unchanged USB attachment session alone does not establish that the dial did not reboot.
+Person screen observation: NOT RUN.
+Heartbeat/protocol continuity: NOT RUN in E1.3.
+Controller ruling: the automated gate unlocks E2; carry Person screen observation and heartbeat verification to E5.
+This record does not claim full hardware/product acceptance, ARM hardware acceptance or completion of E5.

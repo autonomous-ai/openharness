@@ -33,6 +33,13 @@ enum ProductFlow {
   phoneOffer('phone_offer'),
   shareInvite('share_invite'),
   shareAccept('share_accept'),
+  // The same card offered once to a computer that never had it, after one of its own harnesses
+  // finished a turn (`AppNotifier._offerPhoneAfterWork`): counted apart, so the two offers read apart.
+  phoneOfferAfterWork('phone_offer_after_work'),
+  // The same card offered when the person comes back after five minutes or more away to a harness
+  // that waited on them, or one that finished (`AppNotifier._offerPhoneAway`), each counted apart.
+  phoneOfferAwayWaited('phone_offer_away_waited'),
+  phoneOfferAwayFinished('phone_offer_away_finished'),
   // The phone's own flows, listed so this enum names every flow the phone's copy does; the desktop
   // never begins them.
   signInScan('sign_in_scan'),
@@ -53,14 +60,19 @@ enum ProductFlow {
   /// queue for that answer instead of being skipped ([ProductMeasurement]).
   int get vocabulary => switch (this) {
     phoneOffer => 3,
-    shareInvite || shareAccept => 4,
+    shareInvite || shareAccept => 5,
+    phoneOfferAfterWork || phoneOfferAwayWaited || phoneOfferAwayFinished => 4,
     _ => 1,
   };
 
   /// Ended only by what the person does, never by the 15-minute observation
   /// bound: the card waits beside the work until it is used or put away, and
   /// an Add Phone pressed after 15 minutes would otherwise be lost to unknown.
-  bool get unbounded => this == phoneOffer;
+  bool get unbounded =>
+      this == phoneOffer ||
+      this == phoneOfferAfterWork ||
+      this == phoneOfferAwayWaited ||
+      this == phoneOfferAwayFinished;
 }
 
 enum ProductOutcome { ok, failed, cancelled, unknown }
@@ -610,20 +622,26 @@ class ProductMeasurement extends ChangeNotifier {
 
   void setupHidden() => _setupShown = false;
 
-  /// The proxy revision that forwards a queued metric. First-run and sharing
-  /// counters wait for revision 4; an older proxy never receives unknown names.
-  /// Other health measures use [health]'s skip-until-supported behavior.
-  static int _vocabularyOf(String metric) =>
-      metric.startsWith('health_desktop_first_run_') ||
-          metric.startsWith('health_desktop_shared_invites_') ||
-          metric.startsWith('ui_desktop_share_invite_') ||
-          metric.startsWith('ui_desktop_share_accept_')
-      ? 4
-      : metric.startsWith('ui_desktop_${ProductFlow.phoneOffer.wire}_')
-      ? ProductFlow.phoneOffer.vocabulary
-      : metric.startsWith('ui_desktop_add_phone_')
-      ? AddPhoneOpening.vocabulary
-      : 1;
+  /// The proxy revision ([proxyVocabulary]) that forwards [metric]: the Add
+  /// Phone card's flow and the ways Add Phone opened are 3, the card offered
+  /// after work or after time away 4, and first-run/invite counters 5. Other
+  /// health measures use [health] to wait for support before counting.
+  static int _vocabularyOf(String metric) {
+    if (metric.startsWith('health_desktop_first_run_') ||
+        metric.startsWith('health_desktop_shared_invites_')) return 5;
+    for (final flow in _newerFlows) {
+      if (metric.startsWith('ui_desktop_${flow.wire}_')) return flow.vocabulary;
+    }
+    return metric.startsWith('ui_desktop_add_phone_')
+        ? AddPhoneOpening.vocabulary
+        : 1;
+  }
+
+  /// The flows newer than revision 1, longest name first: `phone_offer_after_work_` starts with
+  /// `phone_offer_`, and must be read as itself.
+  static final _newerFlows =
+      ProductFlow.values.where((flow) => flow.vocabulary > 1).toList()
+        ..sort((a, b) => b.wire.length.compareTo(a.wire.length));
 
   /// A widget's delayed callback cannot count after sign-out or a choice revision.
   VoidCallback observer(ProductHealthMeasure measure) {
@@ -715,13 +733,16 @@ class ProductMeasurement extends ChangeNotifier {
     );
   }
 
+  // Report days are UTC dates. Parsing a date without Z uses the machine's
+  // timezone and can make today's UTC report look like it is from the future.
+  DateTime _utcDayStart(String day) => DateTime.parse('${day}T00:00:00Z');
+
   void _count(String channel, String day, String metric) {
     final today = _now().toUtc();
-    final date = DateTime.parse(day);
+    final date = _utcDayStart(day);
     if (today.difference(date).inDays > 1 || date.isAfter(today)) return;
     _days.removeWhere(
-      (key, _) =>
-          today.difference(DateTime.parse(key.split(':')[1])).inDays > 1,
+      (key, _) => today.difference(_utcDayStart(key.split(':')[1])).inDays > 1,
     );
     final counters = _days.putIfAbsent('$channel:$day', () => {});
     if ((counters[metric] ?? 0) >= 1000 && healthEnabled && channel == 'ui') {
@@ -824,7 +845,7 @@ class ProductMeasurement extends ChangeNotifier {
       }
       if (_now()
               .toUtc()
-              .difference(DateTime.parse(report['day'] as String))
+              .difference(_utcDayStart(report['day'] as String))
               .inDays >
           1) {
         _pending.remove(channel);

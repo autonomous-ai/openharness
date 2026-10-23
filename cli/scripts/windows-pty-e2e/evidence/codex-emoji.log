@@ -1,0 +1,6 @@
+12:19:48.798 create codex → a9332983… launch=starting (329 ms)
+12:19:54.409 paste "P1 🎉🚀 中文 Việt" → composer: "› P1  中文 Việt"
+12:19:57.927 input " T1 🎉🚀 中文 Việt" → composer: "› P1  中文 Việt T1  中文 Việt"
+12:20:01.438 paste " P2 a🎉b" → composer: "› P1  中文 Việt T1  中文 Việt P2 ab"
+12:20:04.947 input " T2 a🎉b" → composer: "› P1  中文 Việt T1  中文 Việt P2 ab T2 ab"
+12:20:05.754 agent a9332983…

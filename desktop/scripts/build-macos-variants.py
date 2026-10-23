@@ -143,7 +143,7 @@ def main(argv=None):
     parser.add_argument("--metadata-prefix", type=object_prefix, help="publish only to these separate per-variant manifests")
     parser.add_argument("--artifact-prefix", type=object_prefix)
     parser.add_argument("--artifact-suffix", default="")
-    parser.add_argument("--verify-downloads", action="store_true", help="verify all four internal-build downloads; real releases use their six-artifact final gate")
+    parser.add_argument("--verify-downloads", action="store_true", help="verify all four internal-build downloads; real releases use their nine-artifact final gate")
     parser.add_argument("--dart-define", action="append", default=[])
     args = parser.parse_args(argv)
     if not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", args.version):

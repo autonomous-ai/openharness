@@ -84,6 +84,8 @@ class _FirstUseApp extends AppNotifier {
     String? permissionMode,
     String? codexHome,
     String? dsh,
+    String? swarmRole,
+    String? swarmSkillMode,
     GridModel? model,
     String? prompt,
     String? name,

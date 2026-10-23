@@ -36,7 +36,32 @@ export function readPid(): number | null {
 }
 
 export function isAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true } catch { return false }
+  return processAlive(pid)
+}
+
+export interface ProcessAliveDeps {
+  platform?: NodeJS.Platform
+  /** `kill -0`: whether the pid can be signalled. */
+  signal?: (pid: number) => boolean
+  /** `/proc/<pid>/stat` on Linux. */
+  readStat?: (pid: number) => string
+}
+
+/**
+ * Whether [pid] runs. On Linux a zombie or a dead entry (`Z`, `X` in /proc/<pid>/stat) is gone, though `kill -0` still
+ * reaches it: in a container with no init a stopped master stays a zombie of PID 1, and `harness uninstall` waited on it
+ * and removed nothing (G6, docs/testing/windows-cli-e2e.md). A zombie holds nothing: no socket, no lock, no pane. When
+ * /proc cannot say, the signal decides, as before.
+ */
+export function processAlive(pid: number, deps: ProcessAliveDeps = {}): boolean {
+  const signal = deps.signal ?? ((target: number) => { try { process.kill(target, 0); return true } catch { return false } })
+  if (!signal(pid)) return false
+  if ((deps.platform ?? process.platform) !== 'linux') return true
+  let stat: string
+  try { stat = (deps.readStat ?? ((target: number) => readFileSync(`/proc/${target}/stat`, 'utf8')))(pid) } catch { return true }
+  // `<pid> (<comm>) <state> …`: the name may hold spaces and parentheses, so the state follows the LAST `)`.
+  const state = /^\s*(\S)/.exec(stat.slice(stat.lastIndexOf(')') + 1))?.[1]
+  return !(stat.includes(')') && (state === 'Z' || state === 'X'))
 }
 
 /** Whether a durable SSO session exists for this computer. */

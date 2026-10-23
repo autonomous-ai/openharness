@@ -39,6 +39,12 @@ export function screenEnvPrefix(launch: Launch): string[] {
   return ['/usr/bin/env', ...clear.flatMap((name) => ['-u', name]), ...set.map(([name, value]) => `${name}=${value}`)]
 }
 
+/** The variables the screen sets, as an environment: what a Windows launch sends in the pane's env instead of the
+ *  `/usr/bin/env` prefix, which Windows has no program for (lib/engineLaunch.ts `engineLaunchEnv`). */
+export function screenVariables(launch: Launch): Record<string, string> {
+  return Object.fromEntries(variablesOf(launch).set)
+}
+
 /** `inherited` with the screen's variables cleared and set, as a copy. */
 export function screenEnvironment(launch: Launch, inherited: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const { clear, set } = variablesOf(launch)
