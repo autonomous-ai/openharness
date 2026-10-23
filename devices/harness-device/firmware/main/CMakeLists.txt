@@ -49,6 +49,7 @@ set(BOARD_SRCS
     "ui/habitat/terminal.c"
     "ui/habitat/scroll.c"
     "ui/habitat/workspace.c"
+    "ui/habitat/supertab.c"
     "ui/habitat/selection.c"
     "ui/habitat/carry.c"
     "ui/habitat/visit.c"
