@@ -1869,14 +1869,15 @@ export function createCoreApi({
         const session = registry.byAgent(request.agentId)
         // This is the authoritative live registry, not a service's possibly old snapshot or a failed read.
         if (!session) return { closed: true }
-        if (session.startedBy !== 'agent' || session.resumeOnly || !request.creationId || typeof request.sessionId !== 'string' || !request.createdAt) return { error: 'NOT_SWARM_STARTED' }
+        // A reopen (resume-only) of the same conversation is still the Swarm's session: the identity below proves it.
+        if (session.startedBy !== 'agent' || !request.creationId || typeof request.sessionId !== 'string' || !request.createdAt) return { error: 'NOT_SWARM_STARTED' }
         if (session.sessionId !== request.sessionId || session.registeredAt !== Date.parse(request.createdAt)) return { error: 'AGENT_CHANGED' }
         if (!Number.isFinite(request.expiresAt) || request.expiresAt! <= Date.now()) return { error: 'STOP_LEASE_EXPIRED' }
         const creation = await creationStatus?.(request.creationId)
         if (creation?.state !== 'created' || creation.agentId !== request.agentId) return { error: 'NOT_SWARM_STARTED' }
         if (request.expiresAt! <= Date.now()) return { error: 'STOP_LEASE_EXPIRED' }
         const latest = registry.byAgent(request.agentId)
-        if (!latest || latest.startedBy !== 'agent' || latest.resumeOnly || latest.sessionId !== request.sessionId
+        if (!latest || latest.startedBy !== 'agent' || latest.sessionId !== request.sessionId
           || latest.registeredAt !== Date.parse(request.createdAt)) return { error: 'AGENT_CHANGED' }
         return closeAgent ? closeAgent({ agentId: request.agentId, sessionId: request.sessionId, createdAt: request.createdAt, mode: 'now', onlyIfOriginalLaunch: true, expiresAt: request.expiresAt }) : { error: 'UNSUPPORTED' }
       },

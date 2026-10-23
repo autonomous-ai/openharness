@@ -733,6 +733,24 @@ function releaseFixture(nativeKind = 'swarm', result: Record<string, unknown> = 
   return { ...t, host, target, native, lookup, close, lease, remove, sent, poll }
 }
 
+// On 2026-10-23 a worker its machine's restart had stopped, reopened on the same conversation, could no longer be stopped by
+// the Swarm ("not started by the Swarm"): the reopen marks the row resume-only, though it is still the Swarm's session.
+it('stops a Swarm worker reopened after a restart on the conversation the Swarm started', async () => {
+  const t = releaseFixture('swarm', { closed: true })
+  Object.assign(t.native, { resumeOnly: true })
+  await t.poll()
+  await vi.waitFor(() => expect(t.remove).toHaveBeenCalledOnce())
+  expect(t.close).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'harness', creationId: 'super-original-creation', sessionId: 'native' }))
+})
+
+it('still refuses, as changed, a reopened worker that now runs another conversation', async () => {
+  const t = releaseFixture('changed', { closed: true })
+  Object.assign(t.native, { resumeOnly: true })
+  for (let i = 0; i < 3; i++) await t.poll(130_000)
+  expect(t.close).not.toHaveBeenCalled()
+  expect(t.remove).not.toHaveBeenCalled()
+})
+
 // A Swarm start before #1527 left only its start record and the native creation receipt (super-<startId>).
 const group = { id: 'group', leadId: 'lead', agentIds: ['lead', 'agent'], assignment: { agentId: 'agent', status: 'done' } }
 const legacyStarts = { starts: [{ id: 'start-1', creationId: 'super-start-1', harnessId: 'harness', request: { machineId: 'machine-1', name: 'Permission builder' }, error: null }] }

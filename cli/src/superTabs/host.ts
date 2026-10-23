@@ -365,10 +365,12 @@ export class SuperTabHost {
           // The process snapshot can lag. Only the authoritative core may confirm absence; no lease can close a live row.
           result = await this.core.agents.closeSwarm({ agentId: agent.harnessId })
         } else {
-          if (native.startedBy !== 'agent' || native.resumeOnly || !identifier(identity.creationId)
+          // A reopen keeps the row's harness, conversation and registeredAt but marks it resume-only: still the Swarm's
+          // session (2026-10-23, a worker reopened after its machine restarted was refused as "not started by the Swarm").
+          if (native.startedBy !== 'agent' || !identifier(identity.creationId)
             || typeof identity.sessionId !== 'string' || !identity.sessionId || typeof identity.createdAt !== 'string'
             || native.sessionId !== identity.sessionId || native.registeredAt !== Date.parse(identity.createdAt)) {
-            refuse(native.startedBy === 'agent' && !native.resumeOnly && identifier(identity.creationId) ? 'AGENT_CHANGED' : 'NOT_SWARM_STARTED')
+            refuse(native.startedBy === 'agent' && identifier(identity.creationId) ? 'AGENT_CHANGED' : 'NOT_SWARM_STARTED')
             return
           }
           const creation = await this.core.agents.creationStatus?.(identity.creationId)

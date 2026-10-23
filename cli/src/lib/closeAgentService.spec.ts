@@ -35,14 +35,22 @@ beforeEach(() => {
 })
 afterEach(() => { service.dispose(); vi.useRealTimers(); vi.restoreAllMocks(); for (const s of registry.list()) registry.removeAgent(s.agentId) })
 
-it.each(['before', 'activity', 'checkpoint'] as const)('a Swarm close preserves a personally resumed worker at %s', async phase => {
+it.each(['before', 'activity', 'checkpoint'] as const)('a Swarm close preserves a worker that stopped being Swarm-started at %s', async phase => {
   row.startedBy = 'agent'
-  if (phase === 'before') row.resumeOnly = true
-  if (phase === 'activity') vi.mocked(deps.activity).mockImplementation(async () => { row.resumeOnly = true; return 'idle' })
-  if (phase === 'checkpoint') vi.mocked(deps.checkpoint).mockImplementation(async () => { row.resumeOnly = true })
+  if (phase === 'before') row.startedBy = undefined
+  if (phase === 'activity') vi.mocked(deps.activity).mockImplementation(async () => { row.startedBy = undefined; return 'idle' })
+  if (phase === 'checkpoint') vi.mocked(deps.checkpoint).mockImplementation(async () => { row.startedBy = undefined })
   const guarded = { ...request('now'), onlyIfOriginalLaunch: true }
   expect(await service.request(guarded)).toMatchObject({ error: expect.any(String) })
   expect(registry.byAgent(row.agentId)).toBe(row)
+})
+
+// A machine restart stops a Swarm worker; reopened on its own conversation it is resume-only, and is still the Swarm's
+// (2026-10-23: such a worker could no longer be stopped by the Swarm).
+it('a Swarm close closes a worker reopened on the conversation it was started with', async () => {
+  row.startedBy = 'agent'
+  row.resumeOnly = true
+  expect(await service.request({ ...request('now'), onlyIfOriginalLaunch: true })).toEqual({ closed: true })
 })
 
 it.each(['before', 'activity', 'checkpoint'] as const)('an expired native close lease preserves the worker at %s', async phase => {

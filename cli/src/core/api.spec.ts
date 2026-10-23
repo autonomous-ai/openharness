@@ -40,19 +40,22 @@ describe('the core API services stand on', () => {
     expect(await core.agents.closeSwarm!({ agentId: 'worker' })).toEqual({ closed: true })
   })
 
-  it('refuses a personal resume before or during the original creation lookup', async () => {
+  // A machine restart stops Swarm sessions; reopened, each keeps its harness, conversation and registeredAt but is marked
+  // resume-only. On 2026-10-23 such a worker could no longer be stopped by the Swarm ("not started by the Swarm").
+  it('closes a Swarm session reopened on its own conversation, and refuses one whose conversation changed during the lookup', async () => {
     const request = { agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', expiresAt: Date.now() + 120_000, createdAt: new Date(1000).toISOString() }
-    const session = { ...row('worker'), sessionId: 'native', registeredAt: 1000, startedBy: 'agent' as const, resumeOnly: true }
+    const session = { ...row('worker'), sessionId: 'native', registeredAt: 1000, startedBy: 'agent' as const, resumeOnly: true as const }
     const deps = coreDeps(), closeAgent = vi.fn(async () => ({ closed: true as const }))
-    const creationStatus = vi.fn(async () => {
-      session.resumeOnly = true
+    const creationStatus = vi.fn(async () => ({ creationId: request.creationId, state: 'created' as const, agentId: 'worker' }))
+    const core = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent: () => session } as CoreApiDeps['registry'], closeAgent, creationStatus })
+    expect(await core.agents.closeSwarm!(request)).toEqual({ closed: true })
+    expect(closeAgent).toHaveBeenCalledOnce()
+    closeAgent.mockClear()
+    creationStatus.mockImplementationOnce(async () => {
+      session.sessionId = 'personal-resume'
       return { creationId: request.creationId, state: 'created' as const, agentId: 'worker' }
     })
-    const core = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent: () => session } as CoreApiDeps['registry'], closeAgent, creationStatus })
-    expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: expect.any(String) })
-    expect(creationStatus).not.toHaveBeenCalled()
-    session.resumeOnly = false
-    expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: expect.any(String) })
+    expect(await core.agents.closeSwarm!(request)).toEqual({ error: 'AGENT_CHANGED' })
     expect(closeAgent).not.toHaveBeenCalled()
   })
 
