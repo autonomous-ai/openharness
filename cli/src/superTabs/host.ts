@@ -526,6 +526,15 @@ export class SuperTabHost {
         this.nextConfigurationsAt = this.now() + 5_000
       })
     }
+    // Set as the roster arrives, before any delivery read can stall this poll: a refresh started from an older roster must
+    // see this one at once (round 2 of the review of #1660).
+    this.rosterSkills.clear()
+    for (const item of data) {
+      const row = object(item), agent = object(row.agent)
+      if (identifier(agent.harnessId) && agent.machineId === this.machineId && row.closeSession !== true && row.stopRequested !== true) {
+        this.rosterSkills.set(agent.harnessId, skillSetOf(row as unknown as HostAgent))
+      }
+    }
     const stopKeys = new Set(data.filter(item => object(item).stopRequested === true).map(item => { const row = object(item); return `${row.tabId}:${object(row.agent).id}` }))
     for (const key of this.releaseAttempts.keys()) if (!stopKeys.has(key)) this.releaseAttempts.delete(key)
     const seen = new Set<string>()
@@ -598,8 +607,6 @@ export class SuperTabHost {
       }
     }
     await this.leases()
-    this.rosterSkills.clear()
-    for (const target of running) this.rosterSkills.set(target.agent.harnessId, skillSetOf(target))
     // Off the poll, so the backend calls of a notice never delay the next lease renewal. Owed at most once per text release.
     this.skillsRunning ??= (async () => { for (const target of running) await this.refreshSkill(target) })()
       .finally(() => { this.skillsRunning = null })

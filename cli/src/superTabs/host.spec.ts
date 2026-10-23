@@ -1141,14 +1141,14 @@ describe('built-in skill text after a CLI update', () => {
     const rowRoles: Record<string, unknown> = {}
     const texts: Record<string, { version: string; text: string }> = {}
     const fetched: string[] = []
-    /** A backend call held until the test releases it: the roster may change while the refresh waits on it. */
-    let hold: { match: (path: string, body: any) => boolean; until: Promise<void> } | null = null
+    /** Backend calls held until the test releases them: the roster may change while the refresh waits on one. */
+    const holds: Array<{ match: (path: string, body: any) => boolean; until: Promise<void> }> = []
     let inFlight = 0
     t.core.agents.byAgent = vi.fn(id => sessions[id] as never)
     t.core.agents.terminalAvailable = vi.fn(() => true)
     t.core.account.backend = vi.fn(async (method, path, body) => {
-      const held = hold?.match(path, body) ? hold : null
-      if (held) { hold = null; await held.until }
+      const held = holds.findIndex(h => h.match(path, body))
+      if (held >= 0) await holds.splice(held, 1)[0]!.until
       inFlight++
       await Promise.resolve()
       inFlight--
@@ -1178,7 +1178,7 @@ describe('built-in skill text after a CLI update', () => {
     }
     const holdNext = (match: (path: string, body: any) => boolean) => {
       let release!: () => void
-      hold = { match, until: new Promise<void>(resolve => { release = resolve }) }
+      holds.push({ match, until: new Promise<void>(resolve => { release = resolve }) })
       return release
     }
     return { t, files, sent, pass, rowRoles, texts, fetched, holdNext, setGroups: (next: typeof groups) => { groups = next }, setMode: (next: typeof mode) => { skillMode = next } }
@@ -1261,6 +1261,29 @@ describe('built-in skill text after a CLI update', () => {
       await f.pass(host, 1_000)
       expect(readFileSync(f.files.lead!, 'utf8')).toMatch(/\nPlan the work\.\n$/)
       expect(f.sent).toHaveLength(1)
+    })
+    // Round 2 of that review: the roster that drops the role arrives while that poll's own delivery read stalls; the
+    // older refresh must already see it, not wait for the poll to finish.
+    it('drops a refresh whose role is gone in a roster whose poll is still reading deliveries', async () => {
+      const f = syncFixture(false, 'default')
+      custom(f, 'Plan the work.\n')
+      const before = readFileSync(f.files.lead!, 'utf8')
+      const fetch = f.holdNext(path => path.includes('/roles/'))
+      const host = f.t.open()
+      await host.tick()
+      await vi.waitFor(() => expect(vi.mocked(f.t.core.account.backend).mock.calls.some(([, path]) => path.includes('/roles/'))).toBe(true))
+      f.rowRoles['a-lead'] = null
+      const deliveries = f.holdNext(path => path.endsWith('/agents/a-lead/deliveries'))
+      const poll = host.tick()
+      await vi.waitFor(() => expect(vi.mocked(f.t.core.account.backend).mock.calls.filter(([, path]) => path.endsWith('/agents/a-lead/deliveries'))).toHaveLength(2))
+      fetch()
+      for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve))
+      expect(f.sent).toEqual([])
+      expect(readFileSync(f.files.lead!, 'utf8')).toBe(before)
+      deliveries()
+      await poll
+      await f.pass(host, 1_000)
+      expect(f.sent).toEqual([])
     })
     it('leaves an agent whose role is gone on its file, fetching and telling nothing: the backend tells it', async () => {
       const f = syncFixture(false, 'default')
