@@ -104,7 +104,7 @@ export interface RestartAgentDeps {
   prepareResume?: () => void | Promise<void>
   /**
    * Claude only: stop a `claude --bg` job still holding the session this is about to `--resume`
-   * (`engines/claude/backgroundResume.ts`). Run once, after history preparation and before the resume
+   * (`lib/claudeBackgroundJob.ts`). Run once, after history preparation and before the resume
    * argv is built, so a job that held the jobs store's lock is gone before Claude Code is asked to
    * reopen it. A failure here must not block the restart it exists to unblock, so it is awaited for
    * ordering only, never allowed to fail the restart; implementations swallow their own errors.

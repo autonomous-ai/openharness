@@ -16,7 +16,7 @@ import { checkSessionRuntime, resolvePaneEngineProcess } from './paneEngineProce
 import { windowsAfterExit, windowsPaneLaunch } from './windows/engineStart.js'
 import { buildEngineLaunchArgv, dropPermissionFlagIfUnsupported, engineLaunchEnv, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
 import { engineBin, enginePathOverride } from './engineBin.js'
-import { stopConflictingBackgroundJob } from '../engines/claude/backgroundResume.js'
+import { stopConflictingBackgroundJob } from './claudeBackgroundJob.js'
 import { installedDsh } from '../dsh/installed.js'
 import { createLaunchHelpers } from '../core/agents/launch.js'
 import { createLaunchAuthority } from '../core/agents/launchAuthority.js'
@@ -43,7 +43,7 @@ vi.mock('./engineLaunch.js', async importOriginal => ({
   refusePermissionFlagIfUnsupported: vi.fn(async () => null),
 }))
 vi.mock('./engineBin.js', () => ({ enginePathOverride: vi.fn(() => undefined), engineBin: vi.fn((engine: string) => engine) }))
-vi.mock('../engines/claude/backgroundResume.js', () => ({ stopConflictingBackgroundJob: vi.fn(async () => {}) }))
+vi.mock('./claudeBackgroundJob.js', () => ({ stopConflictingBackgroundJob: vi.fn(async () => {}) }))
 vi.mock('./engineInstall.js', async original => ({ ...await original<object>(), engineInstallRecipe: () => ({ command: 'fixture-install' }) }))
 vi.mock('../dsh/installed.js', () => ({ installedDsh: vi.fn() }))
 vi.mock('../engines/transcriptBindings.js', async original => ({ ...await original<object>(), controlTranscriptEvidence: vi.fn() }))

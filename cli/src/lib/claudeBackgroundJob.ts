@@ -16,7 +16,7 @@
  * refusal if the job really is in the way.
  */
 import { execFile } from 'node:child_process'
-import { patientExec } from '../../lib/patientExec.js'
+import { patientExec } from './patientExec.js'
 
 export interface ClaudeAgentListEntry {
   id?: string

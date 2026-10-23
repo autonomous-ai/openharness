@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { conflictingBackgroundJob, stopConflictingBackgroundJob, type ClaudeAgentListEntry } from './backgroundResume.js'
+import { conflictingBackgroundJob, stopConflictingBackgroundJob, type ClaudeAgentListEntry } from './claudeBackgroundJob.js'
 
 const BG_MATCH: ClaudeAgentListEntry = { id: '06b52258', sessionId: 's1', kind: 'background' }
 const BG_OTHER: ClaudeAgentListEntry = { id: 'aaaa1111', sessionId: 's2', kind: 'background' }

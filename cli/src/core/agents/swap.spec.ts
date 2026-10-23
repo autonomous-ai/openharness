@@ -14,11 +14,11 @@ import { setAgentSignaller } from '../../lib/processSignals.js'
 import { createPaneSwap, SWAP_SETTLE_MS, type PaneSwapDeps } from './swap.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { NATIVE_LAUNCH_MARKER } from '../../lib/nativePaneHold.js'
-import { stopConflictingBackgroundJob } from '../../engines/claude/backgroundResume.js'
+import { stopConflictingBackgroundJob } from '../../lib/claudeBackgroundJob.js'
 
 vi.mock('../../lib/deleteAgentFallback.js', async (real) => ({ ...await real<object>(), terminateDeletedAgent: vi.fn(async () => ({ ok: true })) }))
 vi.mock('../../lib/engineLaunch.js', async (real) => ({ ...await real<object>(), buildEngineLaunchArgv: vi.fn(() => ['zsh', '-lc', 'claude']) }))
-vi.mock('../../engines/claude/backgroundResume.js', () => ({ stopConflictingBackgroundJob: vi.fn(async () => {}) }))
+vi.mock('../../lib/claudeBackgroundJob.js', () => ({ stopConflictingBackgroundJob: vi.fn(async () => {}) }))
 vi.mock('../../lib/terminalAgentDiscovery.js', async (real) => ({ ...await real<object>(), processRows: vi.fn(async () => null) }))
 vi.mock('../../lib/paneEngineProcess.js', async (real) => ({
   ...await real<object>(),
