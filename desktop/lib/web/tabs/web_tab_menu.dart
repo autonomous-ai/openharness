@@ -153,7 +153,7 @@ List<Widget> webTabMenuRows(
       row(
         'web-tab-run:swarm.rename',
         const WebRunCommand('swarm.rename'),
-        const PaneMenuRow(selected: false, title: 'Rename this tab'),
+        const PaneMenuRow(selected: false, title: 'Rename Tab…'),
       ),
   ];
 }

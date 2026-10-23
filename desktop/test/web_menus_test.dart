@@ -1,6 +1,7 @@
 // The web workspace's menus: what they offer and how big a finger's target
 // is on a phone.
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
@@ -11,6 +12,8 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/workspace_chrome.dart';
 import 'package:harness/web/shell/web_app_menu.dart';
 import 'package:harness/web/shell/web_chrome.dart';
+import 'package:harness/web/tabs/web_tab_menu.dart';
+import 'package:harness/widgets/desktop_workspace_tab.dart';
 
 const _phone = Size(390, 844);
 const _computer = Size(1440, 900);
@@ -54,7 +57,159 @@ Future<void> _openAppMenu(WidgetTester tester) async {
   await tester.pump(const Duration(milliseconds: 100));
 }
 
+/// One ordinary tab, unshared, under [chrome] (none is Desktop's).
+Widget _tab({
+  WorkspaceChrome? chrome,
+  VoidCallback? onRename,
+  VoidCallback? onClose,
+}) => MaterialApp(
+  theme: grid.buildAppTheme(brightness: Brightness.dark),
+  home: Scaffold(
+    body: WorkspaceChromeScope(
+      chrome: chrome,
+      child: Align(
+        alignment: Alignment.topLeft,
+        child: SizedBox(
+          width: 220,
+          height: 40,
+          child: DesktopWorkspaceTab(
+            id: 'docs',
+            label: 'docs',
+            selected: false,
+            showShortcuts: const AlwaysStoppedAnimation(false),
+            onSelect: () {},
+            onRename: onRename,
+            onClose: onClose,
+          ),
+        ),
+      ),
+    ),
+  ),
+);
+
+Future<void> _rightClick(WidgetTester tester, Finder target) async {
+  await tester.tap(
+    target,
+    buttons: kSecondaryButton,
+    kind: PointerDeviceKind.mouse,
+  );
+  await tester.pumpAndSettle();
+}
+
+const _tabLabel = ValueKey('tab-label:docs');
+
 void main() {
+  late WorkspaceChrome web;
+  setUp(() {
+    final app = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: null,
+    );
+    addTearDown(app.dispose);
+    web = webWorkspaceChrome(app);
+  });
+
+  testWidgets('on web, right-clicking an ordinary tab renames or closes it', (
+    tester,
+  ) async {
+    var renames = 0, closes = 0;
+    await tester.pumpWidget(
+      _tab(chrome: web, onRename: () => renames++, onClose: () => closes++),
+    );
+
+    await _rightClick(tester, find.byKey(_tabLabel));
+    expect(find.text('Rename Tab…'), findsOneWidget);
+    expect(find.text('Close Tab'), findsOneWidget);
+    await tester.tap(find.text('Rename Tab…'));
+    await tester.pumpAndSettle();
+    expect(renames, 1);
+    expect(find.text('Close Tab'), findsNothing);
+
+    await _rightClick(tester, find.byKey(_tabLabel));
+    await tester.tap(find.text('Close Tab'));
+    await tester.pumpAndSettle();
+    expect(closes, 1);
+    expect(renames, 1);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('on web, a double click on a tab still renames it', (
+    tester,
+  ) async {
+    var renames = 0;
+    await tester.pumpWidget(_tab(chrome: web, onRename: () => renames++));
+
+    await tester.tap(find.byKey(_tabLabel));
+    await tester.pump(const Duration(milliseconds: 80));
+    await tester.tap(find.byKey(_tabLabel));
+    await tester.pumpAndSettle();
+
+    expect(renames, 1);
+    expect(find.text('Rename Tab…'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('on Desktop, an ordinary tab still has no right-click menu', (
+    tester,
+  ) async {
+    var renames = 0, closes = 0;
+    await tester.pumpWidget(
+      _tab(onRename: () => renames++, onClose: () => closes++),
+    );
+
+    await _rightClick(tester, find.byKey(_tabLabel));
+
+    expect(find.text('Rename Tab…'), findsNothing);
+    expect(find.text('Close Tab'), findsNothing);
+    expect((renames, closes), (0, 0));
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('the web workspace at 1440 gives a tab the menu', (tester) async {
+    final app = await _workspace(tester, _computer);
+    final tab = app.activeSwarmId;
+
+    await _rightClick(tester, find.byKey(ValueKey('tab-label:$tab')));
+
+    expect(find.text('Rename Tab…'), findsOneWidget);
+    expect(find.text('Close Tab'), findsOneWidget);
+    await tester.tap(find.text('Close Tab'));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(app.swarms.any((swarm) => swarm.id == tab), isFalse);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('the phone tab menu renames with Rename Tab…', (tester) async {
+    final app = _app();
+    WebTabChoice? chosen;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        home: Material(
+          child: Column(
+            children: webTabMenuRows(
+              app,
+              WorkspaceCommands(
+                enabled: () => true,
+                canRun: (command) => command == 'swarm.rename',
+                run: (_) {},
+              ),
+              (choice) => chosen = choice,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Rename Tab…'));
+
+    expect((chosen! as WebRunCommand).command, 'swarm.rename');
+    expect(find.text('Rename this tab'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   for (final size in [_phone, _computer]) {
     testWidgets('New Swarm in the menu runs what Alt+S runs at ${size.width}', (
       tester,
