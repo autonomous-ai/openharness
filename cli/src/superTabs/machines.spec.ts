@@ -401,10 +401,11 @@ describe('removed machine cleanup', () => {
     const backend = vi.fn(async (_core: unknown, method: string, path: string, _body?: unknown): Promise<unknown> =>
       method === 'GET' && path === '/api/super-tabs/tab' ? { state: { starts } } : { revision: 1 })
     const log = vi.fn()
-    const open = () => new ContributedMachines(core, 'host', { backend, log, now: () => 0 } as never)
+    let now = 0
+    const open = () => new ContributedMachines(core, 'host', { backend, log, now: () => now } as never)
     const acks = () => backend.mock.calls.filter(c => c[1] === 'POST')
-    return { core, backend, log, open, acks, home, data, clone, newRoot, otherTab, own, ownWorktree, recorded, earlier, unproven,
-      setLive: (sessions: RegisteredSession[]) => { live = sessions } }
+    return { core, backend, log, open, acks, home, data, clone, newRoot, otherTab, own, ownWorktree, recorded, earlier, unproven, starts,
+      setLive: (sessions: RegisteredSession[]) => { live = sessions }, step: (ms: number) => { now += ms } }
   }
 
   it('deletes only the tab\'s Swarm folders and Swarm-made worktrees, then acknowledges once', async () => {
@@ -425,6 +426,38 @@ describe('removed machine cleanup', () => {
     await host.clean('tab', 'removal')
     expect(m.acks()).toHaveLength(1)
     await expect(host.clean('../escape', 'other')).rejects.toThrow('Invalid machine removal.')
+  })
+
+  it('keeps a person\'s own worktree of the same repository even when the registry now lists it as the agent\'s folder', async () => {
+    const m = machine()
+    const outside = worktree(m.own, join(m.home, 'code', 'app-feature'), 'feature')
+    vi.mocked(m.core.agents.all).mockReturnValue([session('h-earlier', m.ownWorktree, 'agent'), session('h-unproven', outside, 'agent')])
+    vi.mocked(m.core.agents.creationStatus!).mockImplementation(async creationId => ({ creationId, state: 'created' as const, agentId: `h-${creationId.slice('super-'.length)}` }))
+    await m.open().clean('tab', 'removal')
+    for (const kept of [m.ownWorktree, outside, m.own]) expect(existsSync(kept), kept).toBe(true)
+    expect(git(m.own, 'worktree', 'list', '--porcelain')).toContain('/mine\n')
+    expect(m.acks()).toHaveLength(1)
+  })
+
+  it('reads git as itself, not through git settings the daemon inherited', async () => {
+    const m = machine()
+    vi.stubEnv('GIT_DIR', join(m.home, 'nowhere')); vi.stubEnv('GIT_WORK_TREE', join(m.home, 'nowhere'))
+    await m.open().clean('tab', 'removal')
+    expect(existsSync(m.recorded)).toBe(false)
+    expect(existsSync(m.earlier)).toBe(false)
+  })
+
+  it('waits longer after each failed acknowledgement instead of cleaning again every pass', async () => {
+    const m = machine()
+    const host = m.open()
+    m.backend.mockImplementationOnce(async () => ({ state: { starts: [] } })).mockRejectedValueOnce(new Error('Backend offline'))
+    await expect(host.clean('tab', 'removal')).rejects.toThrow('Backend offline')
+    const calls = m.backend.mock.calls.length
+    await host.clean('tab', 'removal')
+    m.step(59_000); await host.clean('tab', 'removal')
+    expect(m.backend.mock.calls).toHaveLength(calls)
+    m.step(1_000); await host.clean('tab', 'removal')
+    expect(m.acks()).toHaveLength(2)
   })
 
   it('keeps a recorded folder that is no longer the worktree it recorded', async () => {

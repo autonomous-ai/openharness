@@ -2,7 +2,7 @@ import { inspectCapacity, startAgent } from './start.js'
 import { object } from './host.js'
 import { routeTask } from './routeCommand.js'
 import { openDaemon, whereFor, type Daemon, type Where } from '../agentClient/daemon.js'
-import { callerOf, type Frame } from '../agentClient/model.js'
+import { callerOf, outsideCaller, type Frame } from '../agentClient/model.js'
 import { identifier } from './host.js'
 import { resolve } from 'node:path'
 import { uploadAttachments } from './attach.js'
@@ -83,7 +83,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
 }
 
 export async function superTabCommand(argv: readonly string[], deps: {
-  where?: () => Where; open?: typeof openDaemon; print?: (text: string) => void; pane?: string; fetch?: typeof fetch
+  where?: () => Where; open?: typeof openDaemon; print?: (text: string) => void; pane?: string; fetch?: typeof fetch; env?: NodeJS.ProcessEnv
 } = {}): Promise<number> {
   let daemon: Daemon | null = null
   let operationId: unknown
@@ -92,6 +92,14 @@ export async function superTabCommand(argv: readonly string[], deps: {
     const request = parseSuperTabArgs(argv, (deps.where ?? (() => whereFor(process.env.TMUX_PANE)))())
     operationId = request.payload.operationId
     daemon = await (deps.open ?? openDaemon)(request.where)
+    if (request.payload.action === 'backend') {
+      // The owner's own act: it deletes this machine's Swarm folders, so neither a Swarm agent on it (its pane, or --agent)
+      // nor an outside agent's shell may run it with the owner's authority.
+      const listed = request.payload.agentId || outsideCaller(deps.env ?? process.env, request.where.machineId) ? null : await daemon.request('agents_list')
+      if (!listed || callerOf(Array.isArray(listed.agents) ? listed.agents as Frame[] : [], deps.pane ?? process.env.TMUX_PANE, request.where.machineId)) {
+        throw new Error('Remove a machine from your own terminal or from Desktop, not from an agent.')
+      }
+    }
     if (!['help', 'backend'].includes(String(request.payload.action)) && !request.payload.agentId) {
       const listed = await daemon.request('agents_list')
       const frames = Array.isArray(listed.agents) ? listed.agents as Frame[] : []
