@@ -19,7 +19,7 @@ import {
   SuperTabError, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
 } from './model.js'
 import { holdNoticeText, type HoldReason } from './holdNotice.js'
-import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_PICKUP_MS, type TerminalEffect } from './terminal.js'
+import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, type TerminalEffect } from './terminal.js'
 import { closeAssignment, readDecision, recentRoutes, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
@@ -660,12 +660,11 @@ export class SuperTabStore {
   private async writeTerminal(tx: Transaction, tabId: string, effect: TerminalEffect, now: number) {
     if (effect.op === 'request') {
       const { op: _op, id, ...request } = effect
-      // Unread answers do not outlive their usefulness.
-      await tx.superTabTerminalRequest.deleteMany({ where: { tabId, createdAt: { lt: new Date(now - 600_000) } } })
       await tx.superTabTerminalRequest.create({ data: { id, tabId, ...request, createdAt: new Date(now) } })
       return
     }
-    const answered = await tx.superTabTerminalRequest.updateMany({ where: { id: effect.id, tabId, status: 'claimed' },
+    // The deadline holds whether or not the sender has asked for the answer yet.
+    const answered = await tx.superTabTerminalRequest.updateMany({ where: { id: effect.id, tabId, status: 'claimed', claimedAt: { gte: new Date(now - TERMINAL_ANSWER_MS) } },
       data: { status: 'done', ok: effect.ok, result: effect.text, error: effect.error } })
     if (!answered.count) fail('REQUEST_CLOSED', 'This terminal request is no longer waiting for an answer.')
   }
@@ -678,9 +677,11 @@ export class SuperTabStore {
         const state = stateOf(await this.row(tx, user, tabId))
         const actor = await this.actor(tx, user, state, asAgentId)
         author(state, actor)
-        const row = await tx.superTabTerminalRequest.findFirst({ where: { id: requestId, tabId } })
-        if (!row || row.requesterKey !== actorKey(actor)) fail('NOT_FOUND', 'This terminal request is unavailable.', 404)
         const now = this.now()
+        const row = await tx.superTabTerminalRequest.findFirst({ where: { id: requestId, tabId, createdAt: { gte: new Date(now - TERMINAL_EXPIRY_MS) } } })
+        if (!row || row.requesterKey !== actorKey(actor)) fail('NOT_FOUND', 'This terminal request is unavailable.', 404)
+        // A sender who has since lost write access, or is no longer the agent's project Lead, gets nothing.
+        mayDrive(state, actor, agent(state, row.agentId))
         const late = row.status === 'pending' && now - row.createdAt.getTime() > TERMINAL_PICKUP_MS
           ? 'The agent’s machine did not pick up the request within 10 seconds. It may be offline or asleep.'
           : row.status === 'claimed' && now - row.claimedAt!.getTime() > TERMINAL_ANSWER_MS

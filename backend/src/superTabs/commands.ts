@@ -391,8 +391,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       effects.terminal = terminalResult(state, actor, context.terminalRequest, command)
       break
     case 'agent.alert': {
-      const row = terminalAlert(state, actor, sender, operationId, context.now, command)
-      if (row) effects.messages.push(row)
+      effects.messages.push(...terminalAlert(state, actor, sender, operationId, context.now, command))
       break
     }
     case 'project.report': {

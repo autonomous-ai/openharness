@@ -134,6 +134,21 @@ describe('terminal alerts', () => {
     expect(s.run(prompt, as(s.worker)).messages).toHaveLength(1)
   })
 
+  it('delivers to the worker\'s project Lead, not the group\'s Lead, and through the Lead chat when the Lead is not in the group', () => {
+    const s = swarm()
+    const bare = s.run({ type: 'conversation.create', title: 'Bare', brief: 'No Lead here.', checks: [] }).result.conversationId as string
+    const room = s.state.conversations.find(c => c.id === bare)!
+    room.leadId = null
+    room.agentIds = room.agentIds.filter(id => id !== s.lead)
+    const other = s.run({ type: 'agent.add', conversationId: bare, machineId: 'host', harnessId: 'other-worker', name: 'other-worker', configuration: config, lead: false },
+      owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
+    const rows = s.run({ type: 'agent.alert', agentId: other, alert: 'prompt', active: true }, as(other)).messages
+    expect(rows.map(r => [r.conversationId, r.recipients])).toEqual([[bare, []], ['lead', [s.lead]]])
+    s.state.conversations.find(c => c.id === s.group)!.leadId = other
+    expect(s.run({ type: 'agent.alert', agentId: s.worker, alert: 'prompt', active: true }, as(s.worker)).messages
+      .map(r => [r.conversationId, r.recipients])).toEqual([[s.group, [s.lead]]])
+  })
+
   it('marks a limited agent until its reset time, or an hour, and shows null once it passed', () => {
     const s = swarm()
     const reset = new Date(1_000_000 + 600_000).toISOString()

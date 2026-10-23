@@ -1,4 +1,5 @@
-import { activeWork, actorKey, agent, author, conversation, fail, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
+import type { PrismaClient } from '@prisma/client'
+import { activeWork, actorKey, agent, author, conversation, fail, stableId, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
 import { downSince } from './machines.js'
 import { agentProjectId, projectOf, readAgent } from './projects.js'
@@ -9,6 +10,13 @@ export const TERMINAL_KEYS = ['Enter', 'Esc', 'Tab', 'Up', 'Down', 'Left', 'Righ
 /** The host has this long to pick a request up, then this long to answer it; after either, the request fails with a plain reason. */
 export const TERMINAL_PICKUP_MS = 10_000
 export const TERMINAL_ANSWER_MS = 30_000
+/** An unread answer, which can hold a screen's secrets, is gone after this long: refused on read, and removed by a TTL index. */
+export const TERMINAL_EXPIRY_MS = 120_000
+/** Run by the singleton worker at startup, like the product-usage expiry indexes. */
+export async function ensureTerminalExpiry(db: PrismaClient): Promise<void> {
+  await db.$runCommandRaw({ createIndexes: 'SuperTabTerminalRequest', indexes: [{ key: { createdAt: 1 }, name: 'terminal_request_expiry',
+    expireAfterSeconds: TERMINAL_EXPIRY_MS / 1000 }] })
+}
 /** A limited agent without a shown reset time is skipped by routing for this long. */
 export const LIMIT_FALLBACK_MS = 3_600_000
 
@@ -72,20 +80,22 @@ export function terminalResult(state: SuperTabState, actor: Actor, request: Term
     error: command.ok ? null : command.error! }
 }
 
-/** One row per episode: a repeated observation adds nothing, and `active: false` ends the episode. No screen text goes in the row. */
+/** One row per episode: a repeated observation adds nothing, and `active: false` ends the episode. No screen text goes in the row.
+ * It is delivered to the agent's project Lead, in the agent's group when the Lead is there, else by a second row in the Lead's chat. */
 export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author, id: string, now: number,
-  command: { agentId: string; alert: 'prompt' | 'limit'; active: boolean; resetAt?: string }): MessageDraft | null {
+  command: { agentId: string; alert: 'prompt' | 'limit'; active: boolean; resetAt?: string }): MessageDraft[] {
   const target = agent(state, command.agentId)
   if (actor.kind !== 'agent' || actor.agentId !== target.id) fail('HOST_REQUIRED', 'Only the host of this agent’s terminal reports its alerts.', 403)
   const alerting = target.alerting ?? []
   if (!command.active) {
     target.alerting = alerting.filter(a => a !== command.alert)
-    return null
+    return []
   }
-  if (alerting.includes(command.alert)) return null
+  if (alerting.includes(command.alert)) return []
   target.alerting = [...alerting, command.alert]
   const group = currentGroup(state, target)
-  const lead = group.leadId && group.leadId !== target.id && group.agentIds.includes(group.leadId) ? group.leadId : null
+  const chat = conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId)
+  const lead = chat.leadId && chat.leadId !== target.id ? chat.leadId : null
   let text = `${nameOf(target)} is waiting at a prompt in its terminal.`
   const source: Record<string, unknown> = { kind: 'terminal-alert', agentId: target.id, alert: command.alert }
   if (command.alert === 'limit') {
@@ -93,5 +103,7 @@ export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author
     target.limitedUntil = source.limitedUntil = new Date(reset).toISOString()
     text = `${nameOf(target)} hit a usage limit. Routing skips it until ${target.limitedUntil.slice(11, 16)} UTC.`
   }
-  return { id, conversationId: group.id, author: sender, replyTo: null, recipients: lead ? [lead] : [], text, source }
+  const here = !!lead && group.agentIds.includes(lead)
+  const row = { id, conversationId: group.id, author: sender, replyTo: null, recipients: here ? [lead] : [], text, source }
+  return here || !lead || !chat.agentIds.includes(lead) ? [row] : [row, { ...row, id: stableId(id, 'lead'), conversationId: chat.id, recipients: [lead] }]
 }
