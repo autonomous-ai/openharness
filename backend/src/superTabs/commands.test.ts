@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, PAIR_CHAIN_LIMIT, type Command, type CommandContext } from './commands.js'
-import { machineSlots } from './machines.js'
+import { machineSlots, removalPreview } from './machines.js'
 import { activeWork, agentRole, createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
 import { agentTarget, broken } from './rules.js'
@@ -1526,7 +1526,8 @@ describe('machine.remove', () => {
     const workerName = named(worker)
     const effects = f.run({ type: 'machine.remove', machineId: 'host' })
 
-    expect(f.state.machines).toEqual([])
+    expect(f.state.machines).toEqual([expect.objectContaining({ machineId: 'host', paused: true,
+      removal: { id: effects.result.removalId, state: 'cleaning', requestedAt: new Date(1000).toISOString() } })])
     expect(f.state.agents.map(a => a.id)).toEqual([lead])
     expect(effects.result.removedAgents).toEqual([worker])
     expect(f.state.harnessReservations).toEqual([expect.objectContaining({ machineId: 'elsewhere' })])
@@ -1561,21 +1562,112 @@ describe('machine.remove', () => {
     expect(g.state.machines).toHaveLength(1)
   })
 
-  it('lets the machine\'s owner take back what is all theirs, and leaves anyone else\'s to the Swarm owner', () => {
+  it('is only the machine owner\'s to remove, with every Swarm agent on it; the Swarm owner cannot remove another person\'s machine', () => {
     const f = fixture()
     f.invite()
     contribute(f, 'peer')
     f.add('theirs', 'peer')
+    const owners = f.add('owners', 'owner')
+    expect(() => f.run({ type: 'machine.remove', machineId: 'host' })).toThrow(expect.objectContaining({ code: 'FORBIDDEN', status: 403,
+      message: 'Only the machine\'s owner can remove it.' }))
     f.run({ type: 'machine.remove', machineId: 'host' }, peer)
-    expect(f.state.machines).toEqual([])
+    expect(f.state.agents.some(a => a.id === owners)).toBe(false)
+    expect(f.state.machines!.map(m => m.removal?.state)).toEqual(['cleaning'])
 
+    // A machine nobody contributed, with only shared agents, is theirs whose agents they all are.
     const g = fixture()
     g.invite()
-    contribute(g, 'peer')
+    g.add('mine', 'peer')
     g.add('owners', 'owner')
-    expect(() => g.run({ type: 'machine.remove', machineId: 'host' }, peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN', status: 403 }))
-    g.run({ type: 'machine.remove', machineId: 'host' })
-    expect(g.state.machines).toEqual([])
+    expect(() => g.run({ type: 'machine.remove', machineId: 'host' }, peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    expect(() => g.run({ type: 'machine.remove', machineId: 'host' })).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+  })
+
+  const cleaning = () => {
+    const f = fixture(), group = f.group()
+    contribute(f)
+    const removalId = f.run({ type: 'machine.remove', machineId: 'host' }).result.removalId as string
+    return { f, group, removalId }
+  }
+  const cleaned = (removalId: string): Command => ({ type: 'machine.cleaned', machineId: 'host', removalId })
+
+  it('keeps the machine paused and cleaning: no start, pause, re-adding or second removal until its owner\'s host says it cleaned up', () => {
+    const { f, group, removalId } = cleaning()
+    const request = { conversationId: group, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    expect(() => f.run({ type: 'agent.start', request }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })).toThrow('being removed')
+    expect(() => f.run({ type: 'machine.pause', machineId: 'host', paused: false })).toThrow('being removed')
+    expect(() => f.run({ type: 'machine.remove', machineId: 'host' })).toThrow('being removed')
+    const add = { type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents: 2 } as Command
+    expect(() => f.run(add, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })).toThrow('still cleaning up')
+    f.invite()
+    expect(() => f.run(cleaned(removalId), peer)).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
+    expect(() => f.run(cleaned('other'))).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
+    f.run(cleaned(removalId))
+    expect(f.state.machines).toEqual([])
+    expect(() => f.run(cleaned(removalId))).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
+    f.run(add, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
+    expect(f.state.machines!.map(m => m.removal)).toEqual([undefined])
+  })
+
+  it('lets the machine owner\'s host acknowledge after the owner left the Swarm', () => {
+    const f = fixture()
+    f.invite()
+    contribute(f, 'peer')
+    const removalId = f.run({ type: 'machine.remove', machineId: 'host' }, peer).result.removalId as string
+    f.run({ type: 'member.remove', userId: 'peer' }, peer)
+    expect(f.state.machines!.map(m => m.removal?.id)).toEqual([removalId])
+    f.run(cleaned(removalId), peer)
+    expect(f.state.machines).toEqual([])
+  })
+
+  it('drops the machine\'s records after 24 hours without an acknowledgement, and keeps the cleanup for its host', () => {
+    const { f, removalId } = cleaning()
+    const day = 24 * 3_600_000
+    f.run({ type: 'tab.rename', name: 'Still cleaning' }, owner, { now: 1000 + day - 1 })
+    expect(f.state.machines!.map(m => m.removal?.id)).toEqual([removalId])
+    expect(visibleState(f.state, owner, 1000 + day).machines).toEqual([])
+    f.run({ type: 'tab.rename', name: 'A day later' }, owner, { now: 1000 + day })
+    expect(f.state.machines).toEqual([])
+    expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner' }])
+    const add = { type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents: 2 } as Command
+    expect(() => f.run(add, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, now: 1000 + day })).toThrow('still cleaning up')
+    f.run(cleaned(removalId), owner, { now: 1000 + day })
+    expect(f.state.machineCleanups).toBeUndefined()
+  })
+
+  it('takes the machine out of every project\'s machines rule, and removes a rule left empty with a row in its project\'s chat', () => {
+    const f = fixture()
+    contribute(f)
+    const docs = f.run({ type: 'project.create', name: 'Docs', visibility: 'public', brief: '' }).result as { projectId: string; conversationId: string }
+    const rule = (id: string, projectId: string, machineIds: string[]) => ({ id, projectId, rule: { kind: 'machines' as const, machineIds },
+      text: `Only ${machineIds.join(' and ')}.`, askedBy: 'owner', askedIn: null, addedBy: 'person:owner', createdAt: '' })
+    f.state.rules = [rule('both', 'lead', ['host', 'other']), rule('only', docs.projectId, ['host']), rule('elsewhere', docs.projectId, ['other']),
+      { ...rule('effort', 'lead', ['x']), rule: { kind: 'minEffort', effort: 'high' } }]
+    const effects = f.run({ type: 'machine.remove', machineId: 'host' })
+    expect(f.state.rules!.map(r => [r.id, r.rule])).toEqual([['both', { kind: 'machines', machineIds: ['other'] }],
+      ['elsewhere', { kind: 'machines', machineIds: ['other'] }], ['effort', { kind: 'minEffort', effort: 'high' }]])
+    expect(effects.messages).toEqual([expect.objectContaining({ conversationId: docs.conversationId, source: { kind: 'rule' },
+      text: 'Rule removed: Only host. Its only machine, Studio, left the Swarm.' })])
+  })
+
+  it('previews what removal does for the machine owner only: its agents and their tasks, sole-source projects, and a Product Manager that blocks it', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group(), worker = f.add('worker', 'owner', group)
+    contribute(f)
+    f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+    f.state.project = { machineId: 'host', cwd: '/repo', repositoryUrl: null }
+    f.state.projects![0]!.repository = { machineId: 'host', cwd: '/repo', repositoryUrl: null }
+    const docs = f.run({ type: 'project.create', name: 'Docs', visibility: 'public', brief: '' }).result.projectId as string
+    f.state.projects!.find(p => p.id === docs)!.repository = { machineId: 'host', cwd: '/docs', repositoryUrl: 'https://github.com/example/docs' }
+    const named = (id: string) => { const a = f.state.agents.find(x => x.id === id)!; return a.displayName ?? a.name }
+    expect(removalPreview(f.state, owner, 'host')).toEqual({ blockedBy: { projectId: 'lead', projectName: 'Pilot' },
+      agents: [{ id: lead, name: named(lead), projectName: 'Pilot' }, { id: worker, name: named(worker), projectName: 'Pilot', task: 'Offline editing' }],
+      soleSourceProjects: [{ id: 'lead', name: 'Pilot' }] })
+    f.state.agents.find(a => a.id === lead)!.machineId = 'elsewhere'
+    expect(removalPreview(f.state, owner, 'host').blockedBy).toBeNull()
+    f.invite()
+    expect(() => removalPreview(f.state, peer, 'host')).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    expect(() => removalPreview(f.state, owner, 'nowhere')).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
   })
 
   it('is a person\'s to do, and only for a machine in the Swarm', () => {
@@ -1598,7 +1690,7 @@ describe('Lead protection', () => {
     f.invite()
     const lead = f.add('lead', 'peer', 'lead', true)
     expect(() => f.run({ type: 'agent.remove', agentId: lead })).toThrow(refused())
-    expect(() => f.run({ type: 'machine.remove', machineId: 'host' })).toThrow(refused())
+    expect(() => f.run({ type: 'machine.remove', machineId: 'host' }, peer)).toThrow(refused())
     expect(() => f.run({ type: 'member.remove', userId: 'peer' })).toThrow(refused())
     expect(() => f.run({ type: 'member.remove', userId: 'peer' }, peer)).toThrow(refused())
     expect(f.state.agents.map(a => a.id)).toEqual([lead])

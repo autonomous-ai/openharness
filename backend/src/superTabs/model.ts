@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
-import { downSince } from './machines.js'
+import { downSince, expireRemovals } from './machines.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
@@ -189,6 +189,8 @@ export interface SuperTabState {
   releasedHarnesses?: Array<{ machineId: string; harnessId: string }>
   /** Sessions of removed agents their host closes, listed to that host until it says they closed (agent.sessionClosed). */
   closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string }>
+  /** Removed machines whose host still has to clean up (machines.ts expireRemovals), listed only to that host. */
+  machineCleanups?: import('./machines.js').MachineCleanup[]
   /** Conversations of a kind a later release added, set aside unchanged by a release that does not know it (parkLaterConversations). */
   parkedConversations?: Conversation[]
 }
@@ -385,6 +387,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   delete visible.overlapAlerts
   // Only that machine's host roster lists them (store.ts hostTabs); a removed private agent's session is not every member's.
   delete visible.closingSessions
+  delete visible.machineCleanups
+  expireRemovals(visible, now)
   delete visible.parkedConversations
   numberConversations(visible)
   delete visible.retiredConversationNumber

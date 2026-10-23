@@ -1,6 +1,6 @@
 import { z } from 'zod'
-import { fail, person, type Agent, type AgentStart, type AgentStartRequest, type SuperTabState } from './model.js'
-import { groupProject } from './projects.js'
+import { activeWork, fail, person, type Actor, type Agent, type AgentStart, type AgentStartRequest, type SuperTabState } from './model.js'
+import { agentProjectId, groupProject, ledProject, projectsOf } from './projects.js'
 import { conversation } from './model.js'
 
 /** An explicit grant for this tab and project. It never creates a MachineShare. */
@@ -16,7 +16,13 @@ export interface ContributedMachine {
   maxAgents: number
   paused: boolean
   observation?: MachineObservation & { receivedAt: number }
+  /** Set by machine.remove: the machine stays listed, paused, while its host deletes the Swarm's folders there, until the
+   *  host says it cleaned up (machine.cleaned) or REMOVAL_FALLBACK_MS passes (expireRemovals). */
+  removal?: { id: string; state: 'cleaning'; requestedAt: string }
 }
+/** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll. */
+export interface MachineCleanup { machineId: string; removalId: string; machineOwnerId: string }
+export const REMOVAL_FALLBACK_MS = 24 * 3_600_000
 /** Older contributions may name engines that Swarm no longer starts. Their fresh
  * observation lists the supported engines that are actually installed. */
 export function contributedEngines(pool: ContributedMachine, observation: MachineObservation | undefined = pool.observation): string[] {
@@ -80,6 +86,41 @@ export function machineContribution(state: SuperTabState, machineId: string) {
   return pool
 }
 
+/** A machine is its owner's to remove: whoever contributed it, or, for a machine with only shared agents, whoever
+ *  contributed all of them. Not the Swarm owner (spec 2026-10-23-remove-machine.md, decision 1). */
+export function ownedMachine(state: SuperTabState, actor: Actor, machineId: string) {
+  const pool = state.machines?.find(m => m.machineId === machineId)
+  const members = state.agents.filter(a => a.machineId === machineId)
+  if (!pool && !members.length) fail('NOT_FOUND', 'This machine is not in the Swarm.', 404)
+  const ownerId = pool?.contributorId ?? (members.every(a => a.contributorId === members[0]!.contributorId) ? members[0]!.contributorId : null)
+  if (actor.kind !== 'person' || actor.userId !== ownerId) fail('FORBIDDEN', 'Only the machine\'s owner can remove it.', 403)
+  return { pool, members }
+}
+
+/** What removing the machine would do, for its owner's confirmation. */
+export function removalPreview(state: SuperTabState, actor: Actor, machineId: string) {
+  const { members } = ownedMachine(state, actor, machineId)
+  const led = members.map(a => ledProject(state, a.id)).find(Boolean)
+  return {
+    blockedBy: led ? { projectId: led.id, projectName: led.name } : null,
+    agents: members.map(a => {
+      const task = state.conversations.find(c => activeWork(c) && c.assignment!.agentId === a.id)
+      return { id: a.id, name: a.displayName ?? a.name, projectName: projectsOf(state).find(p => p.id === agentProjectId(state, a))?.name ?? '',
+        ...(task ? { task: task.title } : {}) }
+    }),
+    // Their code is only on this machine: no other machine can start agents for them until someone shares a repository.
+    soleSourceProjects: projectsOf(state).filter(p => p.repository?.machineId === machineId && !p.repository.repositoryUrl).map(p => ({ id: p.id, name: p.name })),
+  }
+}
+
+/** A removal its host has not acknowledged in a day: the machine's records go, and the cleanup waits for its host. */
+export function expireRemovals(state: SuperTabState, now: number): void {
+  for (const pool of state.machines?.filter(m => m.removal && now - Date.parse(m.removal.requestedAt) >= REMOVAL_FALLBACK_MS) ?? []) {
+    (state.machineCleanups ??= []).push({ machineId: pool.machineId, removalId: pool.removal!.id, machineOwnerId: pool.contributorId })
+    state.machines = state.machines!.filter(m => m !== pool)
+  }
+}
+
 /** Pending intents reserve slots too. Only an explicit host stop frees a launched slot. */
 export function machineSlots(state: SuperTabState, pool: ContributedMachine) {
   const reservations = (state.harnessReservations ?? []).filter(r => r.machineId === pool.machineId)
@@ -106,6 +147,7 @@ export function machineSlots(state: SuperTabState, pool: ContributedMachine) {
 export function admitMachineStart(state: SuperTabState, request: AgentStartRequest, now: number, start?: AgentStart) {
   const pool = machineContribution(state, request.machineId)
   if (!pool) return null
+  if (pool.removal) fail('MACHINE_REMOVED', 'This machine is being removed from the Swarm.')
   if (start && start.poolGeneration !== pool.generation) fail('CONTRIBUTION_REVOKED', 'This machine contribution changed. Reconcile the original start.', 403)
   if (pool.paused) fail('MACHINE_PAUSED', 'New work is paused on this machine.')
   const project = groupProject(state, conversation(state, request.conversationId))
