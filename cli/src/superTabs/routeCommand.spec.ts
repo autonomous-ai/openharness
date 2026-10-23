@@ -608,7 +608,7 @@ describe('what the route log says about each candidate', () => {
 describe('routing contributed capacity', () => {
   const healthy = () => ({ machineId: 'm1', name: 'Contributed laptop', cwd: '/owner/project', engines: ['claude'], paused: false,
     observation: { receivedAt: Date.now(), resources: { memoryTotalBytes: 32e9, memoryUsedBytes: 2e9, projectDiskFreeBytes: 200e9 },
-      tools: { git: true }, runningHarnessIds: [], quotas: [{ engine: 'claude', known: true, windows: [{ name: '5-hour', usedPercent: 20, resetsAt: Date.now() + 3600000 }] }] } })
+      tools: { git: true }, runningHarnessIds: ['h1'], quotas: [{ engine: 'claude', known: true, windows: [{ name: '5-hour', usedPercent: 20, resetsAt: Date.now() + 3600000 }] }] } })
   async function runPool(pool: Record<string, any>, members = false, needs: Record<string, unknown> = {}, project?: Record<string, unknown>) {
     const groups = conversations()
     if (project) Object.assign(groups[1]!, { projectId: project.id })
@@ -624,6 +624,45 @@ describe('routing contributed capacity', () => {
     expect(answer.next).toContain('/owner/project')
     const member = await runPool(healthy(), true)
     expect(member.answer.ok).toBe(true)
+  })
+  it('keeps a healthy contributed member pickable', async () => {
+    const { answer, s } = await runPool(healthy(), true)
+    expect(answer.ok).toBe(true)
+    expect(recorded(s).command.decision.candidates).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply') })]))
+  })
+  it('withholds a contributed member whose engine account has an exhausted usage window', async () => {
+    const pool = healthy(); pool.observation.quotas[0]!.windows[0]!.usedPercent = 100
+    const { answer } = await runPool(pool, true)
+    expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+    expect(answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
+      reason: expect.stringContaining('exhausted usage window') })]))
+  })
+  it('withholds a contributed member when a required tool was reported missing', async () => {
+    const pool = healthy(); pool.observation.tools.git = false
+    const { answer } = await runPool(pool, true)
+    expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+    expect(answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
+      reason: expect.stringContaining('Required tool unavailable: git.') })]))
+  })
+  it('withholds a contributed member absent from an explicit running-terminal list', async () => {
+    const pool = healthy(); pool.observation.runningHarnessIds = []
+    const { answer, s } = await runPool(pool, true)
+    expect(answer).toMatchObject({ ok: true, pick: { kind: 'new' } })
+    expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
+      reason: 'Its terminal is not running.' })]))
+  })
+  it('keeps a contributed member with no running-terminal list pickable and warns that its terminal is unverified', async () => {
+    const pool = healthy(); delete (pool.observation as Partial<typeof pool.observation>).runningHarnessIds
+    const { answer, s } = await runPool(pool, true)
+    expect(answer.ok).toBe(true)
+    expect(recorded(s).command.decision.candidates).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply') })]))
+    expect(answer.warnings).toEqual(expect.arrayContaining([expect.stringContaining('terminal could not be verified')]))
+  })
+  it('withholds a contributed member when a required device was not reported', async () => {
+    const { answer } = await runPool(healthy(), true, { devices: ['/dev/ttyUSB0'] })
+    expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+    expect(answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
+      reason: expect.stringContaining('Required device unavailable: /dev/ttyUSB0.') })]))
   })
   it('routes each swarm project to its own checkout and never widens an old folder grant', async () => {
     const project = { id: 'project-two', repository: { machineId: 'other', cwd: '/elsewhere', repositoryUrl: 'https://github.com/example/two' } }
