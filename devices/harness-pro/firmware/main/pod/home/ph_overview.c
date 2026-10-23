@@ -504,15 +504,17 @@ static void centred(ht_scene_t *s, int cx, int y, const ht_pro_font_t *f, unsign
 {
     ht_pro_text(s, cx - ht_pro_width(f, t) / 2, y, ht_pro_width(f, t) + 2, f, C(rgb), t);
 }
-// The order the card shows the Leads in: ord[] = indices into sw->leads, stuck, needs you, working, done, the Swarm's order inside each; cnt[0..3] = how many of each.
+// The order the card shows the Leads in: ord[] = indices into sw->leads, the Swarm's order (the app's, as the cable put them) whatever their state, so a Lead
+// keeps its place as it changes; cnt[0..3] = how many are stuck, need you, working, done.
 static int lead_order(const pod_swarm_t *sw, int *ord, int *cnt)
 {
     static const pod_lead_state_t rank[4] = {POD_LEAD_STUCK, POD_LEAD_ASK, POD_LEAD_WORK, POD_LEAD_DONE};
     int n = 0;
     cnt[0] = cnt[1] = cnt[2] = cnt[3] = 0;
-    for (int r = 0; r < 4; r++)
-        for (int j = 0; j < sw->lead_n && j < SWARM_LEADS_MAX; j++)
-            if (sw->leads[j].state == rank[r]) { ord[n++] = j; cnt[r]++; }
+    for (int j = 0; j < sw->lead_n && j < SWARM_LEADS_MAX; j++) {
+        ord[n++] = j;
+        for (int r = 0; r < 4; r++) if (sw->leads[j].state == rank[r]) cnt[r]++;
+    }
     return n;
 }
 // A Lead's status line on this card: "needs you", "stuck", "done", a working Lead's clock alone (ph_lead_status's line less its "working · "). Returns its colour.

@@ -1481,7 +1481,7 @@ int main(void) {
         CHECK(text_run("Solo swarm") && !text_run("ops") && hits_of(POD_A_LEAD) == 3);
         // Leads: the pet's scene is work (WORK), ask (ASK, STUCK) or rest (DONE)
         CHECK(ph_lead_scene(POD_LEAD_WORK) == POD_SCENE_WORK && ph_lead_scene(POD_LEAD_ASK) == POD_SCENE_ASK && ph_lead_scene(POD_LEAD_STUCK) == POD_SCENE_ASK && ph_lead_scene(POD_LEAD_DONE) == POD_SCENE_REST);
-        {   // v3: the capsule's counts in the fixed order, the Leads stuck / needs you / working / done (the Swarm's order inside each), "All done", the long forms
+        {   // the capsule's counts in the fixed order; the Leads in the Swarm's order whatever their state (the daemon's `order`); "All done", the long forms
             static const pod_lead_state_t st[6] = {POD_LEAD_DONE, POD_LEAD_WORK, POD_LEAD_ASK, POD_LEAD_STUCK, POD_LEAD_WORK, POD_LEAD_ASK};
             snprintf(S1.name, sizeof S1.name, "Order");
             S1.count = S1.lead_n = 6;
@@ -1494,12 +1494,12 @@ int main(void) {
             pod_model_supertab(&M, &S1, 1000);
             N.stack[0].scroll = 1; N.swarm_page = 0; fresh(); ph_view_home(&F, &N, &M, 1000);
             CHECK(text_run("6") && text_run("1 stuck \xc2\xb7 2 need you") && text_run("1 stuck \xc2\xb7 2 need you")->fg == ht_rgb(0xFFB0B0) && text_run("2") && !text_run("2 working") && !text_prefix("1 done"));   // too wide with "working": the bars and the number
-            CHECK(hits_of(POD_A_LEAD) == 3 && nth_hit(POD_A_LEAD, 0)->arg == 3 && nth_hit(POD_A_LEAD, 1)->arg == 2 && nth_hit(POD_A_LEAD, 2)->arg == 5);   // stuck, then the two that need you
-            CHECK(text_run("p3") && text_run("p2") && text_run("p5") && text_run("stuck") && text_run("needs you") && !text_run("p1"));
-            CHECK(text_run("p3")->x < text_run("p2")->x && text_run("p2")->x < text_run("p5")->x);
+            CHECK(hits_of(POD_A_LEAD) == 3 && nth_hit(POD_A_LEAD, 0)->arg == 0 && nth_hit(POD_A_LEAD, 1)->arg == 1 && nth_hit(POD_A_LEAD, 2)->arg == 2);   // done, working, needs you: as listed
+            CHECK(text_run("p0") && text_run("p1") && text_run("p2") && text_run("done") && text_run("needs you") && !text_run("p3"));
+            CHECK(text_run("p0")->x < text_run("p1")->x && text_run("p1")->x < text_run("p2")->x);
             N.swarm_page = 1; fresh(); ph_view_home(&F, &N, &M, 1000);
-            CHECK(hits_of(POD_A_LEAD) == 3 && nth_hit(POD_A_LEAD, 0)->arg == 1 && nth_hit(POD_A_LEAD, 1)->arg == 4 && nth_hit(POD_A_LEAD, 2)->arg == 0);   // working, then done
-            CHECK(text_run("0:20") && text_run("0:50") && text_run("done") && !text_run("needs you") && text_run("1 stuck \xc2\xb7 2 need you"));   // the capsule counts the whole Swarm
+            CHECK(hits_of(POD_A_LEAD) == 3 && nth_hit(POD_A_LEAD, 0)->arg == 3 && nth_hit(POD_A_LEAD, 1)->arg == 4 && nth_hit(POD_A_LEAD, 2)->arg == 5);   // stuck, working, needs you
+            CHECK(text_run("stuck") && text_run("0:50") && text_run("needs you") && !text_run("done") && text_run("1 stuck \xc2\xb7 2 need you"));   // the capsule counts the whole Swarm
             for (int i = 0; i < 6; i++) S1.leads[i].state = POD_LEAD_DONE;
             pod_model_supertab(&M, &S1, 1000);
             N.swarm_page = 0; fresh(); ph_view_home(&F, &N, &M, 1000);
