@@ -15,5 +15,7 @@ export const FLOWS = [
   { name: 'settings', scenario: 'workspace', steps: menu('Settings') },
   // Group 1's own: what New Swarm opens, and the phone tab menu's Rename Tab… dialog.
   { name: 'new-swarm', scenario: 'workspace', steps: menu('New Swarm') },
+  // The same Swarm by its key, for comparison with the menu's.
+  { name: 'new-swarm-key', scenario: 'workspace', steps: [['key', 'Alt+s']] },
   { name: 'tab-menu-rename', scenario: 'many-tabs', only: 'wide', steps: [['rclick', 'docs'], ['text', 'Rename Tab…']] },
 ];
