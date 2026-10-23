@@ -135,14 +135,14 @@ it('parses screen AGENT [--scrollback N] and type AGENT [TEXT] [--key K]...', ()
   expect(parseSuperTabArgs([...prefix, 'screen', 'worker', '--scrollback', '120'], where).payload).toMatchObject({ command: { type: 'agent.screen', agentId: 'worker', scrollback: 120 } })
   expect(parseSuperTabArgs([...prefix, 'type', 'worker', '2', '--key', 'enter'], where).payload).toMatchObject({ action: 'type', command: { type: 'agent.input', agentId: 'worker', text: '2', keys: ['Enter'] } })
   expect(parseSuperTabArgs([...prefix, 'type', 'worker', '--key', 'Esc', '--key', 'ctrl-c', '--key', '1'], where).payload.command).toEqual({ type: 'agent.input', agentId: 'worker', keys: ['Esc', 'Ctrl-C', '1'] })
-  for (const argv of [[...prefix, 'screen'], [...prefix, 'screen', '../x'], [...prefix, 'screen', 'worker', '--scrollback', '201'], [...prefix, 'screen', 'worker', '--scrollback', '-1'],
+  for (const argv of [[...prefix, 'screen'], [...prefix, 'screen', '../x'], [...prefix, 'screen', 'worker', '--scrollback', '201'], [...prefix, 'screen', 'worker', '--scrollback', '-1'], [...prefix, 'screen', 'worker', '--scrollback', '0'],
     [...prefix, 'type', 'worker'], [...prefix, 'type', 'worker', '--key', 'F1'], [...prefix, 'type', 'worker', 'a', 'b'], [...prefix, 'type', 'worker', '--key']]) {
     expect(() => parseSuperTabArgs(argv, where)).toThrow('harness super-tab')
   }
 })
 it('sends a terminal request, reads its result again while it is pending, and prints the screen as plain text', async () => {
   const print = vi.fn(), close = vi.fn()
-  const results: Record<string, unknown>[] = [{ error: 'BACKEND_TIMEOUT', detail: 'slow' }, { ok: true, value: { status: 'pending' } }, { ok: true, value: { ok: true, text: 'Allow?\n1. Yes' } }]
+  const results: Record<string, unknown>[] = [{ error: 'BACKEND_TIMEOUT', detail: 'slow' }, { ok: true, value: { requestId: 'r1', pending: true } }, { ok: true, value: { ok: true, text: 'Allow?\n1. Yes' } }]
   const request = vi.fn(async (_type: string, payload: Record<string, any> = {}): Promise<Record<string, unknown>> => payload.action === 'command'
     ? { ok: true, value: { result: { requestId: 'r1' } } } : results.shift()!)
   const deps = { where: () => where, open: async () => ({ request, close, machineId: 'machine' }), print }
@@ -164,7 +164,7 @@ it('gives up after three pending reads, and passes on a refused request without 
   let refused = false
   const request = vi.fn(async (_type: string, payload: Record<string, any> = {}): Promise<Record<string, unknown>> => payload.action === 'command'
     ? refused ? { error: 'LEAD_REQUIRED', detail: 'Only the Lead of this agent\'s project may read its terminal.' } : { ok: true, value: { result: { requestId: 'r1' } } }
-    : { ok: true, value: { status: 'pending' } })
+    : { ok: true, value: { requestId: 'r1', pending: true } })
   const deps = { where: () => where, open: async () => ({ request, close, machineId: 'machine' }), print }
   expect(await superTabCommand([...prefix, 'screen', 'worker'], deps)).toBe(1)
   expect(request).toHaveBeenCalledTimes(4)

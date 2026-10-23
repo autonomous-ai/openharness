@@ -31,6 +31,7 @@ const KEYS: Record<string, [string, string]> = { enter: ['Enter', 'Enter'], esc:
 /** A key as the Lead's request names it, or null for one it may not type. */
 export const keyName = (key: string): string | null => KEYS[key.toLowerCase()]?.[0] ?? null
 const CHANGED = 'This agent\'s terminal on this machine changed. Ask again.'
+const NOT_RUNNING = 'This agent is not running on this machine.'
 
 /** The end of the screen, at most 64 KB of UTF-8, cut on a character boundary: the prompt is at the bottom. */
 export function capScreen(text: string): string {
@@ -84,7 +85,8 @@ function resetOf(said: string, now: number): number | null {
   const time = /(?:resets?(?: at)?|try again at)\s+(?:([a-z]{3})[a-z]*\s+(\d{1,2}),?\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(said)
   if (!time) return null
   const [, month, day, hour, minute, half] = time
-  const h = Number(hour) % 12 + (half?.toLowerCase() === 'pm' ? 12 : half ? 0 : Number(hour) === 12 ? 12 : 0)
+  // "3pm" and "12am" are 12-hour; "15:00" and "0:30", with no am or pm, are 24-hour.
+  const h = half ? Number(hour) % 12 + (half.toLowerCase() === 'pm' ? 12 : 0) : Number(hour)
   const date = new Date(now)
   if (month && MONTHS.includes(month.toLowerCase())) date.setMonth(MONTHS.indexOf(month.toLowerCase()), Number(day))
   date.setHours(h, Number(minute ?? 0), 0, 0)
@@ -112,12 +114,13 @@ export class TerminalHost {
   /** Each host roster read. Serving and watching run on their own cadence, and the returned promise is only for specs:
    *  the host never waits on it, so a slow screen read never delays deliveries. */
   tick(rows: unknown[]): Promise<void> {
-    const own = this.own(rows)
-    if (!own.length) { this.watched.clear(); return Promise.resolve() }
+    const here = this.here(rows)
+    if (!here.length) { this.watched.clear(); return Promise.resolve() }
+    const own = here.filter(agent => agent.running)
     const now = this.now()
     if (!this.serving && now >= this.nextServeAt) {
       this.nextServeAt = now + SERVE_EVERY_MS
-      this.serving = this.serve(own).catch(error => this.log(error instanceof Error ? error.message : String(error))).finally(() => { this.serving = null })
+      this.serving = this.serve(here).catch(error => this.log(error instanceof Error ? error.message : String(error))).finally(() => { this.serving = null })
     }
     if (!this.watching && now >= this.nextWatchAt) {
       this.nextWatchAt = now + WATCH_EVERY_MS
@@ -126,28 +129,30 @@ export class TerminalHost {
     return Promise.all([this.serving, this.watching]).then(() => {})
   }
 
-  /** This machine's live Swarm agents, as the roster names them; a stopping one is no longer anyone's to drive. */
-  private own(rows: unknown[]): Own[] {
+  /** This machine's Swarm agents, as the roster names them, and whether each runs here: a stopping one, or one whose
+   *  session is gone, is no longer anyone's to drive, but its requests are still this host's to answer. */
+  private here(rows: unknown[]): Array<Own & { running: boolean }> {
     return rows.map(object).flatMap(row => {
       const agent = object(row.agent)
       return identifier(row.tabId) && identifier(agent.id) && identifier(agent.harnessId) && agent.machineId === this.machineId
-        && row.stopRequested !== true && this.core.agents.byAgent(agent.harnessId)
-        ? [{ tabId: row.tabId, agentId: agent.id, harnessId: agent.harnessId }] : []
+        ? [{ tabId: row.tabId, agentId: agent.id, harnessId: agent.harnessId, running: row.stopRequested !== true && !!this.core.agents.byAgent(agent.harnessId) }] : []
     })
   }
 
-  private async serve(own: Own[]): Promise<void> {
+  private async serve(here: Array<Own & { running: boolean }>): Promise<void> {
     const rows = await backend(this.core, 'POST', `/api/super-tabs/hosts/${this.machineId}/terminal`)
     if (!Array.isArray(rows)) throw new Error('Invalid Super Tab terminal requests.')
     await Promise.all(rows.map(object).map(async row => {
       const request = object(row.request)
       const kind = request.kind
       if (!identifier(request.id) || (kind !== 'screen' && kind !== 'input')) return
-      const agent = own.find(a => a.tabId === row.tabId && a.agentId === row.agentId)
+      const agent = here.find(a => a.tabId === row.tabId && a.agentId === row.agentId)
       // Not an agent of this machine: the host may not answer as it.
       if (!agent) return this.log(`terminal request ${request.id} names no agent of this machine`)
-      // After a restart the agent may run in another terminal: never read or type into one the Lead did not ask about.
-      const answer = row.harnessId !== agent.harnessId ? { ok: false, error: CHANGED }
+      // Answered at once, so the Lead is not left waiting out the backend's 30 s (review of #1646).
+      const answer = !agent.running ? { ok: false, error: NOT_RUNNING }
+        // After a restart the agent may run in another terminal: never read or type into one the Lead did not ask about.
+        : row.harnessId !== agent.harnessId ? { ok: false, error: CHANGED }
         : kind === 'screen' ? this.screen(agent, request) : this.input(agent, request)
       await this.command(agent, `terminal-${request.id}`, { type: kind === 'screen' ? 'agent.screenResult' : 'agent.inputResult', requestId: request.id, ...await answer })
     }))
@@ -156,13 +161,18 @@ export class TerminalHost {
   private async screen(agent: Own, request: Json): Promise<Json> {
     const scrollback = typeof request.scrollback === 'number' ? request.scrollback : 0
     const read = await this.core.superTabs!.screen(agent.harnessId, scrollback)
-    return read.ok ? { ok: true, text: capScreen(read.text) } : { ok: false, error: read.error }
+    // The backend keeps a reason to 500 characters.
+    return read.ok ? { ok: true, text: capScreen(read.text) } : { ok: false, error: read.error.slice(0, 500) }
   }
 
   private async input(agent: Own, request: Json): Promise<Json> {
     const keys = typedKeys(Array.isArray(request.keys) ? request.keys : [])
     if (typeof keys === 'string') return { ok: false, error: keys }
-    return { ...await this.core.superTabs!.input(agent.harnessId, typeof request.text === 'string' ? request.text : '', keys) }
+    const text = typeof request.text === 'string' ? request.text : ''
+    // The text is typed literally, so a newline or an escape in it would act as a key the Lead never named (the backend
+    // refuses them too).
+    if (/[\x00-\x1f\x7f]/.test(text)) return { ok: false, error: 'Send Enter and other keys as named keys, not in the text.' }
+    return { ...await this.core.superTabs!.input(agent.harnessId, text, keys) }
   }
 
   private async command(agent: Own, operationId: string, command: Json): Promise<void> {

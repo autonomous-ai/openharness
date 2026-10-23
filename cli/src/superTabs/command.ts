@@ -53,7 +53,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
   } else if (action === 'route' && identifier(first) && second && positional.length === 3) {
     Object.assign(payload, { conversationId: first, assessment: JSON.parse(second) })
   } else if (action === 'screen' && identifier(first) && (positional.length === 2
-    || positional.length === 4 && second === '--scrollback' && /^\d+$/.test(third ?? '') && Number(third) <= 200)) {
+    || positional.length === 4 && second === '--scrollback' && /^[1-9]\d*$/.test(third ?? '') && Number(third) <= 200)) {
     // The id names this one read; a read sent twice is only read twice.
     Object.assign(payload, { operationId: `terminal-${randomUUID()}`,
       command: { type: 'agent.screen', agentId: first, ...(positional.length === 4 ? { scrollback: Number(third) } : {}) } })
@@ -149,7 +149,7 @@ async function terminalRequest(payload: Record<string, unknown>, scoped: (payloa
   for (let read = 0; read < TERMINAL_READS; read++) {
     const answer = await scoped({ action: 'terminalResult', requestId })
     // A read the backend held to its limit while the worker's machine was still answering is read again.
-    if (answer.error === 'BACKEND_TIMEOUT' || object(answer.value).status === 'pending') continue
+    if (answer.error === 'BACKEND_TIMEOUT' || object(answer.value).pending === true) continue
     return answer
   }
   return { error: 'TERMINAL_PENDING', detail: 'The worker\'s machine has not answered yet. Try again in a moment.' }

@@ -54,11 +54,28 @@ describe('a host serving its Lead\'s terminal requests', () => {
       { type: 'agent.inputResult', requestId: 'r2', ok: false, error: 'This agent\'s terminal on this machine changed. Ask again.' }])
   })
 
-  it('answers only for its own agents: another machine\'s, a stopped one\'s or one not running here is not served', async () => {
-    const t = setup({ live: ['h1', 'h3'], requests: [screenRequest({ agentId: 'a9', harnessId: 'h9' }), screenRequest({ agentId: 'a2', harnessId: 'h2' }), screenRequest({ agentId: 'a3', harnessId: 'h3' })] })
-    await t.host.tick([row(), { tabId: 'tab', agent: { id: 'a2', harnessId: 'h2', machineId: 'm2' } }, row('a3', 'h3', { stopRequested: true })])
+  it('never answers as another machine\'s agent, and tells at once that a stopping one or one not running here is not running', async () => {
+    const t = setup({ live: ['h1', 'h3'], requests: [screenRequest({ agentId: 'a9', harnessId: 'h9' }), screenRequest({ agentId: 'a2', harnessId: 'h2' }),
+      screenRequest({ agentId: 'a3', harnessId: 'h3', request: { id: 'r3', kind: 'screen' } }), screenRequest({ agentId: 'a4', harnessId: 'h4', request: { id: 'r4', kind: 'input', keys: ['Enter'] } })] })
+    await t.host.tick([row(), { tabId: 'tab', agent: { id: 'a2', harnessId: 'h2', machineId: 'm2' } }, row('a3', 'h3', { stopRequested: true }), row('a4', 'h4')])
     expect(vi.mocked(t.core.superTabs!.screen).mock.calls).toEqual([['h1', 0]])
-    expect(t.sent).toEqual([])
+    expect(t.core.superTabs!.input).not.toHaveBeenCalled()
+    expect(t.sent.map(s => [s.body.asAgentId, s.body.command]).sort()).toEqual([
+      ['a3', { type: 'agent.screenResult', requestId: 'r3', ok: false, error: 'This agent is not running on this machine.' }],
+      ['a4', { type: 'agent.inputResult', requestId: 'r4', ok: false, error: 'This agent is not running on this machine.' }]])
+  })
+
+  it('asks for requests while only a stopping agent is here, so its requests are answered', async () => {
+    const t = setup({ requests: [screenRequest({ agentId: 'a3', harnessId: 'h3' })] })
+    await t.host.tick([row('a3', 'h3', { stopRequested: true })])
+    expect(t.sent.map(s => s.body.command.error)).toEqual(['This agent is not running on this machine.'])
+  })
+
+  it('refuses typed text with a newline or another control character: those are keys, sent by name', async () => {
+    const t = setup({ requests: ['a\nrm -rf x', 'a\u001b[A', 'ok\u007f'].map((text, i) => ({ tabId: 'tab', agentId: 'a1', harnessId: 'h1', request: { id: `r${i}`, kind: 'input', text } })) })
+    await t.host.tick([row()])
+    expect(t.core.superTabs!.input).not.toHaveBeenCalled()
+    expect(t.sent.map(s => s.body.command.error)).toEqual(Array(3).fill('Send Enter and other keys as named keys, not in the text.'))
   })
 
   it('caps the screen at 64 KB, keeping its end and never splitting a character', async () => {
@@ -90,6 +107,11 @@ describe('a host serving its Lead\'s terminal requests', () => {
     const t = setup({ requests: [screenRequest()], screen: () => ({ ok: false, error: 'Could not read the terminal: pane gone' }) })
     await t.host.tick([row()])
     expect(t.sent[0].body.command).toEqual({ type: 'agent.screenResult', requestId: 'r1', ok: false, error: 'Could not read the terminal: pane gone' })
+    // The backend takes a reason of at most 500 characters.
+    t.showing(() => ({ ok: false, error: `Could not read the terminal: ${'x'.repeat(600)}` }))
+    t.request(screenRequest({ request: { id: 'r2', kind: 'screen' } }))
+    t.wait(3_000); await t.host.tick([row()])
+    expect(t.sent[1].body.command.error).toHaveLength(500)
   })
 
   it('asks for requests every 3 seconds, and not at all without a Swarm agent here', async () => {
@@ -179,6 +201,10 @@ describe('reading a usage limit off a screen', () => {
     ['Claude usage limit reached. Your limit will reset at 3pm (Asia/Saigon).', new Date(2026, 9, 23, 15, 0)],
     ['You\'ve hit your limit · resets 1:30pm (Asia/Saigon)', new Date(2026, 9, 24, 13, 30)],
     ['Weekly limit reached ∙ resets Oct 25, 9am', new Date(2026, 9, 25, 9, 0)],
+    ['5-hour limit reached ∙ resets 15:00', new Date(2026, 9, 23, 15, 0)],
+    ['5-hour limit reached ∙ resets 0:30', new Date(2026, 9, 24, 0, 30)],
+    ['5-hour limit reached ∙ resets 12pm', new Date(2026, 9, 24, 12, 0)],
+    ['5-hour limit reached ∙ resets 12am', new Date(2026, 9, 24, 0, 0)],
     ['■ You\'ve hit your usage limit. Try again at 4:05 PM.', new Date(2026, 9, 23, 16, 5)],
     ['■ You\'ve hit your usage limit. Upgrade to Pro, or try again in 2 days 3 hours 1 minute.', new Date(now + ((2 * 24 + 3) * 60 + 1) * 60_000)],
   ])('reads %s', (line, reset) => {
