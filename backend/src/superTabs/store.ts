@@ -423,6 +423,23 @@ export class SuperTabStore {
       const dispatched = command.type === 'agent.startDispatch' ? original.starts?.find(s => s.id === command.startId)?.routeDecisionId : undefined
       if (dispatched) context.routeDecision = await readDecision(tx, tabId, dispatched) ?? undefined
       const effects = applyCommand(original, actor, command, context)
+      if (command.type === 'agent.rebind') {
+        const target = agent(effects.state, command.agentId)
+        // A terminal can already belong to a different project or Swarm on this host. The pure
+        // transition checks this tab; inspect the other registrations inside the same transaction.
+        const registrations = await tx.superTab.findMany({ where: { autonomousEnv: original.environment,
+          machineIds: { has: target.machineId } } })
+        if (registrations.some(row => stateOf(row).agents.some(a => a.machineId === target.machineId
+          && a.harnessId === command.harnessId && a.id !== target.id))) {
+          fail('SESSION_CONTRIBUTED', 'The replacement terminal already belongs to another member.')
+        }
+        if (target.harnessId !== agent(original, target.id).harnessId) {
+          // Preserve the stable member's scope and also reserve the new native identity's scope.
+          await bindSession(tx, effects.state, { ...target, id: stableId(target.machineId, target.harnessId) }, context.now)
+          await tx.superTabRun.updateMany({ where: { id: target.id, tabId, machineId: target.machineId,
+            harnessId: command.previousHarnessId }, data: { harnessId: target.harnessId } })
+        }
+      }
       if (command.type === 'agent.add' || command.type === 'agent.started') {
         const target = agent(effects.state, effects.result.agentId as string)
         await bindSession(tx, effects.state, target, context.now)
@@ -439,7 +456,7 @@ export class SuperTabStore {
           status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled', holdReason: null, holdSince: null } })
       }
       const revision = row.revision + 1
-      if (command.type === 'agent.add' || command.type === 'agent.started' || command.type === 'agent.configuration') {
+      if (command.type === 'agent.add' || command.type === 'agent.started' || command.type === 'agent.configuration' || command.type === 'agent.rebind') {
         for (const target of effects.state.agents) {
           if (target.configurationVersion !== receiptId) continue
           const previous = original.agents.find(a => a.id === target.id)

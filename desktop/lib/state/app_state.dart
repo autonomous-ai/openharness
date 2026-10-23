@@ -279,6 +279,7 @@ class _AgentChange {
   bool handoffFailed = false;
   String? companionTarget;
   bool launchFailed = false;
+  bool replacementReported = false;
 }
 
 class AgentCreationAttempt {
@@ -16093,6 +16094,29 @@ class AppNotifier extends ChangeNotifier {
       change.launchFailed = target?.launchState == 'failed';
       return target?.launchDetail ??
           'The new terminal is not available yet. Choose the agent again to check.';
+    }
+    if (!change.replacementReported && source.dsh != 'autonomous/pair') {
+      try {
+        final reported = await _conn(machineId).request(
+          'agent_handoff_complete',
+          payload: {
+            'agentId': source.id,
+            'replacementId': nextId,
+            'changeId': change.creation._id,
+            'targetEngine': change.engine,
+          },
+          timeout: const Duration(seconds: 5),
+        );
+        if (reported['ok'] != true && reported['error'] != 'UNSUPPORTED') {
+          return 'The new agent started. Choose it again to finish the switch.';
+        }
+        change.replacementReported = true;
+      } catch (_) {
+        return 'The new agent started. Choose it again to finish the switch.';
+      }
+      if (!_machineWorkCurrent(machine, change.revision)) {
+        return 'This switch is no longer active.';
+      }
     }
     final terminals = allPanes
         .where((p) => p.machineId == machineId && p.agentId == source.id)

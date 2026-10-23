@@ -197,6 +197,16 @@ it('resolves a native caller to its exact contribution and rechecks it before ev
   expect(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).toMatchObject({ error: 'AGENT_UNAVAILABLE' })
 })
 
+it('resolves a replacement terminal to the original stable member', async () => {
+  const t = setup()
+  t.agent.harnessId = 'replacement'
+  t.call.mockImplementation(async (_method, path) => ({ status: 200, body: { data: path.includes('/hosts/')
+    ? [{ tabId: 'tab', agent: t.agent }] : { state: { agents: [t.agent] } } } }))
+  expect(await t.ask({ action: 'status', tabId: 'tab', harnessId: 'replacement' }, owner)).toMatchObject({ ok: true })
+  expect(t.call).toHaveBeenLastCalledWith('GET', `/api/super-tabs/tab?asAgentId=${t.agentId}`, undefined)
+  expect(await t.ask({ action: 'status', tabId: 'tab', harnessId: 'native' }, owner)).toMatchObject({ error: 'AGENT_UNAVAILABLE' })
+})
+
 it('tells the Lead which branch a started agent works from, and how to choose another', async () => {
   const t = setup()
   const help = (await t.ask({ action: 'help' }, owner)).help as { start: string; startRequest: Record<string, unknown> }

@@ -4,6 +4,7 @@ import { performance } from 'node:perf_hooks'
 import { HANDOFF_REQUESTS, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
 import { prepareAgentHandoff, type HandoffDeps } from '../lib/agentHandoff.js'
 import { createHandoffRequest } from './handoffRequest.js'
+import { recordReplacement } from '../superTabs/replacements.js'
 
 export { HANDOFF_REQUESTS }
 
@@ -27,5 +28,12 @@ export function startHandoff(core: CoreApi, _ports?: CorePorts, prepare = prepar
     const answer = createHandoffRequest({ prepare: (request) => prepare({ ...deps, permit,
       publish: (prepared, _permit) => reads.publish(prepared, permit) }, request) })
     return new Promise(reply => answer(payload, asker, reply))
+  }, agent_handoff_complete: async (payload, asker, closed) => {
+    if (!asker.owner) return { error: 'OWNER_REQUIRED' }
+    try {
+      if (closed?.aborted) return { error: 'HANDOFF_UNAVAILABLE' }
+      await recordReplacement(core, payload)
+      return { ok: true }
+    } catch { return { error: 'HANDOFF_UNAVAILABLE' } }
   } }
 }

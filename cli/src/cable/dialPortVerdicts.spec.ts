@@ -55,4 +55,18 @@ describe('verdicts on USB boards', () => {
     verdicts.markForeign(board('1'))
     expect(JSON.parse(readFileSync(file, 'utf8'))).toHaveProperty('AA:01')
   })
+
+  it('never judges foreign a board that once greeted as a dial, across restarts and attachments', () => {
+    // A Harness Pro rebooting while the daemon restarted stayed silent past the probe, was marked foreign
+    // and left on its "Harness" screen for hours (a user's logs, 10-15, 10-16 and 10-22).
+    const file = join(mkdtempSync(join(tmpdir(), 'verdicts-')), 'dial-ports.json')
+    new DialVerdicts(file).markDial(board('1'))
+    const next = new DialVerdicts(file)
+    next.markForeign(board('2'))
+    expect(next.isForeign(board('2'))).toBe(false)
+    expect(new DialVerdicts(file).isForeign(board('3'))).toBe(false)
+    // Another board is still judged on its own.
+    next.markForeign(board('2', 'BB:02'))
+    expect(next.isForeign(board('2', 'BB:02'))).toBe(true)
+  })
 })

@@ -59,6 +59,14 @@ const recorded = (s: ReturnType<typeof scoped>) => s.mock.calls.find(c => c[0].a
 const labels = (s: ReturnType<typeof scoped>) => (recorded(s).command.decision.candidates as Array<{ label: string }>).map(c => c.label)
 
 describe('routeTask', () => {
+  it('offers the same member after Change agent when only its replacement terminal is live', async () => {
+    const rebound = tab()
+    rebound.state.agents = agents.map(a => a.id === 'a1' ? { ...a, harnessId: 'replacement' } : a)
+    const s = scoped({ tab: rebound })
+    const result = await routeTask(input, s, where as never, opener(id => daemon(id, { agents: ['replacement'] })), () => 'op')
+    expect(result).toMatchObject({ ok: true, pick: { kind: 'member', agentId: 'a1' } })
+    expect(recorded(s).command.decision.excluded.some((c: { title: string }) => c.title.startsWith('Multiply'))).toBe(false)
+  })
   it('collects members and new agents, records and returns the first in the order, and never asks Jev', async () => {
     const s = scoped()
     const result = await routeTask(input, s, where as never, opener(), () => 'op')

@@ -176,15 +176,22 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           return { ok: true, value }
         }
         if (payload.action === 'help') return { ok: true, help: HELP }
-        const agentId = identifier(payload.agentId) ? payload.agentId
+        let agentId = identifier(payload.agentId) ? payload.agentId
           : identifier(payload.harnessId) ? createHash('sha256').update(JSON.stringify([core.daemon.machineId(), payload.harnessId])).digest('hex').slice(0, 24) : null
         if (!identifier(payload.tabId) || !agentId) return { error: 'INVALID_REQUEST' }
+        if (!identifier(payload.agentId) && identifier(payload.harnessId)) {
+          const rows = await backend(core, 'GET', `/api/super-tabs/hosts/${core.daemon.machineId()}`)
+          const member = list(rows).find(row => row.tabId === payload.tabId && object(row.agent).machineId === core.daemon.machineId()
+            && object(row.agent).harnessId === payload.harnessId && row.stopRequested !== true)
+          if (identifier(object(member?.agent).id)) agentId = String(object(member?.agent).id)
+        }
         const path = `/api/super-tabs/${payload.tabId}`
         const identity = `asAgentId=${agentId}`
         const answer = object(await backend(core, 'GET', `${path}?${identity}`))
         const state = object(answer.state)
         const agent = Array.isArray(state.agents) ? state.agents.map(object).find(a => a.id === agentId) : undefined
-        if (!agent || agent.machineId !== core.daemon.machineId() || typeof agent.harnessId !== 'string' || !core.agents.byAgent(agent.harnessId)) {
+        if (!agent || agent.machineId !== core.daemon.machineId() || typeof agent.harnessId !== 'string'
+          || identifier(payload.harnessId) && agent.harnessId !== payload.harnessId || !core.agents.byAgent(agent.harnessId)) {
           return { error: 'AGENT_UNAVAILABLE', detail: 'This agent is not a running contribution on this machine.' }
         }
         wake()

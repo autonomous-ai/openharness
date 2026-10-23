@@ -191,6 +191,7 @@ export class CableFleet {
       if (this.stopped) return
       const entry: Entry = { port, attached: false, status: { attached: false }, session: undefined!, faults: [] }
       const attached = () => {
+        this.verdicts.markDial(port)
         if (entry.attached) return
         const first = ![...this.entries.values()].some(e => e.attached)
         entry.attached = true

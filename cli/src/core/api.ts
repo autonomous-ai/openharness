@@ -659,7 +659,7 @@ export const PROJECTS_REQUESTS = ['git_pull_request', 'git_pull_requests_status'
 /** A window's name for its repo and its work, by a small model in the background (services/windowNames.ts). */
 export const WINDOW_NAMES_REQUESTS = ['window_name'] as const
 /** Change agent's handoff file, prepared in the edge host (services/handoff.ts). */
-export const HANDOFF_REQUESTS = ['agent_handoff_prepare'] as const
+export const HANDOFF_REQUESTS = ['agent_handoff_prepare', 'agent_handoff_complete'] as const
 /** Connected services for every local agent, and their MCP bridge, in the edge host (services/connectors.ts). */
 export const CONNECTORS_REQUESTS = ['connectors'] as const
 /** Sharing this machine with other accounts, and adding machines shared with this one, in the edge host

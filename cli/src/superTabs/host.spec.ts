@@ -45,7 +45,7 @@ function setup(messageFields: Record<string, unknown> = {}) {
     for (const fn of listeners) fn({ deliveryId: 'team:service:superTabs:delivery', sessionId: 'harness', state, reason })
   }
   const saved = () => JSON.parse(readFileSync(hostJournalFile(dir, 'machine-1'), 'utf8'))
-  return { core, call, open, event, receipts, holds, log, wait: (ms: number) => { clock += ms }, saved, dir, remove: () => { removed = true }, revoke: (value = true) => { revoked = value }, foreignClaim: () => { claimId = 'another-process' } }
+  return { core, call, open, event, receipts, holds, log, row, wait: (ms: number) => { clock += ms }, saved, dir, remove: () => { removed = true }, revoke: (value = true) => { revoked = value }, foreignClaim: () => { claimId = 'another-process' } }
 }
 
 describe('current Swarm role lookup', () => {
@@ -93,6 +93,29 @@ describe('current Swarm role lookup', () => {
 })
 
 describe('Super Tab native delivery handoff', () => {
+  it('revokes an in-flight old-terminal lease when the member is rebound, preserving uncertainty', async () => {
+    const t = setup(), host = t.open()
+    await host.tick()
+    t.row.agent.harnessId = 'new-harness'
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.core.turns.cancelDelivery).toHaveBeenCalledWith('team:service:superTabs:delivery')
+    expect(t.saved().entries.delivery.stage).toBe('uncertain')
+    expect(t.receipts.at(-1)).toMatchObject({ uncertain: true })
+  })
+  it('retargets held input after Change agent without retargeting uncertain input', async () => {
+    const t = setup(), host = t.open()
+    await host.tick(); t.event('rejected', 'team_waiting_busy')
+    t.row.agent.harnessId = 'new-harness'
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenLastCalledWith('new-harness', expect.any(String), 'team:service:superTabs:delivery')
+    expect(t.saved().entries.delivery.harnessId).toBe('new-harness')
+    host.stop()
+    const fresh = t.open()
+    await fresh.tick()
+    expect(t.saved().entries.delivery.stage).toBe('uncertain')
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+  })
   it('names all five task parts in the worker delivery header', async () => {
     const t = setup()
     await t.open().tick()

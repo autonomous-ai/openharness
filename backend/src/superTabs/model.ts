@@ -34,6 +34,8 @@ export interface Agent {
   configuration: AgentConfiguration
   /** The last configuration operation fences delayed observations, including re-contribution. */
   configurationVersion?: string
+  /** Fences a repeated Change agent report without rolling back later model observations. */
+  replacement?: { previousHarnessId: string; harnessId: string }
 }
 export type AgentRole = 'builder' | 'reviewer'
 export const agentRole = (agent: Pick<Agent, 'role'>): AgentRole => agent.role ?? 'builder'

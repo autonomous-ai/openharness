@@ -509,6 +509,21 @@ describe('a board that is not a dial', () => {
     } finally { await second.fleet.stop() }
   })
 
+  it('remembers a board that greeted as a dial, so a later silent probe never marks it foreign', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'fleet-verdicts-')), 'dial-ports.json')
+    const s = scenario({ file })
+    try {
+      s.fleet.start()
+      await vi.waitFor(() => expect(s.f.ports.map(p => p.path)).toContain('/dev/tim'))
+      await s.f.greet(s.f.ports.filter(p => p.path === '/dev/tim'))
+      await vi.waitFor(() => expect(s.fleet.isConnected).toBe(true))
+    } finally { await s.fleet.stop() }
+    const dial = { ...device('/dev/tim', 'AA:01'), session: '201' }
+    const verdicts = new DialVerdicts(file)
+    verdicts.markForeign(dial)
+    expect(verdicts.isForeign(dial)).toBe(false)
+  })
+
   it('is never opened while another program has it, and only then once that program is done', async () => {
     let busy = true
     const s = scenario({ inUse: async path => path === '/dev/other' && busy })
