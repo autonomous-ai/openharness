@@ -10,7 +10,7 @@ import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type Rou
 import { routingOverrideSchema } from './routingPolicy.js'
 import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
-import { agentProjectId, deleteProject, groupProject, inviteLanding, manageProject, mutableProjects, placeRules, projectMembers, projectOf, projectRules, readAgent, readConversation, readProject, sameProject, type SwarmProject } from './projects.js'
+import { agentProjectId, deleteProject, groupProject, inviteLanding, manageProject, mutableProjects, placeRules, projectMembers, projectOf, projectRules, readAgent, readConversation, readProject, sameProject, SKILL_MODE_NAMES, skillModeOf, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -69,6 +69,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.cadence'), projectId: id, minutes: z.union([z.literal(1), z.literal(5), z.literal(15), z.literal(30)]) }).strict(),
   z.object({ type: z.literal('project.report'), projectId: id, throughRevision: z.number().int().nonnegative().safe(), text: text.nullable() }).strict(),
   z.object({ type: z.literal('project.repository'), projectId: id, repositoryUrl }).strict(),
+  z.object({ type: z.literal('project.skills'), projectId: id, mode: z.enum(['default', 'orchestration']), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000).optional(), task: task.optional(), reviewOf: id.optional(), checks: z.array(check).max(40) }).strict()
     .refine(c => c.task !== undefined || c.brief !== undefined, 'Provide a task or brief.')
     .refine(c => !c.task || renderWorkTask(c.task).length <= 8000, 'Keep the rendered task within 8,000 characters.'),
@@ -119,7 +120,7 @@ export interface CommandContext {
   contribution?: { machineOwnerId: string; contributorId: string; hostGrant?: string | null }
   /** Loaded from this tab and conversation by the store. */
   reply?: { id: string; conversationId: string; author: Author }
-  /** The message a Lead quotes as the owner's request for a rule change, loaded from this tab by the store. */
+  /** The message a Lead quotes as the owner's request for a rule or skill mode change, loaded from this tab by the store. */
   askedIn?: { author: Author; source: boolean; createdAt: number }
   /** The newest messages of this conversation before the one being sent, newest first, loaded by the store for `message.send`. */
   recent?: { author: Author; recipients: string[] }[]
@@ -178,7 +179,9 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if ('projectId' in command && command.projectId) readProject(state, actor, command.projectId)
   if ('agentId' in command) readAgent(state, actor, command.agentId)
   if (command.type === 'agent.start') readConversation(state, actor, command.request.conversationId)
-  if ((command.type === 'rule.set' || command.type === 'rule.remove') && command.askedIn) readConversation(state, actor, command.askedIn.conversationId)
+  if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills') && command.askedIn) {
+    readConversation(state, actor, command.askedIn.conversationId)
+  }
   if ('startId' in command && command.type !== 'route.modelResult') {
     const start = state.starts?.find(s => s.id === command.startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
     readConversation(state, actor, start.request.conversationId)
@@ -351,11 +354,33 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (projects.length >= 100) fail('PROJECTS_FULL', 'A swarm can have up to 100 projects.')
       const leadConversationId = `project-${operationId}`
       projects.push({ id: operationId, name: command.name, ownerId: actor.userId, leadConversationId,
-        visibility: command.visibility, members: [], updateMinutes: 5 })
+        visibility: command.visibility, members: [], updateMinutes: 5, skillMode: 'default' })
       state.conversations.push({ id: leadConversationId, projectId: operationId, title: 'Lead', leadId: null,
         agentIds: [], archived: false, brief: command.brief, checks: [], assignment: null, lastMessageSequence: 0 })
       result.projectId = operationId
       result.conversationId = leadConversationId
+      break
+    }
+    case 'project.skills': {
+      // Only the project owner, or that project's Lead quoting a chat message the project owner wrote in the last day. The
+      // same check as ruleChange, but against the project owner: the Swarm owner does not choose another person's skills.
+      const project = readProject(state, actor, command.projectId)
+      author(state, actor, true)
+      if (!(actor.kind === 'person' && actor.userId === project.ownerId)) {
+        if (actor.kind !== 'agent' || conversation(state, project.leadConversationId).leadId !== actor.agentId) {
+          fail('PROJECT_OWNER_REQUIRED', 'Only the project owner, or its Lead passing on the owner\'s request, changes its skills.', 403)
+        }
+        const asked = command.askedIn && context.askedIn
+        if (!asked || groupProject(state, conversation(state, command.askedIn!.conversationId)).id !== project.id
+          || asked.author.kind !== 'person' || asked.author.id !== project.ownerId || asked.source
+          || context.now - asked.createdAt > RULE_MESSAGE_MS) {
+          fail('OWNER_MESSAGE_REQUIRED', 'Only the project owner changes its skills; quote a chat message the project owner wrote in the last day asking for this change.', 403)
+        }
+      }
+      if (skillModeOf(project) === command.mode) break
+      mutableProjects(state)
+      projectOf(state, project.id).skillMode = command.mode
+      message(project.leadConversationId, `Skills: ${SKILL_MODE_NAMES[command.mode]}`, [], null, SYSTEM_ROW)
       break
     }
     case 'project.rename': {
@@ -389,6 +414,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (actor.kind === 'person') owner(state, actor)
       if (state.project) fail('PROJECT_SET', 'This Super Tab already has a project.')
       state.project = { machineId: command.machineId, ...command.project }
+      // A new Swarm stores its first project, and stored projects are read instead of `state.project` (projectsOf).
+      const first = state.projects?.find(p => p.id === 'lead')
+      if (first) first.repository ??= { ...state.project }
       break
     }
     case 'machine.contribute': {

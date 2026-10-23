@@ -39,9 +39,9 @@ describe('built-in Swarm skills', () => {
     expect(readdirSync(data)).toEqual([])
   })
 
-  // The owner's approved text (2026-10-22), byte for byte.
+  // The owner's approved text (2026-10-22), with Lead recovery guidance agreed on 2026-10-23.
   it.each([
-    ['lead', 'a8d54ee204209946486c8d99960f1317e4bd3e51434af894b174e712b67b7941'],
+    ['lead', '5fc83d8c43b66b44cdab27b48235dbc86b7ab11a57153edc1ae7e92831642a8e'],
     ['dev', '86caf697c83365f000317845b0aaa929947a9591d637ab2bd0f8536da8e86763'],
     ['review', '424dc9db5642ed7093128525f30877ffc301eb6957b33e8234916de0f0eaa208'],
   ] as const)('writes the owner\'s %s skill byte for byte', (role, sha256) => {

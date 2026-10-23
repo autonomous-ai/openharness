@@ -158,7 +158,8 @@ class SuperTabFixtureConnection extends WsConn {
           'cwd': '/work/project',
           'scope': 'swarm',
           'engines': ['claude', 'codex', 'pi'],
-          'maxAgents': 4,
+          'maxAgents': 8,
+          'maxAvailableAgents': 16,
         };
       }
       if (payload['action'] == 'prepareNative' ||

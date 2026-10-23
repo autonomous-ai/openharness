@@ -102,6 +102,14 @@ export interface RestartAgentDeps {
   /** Prepare persisted history only once the old writer is confirmed stopped. A failure must
    * preserve the conversation, not enter the fresh-session fallback. */
   prepareResume?: () => void | Promise<void>
+  /**
+   * Claude only: stop a `claude --bg` job still holding the session this is about to `--resume`
+   * (`lib/claudeBackgroundJob.ts`). Run once, after history preparation and before the resume
+   * argv is built, so a job that held the jobs store's lock is gone before Claude Code is asked to
+   * reopen it. A failure here must not block the restart it exists to unblock, so it is awaited for
+   * ordering only, never allowed to fail the restart; implementations swallow their own errors.
+   */
+  stopConflictingJob?: () => Promise<void>
   buildArgv: (opts: { bypassPermission: boolean; resumeSessionId?: string }) => string[]
   /** Why the relaunch [buildArgv] would build is refused on this platform (a Windows batch-file engine whose arguments
    *  cmd.exe would read, lib/windows/launch.ts), asked before anything is stopped; null when it is not. */
@@ -153,6 +161,8 @@ export async function restartAgent(
       return { ok: false, detail: `could not prepare ${session.engine} session for resume: ${error instanceof Error ? error.message : error}` }
     }
   }
+  if (!current()) return changed
+  if (resumeSessionId && deps.stopConflictingJob) await deps.stopConflictingJob()
   if (!current()) return changed
   const spawnAndWait = async (withResume: boolean): Promise<ProcessIdentity | null> => {
     if (!current()) return null

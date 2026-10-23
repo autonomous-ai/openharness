@@ -1,4 +1,4 @@
-import { machineContribution, machineObservationSchema, machineSlots, type MachineObservation } from './machines.js'
+import { machineContribution, machineObservationSchema, machineSlots, recordAgentPresence, type MachineObservation } from './machines.js'
 import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient, SuperTab, SuperTabDelivery } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
@@ -10,7 +10,7 @@ import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, MAX_AT
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
-import { canReadAgent, canReadProject, groupProject, projectsOf, agentProjectId, readConversation, type ProjectVisibility } from './projects.js'
+import { canReadAgent, canReadProject, groupProject, projectsOf, agentProjectId, readConversation, skillModeOf, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
@@ -282,7 +282,7 @@ export class SuperTabStore {
       const row = await this.row(tx, user, tabId)
       const state = stateOf(row)
       const actor = await this.actor(tx, user, state, asAgentId)
-      const visible = visibleState(state, actor)
+      const visible = visibleState(state, actor, this.now())
       return { revision: row.revision, state: { ...visible, machines: visible.machines?.map(pool => ({
         ...pool, availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, state.machines!.find(m => m.machineId === pool.machineId)!)),
       })) } }
@@ -399,7 +399,7 @@ export class SuperTabStore {
         const reply = await tx.superTabMessage.findFirst({ where: { id: command.replyTo, tabId, conversationId: command.conversationId } })
         if (reply) context.reply = { id: reply.id, conversationId: reply.conversationId, author: reply.author as unknown as Author }
       }
-      if ((command.type === 'rule.set' || command.type === 'rule.remove') && command.askedIn) {
+      if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills') && command.askedIn) {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.askedIn.messageId, tabId, conversationId: command.askedIn.conversationId } })
         if (asked) context.askedIn = { author: asked.author as unknown as Author, source: !!asked.source, createdAt: asked.createdAt.getTime() }
       }
@@ -456,6 +456,15 @@ export class SuperTabStore {
           status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled', holdReason: null, holdSince: null } })
       }
       const revision = row.revision + 1
+      if (command.type === 'work.assign' || command.type === 'work.status' || command.type === 'message.send') {
+        const group = conversation(effects.state, command.conversationId)
+        const assignment = group.assignment
+        if (assignment && (command.type !== 'message.send' || actor.kind === 'agent' && actor.agentId === assignment.agentId)) {
+          // Even an unchanged working status is fresh evidence that the agent
+          // continued. An older queued gap must not turn that progress into Stuck.
+          assignment.recordingProgress = { at: context.now, revision }
+        }
+      }
       if (command.type === 'agent.add' || command.type === 'agent.started' || command.type === 'agent.configuration' || command.type === 'agent.rebind') {
         for (const target of effects.state.agents) {
           if (target.configurationVersion !== receiptId) continue
@@ -760,6 +769,7 @@ export class SuperTabStore {
       if (!pool || pool.contributorId !== user.sub || pool.generation !== observation.generation) fail('CONTRIBUTION_REVOKED', 'Read the current machine contribution.', 403)
       const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
       if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
+      recordAgentPresence(state, machineId, observation.runningHarnessIds, this.now())
       pool.observation = { ...observation, quotas: observation.quotas.filter(q => pool.engines.includes(q.engine)), receivedAt: this.now() }
       // Current-generation physical stop proof also finishes a close whose membership was already withdrawn.
       for (const proof of observation.stoppedReservations ?? []) {
@@ -801,7 +811,11 @@ export class SuperTabStore {
           // (cli/src/superTabs/host.ts). A collaborator's Lead on a machine shared with them must not open it to every member.
           const joinSwarm = state.ownerId === user.sub && target.contributorId === user.sub && !state.machines?.some(m => m.machineId === machineId)
             && state.conversations.some(c => !c.archived && c.leadId === target.id)
-          result.push({ tabId: row.id, tabName: state.name, revision: row.revision, paused: state.paused, active, attention, agent: target, joinSwarm,
+          // Which skill texts this agent runs; the host reads it here rather than fetching each tab's state per poll. A row
+          // whose project is gone reads like one from before skill modes instead of failing the host's whole poll.
+          const home = projectsOf(state).find(p => p.id === agentProjectId(state, target))
+          const skillMode = home ? skillModeOf(home) : 'orchestration'
+          result.push({ tabId: row.id, tabName: state.name, revision: row.revision, paused: state.paused, active, attention, agent: target, joinSwarm, skillMode,
             stopRequested: target.workDecision === 'stop' && !state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id),
             observers: people.filter(p => p.id !== user.sub &&
               canReadAgent(state, { kind: 'person', userId: p.id, email: p.email }, target))
@@ -874,15 +888,21 @@ export class SuperTabStore {
       const update = projectUpdateRequest(state, target, this.now())
       if (update) {
         const project = groupProject(state, conversation(state, update.conversationId))
-        const progress = project.progress!
+        // A worker down two hours asks for a wake-up even when no report has come in yet.
+        const progress = project.progress ??= { dirtyRevision: 0, summarizedRevision: 0, requestedRevision: 0, since: this.now() }
         const pending = progress.requestMessageId
           ? await tx.superTabDelivery.findFirst({ where: { tabId, agentId, messageId: progress.requestMessageId,
             status: { in: ['queued', 'claimed', 'uncertain', 'delivered'] } } })
           : null
         if (!pending) {
-          progress.requestedRevision = progress.dirtyRevision
-          progress.requestedAt = this.now()
+          if (update.source!.throughRevision === progress.dirtyRevision) {
+            progress.requestedRevision = progress.dirtyRevision
+            progress.requestedAt = this.now()
+          }
           progress.requestMessageId = update.id
+          for (const { agentId, since } of (update.source!.down ?? []) as Array<{ agentId: string; since: string }>) {
+            state.agents.find(a => a.id === agentId)!.downNamed = since
+          }
           const revision = row.revision + 1
           await this.writeMessages(tx, tabId, state, [update], revision)
           await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: { revision, state: json(state) } })
@@ -1010,6 +1030,7 @@ export class SuperTabStore {
         // on purpose by someone who already knows.
         const worker = state.agents.find(a => a.id === assignment.agentId)
         if (worker) {
+          worker.downSince ??= new Date(this.now()).toISOString()
           const lead = group.leadId && group.leadId !== worker.id && group.agentIds.includes(group.leadId) ? group.leadId : null
           notices.push({ id: stableId('stop-notice', tabId, assignmentId), conversationId: group.id,
             author: author(state, { kind: 'agent', agentId: worker.id, machineOwnerId: worker.machineOwnerId }),

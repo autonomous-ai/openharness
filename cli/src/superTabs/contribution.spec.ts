@@ -45,20 +45,31 @@ describe('one-field machine preparation', () => {
   })
   it('uses the lead project on its host and probes all engines without inventing authentication', async () => {
     const f = fixture()
-    expect(await f.run()).toEqual({ ok: true, state: 'ready', cwd: '/repo', engines: ['claude', 'pi'], maxAgents: 8 })
+    expect(await f.run()).toEqual({ ok: true, state: 'ready', cwd: '/repo', engines: ['claude', 'pi'], maxAgents: 8, maxAvailableAgents: 16 })
     expect(f.request).toHaveBeenCalledWith('engines_probe', { accounts: true }, 20000)
     expect(f.deps.prepare).not.toHaveBeenCalled()
     expect(f.close).toHaveBeenCalledOnce()
   })
-  it('offers one slot per 2 GiB free, the memory each start needs, between one and eight', async () => {
+  it.each([
+    { totalGiB: 32, usedGiB: 30, maxAgents: 8, maxAvailableAgents: 16 },
+    { totalGiB: 16, usedGiB: 15, maxAgents: 4, maxAvailableAgents: 8 },
+    { totalGiB: 64, usedGiB: 63, maxAgents: 16, maxAvailableAgents: 16 },
+    { totalGiB: 2, usedGiB: 1, maxAgents: 1, maxAvailableAgents: 1 },
+  ])('suggests $maxAgents of $maxAvailableAgents slots from $totalGiB GiB total RAM', async ({ totalGiB, usedGiB, maxAgents, maxAvailableAgents }) => {
+    const f = fixture()
+    f.deps.capacity.mockResolvedValueOnce({ ok: true, resources: {
+      memoryTotalBytes: totalGiB * GiB, memoryUsedBytes: usedGiB * GiB, projectDiskFreeBytes: 100 * GiB,
+    } })
+    expect(await f.run()).toMatchObject({ maxAgents, maxAvailableAgents })
+  })
+  it('keeps the suggestion when free RAM changes but total RAM does not', async () => {
     const f = fixture()
     const slots = async (freeBytes: number) => {
       f.deps.capacity.mockResolvedValueOnce({ ok: true, resources: { memoryTotalBytes: 32 * GiB, memoryUsedBytes: 32 * GiB - freeBytes, projectDiskFreeBytes: 100 * GiB } })
       return (await f.run() as { maxAgents?: number }).maxAgents
     }
-    // Diego's Mac on 2026-10-21: 32 GiB, about 5.3 GiB free.
-    expect(await slots(5.3 * GiB)).toBe(2)
-    expect(await slots(GiB)).toBe(1)
+    expect(await slots(5.3 * GiB)).toBe(8)
+    expect(await slots(GiB)).toBe(8)
     expect(await slots(30 * GiB)).toBe(8)
   })
   it('prepares the repository on another machine and reuses an existing contribution', async () => {

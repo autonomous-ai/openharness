@@ -2,6 +2,9 @@ import { activeWork, agent, author, conversation, fail, nextConversationNumber, 
 import type { SwarmRule } from './rules.js'
 
 export type ProjectVisibility = 'public' | 'private'
+/** Which built-in skill texts the project's agents get: Default (the team process only) or today's Harness orchestration. */
+export type SkillMode = 'default' | 'orchestration'
+export const SKILL_MODE_NAMES: Record<SkillMode, string> = { default: 'Default', orchestration: 'Harness orchestration' }
 export interface SwarmProject {
   id: string
   name: string
@@ -20,7 +23,11 @@ export interface SwarmProject {
     requestMessageId?: string
   }
   repository?: { machineId: string; cwd: string; repositoryUrl: string | null }
+  /** Absent on projects from before skill modes, which keep the texts their agents already run. */
+  skillMode?: SkillMode
 }
+
+export const skillModeOf = (project: SwarmProject): SkillMode => project.skillMode ?? 'orchestration'
 
 /** Existing tabs are one project; their conversation IDs and messages stay intact. */
 export function projectsOf(state: SuperTabState): SwarmProject[] {

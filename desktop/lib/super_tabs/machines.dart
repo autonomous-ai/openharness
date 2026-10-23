@@ -33,11 +33,9 @@ import 'section_heading.dart';
 
 export 'machine_status.dart';
 
-/// The owner's agent slots run 1–8 here, though the backend itself accepts up
-/// to 16: widening the UI to the backend's ceiling would only invite a number
-/// the machine cannot run.
+/// The backend's upper bound. A machine's own total RAM may set a lower one.
 const _agentSlotsMin = 1;
-const _agentSlotsMax = 8;
+const _agentSlotsMax = 16;
 
 /// What one more agent needs to start, the CLI's own figure
 /// (`START_REQUIREMENTS.memoryBytes`, `cli/src/superTabs/capacity.ts`).
@@ -46,14 +44,18 @@ const _agentMemoryBytes = 2 * 1024 * 1024 * 1024;
 int _clampAgentSlots(num value) =>
     value.toInt().clamp(_agentSlotsMin, _agentSlotsMax);
 
-/// What this machine's free memory suggests, by the CLI's own arithmetic: one
-/// agent per [_agentMemoryBytes] free. Null when the reading does not say how
-/// much memory there is.
+/// The machine's total-RAM limit and its half-sized starting suggestion.
+/// The suggestion is capped separately, so 64 GiB suggests 16 of 16 slots.
+int? _maxAgentSlots(MachineResources? resources) {
+  final total = resources?.memoryTotalBytes;
+  if (total == null) return null;
+  return _clampAgentSlots((total / _agentMemoryBytes).floor());
+}
+
 int? _suggestedAgentSlots(MachineResources? resources) {
   final total = resources?.memoryTotalBytes;
-  final used = resources?.memoryUsedBytes;
-  if (total == null || used == null) return null;
-  return _clampAgentSlots(((total - used) / _agentMemoryBytes).floor());
+  if (total == null) return null;
+  return _clampAgentSlots((total / (2 * _agentMemoryBytes)).floor());
 }
 
 class SuperTabMachines extends StatefulWidget {
@@ -105,8 +107,7 @@ class _MachineChoice {
 }
 
 /// "Agent slots" — how many agents this machine offers the Swarm — with the one
-/// thing the number is not: a promise. Its free memory is what it was suggested
-/// from, and what is free moves.
+/// thing the number is not: a promise. Each start still checks free memory.
 ///
 /// A stepper rather than a number field, so no keystroke can leave the dialog
 /// holding a count the backend would refuse; both buttons go dead at the bounds
@@ -114,18 +115,15 @@ class _MachineChoice {
 class _AgentSlots extends StatelessWidget {
   const _AgentSlots({
     required this.value,
+    required this.maximum,
     required this.busy,
     required this.onChanged,
-    this.cappedFrom,
   });
 
   final int value;
+  final int maximum;
   final bool busy;
   final ValueChanged<int> onChanged;
-
-  /// The number this machine was contributed with, when it is above what this
-  /// form offers: saving would lower it, and the owner is told so.
-  final int? cappedFrom;
 
   @override
   Widget build(BuildContext context) {
@@ -158,7 +156,8 @@ class _AgentSlots extends StatelessWidget {
                     tooltip: 'Fewer slots',
                     onPressed: busy || value <= _agentSlotsMin
                         ? null
-                        : () => onChanged(value - 1),
+                        : () =>
+                              onChanged(value > maximum ? maximum : value - 1),
                   ),
                   Text(
                     value.toString(),
@@ -170,7 +169,7 @@ class _AgentSlots extends StatelessWidget {
                     icon: AppIcons.plus,
                     size: 16,
                     tooltip: 'More slots',
-                    onPressed: busy || value >= _agentSlotsMax
+                    onPressed: busy || value >= maximum
                         ? null
                         : () => onChanged(value + 1),
                   ),
@@ -184,14 +183,6 @@ class _AgentSlots extends StatelessWidget {
           'Each new agent still needs free memory when it starts.',
           style: DesktopChrome.metadata(),
         ),
-        if (cappedFrom case final from?) ...[
-          const SizedBox(height: 4),
-          Text(
-            'This machine was set to $from agent slots. This form offers up to '
-            '$_agentSlotsMax, and saving here lowers it.',
-            style: DesktopChrome.metadata(),
-          ),
-        ],
       ],
     );
   }
@@ -526,7 +517,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     var busy = false;
     String? setupId;
     // The agent slots the owner is choosing. A machine already in this Swarm
-    // starts at the number it has; a new one starts at what its free memory
+    // starts at the number it has; a new one starts at what its total memory
     // suggests, worked out here rather than by preparation (below).
     int? storedSlots(String? id) {
       final row = id == null
@@ -536,22 +527,22 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       return current is num ? current.toInt() : null;
     }
 
-    /// A machine contributed before this form had a range keeps its number
-    /// until the owner saves, and is told when saving would lower it.
-    int? storedOverRange(String? id) {
-      final stored = storedSlots(id);
-      return stored != null && stored > _agentSlotsMax ? stored : null;
-    }
-
     // Readings this dialog has taken itself, keyed by machine. The panel's own
     // samples stand in for a machine it already reads.
     final suggestions = <String, int>{};
+    final maximums = <String, int>{};
 
     /// What this machine's own memory says, once a reading has answered. Null
     /// while one is still coming, or when it failed.
     int? memorySuggestion(String? id) => id == null
         ? null
         : suggestions[id] ?? _suggestedAgentSlots(_samples[id]?.$1);
+
+    int maximumFor(String? id) => id == null
+        ? _agentSlotsMin
+        : maximums[id] ??
+              _maxAgentSlots(_samples[id]?.$1) ??
+              _clampAgentSlots(storedSlots(id) ?? _agentSlotsMin);
 
     int slotsFor(String? id) {
       final stored = storedSlots(id);
@@ -572,14 +563,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     /// Start the field where this machine's own memory says, without asking
     /// preparation: preparation sets the project up, probes engines and takes
     /// one of its 32 setup slots, and opening a form the owner may cancel is
-    /// no reason to do that. A machine with a number of its own needs no
-    /// reading at all.
+    /// no reason to do that. A configured machine still needs its RAM reading
+    /// for the stepper limit, but its chosen number is never replaced.
     Future<void> suggestSlots() async {
       final id = machineId;
-      if (id == null ||
-          storedSlots(id) != null ||
-          !canSelect(app.stateOf(id)) ||
-          !reading.add(id)) {
+      if (id == null || !canSelect(app.stateOf(id)) || !reading.add(id)) {
         return;
       }
       MachineResources? resources;
@@ -595,9 +583,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         return;
       }
       suggestions[id] = suggested;
-      // Never over a number the owner has set meanwhile.
-      if (slotsEdited) return;
-      repaint?.call(() => slots = suggested);
+      maximums[id] = _maxAgentSlots(resources)!;
+      // Repaint the limit, but never replace a number the owner chose.
+      repaint?.call(() {
+        if (!slotsEdited && storedSlots(id) == null) slots = suggested;
+      });
     }
 
     await showAppDialog<void>(
@@ -666,6 +656,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   // preparation offered instead — the number the field would
                   // have shown had the reading arrived.
                   final offered = prepared['maxAgents'];
+                  final offeredMaximum = prepared['maxAvailableAgents'];
+                  if (offeredMaximum is num) {
+                    maximums[selected] = _clampAgentSlots(offeredMaximum);
+                  }
                   if (!slotsEdited &&
                       storedSlots(selected) == null &&
                       memorySuggestion(selected) == null &&
@@ -803,8 +797,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                           const SizedBox(height: 16),
                           _AgentSlots(
                             value: slots,
+                            maximum: maximumFor(machineId),
                             busy: busy,
-                            cappedFrom: storedOverRange(machineId),
                             onChanged: (next) => update(() {
                               slots = next;
                               slotsEdited = true;
