@@ -148,6 +148,28 @@ static void begin(void) { speak(); work(queued); assert(recording && s.view == V
 int main(void) {
     // The listening scene follows whom the turn is for: an agent's engine, nothing for a draft.
     reset(); strcpy(s.agents[0].engine, "claude"); begin(); assert(!strcmp(s.voice_engine, "claude"));
+    // In a Swarm the face's turn goes to the Lead's harness on this computer, never the Lead id, with the Lead's
+    // engine and project; it comes back to the Swarm's face.
+    {
+        static ht_supertab_t card; static ht_lead_event_t ev[4];
+        assert(ht_supertab_init(&card, "s1", "", "openharness", 2));
+        ht_lead_in_t mobile = {.id = "L1", .project = "mobile", .engine = "codex", .local = "h1", .state = "work", .order = 0, .since = 5};
+        ht_lead_in_t web = {.id = "L2", .project = "web", .engine = "claude", .local = "", .state = "work", .order = 1, .since = -1};
+        assert(ht_supertab_lead_add(&card, &mobile) && ht_supertab_lead_add(&card, &web));
+        const char ids[1][ID_MAX] = {"s1"};
+        reset(); ht_supertabs_reset(&swarm); memset(&sw, 0, sizeof sw);
+        ht_supertabs_ids(&swarm, ids, 1, ev, 4); ht_supertabs_put(&swarm, &card, now, ev, 4);
+        strcpy(sw.tab, "s1"); strcpy(sw.lead, "L1");
+        dispatch((action_t){.kind = A_VOICE, .id = "h1"}); work(queued);
+        assert(recording && s.view == VOICE && !strcmp(started_for, "h1"));
+        assert(!strcmp(s.voice_engine, "codex") && !strcmp(s.voice_target, "mobile"));
+        done(); finish_audio(); ui_voice_routed(true, false, "", "h1", "mobile", 1);
+        assert(s.view == AGENT && !s.voice_open && !strcmp(sw.tab, "s1") && !strcmp(sw.lead, "L1"));
+        // A desk pane's id while a Lead is on the face is no Lead's harness: the pane's own engine.
+        strcpy(s.agents[0].engine, "claude"); begin();
+        assert(!strcmp(started_for, "agent") && !strcmp(s.voice_engine, "claude"));
+        ht_supertabs_reset(&swarm); memset(&sw, 0, sizeof sw);
+    }
     reset(); host_features=0; begin(); dispatch((action_t){.kind=A_VOICE_STOP,.value=1});
     assert(!reviews && !s.voice_review && s.voice_waiting);
     reset(); begin(); dispatch((action_t){.kind=A_VOICE_STOP,.value=1});

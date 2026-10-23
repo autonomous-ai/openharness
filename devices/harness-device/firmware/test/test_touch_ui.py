@@ -228,7 +228,7 @@ swarm_parts = {
     # with the last `swarms` list it keeps beside it
     'swarms_apply': source[source.index('// The last `swarms` list as it came'):source.index('void ui_swarms_replace(')],
 }
-for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'swarm_core', 'tabs_open', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_skin', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'render_swarm_face', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'swarms_apply', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'swarm_core', 'voice_lead', 'tabs_open', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_skin', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'render_swarm_face', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'swarms_apply', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
     code += swarm_parts[name] if name in swarm_parts else function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
@@ -280,6 +280,8 @@ static void dispatch(action_t a) {
         starts++; COPY(target, a.id); COPY(s.voice_target, a.value==7 ? "Find in output" : active()->name);
         s.voice_engine[0]=0;   // as the real dispatch: the recipient's engine, none for Find / form / draft voice
         for (int i=0;i<s.count;i++) if (a.value!=2 && a.value!=5 && a.value!=6 && a.value!=7 && !strcmp(s.agents[i].id,a.id)) COPY(s.voice_engine,s.agents[i].engine);
+        const ht_lead_t *lead = voice_lead(a.id, a.value);   // and a Swarm's Lead's, by its harness
+        if (lead) { COPY(s.voice_engine, lead->engine); COPY(s.voice_target, lead->project); }
         s.voice_carry=a.value==3; s.voice_search=a.value==7; COPY(voice_context,a.text);
         s.voice_return=s.view; s.voice_open = recording = true; view(VOICE);
     } else if (a.kind == A_VOICE_STOP) { stops++; if(a.value==1)reviews++; recording = false; }
@@ -1712,6 +1714,31 @@ static void swarm_inbox_checks(const char *dir) {
     FOCUS_PAGE("swarm-4f");
     puts("Swarm inbox: one entry per Lead, fixed lines, one beep (raise, stuck, either order with a wait), wait text and its close, never a question screen, no worker entries, kept across notif.replace, read on the face, bell pill and bubble, tap enters the Swarm, cleared on link loss PASS");
 }
+
+static int voice_bars(void) {
+    int n = 0;
+    for (int i = 0; i < scene.count; i++) n += scene.runs[i].font == &ht_wave && scene.runs[i].text[0];
+    return n;
+}
+static void swarm_voice_checks(const char *dir) {
+    // 5a-5d "mobile" on this computer: a tap on its face talks to its harness, with Clawd listening, then sending, then
+    // the Swarm's face again.
+    swarm_setup(); enter_at("s1", "L0"); FOCUS_PAGE("swarm-5a");
+    tap(fake_ms, 233, 260);
+    assert(s.view == VOICE && !strcmp(target, "h0") && !strcmp(s.voice_engine, "claude") && !strcmp(s.voice_target, "mobile"));
+    assert(!voice_bars()); FOCUS_PAGE("swarm-5b");
+    s.voice_waiting = true; FOCUS_PAGE("swarm-5c");
+    dispatch((action_t){.kind = A_VOICE_ABORT}); s.voice_waiting = false; scene_take();
+    assert(s.view == HOME && swarm_mode() && !strcmp(sw.lead, "L0") && title_is("mobile"));
+    FOCUS_PAGE("swarm-5d");
+    // 5e an engine with no listening scene: the seven bars.
+    card_begin("s2", "", "playground"); card_lead("P0", "agents", "opencode", "h9", "work", 0, 12); card_send();
+    fake_ms += 3000; enter_at("s2", "P0"); tap(fake_ms, 233, 260);
+    assert(s.view == VOICE && !strcmp(target, "h9") && !strcmp(s.voice_engine, "opencode") && voice_bars() == 7);
+    FOCUS_PAGE("swarm-5e");
+    dispatch((action_t){.kind = A_VOICE_ABORT});
+    puts("Swarm voice: a local Lead's face talks to its harness with its engine's scene or the seven bars, and returns to the Swarm's face PASS");
+}
 int main(int argc, char **argv) {
     test_character = getenv("HABITAT_TEST_TUX") ? HT_CHARACTER_TUX : HT_CHARACTER_TIM;
     notification_read_checks(argc>1 ? argv[1] : NULL);
@@ -1719,6 +1746,7 @@ int main(int argc, char **argv) {
     swarm_tabs_checks(argc>1 ? argv[1] : NULL);
     swarm_pane_checks(argc>1 ? argv[1] : NULL);
     swarm_inbox_checks(argc>1 ? argv[1] : NULL);
+    swarm_voice_checks(argc>1 ? argv[1] : NULL);
     // The companion screen is gone: character, edge text and still-character are the app's now
     // (Settings > Autonomous robots). What the glass kept is actions, and Nap is the one that moved
     // off that screen into the controls list.
