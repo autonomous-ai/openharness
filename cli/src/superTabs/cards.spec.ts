@@ -67,6 +67,22 @@ describe('leadsOf', () => {
     expect(leads.slice(0, 5).map(l => [l.project, l.state])).toEqual([['P7', 'ask'], ['P9', 'ask'], ['P5', 'stuck'], ['P2', 'work'], ['P0', 'done']])
   })
 
+  it('gives each Lead its project\'s index as `order`, whatever place urgency gives it', () => {
+    const three = swarm({
+      projects: [...swarm().projects, { id: 'api', name: 'api', leadConversationId: 'lead-api' }],
+      agents: [agent('a1'), agent('a2'), agent('a3')],
+      conversations: [...swarm().conversations, conv('lead-api', 'a3', { projectId: 'api' }), work('mobile', 'needs_human'), work('api', 'working')],
+    })
+    expect(leadsOf(three, 'm1', idle).leads.map(l => [l.project, l.state, l.order])).toEqual([['mobile', 'ask', 1], ['api', 'work', 2], ['web', 'done', 0]])
+    // The 12 most urgent of 13 keep their own index: the one left out leaves a gap.
+    const projects = Array.from({ length: 13 }, (_, i) => ({ id: `p${i}`, name: `P${i}`, leadConversationId: `lead-p${i}` }))
+    const many = swarm({ projects, agents: projects.map((_, i) => agent(`a${i}`)),
+      conversations: [...projects.map((p, i) => conv(p.leadConversationId, `a${i}`, { projectId: p.id })), ...projects.slice(1).map(p => work(p.id, 'working'))] })
+    expect(leadsOf(many, 'm1', idle).leads.map(l => l.order)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+    const old = { name: 'Old', agents: [agent('a1')], people: [], conversations: [{ id: 'lead', leadId: 'a1', assignment: null }] }
+    expect(leadsOf(old, 'm1', idle).leads[0].order).toBe(0)
+  })
+
   it('cuts a name to 48 bytes on a character boundary and reads a paused Swarm as done', () => {
     const named = swarm({ projects: [{ id: 'web', name: `${'a'.repeat(47)}éé`, leadConversationId: 'lead-web' }] })
     expect(leadsOf(named, 'm1', idle).leads[0].project).toBe('a'.repeat(47))
