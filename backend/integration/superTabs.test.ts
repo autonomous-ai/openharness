@@ -910,7 +910,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await store.read(owner, tab)).state.agents[0]).toMatchObject({ contributorId: host.sub, machineOwnerId: host.sub, harnessId: 'pool-builder' })
     await run(tab, { type: 'member.remove', userId: host.sub })
     expect(await store.hostPools(host, 'pool-host')).toEqual([])
-    await expect(store.observeMachine(host, tab, 'pool-host', observation)).rejects.toMatchObject({ code: 'CONTRIBUTION_REVOKED' })
+    // The machine stays listed while its host cleans up, but its owner left: a reading is refused as theirs no longer.
+    await expect(store.observeMachine(host, tab, 'pool-host', observation)).rejects.toMatchObject({ code: 'FORBIDDEN' })
     await expect(store.start(host, tab, startId, undefined, 'pool-host')).rejects.toMatchObject({ code: 'FORBIDDEN' })
   })
 
@@ -1830,7 +1831,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBe('failed')
   })
 
-  it('releases every queued route hold when its machine is removed', async () => {
+  it.each(['its owner removes it', 'its owner leaves the Swarm'] as const)('releases every queued route hold when its machine leaves because %s', async how => {
     // The Lead runs elsewhere: a machine that hosts a project's Lead cannot leave the Swarm.
     const tab = (await store.create(owner, randomUUID(), 'Pilot')).id
     const leadMachineId = `lead-${randomUUID()}`
@@ -1849,7 +1850,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const starts = [await routedStart(tab, lead), await routedStart(tab, lead)]
     for (const { routeDecisionId } of starts) expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBeNull()
 
-    await run(tab, { type: 'machine.remove', machineId: 'test-host' }, host)
+    await run(tab, how === 'its owner removes it' ? { type: 'machine.remove', machineId: 'test-host' } : { type: 'member.remove', userId: host.sub }, host)
 
     const state = (await store.read(owner, tab)).state
     for (const { routeDecisionId, startId } of starts) {
@@ -2575,6 +2576,20 @@ describe('machine removal', () => {
       expect(await cleanups(tab)).toEqual([{ tabId: tab, cleanup: { machineId: 'test-host', removalId } }])
       expect((await cleaned(tab, removalId)).statusCode).toBe(200)
     } finally { await db.superTab.deleteMany({ where: { id: { in: newer } } }) }
+  })
+
+  it('cleans up the machines of a person who leaves the Swarm, the same way as removing one', async () => {
+    const tab = await contributed()
+    const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Worker', configuration: config, lead: false }, host)).result.agentId as string
+    await run(tab, { type: 'member.remove', userId: host.sub }, host)
+    const [row] = await cleanups(tab)
+    expect(row).toEqual({ tabId: tab, cleanup: { machineId: 'test-host', removalId: expect.any(String) } })
+    expect((await store.hostTabs(host, 'test-host')).filter(r => r.tabId === tab && r.agent?.id === worker && 'closeSession' in r)).toHaveLength(1)
+    expect((await store.read(owner, tab)).state.machines!.map(m => m.removal?.state)).toEqual(['cleaning'])
+    expect((await cleaned(tab, (row as { cleanup: { removalId: string } }).cleanup.removalId)).statusCode).toBe(200)
+    expect(await cleanups(tab)).toEqual([])
+    expect((await store.read(owner, tab)).state.machines).toEqual([])
   })
 
   it('drops the machine\'s records after 24 hours without an acknowledgement, and still lists the cleanup to its host', async () => {

@@ -1656,6 +1656,39 @@ describe('machine.remove', () => {
         text: 'Rule removed: Only host. Its only machine, Studio, left the Swarm.' })])
   })
 
+  it.each(['leaves', 'is removed'] as const)('puts the machines of a person who %s through the same removal', how => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+    f.state.agents.find(a => a.id === lead)!.machineId = 'elsewhere'
+    f.invite()
+    contribute(f, 'peer')
+    const worker = f.add('worker', 'peer', group), owners = f.add('owners', 'owner')
+    f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+    f.state.rules = [{ id: 'both', projectId: 'lead', rule: { kind: 'machines', machineIds: ['host', 'elsewhere'] }, text: 'Only these two.',
+      askedBy: 'owner', askedIn: null, addedBy: 'person:owner', createdAt: '' }]
+    const effects = f.run({ type: 'member.remove', userId: 'peer' }, how === 'leaves' ? peer : owner)
+    const pool = f.state.machines!.find(m => m.machineId === 'host')!
+    expect([pool.removal?.state, pool.paused]).toEqual(['cleaning', true])
+    expect(f.state.agents.map(a => a.id)).toEqual([lead])
+    expect(f.state.agents.some(a => a.id === owners)).toBe(false)
+    expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('reconciling')
+    expect(f.state.rules!.map(r => r.rule)).toEqual([{ kind: 'machines', machineIds: ['elsewhere'] }])
+    expect(effects.messages.map(m => [m.conversationId, m.text])).toEqual(expect.arrayContaining([
+      ['lead', 'Rule changed: Studio left the Swarm, so "Only these two." now allows only elsewhere.'],
+      [group, expect.stringContaining('Its task "Offline editing" needs to be assigned again or closed.')]]))
+    expect(new Set(effects.messages.map(m => m.id)).size).toBe(effects.messages.length)
+    f.run({ type: 'machine.cleaned', machineId: 'host', removalId: pool.removal!.id }, peer)
+    expect(f.state.machines).toEqual([])
+  })
+
+  it('refuses a person\'s leaving while their machine runs a Product Manager, whoever contributed that agent', () => {
+    const f = fixture()
+    f.invite()
+    contribute(f, 'peer')
+    f.add('lead', 'owner', 'lead', true)
+    expect(() => f.run({ type: 'member.remove', userId: 'peer' }, peer)).toThrow(expect.objectContaining({ code: 'LEAD_PROTECTED' }))
+    expect(f.state.machines!.map(m => m.removal)).toEqual([undefined])
+  })
+
   it('previews what removal does for the machine owner only: its agents and their tasks, sole-source projects, and a Product Manager that blocks it', () => {
     const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group(), worker = f.add('worker', 'owner', group)
     contribute(f)

@@ -606,9 +606,10 @@ export class SuperTabStore {
         const start = original.starts?.find(s => s.id === command.startId)
         if (start?.routeDecisionId) await closeUnassignedStart(tx, tabId, start.routeDecisionId, start.id, 'failed', context.now)
       }
-      if (command.type === 'machine.remove') {
+      // Starts a removed machine failed, whether its owner removed it or left the Swarm with it, release their route holds.
+      if (command.type === 'machine.remove' || command.type === 'member.remove') {
         for (const start of original.starts ?? []) {
-          if (!start.routeDecisionId || start.request.machineId !== command.machineId || start.harnessId || start.error) continue
+          if (!start.routeDecisionId || start.harnessId || start.error) continue
           if (effects.state.starts?.find(s => s.id === start.id)?.error) {
             await closeUnassignedStart(tx, tabId, start.routeDecisionId, start.id, 'failed', context.now)
           }

@@ -1,4 +1,4 @@
-import { admitMachineStart, expireRemovals, machineContribution, ownedMachine } from './machines.js'
+import { admitMachineStart, expireRemovals, machineContribution, ownedMachine, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
@@ -446,6 +446,55 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
   }
 
+  /** Takes a machine out of the Swarm with every agent on it (machine.remove, or its owner leaving): each agent is removed
+   *  like one agent, its pending starts fail, routing rules lose it, and a contributed machine stays paused and cleaning
+   *  until its host deletes the Swarm's folders there (spec 2026-10-23-remove-machine.md). */
+  const removeMachine = (machineId: string, pool: ContributedMachine | undefined, members: Agent[], how: (machine: string) => string) => {
+    const pending = state.starts?.filter(s => s.request.machineId === machineId && !s.harnessId && !s.error) ?? []
+    // A launch already under way would arrive with nowhere to go; it finishes in moments.
+    if (pending.some(s => s.dispatched)) fail('STARTS_PENDING', 'An agent is starting on this machine. Try again in a moment.')
+    for (const start of pending) {
+      start.error = 'Its machine was removed from the Swarm.'
+      effects.messages.push({ id: stableId(operationId, 'start', start.id), conversationId: start.request.conversationId, author: sender,
+        text: `${start.request.name} will not start: its machine was removed from the Swarm.`, replyTo: null, recipients: [], source: SYSTEM_ROW })
+    }
+    const removed = new Set(members.map(a => a.id))
+    const affected = state.conversations.filter(group => group.agentIds.some(a => removed.has(a))
+      || (group.leadId && removed.has(group.leadId)) || (group.assignment && removed.has(group.assignment.agentId)))
+      .map(group => ({ group, names: members.filter(a => group.agentIds.includes(a.id) || group.leadId === a.id || group.assignment?.agentId === a.id)
+        .map(a => a.displayName ?? a.name), task: !!group.assignment && removed.has(group.assignment.agentId) && activeWork(group) }))
+    for (const target of members) removeAgent(target)
+    if (pool) {
+      // Paused, so routing in clients that do not know removals stops offering it too.
+      pool.removal = { id: operationId, state: 'cleaning', requestedAt: new Date(context.now).toISOString() }
+      pool.paused = true
+    }
+    // Its capacity left with it: no slot there is held for anyone now.
+    state.harnessReservations = state.harnessReservations?.filter(r => r.machineId !== machineId)
+    state.releasedHarnesses = state.releasedHarnesses?.filter(r => r.machineId !== machineId)
+    const machine = pool?.name ?? 'a machine'
+    // Routing rules naming it lose it; a machines rule left with none is removed, and its project's chat is told.
+    for (const rule of state.rules ?? []) {
+      if (rule.rule.kind !== 'machines' || !rule.rule.machineIds.includes(machineId)) continue
+      rule.rule.machineIds = rule.rule.machineIds.filter(m => m !== machineId)
+      // The owner's words stay as they are; the row says what the rule allows now.
+      const project = projectsOf(state).find(p => p.id === rule.projectId)
+      if (project) effects.messages.push({ id: stableId(operationId, 'rule', machineId, rule.id), conversationId: project.leadConversationId, author: sender,
+        text: rule.rule.machineIds.length ? `Rule changed: ${machine} left the Swarm, so "${rule.text}" now allows only ${rule.rule.machineIds.map(machineName).join(', ')}.`
+          : `Rule removed: ${rule.text} Its only machine, ${machine}, left the Swarm.`, replyTo: null, recipients: [], source: RULE_ROW })
+    }
+    state.rules = state.rules?.filter(r => r.rule.kind !== 'machines' || r.rule.machineIds.length)
+    if (!state.rules?.length) delete state.rules
+    for (const { group, names, task } of affected) {
+      const lead = group.leadId && group.agentIds.includes(group.leadId) ? group.leadId : null
+      const join = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]
+      effects.messages.push({ id: stableId(operationId, 'machine-removed', machineId, group.id), conversationId: group.id, author: sender,
+        text: `${how(machine)}, and ${join} with it.${task ? ` Its task "${group.title}" needs to be assigned again or closed.` : ''}`,
+        replyTo: null, recipients: lead ? [lead] : [], source: SYSTEM_ROW })
+    }
+    return removed
+  }
+
   /** Projects in one Swarm changed the same code without knowing it (2026-10-23). When a task is created, defined or assigned,
    *  its Leads hear once per pair of tasks that it owns code another shared project's active task owns too. */
   const alertOverlaps = (group: Conversation) => {
@@ -690,49 +739,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person removes a machine from the Swarm.', 403)
       const { pool, members } = ownedMachine(state, actor, command.machineId)
       if (pool?.removal) fail('MACHINE_REMOVED', 'This machine is already being removed from the Swarm.')
-      const pending = state.starts?.filter(s => s.request.machineId === command.machineId && !s.harnessId && !s.error) ?? []
-      // A launch already under way would arrive with nowhere to go; it finishes in moments.
-      if (pending.some(s => s.dispatched)) fail('STARTS_PENDING', 'An agent is starting on this machine. Try again in a moment.')
-      for (const start of pending) {
-        start.error = 'Its machine was removed from the Swarm.'
-        effects.messages.push({ id: stableId(operationId, 'start', start.id), conversationId: start.request.conversationId, author: sender,
-          text: `${start.request.name} will not start: its machine was removed from the Swarm.`, replyTo: null, recipients: [], source: SYSTEM_ROW })
-      }
-      const removed = new Set(members.map(a => a.id))
-      const affected = state.conversations.filter(group => group.agentIds.some(a => removed.has(a))
-        || (group.leadId && removed.has(group.leadId)) || (group.assignment && removed.has(group.assignment.agentId)))
-        .map(group => ({ group, names: members.filter(a => group.agentIds.includes(a.id) || group.leadId === a.id || group.assignment?.agentId === a.id)
-          .map(a => a.displayName ?? a.name), task: !!group.assignment && removed.has(group.assignment.agentId) && activeWork(group) }))
-      for (const target of members) removeAgent(target)
-      if (pool) {
-        // Paused, so routing in clients that do not know removals stops offering it too.
-        pool.removal = { id: operationId, state: 'cleaning', requestedAt: new Date(context.now).toISOString() }
-        pool.paused = true
-        result.removalId = operationId
-      }
-      // Its capacity left with it: no slot there is held for anyone now.
-      state.harnessReservations = state.harnessReservations?.filter(r => r.machineId !== command.machineId)
-      state.releasedHarnesses = state.releasedHarnesses?.filter(r => r.machineId !== command.machineId)
-      const machine = pool?.name ?? 'a machine'
-      // Routing rules naming it lose it; a machines rule left with none is removed, and its project's chat is told.
-      for (const rule of state.rules ?? []) {
-        if (rule.rule.kind !== 'machines' || !rule.rule.machineIds.includes(command.machineId)) continue
-        rule.rule.machineIds = rule.rule.machineIds.filter(m => m !== command.machineId)
-        // The owner's words stay as they are; the row says what the rule allows now.
-        const project = projectsOf(state).find(p => p.id === rule.projectId)
-        if (project) effects.messages.push({ id: stableId(operationId, 'rule', rule.id), conversationId: project.leadConversationId, author: sender,
-          text: rule.rule.machineIds.length ? `Rule changed: ${machine} left the Swarm, so "${rule.text}" now allows only ${rule.rule.machineIds.map(machineName).join(', ')}.`
-            : `Rule removed: ${rule.text} Its only machine, ${machine}, left the Swarm.`, replyTo: null, recipients: [], source: RULE_ROW })
-      }
-      state.rules = state.rules?.filter(r => r.rule.kind !== 'machines' || r.rule.machineIds.length)
-      if (!state.rules?.length) delete state.rules
-      for (const { group, names, task } of affected) {
-        const lead = group.leadId && group.agentIds.includes(group.leadId) ? group.leadId : null
-        const join = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]
-        effects.messages.push({ id: stableId(operationId, 'machine-removed', group.id), conversationId: group.id, author: sender,
-          text: `${who} removed ${machine} from the Swarm, and ${join} with it.${task ? ` Its task "${group.title}" needs to be assigned again or closed.` : ''}`,
-          replyTo: null, recipients: lead ? [lead] : [], source: SYSTEM_ROW })
-      }
+      const removed = removeMachine(command.machineId, pool, members, machine => `${who} removed ${machine} from the Swarm`)
+      if (pool) result.removalId = operationId
       result.removedAgents = [...removed]
       break
     }
@@ -1120,9 +1128,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       if (command.userId === state.ownerId) fail('OWNER_REQUIRED', 'The owner cannot leave their Super Tab.')
       const member = person(state, command.userId)
+      // Their machines leave the way their owner removes one, so the Swarm's folders there are deleted too.
+      for (const pool of state.machines?.filter(m => m.contributorId === member.id && !m.removal) ?? []) {
+        removeMachine(pool.machineId, pool, state.agents.filter(a => a.machineId === pool.machineId), machine => `${machine} left the Swarm with its owner`)
+      }
       for (const target of state.agents.filter(a => a.contributorId === member.id)) removeAgent(target)
-      // A machine being removed stays until its host cleaned up.
-      state.machines = state.machines?.filter(m => m.contributorId !== member.id || m.removal)
       state.people = state.people.filter(p => p.id !== member.id)
       state.invitations = state.invitations.filter(i => i.email !== member.email)
       result.removedUserId = member.id
