@@ -1206,6 +1206,15 @@ describe('built-in skill text after a CLI update', () => {
       expect(f.sent.map(s => s.command.text)).toEqual([expect.stringMatching(/^This project now uses its Custom skills/),
         `The project owner updated your Planner role. Before your next step, read ${JSON.stringify(f.files.lead)} again with your file or shell tool and follow the new version.`])
     })
+    it('renames the role in the file when the owner renames it, without fetching its unchanged text again', async () => {
+      const f = syncFixture(false, 'default')
+      custom(f, 'Plan the work.\n')
+      const host = await f.pass()
+      custom(f, 'Plan the work.\n', 'Coordinator')
+      await f.pass(host, 1_000)
+      expect(f.fetched).toEqual(['lead'])
+      expect(readFileSync(f.files.lead!, 'utf8')).toContain('description: "The Coordinator role of this project\'s Custom skills."')
+    })
     it('keeps the file and installs nothing when the text read back is not the roster\'s version, and tries again later', async () => {
       const f = syncFixture(false, 'default')
       custom(f, 'Plan the work.\n')

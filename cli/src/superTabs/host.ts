@@ -655,10 +655,11 @@ export class SuperTabHost {
     // version. A role that is gone (null) keeps its file; the backend tells the agent to finish its current work.
     const role = 'role' in target ? object(target.role) : null
     if (role && !Object.keys(role).length) return
-    const custom = role && ['id', 'name', 'version', 'projectId'].every(key => typeof role[key] === 'string' && role[key])
-      && KIND_SKILLS[String(role.kind)] === skill?.role ? role as { id: string; name: string; version: string; projectId: string } : null
+    const custom = role && identifier(role.id) && identifier(role.projectId) && typeof role.name === 'string' && role.name
+      && typeof role.version === 'string' && role.version && KIND_SKILLS[String(role.kind)] === skill?.role ? role as { id: string; name: string; version: string; projectId: string } : null
     if (role && !custom) return
-    const set = custom ? `custom:${custom.projectId}:${custom.id}:${custom.version}` : mode
+    // A rename changes the installed front matter, not the text: the file is rewritten without a fetch.
+    const set = custom ? JSON.stringify([custom.projectId, custom.id, custom.version, custom.name]) : mode
     // A checked session waits for the next host (Infinity); the project's owner switching its skills must reach it now.
     if (this.skillModes.get(target.agent.harnessId) !== set) {
       this.skillModes.set(target.agent.harnessId, set)
