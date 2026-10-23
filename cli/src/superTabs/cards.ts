@@ -128,6 +128,8 @@ export class SwarmCards {
   /** When each local Lead's current turn began, so `since` counts on between polls. */
   private turns = new Map<string, number>()
   private last: string | null = null
+  /** When each shown Lead's clock started (ms, `${card}/${lead}`), as the list last sent said. */
+  private lastStarts = new Map<string, number>()
   private me: string | undefined
   private include: string[] = []
   private opened = new Map<string, Opened>()
@@ -226,8 +228,13 @@ export class SwarmCards {
       cards.push({ id: row.id as string, name: cut(String(tab.state.name ?? row.name ?? ''), NAME_BYTES), count, leads })
     }
     // `since` moves every poll while a turn runs and the Pro counts on by itself, so it alone never re-sends the list.
+    // Nor does a clock that keeps its turn; one whose turn changed (the Lead's ended, a worker's goes on) does. The start is
+    // compared within 2 s: `since` is whole seconds, read at a poll's own moment.
     const signature = JSON.stringify(cards, (key, value) => key === 'since' ? value !== undefined : value)
-    if (signature !== this.last) { this.last = signature; this.onCards?.(cards) }
+    const now = this.now(), starts = new Map<string, number>()
+    for (const card of cards) for (const lead of card.leads) if (lead.since !== undefined) starts.set(`${card.id}/${lead.id}`, now - lead.since * 1000)
+    const moved = [...starts].some(([key, at]) => Math.abs(at - (this.lastStarts.get(key) ?? at)) > 2000)
+    if (signature !== this.last || moved) { this.last = signature; this.lastStarts = starts; this.onCards?.(cards) }
     this.prune()
     await this.pushOpen()
   }
@@ -247,7 +254,8 @@ export class SwarmCards {
         const elapsed = (await this.core.agents.activitySnapshot?.(id).catch(() => null))?.elapsedSeconds
         this.turns.set(id, now - (typeof elapsed === 'number' && elapsed > 0 ? elapsed * 1000 : 0))
       }
-      out.set(id, { inTurn: true, since: Math.max(0, Math.floor((now - this.turns.get(id)!) / 1000)) })
+      // At least 1: the Pro reads 0 as no turn start and shows no clock.
+      out.set(id, { inTurn: true, since: Math.max(1, Math.floor((now - this.turns.get(id)!) / 1000)) })
     }
     for (const id of [...this.turns.keys()]) if (!ids.has(id)) this.turns.delete(id)
     return out
