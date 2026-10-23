@@ -49,6 +49,10 @@ class SuperTabController extends ChangeNotifier {
       expandedProjects.addAll(
         (initial['expandedProjects'] as List? ?? const []).whereType<String>(),
       );
+      expandedMachines.addAll(
+        (initial['expandedMachines'] as List? ?? const []).whereType<String>(),
+      );
+      devicesSelected = initial['devicesSelected'] == true;
       projectsGroupOpen = initial['projectsGroupOpen'] as bool? ?? true;
       machinesGroupOpen = initial['machinesGroupOpen'] as bool? ?? true;
       offlineMachinesOpen = initial['offlineMachinesOpen'] as bool? ?? false;
@@ -149,7 +153,26 @@ class SuperTabController extends ChangeNotifier {
   final _before = <String, int?>{};
   final _reading = <String>{};
   final expandedProjects = <String>{};
+  final expandedMachines = <String>{};
+  bool devicesSelected = false;
   bool projectsGroupOpen = true, machinesGroupOpen = true;
+
+  bool isMachineExpanded(String id) => expandedMachines.contains(id);
+
+  void toggleMachineExpanded(String id) {
+    if (!expandedMachines.remove(id)) expandedMachines.add(id);
+    _saveSoon();
+    _changed();
+  }
+
+  /// Devices is personal navigation inside this Swarm. The selected workgroup,
+  /// its draft and terminal choice stay available when the person returns.
+  void selectDevices() {
+    if (_disposed || accessRevoked || devicesSelected) return;
+    devicesSelected = true;
+    _saveSoon();
+    _changed();
+  }
 
   /// Whether the Machines group's "Offline · N" disclosure is open; it starts closed.
   bool offlineMachinesOpen = false;
@@ -232,7 +255,7 @@ class SuperTabController extends ChangeNotifier {
   }
 
   List<SuperTabAgent> terminalAgents(String conversationId) {
-    if (accessRevoked) return const [];
+    if (accessRevoked || devicesSelected) return const [];
     final id = _terminals[conversationId];
     final group = snapshot?.conversation(conversationId);
     if (id == null || group == null) return const [];
@@ -248,6 +271,7 @@ class SuperTabController extends ChangeNotifier {
       return;
     }
     _terminals[conversationId] = '*';
+    devicesSelected = false;
     _saveSoon();
     _changed();
   }
@@ -259,9 +283,10 @@ class SuperTabController extends ChangeNotifier {
             true) {
       return;
     }
-    if (_terminals[conversationId] == agentId) {
+    if (_terminals[conversationId] == agentId && !devicesSelected) {
       return;
     }
+    devicesSelected = false;
     if (agentId == null) {
       _terminals.remove(conversationId);
     } else {
@@ -323,6 +348,7 @@ class SuperTabController extends ChangeNotifier {
   void revokeAccess(String message) {
     if (_disposed) return;
     accessRevoked = true;
+    devicesSelected = false;
     error = message;
     snapshot = null;
     _messages.clear();
@@ -335,6 +361,8 @@ class SuperTabController extends ChangeNotifier {
     'accountId': accountId,
     'selectedId': selectedId,
     'expandedProjects': expandedProjects.toList(),
+    'expandedMachines': expandedMachines.toList(),
+    'devicesSelected': devicesSelected,
     'projectsGroupOpen': projectsGroupOpen,
     'machinesGroupOpen': machinesGroupOpen,
     'offlineMachinesOpen': offlineMachinesOpen,
@@ -394,7 +422,11 @@ class SuperTabController extends ChangeNotifier {
       Map.unmodifiable(_mentions[conversationId] ?? const {});
 
   void select(String id) {
-    if (snapshot?.conversation(id) == null || id == selectedId) return;
+    if (snapshot?.conversation(id) == null ||
+        (id == selectedId && !devicesSelected)) {
+      return;
+    }
+    devicesSelected = false;
     if (!snapshot!.isProjectLead(id)) {
       final group = snapshot!.conversation(id)!;
       expandedProjects.add(group.projectId);
@@ -509,6 +541,7 @@ class SuperTabController extends ChangeNotifier {
         failure is SuperTabFailure &&
         const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
       accessRevoked = true;
+      devicesSelected = false;
       snapshot = null;
       _messages.clear();
       _poll?.cancel();

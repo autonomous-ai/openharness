@@ -86,6 +86,10 @@ class _SuperTabViewState extends State<SuperTabView>
   String? _completionPrefix;
   final _completionKeys = List.generate(6, (_) => GlobalKey());
   SuperTabController get c => widget.controller;
+  bool get _devicesVisible =>
+      c.devicesSelected &&
+      widget.app?.devicesEnabled == true &&
+      !c.accessRevoked;
 
   String _agentName(SuperTabAgent agent) =>
       c.snapshot?.agentName(agent.id, fallback: agent.name) ?? agent.name;
@@ -231,6 +235,7 @@ class _SuperTabViewState extends State<SuperTabView>
         !_viewEnabled ||
         _chatCovered ||
         c.accessRevoked ||
+        _devicesVisible ||
         _terminalsVisible ||
         _showPullRequests) {
       return false;
@@ -453,13 +458,19 @@ class _SuperTabViewState extends State<SuperTabView>
 
   void _closeRoster() {
     setState(() => _rosterOpen = false);
-    if (!_terminalsVisible) _focus.requestFocus();
+    if (!_terminalsVisible && !_devicesVisible) _focus.requestFocus();
   }
 
   void _closeSidebar() {
     setState(() => _sidebarOpen = false);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && !_sidebarOpen) _focus.requestFocus();
+      if (mounted &&
+          !_sidebarOpen &&
+          !_devicesVisible &&
+          !_terminalsVisible &&
+          !_showPullRequests) {
+        _focus.requestFocus();
+      }
     });
   }
 
@@ -687,6 +698,12 @@ class _SuperTabViewState extends State<SuperTabView>
     app: widget.app,
     onAddAgent: widget.onAddAgent,
     onNewProject: widget.onNewProject,
+    devicesSelected: _devicesVisible,
+    onOpenAgent: (agent) {
+      _closeSidebar();
+      setState(() => _showPullRequests = false);
+      (widget.onChooseAgentTerminal ?? widget.onOpenTerminal)(agent);
+    },
     onYourDevices: widget.app?.devicesEnabled != true
         ? null
         : () {
@@ -722,7 +739,7 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   void _leaveResize() {
-    if (_terminalsVisible) {
+    if (_terminalsVisible || _devicesVisible) {
       FocusManager.instance.primaryFocus?.unfocus();
       final app = widget.app, paneId = widget.app?.focusedPaneId;
       if (app != null && paneId != null) app.focusPane(paneId, reveal: true);
@@ -734,7 +751,7 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   bool get _terminalsVisible =>
-      widget.terminalsVisible || widget.terminal != null;
+      !_devicesVisible && (widget.terminalsVisible || widget.terminal != null);
 
   Widget _header(SuperTabConversation? group, bool narrow, bool showRoster) =>
       Container(
@@ -759,7 +776,9 @@ class _SuperTabViewState extends State<SuperTabView>
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      group == null
+                      _devicesVisible
+                          ? 'Your devices'
+                          : group == null
                           ? c.snapshot?.projects.isEmpty == true
                                 ? c.snapshot!.name
                                 : 'Choose a project'
@@ -770,19 +789,20 @@ class _SuperTabViewState extends State<SuperTabView>
                       overflow: TextOverflow.ellipsis,
                       style: DesktopChrome.text(medium: true),
                     ),
-                    if (c.reviewLine(group) case final line?)
-                      Text(
-                        line,
-                        key: const ValueKey('super-review-line'),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: DesktopChrome.metadata(),
-                      ),
+                    if (!_devicesVisible)
+                      if (c.reviewLine(group) case final line?)
+                        Text(
+                          line,
+                          key: const ValueKey('super-review-line'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: DesktopChrome.metadata(),
+                        ),
                   ],
                 ),
               ),
             ),
-            if (group != null) ...[
+            if (group != null && !_devicesVisible) ...[
               AppIconButton(
                 key: const ValueKey('super-chat'),
                 icon: AppIcons.messageSquare,
@@ -1596,7 +1616,9 @@ class _SuperTabViewState extends State<SuperTabView>
                   _header(c.selected, narrow, showRoster),
                   Expanded(
                     child: IndexedStack(
-                      index: c.snapshot?.projects.isEmpty == true
+                      index: _devicesVisible
+                          ? 1
+                          : c.snapshot?.projects.isEmpty == true
                           ? 0
                           : _terminalsVisible
                           ? 1

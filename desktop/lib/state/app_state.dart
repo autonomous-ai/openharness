@@ -2862,9 +2862,38 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// One utility tab for physical devices.
+  /// Devices stays inside an active Swarm; ordinary workspaces keep their
+  /// existing utility tab. Opening it never changes the Swarm's membership.
   void openDevices() {
     if (!devicesEnabled) return;
+    final swarm = activeSwarm;
+    if (swarm.isSuperTab && swarm.superTabId != null) {
+      final account = currentUser?.id;
+      final controller = superTabs.peek(swarm.superTabId!);
+      if (controller != null) {
+        controller.selectDevices();
+      } else {
+        unawaited(
+          superTabs
+              .open(swarm.superTabId!)
+              .then((controller) {
+                if (!_disposed &&
+                    currentUser?.id == account &&
+                    identical(activeSwarm, swarm)) {
+                  controller.selectDevices();
+                }
+              })
+              .catchError((Object error) {
+                if (!_disposed &&
+                    currentUser?.id == account &&
+                    identical(activeSwarm, swarm)) {
+                  debugPrint('Could not open Devices in the Swarm: $error');
+                }
+              }),
+        );
+      }
+      return;
+    }
     final existing = swarms.where((s) => s.isDevices).firstOrNull;
     if (existing != null) {
       _ensureDevicesViewer(existing);
@@ -2908,6 +2937,23 @@ class AppNotifier extends ChangeNotifier {
       tab.panes.insert(0, pane);
       tab.focusedPaneId ??= pane.id;
     }
+    if (tab.isSuperTab) {
+      // Your devices is a dashboard in the Swarm, without its own agent.
+      // Clear ownership left by an earlier embedded conversation so closing
+      // that old agent elsewhere cannot remove this independent viewer.
+      final viewer = tab.panes.firstWhere((pane) => pane.isDevices)
+        ..machineId = ''
+        ..ownerAgentId = null
+        ..fixedWidth = null;
+      tab
+        ..focusedPaneId = viewer.id
+        ..previousPaneId = null
+        ..zoomedPaneId = null
+        ..arranged = null
+        ..arrangedKey = null
+        ..arrangedMinimum = null;
+      return;
+    }
     // Reserve the conversation before any network or launch work. Setup and
     // failures belong in this same right-hand pane, never above the dashboard.
     if (!tab.panes.any((pane) => !pane.isViewer)) {
@@ -2919,9 +2965,33 @@ class AppNotifier extends ChangeNotifier {
     );
   }
 
-  Future<void> showDevicesTerminal(String machineId, String agentId) async {
+  bool isDevicesWorkspace(Swarm tab) =>
+      tab.isDevices ||
+      (tab.isSuperTab &&
+          tab.superTabId != null &&
+          superTabs.peek(tab.superTabId!)?.devicesSelected == true);
+
+  /// Called only after the Swarm has detached its previous group's views.
+  void prepareSuperTabDevices(String swarmId) {
+    final tab = swarms.where((tab) => tab.id == swarmId).firstOrNull;
+    if (tab == null || !tab.isSuperTab || !isDevicesWorkspace(tab)) return;
+    _ensureDevicesViewer(tab);
+    notifyListeners();
+  }
+
+  Future<void> showDevicesTerminal(
+    String machineId,
+    String agentId, {
+    String? swarmId,
+  }) async {
     if (!devicesEnabled) return;
-    final tab = swarms.where((tab) => tab.isDevices).firstOrNull;
+    final tab = swarms
+        .where(
+          (tab) =>
+              (swarmId == null ? tab.isDevices : tab.id == swarmId) &&
+              tab.isDevices,
+        )
+        .firstOrNull;
     if (tab == null) return;
     _ensureDevicesViewer(tab);
     final viewer = tab.panes.firstWhere((pane) => pane.isDevices);

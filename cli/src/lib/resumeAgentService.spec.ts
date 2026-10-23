@@ -6,6 +6,7 @@ import { createResumeAgentService, type ResumeAgentServiceDeps } from './resumeA
 import { RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
 import { registry, type RegisteredSession } from './registry.js'
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
+import { materializeResumeTranscript } from '../engines/resumeTranscript.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { env } from '../config/env.js'
 import { StoppedAgentStore } from './stoppedAgents.js'
@@ -44,6 +45,7 @@ vi.mock('./engineBin.js', () => ({ enginePathOverride: vi.fn(() => undefined) })
 vi.mock('./engineInstall.js', async original => ({ ...await original<object>(), engineInstallRecipe: () => ({ command: 'fixture-install' }) }))
 vi.mock('../dsh/installed.js', () => ({ installedDsh: vi.fn() }))
 vi.mock('../engines/transcriptBindings.js', async original => ({ ...await original<object>(), controlTranscriptEvidence: vi.fn() }))
+vi.mock('../engines/resumeTranscript.js', () => ({ materializeResumeTranscript: vi.fn(async (_engine, _id, path) => path) }))
 
 let dir: string
 let saved: RegisteredSession
@@ -103,6 +105,7 @@ beforeEach(() => {
   create.mockReset().mockResolvedValue({ state: 'succeeded', runtime: { backend: 'tmux', paneId: pane } })
   kill.mockReset().mockResolvedValue({ state: 'succeeded' })
   vi.mocked(controlTranscriptEvidence).mockImplementation((_engine, _id, path) => ({ path, verify: vi.fn() }))
+  vi.mocked(materializeResumeTranscript).mockReset().mockImplementation(async (_engine, _id, path) => path)
   vi.mocked(enginePathOverride).mockReturnValue(undefined)
   vi.mocked(refusePermissionFlagIfUnsupported).mockReset().mockResolvedValue(null)
   vi.mocked(installedDsh).mockReturnValue(undefined)
@@ -134,6 +137,41 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); for (const row of registry.list()) registry.removeAgent(row.agentId); rmSync(dir, { recursive: true, force: true }) })
 
 describe('production resume handler', () => {
+  it('holds the reservation and restores cold history before checking its control identity', async () => {
+    const restored = join(dir, 'restored.jsonl')
+    vi.mocked(materializeResumeTranscript).mockImplementation(async (_engine, _id, _path, _profile, current) => {
+      expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).not.toBeNull()
+      expect(current()).toBe(true)
+      expect(controlTranscriptEvidence).not.toHaveBeenCalled()
+      expect(create).not.toHaveBeenCalled()
+      return restored
+    })
+    expect(await start()).toMatchObject({ ok: true })
+    expect(controlTranscriptEvidence).toHaveBeenCalledWith('codex', saved.sessionId, restored, undefined, saved.cwd)
+  })
+
+  it('does not allocate when Stop cancels an asynchronous history restoration', async () => {
+    vi.mocked(materializeResumeTranscript).mockImplementation(async (_engine, _id, path, _profile, current) => {
+      deps.restartJobs.cancel(saved.agentId)
+      expect(current()).toBe(false)
+      return path
+    })
+    expect(await start()).toMatchObject({ error: 'AGENT_CHANGED' })
+    expect(create).not.toHaveBeenCalled()
+    expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).toBeNull()
+  })
+
+  it('restoration loses permission if another harness takes the conversation', async () => {
+    vi.mocked(materializeResumeTranscript).mockImplementation(async (_engine, _id, _path, _profile, current) => {
+      registry.resumePendingAgent({ ...saved, agentId: 'other' }, [{ backend: 'tmux', paneId: '%101' }])
+      expect(current()).toBe(false)
+      throw new IdentityReadUnavailable('another harness owns the conversation')
+    })
+    expect(await start()).toMatchObject({ error: 'IDENTITY_UNAVAILABLE' })
+    expect(create).not.toHaveBeenCalled()
+    expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).toBeNull()
+  })
+
   it('composes stopped resume with real launch preparation before any live row exists', async () => {
     const apiNotes = vi.fn()
     const helpers = createLaunchHelpers({

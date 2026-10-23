@@ -44,6 +44,7 @@ class SuperTabAvatar extends StatelessWidget {
       ),
       child: Text(
         initial,
+        textScaler: TextScaler.noScaling,
         style: DesktopChrome.control(
           medium: true,
           color: color,

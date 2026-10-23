@@ -5,6 +5,7 @@ import { isTerminalEngine } from '../engines/types.js'
 import { installedDsh } from '../dsh/installed.js'
 import { engineKeepsTranscriptFile, registry as liveRegistry, type RegisteredSession } from './registry.js'
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
+import { materializeResumeTranscript } from '../engines/resumeTranscript.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import { resumeStoppedAgent, waitForResumedAgent, resumeChanged, resumeUnconfirmed, RESUME_READINESS_BUDGET_MS } from './resumeStoppedAgent.js'
@@ -237,6 +238,16 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       let token: string | null = null
       let allocationAttempted = false
       try {
+        // Reserve before materializing cold history too: two Open requests must not rewrite a
+        // conversation an earlier, unconfirmed allocation might still be using.
+        token = stoppedAgents.beginResume(agentId)
+        if (!token) token = retakeStaleReservation(agentId)
+        if (!token) return resumeUnconfirmed
+        if (resumeSessionId && saved.transcriptPath) {
+          saved = { ...saved, transcriptPath: await materializeResumeTranscript(saved.engine, resumeSessionId,
+            saved.transcriptPath, saved.codexHome ?? undefined, () => current() && !registry.bySession(saved.sessionId)) }
+          if (!current()) return resumeChanged
+        }
         let transcript = sourceEvidence()
         if (transcript) saved = { ...saved, transcriptPath: transcript.path }
         let sourceError: unknown
@@ -249,11 +260,6 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           try { transcript?.verify(); return true }
           catch (error) { sourceError = error; return false }
         }
-        // Reserve before preparing history or rewriting launch configuration: an unknown previous
-        // allocation may still have a writer using those files.
-        token = stoppedAgents.beginResume(agentId)
-        if (!token) token = retakeStaleReservation(agentId)
-        if (!token) return resumeUnconfirmed
         const built = await relaunchOverrides(saved, saved, sourceCurrent)
         if (sourceError) throw sourceError
         transcript?.verify()

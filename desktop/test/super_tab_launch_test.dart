@@ -335,8 +335,13 @@ class SuperTabFixtureConnection extends WsConn {
 }
 
 class SuperTabLaunchFixture {
-  SuperTabLaunchFixture({bool local = false}) {
-    connection = SuperTabFixtureConnection(store, local: local);
+  SuperTabLaunchFixture({
+    bool local = false,
+    SuperTabFixtureConnection Function(MemoryStore)? connectionFactory,
+  }) {
+    connection =
+        connectionFactory?.call(store) ??
+        SuperTabFixtureConnection(store, local: local);
     app = createApp(
       store: store,
       connectionForTest: (_) => connection,

@@ -18,7 +18,7 @@ import 'identity.dart';
 import 'model.dart';
 import 'section_heading.dart';
 
-/// Tab-wide people and capacity, with agents from the selected project.
+/// The current Swarm's authorized people and agents, independent of navigation.
 class SuperTabRoster extends StatefulWidget {
   const SuperTabRoster({
     super.key,
@@ -190,18 +190,116 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     widget.onOpenAgent,
   );
 
+  Widget _agentIdentity(
+    String name,
+    String role,
+    String badge,
+    String? project,
+  ) => LayoutBuilder(
+    builder: (context, constraints) {
+      final nameStyle = DesktopChrome.control();
+      final tagStyle = DesktopChrome.metadata();
+      final scale = MediaQuery.textScalerOf(context);
+      double measure(String text, TextStyle style) {
+        final painter = TextPainter(
+          text: TextSpan(text: text, style: style),
+          textDirection: Directionality.of(context),
+          textScaler: scale,
+          maxLines: 1,
+        )..layout();
+        final width = painter.width;
+        painter.dispose();
+        return width;
+      }
+
+      final badgeWidth = (measure(badge, tagStyle) + 10).clamp(
+        0.0,
+        constraints.maxWidth,
+      );
+      final nameWidth = measure(name, nameStyle).clamp(
+        0.0,
+        (constraints.maxWidth - badgeWidth - 6).clamp(0.0, double.infinity),
+      );
+      final projectWidth = project == null
+          ? 0.0
+          : (measure(project, tagStyle) + 10).clamp(
+              0.0,
+              (constraints.maxWidth - nameWidth - badgeWidth - 12).clamp(
+                0.0,
+                double.infinity,
+              ),
+            );
+      Widget tag(String text) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+        decoration: BoxDecoration(
+          color: grid.AppSurface.hoverFill,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Text(
+          text,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: tagStyle,
+        ),
+      );
+      return Row(
+        children: [
+          if (nameWidth > 0) ...[
+            SizedBox(
+              width: nameWidth,
+              child: Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: nameStyle,
+              ),
+            ),
+            const SizedBox(width: 6),
+          ],
+          Semantics(
+            label: role,
+            excludeSemantics: true,
+            child: SizedBox(width: badgeWidth, child: tag(badge)),
+          ),
+          // Give the name and role their space first. The full project remains
+          // in the row's tooltip when a narrow pane cannot fit a readable tag.
+          if (project != null && projectWidth >= scale.scale(24) + 10) ...[
+            const SizedBox(width: 6),
+            SizedBox(width: projectWidth, child: tag(project)),
+          ],
+        ],
+      );
+    },
+  );
+
   Widget _agent(SuperTabAgent agent) {
     final name = c.snapshot!.agentName(agent.id), activity = _activity(agent);
     final info = SuperTabAgentInfo(c, widget.app, agent, activity: activity);
     final project = c.snapshot!.projects
         .where((p) => p.id == _agentProjectId(agent))
         .firstOrNull;
+    final role = c.snapshot!.isLead(agent.id)
+        ? 'Product Manager'
+        : agent.isReviewer
+        ? 'Reviewer'
+        : 'Engineer';
+    final badge = c.snapshot!.isLead(agent.id)
+        ? 'PM'
+        : agent.isReviewer
+        ? 'Rev'
+        : 'Dev';
+    final status = info.status ?? 'Status unavailable';
+    final tooltip = [
+      [name, role, ?project?.name].join(' · '),
+      if (info.tooltip.isNotEmpty) info.tooltip,
+      if (!info.tooltip.contains(status)) status,
+    ].join('\n');
     final theme = terminalThemeFor(
       grid.AppTheme.surfacePalette,
       terminalThemeStore.value,
     );
     return Tooltip(
-      message: info.tooltip,
+      message: tooltip,
       constraints: const BoxConstraints(maxWidth: 820),
       child: GestureDetector(
         onSecondaryTapUp: (event) async {
@@ -242,70 +340,35 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
                 size: 24,
               ),
               const SizedBox(width: 8),
-              Expanded(
-                child: Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: DesktopChrome.control(),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Semantics(
-                      label: c.snapshot!.isLead(agent.id)
-                          ? 'Product Manager'
-                          : agent.isReviewer
-                          ? 'Reviewer'
-                          : 'Engineer',
-                      excludeSemantics: true,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 5,
-                          vertical: 1,
-                        ),
-                        decoration: BoxDecoration(
-                          color: grid.AppSurface.hoverFill,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          c.snapshot!.isLead(agent.id)
-                              ? 'PM'
-                              : agent.isReviewer
-                              ? 'Rev'
-                              : 'Dev',
-                          style: DesktopChrome.metadata(),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              ActivityMark(
-                activity: activity,
-                tooltip: false,
-                color: activityColor(
-                  activity,
-                  theme,
-                  color: appearancePrefsStore.value.prompt.color,
-                ),
-              ),
+              Expanded(child: _agentIdentity(name, role, badge, project?.name)),
             ],
           ),
-          subtitle: project == null
-              ? null
-              : Padding(
-                  padding: const EdgeInsets.only(left: 32),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(left: 32),
+            child: Row(
+              children: [
+                ActivityMark(
+                  activity: activity,
+                  tooltip: false,
+                  showIdle: true,
+                  color: activityColor(
+                    activity,
+                    theme,
+                    color: appearancePrefsStore.value.prompt.color,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
                   child: Text(
-                    project.name,
+                    status,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: DesktopChrome.metadata(),
                   ),
                 ),
+              ],
+            ),
+          ),
           onTap: () => unawaited(_details(agent)),
           onLongPress: () => unawaited(_details(agent)),
         ),
@@ -315,15 +378,9 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
 
   List<Widget> _members() {
     final state = c.snapshot;
-    final projectId = c.selected?.projectId;
-    final members =
-        state?.agents
-            .where(
-              (agent) =>
-                  projectId != null && _agentProjectId(agent) == projectId,
-            )
-            .toList() ??
-        const <SuperTabAgent>[];
+    // The backend already scopes this snapshot to projects the person can
+    // access. Local machine inventory is not membership in this Swarm.
+    final members = state?.agents ?? const <SuperTabAgent>[];
     final leads = members.where((a) => state!.isLead(a.id)).toList();
     final agents = members.where((a) => !state!.isLead(a.id)).toList();
     return [

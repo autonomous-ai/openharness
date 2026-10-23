@@ -10,6 +10,7 @@ import 'package:harness/core/relative_time.dart';
 import 'package:harness/notify/alert_sounds.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/harness_activity.dart';
+import 'package:harness/super_tabs/agent_details.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/roster.dart';
@@ -187,11 +188,22 @@ void main() {
           lastActivityAt: lastActive,
         ),
       ];
+      f.app.stateOf('m')!.processingAgentIds.add('a1');
       await f.controller.refresh();
       await f.show(tester);
       expect(
         rowTooltip(tester, f, 1),
-        'Claude opus · Test host · Working on "Offline editing" · Last active 2 hours ago',
+        contains(
+          'Claude opus · Test host · Working on "Offline editing" · Last active 2 hours ago',
+        ),
+      );
+      expect(
+        rowTooltip(tester, f, 1),
+        contains('Sage · Engineer · openharness'),
+      );
+      expect(
+        f.inRow(1, find.text('Working on "Offline editing"')),
+        findsOneWidget,
       );
       final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
       await mouse.addPointer(location: Offset.zero);
@@ -208,7 +220,13 @@ void main() {
   ) async {
     final f = await fixture(tester);
     await f.show(tester, nativeState: false);
-    expect(rowTooltip(tester, f, 0), 'Codex');
+    expect(
+      rowTooltip(tester, f, 0),
+      contains('Atlas · Product Manager · openharness'),
+    );
+    expect(rowTooltip(tester, f, 0), contains('Codex'));
+    expect(f.inRow(0, find.text('Status unavailable')), findsOneWidget);
+    expect(rowTooltip(tester, f, 0), isNot(contains('Last active')));
     await tester.tap(f.row(0));
     await tester.pumpAndSettle();
     for (final absent in [
@@ -246,35 +264,40 @@ void main() {
     await f.controller.refresh();
     await f.show(tester);
     expect(f.activity(tester, 1), HarnessActivity.needsInput);
+    expect(f.inRow(1, find.text('Needs input')), findsOneWidget);
     expect(rowTooltip(tester, f, 1), contains('Needs input'));
     expect(rowTooltip(tester, f, 1), isNot(contains('Working on')));
     await f.close(tester);
   });
 
-  testWidgets('agent tooltip shortens a long task title to one line', (
-    tester,
-  ) async {
-    final f = await fixture(tester);
-    await tester.binding.setSurfaceSize(const Size(1000, 700));
-    final title = 'A long task title ' * 12;
-    (f.server.state['conversations'] as List)[1]
-      ..['title'] = title
-      ..['assignment'] = {'agentId': 'agent-1', 'status': 'working'};
-    await f.controller.refresh();
-    await f.show(tester);
-    final tooltip = rowTooltip(tester, f, 1);
-    expect(tooltip, contains('…'));
-    expect(tooltip, isNot(contains(title)));
-    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-    await mouse.addPointer(location: Offset.zero);
-    await mouse.moveTo(tester.getCenter(f.row(1)));
-    await tester.pumpAndSettle(const Duration(milliseconds: 800));
-    final text = find.text(tooltip);
-    expect(text, findsOneWidget);
-    expect(tester.getSize(text).height, lessThan(30));
-    await mouse.removePointer();
-    await f.close(tester);
-  });
+  testWidgets(
+    'a one-line activity keeps its full task title available on hover',
+    (tester) async {
+      final f = await fixture(tester);
+      await tester.binding.setSurfaceSize(const Size(1000, 700));
+      final title = 'A long task title ' * 12;
+      (f.server.state['conversations'] as List)[1]
+        ..['title'] = title
+        ..['assignment'] = {'agentId': 'agent-1', 'status': 'working'};
+      f.app.stateOf('m')!.processingAgentIds.add('a1');
+      await f.controller.refresh();
+      await f.show(tester);
+      final tooltip = rowTooltip(tester, f, 1);
+      expect(tooltip, contains(title));
+      final activity = f.inRow(1, find.text('Working on "$title"'));
+      expect(activity, findsOneWidget);
+      expect(tester.getSize(activity).height, lessThan(30));
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: Offset.zero);
+      await mouse.moveTo(tester.getCenter(f.row(1)));
+      await tester.pumpAndSettle(const Duration(milliseconds: 800));
+      final text = find.text(tooltip);
+      expect(text, findsOneWidget);
+      expect(tester.getSize(text).width, lessThanOrEqualTo(820));
+      await mouse.removePointer();
+      await f.close(tester);
+    },
+  );
 
   testWidgets('agent details link the held task and latest group PR', (
     tester,
@@ -715,68 +738,92 @@ void main() {
     await f.close(tester);
   });
 
-  testWidgets('agents follow project selection', (tester) async {
-    final f = await fixture(tester);
-    f.app.stateOf('m')!.agents = const [
-      Agent(
-        id: 'a0',
-        name: 'native',
-        engine: 'codex',
-        title: 'Join Super Tab roster',
-      ),
-    ];
-    await f.show(tester);
-    expect(f.row(2), findsNothing);
-    for (final i in [0, 1, 3]) {
-      expect(f.inRow(i, find.byType(SuperTabAvatar)), findsOneWidget);
-      expect(f.inRow(i, find.text(i == 0 ? 'PM' : 'Dev')), findsOneWidget);
-      expect(f.inRow(i, find.text('openharness')), findsOneWidget);
-    }
-    expect(find.text('Join Super Tab roster'), findsNothing);
-    expect(find.text('Ready'), findsNothing);
-    final nameX = tester.getTopLeft(f.inRow(0, find.text('Atlas'))).dx;
-    final projectX = tester.getTopLeft(f.inRow(0, find.text('openharness'))).dx;
-    expect(projectX, nameX);
-    expect(
-      tester.getCenter(f.inRow(0, find.text('Atlas'))).dy,
-      lessThan(tester.getCenter(f.inRow(0, find.text('openharness'))).dy),
-    );
-    expect(tester.getSize(f.row(0)).height, lessThanOrEqualTo(60));
-    expect(
-      tester.getTopLeft(find.text('owner').first).dx,
-      projectX,
-      reason: 'People and agent identity use the same text column',
-    );
-    f.controller.select('os-lead');
-    await tester.pumpAndSettle();
-    for (final i in [0, 1, 3]) {
-      expect(f.row(i), findsNothing);
-    }
-    expect(f.inRow(2, find.text('autonomous-os')), findsOneWidget);
-    expect(find.text('owner'), findsOneWidget);
-    await tester.tap(find.byTooltip('Add agent'));
-    expect(f.added?.id, 'os-lead');
-    f.controller.select('offline');
-    await tester.pumpAndSettle();
-    expect(f.row(2), findsNothing);
-    expect(
-      tester.getTopLeft(f.row(0)).dy,
-      lessThan(tester.getTopLeft(f.row(1)).dy),
-    );
-    expect(
-      tester.getTopLeft(f.row(1)).dy,
-      lessThan(tester.getTopLeft(f.row(3)).dy),
-    );
-    await tester.tap(f.row(1));
-    await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsOneWidget);
-    await tester.tap(find.widgetWithText(FilledButton, 'Open terminal'));
-    await tester.pumpAndSettle();
-    expect(f.opened?.harnessId, 'a1');
-    expect(f.controller.selectedId, 'offline');
-    expect(f.server.posts, isEmpty);
-    await f.close(tester);
-  });
+  testWidgets(
+    'authorized roster stays stable across projects, workgroups and Devices',
+    (tester) async {
+      final f = await fixture(tester);
+      f.app.stateOf('m')!.agents = const [
+        Agent(
+          id: 'a0',
+          name: 'native',
+          engine: 'codex',
+          title: 'Join Super Tab roster',
+        ),
+        Agent(id: 'outside', name: 'Not in this Swarm', engine: 'codex'),
+      ];
+      (f.server.state['conversations'] as List).add({
+        ...conversationFixture('os-work', 'OS work'),
+        'projectId': 'os',
+        'agentIds': ['agent-2'],
+      });
+      await f.controller.refresh();
+      await f.show(tester);
+      expect(f.inRow(2, find.text('autonomous-os')), findsOneWidget);
+      for (final i in [0, 1, 3]) {
+        expect(f.inRow(i, find.byType(SuperTabAvatar)), findsOneWidget);
+        expect(f.inRow(i, find.text(i == 0 ? 'PM' : 'Dev')), findsOneWidget);
+        expect(f.inRow(i, find.text('openharness')), findsOneWidget);
+      }
+      expect(find.text('Join Super Tab roster'), findsNothing);
+      expect(find.text('Not in this Swarm'), findsNothing);
+      expect(find.text('Ready'), findsNothing);
+      final nameX = tester.getTopLeft(f.inRow(0, find.text('Atlas'))).dx;
+      final project = tester.getRect(f.inRow(0, find.text('openharness')));
+      final name = tester.getRect(f.inRow(0, find.text('Atlas')));
+      final status = tester.getRect(f.inRow(0, find.text('Idle')));
+      final mark = tester.getRect(f.inRow(0, find.byType(ActivityMark)));
+      expect(project.left, greaterThan(name.right));
+      expect(project.center.dy, closeTo(name.center.dy, 2));
+      expect(mark.left, nameX);
+      expect(status.left, greaterThan(mark.right));
+      expect(status.top, greaterThanOrEqualTo(name.bottom));
+      expect(tester.getSize(f.row(0)).height, lessThanOrEqualTo(60));
+      expect(
+        tester.getTopLeft(find.text('owner').first).dx,
+        nameX,
+        reason: 'People and agent identity use the same text column',
+      );
+      final rows = [for (var i = 0; i < 4; i++) tester.getRect(f.row(i))];
+      final people = tester.getRect(find.text('owner'));
+      for (final selected in ['os-lead', 'offline', 'os-work']) {
+        f.controller.select(selected);
+        await tester.pumpAndSettle();
+        for (var i = 0; i < 4; i++) {
+          expect(tester.getRect(f.row(i)), rows[i]);
+          expect(f.inRow(i, find.byType(ActivityMark)), findsOneWidget);
+        }
+        expect(tester.getRect(find.text('owner')), people);
+        await tester.tap(find.byTooltip('Add agent'));
+        expect(f.added?.id, selected);
+      }
+      f.controller.selectDevices();
+      await tester.pumpAndSettle();
+      expect(f.controller.devicesSelected, isTrue);
+      for (var i = 0; i < 4; i++) {
+        expect(tester.getRect(f.row(i)), rows[i]);
+      }
+      expect(tester.getRect(find.text('owner')), people);
+      f.controller.select('offline');
+      await tester.pumpAndSettle();
+      expect(
+        tester.getTopLeft(f.row(0)).dy,
+        lessThan(tester.getTopLeft(f.row(1)).dy),
+      );
+      expect(
+        tester.getTopLeft(f.row(1)).dy,
+        lessThan(tester.getTopLeft(f.row(3)).dy),
+      );
+      await tester.tap(f.row(1));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, 'Open terminal'));
+      await tester.pumpAndSettle();
+      expect(f.opened?.harnessId, 'a1');
+      expect(f.controller.selectedId, 'offline');
+      expect(f.server.posts, isEmpty);
+      await f.close(tester);
+    },
+  );
 
   for (final legacyAgent in [1, 2]) {
     testWidgets(
@@ -798,7 +845,10 @@ void main() {
           'lead',
         );
         await f.show(tester);
-        expect(f.row(legacyAgent), findsNothing);
+        expect(
+          f.inRow(legacyAgent, find.text('autonomous-os')),
+          findsOneWidget,
+        );
         f.controller.select('os-lead');
         await tester.pumpAndSettle();
         expect(
@@ -821,24 +871,279 @@ void main() {
     });
     await f.controller.refresh();
     await f.show(tester);
-    expect(f.row(1), findsOneWidget);
+    expect(f.inRow(1, find.text('openharness')), findsOneWidget);
     f.controller.select('os-lead');
     await tester.pumpAndSettle();
-    expect(f.row(1), findsNothing);
+    expect(f.inRow(1, find.text('openharness')), findsOneWidget);
     await f.close(tester);
   });
 
-  testWidgets('no selected project shows no agent rows', (tester) async {
+  testWidgets('no selected project still shows the authorized directory', (
+    tester,
+  ) async {
     final f = await fixture(tester);
     f.controller.selectedId = 'missing';
     await f.show(tester);
     for (var i = 0; i < 4; i++) {
-      expect(f.row(i), findsNothing);
+      expect(f.row(i), findsOneWidget);
     }
     expect(find.text('owner'), findsOneWidget);
     expect(find.byTooltip('Add agent'), findsNothing);
     await f.close(tester);
   });
+
+  testWidgets('assigned work is visible without invented activity durations', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    (f.server.state['conversations'] as List)[1]
+      ..['title'] = 'Polish navigation'
+      ..['assignment'] = {'agentId': 'agent-1', 'status': 'planned'};
+    await f.controller.refresh();
+    await f.show(tester, nativeState: false);
+    expect(
+      f.inRow(1, find.text('Assigned to "Polish navigation"')),
+      findsOneWidget,
+    );
+    expect(f.inRow(0, find.text('Status unavailable')), findsOneWidget);
+    expect(f.activity(tester, 1), HarnessActivity.unknown);
+    final copy = tester
+        .widgetList<Text>(
+          find.descendant(of: f.row(1), matching: find.byType(Text)),
+        )
+        .map((text) => text.data ?? '')
+        .join(' ');
+    expect(
+      copy,
+      isNot(matches(RegExp(r'\b\d+\s*(seconds?|minutes?|hours?|tokens?)\b'))),
+    );
+    expect(rowTooltip(tester, f, 1), isNot(contains('Last active')));
+    await f.close(tester);
+  });
+
+  testWidgets(
+    'retained working tasks need native activity before claiming work',
+    (tester) async {
+      final f = await fixture(tester);
+      (f.server.state['conversations'] as List)[1]
+        ..['title'] = 'Polish navigation'
+        ..['assignment'] = {'agentId': 'agent-1', 'status': 'working'};
+      await f.controller.refresh();
+      final machine = f.app.stateOf('m')!;
+      for (final activity in [
+        HarnessActivity.idle,
+        HarnessActivity.done,
+        HarnessActivity.unknown,
+        HarnessActivity.working,
+      ]) {
+        machine.processingAgentIds.clear();
+        machine.unknownActivityAgentIds.clear();
+        f.app.markAgentSeen('m', 'a1');
+        switch (activity) {
+          case HarnessActivity.done:
+            f.app.agentUnread.mark('m', 'a1', AlertKind.done);
+          case HarnessActivity.unknown:
+            machine.unknownActivityAgentIds.add('a1');
+          case HarnessActivity.working:
+            machine.processingAgentIds.add('a1');
+          default:
+            break;
+        }
+        await f.show(tester);
+        final status = activity == HarnessActivity.working
+            ? 'Working on "Polish navigation"'
+            : 'Assigned to "Polish navigation"';
+        expect(f.activity(tester, 1), activity);
+        expect(f.inRow(1, find.text(status)), findsOneWidget);
+        expect(rowTooltip(tester, f, 1), contains(status));
+        if (activity != HarnessActivity.working) {
+          expect(rowTooltip(tester, f, 1), isNot(contains('Working on')));
+        }
+      }
+      await f.show(tester, nativeState: false);
+      expect(f.activity(tester, 1), HarnessActivity.unknown);
+      expect(
+        f.inRow(1, find.text('Assigned to "Polish navigation"')),
+        findsOneWidget,
+      );
+      await f.close(tester);
+    },
+  );
+
+  testWidgets('cancelled work cannot hide a later current assignment', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    (f.server.state['conversations'] as List)[1]
+      ..['title'] = 'Cancelled task'
+      ..['assignment'] = {'agentId': 'agent-1', 'status': 'cancelled'};
+    final currentTask = {
+      ...conversationFixture('current-task', 'Polish navigation'),
+      'assignment': {'agentId': 'agent-1', 'status': 'planned'},
+    };
+    (f.server.state['conversations'] as List).add(currentTask);
+    await f.controller.refresh();
+    await f.show(tester, nativeState: false);
+    expect(
+      f.inRow(1, find.text('Assigned to "Polish navigation"')),
+      findsOneWidget,
+    );
+    expect(rowTooltip(tester, f, 1), isNot(contains('Cancelled task')));
+
+    (currentTask['assignment'] as Map)['status'] = 'cancelled';
+    await f.controller.refresh();
+    await tester.pumpAndSettle();
+    expect(f.inRow(1, find.text('Status unavailable')), findsOneWidget);
+    expect(rowTooltip(tester, f, 1), isNot(contains('Polish navigation')));
+    expect(rowTooltip(tester, f, 1), isNot(contains('Working on')));
+    await f.close(tester);
+  });
+
+  testWidgets('explicit task states remain visible without a native turn', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    for (final (status, activity, label) in [
+      ('blocked', HarnessActivity.needsInput, 'Needs input'),
+      (
+        'review',
+        HarnessActivity.idle,
+        'Waiting for review on "Polish navigation"',
+      ),
+      ('reconciling', HarnessActivity.idle, 'Checking "Polish navigation"'),
+    ]) {
+      (f.server.state['conversations'] as List)[1]
+        ..['title'] = 'Polish navigation'
+        ..['assignment'] = {'agentId': 'agent-1', 'status': status};
+      await f.controller.refresh();
+      await f.show(tester);
+      expect(f.activity(tester, 1), activity);
+      expect(f.inRow(1, find.text(label)), findsOneWidget);
+      expect(rowTooltip(tester, f, 1), isNot(contains('Working on')));
+    }
+    await f.close(tester);
+  });
+
+  testWidgets('agent facts use native activity when no override is supplied', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    (f.server.state['conversations'] as List)[1]
+      ..['title'] = 'Polish navigation'
+      ..['assignment'] = {'agentId': 'agent-1', 'status': 'working'};
+    await f.controller.refresh();
+    final machine = f.app.stateOf('m')!;
+    final agent = f.controller.snapshot!.agent('agent-1')!;
+    String? status() => SuperTabAgentInfo(f.controller, f.app, agent).status;
+    expect(status(), 'Assigned to "Polish navigation"');
+    machine.processingAgentIds.add('a1');
+    expect(status(), 'Working on "Polish navigation"');
+    machine.agents = const [
+      Agent(id: 'a1', name: 'Sage', engine: 'claude', status: 'stopped'),
+    ];
+    expect(status(), 'Stopped');
+    machine.connectionStatus = ConnectionStatus.disconnected;
+    expect(status(), 'Offline');
+    await f.close(tester);
+  });
+
+  testWidgets(
+    'lifecycle status takes precedence over a retained working task',
+    (tester) async {
+      final f = await fixture(tester);
+      (f.server.state['conversations'] as List)[1]['assignment'] = {
+        'agentId': 'agent-1',
+        'status': 'working',
+      };
+      await f.controller.refresh();
+      final machine = f.app.stateOf('m')!;
+      for (final (activity, status, data) in [
+        (HarnessActivity.offline, 'Offline', <String, dynamic>{}),
+        (HarnessActivity.paused, 'Stopped', {'status': 'stopped'}),
+        (HarnessActivity.starting, 'Starting', {'launchState': 'starting'}),
+        (HarnessActivity.failed, 'Failed', {'launchState': 'failed'}),
+        (
+          HarnessActivity.needsInput,
+          'Needs input',
+          {'launchState': 'failed', 'launchError': 'RESUME_UNCONFIRMED'},
+        ),
+      ]) {
+        machine
+          ..connectionStatus = activity == HarnessActivity.offline
+              ? ConnectionStatus.disconnected
+              : ConnectionStatus.connected
+          ..agents = [
+            Agent(
+              id: 'a1',
+              name: 'Sage',
+              engine: 'claude',
+              status: data['status'] as String? ?? 'active',
+              launchState: data['launchState'] as String? ?? 'ready',
+              launchError: data['launchError'] as String?,
+            ),
+          ];
+        await f.show(tester);
+        expect(f.activity(tester, 1), activity);
+        expect(f.inRow(1, find.text(status)), findsOneWidget);
+        expect(f.inRow(1, find.textContaining('Working on')), findsNothing);
+        expect(rowTooltip(tester, f, 1), isNot(contains('Working on')));
+      }
+      await f.close(tester);
+    },
+  );
+
+  for (final width in [220.0, 280.0]) {
+    for (final scale in [1.0, 2.0]) {
+      testWidgets('agent identity and status fit $width pixels at ${scale}x', (
+        tester,
+      ) async {
+        final f = await fixture(tester);
+        await tester.binding.setSurfaceSize(Size(width, 700));
+        const longName = 'Alexandria Montgomery';
+        const longProject = 'an-extremely-long-project-identifier';
+        (f.server.state['agents'] as List)[0]['displayName'] = longName;
+        (f.server.state['projects'] as List)[0]['name'] = longProject;
+        await f.controller.refresh();
+        await f.show(tester, nativeState: false, scale: scale);
+        final row = tester.getRect(f.row(0));
+        final name = tester.getRect(f.inRow(0, find.text(longName)));
+        final badgeFinder = f.inRow(0, find.text('PM'));
+        final badge = tester.getRect(badgeFinder);
+        final status = tester.getRect(
+          f.inRow(0, find.text('Status unavailable')),
+        );
+        final mark = tester.getRect(f.inRow(0, find.byType(ActivityMark)));
+        expect(name.left, tester.getTopLeft(find.text('owner')).dx);
+        expect(mark.left, name.left);
+        expect(name.right, lessThan(badge.left));
+        expect(status.top, greaterThanOrEqualTo(name.bottom));
+        for (final bounds in [name, badge, status, mark]) {
+          expect(bounds.left, greaterThanOrEqualTo(row.left));
+          expect(bounds.right, lessThanOrEqualTo(row.right));
+          expect(bounds.bottom, lessThanOrEqualTo(row.bottom));
+        }
+        expect(
+          tester.renderObject<RenderParagraph>(badgeFinder).didExceedMaxLines,
+          isFalse,
+        );
+        expect(
+          tester.widget<Text>(badgeFinder).style!.fontSize,
+          greaterThanOrEqualTo(12),
+        );
+        final tooltip = rowTooltip(tester, f, 0);
+        for (final fact in [
+          longName,
+          'Product Manager',
+          longProject,
+          'Status unavailable',
+        ]) {
+          expect(tooltip, contains(fact));
+        }
+        expect(tester.takeException(), isNull);
+        await f.close(tester);
+      });
+    }
+  }
 
   testWidgets('live turns and unread changes update the same status cell', (
     tester,
@@ -846,6 +1151,7 @@ void main() {
     final f = await fixture(tester);
     await f.show(tester);
     expect(f.activity(tester, 0), HarnessActivity.idle);
+    expect(f.inRow(0, find.text('○')), findsOneWidget);
     final mark = f.inRow(0, find.byType(ActivityMark));
     final position = tester.getTopLeft(mark);
     await f.app.handleEventForTest('m', {
@@ -854,6 +1160,7 @@ void main() {
     });
     await tester.pump();
     expect(f.activity(tester, 0), HarnessActivity.working);
+    expect(f.inRow(0, find.text('○')), findsNothing);
     f.app.agentUnread.mark('m', 'a0', AlertKind.done);
     await tester.pump();
     expect(f.activity(tester, 0), HarnessActivity.working);
@@ -863,11 +1170,14 @@ void main() {
     });
     await tester.pump();
     expect(f.activity(tester, 0), HarnessActivity.done);
+    expect(f.inRow(0, find.text('✓')), findsOneWidget);
+    expect(f.inRow(0, find.text('○')), findsNothing);
     expect(rowTooltip(tester, f, 0), contains('Finished'));
     expect(f.inRow(0, find.byType(Tooltip)), findsNothing);
     f.app.markAgentSeen('m', 'a0');
     await tester.pump();
     expect(f.activity(tester, 0), HarnessActivity.idle);
+    expect(f.inRow(0, find.text('○')), findsOneWidget);
     expect(tester.getTopLeft(mark), position);
     f.app.agentUnread.mark('m', 'a0', AlertKind.done);
     await tester.pump();
@@ -916,7 +1226,9 @@ void main() {
         'roster marks remain legible in ${brightness.name} at ${scale}x',
         (tester) async {
           final f = await fixture(tester);
-          (f.server.state['agents'] as List)[2]['projectId'] = 'lead';
+          (f.server.state['conversations'] as List)[0]
+            ..['title'] = 'Polish sidebar navigation'
+            ..['assignment'] = {'agentId': 'agent-0', 'status': 'working'};
           await f.controller.refresh();
           final previous = grid.AppTheme.brightness.value;
           grid.AppTheme.brightness.value = brightness;

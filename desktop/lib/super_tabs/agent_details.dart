@@ -28,7 +28,10 @@ class SuperTabAgentInfo {
          controller,
          app,
          agent,
-         activity,
+         activity ??
+             (app == null
+                 ? null
+                 : harnessActivity(app, agent.machineId, agent.harnessId)),
          app
              ?.stateOf(agent.machineId)
              ?.agents
@@ -39,7 +42,11 @@ class SuperTabAgentInfo {
                (g) =>
                    !g.archived &&
                    g.assignment?['agentId'] == agent.id &&
-                   !const {'done', 'stopped'}.contains(g.assignment?['status']),
+                   !const {
+                     'done',
+                     'stopped',
+                     'cancelled',
+                   }.contains(g.assignment?['status']),
              )
              .firstOrNull,
        );
@@ -120,7 +127,11 @@ class SuperTabAgentInfo {
         'blocked' => 'Stuck on "${group.title}"',
         'review' => 'Waiting for review on "${group.title}"',
         'reconciling' => 'Checking "${group.title}"',
-        _ => 'Working on "${group.title}"',
+        'working' when activity == HarnessActivity.working =>
+          'Working on "${group.title}"',
+        // An assignment can outlive a native turn or connection. Keep the
+        // known task as context without claiming the agent is still working.
+        _ => 'Assigned to "${group.title}"',
       };
     }
     return switch (activity) {
