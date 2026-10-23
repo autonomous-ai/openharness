@@ -104,6 +104,7 @@ class SuperTabProject {
       name = _text(row, 'name'),
       ownerId = _text(row, 'ownerId'),
       leadConversationId = _text(row, 'leadConversationId'),
+      skillMode = row['skillMode'] == 'default' ? 'default' : 'orchestration',
       isPrivate = row['visibility'] == 'private',
       memberIds = [
         for (final member in row['members'] as List? ?? const [])
@@ -114,6 +115,7 @@ class SuperTabProject {
           ? Map.unmodifiable(superTabMap(row['repository']))
           : null;
   final String id, name, ownerId, leadConversationId;
+  final String skillMode;
   final bool isPrivate;
   final List<String> memberIds;
   final int updateMinutes;

@@ -894,6 +894,8 @@ class _SuperTabViewState extends State<SuperTabView>
           item('Project details', () => _groupAction('details', group)),
           if (editable && project?.ownerId == c.accountId)
             item('Sharing', () => _groupAction('sharing', group)),
+          if (editable && project?.ownerId == c.accountId)
+            item('Skills', () => _groupAction('skills', group)),
           if (editable)
             item('Update cadence', () => _groupAction('cadence', group)),
           item('Swarm routing', () => _groupAction('routing', group)),
