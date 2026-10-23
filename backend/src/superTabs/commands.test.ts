@@ -1773,4 +1773,38 @@ describe('other projects\' work for Leads', () => {
     expect(visibleState(f.state, as(roster.worker))).not.toHaveProperty('otherProjectsWork')
     expect(visibleState(f.state, owner)).not.toHaveProperty('otherProjectsWork')
   })
+
+  it('tells both Leads once when a task\'s owned code overlaps another project\'s active task', () => {
+    const { f, lead, project, work } = swarm()
+    const docs = project('Docs', 'public')
+    const roster = work(docs.projectId, 'Roster', ['desktop/lib/super_tabs'])
+    const alerts = () => f.state.leadsConversationId
+    const name = (id: string) => f.state.agents.find(a => a.id === id)!.displayName
+    const created = f.run({ type: 'conversation.create', title: 'Agents filter', task: task([' ./desktop/lib/super_tabs/roster.dart ', 'cli']), checks }, as(lead))
+    const group = created.result.conversationId as string
+    const alert = created.messages.find(m => m.conversationId === alerts())!
+    expect(alert).toMatchObject({ author: { id: lead }, recipients: [docs.lead],
+      source: { kind: 'overlap', conversationIds: [group, roster.group] } })
+    expect(alert.text).toBe(`"Agents filter" (Pilot, ${name(lead)}) and "Roster" (Docs, ${name(docs.lead)}) both change `
+      + 'desktop/lib/super_tabs/roster.dart. Agree an order or a split here, then each tell your own project.')
+    // The same pair is not alerted again.
+    f.run({ type: 'work.define', conversationId: group, task: task(['desktop/lib/super_tabs/roster.dart']), checks }, as(lead))
+    const worker = f.add('pilot-worker', 'owner', group)
+    expect(f.run({ type: 'work.assign', conversationId: group, agentId: worker }).messages.some(m => m.conversationId === alerts())).toBe(false)
+    expect(visibleState(f.state, owner)).not.toHaveProperty('overlapAlerts')
+  })
+
+  it('stays silent within one project, for owned code that is not a path, and for private projects', () => {
+    const { f, project, work } = swarm()
+    const secret = project('Secret', 'private'), docs = project('Docs', 'public')
+    work('lead', 'Own', ['desktop/lib'])
+    work(secret.projectId, 'Hidden', ['desktop/lib'])
+    work(docs.projectId, 'Phrase', ['The Desktop roster'])
+    for (const owns of [['desktop/lib/super_tabs'], ['The Desktop roster']]) {
+      const effects = f.run({ type: 'conversation.create', title: 'More', task: task(owns), checks })
+      expect(effects.messages.filter(m => m.conversationId === f.state.leadsConversationId)).toEqual([])
+    }
+    expect(f.run({ type: 'conversation.create', projectId: secret.projectId, title: 'Secret too', task: task(['desktop/lib']), checks })
+      .messages.filter(m => m.conversationId === f.state.leadsConversationId)).toEqual([])
+  })
 })

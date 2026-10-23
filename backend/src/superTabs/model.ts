@@ -146,6 +146,8 @@ export interface SuperTabState {
   projects?: SwarmProject[]
   /** The Leads conversation, outside every project (syncLeads). */
   leadsConversationId?: string
+  /** Pairs of tasks ("a:b", sorted ids) whose Leads were told their owned code overlaps, so each pair is told once. */
+  overlapAlerts?: string[]
   /** Read-only, for a Lead's own reads (visibleState): the active work of the other projects it may know about. */
   otherProjectsWork?: OtherProjectWork[]
   ownerId: string
@@ -350,6 +352,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   delete visible.sharing
   delete visible.harnessReservations
   delete visible.releasedHarnesses
+  delete visible.overlapAlerts
   // Only that machine's host roster lists them (store.ts hostTabs); a removed private agent's session is not every member's.
   delete visible.closingSessions
   numberConversations(visible)

@@ -2234,4 +2234,31 @@ describe('Leads conversation', () => {
     await expect(store.messages(host, tab, leads, {}, worker)).rejects.toMatchObject({ code: 'NOT_FOUND' })
     expect((await store.messages(owner, tab, leads, {})).messages.map(m => m.text)).toEqual(['Who goes first?', 'Pilot goes first.'])
   })
+
+  it('shows Leads the other projects\' work and posts one overlap alert for both Leads', async () => {
+    const { tab, lead } = await fixture()
+    const docs = String((await run(tab, { type: 'project.create', name: 'Docs', visibility: 'public', brief: '' })).result.projectId)
+    const docsChat = (await store.read(owner, tab)).state.projects!.find(p => p.id === docs)!.leadConversationId
+    const docsLead = (await run(tab, { type: 'agent.add', conversationId: docsChat, machineId: 'test-host', harnessId: randomUUID(), name: 'Docs Lead',
+      configuration: config, lead: true })).result.agentId as string
+    const task = (owns: string[]) => ({ goal: 'Polish', changes: 'Roster', constraints: 'None', owns })
+    const checks = [{ description: 'Done', independent: false }]
+    const roster = String((await run(tab, { type: 'conversation.create', projectId: docs, title: 'Roster', task: task(['desktop/lib/super_tabs']), checks })).result.conversationId)
+    const worker = (await run(tab, { type: 'agent.add', conversationId: roster, machineId: 'test-host', harnessId: randomUUID(), name: 'Docs Worker',
+      configuration: config, lead: false })).result.agentId as string
+    await run(tab, { type: 'work.assign', conversationId: roster, agentId: worker })
+
+    expect((await store.read(host, tab, lead)).state.otherProjectsWork).toEqual([expect.objectContaining({ conversationId: roster, projectName: 'Docs',
+      title: 'Roster', owns: ['desktop/lib/super_tabs'], status: 'working' })])
+    expect((await store.read(host, tab, worker)).state).not.toHaveProperty('otherProjectsWork')
+
+    const filter = String((await run(tab, { type: 'conversation.create', title: 'Agents filter', task: task(['desktop/lib/super_tabs/roster.dart']), checks },
+      host, lead)).result.conversationId)
+    await run(tab, { type: 'work.define', conversationId: filter, task: task(['desktop/lib/super_tabs']), checks }, host, lead)
+    const leads = (await store.read(owner, tab)).state.leadsConversationId!
+    const alerts = (await store.messages(owner, tab, leads, {})).messages
+    expect(alerts).toEqual([expect.objectContaining({ source: { kind: 'overlap', conversationIds: [filter, roster] }, recipientIds: [docsLead],
+      text: expect.stringContaining('"Agents filter" (Pilot') })])
+    expect((await store.deliveries(host, tab, docsLead)).filter(d => d.conversationId === leads)).toHaveLength(1)
+  })
 })

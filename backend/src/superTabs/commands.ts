@@ -2,7 +2,7 @@ import { admitMachineStart, machineContribution } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
-  activeWork, actorKey, agent, agentRole, author, conversation, fail, isLeads, person, stableId, syncLeads, numberConversations, nextConversationNumber, renderWorkTask,
+  activeWork, actorKey, agent, agentRole, author, conversation, crossProjectActive, fail, isLeads, person, stableId, syncLeads, numberConversations, nextConversationNumber, renderWorkTask,
   finishWorker, requireWorkerDecisions, reviewing,
   type Actor, type Agent, type Author, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
@@ -11,7 +11,7 @@ import { routingOverrideSchema } from './routingPolicy.js'
 import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, type TerminalRequest } from './terminal.js'
-import { agentProjectId, deleteProject, groupProject, inviteLanding, ledProject, manageProject, mutableProjects, placeRules, projectMembers, projectOf, projectRules, readAgent, readConversation, readProject, sameProject, SKILL_MODE_NAMES, skillModeOf, type SwarmProject } from './projects.js'
+import { agentProjectId, deleteProject, groupProject, inviteLanding, ledProject, manageProject, mutableProjects, placeRules, projectMembers, projectOf, projectRules, readAgent, readConversation, readProject, sameProject, sharedWithLeads, SKILL_MODE_NAMES, skillModeOf, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -180,6 +180,13 @@ function controls(state: SuperTabState, actor: Actor, conversationId = 'lead'): 
     fail('LEAD_REQUIRED', 'The coordinating lead owns this action.', 403)
   }
 }
+
+/** The repo path an owns entry names, or null for anything else (a phrase, a glob), which is never compared. */
+function ownedPath(entry: string): string | null {
+  const path = entry.trim().replace(/^\.\//, '').replace(/\/+$/, '')
+  return /^[\w.@-]+(\/[\w.@-]+)*$/.test(path) ? path : null
+}
+const pathsOverlap = (a: string, b: string) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)
 
 /** A project's Lead (Product Manager) leaves only with its project: every other removal path refuses it. */
 function protectLead(state: SuperTabState, agentId: string): void {
@@ -373,6 +380,32 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       group.agentIds = group.agentIds.filter(a => a !== target.id)
       if (group.leadId === target.id) group.leadId = null
       if (group.assignment?.agentId === target.id && activeWork(group)) group.assignment.status = 'reconciling'
+    }
+  }
+
+  /** Projects in one Swarm changed the same code without knowing it (2026-10-23). When a task is created, defined or assigned,
+   *  its Leads hear once per pair of tasks that it owns code another shared project's active task owns too. */
+  const alertOverlaps = (group: Conversation) => {
+    const project = groupProject(state, group)
+    const mine = (group.task?.owns ?? []).flatMap(entry => ownedPath(entry) ?? [])
+    if (!mine.length || !sharedWithLeads(project)) return
+    state.overlapAlerts = state.overlapAlerts?.filter(pair => pair.split(':').every(id => state.conversations.some(c => c.id === id)))
+    const leadOf = (p: SwarmProject) => state.agents.find(a => a.id === conversation(state, p.leadConversationId).leadId)
+    const named = (a: Agent | undefined) => a ? a.displayName ?? a.name : 'no Lead'
+    for (const other of state.conversations.filter(crossProjectActive)) {
+      const theirs = groupProject(state, other)
+      if (theirs.id === project.id || !sharedWithLeads(theirs)) continue
+      const owned = (other.task?.owns ?? []).flatMap(entry => ownedPath(entry) ?? [])
+      const shared = mine.filter(a => owned.some(b => pathsOverlap(a, b)))
+      const pair = [group.id, other.id].sort().join(':')
+      if (!shared.length || state.overlapAlerts?.includes(pair)) continue
+      (state.overlapAlerts ??= []).push(pair)
+      const ours = leadOf(project), their = leadOf(theirs)
+      effects.messages.push({ id: stableId(operationId, 'overlap', pair), conversationId: state.leadsConversationId!, author: sender,
+        text: `"${group.title}" (${project.name}, ${named(ours)}) and "${other.title}" (${theirs.name}, ${named(their)}) both change `
+          + `${shared.join(', ')}. Agree an order or a split here, then each tell your own project.`,
+        replyTo: null, recipients: [ours, their].flatMap(a => a && !(actor.kind === 'agent' && a.id === actor.agentId) ? [a.id] : []),
+        source: { kind: 'overlap', conversationIds: [group.id, other.id] } })
     }
   }
 
@@ -1191,6 +1224,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       check.passedBy = command.passed ? actorKey(actor) : null
       break
     }
+  }
+  if (command.type === 'conversation.create' || command.type === 'work.define' || command.type === 'work.assign') {
+    alertOverlaps(conversation(state, command.type === 'conversation.create' ? result.conversationId as string : command.conversationId))
   }
   for (const target of original.agents.filter(a => a.workDecision === 'stop')) {
     const acknowledged = command.type === 'agent.remove' && command.agentId === target.id &&
