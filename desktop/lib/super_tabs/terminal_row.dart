@@ -8,7 +8,8 @@ import 'model.dart';
 
 /// A Lead's typing into a worker's terminal, or a worker's machine telling its
 /// Lead it waits at a prompt or hit a usage limit
-/// (spec/2026-10-23-lead-sees-agent-terminal.md). The backend writes what
+/// (spec/2026-10-23-lead-sees-agent-terminal.md), or two projects' tasks that
+/// own the same code (spec 2026-10-23-leads-see-and-talk.md). The backend writes what
 /// happened as one sentence; it is a note in the group, not chat from the
 /// agent, so it has no author heading, reply or receipt.
 class SuperTabTerminalRow extends StatelessWidget {
@@ -18,7 +19,7 @@ class SuperTabTerminalRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final alert = message.source['kind'] == 'terminal-alert';
+    final alert = message.source['kind'] != 'terminal-input';
     final style = DesktopChrome.metadata(
       color: Theme.of(context).colorScheme.onSurfaceVariant,
     );

@@ -78,7 +78,10 @@ class SuperTabTask {
 class SuperTabConversation {
   SuperTabConversation.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
-      projectId = row['projectId'] as String? ?? 'lead',
+      // The Product Managers' conversation belongs to no project; a group from
+      // before projects belongs to the first.
+      projectId =
+          row['projectId'] as String? ?? (row['kind'] == 'leads' ? '' : 'lead'),
       number = (row['number'] as num?)?.toInt(),
       title = _text(row, 'title'),
       leadId = row['leadId'] as String?,
@@ -161,7 +164,8 @@ class SuperTabSnapshot {
       invitations = _list(
         row['invitations'],
         (row) => Map<String, dynamic>.unmodifiable(row),
-      ) {
+      ),
+      leadsConversationId = row['leadsConversationId'] as String? {
     if (row['version'] != 1) {
       throw const FormatException('Update Harness to open this Swarm.');
     }
@@ -191,6 +195,10 @@ class SuperTabSnapshot {
   final List<SuperTabConversation> conversations;
   late final List<SuperTabProject> projects;
   final List<Map<String, dynamic>> invitations;
+
+  /// Where the projects' Product Managers talk, Swarm-wide; null in a Swarm
+  /// from before it (spec 2026-10-23-leads-see-and-talk.md).
+  final String? leadsConversationId;
   SuperTabConversation? conversation(String id) =>
       conversations.where((c) => c.id == id).firstOrNull;
   SuperTabAgent? agent(String id) =>

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { downSince } from './machines.js'
-import { canReadAgent, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, type ProjectVisibility, type SwarmProject } from './projects.js'
+import { agentProjectId, agentSetRole, canReadAgent, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
 export interface Person { id: string; email: string; role: Role; generation: string }
@@ -27,6 +27,8 @@ export interface Agent {
   displayName?: string
   /** Chosen at start and kept for the session. Absent reads as builder (agentRole); the Lead is derived from leadId. */
   role?: AgentRole
+  /** The project's custom role it runs, chosen at start or assignment (projects.ts agentSetRole). */
+  roleId?: string | null
   /** A finished worker stays undecided even when its group receives a new brief. */
   workDecision?: 'awaiting' | 'keep' | 'stop'
   releaseId?: string
@@ -51,6 +53,7 @@ export const agentRole = (agent: Pick<Agent, 'role'>): AgentRole => agent.role ?
 export interface AgentStartRequest {
   conversationId: string
   role?: AgentRole
+  roleId?: string
   machineId: string
   engine: string
   model?: string
@@ -407,6 +410,13 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     visible.invitations = visible.invitations.filter(i => visible.conversations.some(c => c.id === i.conversationId))
   }
   for (const project of projectsOf(visible)) for (const target of awaitingWorkers(visible, project.id)) target.workDecision = 'awaiting'
+  for (const project of visible.projects ?? []) project.skillSet = skillSetOf(project)
+  // On Custom every agent shows the role it runs, null when its kind has none; elsewhere a role id means nothing yet.
+  for (const target of visible.agents) {
+    const home = projectsOf(state).find(p => p.id === agentProjectId(state, target))
+    if (home && skillSetOf(home) === 'custom') target.roleId = agentSetRole(state, home, target)?.id ?? null
+    else delete target.roleId
+  }
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) visible.invitations = []
   return visible
 }

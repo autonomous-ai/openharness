@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
@@ -1357,6 +1357,59 @@ describe('Super Tabs on a real Mongo replica set', () => {
     delete state.projects.find(p => p.id === 'lead')!.skillMode
     await db.superTab.update({ where: { id: tab }, data: { state } })
     expect(await modes()).toEqual({ [lead]: 'default', [legacyLead]: 'orchestration' })
+  })
+  it('keeps custom role texts out of the tab and the host rows, and serves a text only to the project owner, its Lead and its agents\' hosts', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Worker', configuration: config, lead: false })).result.agentId as string
+    const version = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16)
+    const roles = [{ id: 'lead', name: 'Product Manager', kind: 'lead' as const, text: 'LEAD-TEXT' },
+      { id: 'dev', name: 'Engineer', kind: 'builder' as const, text: 'DEV-TEXT' }, { id: 'review', name: 'Reviewer', kind: 'reviewer' as const, text: 'REVIEW-TEXT' }]
+    await run(tab, { type: 'project.roles.create', projectId: 'lead', roles })
+    const rows = async () => (await store.hostTabs(host, 'test-host')).filter(r => r.tabId === tab)
+    const rowOf = async (id: string) => (await rows()).find(r => r.agent.id === id)!
+    expect(await rowOf(worker)).not.toHaveProperty('role')
+    await run(tab, { type: 'project.skills', projectId: 'lead', mode: 'custom' })
+    expect(await rowOf(lead)).toMatchObject({ skillMode: 'default', role: { id: 'lead', name: 'Product Manager', kind: 'lead', version: version('LEAD-TEXT') } })
+    expect(await rowOf(worker)).toMatchObject({ skillMode: 'default', role: { id: 'dev', name: 'Engineer', kind: 'builder', version: version('DEV-TEXT') } })
+    const stored = JSON.stringify((await db.superTab.findUniqueOrThrow({ where: { id: tab } })).state)
+    for (const text of [JSON.stringify(await rows()), stored, JSON.stringify((await store.read(owner, tab)).state)]) expect(text).not.toMatch(/LEAD-TEXT|DEV-TEXT/)
+
+    const text = (user: AuthUser, roleId: string, asAgentId?: string) => app.inject({ method: 'GET',
+      url: `/api/super-tabs/${tab}/projects/lead/roles/${roleId}${asAgentId ? `?asAgentId=${asAgentId}` : ''}`, headers: { authorization: `Bearer ${user.sub}` } })
+    for (const [user, as] of [[owner], [host], [host, lead]] as Array<[AuthUser, string?]>) {
+      const answer = await text(user, 'dev', as)
+      expect(answer.statusCode, answer.body).toBe(200)
+      expect(answer.json().data).toEqual({ version: version('DEV-TEXT'), text: 'DEV-TEXT' })
+    }
+    for (const [user, as] of [[peer], [host, worker]] as Array<[AuthUser, string?]>) expect((await text(user, 'dev', as)).statusCode).toBe(404)
+    expect((await text(owner, 'aaaaaaaaaaaa')).statusCode).toBe(404)
+    // A host reads a text only while it could host the agent now: its machine active and the contributor's share grant live.
+    const share = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'test-host' } })
+    await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [] } })
+    try { expect((await text(host, 'dev')).statusCode).toBe(404) } finally {
+      await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: share.emails } })
+    }
+    await db.machine.update({ where: { machineId: 'test-host' }, data: { deletedAt: new Date() } })
+    try { expect((await text(host, 'dev')).statusCode).toBe(404) } finally {
+      await db.machine.update({ where: { machineId: 'test-host' }, data: { deletedAt: null } })
+    }
+    expect((await text(host, 'dev')).statusCode).toBe(200)
+
+    await run(tab, { type: 'project.role.set', projectId: 'lead', role: { ...roles[1]!, text: 'DEV-TEXT v2' } })
+    expect((await rowOf(worker)).role).toMatchObject({ id: 'dev', version: version('DEV-TEXT v2') })
+    expect((await text(owner, 'dev')).json().data).toEqual({ version: version('DEV-TEXT v2'), text: 'DEV-TEXT v2' })
+    await run(tab, { type: 'project.role.remove', projectId: 'lead', roleId: 'review' })
+    expect((await text(owner, 'review')).statusCode).toBe(404)
+    expect(await db.superTabRoleText.count({ where: { tabId: tab } })).toBe(2)
+    await run(tab, { type: 'project.roles.reset', projectId: 'lead', roles: roles.slice(0, 2) })
+    expect((await text(owner, 'dev')).json().data.text).toBe('DEV-TEXT')
+
+    const other = (await run(tab, { type: 'project.create', name: 'Other', visibility: 'public', brief: '' })).result.projectId as string
+    await run(tab, { type: 'project.roles.create', projectId: other, roles })
+    await run(tab, { type: 'project.delete', projectId: other })
+    expect(await db.superTabRoleText.count({ where: { tabId: tab, projectId: other } })).toBe(0)
   })
   it('closes the replying agent\'s own deliveries of a message as answered, and nobody else\'s', async () => {
     const { tab, lead } = await fixture()

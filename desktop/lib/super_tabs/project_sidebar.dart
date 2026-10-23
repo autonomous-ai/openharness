@@ -113,7 +113,12 @@ class ProjectSidebar extends StatelessWidget {
   );
 
   /// Project names open their PM chat; only the trailing control expands them.
-  Widget _row(SuperTabConversation group, {SuperTabProject? project}) {
+  Widget _row(
+    SuperTabConversation group, {
+    SuperTabProject? project,
+    String? label,
+    IconData? icon,
+  }) {
     final selected = !devicesSelected && controller.selectedId == group.id;
     final groups = project == null
         ? [group]
@@ -141,10 +146,11 @@ class ProjectSidebar extends StatelessWidget {
               SizedBox(width: SuperTabSectionHeading.indentFor(0)),
               SizedBox(
                 width: _iconColumn,
-                child: project == null
+                child: project == null && icon == null
                     ? null
                     : Icon(
-                        expanded ? AppIcons.folderOpen : AppIcons.folder,
+                        icon ??
+                            (expanded ? AppIcons.folderOpen : AppIcons.folder),
                         size: AppIcons.inlineSize,
                         color: DesktopChrome.muted,
                       ),
@@ -154,7 +160,7 @@ class ProjectSidebar extends StatelessWidget {
                   label: project?.isPrivate == true ? 'Private project' : null,
                   selected: selected,
                   child: Tooltip(
-                    message: project?.name ?? group.label,
+                    message: label ?? project?.name ?? group.label,
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(minHeight: 36),
                       child: Padding(
@@ -163,12 +169,16 @@ class ProjectSidebar extends StatelessWidget {
                           children: [
                             Expanded(
                               child: Text(
-                                project?.name ?? group.label,
+                                label ?? project?.name ?? group.label,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: DesktopChrome.control(
                                   medium: unread || selected,
-                                  color: selected || unread || project != null
+                                  color:
+                                      selected ||
+                                          unread ||
+                                          project != null ||
+                                          label != null
                                       ? DesktopChrome.foreground
                                       : DesktopChrome.muted,
                                 ),
@@ -365,6 +375,12 @@ class ProjectSidebar extends StatelessWidget {
             ),
           if (onNewProject != null || onYourDevices != null)
             const SizedBox(height: 20),
+          // Every person in the Swarm reads where the Product Managers talk.
+          if (snapshot?.conversation(snapshot.leadsConversationId ?? '')
+              case final leads?) ...[
+            _row(leads, label: 'Product Managers', icon: AppIcons.users),
+            const SizedBox(height: 16),
+          ],
           SuperTabSectionHeading(
             'Projects',
             onAdd: controller.canWrite ? onNewProject : null,
