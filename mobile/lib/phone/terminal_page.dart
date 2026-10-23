@@ -162,6 +162,21 @@ bool _keyboardIsUp = false;
 /// tracks the truth again as it always did.
 bool _keyboardDismissing = false;
 
+/// The onboarding hand-over whose first session has had its keyboard raised — once, across every page
+/// a wrapping pager mounts for that agent: each would otherwise raise it again when swiped to.
+({String machineId, String agentId, String text})? _firstSessionRaisedFor;
+
+/// Desktop's starter as the first session's OpenCode box was first read, and the hand-over it was
+/// read under — see `_TerminalPageState._firstTask`.
+({String machineId, String agentId, String text})? _starterFor;
+String? _starter;
+
+/// A keyboard asked for again: whatever was putting one away is over, and the inset's ticks are the
+/// truth again. Asked for while the last one still slid down, the inset turns back before reaching
+/// zero, the hold-off of [dismissKeyboardForSwipe] never ended, and [_keyboardIsUp] read false
+/// under a keyboard that was up.
+void _keyboardWanted() => _keyboardDismissing = false;
+
 /// Forgets what the keyboard did during the last run of terminal pages.
 ///
 /// Called when a pager opens. A pager popped with the keyboard up is disposed
@@ -492,6 +507,7 @@ class _TerminalPageState extends State<TerminalPage>
     // The keyboard has stopped moving, so whether it is up is now a fact: a
     // question read while it moved is decided here. See [_raiseForQuestion].
     _raiseForQuestion();
+    _raiseForFirstSession();
   }
 
   /// What the last build read from the notifier — the baseline [_onNotifier]
@@ -597,6 +613,7 @@ class _TerminalPageState extends State<TerminalPage>
     });
     if (_questionWatcher?.queued == null) _queueRaisedFor = null;
     _raiseForQuestion();
+    _raiseForFirstSession();
   }
 
   /// The daemon on this phone, cached so a page going can take its report back
@@ -676,7 +693,8 @@ class _TerminalPageState extends State<TerminalPage>
     _raiseKeyboardForQuestion();
   }
 
-  /// Open the keyboard because an agent is waiting on an answer.
+  /// Open the keyboard because an agent is waiting on an answer — or because the first session has
+  /// just opened over its task ([_raiseForFirstSession]).
   ///
   /// ⚠️ **Not [_raiseKeyboard], and synchronous where that one is not.** That
   /// one belongs to a TAP on the terminal, and awaits the mic's transcript to
@@ -700,6 +718,7 @@ class _TerminalPageState extends State<TerminalPage>
     if (_keyboardRequested || _ownsInput) return;
     // The controls somebody reaches for next are in the header.
     _chrome.reveal();
+    _keyboardWanted();
     setState(() {
       _keyboardRequested = true;
       // ⚠️ **The claim is asked for outright, not left to `focused` turning
@@ -790,7 +809,10 @@ class _TerminalPageState extends State<TerminalPage>
     final accepts = facts.session?.acceptsInput ?? false;
     if (accepts != _acceptedInput) {
       _acceptedInput = accepts;
-      if (accepts) _raiseForQuestion();
+      if (accepts) {
+        _raiseForQuestion();
+        _raiseForFirstSession();
+      }
     }
     if (facts == _facts) return;
     if (kTypingTrace) typingCount('page.rebuild(facts)');
@@ -805,6 +827,10 @@ class _TerminalPageState extends State<TerminalPage>
     _lifecycle =
         WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed;
     widget.notifier.addListener(_onNotifier);
+    // A session already taking input when the page comes ticks nothing to raise from.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _raiseForFirstSession();
+    });
   }
 
   @override
@@ -840,6 +866,16 @@ class _TerminalPageState extends State<TerminalPage>
       if (_keyboardSettling) setState(() => _keyboardSettling = false);
       // Find belongs to the terminal being read: swiped away, it goes, keyboard and all.
       if (_find != null) _closeFind(giveKeyboardBack: false, rebuild: false);
+      // A pretend take is this session's task: carried across the swipe, the next page's mic would
+      // send it there.
+      if (widget.voice.pretending && _firstSessionLine() != null) {
+        widget.voice.clear();
+      }
+    }
+    if (!oldWidget.isActive && widget.isActive) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _raiseForFirstSession();
+      });
     }
   }
 
@@ -852,6 +888,11 @@ class _TerminalPageState extends State<TerminalPage>
         ?.session;
     if (session?.voiceDeliver == _deliverVoice) session?.voiceDeliver = null;
     if (session?.onLineSent == _onLineSent) session?.onLineSent = null;
+    if (session?.voicePretend == _heardInFirstSession) {
+      session?.voicePretend = null;
+    }
+    _stopPromptWait();
+    _stopSentWait();
     // Said once: leaving the session spends the onboarding's line too. Not the onboarding's first
     // message: a line sent in any other session still answers it ([_onLineSent]), and a sign-out
     // ends it cancelled.
@@ -1107,25 +1148,27 @@ class _TerminalPageState extends State<TerminalPage>
     // The onboarding's one line, until the first send — see [AppNotifier.firstSessionLine].
     if (_firstSessionLine() case final line?) {
       final session = _facts?.session;
-      final fresh = line == OnboardingCopy.micSayWhat;
-      final typed = _preTypedStarter(session);
-      if ((fresh || typed != null) &&
-          session != null &&
-          const ['claude', 'codex', 'opencode'].contains(session.engineId)) {
+      final task = session == null ? null : _firstTask(session);
+      if (session != null && task != null) {
         // A take is on: the mic's own face speaks, and the suggestion waits with its line — a line
         // left over an empty row would point at nothing. Both are back if the take is dropped.
         if (VoiceLine.shows(widget.voice)) return null;
-        final suggestion = typed ?? firstTaskIdeas.first;
         return _FirstSessionSuggestion(
           line: line,
-          suggestion: suggestion,
+          suggestion: task,
           onSend: session.acceptsInput
               ? () {
                   // Read at the tap, not at the last frame: a send that landed since has spent the
-                  // line, and the button is still on screen until the next frame draws that.
+                  // line, and the button is still on screen until the next frame draws that. The
+                  // task too: the prompt as it stands, with whatever was changed in it since.
                   if (_firstSessionLine() == null) return;
+                  final now = _firstTask(session);
+                  if (now == null) return;
                   unawaited(
-                    widget.voice.submitText(suggestion, session.sendFirstTask),
+                    widget.voice.submitText(
+                      now,
+                      (text) => _sendFirstTask(session, text),
+                    ),
                   );
                 }
               : null,
@@ -1136,13 +1179,196 @@ class _TerminalPageState extends State<TerminalPage>
     return null;
   }
 
-  /// The task Desktop typed into OpenCode's box and did not send, while the first session's line is
-  /// still up. Null for any other pane, line or empty box.
-  String? _preTypedStarter(TerminalSession? session) =>
-      _firstSessionLine() == OnboardingCopy.micSendIt &&
-          session?.engineId == 'opencode'
-      ? openCodePromptText(session!.terminal.buffer)
-      : null;
+  /// Whether [session] is the first session handing its task over, on the page the onboarding
+  /// opened: a fresh Claude Code or Codex ("Say what to build, or send this:"), or OpenCode with
+  /// Desktop's starter ("Send it, or say anything."). The engines whose prompt the phone can clear
+  /// before it sends ([TerminalSession.sendFirstTask]).
+  bool _firstTaskSession(TerminalSession session) {
+    final line = _firstSessionLine();
+    return (line == OnboardingCopy.micSayWhat ||
+            line == OnboardingCopy.micSendIt) &&
+        const ['claude', 'codex', 'opencode'].contains(session.engineId);
+  }
+
+  /// The first session's task as it stands — what its Send sends, and what its mic is heard as
+  /// ([_heardInFirstSession]): what the prompt holds now — Desktop's starter in OpenCode's box, the
+  /// task [_raiseForFirstSession] typed into Claude Code or Codex, or whatever it was changed to —
+  /// and with an empty prompt the task it opened on. Null outside the first session, and for an
+  /// OpenCode box that has shown no starter.
+  String? _firstTask(TerminalSession session) {
+    if (!_firstTaskSession(session)) return null;
+    final line = widget.notifier.firstSessionLine;
+    final typed = typedPromptText(session.terminal.buffer, session.engineId);
+    if (_firstSessionLine() == OnboardingCopy.micSayWhat) {
+      return typed ?? firstTaskIdeas.first;
+    }
+    // OpenCode's box as first read is Desktop's starter: kept, so a box emptied on the keyboard
+    // still offers it, never a task the screen did not show.
+    if (typed != null && line != _starterFor) {
+      _starterFor = line;
+      _starter = typed;
+    }
+    return typed ?? (line == _starterFor ? _starter : null);
+  }
+
+  /// Sends the first session's task, replacing what its prompt holds — never joined to it
+  /// ([TerminalSession.sendFirstTask]). A prompt holding a paste marker ([holdsPasteMarker]) goes
+  /// by Return as it stands instead: what was pasted is only in the program, and read off the screen
+  /// and typed again it would be the marker, with the paste cleared away.
+  Future<bool> _sendFirstTask(TerminalSession session, String text) async {
+    if (!holdsPasteMarker(text)) return session.sendFirstTask(text);
+    if (!session.acceptsInput) return false;
+    session.terminal.keyInput(TerminalKey.enter);
+    return true;
+  }
+
+  /// What a take in the first session is heard as, read as it starts and as it ends: the task in
+  /// the prompt ([_firstTask]; empty when there is none to send, which is heard as nothing). Null —
+  /// an ordinary recording — once the first send has gone, or while a question is on screen that a
+  /// spoken answer is for ([_deliverVoice] answers it).
+  String? _heardInFirstSession() {
+    final session = widget.notifier
+        .paneOfAgent(widget.machineId, widget.agentId)
+        ?.session;
+    if (session == null || !_firstTaskSession(session)) return null;
+    if (_questionOnScreen(session)) return null;
+    return _firstTask(session) ?? '';
+  }
+
+  /// Whether [session]'s screen shows a question its engine asks — read off its terminal now, not
+  /// through [_questionWatcher], which follows a new terminal only on the next build and settles a
+  /// beat after it.
+  static bool _questionOnScreen(TerminalSession session) {
+    final engine = questionEngineOf(session.engineId);
+    return engine != null && readQuestionPane(session.terminal, engine) != null;
+  }
+
+  /// The first session's mic pretends (owner, 2026-10-23) — see [TerminalSession.voicePretend]. Set
+  /// while this page shows that session; [_heardInFirstSession] itself says when a take records after
+  /// all.
+  void _syncPretendVoice(TerminalSession? session) {
+    if (session == null) return;
+    if (_firstTaskSession(session)) {
+      session.voicePretend = _heardInFirstSession;
+    } else if (session.voicePretend == _heardInFirstSession) {
+      session.voicePretend = null;
+    }
+  }
+
+  /// The pane [_raiseForFirstSession] waits on for its prompt, and the listener it waits with.
+  TerminalSession? _promptWaitOn;
+  VoidCallback? _promptWait;
+
+  /// The first session opens with the keyboard up over its task (owner, 2026-10-23): Return sends it
+  /// as it stands, and the words are there to change. A fresh Claude Code or Codex gets the first
+  /// New Harness idea typed into its empty prompt, unsent; OpenCode's starter is Desktop's. Once per
+  /// hand-over ([_firstSessionRaisedFor]): put away, the keyboard stays away, and Send and the mic
+  /// send the same task.
+  ///
+  /// ⚠️ **Not before the cursor is in the prompt** ([cursorInPrompt]). A pane still starting has no
+  /// prompt to type into, and a dialog drawn first — Claude Code's trust prompt, its cursor on an
+  /// answer — is answered where it is drawn, under no keyboard. So the pane is watched until then,
+  /// each change read after it is written: [TerminalSession.outputTicks] moves before the write,
+  /// and a keyframe moves only the session.
+  ///
+  /// Asked as the page first draws, when its session starts taking input ([_onNotifier]), when it
+  /// becomes the page on screen ([didUpdateWidget]), when a question goes ([_onQuestionPane]) and
+  /// when the keyboard stops moving ([_endSettle]).
+  void _raiseForFirstSession() {
+    if (_firstSessionLine() == null || !widget.isActive) return;
+    if (widget.notifier.firstSessionLine == _firstSessionRaisedFor) return;
+    final session = widget.notifier
+        .paneOfAgent(widget.machineId, widget.agentId)
+        ?.session;
+    if (session == null || !_firstTaskSession(session)) return;
+    if (!identical(_promptWaitOn, session)) {
+      _stopPromptWait();
+      void soon() => scheduleMicrotask(_tryRaiseForFirstSession);
+      _promptWaitOn = session;
+      _promptWait = soon;
+      session.outputTicks.addListener(soon);
+      session.addListener(soon);
+    }
+    _tryRaiseForFirstSession();
+  }
+
+  void _tryRaiseForFirstSession() {
+    final session = _promptWaitOn;
+    if (!mounted || session == null) return;
+    final line = widget.notifier.firstSessionLine;
+    if (_firstSessionLine() == null ||
+        line == _firstSessionRaisedFor ||
+        !_firstTaskSession(session)) {
+      _stopPromptWait();
+      return;
+    }
+    // Parked, reconnecting, or the keyboard still moving: wait on — the next change asks again.
+    if (!widget.isActive || !session.acceptsInput || _keyboardSettling) return;
+    final buffer = session.terminal.buffer;
+    if (!cursorInPrompt(buffer, session.engineId)) return;
+    _stopPromptWait();
+    _firstSessionRaisedFor = line;
+    if (_firstSessionLine() == OnboardingCopy.micSayWhat &&
+        const ['claude', 'codex'].contains(session.engineId) &&
+        emptyPromptAtCursor(buffer)) {
+      session.terminal.textInput(firstTaskIdeas.first);
+      session.resetInputBuffer();
+    }
+    _raiseKeyboardForQuestion();
+  }
+
+  void _stopPromptWait() {
+    final session = _promptWaitOn;
+    final wait = _promptWait;
+    if (session != null && wait != null) {
+      session.outputTicks.removeListener(wait);
+      session.removeListener(wait);
+    }
+    _promptWaitOn = null;
+    _promptWait = null;
+  }
+
+  /// The pane [_dismissOnceSent] watches, its listener, and how long it watches.
+  TerminalSession? _sentWaitOn;
+  VoidCallback? _sentWait;
+  Timer? _sentDeadline;
+  static const _sentWatch = Duration(seconds: 3);
+
+  /// The first session's task went: the keyboard goes once the prompt has emptied — the task is
+  /// with the harness, and what it does with it is on screen (owner, 2026-10-23). A Return that sent
+  /// nothing — a file picked after `@`, a line broken with `\` — leaves the prompt holding its text
+  /// and the keyboard up. Watched as [_raiseForFirstSession] watches, for [_sentWatch].
+  void _dismissOnceSent(TerminalSession session) {
+    _stopSentWait();
+    void check() {
+      if (!mounted) return _stopSentWait();
+      if (typedPromptText(session.terminal.buffer, session.engineId) != null) {
+        return;
+      }
+      _stopSentWait();
+      _dismissInput();
+    }
+
+    void soon() => scheduleMicrotask(check);
+    _sentWaitOn = session;
+    _sentWait = soon;
+    session.outputTicks.addListener(soon);
+    session.addListener(soon);
+    _sentDeadline = Timer(_sentWatch, _stopSentWait);
+  }
+
+  void _stopSentWait() {
+    final session = _sentWaitOn;
+    final wait = _sentWait;
+    if (session != null && wait != null) {
+      session.outputTicks.removeListener(wait);
+      session.removeListener(wait);
+    }
+    _sentDeadline?.cancel();
+    _sentDeadline = null;
+    _sentWaitOn = null;
+    _sentWait = null;
+  }
 
   /// The onboarding's line by the mic, when this page is the session it opened on: "Send it, or say
   /// anything." Null on every other page, and once spent.
@@ -1160,6 +1386,16 @@ class _TerminalPageState extends State<TerminalPage>
   bool _spendFirstSessionLine() {
     if (_firstSessionLine() == null) return false;
     widget.notifier.firstSessionLine = null;
+    // Kept for this hand-over only: a later one for the same agent reads the same.
+    _firstSessionRaisedFor = null;
+    _starterFor = null;
+    _starter = null;
+    // From here a take is a recording again — see [_syncPretendVoice].
+    widget.notifier
+            .paneOfAgent(widget.machineId, widget.agentId)
+            ?.session
+            ?.voicePretend =
+        null;
     return true;
   }
 
@@ -1182,7 +1418,12 @@ class _TerminalPageState extends State<TerminalPage>
     // only the one it opened: a person signing in again may go straight to a session of their own,
     // which read as no first message (1 in 3 on 2026-10-19). Nothing once it has ended.
     onboarding.end(ProductFlow.firstMessage, ProductOutcome.ok);
+    final session = _readFacts().session;
+    final firstTask = session != null && _firstTaskSession(session);
     if (!_spendFirstSessionLine()) return;
+    // The first session's task is on its way: the keyboard goes once it has gone (owner,
+    // 2026-10-23). Only this once — Return in a session at work keeps it up.
+    if (firstTask) _dismissOnceSent(session);
     setState(() {});
   }
 
@@ -1364,9 +1605,9 @@ class _TerminalPageState extends State<TerminalPage>
     final session = await _sessionForInput();
     if (session == null) return false;
     if (_questionWatcher?.view != null) return _answerByVoice(session, text);
-    // Words spoken over a starter Desktop typed replace it, as Send does: never joined to it.
-    final sent = _preTypedStarter(session) != null
-        ? await session.sendFirstTask(text)
+    // The first session's task replaces what its prompt holds, as Send does: never joined to it.
+    final sent = _firstTaskSession(session)
+        ? await _sendFirstTask(session, text)
         : await session.sendComposerText(text);
     // After the send is acknowledged, never before: a tap felt first would be a promise.
     if (sent && mounted) HapticFeedback.lightImpact();
@@ -1660,6 +1901,7 @@ class _TerminalPageState extends State<TerminalPage>
       _find = null;
       if (!rebuild) return;
       if (back) {
+        _keyboardWanted();
         _keyboardRequested = true;
         _focusRequest++;
       } else {
@@ -1838,6 +2080,7 @@ class _TerminalPageState extends State<TerminalPage>
     // would be a keyboard that does nothing. See [_raiseKeyboardForQuestion].
     final session = _readFacts().session;
     if (session == null || !session.acceptsInput) return;
+    _keyboardWanted();
     setState(() {
       _keyboardRequested = true;
       _focusRequest++;
@@ -1896,6 +2139,7 @@ class _TerminalPageState extends State<TerminalPage>
     if (heard.isNotEmpty && session.acceptsInput) {
       session.terminal.textInput(heard);
     }
+    _keyboardWanted();
     setState(() => _keyboardRequested = true);
     // The keyboard is on its way and the key bar opens with it. Held from here
     // rather than from the first metrics tick, which is a frame too late: see
@@ -1905,8 +2149,13 @@ class _TerminalPageState extends State<TerminalPage>
 
   /// Puts the keyboard away without leaving the page — the `⌄` key on
   /// [TerminalKeyBar]. Dropping focus is what closes the input connection.
+  ///
+  /// ⚠️ **Through [dismissKeyboardForSwipe], not a bare `unfocus()`.** The inset is still falling
+  /// for ~250ms after it, [_keyboardIsUp] stays true, and [_shouldFocus] with it: a keyframe that
+  /// lands meanwhile — the harness answering the very line that put the keyboard away — had the
+  /// panel claim it straight back, and the keyboard never went.
   void _dismissInput() {
-    FocusManager.instance.primaryFocus?.unfocus();
+    dismissKeyboardForSwipe();
     if (_keyboardRequested) setState(() => _keyboardRequested = false);
     // The same move as [_raiseKeyboard], run backwards. See [_armSettle].
     _armSettle();
@@ -2245,6 +2494,7 @@ class _TerminalPageState extends State<TerminalPage>
     // While the agent's question is open, a voice take answers it — never a paste and a blind
     // Return into the dialog. See [_answerByVoice].
     session?.voiceDeliver = _deliverVoice;
+    _syncPretendVoice(session);
     // What this page sends: the first send on the phone asks for notifications, and answers the
     // onboarding's line by the mic. See [_onLineSent].
     session?.onLineSent = _onLineSent;
