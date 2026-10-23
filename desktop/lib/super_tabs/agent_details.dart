@@ -116,6 +116,12 @@ class SuperTabAgentInfo {
             HarnessActivity.starting) {
       return activity!.label;
     }
+    // A usage limit holds the agent whatever its task says, until the reset.
+    if (agent.limitedUntil?.toLocal() case final until?
+        when until.isAfter(DateTime.now())) {
+      String two(int n) => n.toString().padLeft(2, '0');
+      return 'Limited until ${two(until.hour)}:${two(until.minute)}';
+    }
     final workStatus = taskGroup?.assignment?['status'];
     if (hasQuestion || workStatus == 'needs_human') {
       return 'Waiting for a person to answer';

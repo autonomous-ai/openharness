@@ -21,6 +21,7 @@ import 'model.dart';
 import 'message_row.dart';
 import 'message_receipt.dart';
 import 'route_row.dart';
+import 'terminal_row.dart';
 import 'work_details.dart';
 import 'project_sidebar.dart';
 import 'project_options.dart';
@@ -961,6 +962,12 @@ class _SuperTabViewState extends State<SuperTabView>
     Map<String, SuperTabMessage> byId, {
     bool showReceipt = false,
   }) {
+    if (message.terminalEvent) {
+      return SuperTabTerminalRow(
+        key: ValueKey('super-message-${message.id}'),
+        message: message,
+      );
+    }
     final route = message.route;
     if (route != null) {
       return SuperTabRouteRow(

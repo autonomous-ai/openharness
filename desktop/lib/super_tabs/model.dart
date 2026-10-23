@@ -44,8 +44,13 @@ class SuperTabAgent {
       machineOwnerId =
           row['machineOwnerId'] as String? ?? _text(row, 'contributorId'),
       role = row['role'] as String?,
+      limitedUntil = DateTime.tryParse(row['limitedUntil'] as String? ?? ''),
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
+
+  /// Until when routing skips it: its machine saw a usage limit on its screen
+  /// (spec/2026-10-23-lead-sees-agent-terminal.md). Null when none was seen.
+  final DateTime? limitedUntil;
 
   /// The account whose computer runs it; a contributor may run agents on a computer another account shared with them.
   final String machineOwnerId;
@@ -384,6 +389,10 @@ class SuperTabMessage {
   bool get fromTerminal => source['kind'] == 'native';
   SuperTabRoute? get route => SuperTabRoute.fromSource(source);
   bool get routeOverride => source['kind'] == 'route-override';
+
+  /// A note the backend writes about a terminal: a Lead's typing, or an alert.
+  bool get terminalEvent =>
+      source['kind'] == 'terminal-input' || source['kind'] == 'terminal-alert';
   String? get terminalNote {
     if (!fromTerminal) return null;
     final phase = source['phase'];

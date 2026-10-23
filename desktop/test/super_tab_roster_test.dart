@@ -169,6 +169,52 @@ void main() {
       .message!;
 
   testWidgets(
+    'an agent whose screen showed a usage limit reads "Limited until" its reset, in local time, until it passes',
+    (tester) async {
+      final f = await fixture(tester);
+      final agents = f.server.state['agents'] as List;
+      // Working on a task, so its status would otherwise say so.
+      (f.server.state['conversations'] as List)[1]['assignment'] = {
+        'agentId': 'agent-1',
+        'status': 'working',
+      };
+      agents[1]['limitedUntil'] = DateTime(
+        2099,
+        1,
+        2,
+        9,
+        5,
+      ).toUtc().toIso8601String();
+      await f.controller.refresh();
+      await f.show(tester);
+      expect(f.inRow(1, find.text('Limited until 09:05')), findsOneWidget);
+      expect(rowTooltip(tester, f, 1), contains('Limited until 09:05'));
+      await captureBoundary(
+        tester,
+        f.boundary.currentContext!.findRenderObject()! as RenderRepaintBoundary,
+        captureDir,
+        'roster-limited',
+      );
+      // A reset already past, or none, is no limit.
+      for (final until in [DateTime(2000).toUtc().toIso8601String(), null]) {
+        if (until == null) {
+          (agents[1] as Map).remove('limitedUntil');
+        } else {
+          agents[1]['limitedUntil'] = until;
+        }
+        await f.controller.refresh();
+        await tester.pumpAndSettle();
+        expect(find.textContaining('Limited until'), findsNothing);
+        expect(
+          f.inRow(1, find.text('Assigned to "Offline editing"')),
+          findsOneWidget,
+        );
+      }
+      await f.close(tester);
+    },
+  );
+
+  testWidgets(
     'agent tooltip combines known model, machine, task and activity',
     (tester) async {
       final f = await fixture(tester);
