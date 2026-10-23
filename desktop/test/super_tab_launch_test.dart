@@ -1029,6 +1029,36 @@ void main() {
     expect(f.connection.joins.single['command']['roleId'], 'review');
   });
 
+  test('switching away from Custom resets a pending Reviewer launch', () async {
+    final f = SuperTabLaunchFixture();
+    final project = {
+      ...projectFixture('lead', 'Company', 'lead'),
+      'skillSet': 'custom',
+      'skillMode': 'default',
+      'roles': [
+        {'id': 'dev', 'name': 'Engineer', 'kind': 'builder', 'version': 'v1'},
+        {
+          'id': 'review',
+          'name': 'Reviewer',
+          'kind': 'reviewer',
+          'version': 'v1',
+        },
+      ],
+    };
+    f.connection.server.state['projects'] = [project];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box();
+    box.integration!.chooseRole('review');
+    project['skillSet'] = 'default';
+    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+    final create = f.connection.calls
+        .firstWhere((entry) => entry.$1 == 'agent_create')
+        .$2;
+    expect(create['swarmSkillMode'], 'default');
+    expect(create['swarmRole'], 'dev');
+    expect(f.connection.joins.single['command'], isNot(contains('roleId')));
+  });
+
   testWidgets('recovering a removed role keeps the form readable', (
     tester,
   ) async {

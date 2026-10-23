@@ -122,6 +122,11 @@ class SuperTabLaunch {
           final prompt = await launch.prepare(machine, task);
           integration.swarmSkillMode =
               saved['skillMode'] as String? ?? 'orchestration';
+          integration.swarmRole = saved['lead'] == true
+              ? 'lead'
+              : saved['roleKind'] == 'reviewer'
+              ? 'review'
+              : 'dev';
           return prompt;
         } on SuperTabFailure catch (failure) {
           // Validation rejects the request before applying it. A lost response
@@ -277,6 +282,7 @@ class SuperTabLaunch {
       }
     } else {
       saved.remove('roleId');
+      saved.remove('roleKind');
     }
     final prompt = superTabLaunchPrompt(
       tabId: saved['tabId'] as String,

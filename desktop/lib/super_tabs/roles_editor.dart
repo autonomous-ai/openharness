@@ -48,6 +48,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 ## 3. Route, start, assign
 - Route each group; reuse an idle agent before starting one; start only on the Swarm's machines.
 - The brief is all a Builder gets; never rely on chat history.
+- Before assigning, look at other projects' active work; if your task touches the same code, say so in the Leads conversation and agree an order first.
 
 ## 4. Keep work moving
 - Each time you are woken, look at active work.

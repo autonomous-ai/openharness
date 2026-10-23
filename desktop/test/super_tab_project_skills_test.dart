@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/roles_editor.dart';
 
 import 'support/super_tab_fixture.dart';
 import 'support/capture.dart';
@@ -102,6 +103,34 @@ class _RolesServer extends ConversationServer {
 void main() {
   final captureDir = Platform.environment['HARNESS_CUSTOM_ROLES_CAPTURE'];
   setUpAll(() => loadCaptureFonts(captureDir));
+
+  test(
+    'custom set starts with the shipped Default skill texts byte for byte',
+    () {
+      final source = File('../cli/src/lib/swarmSkills.ts').readAsStringSync();
+      final sections = source.split(
+        'const defaults: Record<SwarmRole, string> = {',
+      );
+      expect(sections, hasLength(2));
+      final defaults = sections.last;
+      final roles = {
+        for (final role in defaultProjectRoles()) role['id']!: role['text']!,
+      };
+      for (final id in ['lead', 'dev', 'review']) {
+        final match = RegExp(
+          '  $id: '
+          r'`([\s\S]*?)`,',
+        ).firstMatch(defaults);
+        expect(match, isNotNull, reason: 'CLI Default $id text is missing');
+        expect(
+          roles[id],
+          match!.group(1),
+          reason: '$id differs from CLI Default',
+        );
+      }
+    },
+  );
+
   Future<_RolesServer> mount(
     WidgetTester tester, {
     String account = 'owner',
