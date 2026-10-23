@@ -140,6 +140,33 @@ Future<void> _settleSave(WidgetTester tester) async {
 }
 
 void main() {
+  test('an allowance\'s note names its tightest window and its reset, in either detail format', () {
+    // Another machine's reading: the tightest window first.
+    expect(
+      superMachineAllowanceNote([
+        '5-hour: 44% remaining · resets in 2h 10m',
+        'Weekly: 80% remaining',
+      ]),
+      '5-hour limit · resets in 2h 10m',
+    );
+    // This computer's: the limiting window named, then each window.
+    expect(
+      superMachineAllowanceNote([
+        'Limiting window: Weekly',
+        'Read 3 min ago',
+        '5-hour — 90% remaining · resets in 1h',
+        'Weekly — 62% remaining · resets in 4d',
+      ]),
+      'Weekly limit · resets in 4d',
+    );
+    expect(
+      superMachineAllowanceNote(['Weekly: 62% remaining']),
+      'Weekly limit',
+    );
+    expect(superMachineAllowanceNote(['Usage unavailable']), isNull);
+    expect(superMachineAllowanceNote(const []), isNull);
+  });
+
   final capture = Platform.environment['HARNESS_SUPER_TAB_CAPTURE'];
   setUpAll(() => loadCaptureFonts(capture));
   test('a computer is shown by its real hostname without ".local", and a name a person chose stays as it is', () {
@@ -221,9 +248,9 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.byType(AlertDialog), findsNothing);
-      expect(find.text('CPU 0%'), findsOneWidget);
-      expect(find.text('RAM 0 GB'), findsOneWidget);
-      expect(find.text('SSD 141 GB'), findsOneWidget);
+      expect(_hw(tester, 'online', 'CPU'), '0%');
+      expect(_hw(tester, 'online', 'RAM'), '0 GB');
+      expect(_hw(tester, 'online', 'SSD'), '141 GB');
       expect(
         find.byKey(const ValueKey('super-machine-allowance-online-codex')),
         findsOneWidget,
@@ -249,7 +276,13 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
       expect(find.text('Available capacity'), findsOneWidget);
-      expect(find.text('CPU'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(SuperTabMachineDetails),
+          matching: find.text('CPU'),
+        ),
+        findsOneWidget,
+      );
       expect(
         find.descendant(
           of: find.byType(SuperTabMachineDetails),
@@ -652,7 +685,7 @@ void main() {
       );
       expect(
         ink(chip('fine', 'claude'), '50%'),
-        statusLineInkOnSurface(DesktopChrome.muted, surface),
+        statusLineInkOnSurface(DesktopChrome.foreground, surface),
       );
       expect(
         tester
@@ -680,6 +713,16 @@ void main() {
       expect(
         claudeTip,
         startsWith('Claude Code\n5-hour: 15% remaining · resets in '),
+      );
+      // Under the figure, the window that stops work first and when it resets.
+      expect(
+        find.descendant(
+          of: chip('both', 'claude'),
+          matching: find.textContaining(
+            RegExp(r'^5-hour limit · resets in \d'),
+          ),
+        ),
+        findsOneWidget,
       );
       expect(
         find.bySemanticsLabel(RegExp('Claude Code 15% remaining')),
@@ -809,10 +852,10 @@ void main() {
             row.left + 36,
             reason: reason,
           );
-          expect(find.text('CPU 71%'), findsOneWidget, reason: reason);
-          expect(find.text('GPU 100%'), findsOneWidget, reason: reason);
-          expect(find.text('RAM 17 GB'), findsOneWidget, reason: reason);
-          expect(find.text('SSD 207 GB'), findsOneWidget, reason: reason);
+          expect(_hw(tester, 'm', 'CPU'), '71%', reason: reason);
+          expect(_hw(tester, 'm', 'GPU'), '100%', reason: reason);
+          expect(_hw(tester, 'm', 'RAM'), '17 GB', reason: reason);
+          expect(_hw(tester, 'm', 'SSD'), '207 GB', reason: reason);
           expect(
             find.byKey(const ValueKey('super-machine-allowance-m-claude')),
             findsOneWidget,
@@ -937,12 +980,12 @@ void main() {
           find.byKey(const ValueKey('super-machine-toggle-studio')),
         );
         await tester.pumpAndSettle();
-        expect(find.text('Local models'), findsOneWidget);
+        expect(find.text('Local'), findsOneWidget);
         expect(
           find.byKey(const ValueKey('super-machine-local-studio-Qwen 3')),
           findsOneWidget,
         );
-        expect(find.text('API models'), findsOneWidget);
+        expect(find.text('API'), findsOneWidget);
         expect(
           find.byKey(
             const ValueKey('super-machine-api-studio-deepseek-v4.1-flash'),
@@ -2475,3 +2518,8 @@ void main() {
     await tester.pump();
   });
 }
+
+/// A hardware reading's value in a machine's expanded readings.
+String? _hw(WidgetTester tester, String id, String name) => tester
+    .widget<Text>(find.byKey(ValueKey('super-machine-hw-$id-$name')))
+    .data;

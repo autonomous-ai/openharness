@@ -1024,6 +1024,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                       0,
                       100,
                     ),
+                    note: superMachineAllowanceNote(switch (row['details']) {
+                      final List lines => lines.whereType<String>(),
+                      _ => const <String>[],
+                    }),
                     detail: [
                       account.name,
                       ...switch (row['details']) {
@@ -1708,6 +1712,33 @@ class _MachineView {
 /// A model a machine offers its Swarm: its short name on the row, the whole of it on hover.
 typedef _ServedModel = ({String name, String tip});
 
+/// An allowance's note, from its detail lines: the window that stops work first, and its reset. Another machine's
+/// lines put that window first (`5-hour: 44% remaining · resets in 2h 10m`); this computer's name it
+/// (`Limiting window: 5-hour`) and list each window as `5-hour — 44% remaining · resets in 2h 10m`.
+String? superMachineAllowanceNote(Iterable<String> lines) {
+  const limiting = 'Limiting window: ', resets = ' · resets in ';
+  final named = lines
+      .where((line) => line.startsWith(limiting))
+      .firstOrNull
+      ?.substring(limiting.length);
+  final String window;
+  final String? line;
+  if (named != null) {
+    window = named;
+    line = lines.where((l) => l.startsWith('$named — ')).firstOrNull;
+  } else {
+    final first = lines.firstOrNull;
+    if (first == null || !first.contains(': ')) return null;
+    window = first.substring(0, first.indexOf(': '));
+    line = first;
+  }
+  return [
+    '$window limit',
+    if (line != null && line.contains(resets))
+      line.substring(line.indexOf(resets) + 3),
+  ].join(' · ');
+}
+
 /// One engine's allowance on a machine: its mark and remaining share on the row, its windows on hover.
 class _Allowance {
   const _Allowance({
@@ -1716,20 +1747,24 @@ class _Allowance {
     required this.figure,
     required this.left,
     required this.detail,
+    this.note,
   });
 
   final String engine, name, figure, detail;
 
+  /// The window that stops work first and when it resets (`5-hour limit · resets in 2h 10m`), under the figure.
+  final String? note;
+
   /// The share left, 0–100.
   final double left;
 
-  /// Amber below 20%, red below 10%, otherwise the row's quiet metadata ink.
+  /// Amber below 20%, red below 10%, otherwise the reading's own ink.
   Color get ink => statusLineInkOnSurface(
     left < 10
         ? grid.AppPalette.usageCritical
         : left < 20
         ? grid.AppPalette.usageLow
-        : DesktopChrome.muted,
+        : DesktopChrome.foreground,
     DesktopChrome.surface,
   );
 }
@@ -1865,96 +1900,395 @@ class _MachineReadings extends StatelessWidget {
   const _MachineReadings({required this.view});
   final _MachineView view;
 
+  /// A share used, as a bar's tone: amber from 85%, red from 95%, else the reading's own quiet ink.
+  static Color? _tone(double? used) => used == null
+      ? null
+      : used >= .95
+      ? grid.AppPalette.usageCritical
+      : used >= .85
+      ? grid.AppPalette.usageLow
+      : null;
+
   @override
   Widget build(BuildContext context) {
     if (view.dim) return const SizedBox.shrink();
     final resources = view.resources;
-    final usage = <(String, String)>[
-      if (resources?.cpuPercent case final cpu?)
-        ('CPU ${resourcePercent(cpu)}', 'CPU utilization'),
-      if (resources?.busiestGpu?.utilizationPercent case final gpu?)
-        ('GPU ${resourcePercent(gpu)}', 'GPU utilization'),
-    ];
-    final memoryFree =
-        resources?.memoryTotalBytes == null ||
-            resources?.memoryUsedBytes == null
+    final memoryTotal = resources?.memoryTotalBytes;
+    final memoryFree = memoryTotal == null || resources?.memoryUsedBytes == null
         ? null
-        : (resources!.memoryTotalBytes! - resources.memoryUsedBytes!).clamp(
-            0,
-            resources.memoryTotalBytes!,
-          );
+        : (memoryTotal - resources!.memoryUsedBytes!).clamp(0, memoryTotal);
     final diskFree = resources?.projectDiskTotalBytes == null
         ? resources?.diskFreeBytes
         : resources?.projectDiskFreeBytes;
-    final capacity = <(String, String)>[
+    final diskTotal =
+        resources?.projectDiskTotalBytes ?? resources?.diskTotalBytes;
+    final gpu = resources?.busiestGpu?.utilizationPercent;
+    // What is in use as a share, for the bar; RAM and SSD say what is free, as the row's tooltip does.
+    final hardware = <_Reading>[
+      if (resources?.cpuPercent case final cpu?)
+        (
+          name: 'CPU',
+          value: resourcePercent(cpu),
+          used: (cpu / 100).clamp(0, 1).toDouble(),
+          note: 'in use',
+          meaning: 'CPU utilization',
+        ),
+      if (gpu != null)
+        (
+          name: 'GPU',
+          value: resourcePercent(gpu),
+          used: (gpu / 100).clamp(0, 1).toDouble(),
+          note: 'in use',
+          meaning: 'GPU utilization',
+        ),
       if (memoryFree != null)
-        ('RAM ${resourceBytes(memoryFree.toDouble())}', 'Memory available'),
+        (
+          name: 'RAM',
+          value: resourceBytes(memoryFree.toDouble()),
+          used: memoryTotal! > 0 ? 1 - memoryFree / memoryTotal : null,
+          note: 'free of ${resourceBytes(memoryTotal)}',
+          meaning: 'Memory available',
+        ),
       if (diskFree != null)
-        ('SSD ${resourceBytes(diskFree)}', 'Storage available'),
+        (
+          name: 'SSD',
+          value: resourceBytes(diskFree),
+          used: diskTotal != null && diskTotal > 0
+              ? (1 - diskFree / diskTotal).clamp(0, 1).toDouble()
+              : null,
+          note: diskTotal == null
+              ? 'free'
+              : 'free of ${resourceBytes(diskTotal)}',
+          meaning: 'Storage available',
+        ),
     ];
-    final label = DesktopChrome.metadata();
-    final style = DesktopChrome.metadata(color: DesktopChrome.foreground)
-        .copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
-    Widget readings(List<(String, String)> readings) => Wrap(
-      spacing: 10,
-      runSpacing: 2,
-      children: [
-        for (final (text, meaning) in readings)
-          Tooltip(
-            message: meaning,
-            child: Text(text, style: style),
-          ),
-      ],
-    );
-    // Model names are long and full of dashes: a quiet dot between them keeps two from reading as one.
-    Widget models(List<_ServedModel> models, String kind) => Wrap(
-      spacing: 6,
-      runSpacing: 2,
-      children: [
-        for (final (index, model) in models.indexed) ...[
-          if (index > 0) Text('·', style: label),
-          Tooltip(
-            message: model.tip,
-            child: Text(
-              model.name,
-              key: ValueKey('super-machine-$kind-${view.id}-${model.name}'),
-              style: style,
-            ),
-          ),
-        ],
-      ],
-    );
-    final hardware = [...usage, ...capacity];
-    // One labelled line each, the labels in a column as wide as the widest, so values line up at any text size.
-    final lines = <(String, Widget)>[
-      if (hardware.isNotEmpty) ('Hardware', readings(hardware)),
+    final sections = <(String, String?, Widget Function(double))>[
+      if (hardware.isNotEmpty)
+        (
+          'Hardware',
+          null,
+          (width) => _grid(width, width >= 300 ? 4 : 2, [
+            for (final reading in hardware) _hardware(reading),
+          ]),
+        ),
       if (view.allowances.isNotEmpty)
         (
           'Subscriptions',
-          Wrap(
-            spacing: 12,
-            runSpacing: 4,
+          'left now',
+          (width) => _grid(width, width >= 260 ? 2 : 1, [
+            for (final allowance in view.allowances) _allowance(allowance),
+          ]),
+        ),
+      if (view.apiModels.isNotEmpty || view.localModels.isNotEmpty)
+        (
+          'Models for the Swarm',
+          null,
+          (_) => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              for (final allowance in view.allowances)
-                Tooltip(
-                  message: allowance.detail,
-                  child: Semantics(
-                    label: '${allowance.name} ${allowance.figure} remaining',
-                    excludeSemantics: true,
-                    child: Row(
-                      key: ValueKey(
-                        'super-machine-allowance-${view.id}-${allowance.engine}',
+              if (view.apiModels.isNotEmpty)
+                _models(AppIcons.cloud, 'API', view.apiModels, 'api'),
+              if (view.apiModels.isNotEmpty && view.localModels.isNotEmpty)
+                const SizedBox(height: 6),
+              if (view.localModels.isNotEmpty)
+                _models(AppIcons.cpu, 'Local', view.localModels, 'local'),
+            ],
+          ),
+        ),
+    ];
+    if (sections.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      key: ValueKey('super-machine-readings-${view.id}'),
+      padding: const EdgeInsets.fromLTRB(10, 4, 10, 12),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: DesktopChrome.foreground.withValues(alpha: .035),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: DesktopChrome.rim),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              // Large text keeps the narrow arrangement: fewer, wider columns.
+              final width = MediaQuery.textScalerOf(context).scale(12) > 16
+                  ? constraints.maxWidth / 2
+                  : constraints.maxWidth;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final (index, (title, aside, body))
+                      in sections.indexed) ...[
+                    if (index > 0) const SizedBox(height: 14),
+                    Text.rich(
+                      TextSpan(
+                        text: title,
+                        children: [
+                          if (aside != null)
+                            TextSpan(
+                              text: ' · $aside',
+                              style: DesktopChrome.text(
+                                size: 11,
+                                height: 1.3,
+                                color: DesktopChrome.muted,
+                              ),
+                            ),
+                        ],
                       ),
+                      style: DesktopChrome.text(
+                        size: 11,
+                        medium: true,
+                        height: 1.3,
+                        color: DesktopChrome.muted,
+                      ).copyWith(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 8),
+                    body(width),
+                  ],
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// [children] in [columns] equal columns, wrapping into rows.
+  static Widget _grid(double width, int columns, List<Widget> children) =>
+      LayoutBuilder(
+        builder: (context, constraints) {
+          const gap = 8.0;
+          final cell = (constraints.maxWidth - gap * (columns - 1)) / columns;
+          return Wrap(
+            spacing: gap,
+            runSpacing: 10,
+            children: [
+              for (final child in children) SizedBox(width: cell, child: child),
+            ],
+          );
+        },
+      );
+
+  Widget _hardware(_Reading reading) {
+    final tone = _tone(reading.used);
+    final ink = tone == null
+        ? DesktopChrome.foreground
+        : statusLineInkOnSurface(tone, DesktopChrome.surface);
+    return Tooltip(
+      message: reading.meaning,
+      child: Semantics(
+        label: '${reading.name} ${reading.value} ${reading.note}',
+        excludeSemantics: true,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                Text(
+                  reading.name,
+                  style: DesktopChrome.text(
+                    size: 11,
+                    height: 1.3,
+                    color: DesktopChrome.muted,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    reading.value,
+                    key: ValueKey(
+                      'super-machine-hw-${view.id}-${reading.name}',
+                    ),
+                    textAlign: TextAlign.right,
+                    maxLines: 1,
+                    overflow: TextOverflow.fade,
+                    softWrap: false,
+                    style:
+                        DesktopChrome.text(
+                          size: 12,
+                          medium: true,
+                          height: 1.3,
+                          color: ink,
+                        ).copyWith(
+                          fontWeight: FontWeight.w600,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 5),
+            _Meter(share: reading.used ?? 0, tone: tone),
+            const SizedBox(height: 4),
+            Text(
+              reading.note,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.text(
+                size: 10,
+                height: 1.2,
+                color: DesktopChrome.muted,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _allowance(_Allowance allowance) {
+    final tone = allowance.left < 10
+        ? grid.AppPalette.usageCritical
+        : allowance.left < 20
+        ? grid.AppPalette.usageLow
+        : null;
+    return Tooltip(
+      message: allowance.detail,
+      child: Semantics(
+        label: '${allowance.name} ${allowance.figure} remaining',
+        excludeSemantics: true,
+        child: Container(
+          key: ValueKey(
+            'super-machine-allowance-${view.id}-${allowance.engine}',
+          ),
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+          decoration: BoxDecoration(
+            color: DesktopChrome.foreground.withValues(alpha: .045),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  EngineMark(engine: allowance.engine, size: 14),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      allowance.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: DesktopChrome.text(size: 12, height: 1.3),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    allowance.figure,
+                    key: ValueKey(
+                      'super-machine-figure-${view.id}-${allowance.engine}',
+                    ),
+                    style:
+                        DesktopChrome.text(
+                          size: 12,
+                          medium: true,
+                          height: 1.3,
+                          color: allowance.ink,
+                        ).copyWith(
+                          fontWeight: FontWeight.w600,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              // The bar is what is left, as the figure is.
+              _Meter(share: allowance.left / 100, tone: tone),
+              if (allowance.note case final note?) ...[
+                const SizedBox(height: 5),
+                Text(
+                  note,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: DesktopChrome.text(
+                    size: 10,
+                    height: 1.2,
+                    color: DesktopChrome.muted,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// A kind's label, then its models as chips: a long dashed name reads as one name inside its own chip.
+  Widget _models(
+    IconData icon,
+    String label,
+    List<_ServedModel> models,
+    String kind,
+  ) {
+    final local = kind == 'local';
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 52,
+          height: 22,
+          child: Row(
+            children: [
+              Icon(icon, size: 12, color: DesktopChrome.muted),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: DesktopChrome.text(
+                  size: 11,
+                  height: 1.3,
+                  color: DesktopChrome.muted,
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final model in models)
+                Tooltip(
+                  message: model.tip,
+                  child: Container(
+                    height: 22,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    decoration: BoxDecoration(
+                      color: local
+                          ? grid.AppPalette.online.withValues(alpha: .13)
+                          : DesktopChrome.foreground.withValues(alpha: .06),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        EngineMark(engine: allowance.engine, size: 14),
-                        const SizedBox(width: 4),
-                        Text(
-                          allowance.figure,
-                          key: ValueKey(
-                            'super-machine-figure-${view.id}-${allowance.engine}',
+                        if (local) ...[
+                          Container(
+                            width: 5,
+                            height: 5,
+                            decoration: BoxDecoration(
+                              color: grid.AppPalette.online,
+                              shape: BoxShape.circle,
+                            ),
                           ),
-                          style: style.copyWith(color: allowance.ink),
+                          const SizedBox(width: 5),
+                        ],
+                        Flexible(
+                          child: Text(
+                            model.name,
+                            key: ValueKey(
+                              'super-machine-$kind-${view.id}-${model.name}',
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: grid.AppType.monoMeta(
+                              color: DesktopChrome.foreground,
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -1963,62 +2297,45 @@ class _MachineReadings extends StatelessWidget {
             ],
           ),
         ),
-      if (view.apiModels.isNotEmpty)
-        ('API models', models(view.apiModels, 'api')),
-      if (view.localModels.isNotEmpty)
-        ('Local models', models(view.localModels, 'local')),
-    ];
-    if (lines.isEmpty) return const SizedBox.shrink();
-    return Padding(
-      key: ValueKey('super-machine-readings-${view.id}'),
-      padding: const EdgeInsets.fromLTRB(36, 6, 24, 12),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          // Side by side while there is room for a value beside its label; above it in a narrow sidebar or at
-          // large text, where a column of labels would leave the values no width.
-          final stacked =
-              constraints.maxWidth < 240 ||
-              MediaQuery.textScalerOf(context).scale(12) > 18;
-          if (stacked) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (final (index, (name, value)) in lines.indexed) ...[
-                  if (index > 0) const SizedBox(height: 8),
-                  Text(name, style: label),
-                  const SizedBox(height: 2),
-                  value,
-                ],
-              ],
-            );
-          }
-          return Table(
-            columnWidths: const {
-              0: IntrinsicColumnWidth(),
-              1: FlexColumnWidth(),
-            },
-            children: [
-              for (final (index, (name, value)) in lines.indexed)
-                TableRow(
-                  children: [
-                    Padding(
-                      padding: EdgeInsets.only(
-                        right: 12,
-                        top: index == 0 ? 0 : 6,
-                      ),
-                      child: Text(name, style: label),
-                    ),
-                    Padding(
-                      padding: EdgeInsets.only(top: index == 0 ? 0 : 6),
-                      child: value,
-                    ),
-                  ],
-                ),
-            ],
-          );
-        },
-      ),
+      ],
     );
   }
+}
+
+/// One hardware reading of a machine: its name and value, the share in use, and a word on what the value is.
+typedef _Reading = ({
+  String name,
+  String value,
+  double? used,
+  String note,
+  String meaning,
+});
+
+/// A thin bar: [share] of it filled, in [tone] when it warns.
+class _Meter extends StatelessWidget {
+  const _Meter({required this.share, this.tone});
+
+  final double share;
+  final Color? tone;
+
+  @override
+  Widget build(BuildContext context) => ClipRRect(
+    borderRadius: BorderRadius.circular(2),
+    child: SizedBox(
+      height: 4,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          ColoredBox(color: DesktopChrome.foreground.withValues(alpha: .09)),
+          FractionallySizedBox(
+            alignment: Alignment.centerLeft,
+            widthFactor: share.clamp(0, 1),
+            child: ColoredBox(
+              color: tone ?? DesktopChrome.foreground.withValues(alpha: .72),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 }
