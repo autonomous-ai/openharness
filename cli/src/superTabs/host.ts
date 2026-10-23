@@ -17,6 +17,7 @@ import { attentionOf } from './attention.js'
 import { prepareContribution } from './contribution.js'
 import { hostname } from 'node:os'
 import { replacementObservations } from './replacements.js'
+import { TerminalHost } from './terminal.js'
 
 type Json = Record<string, unknown>
 export class SuperTabHostError extends Error {
@@ -181,6 +182,8 @@ export class SuperTabHost {
   private readonly skillModes = new Map<string, SwarmSkillMode>()
   private skillsRunning: Promise<void> | null = null
   private missing = new Map<string, number>()
+  /** A Lead's reads of and typing into this machine's agents' terminals, and the stuck and usage-limit alerts. */
+  private readonly terminal: TerminalHost
 
   constructor(private readonly core: CoreApi, readonly machineId: string, options: SuperTabHostOptions = {}) {
     if (!identifier(machineId)) throw new SuperTabHostError('MACHINE_UNAVAILABLE', 'This machine is not signed in.')
@@ -192,6 +195,7 @@ export class SuperTabHost {
     this.now = options.now ?? Date.now
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
+    this.terminal = new TerminalHost(core, machineId, { now: this.now, log: this.log })
     this.journal = { version: 1, machineId, entries: {} }
     if (existsSync(this.file)) {
       const raw = readFileSync(this.file, 'utf8')
@@ -460,6 +464,8 @@ export class SuperTabHost {
     this.wakeShare(data)
     this.publishAttention(data)
     this.joinSwarms(data)
+    // Off the poll: a screen read waits on the core, and never delays the input leases below.
+    if (this.core.superTabs) void this.terminal.tick(data)
     // Recovery can wait on a native receipt. Run it beside leases, so another worker's input
     // never expires while an old Change agent is being reconciled.
     if (!this.replacementsRunning && this.now() >= this.nextReplacementsAt) {

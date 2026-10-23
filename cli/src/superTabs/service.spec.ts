@@ -502,7 +502,7 @@ it('documents finished worker decisions and explains an older backend without re
 describe('the Swarm cards the devices ask for', () => {
   function withCards() {
     const cards = { want: vi.fn(), open: vi.fn(), recap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped', at: 5, none: false })), onCards: undefined as unknown, onRecap: undefined as unknown }
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
     const core = fakeCore({ superTabs })
     const make = vi.fn(() => cards as never)
     const service = superTabService(core, { cards: make })
@@ -563,5 +563,17 @@ describe('the Swarm cards the devices ask for', () => {
       expect(await t.ask({ action, on: true, session: 's1', tabId: 't1', leadId: 'l1' }, { local: false, owner: true, accountOwner: true } as never)).toEqual({ error: 'OWNER_REQUIRED' })
     }
     expect(t.make).not.toHaveBeenCalled()
+  })
+})
+
+describe('a Lead\'s terminal result', () => {
+  it('reads the result of its own terminal request as the calling agent, and nothing for a bad id', async () => {
+    const t = setup()
+    t.call.mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/terminal/')
+      ? { ok: true, text: 'Allow? 1. Yes' } : { state: { agents: [t.agent] } } } }))
+    expect(await t.ask({ action: 'terminalResult', tabId: 'tab', agentId: t.agentId, terminalRequestId: 'r1', requestId: 'transport-1' }, owner))
+      .toEqual({ ok: true, value: { ok: true, text: 'Allow? 1. Yes' } })
+    expect(t.call.mock.calls.at(-1)!.slice(0, 2)).toEqual(['GET', `/api/super-tabs/tab/terminal/r1?asAgentId=${t.agentId}`])
+    expect(await t.ask({ action: 'terminalResult', tabId: 'tab', agentId: t.agentId, terminalRequestId: '../x' }, owner)).toEqual({ error: 'INVALID_REQUEST' })
   })
 })

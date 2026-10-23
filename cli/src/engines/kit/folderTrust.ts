@@ -15,6 +15,7 @@
  * file), when the file does not parse, or when it already says yes.
  */
 import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
+import { posix, win32 } from 'node:path'
 import type { TrustContract } from '../facets/launch.js'
 
 type JsonTrust = Extract<TrustContract, { format: 'json' }>
@@ -28,6 +29,29 @@ export function trustsIn(trust: TrustContract, file: string, path: string): bool
 /** Record trust in `cwd` in `file`. */
 export function recordTrustIn(trust: TrustContract, file: string, cwd: string): 'trusted' | 'already' | 'skipped' {
   return trust.format === 'json' ? recordJson(trust, file, cwd) : recordToml(trust, file, cwd)
+}
+
+/** A folder as this platform compares it. DESKTOP-0TFH0OJ, 2026-10-23: a Swarm worktree's source came as
+ *  `C:\…\<tab>/<project>` (the Lead joins with "/") and its trust was recorded as `C:\…\<tab>\<project>`; compared as
+ *  text, every Swarm start on Windows stopped at the engine's trust prompt. On Windows any separator and any case is the
+ *  same folder; elsewhere the text is compared as it always was. Never resolved: an engine looks up keys as written. */
+const windows = (): boolean => process.platform === 'win32'
+const folderText = (path: string): string => windows() ? path.replace(/\//g, '\\').toLowerCase() : path
+const sameFolder = (key: string, path: string): boolean => folderText(key) === folderText(path)
+/** `path` is `base` or a folder under it. */
+function within(base: string, path: string): boolean {
+  const separator = windows() ? '\\' : '/', folder = folderText(base).replace(windows() ? /\\+$/ : /\/+$/, ''), target = folderText(path)
+  return target === folder || target.startsWith(`${folder}${separator}`)
+}
+/** The root of the Git repository `path` is in, or null outside one: where Claude Code stops looking for an accepted folder
+ *  above it (2.1.309 walks up to the root its `$_` finds, no further), so a repository cloned under an accepted folder asks
+ *  again. */
+function repositoryRoot(path: string): string | null {
+  const paths = windows() ? win32 : posix
+  for (let folder = path; ; folder = paths.dirname(folder)) {
+    if (existsSync(paths.join(folder, '.git'))) return folder
+    if (paths.dirname(folder) === folder) return null
+  }
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -68,17 +92,16 @@ function recordJson(trust: JsonTrust, file: string, cwd: string): 'trusted' | 'a
   return 'trusted'
 }
 
-/** Its own entry, or a folder above it, says yes: the inheritance Claude Code applies. Unreadable or absent
+/** Its own entry, or a folder above it in the same Git repository, says yes: the inheritance Claude Code applies. Unreadable or absent
  *  settings read as no. */
 function jsonTrusts(trust: JsonTrust, file: string, path: string): boolean {
   if (!existsSync(file)) return false
   let config: unknown
   try { config = JSON.parse(readFileSync(file, 'utf8')) } catch { return false }
   if (!isPlainObject(config) || !isPlainObject(config[trust.projects])) return false
+  const root = repositoryRoot(path)
   for (const [key, entry] of Object.entries(config[trust.projects] as Record<string, unknown>)) {
-    if (!isPlainObject(entry) || entry[trust.accepted] !== true) continue
-    const base = key.replace(/\/+$/, '')
-    if (path === base || path.startsWith(`${base}/`)) return true
+    if (isPlainObject(entry) && entry[trust.accepted] === true && within(key, path) && (root === null || within(root, key))) return true
   }
   return false
 }
@@ -103,7 +126,8 @@ function tomlTrusts(trust: TomlTrust, file: string, path: string): boolean {
   if (!existsSync(file)) return false
   const text = readFileSync(file, 'utf8')
   for (const match of text.matchAll(headerPattern(trust))) {
-    if (tomlKey(match[1]) !== path) continue
+    const key = tomlKey(match[1])
+    if (key === null || !sameFolder(key, path)) continue
     const rest = text.slice((match.index ?? 0) + match[0].length)
     const body = rest.split(/^[ \t]*\[/m)[0]
     return new RegExp(String.raw`^[ \t]*${escape(trust.key)}[ \t]*=[ \t]*["']${escape(trust.value)}["']`, 'm').test(body)

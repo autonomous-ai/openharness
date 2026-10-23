@@ -2,7 +2,7 @@ import { admitMachineStart, machineContribution } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
-  activeWork, actorKey, agent, agentRole, author, conversation, fail, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
+  activeWork, actorKey, agent, agentRole, author, conversation, crossProjectActive, fail, isLeads, person, stableId, syncLeads, numberConversations, nextConversationNumber, renderWorkTask,
   finishWorker, requireWorkerDecisions, reviewing,
   type Actor, type Agent, type Author, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
@@ -10,7 +10,8 @@ import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type Rou
 import { routingOverrideSchema } from './routingPolicy.js'
 import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
-import { agentProjectId, deleteProject, groupProject, inviteLanding, ledProject, manageProject, mutableProjects, placeRules, projectMembers, projectOf, projectRules, readAgent, readConversation, readProject, sameProject, SKILL_MODE_NAMES, skillModeOf, type SwarmProject } from './projects.js'
+import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, type TerminalRequest } from './terminal.js'
+import { agentProjectId, deleteProject, groupProject, inviteLanding, ledProject, manageProject, mutableProjects, placeRules, projectMembers, projectOf, projectRules, readAgent, readConversation, readProject, sameProject, sharedWithLeads, SKILL_MODE_NAMES, skillModeOf, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -110,6 +111,14 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('route.record'), conversationId: id, decision: routeRecordSchema }).strict(),
   z.object({ type: z.literal('route.override'), decisionId: id, candidateId: z.string().regex(/^c\d{1,2}$/), reason }).strict(),
   z.object({ type: z.literal('route.modelResult'), decisionId: id, startId: id, model: z.string().min(1).max(200), effort: z.string().min(1).max(80) }).strict(),
+  z.object({ type: z.literal('agent.screen'), agentId: id, scrollback: z.number().int().min(1).max(200).optional() }).strict(),
+  // Text is typed as is, so it carries no control characters; Enter, Esc and the rest are named keys.
+  z.object({ type: z.literal('agent.input'), agentId: id, text: z.string().min(1).max(4000).regex(/^[^\x00-\x1f\x7f]*$/, 'Send Enter and other keys as named keys.').optional(),
+    keys: z.array(z.enum(TERMINAL_KEYS)).min(1).max(32).optional() }).strict().refine(c => c.text !== undefined || c.keys !== undefined, 'Type text or keys.'),
+  ...(['agent.screenResult', 'agent.inputResult'] as const).map(type => z.object({ type: z.literal(type), requestId: id, ok: z.boolean(),
+    text: z.string().refine(value => Buffer.byteLength(value) <= 65_536, 'A screen is at most 64 KB.').optional(),
+    error: z.string().trim().min(1).max(500).optional() }).strict().refine(c => c.ok || c.error !== undefined, 'Say why the request failed.')),
+  z.object({ type: z.literal('agent.alert'), agentId: id, alert: z.enum(['prompt', 'limit']), active: z.boolean(), resetAt: z.iso.datetime().optional() }).strict(),
   z.object({ type: z.literal('work.check'), conversationId: id, assignmentId: id, checkId: id, passed: z.boolean(), evidence: text }).strict(),
 ])
 export type Command = z.infer<typeof commandSchema>
@@ -139,6 +148,8 @@ export interface CommandContext {
   /** Starts on the machine being contributed that the store found abandoned: never contributed, never dispatched,
    *  and older than ABANDONED_START_MS by their operation receipt. */
   abandonedStartIds?: string[]
+  /** The request an `agent.screenResult` / `agent.inputResult` answers, read from SuperTabTerminalRequest by the store. */
+  terminalRequest?: TerminalRequest
 }
 
 /** Messages in a row between the Lead and its worker after which the Lead's message is no longer delivered automatically. */
@@ -169,6 +180,13 @@ function controls(state: SuperTabState, actor: Actor, conversationId = 'lead'): 
     fail('LEAD_REQUIRED', 'The coordinating lead owns this action.', 403)
   }
 }
+
+/** The repo path an owns entry names, or null for anything else (a phrase, a glob), which is never compared. */
+function ownedPath(entry: string): string | null {
+  const path = entry.trim().replace(/^\.\//, '').replace(/\/+$/, '')
+  return /^[\w.@-]+(\/[\w.@-]+)*$/.test(path) ? path : null
+}
+const pathsOverlap = (a: string, b: string) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)
 
 /** A project's Lead (Product Manager) leaves only with its project: every other removal path refuses it. */
 function protectLead(state: SuperTabState, agentId: string): void {
@@ -202,7 +220,10 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   author(state, actor, !leaving)
   // An invitation's group is only where the person lands, and invite.create replaces a deleted one (inviteLanding).
-  if ('conversationId' in command && command.type !== 'invite.create') readConversation(state, actor, command.conversationId)
+  if ('conversationId' in command && command.type !== 'invite.create') {
+    const group = readConversation(state, actor, command.conversationId)
+    if (isLeads(group) && command.type !== 'message.send') groupProject(state, group)
+  }
   if ('projectId' in command && command.projectId) readProject(state, actor, command.projectId)
   if ('agentId' in command) readAgent(state, actor, command.agentId)
   if (command.type === 'agent.start') readConversation(state, actor, command.request.conversationId)
@@ -240,6 +261,7 @@ function open(state: SuperTabState, conversationId: string) {
 export function applyCommand(original: SuperTabState, actor: Actor, input: Command, context: CommandContext): CommandEffects {
   const command = commandSchema.parse(input)
   const state = structuredClone(original)
+  syncLeads(state)
   numberConversations(state)
   placeRules(state)
   assignAgentDisplayNames(state.agents)
@@ -361,12 +383,54 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
   }
 
+  /** Projects in one Swarm changed the same code without knowing it (2026-10-23). When a task is created, defined or assigned,
+   *  its Leads hear once per pair of tasks that it owns code another shared project's active task owns too. */
+  const alertOverlaps = (group: Conversation) => {
+    const project = groupProject(state, group)
+    const mine = (group.task?.owns ?? []).flatMap(entry => ownedPath(entry) ?? [])
+    if (!mine.length || !sharedWithLeads(project)) return
+    state.overlapAlerts = state.overlapAlerts?.filter(pair => pair.split(':').every(id => state.conversations.some(c => c.id === id)))
+    const leadOf = (p: SwarmProject) => state.agents.find(a => a.id === conversation(state, p.leadConversationId).leadId)
+    const named = (a: Agent | undefined) => a ? a.displayName ?? a.name : 'no Lead'
+    for (const other of state.conversations.filter(crossProjectActive)) {
+      const theirs = groupProject(state, other)
+      if (theirs.id === project.id || !sharedWithLeads(theirs)) continue
+      const owned = (other.task?.owns ?? []).flatMap(entry => ownedPath(entry) ?? [])
+      const shared = mine.filter(a => owned.some(b => pathsOverlap(a, b)))
+      const pair = [group.id, other.id].sort().join(':')
+      if (!shared.length || state.overlapAlerts?.includes(pair)) continue
+      (state.overlapAlerts ??= []).push(pair)
+      const ours = leadOf(project), their = leadOf(theirs)
+      effects.messages.push({ id: stableId(operationId, 'overlap', pair), conversationId: state.leadsConversationId!, author: sender,
+        text: `"${group.title}" (${project.name}, ${named(ours)}) and "${other.title}" (${theirs.name}, ${named(their)}) both change `
+          + `${shared.join(', ')}. Agree an order or a split here, then each tell your own project.`,
+        replyTo: null, recipients: [ours, their].flatMap(a => a && !(actor.kind === 'agent' && a.id === actor.agentId) ? [a.id] : []),
+        source: { kind: 'overlap', conversationIds: [group.id, other.id] } })
+    }
+  }
+
   /** Changing or clearing the Lead of a project's Lead conversation would let it be stopped next. */
   const keepLead = (group: Conversation, next: string | null) => {
     if (group.leadId && group.leadId !== next && group.id === groupProject(state, group).leadConversationId) protectLead(state, group.leadId)
   }
 
   switch (command.type) {
+    case 'agent.screen':
+    case 'agent.input': {
+      const { effect, message } = terminalRequest(state, actor, sender, operationId, context.now, command)
+      effects.terminal = effect
+      result.requestId = operationId
+      if (message) effects.messages.push(message)
+      break
+    }
+    case 'agent.screenResult':
+    case 'agent.inputResult':
+      effects.terminal = terminalResult(state, actor, context.terminalRequest, command)
+      break
+    case 'agent.alert': {
+      effects.messages.push(...terminalAlert(state, actor, sender, operationId, context.now, command))
+      break
+    }
     case 'project.report': {
       const project = readProject(state, actor, command.projectId)
       const group = conversation(state, project.leadConversationId)
@@ -954,7 +1018,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         && group.leadId && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? group.leadId : null
       const agentRecipient = leadToWorker ?? workerToLead
       const automatic = actor.kind === 'person' ? (replyAgent && group.agentIds.includes(replyAgent) ? replyAgent : group.leadId) : agentRecipient
-      const recipients = [...new Set(command.recipientIds.length ? command.recipientIds : automatic ? [automatic] : [])]
+      // In the Leads conversation everything posted reaches every other Lead; naming some only adds emphasis.
+      const everyLead = isLeads(group) ? group.agentIds.filter(id => actor.kind !== 'agent' || id !== actor.agentId) : []
+      const recipients = [...new Set([...command.recipientIds, ...everyLead,
+        ...(command.recipientIds.length || everyLead.length || !automatic ? [] : [automatic])])]
       for (const id of recipients) {
         agent(state, id)
         if (!group.agentIds.includes(id)) fail('INVALID_RECIPIENT', 'Choose an agent in this conversation.', 400)
@@ -1159,11 +1226,15 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     }
   }
+  if (command.type === 'conversation.create' || command.type === 'work.define' || command.type === 'work.assign') {
+    alertOverlaps(conversation(state, command.type === 'conversation.create' ? result.conversationId as string : command.conversationId))
+  }
   for (const target of original.agents.filter(a => a.workDecision === 'stop')) {
     const acknowledged = command.type === 'agent.remove' && command.agentId === target.id &&
       (actor.kind === 'agent' && actor.agentId === target.id || actor.kind === 'person' && [state.ownerId, target.contributorId].includes(actor.userId))
     if (!acknowledged && !state.agents.some(a => a.id === target.id)) fail('STOP_REQUESTED', 'Wait for the execution host to finish stopping its workers before withdrawing them.')
   }
+  syncLeads(state)
   // MongoDB limits a document to 16 MiB. Leave room for indexes and metadata, and refuse before losing state.
   assignAgentDisplayNames(state.agents)
   if (Buffer.byteLength(JSON.stringify(state)) > 8 * 1024 * 1024) fail('TAB_TOO_LARGE', 'This Super Tab has reached its metadata limit.', 413)

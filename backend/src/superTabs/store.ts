@@ -16,9 +16,10 @@ import { noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import {
   activeWork, actorKey, agent, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
-  SuperTabError, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
+  SuperTabError, isLeads, syncLeads, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
 } from './model.js'
 import { holdNoticeText, type HoldReason } from './holdNotice.js'
+import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, type TerminalEffect } from './terminal.js'
 import { closeAssignment, readDecision, recentRoutes, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
@@ -33,6 +34,7 @@ const hash = (value: unknown): string => createHash('sha256').update(JSON.string
 const stateOf = (row: SuperTab): SuperTabState => {
   const state = row.state as unknown as SuperTabState
   if (state.version !== 1) fail('UPDATE_REQUIRED', 'Update Harness to open this Super Tab.', 409)
+  syncLeads(state)
   return state
 }
 const indexes = (state: SuperTabState) => ({
@@ -422,6 +424,18 @@ export class SuperTabStore {
       }
       if (command.type === 'message.send' && command.attachmentIds?.length) context.attachments = await this.sendable(tx, tabId, actor, command)
       if (command.type === 'route.record') context.recentRoutes = await recentRoutes(tx, tabId, context.now)
+      if (command.type === 'agent.screen' || command.type === 'agent.input') {
+        // A machine that is gone or no longer shared refuses at once instead of leaving the request to time out.
+        await this.agentGrant(tx, original, agent(original, command.agentId))
+        const waiting = await tx.superTabTerminalRequest.count({ where: { tabId, agentId: command.agentId, status: { in: ['pending', 'claimed'] },
+          createdAt: { gte: new Date(context.now - TERMINAL_PICKUP_MS - TERMINAL_ANSWER_MS) } } })
+        if (waiting >= 10) fail('RATE_LIMITED', 'Ten requests to this terminal are still waiting. Wait for them to finish.', 429)
+      }
+      if (command.type === 'agent.screenResult' || command.type === 'agent.inputResult') {
+        const request = await tx.superTabTerminalRequest.findFirst({ where: { id: command.requestId, tabId } })
+        if (request) context.terminalRequest = { id: request.id, agentId: request.agentId, harnessId: request.harnessId,
+          kind: request.kind as 'screen' | 'input', status: request.status as 'pending' | 'claimed' | 'done' }
+      }
       const decisionId = command.type === 'route.override' || command.type === 'route.modelResult' ? command.decisionId
         : command.type === 'work.assign' || command.type === 'agent.start' ? command.routeDecisionId : undefined
       if (decisionId) context.routeDecision = await readDecision(tx, tabId, decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
@@ -539,6 +553,7 @@ export class SuperTabStore {
         revision, state: json(effects.state), ...indexes(effects.state),
       } })
       await writeRouteEffects(tx, tabId, effects.routeDecisions, context.now)
+      if (effects.terminal) await this.writeTerminal(tx, tabId, effects.terminal, context.now)
       if (command.type === 'work.cancel') {
         await closeAssignment(tx, tabId, command.assignmentId, 'cancelled', context.now)
       }
@@ -641,6 +656,98 @@ export class SuperTabStore {
       if (row.usedBy) fail('ATTACHMENT_USED', 'This file was already sent. Attach it again to send it in another message.')
       return { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) }
     })
+  }
+
+  private async writeTerminal(tx: Transaction, tabId: string, effect: TerminalEffect, now: number) {
+    if (effect.op === 'request') {
+      const { op: _op, id, ...request } = effect
+      await tx.superTabTerminalRequest.create({ data: { id, tabId, ...request, createdAt: new Date(now) } })
+      return
+    }
+    // The deadline holds whether or not the sender has asked for the answer yet.
+    const answered = await tx.superTabTerminalRequest.updateMany({ where: { id: effect.id, tabId, status: 'claimed', claimedAt: { gte: new Date(now - TERMINAL_ANSWER_MS) } },
+      data: { status: 'done', ok: effect.ok, result: effect.text, error: effect.error } })
+    if (!answered.count) fail('REQUEST_CLOSED', 'This terminal request is no longer waiting for an answer.')
+  }
+
+  /** The requester alone reads the answer, once: the screen text is deleted as it is returned. Waits up to `waitMs` for it. */
+  async terminalResult(user: AuthUser, tabId: string, requestId: string, asAgentId?: string, waitMs = 0) {
+    const deadline = Date.now() + waitMs
+    for (;;) {
+      const answer = await transaction(this.db, async tx => {
+        const state = stateOf(await this.row(tx, user, tabId))
+        const actor = await this.actor(tx, user, state, asAgentId)
+        author(state, actor)
+        const now = this.now()
+        const row = await tx.superTabTerminalRequest.findFirst({ where: { id: requestId, tabId, createdAt: { gte: new Date(now - TERMINAL_EXPIRY_MS) } } })
+        if (!row || row.requesterKey !== actorKey(actor)) fail('NOT_FOUND', 'This terminal request is unavailable.', 404)
+        // A sender who has since lost write access, or is no longer the agent's project Lead, gets nothing.
+        mayDrive(state, actor, agent(state, row.agentId))
+        const late = row.status === 'pending' && now - row.createdAt.getTime() > TERMINAL_PICKUP_MS
+          ? 'The agent’s machine did not pick up the request within 10 seconds. It may be offline or asleep.'
+          : row.status === 'claimed' && now - row.claimedAt!.getTime() > TERMINAL_ANSWER_MS
+            ? 'The agent’s machine picked up the request but did not answer within 30 seconds.' : null
+        if (row.status !== 'done' && !late) return null
+        await tx.superTabTerminalRequest.delete({ where: { id: row.id } })
+        if (late || !row.ok) return { requestId, ok: false, error: late ?? row.error }
+        return { requestId, ok: true, ...(row.result !== null ? { text: row.result } : {}) }
+      })
+      if (answer) return answer
+      if (Date.now() >= deadline) return { requestId, pending: true }
+      await new Promise(resolve => setTimeout(resolve, 250))
+    }
+  }
+
+  /** Each waiting request for this host's agents is handed over once. One that waited too long, or whose terminal, agent or
+   * requester changed, is answered with the reason instead, so input is never typed late or into another pane. */
+  async hostTerminal(user: AuthUser, machineId: string) {
+    return transaction(this.db, async tx => {
+      const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
+      if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
+      const now = this.now()
+      const rows = await tx.superTabTerminalRequest.findMany({ where: { machineId, machineOwnerId: user.sub, status: 'pending' },
+        orderBy: { createdAt: 'asc' }, take: 100 })
+      const states = new Map<string, SuperTabState | null>()
+      const result = []
+      for (const row of rows) {
+        if (!states.has(row.tabId)) {
+          const tab = await tx.superTab.findFirst({ where: { id: row.tabId, autonomousEnv: user.autonomousEnv } })
+          states.set(row.tabId, tab && stateOf(tab))
+        }
+        const refusal = now - row.createdAt.getTime() > TERMINAL_PICKUP_MS
+          ? 'The agent’s machine did not pick up the request within 10 seconds. It may be offline or asleep.'
+          : await this.terminalRefusal(tx, states.get(row.tabId)!, row)
+        if (refusal) {
+          await tx.superTabTerminalRequest.updateMany({ where: { id: row.id, status: 'pending' }, data: { status: 'done', ok: false, error: refusal } })
+          continue
+        }
+        const claimed = await tx.superTabTerminalRequest.updateMany({ where: { id: row.id, status: 'pending' }, data: { status: 'claimed', claimedAt: new Date(now) } })
+        if (!claimed.count) continue
+        result.push({ tabId: row.tabId, agentId: row.agentId, harnessId: row.harnessId, request: { id: row.id, kind: row.kind,
+          ...(row.scrollback !== null ? { scrollback: row.scrollback } : {}), ...(row.text !== null ? { text: row.text } : {}),
+          ...(row.keys.length ? { keys: row.keys } : {}) } })
+      }
+      return result
+    })
+  }
+
+  private async terminalRefusal(tx: Transaction, state: SuperTabState | null,
+    row: { agentId: string; machineId: string; machineOwnerId: string; harnessId: string; requesterKey: string }): Promise<string | null> {
+    const target = state?.agents.find(a => a.id === row.agentId && a.machineId === row.machineId && a.machineOwnerId === row.machineOwnerId)
+    if (!state || !target) return 'The agent is no longer in the Swarm.'
+    if (target.harnessId !== row.harnessId) return 'The agent’s terminal changed since the request. Read it again.'
+    const [kind, id] = [row.requesterKey.slice(0, row.requesterKey.indexOf(':')), row.requesterKey.slice(row.requesterKey.indexOf(':') + 1)]
+    const requester: Actor = kind === 'person' ? { kind: 'person', userId: id, email: '' }
+      : { kind: 'agent', agentId: id, machineOwnerId: state.agents.find(a => a.id === id)?.machineOwnerId ?? '' }
+    try {
+      agent(state, target.id)
+      await this.agentGrant(tx, state, target)
+      mayDrive(state, requester, target)
+    } catch (error) {
+      if (error instanceof SuperTabError) return 'This request is no longer allowed.'
+      throw error
+    }
+    return null
   }
 
   /** Records committed messages and one delivery per recipient, at the tab revision that carried them. */
@@ -760,7 +867,7 @@ export class SuperTabStore {
           ...(pool.scope === 'swarm' ? { projects: projectsOf(state).filter(p => starts.some(s =>
             groupProject(state, conversation(state, s.request.conversationId)).id === p.id))
             .map(p => ({ id: p.id, leadConversationId: p.leadConversationId, repository: p.repository,
-              conversationIds: state.conversations.filter(c => groupProject(state, c).id === p.id).map(c => c.id) })) } : {}),
+              conversationIds: state.conversations.filter(c => !isLeads(c) && groupProject(state, c).id === p.id).map(c => c.id) })) } : {}),
           reservations: (state.harnessReservations ?? []).filter(r => r.machineId === machineId).map(({ harnessId, generation }) => ({ harnessId, generation })),
           harnessIds: [...new Set([...state.agents.filter(a => a.machineId === machineId).map(a => a.harnessId), ...(state.harnessReservations ?? []).filter(r => r.machineId === machineId).map(r => r.harnessId), ...(state.starts ?? []).filter(s => s.request.machineId === machineId && s.harnessId).map(s => s.harnessId!)])] }]
       })
@@ -876,8 +983,9 @@ export class SuperTabStore {
     const actor: Actor = delivery.authorKind === 'person'
       ? { kind: 'person', userId: delivery.authorId, email: '' }
       : { kind: 'agent', agentId: delivery.authorId, machineOwnerId: (sender as Agent).machineOwnerId }
-    if (!canReadProject(state, actor, groupProject(state, group))) return false
-    if (!canReadAgent(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, target) ||
+    // The Leads conversation belongs to no project: its members are the Leads, and an agent posts there only as a Lead.
+    if (isLeads(group) ? actor.kind === 'agent' && !ledProject(state, actor.agentId) : !canReadProject(state, actor, groupProject(state, group))) return false
+    if (!canReadAgent(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, target) || !isLeads(group) &&
       !canReadProject(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, groupProject(state, group))) return false
     const generation = 'generation' in sender ? sender.generation : sender.membershipGeneration
     return generation === delivery.authorGeneration && (!('role' in sender) || sender.role !== 'viewer')

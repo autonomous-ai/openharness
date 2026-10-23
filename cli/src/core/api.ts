@@ -1,3 +1,4 @@
+import type { MessageHold } from '../engines/facets/screen.js'
 import type { ProductUsageLaunchSignal } from '../lib/productUsageSignals.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import type { PreparedHandoff, HandoffPermit, HandoffOutcome } from '../lib/handoffAuthority.js'
@@ -1186,7 +1187,14 @@ export interface SuperTabsCore {
    *  state wakes it only as the core starts, so a machine that joined a Swarm while running never invited anyone and
    *  each member's pane read "must be online" (River on a contributed machine, 2026-10-23). */
   shareObservers(): void
+  /** A member's terminal as plain text for its Lead (core/superTabTerminal.ts): the visible screen, with up to 200 lines
+   *  of scrollback when asked, and what the screen reader says it waits on (a permission prompt, a question). */
+  screen(agentId: string, scrollback: number): Promise<SuperTabScreen>
+  /** Text, then each key by its tmux name, typed into a member's terminal under the pane's write lock. */
+  input(agentId: string, text: string, keys: string[]): Promise<SuperTabTyped>
 }
+export type SuperTabScreen = { ok: true; text: string; hold: MessageHold | null } | { ok: false; error: string }
+export type SuperTabTyped = { ok: true } | { ok: false; error: string }
 
 /** What the cloud service answers the core: done, or why not, in words a person reads. */
 export type CloudResult = { ok: true; detail?: string } | { ok: false; error: string; detail?: string }

@@ -1186,6 +1186,33 @@ model SuperTabConfiguration {
   @@index([tabId, agentId, revision])
 }
 
+// A Lead's read of, or input to, an agent's terminal, relayed to the host of the agent's machine
+// (backend/src/superTabs/terminal.ts). Outside the tab snapshot and history: a screen can show secrets,
+// so its text is kept only until the requester reads it.
+model SuperTabTerminalRequest {
+  id             String    @id @map("_id")
+  tabId          String
+  agentId        String
+  machineId      String
+  machineOwnerId String
+  harnessId      String
+  requesterKey   String
+  kind           String
+  scrollback     Int?
+  text           String?
+  keys           String[]  @default([])
+  /// pending -> claimed (handed to the host once) -> done
+  status         String    @default("pending")
+  ok             Boolean?
+  result         String?
+  error          String?
+  createdAt      DateTime
+  claimedAt      DateTime?
+
+  @@index([machineId, status])
+  @@index([tabId, createdAt])
+}
+
 model ExperimentalSettings {
   id               String  @id @map("_id") @db.ObjectId
   userId           String

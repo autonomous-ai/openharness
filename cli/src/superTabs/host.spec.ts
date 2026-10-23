@@ -556,7 +556,7 @@ describe('Super Tab waits for the Harness Pro', () => {
       if (offline) throw new Error('Host offline')
       return { status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }
     })
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { creationStatus: vi.fn(async creationId => ({ creationId, state: 'created' as const, agentId: 'harness' })), byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
     const open = () => { const host = new SuperTabHost(core, 'machine-1', { log: vi.fn() }); hosts.push(host); return host }
@@ -593,7 +593,7 @@ describe('Super Tab waits for the Harness Pro', () => {
       agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }]
     const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }))
     let here = true, clock = 0
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { byAgent: vi.fn(() => (here ? { agentId: 'harness' } : undefined) as never), terminalAvailable: vi.fn(() => true) } })
     const host = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(host)
@@ -911,6 +911,21 @@ it('rechecks authoritative native absence before retrying a lost acknowledgement
   expect(t.close).toHaveBeenLastCalledWith({ agentId: 'harness' })
 })
 
+describe('a Lead\'s terminal requests', () => {
+  it('asks for its agents\' terminal requests with each roster read, and answers a screen read as the agent', async () => {
+    const t = setup()
+    Object.assign(t.core, { superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), input: vi.fn(),
+      screen: vi.fn(async () => ({ ok: true as const, text: 'Allow? 1. Yes', hold: null })) } })
+    const roster = vi.mocked(t.call).getMockImplementation()!
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => path === '/api/super-tabs/hosts/machine-1/terminal'
+      ? { status: 200, body: { success: true, data: [{ tabId: 'tab', agentId: 'agent', harnessId: 'harness', request: { id: 'r1', kind: 'screen' } }] } }
+      : roster(method, path, body))
+    await t.open().tick()
+    await vi.waitFor(() => expect(t.call).toHaveBeenCalledWith('POST', '/api/super-tabs/tab/commands',
+      { operationId: 'terminal-r1', asAgentId: 'agent', command: { type: 'agent.screenResult', requestId: 'r1', ok: true, text: 'Allow? 1. Yes' } }))
+  })
+})
+
 describe('the members a host lets watch its agents', () => {
   it('keeps them watching through a 3 s roster read, wakes Share once, and lets a removed member go at once', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
@@ -922,7 +937,7 @@ describe('the members a host lets watch its agents', () => {
       if (path.includes('/hosts/') && answer === null) await new Promise<void>(resolve => { answer = resolve })
       return { status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }
     })
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
     const host = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(host)
