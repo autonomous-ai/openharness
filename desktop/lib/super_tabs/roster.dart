@@ -18,7 +18,7 @@ import 'identity.dart';
 import 'model.dart';
 import 'section_heading.dart';
 
-/// The current Swarm's authorized people and agents, independent of navigation.
+/// The current Swarm's authorized people, with agents from the selected project.
 class SuperTabRoster extends StatefulWidget {
   const SuperTabRoster({
     super.key,
@@ -379,8 +379,17 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
   List<Widget> _members() {
     final state = c.snapshot;
     // The backend already scopes this snapshot to projects the person can
-    // access. Local machine inventory is not membership in this Swarm.
-    final members = state?.agents ?? const <SuperTabAgent>[];
+    // access. The roster follows the selected project; without one it keeps
+    // the full directory. Local machine inventory is not membership here.
+    final projectId = c.selected?.projectId;
+    final members =
+        state?.agents
+            .where(
+              (agent) =>
+                  projectId == null || _agentProjectId(agent) == projectId,
+            )
+            .toList() ??
+        const <SuperTabAgent>[];
     final leads = members.where((a) => state!.isLead(a.id)).toList();
     final agents = members.where((a) => !state!.isLead(a.id)).toList();
     return [

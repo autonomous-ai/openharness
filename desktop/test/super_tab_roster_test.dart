@@ -738,8 +738,39 @@ void main() {
     await f.close(tester);
   });
 
+  testWidgets('roster lists only the selected project’s agents', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    await f.show(tester);
+    for (final i in [0, 1, 3]) {
+      expect(f.row(i), findsOneWidget);
+      expect(f.inRow(i, find.text('openharness')), findsOneWidget);
+    }
+    expect(f.row(2), findsNothing);
+    expect(find.text('autonomous-os'), findsNothing);
+
+    f.controller.select('os-lead');
+    await tester.pumpAndSettle();
+    for (final i in [0, 1, 3]) {
+      expect(f.row(i), findsNothing);
+    }
+    expect(f.row(2), findsOneWidget);
+    expect(f.inRow(2, find.text('autonomous-os')), findsOneWidget);
+    expect(f.inRow(2, find.text('PM')), findsOneWidget);
+
+    f.controller.select('offline');
+    await tester.pumpAndSettle();
+    for (final i in [0, 1, 3]) {
+      expect(f.row(i), findsOneWidget);
+      expect(f.inRow(i, find.text('openharness')), findsOneWidget);
+    }
+    expect(f.row(2), findsNothing);
+    await f.close(tester);
+  });
+
   testWidgets(
-    'authorized roster stays stable across projects, workgroups and Devices',
+    'authorized roster stays stable across workgroups in one project',
     (tester) async {
       final f = await fixture(tester);
       f.app.stateOf('m')!.agents = const [
@@ -758,7 +789,7 @@ void main() {
       });
       await f.controller.refresh();
       await f.show(tester);
-      expect(f.inRow(2, find.text('autonomous-os')), findsOneWidget);
+      expect(f.row(2), findsNothing);
       for (final i in [0, 1, 3]) {
         expect(f.inRow(i, find.byType(SuperTabAvatar)), findsOneWidget);
         expect(f.inRow(i, find.text(i == 0 ? 'PM' : 'Dev')), findsOneWidget);
@@ -783,12 +814,14 @@ void main() {
         nameX,
         reason: 'People and agent identity use the same text column',
       );
-      final rows = [for (var i = 0; i < 4; i++) tester.getRect(f.row(i))];
+      final rows = {
+        for (final i in [0, 1, 3]) i: tester.getRect(f.row(i)),
+      };
       final people = tester.getRect(find.text('owner'));
-      for (final selected in ['os-lead', 'offline', 'os-work']) {
+      for (final selected in ['lead', 'offline']) {
         f.controller.select(selected);
         await tester.pumpAndSettle();
-        for (var i = 0; i < 4; i++) {
+        for (final i in [0, 1, 3]) {
           expect(tester.getRect(f.row(i)), rows[i]);
           expect(f.inRow(i, find.byType(ActivityMark)), findsOneWidget);
         }
@@ -796,12 +829,17 @@ void main() {
         await tester.tap(find.byTooltip('Add agent'));
         expect(f.added?.id, selected);
       }
+      f.controller.select('os-lead');
+      await tester.pumpAndSettle();
+      for (final i in [0, 1, 3]) {
+        expect(f.row(i), findsNothing);
+      }
+      expect(f.inRow(2, find.text('autonomous-os')), findsOneWidget);
       f.controller.selectDevices();
       await tester.pumpAndSettle();
       expect(f.controller.devicesSelected, isTrue);
-      for (var i = 0; i < 4; i++) {
-        expect(tester.getRect(f.row(i)), rows[i]);
-      }
+      expect(f.row(0), findsNothing);
+      expect(f.row(2), findsOneWidget);
       expect(tester.getRect(find.text('owner')), people);
       f.controller.select('offline');
       await tester.pumpAndSettle();
@@ -845,10 +883,7 @@ void main() {
           'lead',
         );
         await f.show(tester);
-        expect(
-          f.inRow(legacyAgent, find.text('autonomous-os')),
-          findsOneWidget,
-        );
+        expect(f.row(legacyAgent), findsNothing);
         f.controller.select('os-lead');
         await tester.pumpAndSettle();
         expect(
@@ -874,7 +909,7 @@ void main() {
     expect(f.inRow(1, find.text('openharness')), findsOneWidget);
     f.controller.select('os-lead');
     await tester.pumpAndSettle();
-    expect(f.inRow(1, find.text('openharness')), findsOneWidget);
+    expect(f.row(1), findsNothing);
     await f.close(tester);
   });
 
@@ -1226,6 +1261,8 @@ void main() {
         'roster marks remain legible in ${brightness.name} at ${scale}x',
         (tester) async {
           final f = await fixture(tester);
+          (f.server.state['agents'] as List)[2]['projectId'] = 'lead';
+          await f.controller.refresh();
           (f.server.state['conversations'] as List)[0]
             ..['title'] = 'Polish sidebar navigation'
             ..['assignment'] = {'agentId': 'agent-0', 'status': 'working'};

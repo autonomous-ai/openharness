@@ -21,9 +21,11 @@ import 'package:flutter_test/flutter_test.dart';
 /// nothing overflows, so a face with different advances would move the
 /// threshold and let the same layout pass on one CI host and fail on another.
 /// `.github/workflows/ci.yml` installs `fonts-liberation` for exactly this.
+/// Windows uses Arial and Courier New, the faces Liberation mirrors.
 Future<void> loadRealFonts() async {
   Future<ByteData> bytes(File file) async =>
       ByteData.view(Uint8List.fromList(await file.readAsBytes()).buffer);
+  final windows = Platform.environment['WINDIR'] ?? r'C:\Windows';
 
   // Register under every family these surfaces can resolve to on EITHER host —
   // the app's own `.AppleSystemUIFont`/`Ubuntu Sans`, and Roboto, which is what
@@ -31,10 +33,11 @@ Future<void> loadRealFonts() async {
   // names rather than branching keeps this helper one code path: a family the
   // running host never asks for costs a no-op registration.
   final sans = await bytes(
-    _firstExisting('sans', const [
+    _firstExisting('sans', [
       '/System/Library/Fonts/Supplemental/Arial.ttf',
       '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
       '/usr/share/fonts/liberation/LiberationSans-Regular.ttf',
+      '$windows\\Fonts\\arial.ttf',
     ]),
   );
   for (final family in [
@@ -49,10 +52,11 @@ Future<void> loadRealFonts() async {
   // A model id is set in mono, and an unregistered mono family falls back to
   // Ahem just as loudly.
   final mono = await bytes(
-    _firstExisting('mono', const [
+    _firstExisting('mono', [
       '/System/Library/Fonts/Supplemental/Courier New.ttf',
       '/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf',
       '/usr/share/fonts/liberation/LiberationMono-Regular.ttf',
+      '$windows\\Fonts\\cour.ttf',
     ]),
   );
   for (final family in [
@@ -80,6 +84,7 @@ File _firstExisting(String role, List<String> candidates) {
   throw StateError(
     'no $role font on this host. Looked at:\n'
     '${candidates.map((p) => '  $p').join('\n')}\n'
-    'On Debian/Ubuntu: sudo apt-get install fonts-liberation',
+    'On Debian/Ubuntu: sudo apt-get install fonts-liberation\n'
+    'On Windows: C:\\Windows\\Fonts\\arial.ttf and cour.ttf ship with the OS.',
   );
 }
