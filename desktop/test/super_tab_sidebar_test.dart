@@ -466,10 +466,10 @@ void main() {
     }
 
     final open = find.byKey(const ValueKey('super-local-models'));
-    final toggle = find.byKey(const ValueKey('super-local-models-switch'));
+    final setUp = find.byKey(const ValueKey('super-local-models-setup'));
 
     testWidgets(
-      'the owner turns them on from the sidebar; it is off until then',
+      'the owner sets models up from Manage models; there is no switch',
       (tester) async {
         final server = ConversationServer();
         server.state['machines'] = [machine()];
@@ -479,9 +479,12 @@ void main() {
         expect(find.text('Manage models'), findsOneWidget);
         await tester.tap(open);
         await tester.pumpAndSettle();
-        expect(tester.widget<Switch>(toggle).value, isFalse);
-        expect(find.text('Off. Only you can turn it on.'), findsOneWidget);
-        await tester.tap(toggle);
+        expect(find.byType(Switch), findsNothing);
+        expect(
+          find.textContaining('Set up gets this computer ready'),
+          findsOneWidget,
+        );
+        await tester.tap(setUp);
         await tester.pumpAndSettle();
         expect(
           server.posts
@@ -501,7 +504,7 @@ void main() {
     );
 
     testWidgets(
-      'others see Manage models once it is on, and cannot switch it',
+      'everyone sees Manage models; before it is set up a member is told the owner sets it up',
       (tester) async {
         final server = ConversationServer();
         (server.state['people'] as List).add({
@@ -513,35 +516,60 @@ void main() {
         final c = server.controller(account: 'peer');
         await c.refresh();
         await mount(tester, c);
-        expect(open, findsNothing);
+        await tester.tap(open);
+        await tester.pumpAndSettle();
+        expect(
+          find.text('The Swarm owner has not set up models yet.'),
+          findsOneWidget,
+        );
+        expect(setUp, findsNothing);
+        await tester.tap(
+          find.byKey(const ValueKey('super-local-models-close')),
+        );
+        await tester.pumpAndSettle();
 
+        // Being set up: it says so, and still offers nothing to press.
         server.state['localModels'] = {'grid': swarmGrid, 'enabled': true};
-        server.state['machines'] = [
-          machine(
-            served: [
-              {'grid': swarmGrid, 'model': 'qwen3', 'name': 'Qwen 3'},
-              {
-                'grid': swarmGrid,
-                'model': 'deepseek/v4',
-                'name': 'deepseek/v4 · OpenRouter',
-                'kind': 'api',
-              },
-              {'grid': 'team', 'model': 'muse', 'kind': 'shared'},
-              {'grid': swarmGrid, 'model': 'qwen3'},
-            ],
-          ),
-        ];
         server.revision++;
         await c.refresh();
         await tester.pumpAndSettle();
-        expect(open, findsOneWidget);
-        // What each machine offers is on the machine now, not listed here.
-        expect(find.text('Qwen 3'), findsNothing);
-
-        // A model's row opens the same window, where the switch is the owner's alone.
         await tester.tap(open);
         await tester.pumpAndSettle();
-        expect(tester.widget<Switch>(toggle).onChanged, isNull);
+        expect(
+          find.text('Being set up on the owner\'s computer.'),
+          findsOneWidget,
+        );
+        expect(setUp, findsNothing);
+        await tester.tap(
+          find.byKey(const ValueKey('super-local-models-close')),
+        );
+        await tester.pumpAndSettle();
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        c.dispose();
+      },
+    );
+
+    testWidgets(
+      'a failed set up says grid\'s words and offers Try again to the owner',
+      (tester) async {
+        final server = ConversationServer();
+        server.state['localModels'] = {
+          'grid': swarmGrid,
+          'enabled': true,
+          'ready': false,
+          'error': 'Free plan allows one network',
+        };
+        final c = server.controller();
+        await c.refresh();
+        await mount(tester, c);
+        await tester.tap(open);
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Could not set up: Free plan allows one network.'),
+          findsOneWidget,
+        );
+        expect(find.text('Try again'), findsOneWidget);
         await tester.tap(
           find.byKey(const ValueKey('super-local-models-close')),
         );

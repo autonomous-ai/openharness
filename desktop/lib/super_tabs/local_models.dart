@@ -5,22 +5,23 @@ import 'package:flutter/material.dart';
 import '../models/model_search_catalog.dart';
 import '../models/swarm_models_target.dart';
 import '../shared/theme/app_icons.dart';
+import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../state/app_state.dart';
 import '../state/swarm_navigation.dart';
 import '../state/swarm_search.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/key_hints.dart';
 import '../widgets/swarm_resource_preview.dart';
 import '../widgets/swarm_switcher.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
 
-/// The Swarm's Local models (docs/plans/2026-10-23-swarm-local-models.md): the owner's switch for the add-on, off until
-/// they turn it on since it is the only thing here that asks grid for anything, and, once it is ready, the Models picker
-/// of ⌘I made for the Swarm ([SwarmModelsTarget]): your models to run for it, models to get, your APIs to share with it,
-/// and the models shared with you that agents on your machines can use.
+/// The Swarm's models (docs/plans/2026-10-23-swarm-local-models.md). Until the owner sets them up there is only a
+/// Set up panel, since it is the only thing here that asks grid for anything; set up, it is the Models picker of ⌘I made
+/// for the Swarm ([SwarmModelsTarget]): your models to run for it, models to get, and your APIs to share with it.
 Future<void> showSwarmLocalModels(
   BuildContext context,
   SuperTabController c, {
@@ -35,7 +36,7 @@ Future<void> showSwarmLocalModels(
   ),
 );
 
-class _SwarmModelsWindow extends StatelessWidget {
+class _SwarmModelsWindow extends StatefulWidget {
   const _SwarmModelsWindow({
     required this.controller,
     required this.app,
@@ -47,8 +48,80 @@ class _SwarmModelsWindow extends StatelessWidget {
   final DateTime Function() now;
 
   @override
+  State<_SwarmModelsWindow> createState() => _SwarmModelsWindowState();
+}
+
+class _SwarmModelsWindowState extends State<_SwarmModelsWindow> {
+  /// A Set up (or Try again) under way on this computer, and why the last one failed.
+  bool _settingUp = false;
+  String? _error;
+
+  /// Sets the Swarm's models up from this computer, at once: turns them on (the backend names the Swarm's grid),
+  /// then has this computer's Harness set grid up — installed and signed in with the Harness account if it is not —
+  /// create the grid and add the Swarm's people, and tells the Swarm how that went. The owner's computers keep the
+  /// members in step afterwards (CLI `superTabs/swarmGrids.ts`).
+  Future<void> _setUp() async {
+    final c = widget.controller, app = widget.app;
+    setState(() {
+      _settingUp = true;
+      _error = null;
+    });
+    try {
+      final snapshot = c.snapshot;
+      var grid = snapshot?.localModels?.enabled == true
+          ? snapshot!.localModels!.grid
+          : null;
+      if (grid == null) {
+        final result = await c.command({
+          'type': 'localModels.set',
+          'enabled': true,
+        });
+        grid = result?['grid'] as String? ?? c.snapshot?.localModels?.grid;
+      }
+      if (grid == null) {
+        _error =
+            c.operationError ?? 'The Swarm could not be reached. Try again.';
+        return;
+      }
+      final machineId = app?.modelManager.machine?.machine.machineId;
+      if (app == null || machineId == null) {
+        // Nothing here can run grid: the owner's other computers finish it in the background.
+        return;
+      }
+      final members = [
+        for (final person in c.snapshot?.people ?? const <SuperTabPerson>[])
+          if (person.role != 'viewer' && person.id != c.snapshot?.ownerId)
+            person.email,
+      ];
+      Map<String, dynamic> answer;
+      try {
+        answer = await app.swarmGridSync(machineId, grid, members);
+      } catch (_) {
+        answer = {
+          'ready': false,
+          'error': 'This computer could not be reached. Try again.',
+        };
+      }
+      final ready = answer['ready'] == true;
+      final error = answer['error'] is String
+          ? answer['error'] as String
+          : null;
+      await c.command({
+        'type': 'localModels.status',
+        'grid': grid,
+        'ready': ready,
+        if (error != null)
+          'error': error.length > 500 ? error.substring(0, 500) : error,
+      });
+      if (!ready) _error = error ?? 'Grid could not be set up. Try again.';
+    } finally {
+      if (mounted) setState(() => _settingUp = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final c = controller;
+    final c = widget.controller, app = widget.app;
     final size = MediaQuery.sizeOf(context);
     return ListenableBuilder(
       listenable: c,
@@ -56,59 +129,119 @@ class _SwarmModelsWindow extends StatelessWidget {
         final local = c.snapshot?.localModels;
         final on = local?.enabled == true;
         final picker = on && local?.ready == true && app != null;
+        final String? failed = _settingUp
+            ? null
+            : _error ??
+                  (on && local?.ready == false
+                      ? local?.error ?? 'grid refused the request'
+                      : null);
         final header = Padding(
-          padding: const EdgeInsets.fromLTRB(24, 20, 16, 12),
+          padding: EdgeInsets.fromLTRB(24, 18, 16, picker ? 14 : 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Manage models',
+                      style: DesktopChrome.text(
+                        size: 15,
+                        medium: true,
+                        height: 1.35,
+                      ).copyWith(fontWeight: FontWeight.w600),
+                    ),
+                    if (picker) ...[
+                      const SizedBox(height: 2),
+                      Row(
+                        key: const ValueKey('super-local-models-ready'),
+                        children: [
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: grid.AppPalette.online,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Swarm grid ready · ${_capitalized(thisComputerName())}',
+                            style: DesktopChrome.metadata(),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              AppIconButton(
+                key: const ValueKey('super-local-models-close'),
+                tooltip: 'Close',
+                icon: AppIcons.close,
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        );
+        // Before it is set up, and while it is being set up or has failed: one panel, as ⌘I's Set up is.
+        final setup = Padding(
+          padding: const EdgeInsets.fromLTRB(24, 4, 24, 20),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Manage models',
-                      style: DesktopChrome.text(size: 15, medium: true),
-                    ),
-                  ),
-                  Text('Use local models', style: DesktopChrome.control()),
-                  const SizedBox(width: 8),
-                  Switch(
-                    key: const ValueKey('super-local-models-switch'),
-                    value: on,
-                    onChanged: !c.isOwner || !c.canWrite || c.saving
-                        ? null
-                        : (value) => unawaited(
-                            c.command({
-                              'type': 'localModels.set',
-                              'enabled': value,
-                            }),
-                          ),
-                  ),
-                  const SizedBox(width: 4),
-                  AppIconButton(
-                    key: const ValueKey('super-local-models-close'),
-                    tooltip: 'Close',
-                    icon: AppIcons.close,
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
               Text(
-                'People in this Swarm can run AI models on their own machines and share their APIs. '
-                'The product manager can give simple tasks to them, at no subscription cost.',
+                'Run models on your own machines for this Swarm, and share your APIs with it. '
+                'The product manager can then give simple tasks to them, at no subscription cost.',
                 style: DesktopChrome.text(),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 12),
               Text(
                 key: const ValueKey('super-local-models-status'),
-                _status(local, owner: c.isOwner),
+                _settingUp || (on && local?.ready == null)
+                    ? (c.isOwner
+                          ? 'Setting up… The first time can take a few minutes.'
+                          : 'Being set up on the owner\'s computer.')
+                    : failed != null
+                    ? 'Could not set up: ${_sentence(failed)}'
+                    : c.isOwner
+                    ? 'Set up gets this computer ready with your Harness account and creates the Swarm\'s grid. '
+                          'People in the Swarm are added to it, now and as they join.'
+                    : 'The Swarm owner has not set up models yet.',
                 style: DesktopChrome.metadata(
-                  color: on && local?.ready == false
+                  color: failed != null
                       ? Theme.of(context).colorScheme.error
                       : null,
                 ),
               ),
+              if (c.isOwner) ...[
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    FilledButton(
+                      key: const ValueKey('super-local-models-setup'),
+                      onPressed: _settingUp || !c.canWrite || c.saving
+                          ? null
+                          : () => unawaited(_setUp()),
+                      child: Text(
+                        _settingUp
+                            ? 'Setting up…'
+                            : failed != null
+                            ? 'Try again'
+                            : 'Set up',
+                      ),
+                    ),
+                    if (_settingUp) ...[
+                      const SizedBox(width: 12),
+                      const SizedBox.square(
+                        dimension: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
             ],
           ),
         );
@@ -125,12 +258,11 @@ class _SwarmModelsWindow extends StatelessWidget {
                 children: [
                   header,
                   if (picker) ...[
-                    Divider(height: 1, color: DesktopChrome.rim),
                     Expanded(
-                      child: _SwarmModelsPicker(app: app!, grid: local!.grid),
+                      child: _SwarmModelsPicker(app: app, grid: local!.grid),
                     ),
                   ] else
-                    const SizedBox(height: 12),
+                    setup,
                 ],
               ),
             ),
@@ -214,84 +346,200 @@ class _SwarmModelsPickerState extends State<_SwarmModelsPicker> {
 
   @override
   Widget build(BuildContext context) {
+    final hints = KeyHints.visibleOf(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(24, 12, 16, 8),
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 14),
           child: Row(
             children: [
-              Icon(AppIcons.search, size: 18, color: DesktopChrome.muted),
+              Expanded(child: _searchField()),
               const SizedBox(width: 12),
-              Expanded(
-                child: TextField(
-                  key: const ValueKey('super-local-models-search'),
-                  controller: _editing,
-                  focusNode: _focus,
-                  autofocus: true,
-                  onChanged: _query,
-                  onSubmitted: (_) {
-                    _choose(_search.submit());
-                    _focus.requestFocus();
-                  },
-                  // As ⌘I's search field: no box of its own, the panel's divider is its edge.
-                  decoration: InputDecoration(
-                    hintText: 'Search models',
-                    hintStyle: DesktopChrome.text(color: DesktopChrome.muted),
-                    isDense: true,
-                    contentPadding: EdgeInsets.zero,
-                    border: InputBorder.none,
-                    enabledBorder: InputBorder.none,
-                    focusedBorder: InputBorder.none,
-                    filled: false,
-                  ),
-                  style: DesktopChrome.text(),
-                ),
+              ListenableBuilder(
+                listenable: _search,
+                builder: (context, _) => _SwarmModelScopes(search: _search),
               ),
             ],
           ),
         ),
+        Divider(height: 1, color: DesktopChrome.rim),
         Expanded(
-          child: ListenableBuilder(
-            listenable: Listenable.merge([_search, _target]),
-            builder: (context, _) => SwarmSearchResults(
-              search: _search,
-              onChoose: _choose,
-              onRefocus: _focus.requestFocus,
-              sideBySideMinWidth: 700,
-              previewBuilder: () => SwarmResourcePreview(
+          // The rows are the preview's to act on; the hints for both are this window's footer.
+          child: KeyHints(
+            visible: false,
+            child: ListenableBuilder(
+              listenable: Listenable.merge([_search, _target]),
+              builder: (context, _) => SwarmSearchResults(
                 search: _search,
-                controls: _controls,
                 onChoose: _choose,
                 onRefocus: _focus.requestFocus,
-                onModalChanged: (_) {},
-                onCommands: () {},
+                sideBySideMinWidth: 700,
+                previewBuilder: () => SwarmResourcePreview(
+                  search: _search,
+                  controls: _controls,
+                  onChoose: _choose,
+                  onRefocus: _focus.requestFocus,
+                  onModalChanged: (_) {},
+                  onCommands: () {},
+                ),
               ),
             ),
           ),
         ),
+        if (hints)
+          ListenableBuilder(
+            listenable: Listenable.merge([_search, _target]),
+            builder: (context, _) => _SwarmModelsHints(search: _search),
+          ),
       ],
+    );
+  }
+
+  /// The app's own search field, as Settings' is: the theme frames it and centres the magnifier on its line.
+  Widget _searchField() => TextField(
+    key: const ValueKey('super-local-models-search'),
+    controller: _editing,
+    focusNode: _focus,
+    autofocus: true,
+    onChanged: _query,
+    onSubmitted: (_) {
+      _choose(_search.submit());
+      _focus.requestFocus();
+    },
+    textInputAction: TextInputAction.search,
+    style: grid.kFieldTextStyle,
+    decoration: InputDecoration(
+      hintText: 'Search models and APIs',
+      prefixIcon: Icon(
+        AppIcons.search,
+        size: grid.kFieldIconSize,
+        color: grid.AppPalette.textFaint,
+      ),
+    ),
+  );
+}
+
+/// All, or one section: APIs, your models, the models to get.
+class _SwarmModelScopes extends StatelessWidget {
+  const _SwarmModelScopes({required this.search});
+
+  final SwarmSearchController search;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget scope(String label, ModelSearchSection? section) {
+      final on = search.modelScope == section;
+      return Semantics(
+        button: true,
+        selected: on,
+        child: Material(
+          color: on
+              ? DesktopChrome.foreground.withValues(alpha: .10)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+          child: InkWell(
+            key: ValueKey('super-local-models-scope:${section?.name ?? 'all'}'),
+            borderRadius: BorderRadius.circular(6),
+            onTap: () => search.setModelScope(section),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              child: Text(
+                label,
+                style: DesktopChrome.text(
+                  size: 12,
+                  medium: true,
+                  height: 1.3,
+                  color: on ? DesktopChrome.foreground : DesktopChrome.muted,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      height: 36,
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: DesktopChrome.field,
+        borderRadius: BorderRadius.circular(9),
+        border: Border.all(color: DesktopChrome.rim),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          scope('All', null),
+          scope('APIs', ModelSearchSection.apis),
+          scope('Yours', ModelSearchSection.local),
+          scope('Get', ModelSearchSection.catalog),
+        ],
+      ),
     );
   }
 }
 
-String _status(SuperTabLocalModels? local, {required bool owner}) {
-  if (local == null || !local.enabled) {
-    return owner
-        ? 'Off. Only you can turn it on.'
-        : 'Off. The Swarm owner can turn it on.';
+/// The window's keys, along its foot: Return says what it does on the chosen row.
+class _SwarmModelsHints extends StatelessWidget {
+  const _SwarmModelsHints({required this.search});
+
+  final SwarmSearchController search;
+
+  @override
+  Widget build(BuildContext context) {
+    final row = search.selected;
+    final enter = row == null
+        ? null
+        : row.isCreate
+        ? 'Add API connection'
+        : search.swarmModelAction(row)?.label ??
+              (search.canExpandApi(row) ||
+                      search.isModelDownloadsRow(row) ||
+                      search.canGetModel(row)
+                  ? search.actionLabel(row)
+                  : null);
+    Widget hint(String key, String label) => Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 5),
+          decoration: BoxDecoration(
+            color: DesktopChrome.foreground.withValues(alpha: .07),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Text(key, style: DesktopChrome.text(size: 11, height: 1.45)),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: DesktopChrome.text(size: 11, color: DesktopChrome.muted),
+        ),
+      ],
+    );
+    return Container(
+      key: const ValueKey('super-local-models-hints'),
+      height: 36,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: DesktopChrome.rim)),
+      ),
+      child: Row(
+        children: [
+          hint('↑↓', 'Select'),
+          if (enter != null) ...[const SizedBox(width: 16), hint('↵', enter)],
+          const SizedBox(width: 16),
+          hint('⇥', 'Actions'),
+          const Spacer(),
+          hint('esc', 'Close'),
+        ],
+      ),
+    );
   }
-  return switch (local.ready) {
-    true =>
-      'On. Run your models for the Swarm, or share an API with it, below.',
-    false =>
-      'Could not finish setting up: ${_sentence(local.error ?? 'try again later')}',
-    null =>
-      owner
-          ? 'Setting up. Keep Harness open on one of your computers for a minute.'
-          : 'Setting up on the owner\'s computer.',
-  };
 }
+
+String _capitalized(String text) =>
+    text.isEmpty ? text : '${text[0].toUpperCase()}${text.substring(1)}';
 
 /// [text] as a sentence: grid's own words often end without a full stop.
 String _sentence(String text) {

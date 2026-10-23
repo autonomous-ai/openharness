@@ -245,6 +245,20 @@ void main() {
     expect(plain.swarmModelAction(row('downloaded')), isNull);
   });
 
+  test('a scope shows one section, and All every one again', () {
+    final sections = search.rows.map(search.modelSection).toSet();
+    expect(sections, contains(ModelSearchSection.catalog));
+    expect(sections, contains(ModelSearchSection.local));
+    search.setModelScope(ModelSearchSection.catalog);
+    expect(search.rows, isNotEmpty);
+    expect(
+      search.rows.map(search.modelSection).toSet(),
+      {ModelSearchSection.catalog},
+    );
+    search.setModelScope(null);
+    expect(search.rows.map(search.modelSection).toSet(), sections);
+  });
+
   test('stops a model running for the Swarm on the Swarm\'s grid', () async {
     await search.swarmModelAction(row('served'))!.run!();
     expect(app.actions.last, (machine: 'm', model: 'served', start: false));

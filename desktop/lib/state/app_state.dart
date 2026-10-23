@@ -11286,6 +11286,19 @@ class AppNotifier extends ChangeNotifier {
     timeout: const Duration(seconds: 12),
   );
 
+  /// Sets a Swarm's grid up on [machineId], this computer of the Swarm owner's (CLI `lib/swarmGrid.ts`): `grid`
+  /// installed and signed in with the Harness account when it is not, the grid created, [members] added and anyone
+  /// else removed. Minutes on a computer that has never run grid.
+  Future<Map<String, dynamic>> swarmGridSync(
+    String machineId,
+    String grid,
+    List<String> members,
+  ) => _conn(machineId).request(
+    'grid_swarm_sync',
+    payload: {'grid': grid, 'members': members},
+    timeout: const Duration(minutes: 5),
+  );
+
   /// The models shared with this person that [machineId] offers to the Swarm whose grid is [grid] (CLI `lib/swarmOffers.ts`).
   Future<Map<String, dynamic>> swarmOffers(String machineId, String grid) =>
       _conn(machineId).request(

@@ -356,9 +356,9 @@ class ProjectSidebar extends StatelessWidget {
               icon: AppIcons.plus,
               onTap: controller.canWrite ? onNewProject : null,
             ),
-          // The Local models add-on (docs/plans/2026-10-23-swarm-local-models.md): the owner turns it on here, and
-          // everyone manages their models for the Swarm here once it is on. What each machine offers is on the machine.
-          if (controller.isOwner || snapshot?.localModels?.enabled == true)
+          // The Swarm's models (docs/plans/2026-10-23-swarm-local-models.md), for everyone: the owner sets them up here,
+          // and everyone runs and shares models here once they are. What each machine offers is on the machine.
+          if (snapshot != null)
             _navigationRow(
               key: 'super-local-models',
               label: 'Manage models',

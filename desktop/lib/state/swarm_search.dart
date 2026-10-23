@@ -112,7 +112,10 @@ class SwarmSearchController extends ChangeNotifier {
        _locations = locations ?? SwarmLocationCatalog(),
        targetId = app.activeSwarmId,
        targetName = app.activeSwarm.name {
-    if (activityFirst && history == null && !navigating && harnessContext == null) {
+    if (activityFirst &&
+        history == null &&
+        !navigating &&
+        harnessContext == null) {
       _content = SessionContentSearch(
         machines: () => app.searchableMachineIds,
         ask: (machineId, words, when) =>
@@ -325,10 +328,8 @@ class SwarmSearchController extends ChangeNotifier {
       if (entry.apiModel case final model?) {
         return swarm.shared(entry.api!.id, model.id) ? 'Shared' : null;
       }
-      if (entry.gridModel case GridModel(
-        :final id,
-        grid: final sharedGrid?,
-      ) when local == null) {
+      if (entry.gridModel case GridModel(:final id, grid: final sharedGrid?)
+          when local == null) {
         return swarm.offered(sharedGrid, id) ? 'Offered' : null;
       }
     }
@@ -523,10 +524,8 @@ class SwarmSearchController extends ChangeNotifier {
     }
     // A model shared with the person, on someone else's grid: offering it lets the Lead start Builders on their
     // machines on it (owner, 2026-10-23: a choice, as running a model or sharing an API is).
-    if (entry.gridModel case GridModel(
-      :final id,
-      grid: final sharedGrid?,
-    ) when entry.api == null) {
+    if (entry.gridModel case GridModel(:final id, grid: final sharedGrid?)
+        when entry.api == null) {
       final on = swarm.offered(sharedGrid, id);
       return (
         label: on ? 'Stop offering' : 'Offer to Swarm',
@@ -1278,7 +1277,8 @@ class SwarmSearchController extends ChangeNotifier {
   bool get previewVisible => _previewVisible;
   bool get supportsPreview =>
       harnessContext == null &&
-      history == null && (setupLayout || !isCommandMode && !isHelpMode);
+      history == null &&
+      (setupLayout || !isCommandMode && !isHelpMode);
   bool get canPreview =>
       supportsPreview &&
       selected != null &&
@@ -2308,6 +2308,9 @@ class SwarmSearchController extends ChangeNotifier {
             ? installed
             : order[a.id]!.compareTo(order[b.id]!);
       });
+      if (modelScope case final scope?) {
+        rows = rows.where((row) => modelSection(row) == scope).toList();
+      }
     }
     if (!isCommandMode && !isHelpMode) {
       if (noteFor?.call(query) case final note?) {
@@ -2355,7 +2358,9 @@ class SwarmSearchController extends ChangeNotifier {
         ? 1
         : cursor.clamp(0, rows.length - 1);
     if (harnessContext != null && preferred == null) {
-      final agent = rows.indexWhere((row) => row.agentId != null && canSubmit(row));
+      final agent = rows.indexWhere(
+        (row) => row.agentId != null && canSubmit(row),
+      );
       if (agent >= 0) cursor = agent;
     }
     // Nor on a row Return cannot take: "Already added", dimmed, with its
@@ -2409,6 +2414,29 @@ class SwarmSearchController extends ChangeNotifier {
   /// Subscriptions do, instead of typing a filter the person must delete.
   void openModelSection(ModelSearchSection section) {
     _openSection = section;
+    _filter();
+    notifyListeners();
+  }
+
+  /// The models list of a Swarm's Manage models, drawn in its own way (`super_tabs/local_models.dart`).
+  bool get isSwarmModels => isModelMode && swarmModels != null;
+
+  /// How many of the Swarm's APIs' models [row]'s API shares with the Swarm. Null for any row but an API's own.
+  int? swarmApiShareCount(SwarmDestination row) {
+    final swarm = swarmModels;
+    if (swarm == null || !isApiRow(row)) return null;
+    final id = models!.entries[row.modelId]!.api!.id;
+    return swarm.shares.where((key) => key.startsWith('$id\u0000')).length;
+  }
+
+  /// The one model section the list shows, or every section: the scope buttons of a Swarm's Manage models.
+  ModelSearchSection? modelScope;
+
+  void setModelScope(ModelSearchSection? section) {
+    if (modelScope == section) return;
+    modelScope = section;
+    cursor = 0;
+    _selectedId = null;
     _filter();
     notifyListeners();
   }
@@ -2635,7 +2663,9 @@ class SwarmSearchController extends ChangeNotifier {
 
   bool alreadyHere(SwarmDestination row) =>
       harnessContext == null &&
-      adding && row.agentId != null && _presentIds.contains(row.id);
+      adding &&
+      row.agentId != null &&
+      _presentIds.contains(row.id);
 
   bool canAdd(SwarmDestination? row) => harnessContext != null
       ? adding && row?.agentId != null && sessionUnavailable(row) == null
