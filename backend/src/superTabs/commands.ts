@@ -414,6 +414,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (actor.kind === 'person') owner(state, actor)
       if (state.project) fail('PROJECT_SET', 'This Super Tab already has a project.')
       state.project = { machineId: command.machineId, ...command.project }
+      // A new Swarm stores its first project, and stored projects are read instead of `state.project` (projectsOf).
+      const first = state.projects?.find(p => p.id === 'lead')
+      if (first) first.repository ??= { ...state.project }
       break
     }
     case 'machine.contribute': {

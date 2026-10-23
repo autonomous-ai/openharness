@@ -1178,6 +1178,27 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(rows).toEqual(['Rule added: Only this Mac.', 'Rule removed: Only this Mac.'])
     expect((await store.read(owner, tab)).state.projects!.map(p => p.id)).toEqual([projectId])
   })
+  it('keeps a new Swarm\'s folder from tab.project on its first project, so the repository can be shared and the host uses it', async () => {
+    // Review of #1598: a new Swarm stores its first project, which tab.project left without the folder.
+    const tab = (await store.create(owner, randomUUID(), 'Folder')).id
+    await run(tab, { type: 'tab.project', machineId: 'test-host', project: { cwd: '/work/app', repositoryUrl: null } })
+    const url = 'https://github.com/example/app'
+    await run(tab, { type: 'project.repository', projectId: 'lead', repositoryUrl: url })
+    const repository = { machineId: 'test-host', cwd: '/work/app', repositoryUrl: url }
+    expect((await store.read(owner, tab)).state.projects!.map(p => p.repository)).toEqual([repository])
+    const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
+    await run(tab, { type: 'machine.contribute', machineId: 'test-host', name: 'Host', cwd: '/swarm-root', scope: 'swarm', engines: ['codex'], maxAgents: 2 }, host)
+    const pool = (await store.hostPools(host, 'test-host')).find(p => p.tabId === tab)!
+    await store.observeMachine(host, tab, 'test-host', { generation: pool.machine.generation,
+      resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, projectDiskFreeBytes: 100e9,
+        diskFreeBytes: 100e9, diskTotalBytes: 500e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null },
+      quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [] })
+    const request = { conversationId: 'lead', machineId: 'test-host', engine: 'codex', name: 'Builder', cwd: '/work/app', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    await run(tab, { type: 'agent.start', request })
+    expect((await store.hostPools(host, 'test-host')).find(p => p.tabId === tab)!.projects).toEqual([expect.objectContaining({ id: 'lead', repository })])
+  })
   it('lets a project\'s Lead change its skills only by quoting a message the project owner wrote there, and tells the host', async () => {
     const tab = (await store.create(owner, randomUUID(), 'Skills')).id
     await invite(tab)
