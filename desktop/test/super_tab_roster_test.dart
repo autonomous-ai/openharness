@@ -14,6 +14,7 @@ import 'package:harness/super_tabs/agent_details.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/roster.dart';
+import 'package:harness/widgets/engine_identity.dart';
 import 'package:harness/widgets/harness_activity_mark.dart';
 
 import 'harness_activity_test.dart' show activityQuestion;
@@ -715,6 +716,22 @@ void main() {
     await f.close(tester);
   });
 
+  testWidgets('an agent row shows its engine icon, not its project name', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    await f.show(tester);
+    EngineMark mark(int i) =>
+        tester.widget<EngineMark>(f.inRow(i, find.byType(EngineMark)));
+    expect(mark(0).engine, 'codex');
+    expect(mark(1).engine, 'claude');
+    expect(f.inRow(1, find.text('openharness')), findsNothing);
+    f.controller.select('os-lead');
+    await tester.pumpAndSettle();
+    expect(f.inRow(2, find.text('autonomous-os')), findsNothing);
+    await f.close(tester);
+  });
+
   testWidgets('a reviewer reads Rev; an agent without a role stays Dev', (
     tester,
   ) async {
@@ -796,10 +813,9 @@ void main() {
     await f.show(tester);
     for (final i in [0, 1, 3]) {
       expect(f.row(i), findsOneWidget);
-      expect(f.inRow(i, find.text('openharness')), findsOneWidget);
+      expect(f.inRow(i, find.byType(EngineMark)), findsOneWidget);
     }
     expect(f.row(2), findsNothing);
-    expect(find.text('autonomous-os'), findsNothing);
 
     f.controller.select('os-lead');
     await tester.pumpAndSettle();
@@ -807,14 +823,14 @@ void main() {
       expect(f.row(i), findsNothing);
     }
     expect(f.row(2), findsOneWidget);
-    expect(f.inRow(2, find.text('autonomous-os')), findsOneWidget);
+    expect(f.inRow(2, find.byType(EngineMark)), findsOneWidget);
     expect(f.inRow(2, find.text('PM')), findsOneWidget);
 
     f.controller.select('offline');
     await tester.pumpAndSettle();
     for (final i in [0, 1, 3]) {
       expect(f.row(i), findsOneWidget);
-      expect(f.inRow(i, find.text('openharness')), findsOneWidget);
+      expect(f.inRow(i, find.byType(EngineMark)), findsOneWidget);
     }
     expect(f.row(2), findsNothing);
     await f.close(tester);
@@ -844,18 +860,18 @@ void main() {
       for (final i in [0, 1, 3]) {
         expect(f.inRow(i, find.byType(SuperTabAvatar)), findsOneWidget);
         expect(f.inRow(i, find.text(i == 0 ? 'PM' : 'Dev')), findsOneWidget);
-        expect(f.inRow(i, find.text('openharness')), findsOneWidget);
+        expect(f.inRow(i, find.byType(EngineMark)), findsOneWidget);
       }
       expect(find.text('Join Super Tab roster'), findsNothing);
       expect(find.text('Not in this Swarm'), findsNothing);
       expect(find.text('Ready'), findsNothing);
       final nameX = tester.getTopLeft(f.inRow(0, find.text('Atlas'))).dx;
-      final project = tester.getRect(f.inRow(0, find.text('openharness')));
+      final engine = tester.getRect(f.inRow(0, find.byType(EngineMark)));
       final name = tester.getRect(f.inRow(0, find.text('Atlas')));
       final status = tester.getRect(f.inRow(0, find.text('Idle')));
       final mark = tester.getRect(f.inRow(0, find.byType(ActivityMark)));
-      expect(project.left, greaterThan(name.right));
-      expect(project.center.dy, closeTo(name.center.dy, 2));
+      expect(engine.left, greaterThan(name.right));
+      expect(engine.center.dy, closeTo(name.center.dy, 2));
       expect(mark.left, nameX);
       expect(status.left, greaterThan(mark.right));
       expect(status.top, greaterThanOrEqualTo(name.bottom));
@@ -885,7 +901,7 @@ void main() {
       for (final i in [0, 1, 3]) {
         expect(f.row(i), findsNothing);
       }
-      expect(f.inRow(2, find.text('autonomous-os')), findsOneWidget);
+      expect(f.inRow(2, find.byType(EngineMark)), findsOneWidget);
       f.controller.selectDevices();
       await tester.pumpAndSettle();
       expect(f.controller.devicesSelected, isTrue);
@@ -937,10 +953,7 @@ void main() {
         expect(f.row(legacyAgent), findsNothing);
         f.controller.select('os-lead');
         await tester.pumpAndSettle();
-        expect(
-          f.inRow(legacyAgent, find.text('autonomous-os')),
-          findsOneWidget,
-        );
+        expect(f.inRow(legacyAgent, find.byType(EngineMark)), findsOneWidget);
         await f.close(tester);
       },
     );
@@ -957,7 +970,7 @@ void main() {
     });
     await f.controller.refresh();
     await f.show(tester);
-    expect(f.inRow(1, find.text('openharness')), findsOneWidget);
+    expect(f.inRow(1, find.byType(EngineMark)), findsOneWidget);
     f.controller.select('os-lead');
     await tester.pumpAndSettle();
     expect(f.row(1), findsNothing);

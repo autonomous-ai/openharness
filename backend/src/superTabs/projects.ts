@@ -50,6 +50,11 @@ export function agentProjectId(state: SuperTabState, target: Agent): string {
   return target.projectId ?? state.conversations.find(c => c.agentIds.includes(target.id))?.projectId ?? 'lead'
 }
 
+/** The project whose Lead (Product Manager) this agent is: the Lead of that project's Lead conversation. */
+export function ledProject(state: SuperTabState, agentId: string): SwarmProject | undefined {
+  return projectsOf(state).find(p => state.conversations.some(c => c.id === p.leadConversationId && c.leadId === agentId))
+}
+
 export function canReadProject(state: SuperTabState, actor: Actor, project: SwarmProject): boolean {
   if (actor.kind === 'agent') {
     const target = state.agents.find(a => a.id === actor.agentId)

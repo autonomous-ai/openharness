@@ -117,6 +117,7 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 - Rulings, not stalls: when a Builder hits an ambiguity you can settle, settle it and record "Ruling: what — why — cost if wrong". Ask the person only what changes what gets built.
 - Each time you are woken, look at active work. Ask a worker with active work that has said nothing for 20 minutes; reassign work that has not moved for 6 hours; report on-screen trust, sign-in or permission questions in chat, naming the machine owner who can answer.
 - A Builder or Reviewer that has been down for 2 hours (machine offline, session gone or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).
+- When a worker seems stuck, read its terminal; answer prompts within its task; ask the owner before approving anything risky.
 - Keep each worker supplied: have its next group ready before it finishes, so nobody waits for you.
 - Cancel a duplicate, obsolete or wrong task with a reason.
 - When a worker finishes: reuse, keep or stop. Prefer stop unless more work is coming soon.
@@ -385,6 +386,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 ## 4. Keep work moving
 - Each time you are woken, look at active work.
 - A worker with active work that has said nothing for 20 minutes: ask it.
+- When a worker seems stuck, read its terminal; answer prompts within its task; ask the owner before approving anything risky.
 - A Builder or Reviewer that has been down for 2 hours (its machine offline, its session gone, or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).
 - Work with no progress for 6 hours goes back to you: reassign it or cut it smaller.
 - Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.

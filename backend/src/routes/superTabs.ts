@@ -28,6 +28,7 @@ const messageQuery = agentQuery.extend({ after: z.coerce.number().int().nonnegat
   before: z.coerce.number().int().nonnegative().safe().optional(), messageId: id.optional() })
   .refine(q => [q.after, q.before, q.messageId].filter(value => value !== undefined).length <= 1, 'Choose one message cursor or exact message.')
 const decisionParams = tabParams.extend({ decisionId: id })
+const terminalParams = tabParams.extend({ requestId: id })
 const hostParams = z.object({ machineId: id })
 const hostStartParams = hostParams.extend({ tabId: id, startId: id })
 const machineParams = hostParams.extend({ tabId: id })
@@ -99,6 +100,12 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     (req, reply) => respond(reply, () => store.join(req.user!, req.params.tabId, req.body)))
   app.get<{ Params: z.infer<typeof hostParams> }>('/api/super-tabs/hosts/:machineId', { preHandler: validateParams(hostParams) },
     (req, reply) => respond(reply, () => store.hostTabs(req.user!, req.params.machineId)))
+  app.post<{ Params: z.infer<typeof hostParams> }>('/api/super-tabs/hosts/:machineId/terminal', { preHandler: validateParams(hostParams) },
+    (req, reply) => respond(reply, () => store.hostTerminal(req.user!, req.params.machineId)))
+  // Long-polls about 20 seconds; a request still waiting then answers `pending` and is read again.
+  app.get<{ Params: z.infer<typeof terminalParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/terminal/:requestId',
+    { preHandler: [validateParams(terminalParams), validateQuery(agentQuery)] },
+    (req, reply) => respond(reply, () => store.terminalResult(req.user!, req.params.tabId, req.params.requestId, req.query.asAgentId, 20_000)))
   app.get<{ Params: z.infer<typeof hostParams> }>('/api/super-tabs/hosts/:machineId/assignments', { preHandler: validateParams(hostParams) },
     (req, reply) => respond(reply, () => store.hostAssignments(req.user!, req.params.machineId)))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId',

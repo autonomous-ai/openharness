@@ -41,6 +41,10 @@ export interface Agent {
   downSince?: string
   /** The down time already named in the Lead's scheduled wake-up (projectUpdates.ts), so each time down is named once. */
   downNamed?: string
+  /** A usage limit seen on its terminal; routing skips the agent until then. Shown as null once passed (terminal.ts). */
+  limitedUntil?: string | null
+  /** Terminal alert episodes in progress, so each one posts a single row (terminal.ts). */
+  alerting?: Array<'prompt' | 'limit'>
 }
 export type AgentRole = 'builder' | 'reviewer'
 export const agentRole = (agent: Pick<Agent, 'role'>): AgentRole => agent.role ?? 'builder'
@@ -159,6 +163,8 @@ export interface SuperTabState {
   harnessReservations?: Array<{ machineId: string; harnessId: string; generation: string; renewed: boolean }>
   /** Native stop receipts survive late replaceable machine observations. */
   releasedHarnesses?: Array<{ machineId: string; harnessId: string }>
+  /** Sessions of removed agents their host closes, listed to that host until it says they closed (agent.sessionClosed). */
+  closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string }>
 }
 export type Actor =
   | { kind: 'person'; userId: string; email: string }
@@ -182,6 +188,8 @@ export interface CommandEffects {
   previousAttempts: Array<{ conversationId: string; brief: string; checks: Check[]; assignment: Assignment }>
   routeDecisions: RouteDecisionEffect[]
   result: Record<string, unknown>
+  /** A terminal request or its answer, written outside the tab state by the store (terminal.ts). */
+  terminal?: import('./terminal.js').TerminalEffect
 }
 export class SuperTabError extends Error {
   constructor(readonly code: string, message: string, readonly status = 409) {
@@ -285,10 +293,13 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     const since = downSince(state, target, now)
     if (since) target.downSince = since
     delete target.downNamed
+    if (target.limitedUntil && Date.parse(target.limitedUntil) <= now) target.limitedUntil = null
   }
   delete visible.sharing
   delete visible.harnessReservations
   delete visible.releasedHarnesses
+  // Only that machine's host roster lists them (store.ts hostTabs); a removed private agent's session is not every member's.
+  delete visible.closingSessions
   numberConversations(visible)
   delete visible.retiredConversationNumber
   placeRules(visible)
