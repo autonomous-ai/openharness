@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { createSuperTab, SuperTabError, type AgentStart, type AgentStartRequest, type SuperTabState } from './model.js'
-import { admitMachineStart, machineSlots, type ContributedMachine } from './machines.js'
+import { admitMachineStart, machineSlots, machineObservationSchema, type ContributedMachine } from './machines.js'
 
 const NOW = 1_000_000
 const requirements = { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 50, tools: ['git'], devices: [], quotaRequired: false }
 const observation = { generation: 'o', receivedAt: NOW, resources: { cpuPercent: 1, memoryTotalBytes: 1, memoryUsedBytes: 1, diskFreeBytes: 1, diskTotalBytes: 1,
   projectDiskFreeBytes: 1, deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] }
+
+it('accepts optional tool probe failures while preserving older observations', () => {
+  const { receivedAt: _receivedAt, ...sent } = observation
+  expect(machineObservationSchema.safeParse(sent).success).toBe(true)
+  expect(machineObservationSchema.safeParse({ ...sent, tools: { git: true }, toolProbeErrors: { flutter: 'interactive shell timed out' } }).success).toBe(true)
+})
 
 function setup(machine: Partial<ContributedMachine> = {}) {
   const state: SuperTabState = createSuperTab('tab', 'Team', { id: 'owner', email: 'owner@example.com' }, 'test')

@@ -210,7 +210,7 @@ describe('routeTask', () => {
     expect(reasonOf('mac').some(r => r.includes('This machine does not have the project folder. Add it to the Swarm so it can clone the project.'))).toBe(true)
     expect(reasonOf('mac').some(r => /Project disk space/.test(r))).toBe(false)
     // Its other reasons stay.
-    expect(reasonOf('mac').some(r => /Required tool unavailable: git/.test(r))).toBe(true)
+    expect(reasonOf('mac').some(r => /Required tool not verified: git/.test(r))).toBe(true)
     // The Lead's own machine keeps the plain reason: its folder was named by the Lead itself.
     expect(reasonOf('remote-1').some(r => r.includes('Project disk space could not be verified.'))).toBe(true)
   })
@@ -391,7 +391,7 @@ describe('routeTask', () => {
     const result = await routeTask({ ...input, assessment: { ...input.assessment, needs } }, s, where as never, open)
     expect(result).toMatchObject({ error: 'NO_CANDIDATE' })
     const reasons = (result.excluded as Array<{ reason: string }>).map(e => e.reason)
-    expect(reasons).toContain('Required tool unavailable: git. Required device unavailable: /dev/ttyUSB0.')
+    expect(reasons).toContain('Required tool missing: git. Required device unavailable: /dev/ttyUSB0.')
     const d = open.mock.results[0] && await open.mock.results[0].value as ReturnType<typeof daemon>
     expect(d.request).toHaveBeenCalledWith('super_tabs', expect.objectContaining({ action: 'capacity', cwd: '/repo', tools: ['git'], devices: ['/dev/ttyUSB0'] }), 20_000)
   })
@@ -409,7 +409,7 @@ describe('routeTask', () => {
     const requirements = { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: ['git'], devices: ['/dev/x'], quotaRequired: false }
     const { reasons } = admission({ resources: {}, tools: {}, devices: {} }, { installed: true, signedIn: true }, quota, requirements)
     expect(reasons).toEqual([
-      'Required tool unavailable: git.', 'Required device unavailable: /dev/x.',
+      'Required tool not verified: git. Ask the machine owner to check it and refresh the machine reading.', 'Required device unavailable: /dev/x.',
       'The subscription has an exhausted usage window. Wait for a fresh allowance reading or choose another account.'])
     const unknown = admission({ resources: {}, tools: {}, devices: {} }, { installed: true, signedIn: true }, quotaOf({}, 'claude', false), { ...requirements, tools: [], devices: [] })
     expect(unknown).toMatchObject({ allowed: true, reasons: [] })
@@ -653,7 +653,16 @@ describe('routing contributed capacity', () => {
     const { answer } = await runPool(pool, true)
     expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
     expect(answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
-      reason: expect.stringContaining('Required tool unavailable: git.') })]))
+      reason: expect.stringContaining('Required tool missing: git.') })]))
+  })
+  it('explains a contributed member tool probe that did not complete', async () => {
+    const pool = healthy()
+    delete (pool.observation.tools as Record<string, unknown>).git
+    Object.assign(pool.observation, { toolProbeErrors: { git: 'interactive shell timed out' } })
+    const { answer } = await runPool(pool, true)
+    expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+    expect(answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
+      reason: expect.stringMatching(/Required tool not verified: git.*interactive shell timed out.*check it/) })]))
   })
   it('withholds a contributed member absent from an explicit running-terminal list', async () => {
     const pool = healthy(); pool.observation.runningHarnessIds = []
@@ -708,5 +717,15 @@ describe('routing contributed capacity', () => {
   })
   it('refuses unobserved tools and devices, without probing arbitrary paths on a teammate computer', async () => {
     expect((await runPool(healthy(), false, { tools: ['docker'], devices: ['/dev/fixture'] })).answer.ok).not.toBe(true)
+  })
+  it('distinguishes reported missing tools from unverified contributed probes in route reasons', async () => {
+    const missing = healthy(); missing.observation.tools.git = false
+    const absent = await runPool(missing)
+    expect(absent.answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringContaining('Required tool missing: git.') })]))
+
+    const unverified = healthy(); delete (unverified.observation.tools as Record<string, unknown>).git
+    Object.assign(unverified.observation, { toolProbeErrors: { git: 'interactive shell timed out' } })
+    const failed = await runPool(unverified)
+    expect(failed.answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringMatching(/Required tool not verified: git.*interactive shell timed out/) })]))
   })
 })

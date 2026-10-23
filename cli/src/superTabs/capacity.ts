@@ -2,7 +2,7 @@ import { access } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { readMachineResources } from '../lib/machineResources.js'
-import { commandAvailableInInteractiveShell } from '../lib/engineLaunch.js'
+import { commandAvailableInInteractiveShell, type CommandAvailability } from '../lib/engineLaunch.js'
 import { launchModelEngines } from '../lib/launchModel.js'
 import { object } from './wire.js'
 import { readCapacityDisk } from './disk.js'
@@ -19,12 +19,20 @@ export const startRequirements = (needs: { tools: string[]; devices: string[] })
   // CPU use is only a momentary reading: a busy machine would refuse every candidate (seen in the route e2e at 98.7%), so the route does not cap it.
   ({ ...START_REQUIREMENTS, maxCpuPercent: 100, tools: [...new Set([...START_REQUIREMENTS.tools, ...needs.tools])], devices: needs.devices })
 
+/** A missing result is a completed check; an absent value or failed check is only unverified. */
+export function requiredToolReason(tool: string, reported: unknown, failure?: unknown): string | null {
+  if (reported === true) return null
+  if (reported === false) return `Required tool missing: ${tool}.`
+  const detail = typeof failure === 'string' && failure ? `${failure} ` : ''
+  return `Required tool not verified: ${tool}. ${detail}Ask the machine owner to check it and refresh the machine reading.`
+}
+
 export async function readCapabilities(input: Json, deps = {
   resources: readMachineResources,
   disk: readCapacityDisk,
-  tool: commandAvailableInInteractiveShell,
+  tool: (name: string): Promise<CommandAvailability> => commandAvailableInInteractiveShell(name, undefined, undefined, true),
   device: async (path: string) => { await access(path, constants.R_OK | constants.W_OK); return true },
-}) {
+}): Promise<Json> {
   const cwd = input.cwd, tools = input.tools ?? [], devices = input.devices ?? []
   if (typeof cwd !== 'string' || !isAbsolute(cwd) || cwd.length > 4096 || /[\x00-\x1f\x7f]/.test(cwd)
     || (input.worktree !== undefined && typeof input.worktree !== 'boolean')
@@ -33,9 +41,13 @@ export async function readCapabilities(input: Json, deps = {
     return { error: 'INVALID_REQUEST', detail: 'Name an absolute project path and up to 20 tools and devices.' }
   }
   const probeTools = async () => {
-    const answers: Array<readonly [string, boolean]> = []
+    const answers: Array<readonly [string, CommandAvailability]> = []
     for (let index = 0; index < tools.length; index += 4) {
-      answers.push(...await Promise.all(tools.slice(index, index + 4).map(async t => [t, await deps.tool(t).catch(() => false)] as const)))
+      answers.push(...await Promise.all(tools.slice(index, index + 4).map(async t => {
+        const result = await deps.tool(t).catch(error => ({ status: 'unverified' as const,
+          detail: (error instanceof Error ? error.message : String(error)).slice(0, 200) }))
+        return [t, result] as const
+      })))
     }
     return answers
   }
@@ -46,9 +58,12 @@ export async function readCapabilities(input: Json, deps = {
     probeTools(),
     Promise.all(devices.map(async d => [d, await deps.device(d).catch(() => false)] as const)),
   ])
+  const toolProbeErrors = Object.fromEntries(toolValues.filter(([, result]) => result.status === 'unverified')
+    .map(([name, result]) => [name, result.detail ?? 'The tool probe did not complete.']))
   return { ok: true, sampledAt: Date.now(), resources: { ...resources, projectDiskFreeBytes: disk?.freeBytes ?? null, projectDiskTotalBytes: disk?.totalBytes ?? null,
     projectDiskVolume: disk?.volume ?? null, projectDiskPath: disk?.path ?? null },
-    tools: Object.fromEntries(toolValues), devices: Object.fromEntries(deviceValues),
+    tools: Object.fromEntries(toolValues.filter(([, result]) => result.status !== 'unverified').map(([name, result]) => [name, result.status === 'available'])),
+    ...(Object.keys(toolProbeErrors).length ? { toolProbeErrors } : {}), devices: Object.fromEntries(deviceValues),
     // A daemon from before the launch flags leaves this out, and a start then switches the model after it.
     launchModel: launchModelEngines() }
 }
@@ -73,7 +88,7 @@ export function quotaOf(reply: Json, engine: string, customAccount: boolean) {
 }
 export function admission(capacity: Json, engine: Json, quota: ReturnType<typeof quotaOf>, requirements: Requirements, customAccount = false) {
   const reasons: string[] = [], unknown: string[] = []
-  const resources = object(capacity.resources), tools = object(capacity.tools), devices = object(capacity.devices)
+  const resources = object(capacity.resources), tools = object(capacity.tools), devices = object(capacity.devices), toolProbeErrors = object(capacity.toolProbeErrors)
   if (engine.installed !== true) reasons.push('The selected agent engine is not installed on this machine.')
   if (engine.signedIn === false && !customAccount) reasons.push('The selected agent engine is not signed in on this machine.')
   const memory = finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes)
@@ -90,7 +105,10 @@ export function admission(capacity: Json, engine: Json, quota: ReturnType<typeof
     if (requirements.maxCpuPercent < 100) reasons.push('CPU headroom could not be verified.')
   } else if (resources.cpuPercent > requirements.maxCpuPercent) reasons.push(`CPU use is ${resources.cpuPercent}%; the requested maximum is ${requirements.maxCpuPercent}%.`)
   if (resources.memoryPressure === 'critical') reasons.push('The machine reports critical memory pressure.')
-  for (const t of requirements.tools) if (tools[t] !== true) reasons.push(`Required tool unavailable: ${t}.`)
+  for (const t of requirements.tools) {
+    const reason = requiredToolReason(t, tools[t], toolProbeErrors[t])
+    if (reason) reasons.push(reason)
+  }
   for (const d of requirements.devices) if (devices[d] !== true) reasons.push(`Required device unavailable: ${d}.`)
   if (!quota.known) {
     unknown.push('Subscription allowance is unknown for this account.')
