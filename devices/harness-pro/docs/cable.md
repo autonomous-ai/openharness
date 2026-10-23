@@ -210,7 +210,7 @@ Daemon to Pro:
   0-based place in the Swarm as the app lists it (an old Swarm without projects is 0), so the round dial can show the Leads in the app's order; values may skip
   where a project has no Lead or was cut. The Pro puts the Leads in `order` (ties, and a Lead without one, keep their place as sent): the card, its pages and
   the Lead view's swipe all follow it, whatever each Lead's state. The capsule still counts stuck, needs you and working.
-- `state`: `ask` (needs you), `stuck`, `work`, `done`. `since` is the seconds into the turn of a local Lead at work (the Pro counts on from it); a remote Lead at work has none and shows "working".
+- `state`: `ask` (needs you), `stuck`, `work`, `done`. `since` is the seconds into the project's earliest turn on the daemon's machine (the Lead's or a worker's; at least 1, and the Pro counts on from it). A Lead at work without one (remote, or working only from open assignments) shows "working" with no clock; a `supertab` is re-sent when that turn's start moves.
 - `local` is the harness id of a Lead that runs on this account's machine, else empty. A Lead with `local` offers the usual talk control in its view; a remote one (`owner` names the
   person whose machine) has none.
 - `supertab.recap` with `none:true` (or no text) is "No message yet". A recap for a Swarm or Lead the Pro does not hold is dropped.

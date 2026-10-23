@@ -266,6 +266,34 @@ describe('SwarmCards.tick', () => {
     expect(t.seen[1][0].leads[0].state).toBe('done')
   })
 
+  it('re-sends when the clock\'s turn changes (the Lead\'s ends, a worker\'s goes on), not while the same turn runs', async () => {
+    const state = swarm({ agents: [agent('a1'), agent('a2'), agent('b1', { projectId: 'web' })] })
+    const t = setup({ t1: { revision: 1, state } }, { activity: { 'h-a1': 'working' }, elapsed: 90 })
+    await t.cards.tick()
+    expect(t.seen[0][0].leads[0]).toMatchObject({ project: 'web', state: 'work', since: 90 })
+    // the worker starts too: the Lead's earlier turn is still the clock, nothing to send
+    vi.mocked(t.core.agents.activity).mockResolvedValue({ 'h-a1': 'working', 'h-b1': 'working' })
+    vi.mocked(t.core.agents.activitySnapshot!).mockResolvedValue({ text: '', elapsedSeconds: 10 })
+    t.advance(5000)
+    await t.cards.tick()
+    expect(t.seen).toHaveLength(1)
+    // the Lead's turn ends, the worker's goes on: same state, another start, so the Pro is told
+    vi.mocked(t.core.agents.activity).mockResolvedValue({ 'h-b1': 'working' })
+    t.advance(5000)
+    await t.cards.tick()
+    expect(t.seen).toHaveLength(2)
+    expect(t.seen[1][0].leads[0]).toMatchObject({ project: 'web', state: 'work', since: 15 })
+    t.advance(5000)
+    await t.cards.tick()
+    expect(t.seen).toHaveLength(2)
+  })
+
+  it('sends a turn that just began as 1 s in, never 0 (the Pro shows no clock for 0)', async () => {
+    const t = setup({ t1: { revision: 1, state: swarm() } }, { activity: { 'h-a1': 'working' }, elapsed: 0 })
+    await t.cards.tick()
+    expect(t.seen[0][0].leads[0]).toMatchObject({ id: 'a1', state: 'work', since: 1 })
+  })
+
   it('names a remote Lead\'s owner using the signed-in account', async () => {
     const t = setup({ t1: { revision: 1, state: swarm({ agents: [agent('a1', { machineId: 'm2', machineOwnerId: 'sam' }), agent('a2')] }) } })
     await t.cards.tick()
