@@ -159,6 +159,8 @@ export interface SuperTabState {
   harnessReservations?: Array<{ machineId: string; harnessId: string; generation: string; renewed: boolean }>
   /** Native stop receipts survive late replaceable machine observations. */
   releasedHarnesses?: Array<{ machineId: string; harnessId: string }>
+  /** Sessions of removed agents their host closes, listed to that host until it says they closed (agent.sessionClosed). */
+  closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string }>
 }
 export type Actor =
   | { kind: 'person'; userId: string; email: string }
@@ -289,6 +291,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   delete visible.sharing
   delete visible.harnessReservations
   delete visible.releasedHarnesses
+  // Only that machine's host roster lists them (store.ts hostTabs); a removed private agent's session is not every member's.
+  delete visible.closingSessions
   numberConversations(visible)
   delete visible.retiredConversationNumber
   placeRules(visible)

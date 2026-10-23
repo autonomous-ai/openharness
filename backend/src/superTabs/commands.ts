@@ -10,7 +10,7 @@ import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type Rou
 import { routingOverrideSchema } from './routingPolicy.js'
 import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
-import { agentProjectId, deleteProject, groupProject, inviteLanding, manageProject, mutableProjects, placeRules, projectMembers, projectOf, projectRules, readAgent, readConversation, readProject, sameProject, SKILL_MODE_NAMES, skillModeOf, type SwarmProject } from './projects.js'
+import { agentProjectId, deleteProject, groupProject, inviteLanding, ledProject, manageProject, mutableProjects, placeRules, projectMembers, projectOf, projectRules, readAgent, readConversation, readProject, sameProject, SKILL_MODE_NAMES, skillModeOf, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -86,6 +86,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('agent.stopLease'), agentId: id, releaseId: id }).strict(),
   z.object({ type: z.literal('agent.remove'), agentId: id, releaseId: id.optional() }).strict(),
   z.object({ type: z.literal('agent.release'), agentId: id, decision: z.enum(['keep', 'stop']) }).strict(),
+  z.object({ type: z.literal('agent.sessionClosed'), agentId: id, harnessId: id }).strict(),
   z.object({ type: z.literal('agent.configuration'), previousVersion: id.nullable(), configuration }).strict(),
   z.object({ type: z.literal('agent.rebind'), agentId: id, machineId: id, projectId: id,
     previousHarnessId: id, harnessId: id, configuration,
@@ -169,10 +170,35 @@ function controls(state: SuperTabState, actor: Actor, conversationId = 'lead'): 
   }
 }
 
+/** A project's Lead (Product Manager) leaves only with its project: every other removal path refuses it. */
+function protectLead(state: SuperTabState, agentId: string): void {
+  const project = ledProject(state, agentId), target = state.agents.find(a => a.id === agentId)
+  if (project && target) {
+    fail('LEAD_PROTECTED', `${target.displayName ?? target.name} is the Product Manager of project ${project.name}. Delete the project first.`)
+  }
+}
+
+/** The host proved this session stopped: its slot is free, and a late observation cannot list it as running. */
+function releaseHarness(state: SuperTabState, machineId: string, harnessId: string): void {
+  state.releasedHarnesses ??= []
+  if (!state.releasedHarnesses.some(r => r.machineId === machineId && r.harnessId === harnessId)) state.releasedHarnesses.push({ machineId, harnessId })
+  state.harnessReservations = state.harnessReservations?.filter(r => r.machineId !== machineId || r.harnessId !== harnessId)
+  const observation = state.machines?.find(m => m.machineId === machineId)?.observation
+  if (observation) {
+    observation.runningHarnessIds = observation.runningHarnessIds.filter(id => id !== harnessId)
+    if (!observation.stoppedHarnessIds.includes(harnessId)) observation.stoppedHarnessIds.push(harnessId)
+  }
+}
+
+function dropClosing(state: SuperTabState, keep: (request: NonNullable<SuperTabState['closingSessions']>[number]) => boolean): void {
+  state.closingSessions = state.closingSessions?.filter(keep)
+  if (!state.closingSessions?.length) delete state.closingSessions
+}
+
 /** Also checked before returning an idempotent receipt: a retry does not retain
  * access after the person has been removed from a private project. */
 export function authorizeCommandAccess(state: SuperTabState, actor: Actor, command: Command, context: Partial<CommandContext> = {}) {
-  if (command.type === 'invite.accept') return
+  if (command.type === 'invite.accept' || command.type === 'agent.sessionClosed') return
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   author(state, actor, !leaving)
   // An invitation's group is only where the person lands, and invite.create replaces a deleted one (inviteLanding).
@@ -232,6 +258,15 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     state.invitations = state.invitations.filter(i => i.id !== invite.id)
     result.conversationId = invite.conversationId
+    return effects
+  }
+  // The host of a removed agent may have left the Swarm with it: the machine owner the request names confirms the close.
+  // Anyone else, or a second confirmation, is told the same thing and writes nothing; the store answers an exact retry.
+  if (command.type === 'agent.sessionClosed') {
+    const request = state.closingSessions?.find(c => c.agentId === command.agentId && c.harnessId === command.harnessId
+      && actor.kind === 'person' && c.machineOwnerId === actor.userId) ?? fail('NOT_FOUND', 'This machine has no session waiting to close.', 404)
+    dropClosing(state, c => c !== request)
+    releaseHarness(state, request.machineId, request.harnessId)
     return effects
   }
 
@@ -311,7 +346,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     effects.routeDecisions.push({ op: 'final', id: decision.id, final: finalOf(decision), ...(override ? { override } : {}), ...(assignmentId ? { assignmentId } : {}) })
     return { decision, expected, override }
   }
-  const removeAgent = (target: Agent) => {
+  /** Deleting its project is the only removal that takes a Lead. `close: false` when its host already closed the session. */
+  const removeAgent = (target: Agent, { lead = false, close = true } = {}) => {
+    if (!lead) protectLead(state, target.id)
+    if (close && !state.closingSessions?.some(c => c.agentId === target.id && c.harnessId === target.harnessId)) {
+      (state.closingSessions ??= []).push({ agentId: target.id, machineId: target.machineId, harnessId: target.harnessId, machineOwnerId: target.machineOwnerId })
+    }
     state.agents = state.agents.filter(a => a.id !== target.id)
     effects.cancelledAgents.push(target.id)
     for (const group of state.conversations) {
@@ -319,6 +359,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (group.leadId === target.id) group.leadId = null
       if (group.assignment?.agentId === target.id && activeWork(group)) group.assignment.status = 'reconciling'
     }
+  }
+
+  /** Changing or clearing the Lead of a project's Lead conversation would let it be stopped next. */
+  const keepLead = (group: Conversation, next: string | null) => {
+    if (group.leadId && group.leadId !== next && group.id === groupProject(state, group).leadConversationId) protectLead(state, group.leadId)
   }
 
   switch (command.type) {
@@ -390,10 +435,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     }
     case 'project.delete': {
-      // Its owner confirmed a permanent delete; nothing in Desktop removes agents one by one, so the project takes its
-      // own agents with it. Their machines release the native sessions as they would for any removed agent.
+      // Its owner confirmed a permanent delete, so the project takes its own agents with it, its Lead included, and their
+      // hosts close their sessions.
       const project = manageProject(state, actor, command.projectId)
-      for (const target of state.agents.filter(a => agentProjectId(state, a) === project.id)) removeAgent(target)
+      for (const target of state.agents.filter(a => agentProjectId(state, a) === project.id)) removeAgent(target, { lead: true })
       deleteProject(state, actor, command.projectId)
       break
     }
@@ -596,6 +641,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (existing?.workDecision === 'stop' && command.lead) fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
       if (existing && agentRole(existing) === 'reviewer' && command.lead) fail('REVIEWER_NOT_LEAD', 'A Reviewer reviews work and cannot lead a group.')
       if (!existing) reserveHarnessSlot(state, command.machineId, command.harnessId, operationId)
+      // Added back before its host closed it: the session stays open.
+      if (!existing) dropClosing(state, c => c.machineId !== command.machineId || c.harnessId !== command.harnessId)
       if (!existing) state.agents.push({ id: agentId, machineId: command.machineId, harnessId: command.harnessId,
         ...(state.projects ? { projectId: project.id } : {}),
         machineOwnerId: grant.machineOwnerId, contributorId: grant.contributorId, membershipGeneration: contributor.generation,
@@ -609,6 +656,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       if (!group.agentIds.includes(agentId)) group.agentIds.push(agentId)
       if (command.lead) {
+        keepLead(group, agentId)
         if (group.leadId && group.leadId !== agentId && activeWork(group)) fail('WORK_ACTIVE', 'Reconcile active work before replacing its lead.')
         group.leadId = agentId
       }
@@ -770,6 +818,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const isLead = actor.kind === 'agent' && conversation(state, project.leadConversationId).leadId === actor.agentId
       const isOwner = actor.kind === 'person' && [state.ownerId, target.contributorId].includes(actor.userId)
       if (!isLead && !isOwner) fail('FORBIDDEN', 'Only this project’s Lead, the contributor or tab owner can release a worker.', 403)
+      protectLead(state, target.id)
       if (state.conversations.some(c => c.leadId === target.id)) fail('LEAD_REQUIRED', 'Release workers only; keep the Lead running.')
       if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id)) fail('WORK_ACTIVE', 'Finish active work before releasing this worker.')
       if (reviewing(state, target.id)) fail('WORK_ACTIVE', 'This Reviewer is reviewing active work. Remove it from that group or wait for the work to end.')
@@ -801,18 +850,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (hostStop && (command.releaseId !== target.releaseId || !target.releaseId)) fail('STALE_RELEASE', 'Read the current stop request before confirming removal.')
         if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id)) fail('WORK_ACTIVE', 'Finish active work before stopping this worker.')
         // Administrative withdrawal never attests physical stopping or releases native capacity.
-        if (hostStop) {
-          state.releasedHarnesses ??= []
-          if (!state.releasedHarnesses.some(r => r.machineId === target.machineId && r.harnessId === target.harnessId)) {
-            state.releasedHarnesses.push({ machineId: target.machineId, harnessId: target.harnessId })
-          }
-          state.harnessReservations = state.harnessReservations?.filter(r => r.machineId !== target.machineId || r.harnessId !== target.harnessId)
-          const observation = state.machines?.find(m => m.machineId === target.machineId)?.observation
-          if (observation) {
-            observation.runningHarnessIds = observation.runningHarnessIds.filter(id => id !== target.harnessId)
-            if (!observation.stoppedHarnessIds.includes(target.harnessId)) observation.stoppedHarnessIds.push(target.harnessId)
-          }
-        }
+        if (hostStop) releaseHarness(state, target.machineId, target.harnessId)
         if (actor.kind === 'agent') result.releasedBy = actor.machineOwnerId
         if (forceStop) result.forceReleased = target.id
       } else if (target.workDecision === 'stop') {
@@ -826,7 +864,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       const affected = actor.kind === 'person' ? state.conversations.filter(group => group.agentIds.includes(target.id)
         || group.leadId === target.id || group.assignment?.agentId === target.id) : []
-      removeAgent(target)
+      removeAgent(target, { close: !hostStop })
       for (const group of affected) {
         const task = group.assignment?.agentId === target.id && activeWork(group)
           ? ` Its task "${group.title}" needs to be assigned again or closed.` : ''
@@ -851,6 +889,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (activeWork(group) && (group.assignment?.agentId === command.agentId || group.leadId === command.agentId)) {
           fail('WORK_ACTIVE', 'Reconcile this agent’s assignment before removing it from the conversation.')
         }
+        if (group.leadId === command.agentId) keepLead(group, null)
         group.agentIds = group.agentIds.filter(id => id !== command.agentId)
         if (group.leadId === command.agentId) group.leadId = null
       } else {
@@ -859,6 +898,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // Adding a Reviewer to a group reuses it, as assigning work reuses a Builder.
         if (reviewer) delete member.workDecision
         if (command.lead) {
+          keepLead(group, command.agentId)
           if (group.leadId && group.leadId !== command.agentId && activeWork(group)) fail('WORK_ACTIVE', 'Reconcile active work before replacing its lead.')
           group.leadId = command.agentId
         }

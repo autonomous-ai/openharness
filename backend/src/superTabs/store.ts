@@ -10,7 +10,7 @@ import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, MAX_AT
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
-import { canReadAgent, canReadProject, groupProject, projectsOf, agentProjectId, readConversation, skillModeOf, type ProjectVisibility } from './projects.js'
+import { canReadAgent, canReadProject, groupProject, ledProject, projectsOf, agentProjectId, readConversation, skillModeOf, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
@@ -38,8 +38,12 @@ const stateOf = (row: SuperTab): SuperTabState => {
 const indexes = (state: SuperTabState) => ({
   memberIds: state.people.map(p => p.id), invitedEmails: state.invitations.map(i => i.email),
   machineIds: [...new Set([...state.agents.map(a => a.machineId), ...(state.machines ?? []).map(m => m.machineId),
-    ...state.conversations.filter(activeWork).map(c => c.assignment!.execution.machineId)])],
+    ...state.conversations.filter(activeWork).map(c => c.assignment!.execution.machineId), ...(state.closingSessions ?? []).map(c => c.machineId)])],
 })
+
+/** A host reads its 100 most recently changed Swarms. Unordered, a Swarm just joined could be cut by older ones, such as
+ *  Swarms only waiting for this machine to close a removed agent's session. */
+const HOST_TABS = { orderBy: { updatedAt: 'desc' as const }, take: 100 }
 
 /** Retrying a transaction never repeats a host action. All effects here are durable database writes. */
 async function transaction<T>(db: PrismaClient, body: (tx: Transaction) => Promise<T>): Promise<T> {
@@ -324,9 +328,11 @@ export class SuperTabStore {
         fail('FORBIDDEN', 'Only the execution host can confirm this removal.', 403)
       }
       if (hostMachineId && !['agent.startDispatch', 'agent.started', 'agent.startFailed', 'agent.startSettled', 'route.modelResult'].includes(command.type)) fail('FORBIDDEN', 'A host can only settle its queued starts.', 403)
-      const actor = hostMachineId && 'startId' in command
-        ? await this.poolHostActor(tx, user, original, hostMachineId, command.startId)
-        : await this.actor(tx, user, original, asAgentId)
+      // A removed agent's host confirms its close as the machine owner, who may have left the Swarm with it.
+      const actor: Actor = command.type === 'agent.sessionClosed' ? { kind: 'person', userId: user.sub, email: user.email }
+        : hostMachineId && 'startId' in command
+          ? await this.poolHostActor(tx, user, original, hostMachineId, command.startId)
+          : await this.actor(tx, user, original, asAgentId)
       const receiptId = stableId(tabId, actorKey(actor), operationId)
       const requestHash = hash(command)
       const prior = await tx.superTabOperation.findUnique({ where: { id: receiptId } })
@@ -359,7 +365,7 @@ export class SuperTabStore {
         }
         return { revision: prior.revision, result: prior.result }
       }
-      if (command.type !== 'invite.accept') author(original, actor)
+      if (command.type !== 'invite.accept' && command.type !== 'agent.sessionClosed') author(original, actor)
       const context: CommandContext = { operationId, now: this.now() }
       if ('startId' in command && ['agent.startDispatch', 'agent.started', 'agent.startFailed', 'agent.startSettled', 'route.modelResult'].includes(command.type)) {
         const start = original.starts?.find(s => s.id === command.startId)
@@ -743,7 +749,7 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
       if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
-      const rows = await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, machineIds: { has: machineId } }, take: 100 })
+      const rows = await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, machineIds: { has: machineId } }, ...HOST_TABS })
       return rows.flatMap(row => {
         const state = stateOf(row)
         let pool
@@ -792,7 +798,7 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
       if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
-      const rows = await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, machineIds: { has: machineId } }, take: 100 })
+      const rows = await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, machineIds: { has: machineId } }, ...HOST_TABS })
       const result = []
       for (const row of rows) {
         const state = stateOf(row)
@@ -816,10 +822,15 @@ export class SuperTabStore {
           const home = projectsOf(state).find(p => p.id === agentProjectId(state, target))
           const skillMode = home ? skillModeOf(home) : 'orchestration'
           result.push({ tabId: row.id, tabName: state.name, revision: row.revision, paused: state.paused, active, attention, agent: target, joinSwarm, skillMode,
+            lead: !!ledProject(state, target.id),
             stopRequested: target.workDecision === 'stop' && !state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id),
             observers: people.filter(p => p.id !== user.sub &&
               canReadAgent(state, { kind: 'person', userId: p.id, email: p.email }, target))
               .map(p => ({ email: p.email, userId: p.id })) })
+        }
+        // Not `active`, so a host from before close requests leaves the session to its automatic cleanup.
+        for (const { agentId: id, harnessId } of (state.closingSessions ?? []).filter(c => c.machineId === machineId && c.machineOwnerId === user.sub)) {
+          result.push({ tabId: row.id, agent: { id, harnessId, machineId }, closeSession: true as const, active: false })
         }
       }
       return result
@@ -847,7 +858,7 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
       if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
-      const rows = await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, machineIds: { has: machineId } }, take: 100 })
+      const rows = await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, machineIds: { has: machineId } }, ...HOST_TABS })
       return rows.flatMap(row => stateOf(row).conversations.filter(activeWork).flatMap(group => {
         const work = group.assignment!
         return work.execution.machineId === machineId && work.execution.machineOwnerId === user.sub

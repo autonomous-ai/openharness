@@ -106,10 +106,10 @@ describe('person removal notices', () => {
     ])
   })
 
-  it('posts a notice without claiming inactive work stopped or delivering to the removed Lead', () => {
-    const f = fixture(), worker = f.add('lead', 'owner', 'lead', true)
+  it('posts a notice without claiming inactive work stopped or delivering to the removed group lead', () => {
+    const f = fixture(), group = f.group(), worker = f.add('worker', 'owner', group, true)
     const effects = f.run({ type: 'agent.remove', agentId: worker })
-    expect(effects.messages).toEqual([expect.objectContaining({ conversationId: 'lead', recipients: [] })])
+    expect(effects.messages).toEqual([expect.objectContaining({ conversationId: group, recipients: [] })])
     expect(effects.messages[0]!.text).not.toContain('task')
   })
 
@@ -907,6 +907,8 @@ describe('message attachments', () => {
     expect(removed.messages).toEqual([])
     expect(removed.cancelledAgents).toContain(worker)
     expect(f.state.agents.some(a => a.id === worker)).toBe(false)
+    // Its host closed the session before confirming; nothing is left for it to close.
+    expect(f.state.closingSessions).toBeUndefined()
   })
  })
 
@@ -1515,24 +1517,24 @@ describe('machine.remove', () => {
 
   it('takes the machine out with the Swarm\'s agents on it, and tells each group whose task needs a new worker', () => {
     const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group(), worker = f.add('worker', 'owner', group)
+    f.state.agents.find(a => a.id === lead)!.machineId = 'elsewhere'
     contribute(f)
     f.run({ type: 'work.assign', conversationId: group, agentId: worker })
     f.state.harnessReservations = [{ machineId: 'host', harnessId: 'old', generation: 'g0', renewed: false }, { machineId: 'elsewhere', harnessId: 'x', generation: 'g0', renewed: false }]
     const named = (id: string) => { const a = f.state.agents.find(x => x.id === id)!; return a.displayName ?? a.name }
-    const workerName = named(worker), leadName = named(lead)
+    const workerName = named(worker)
     const effects = f.run({ type: 'machine.remove', machineId: 'host' })
 
     expect(f.state.machines).toEqual([])
-    expect(f.state.agents).toEqual([])
-    expect(effects.result.removedAgents).toEqual([lead, worker])
+    expect(f.state.agents.map(a => a.id)).toEqual([lead])
+    expect(effects.result.removedAgents).toEqual([worker])
     expect(f.state.harnessReservations).toEqual([expect.objectContaining({ machineId: 'elsewhere' })])
     expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('reconciling')
     const notice = effects.messages.find(m => m.conversationId === group)!
     expect(notice).toMatchObject({ author: { kind: 'person', id: 'owner' }, source: { kind: 'system' } })
-    // The group's Lead left with the machine too.
-    expect(notice.text).toBe(`owner removed Studio from the Swarm, and ${leadName} and ${workerName} with it. Its task "Offline editing" needs to be assigned again or closed.`)
-    expect(notice.recipients).toEqual([])
-    expect(effects.messages.find(m => m.conversationId === 'lead')!.text).toBe(`owner removed Studio from the Swarm, and ${leadName} with it.`)
+    expect(notice.text).toBe(`owner removed Studio from the Swarm, and ${workerName} with it. Its task "Offline editing" needs to be assigned again or closed.`)
+    expect(notice.recipients).toEqual([lead])
+    expect(effects.messages.map(m => m.conversationId)).toEqual([group])
     expect(new Set(effects.messages.map(m => m.id)).size).toBe(effects.messages.length)
   })
 
@@ -1581,5 +1583,96 @@ describe('machine.remove', () => {
       .toThrow(expect.objectContaining({ code: 'HUMAN_REQUIRED', status: 403 }))
     expect(() => f.run({ type: 'machine.remove', machineId: 'nowhere' })).toThrow(expect.objectContaining({ code: 'NOT_FOUND', status: 404 }))
     expect(commandSchema.safeParse({ type: 'machine.remove', machineId: 'host', extra: true }).success).toBe(false)
+  })
+})
+
+describe('Lead protection', () => {
+  const refused = (project = 'Pilot') => expect.objectContaining({ code: 'LEAD_PROTECTED',
+    message: expect.stringMatching(new RegExp(`is the Product Manager of project ${project}\\. Delete the project first\\.$`)) })
+  const hostOwner: Actor = { kind: 'person', userId: 'host-owner', email: 'host@example.com' }
+  const closing = (agentId: string, harnessId: string) => ({ agentId, machineId: 'host', harnessId, machineOwnerId: 'host-owner' })
+
+  it('refuses removing the Lead as an agent, with its machine, or with the person who contributed it', () => {
+    const f = fixture()
+    f.invite()
+    const lead = f.add('lead', 'peer', 'lead', true)
+    expect(() => f.run({ type: 'agent.remove', agentId: lead })).toThrow(refused())
+    expect(() => f.run({ type: 'machine.remove', machineId: 'host' })).toThrow(refused())
+    expect(() => f.run({ type: 'member.remove', userId: 'peer' })).toThrow(refused())
+    expect(() => f.run({ type: 'member.remove', userId: 'peer' }, peer)).toThrow(refused())
+    expect(f.state.agents.map(a => a.id)).toEqual([lead])
+    expect(f.state.people.map(p => p.id)).toEqual(['owner', 'peer'])
+  })
+
+  it('refuses clearing or replacing the Lead, so it can never be released afterwards', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), other = f.add('other'), group = f.group()
+    expect(() => f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: lead, present: false, lead: false })).toThrow(refused())
+    expect(() => f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: other, present: true, lead: true })).toThrow(refused())
+    expect(() => f.add('other', 'owner', 'lead', true)).toThrow(refused())
+    expect(() => f.run({ type: 'agent.release', agentId: lead, decision: 'stop' })).toThrow(refused())
+    expect(f.state.conversations[0]!.leadId).toBe(lead)
+    // Its other groups and the Lead conversation's other members are not protected.
+    f.run({ type: 'conversation.agent', conversationId: group, agentId: lead, present: false, lead: false })
+    f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: other, present: false, lead: false })
+    expect(f.state.conversations.find(c => c.id === group)!.leadId).toBeNull()
+  })
+
+  it('protects the Lead of a Swarm from before projects', () => {
+    const f = fixture()
+    delete f.state.projects
+    const lead = f.add('lead', 'owner', 'lead', true)
+    expect(() => f.run({ type: 'agent.remove', agentId: lead })).toThrow(refused())
+  })
+
+  it('lets only deleting its project take the Lead, and asks its host to close the session', () => {
+    const f = fixture()
+    const { projectId, conversationId } = f.run({ type: 'project.create', name: 'Docs', visibility: 'public', brief: 'Docs' }).result as { projectId: string; conversationId: string }
+    const lead = f.add('docs-lead', 'owner', conversationId, true)
+    expect(() => f.run({ type: 'agent.remove', agentId: lead })).toThrow(refused('Docs'))
+    const effects = f.run({ type: 'project.delete', projectId })
+    expect(f.state.agents).toEqual([])
+    expect(effects.cancelledAgents).toEqual([lead])
+    expect(f.state.closingSessions).toEqual([closing(lead, 'docs-lead')])
+  })
+
+  it('asks the host to close the session of every agent a person removes, and shows it to nobody else', () => {
+    const f = fixture(), worker = f.add('worker')
+    f.run({ type: 'agent.remove', agentId: worker })
+    expect(f.state.closingSessions).toEqual([closing(worker, 'worker')])
+    expect(visibleState(f.state, owner)).not.toHaveProperty('closingSessions')
+
+    const g = fixture(), other = g.add('other')
+    g.run({ type: 'machine.remove', machineId: 'host' })
+    expect(g.state.closingSessions).toEqual([closing(other, 'other')])
+
+    const h = fixture()
+    h.invite()
+    const theirs = h.add('theirs', 'peer')
+    h.run({ type: 'member.remove', userId: 'peer' }, peer)
+    expect(h.state.closingSessions).toEqual([closing(theirs, 'theirs')])
+  })
+
+  it('drops a close request and the slot held for its session once the machine owner says it closed', () => {
+    const f = fixture(), worker = f.add('worker')
+    f.run({ type: 'agent.remove', agentId: worker })
+    expect(f.state.harnessReservations).toEqual([expect.objectContaining({ machineId: 'host', harnessId: 'worker' })])
+    const closed = { type: 'agent.sessionClosed', agentId: worker, harnessId: 'worker' } as Command
+    const nothing = expect.objectContaining({ code: 'NOT_FOUND', status: 404 })
+    // Another account learns nothing, not even whether a close is pending.
+    expect(() => f.run(closed)).toThrow(nothing)
+    expect(() => f.run({ ...closed, harnessId: 'other' } as Command, hostOwner)).toThrow(nothing)
+    f.run(closed, hostOwner)
+    expect(f.state.closingSessions).toBeUndefined()
+    expect(f.state.harnessReservations).toEqual([])
+    expect(f.state.releasedHarnesses).toEqual([{ machineId: 'host', harnessId: 'worker' }])
+    // Only the store's receipt answers an exact retry; a new confirmation finds nothing to close.
+    expect(() => f.run(closed, hostOwner)).toThrow(nothing)
+  })
+
+  it('forgets a close request when the same session is added back before its host closed it', () => {
+    const f = fixture(), worker = f.add('worker')
+    f.run({ type: 'agent.remove', agentId: worker })
+    f.add('worker')
+    expect(f.state.closingSessions).toBeUndefined()
   })
 })

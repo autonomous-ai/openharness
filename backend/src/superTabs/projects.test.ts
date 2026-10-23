@@ -156,7 +156,6 @@ describe('projects inside an invite-only swarm', () => {
       expect(() => f.run(command, actor(workerId))).toThrow('coordinating lead')
       expect(() => f.run(command, actor(otherId))).toThrow('unavailable')
     }
-    f.run({ type: 'agent.remove', agentId: leadId })
     f.run({ type: 'agent.remove', agentId: workerId })
     f.run({ type: 'project.delete', projectId: 'lead' })
     expect(() => f.run({ type: 'tab.rename', name: 'Forbidden' }, actor(otherId))).toThrow('unavailable')
@@ -181,7 +180,7 @@ describe('projects inside an invite-only swarm', () => {
   })
 
   it('removes only its own agents, even one that left every workgroup', () => {
-    const f = setup(), p = f.project(), agentId = f.add(p.conversationId, 'idle'), otherId = f.add('lead', 'other')
+    const f = setup(), p = f.project(), agentId = f.add(p.conversationId, 'idle', false), otherId = f.add('lead', 'other')
     f.run({ type: 'conversation.agent', conversationId: p.conversationId, agentId, present: false, lead: false })
     f.run({ type: 'project.delete', projectId: p.projectId })
     expect(projectsOf(f.state).map(p => p.id)).toEqual(['lead'])
@@ -234,7 +233,7 @@ describe('projects inside an invite-only swarm', () => {
   })
 
   it('keeps active work visible after its contributed agent is removed', () => {
-    const f = setup(), p = f.project(), agentId = f.add(p.conversationId, 'worker')
+    const f = setup(), p = f.project(), agentId = f.add(p.conversationId, 'worker', false)
     f.run({ type: 'work.define', conversationId: p.conversationId, brief: 'Finish the task',
       checks: [{ description: 'Verified', independent: false }] })
     f.run({ type: 'work.assign', conversationId: p.conversationId, agentId })
