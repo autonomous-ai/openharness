@@ -15,6 +15,7 @@
  * file), when the file does not parse, or when it already says yes.
  */
 import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
+import { posix, win32 } from 'node:path'
 import type { TrustContract } from '../facets/launch.js'
 
 type JsonTrust = Extract<TrustContract, { format: 'json' }>
@@ -28,6 +29,18 @@ export function trustsIn(trust: TrustContract, file: string, path: string): bool
 /** Record trust in `cwd` in `file`. */
 export function recordTrustIn(trust: TrustContract, file: string, cwd: string): 'trusted' | 'already' | 'skipped' {
   return trust.format === 'json' ? recordJson(trust, file, cwd) : recordToml(trust, file, cwd)
+}
+
+/** Whether `path` is the folder `key` names (or, with `below`, one under it), by this platform's rules: on Windows any
+ *  separator and any case. DESKTOP-0TFH0OJ, 2026-10-23: a Swarm worktree's source came as `C:\…\<tab>/<project>` (the
+ *  Lead joins with "/") and its trust was recorded as `C:\…\<tab>\<project>`; compared as text, every Swarm start on
+ *  Windows stopped at the engine's trust prompt. */
+function sameOrBelow(key: string, path: string, below: boolean): boolean {
+  const windows = process.platform === 'win32', paths = windows ? win32 : posix
+  if (!below) return windows ? win32.normalize(key).toLowerCase() === win32.normalize(path).toLowerCase() : key === path
+  if (!paths.isAbsolute(key) || !paths.isAbsolute(path)) return key === path
+  const rel = paths.relative(paths.resolve(key), paths.resolve(path))
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${paths.sep}`) && !paths.isAbsolute(rel))
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -76,9 +89,7 @@ function jsonTrusts(trust: JsonTrust, file: string, path: string): boolean {
   try { config = JSON.parse(readFileSync(file, 'utf8')) } catch { return false }
   if (!isPlainObject(config) || !isPlainObject(config[trust.projects])) return false
   for (const [key, entry] of Object.entries(config[trust.projects] as Record<string, unknown>)) {
-    if (!isPlainObject(entry) || entry[trust.accepted] !== true) continue
-    const base = key.replace(/\/+$/, '')
-    if (path === base || path.startsWith(`${base}/`)) return true
+    if (isPlainObject(entry) && entry[trust.accepted] === true && sameOrBelow(key, path, true)) return true
   }
   return false
 }
@@ -103,7 +114,8 @@ function tomlTrusts(trust: TomlTrust, file: string, path: string): boolean {
   if (!existsSync(file)) return false
   const text = readFileSync(file, 'utf8')
   for (const match of text.matchAll(headerPattern(trust))) {
-    if (tomlKey(match[1]) !== path) continue
+    const key = tomlKey(match[1])
+    if (key === null || !sameOrBelow(key, path, false)) continue
     const rest = text.slice((match.index ?? 0) + match[0].length)
     const body = rest.split(/^[ \t]*\[/m)[0]
     return new RegExp(String.raw`^[ \t]*${escape(trust.key)}[ \t]*=[ \t]*["']${escape(trust.value)}["']`, 'm').test(body)

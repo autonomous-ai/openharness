@@ -175,6 +175,25 @@ describe('whether a source repo is already trusted (a worktree inherits only tha
     expect(claudeTrusts('/work/repo', home)).toBe(false)
   })
 
+  // DESKTOP-0TFH0OJ, 2026-10-23: a Swarm worktree's source arrived as `C:\\…\\<tab>/<project>` (the Lead joins with "/")
+  // while its trust was recorded as `C:\\…\\<tab>\\<project>`. Compared as text with "/" only, it never matched, so
+  // every Swarm start on Windows stopped at Claude Code's trust prompt.
+  it('compares Windows folders the way Windows does: any separator, any case, a folder above it', () => {
+    const home = mkdtempSync(join(tmpdir(), 'trust-'))
+    writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { 'C:\\Users\\DELL\\swarm-projects\\tab\\project': { hasTrustDialogAccepted: true } } }))
+    mkdirSync(join(home, '.codex'))
+    writeFileSync(join(home, '.codex', 'config.toml'), '[projects.\'C:\\Users\\DELL\\swarm-projects\\tab\\project\']\ntrust_level = "trusted"\n')
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+      expect(claudeTrusts('C:\\Users\\DELL\\swarm-projects\\tab/project', home)).toBe(true)
+      expect(claudeTrusts('c:\\users\\dell\\swarm-projects\\tab\\project\\sub', home)).toBe(true)
+      expect(claudeTrusts('C:\\Users\\DELL\\swarm-projects\\tab\\project-evil', home)).toBe(false)
+      expect(codexTrusts('C:\\Users\\DELL\\swarm-projects\\tab/project', join(home, '.codex'))).toBe(true)
+      expect(codexTrusts('C:\\Users\\DELL\\swarm-projects\\tab', join(home, '.codex'))).toBe(false)
+    } finally { Object.defineProperty(process, 'platform', platform) }
+  })
+
   it('reads Codex trust from exactly that folder\'s table', () => {
     const home = mkdtempSync(join(tmpdir(), 'trust-'))
     expect(codexTrusts('/work/repo', join(home, '.codex'))).toBe(false)
