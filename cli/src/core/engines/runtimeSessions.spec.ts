@@ -136,6 +136,46 @@ describe('core runtime profile authority', () => {
     expect(t.sessions.getState(t.s.sessionId).model).not.toBe('late')
   })
 
+  it('reads a models list again when an attach commits a newer profile of the same binding while it was read', async () => {
+    // 2026-10-23, main e2e (enginehomes, Codex picker): models_list came in as the new agent's attach was finishing
+    // its hydration. The commit advanced the profile while the worker answered, and the read was refused as stale.
+    const t = setup(); t.s.cliVersion = null
+    const hydration = t.sessions.stage(t.s, true, true)
+    await hydration.ingest([{ model: 'm', effort: 'low', version: '0.130.0' }])
+    const entered = deferred<void>(), response = deferred<void>()
+    t.read.mockImplementationOnce(async (_e, context, operation) => { entered.resolve(); await response.promise; return result(context, operation) })
+    const models = t.sessions.read(t.s, { kind: 'models' })
+    await entered.promise
+    expect(hydration.commit()).toBe(true)
+    response.resolve()
+    const answer = await models
+    // Answered from the profile the attach committed, read once more.
+    expect(answer.cliVersion).toBe('0.130.0')
+    expect(answer.state.model).toBe('m')
+    expect(t.read).toHaveBeenCalledTimes(3)
+  })
+
+  it.each(['control', 'version'] as const)('reads a query once more after %s changes mid-read, never twice', async change => {
+    const t = setup(); await t.seed()
+    const advance = () => change === 'control' ? t.sessions.cancelControl(t.s.agentId) : t.s.cliVersion = `${t.s.cliVersion}.1`
+    if (change === 'control') t.sessions.beginControl(t.s, profile(t.s))
+    t.read.mockImplementation(async (_e, context, operation) => { advance(); return result(context, operation) })
+    await expect(t.sessions.read(t.s, { kind: 'catalog' })).rejects.toThrow('ENGINE_STALE_REPLY')
+    expect(t.read).toHaveBeenCalledTimes(3)
+  })
+
+  it.each(['binding', 'forget', 'stop'] as const)('does not read a query again once its %s is gone', async change => {
+    const t = setup(); await t.seed()
+    t.read.mockImplementationOnce(async (_e, context, operation) => {
+      if (change === 'binding') t.bindings.set(t.s.agentId, { ...t.s, boundAt: 2 })
+      if (change === 'forget') t.sessions.forget(t.s.sessionId)
+      if (change === 'stop') t.sessions.stop()
+      return result(context, operation)
+    })
+    await expect(t.sessions.read(t.s, { kind: 'models' })).rejects.toThrow('ENGINE_STALE_REPLY')
+    expect(t.read).toHaveBeenCalledTimes(2)
+  })
+
   it('stages from the version the live row holds, and still refuses a different identity or a change mid-stage', async () => {
     // 2026-10-19: a hook attach copied the row before discovery's attach taught it the CLI version.
     const t = setup(); t.s.cliVersion = null
