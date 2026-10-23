@@ -11286,6 +11286,33 @@ class AppNotifier extends ChangeNotifier {
     timeout: const Duration(seconds: 12),
   );
 
+  /// The models shared with this person that [machineId] offers to the Swarm whose grid is [grid] (CLI `lib/swarmOffers.ts`).
+  Future<Map<String, dynamic>> swarmOffers(String machineId, String grid) =>
+      _conn(machineId).request(
+        'grid_swarm_offers',
+        payload: {'grid': grid},
+        timeout: const Duration(seconds: 10),
+      );
+
+  /// Offers [model], shared with this person on [sharedGrid], to the Swarm whose grid is [grid], or stops: the Swarm's
+  /// Lead may then start Builders on [machineId] on it.
+  Future<Map<String, dynamic>> swarmOffer(
+    String machineId, {
+    required String grid,
+    required String sharedGrid,
+    required String model,
+    required bool start,
+  }) => _conn(machineId).request(
+    'grid_swarm_offer',
+    payload: {
+      'grid': grid,
+      'sharedGrid': sharedGrid,
+      'model': model,
+      'action': start ? 'start' : 'stop',
+    },
+    timeout: const Duration(seconds: 10),
+  );
+
   /// The saved APIs [machineId] shares with the Swarm whose grid is [grid] (CLI `lib/swarmApiShares.ts`).
   Future<Map<String, dynamic>> swarmApiShares(String machineId, String grid) =>
       _conn(machineId).request(

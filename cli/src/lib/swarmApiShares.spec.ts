@@ -29,7 +29,7 @@ describe('an API shared with a Swarm', () => {
     expect(await f.shares.share(GRID, 'c1', 'deepseek/deepseek-chat')).toEqual({ ok: true })
     const args = f.exec.mock.calls[0]![0]
     expect(args).toEqual(['--remote', 'join', GRID, '--at', expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/[0-9a-f]{36}\/v1$/), '-m', 'deepseek/deepseek-chat',
-      '--advertise-as', 'deepseek/deepseek-chat', '--max-concurrency', '4', '--name', 'OpenRouter'])
+      '--advertise-as', 'deepseek/deepseek-chat', '--max-concurrency', '4'])
     expect(args.join(' ')).not.toContain(KEY)
     expect(f.shares.list(GRID)).toEqual([{ grid: GRID, connectionId: 'c1', model: 'deepseek/deepseek-chat', name: 'OpenRouter' }])
     expect(f.shares.list('other')).toEqual([])

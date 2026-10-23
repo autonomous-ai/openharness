@@ -40,6 +40,32 @@ class _SwarmApp extends ModelManagerTestApp {
     };
   }
 
+  final offered = <({String sharedGrid, String model})>{};
+
+  @override
+  Future<Map<String, dynamic>> swarmOffers(
+    String machineId,
+    String grid,
+  ) async => {
+    'offers': [
+      for (final o in offered)
+        {'grid': grid, 'sharedGrid': o.sharedGrid, 'model': o.model},
+    ],
+  };
+
+  @override
+  Future<Map<String, dynamic>> swarmOffer(
+    String machineId, {
+    required String grid,
+    required String sharedGrid,
+    required String model,
+    required bool start,
+  }) async {
+    final key = (sharedGrid: sharedGrid, model: model);
+    start ? offered.add(key) : offered.remove(key);
+    return {'offers': <Object>[]};
+  }
+
   @override
   Future<Map<String, dynamic>> swarmApiShare(
     String machineId, {
@@ -146,12 +172,19 @@ void main() {
           .where((r) => search.modelSection(r) == ModelSearchSection.shared)
           .map((r) => r.title);
       expect(shared, ['Shared Qwen · team.lan · Team']);
-      expect(
-        search.modelRowStatus(
-          search.rows.firstWhere((r) => r.title.startsWith('Shared Qwen')),
-        ),
-        'Usable',
-      );
+      // Not offered until the person offers it, and then stopped the same way.
+      SwarmDestination qwen() =>
+          search.rows.firstWhere((r) => r.title.startsWith('Shared Qwen'));
+      expect(search.modelRowStatus(qwen()), isNull);
+      final offer = search.swarmModelAction(qwen())!;
+      expect(offer.label, 'Offer to Swarm');
+      expect(await offer.run!(), isNull);
+      expect(app.offered, {(sharedGrid: 'Team', model: 'Shared Qwen')});
+      expect(search.modelRowStatus(qwen()), 'Offered');
+      final stop = search.swarmModelAction(qwen())!;
+      expect(stop.label, 'Stop offering');
+      await stop.run!();
+      expect(app.offered, isEmpty);
     },
   );
 

@@ -280,6 +280,20 @@ describe('local model discovery and lifecycle', () => {
     expect((await service.list('home')).models[0].state).toBe('running')
   })
 
+  it('lets a model start beside the APIs a Swarm shares, which run nothing here, and not beside another engine', async () => {
+    const share = (port: number) => ({ endpoint_url: `http://127.0.0.1:${port}/${'a'.repeat(36)}/v1`, models: ['deepseek/x'] })
+    await writeFile(join(records, 'shared.json'), JSON.stringify({ node_id: 'local-node', engines: [share(41001), share(41002)] }))
+    await writeFile(join(records, 'shared.heartbeat'), '')
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect((await service.list('home', true)).models.find(m => m.id === 'org/Small-GGUF')!.operation).toMatchObject({ phase: 'done' })
+    await service.act('home', 'org/Small-GGUF', 'stop'); await service.settled()
+    // One that is not a share's endpoint is an engine like any other.
+    await writeFile(join(records, 'shared.json'), JSON.stringify({ node_id: 'local-node', engines: [share(41001), { endpoint_url: 'http://127.0.0.1:41003/v1', models: ['y'] }] }))
+    await service.act('home', 'org/Small-GGUF', 'start'); await service.settled()
+    expect((await service.list('home', true)).models.find(m => m.id === 'org/Small-GGUF')!.operation)
+      .toMatchObject({ phase: 'failed', error: 'Open Model Manager to add a model alongside those already running.' })
+  })
+
   it('never offers Stop for an external endpoint or another machine', async () => {
     serving = true
     await writeFile(join(records, 'remote.json'), JSON.stringify({ node_id: 'local-node', engines: [{ endpoint_url: 'http://localhost:1234', models: ['Small-Q4.gguf'] }] }))

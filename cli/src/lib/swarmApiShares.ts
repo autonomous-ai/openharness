@@ -60,7 +60,9 @@ export class SwarmApiShares {
     }).catch(() => null)
     if (port === null) return { error: 'This computer could not open a local endpoint for the API.' }
     const joined = await this.deps.exec(['--remote', 'join', grid, '--at', `http://127.0.0.1:${port}/${token}/v1`, '-m', model,
-      '--advertise-as', model, '--max-concurrency', String(CONCURRENCY), '--name', access.connection.name]).catch(() => null)
+      // No `--name`: on a remote grid it names this computer's node, not the engine, and an API's name there read as if
+      // OpenRouter were the machine serving every model on it (2026-10-23).
+      '--advertise-as', model, '--max-concurrency', String(CONCURRENCY)]).catch(() => null)
     if (joined?.code !== 'OK') { server.close(); return { error: joined ? said(joined) : 'grid could not be run on this computer.' } }
     this.running.set(key, { grid, connectionId, model, name: access.connection.name, server, alias: model })
     await this.note()

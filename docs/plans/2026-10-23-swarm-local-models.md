@@ -43,6 +43,9 @@ The ⌘I Models picker made for the Swarm (`SwarmModelsTarget` on `SwarmSearchCo
   path) that adds the key and forwards completions to the API; grid joins it with `--at`. Every Builder in the Swarm then
   spends the sharer's key and credits, which the preview says. Shares end when the models service restarts (it takes
   stale ones off the grid at start).
-- **Shared with you:** models other people share with you are usable by agents on *your* machines only (your machine's
-  grid sign-in reaches them). The backend admits such a start only on a machine whose fresh reading lists the model.
+- **Shared with you:** a model other people share with you is offered to the Swarm only when you choose Offer to Swarm
+  (owner, 2026-10-23); this computer keeps the list (`swarm-offers.json`) and reports only offered ones. Agents on *your*
+  machines alone may use it (your machine's grid sign-in reaches it): the backend admits such a start only on a machine
+  whose fresh reading lists the model.
+- A shared API is never counted as a running local model, so your models can run for the Swarm beside shared APIs.
 - A click only selects a row; the preview's button (or Return) acts.

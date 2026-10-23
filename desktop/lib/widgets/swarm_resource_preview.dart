@@ -1482,7 +1482,12 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
           labelValue(
             'Swarm',
             local == null
-                ? 'Usable by agents on your machines'
+                ? swarm.offered(
+                        entry.gridModel?.grid ?? '',
+                        entry.gridModel?.id ?? '',
+                      )
+                      ? 'Offered: the PM can start Builders on your machines on it'
+                      : 'Offer to Swarm lets the PM start Builders on your machines on it'
                 : local.servedOn(swarm.grid)
                 ? 'Running for this Swarm'
                 : 'Run for Swarm lets agents on any machine in the Swarm use it',

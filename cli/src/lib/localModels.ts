@@ -540,7 +540,10 @@ export class LocalModels {
       const pid = recordPid(record)
       const pidAlive = pid !== null && processExists(pid)
       const dead = pid !== null && !pidAlive
-      if ((specs.length || record.media) && !dead) blocker = 'Open Model Manager to add a model alongside those already running.'
+      // An API a Swarm shares (`swarmApiShares.ts`) is joined as an engine too, but runs nothing here: it never stands in
+      // a local model's way (owner, 2026-10-23: two shared APIs kept a model from running for the same Swarm).
+      const sharedApis = specs.length > 0 && !record.media && specs.every(spec => SWARM_API_SHARE.test(str(spec.endpoint_url)))
+      if ((specs.length || record.media) && !dead && !sharedApis) blocker = 'Open Model Manager to add a model alongside those already running.'
       for (const spec of specs) {
         if (spec.endpoint_url || spec.api_kind || !Array.isArray(spec.models) || spec.models.length !== 1) continue
         const file = str(spec.models[0])
@@ -1290,6 +1293,9 @@ function communityOf(grids: Record<string, any>[]): { osGrid?: string } {
 
 /** The one online node in [nodes] that is [instance]'s engine — its record's node id (or, with no ids,
  * its name) and every name it serves under; none while its heartbeat is stale or two nodes would match. */
+/** The endpoint a Swarm's shared API is joined at (`swarmApiShares.ts`): this computer, a port, and its secret path. */
+const SWARM_API_SHARE = /^http:\/\/127\.0\.0\.1:\d+\/[0-9a-f]{36}\/v1\/?$/
+
 function nodeServing(nodes: Record<string, any>[], instance?: Owned): Record<string, any> | undefined {
   const matches = instance?.live ? nodes.filter(n => n.online === true &&
     (str(n.node_id || n.id) ? str(n.node_id || n.id) === instance.nodeId :

@@ -43,6 +43,7 @@ import { parseRuntimeProfile } from '../lib/runtimeProfileWire.js'
 import { ensureManagedGrid, startGridPinRecheck } from '../lib/runtimeInstall.js'
 import { syncSwarmGrid } from '../lib/swarmGrid.js'
 import { SwarmApiShares } from '../lib/swarmApiShares.js'
+import { SwarmOffers } from '../lib/swarmOffers.js'
 import { internalOnThrow } from './requestErrors.js'
 
 /** The requests models answers for the apps, declared in core/api.ts for the core to route. */
@@ -396,7 +397,8 @@ function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => P
  * that harness's own `harness grid setup`; until then grid answers these in its own words. Their
  * handshake, `grid_fleet_capabilities`, is the socket's (core/api.ts `MODELS_REQUESTS`).
  */
-function gridCommands(grid: GridSetUp, dataDir: string, shares: SwarmApiShares = swarmApiShares(dataDir)): ServiceRequests {
+function gridCommands(grid: GridSetUp, dataDir: string, shares: SwarmApiShares = swarmApiShares(dataDir),
+  offers: SwarmOffers = new SwarmOffers(join(dataDir, 'swarm-offers.json'))): ServiceRequests {
   const fleet = new GridFleetRpc()
   return {
     // Pulls and builds can take minutes; the host answers when it is done and holds nothing else for it.
@@ -433,6 +435,24 @@ function gridCommands(grid: GridSetUp, dataDir: string, shares: SwarmApiShares =
     },
     grid_swarm_api_shares: (payload) => ({
       shares: shares.list(typeof payload.grid === 'string' ? payload.grid : undefined),
+    }),
+    // A model shared with this computer's person, offered to a Swarm or no longer (lib/swarmOffers.ts). Their choice
+    // alone: Builders the Swarm starts here then run on someone else's model through their access.
+    grid_swarm_offer: (payload, asker) => {
+      if (!asker.local || !asker.owner) return { error: 'OWNER_REQUIRED' }
+      const { grid: name, sharedGrid, model, action } = payload
+      const text = (v: unknown) => typeof v === 'string' && v.length > 0 && v.length <= 200
+      if (typeof name !== 'string' || !SWARM_GRID.test(name) || !text(sharedGrid) || !text(model) || (action !== 'start' && action !== 'stop')) {
+        return { error: 'INVALID_REQUEST' }
+      }
+      try {
+        return { offers: offers.set({ grid: name, sharedGrid: sharedGrid as string, model: model as string }, action === 'start') }
+      } catch {
+        return { error: 'The offer could not be saved on this computer.' }
+      }
+    },
+    grid_swarm_offers: (payload) => ({
+      offers: offers.list(typeof payload.grid === 'string' ? payload.grid : undefined),
     }),
     grid_fleet_cancel: (payload, asker) => ({
       cancelled: !!asker.connection && typeof payload.commandId === 'string' && fleet.cancel(asker.connection, payload.commandId),

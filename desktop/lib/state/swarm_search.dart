@@ -325,7 +325,12 @@ class SwarmSearchController extends ChangeNotifier {
       if (entry.apiModel case final model?) {
         return swarm.shared(entry.api!.id, model.id) ? 'Shared' : null;
       }
-      if (local == null && entry.api == null) return 'Usable';
+      if (entry.gridModel case GridModel(
+        :final id,
+        grid: final sharedGrid?,
+      ) when local == null) {
+        return swarm.offered(sharedGrid, id) ? 'Offered' : null;
+      }
     }
     if (modelRowInUse(row)) return inUseWord;
     // An API's model says what Enter does on it — Use, when this pane can run on it, else nothing.
@@ -514,6 +519,19 @@ class SwarmSearchController extends ChangeNotifier {
         label: on ? 'Stop sharing' : 'Share with Swarm',
         command: 'picker.accept',
         run: () => swarm.share(api.id, model.id, start: !on),
+      );
+    }
+    // A model shared with the person, on someone else's grid: offering it lets the Lead start Builders on their
+    // machines on it (owner, 2026-10-23: a choice, as running a model or sharing an API is).
+    if (entry.gridModel case GridModel(
+      :final id,
+      grid: final sharedGrid?,
+    ) when entry.api == null) {
+      final on = swarm.offered(sharedGrid, id);
+      return (
+        label: on ? 'Stop offering' : 'Offer to Swarm',
+        command: 'picker.accept',
+        run: () => swarm.offer(sharedGrid, id, start: !on),
       );
     }
     return null;

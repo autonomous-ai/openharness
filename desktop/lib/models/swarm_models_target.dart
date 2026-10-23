@@ -23,6 +23,12 @@ class SwarmModelsTarget extends ChangeNotifier {
 
   /// The APIs this computer shares with the Swarm, by `connectionId` and model.
   Set<String> shares = {};
+
+  /// The models shared with this person that this computer offers to the Swarm, by their grid and model.
+  Set<String> offers = {};
+
+  bool offered(String sharedGrid, String model) =>
+      offers.contains(shareKey(sharedGrid, model));
   String? error;
   bool _disposed = false;
 
@@ -33,6 +39,12 @@ class SwarmModelsTarget extends ChangeNotifier {
       shares.contains(shareKey(connectionId, model));
 
   Future<void> refresh() async {
+    try {
+      final answer = await app.swarmOffers(machineId, grid);
+      offers = _keys(answer['offers'], 'sharedGrid');
+    } catch (_) {
+      // Unknown, not "none": keep what was last read.
+    }
     try {
       final answer = await app.swarmApiShares(machineId, grid);
       shares = {
@@ -47,6 +59,35 @@ class SwarmModelsTarget extends ChangeNotifier {
       // Unknown, not "none": keep what was last read.
     }
     if (!_disposed) notifyListeners();
+  }
+
+  static Set<String> _keys(Object? rows, String first) => {
+    for (final row in rows is List ? rows : const [])
+      if (row is Map && row[first] is String && row['model'] is String)
+        shareKey(row[first] as String, row['model'] as String),
+  };
+
+  /// Offers [model], shared with this person on [sharedGrid], to the Swarm, or stops. Returns why it could not, or null.
+  Future<String?> offer(
+    String sharedGrid,
+    String model, {
+    required bool start,
+  }) async {
+    error = null;
+    try {
+      final answer = await app.swarmOffer(
+        machineId,
+        grid: grid,
+        sharedGrid: sharedGrid,
+        model: model,
+        start: start,
+      );
+      error = answer['error'] as String?;
+    } catch (_) {
+      error = 'This computer could not be reached. Try again.';
+    }
+    await refresh();
+    return error;
   }
 
   /// Shares, or stops sharing, [model] of the saved API [connectionId]. Returns why it could not, or null.

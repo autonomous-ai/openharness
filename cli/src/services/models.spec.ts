@@ -44,6 +44,11 @@ const apiShares = vi.hoisted(() => ({
   list: vi.fn((_grid?: string) => [{ grid: 'swarm-0123456789ab', connectionId: 'c1', model: 'm', name: 'OpenRouter' }]),
   restore: vi.fn(async (): Promise<void> => {}),
 }))
+const swarmOffers = vi.hoisted(() => ({
+  set: vi.fn((): unknown[] => [{ grid: 'swarm-0123456789ab', sharedGrid: 'team', model: 'muse' }]),
+  list: vi.fn((_grid?: string) => [{ grid: 'swarm-0123456789ab', sharedGrid: 'team', model: 'muse' }]),
+}))
+vi.mock('../lib/swarmOffers.js', () => ({ SwarmOffers: vi.fn(function () { return swarmOffers }) }))
 vi.mock('../lib/swarmApiShares.js', () => ({ SwarmApiShares: vi.fn(function () { return apiShares }) }))
 vi.mock('../lib/swarmGrid.js', () => ({ syncSwarmGrid: vi.fn(async () => ({ ready: true, added: ['b@example.com'], removed: [] })) }))
 /** The Model Manager's grid commands: what each job was run as, and what it answers. */
@@ -434,6 +439,27 @@ describe('the models service', () => {
       expect(deps.access('c1')).toEqual({ connection: { id: 'c1' }, apiKey: 'fixture' })
       await deps.exec(['--remote', 'ls'])
       expect(gridExec).toHaveBeenLastCalledWith(['--remote', 'ls'])
+    })
+
+    it('offers a model shared with this computer\'s person to a Swarm, for them only, and lists what is offered', async () => {
+      const { requests } = setup()
+      const offer = requests.grid_swarm_offer!
+      const ask = { grid: 'swarm-0123456789ab', sharedGrid: 'team', model: 'muse', action: 'start' }
+      expect(await offer(ask, asker)).toEqual({ offers: [expect.objectContaining({ model: 'muse' })] })
+      expect(swarmOffers.set).toHaveBeenLastCalledWith({ grid: 'swarm-0123456789ab', sharedGrid: 'team', model: 'muse' }, true)
+      await offer({ ...ask, action: 'stop' }, asker)
+      expect(swarmOffers.set).toHaveBeenLastCalledWith({ grid: 'swarm-0123456789ab', sharedGrid: 'team', model: 'muse' }, false)
+      expect(await offer(ask, { ...asker, local: false })).toEqual({ error: 'OWNER_REQUIRED' })
+      expect(await offer(ask, { ...asker, owner: false })).toEqual({ error: 'OWNER_REQUIRED' })
+      for (const bad of [{ grid: 'team' }, { sharedGrid: '' }, { model: 'x'.repeat(201) }, { model: 7 }, { action: 'pause' }]) {
+        expect(await offer({ ...ask, ...bad }, asker)).toEqual({ error: 'INVALID_REQUEST' })
+      }
+      swarmOffers.set.mockImplementationOnce(() => { throw new Error('read-only') })
+      expect(await offer(ask, asker)).toEqual({ error: 'The offer could not be saved on this computer.' })
+      expect(requests.grid_swarm_offers!({ grid: 'swarm-0123456789ab' }, asker)).toEqual({ offers: [expect.objectContaining({ model: 'muse' })] })
+      expect(swarmOffers.list).toHaveBeenLastCalledWith('swarm-0123456789ab')
+      requests.grid_swarm_offers!({}, asker)
+      expect(swarmOffers.list).toHaveBeenLastCalledWith(undefined)
     })
 
     it('refuses a command it cannot read, or one with no connection or request to belong to', async () => {

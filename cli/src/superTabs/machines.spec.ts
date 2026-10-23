@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
-import { apisOn, ContributedMachines, servedOn, sharedWith } from './machines.js'
+import { apisOn, ContributedMachines, offered, servedOn, sharedWith } from './machines.js'
 import { SuperTabHostError } from './host.js'
 import { startAgent } from './start.js'
 
@@ -150,7 +150,8 @@ describe('contributed machine executor', () => {
     const local = (await f.open.mock.results[0]!.value) as { request: ReturnType<typeof vi.fn> }
     local.request.mockImplementation((async (type: string) => type === 'grid_swarm_api_shares'
       ? { shares: [{ grid: GRID, connectionId: 'c1', model: 'deepseek/deepseek-chat', name: 'OpenRouter' }] }
-      : type === 'grid_models_list' ? { grids: [{ name: 'team-grid', models: [{ id: 'qwen3-30b' }] }] } : { providers: [] }) as never)
+      : type === 'grid_swarm_offers' ? { offers: [{ grid: GRID, sharedGrid: 'team-grid', model: 'qwen3-30b' }] }
+      : type === 'grid_models_list' ? { grids: [{ name: 'team-grid', models: [{ id: 'qwen3-30b' }, { id: 'not-offered' }] }] } : { providers: [] }) as never)
     f.advance(); await f.machine.tick()
     expect(f.backend.mock.calls.filter(c => c[1] === 'POST').at(-1)![3]).toMatchObject({ localModels: [
       { grid: GRID, model: 'deepseek/deepseek-chat', name: 'deepseek/deepseek-chat · OpenRouter', kind: 'api' },
@@ -162,6 +163,11 @@ describe('contributed machine executor', () => {
     expect(reads()).toBe(before)
     f.step(60_000); await f.machine.tick()
     expect(reads()).toBe(before + 1)
+  })
+  it('keeps of the models shared with its owner only those they offer', () => {
+    const shared = [{ grid: 'team', model: 'a', kind: 'shared' as const }, { grid: 'team', model: 'b', kind: 'shared' as const }]
+    expect(offered(shared, { offers: [{ sharedGrid: 'team', model: 'b' }] })).toEqual([shared[1]])
+    expect(offered(shared, null)).toEqual([])
   })
   it('reads only live models of grids other than Swarms\', once each, and shared APIs of this Swarm alone', () => {
     const GRID = 'swarm-0123456789ab'

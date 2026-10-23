@@ -116,11 +116,12 @@ export class ContributedMachines {
           else toolProbeErrors[name] = result?.detail ?? 'The tool probe did not complete.'
         }
         // Only while the owner has the Local models add-on on: the models this machine serves on the Swarm's grid (its own
-        // engines, the APIs it shares), then the ones it may use on other grids (shared with its owner, usable here alone).
+        // engines, the APIs it shares), then the ones shared with its owner that they offer to this Swarm (usable here alone).
         const localModels = typeof row.localGrid === 'string' ? [
           ...servedOn(await local.request('grid_fleet_models_list', {}, 20_000).catch(() => ({})), row.localGrid),
           ...apisOn(await local.request('grid_swarm_api_shares', { grid: row.localGrid }, 10_000).catch(() => ({})), row.localGrid),
-          ...sharedWith(await this.gridModels(local), row.localGrid),
+          ...offered(sharedWith(await this.gridModels(local), row.localGrid),
+            await local.request('grid_swarm_offers', { grid: row.localGrid }, 10_000).catch(() => ({}))),
         ].slice(0, MAX_LOCAL_MODELS) : null
         const observation = { generation: pool.generation, tools: reportedTools, ...(localModels ? { localModels } : {}),
           ...(Object.keys(toolProbeErrors).length ? { toolProbeErrors } : {}),
@@ -212,6 +213,13 @@ export function sharedWith(answer: unknown, swarmGrid: string): LocalModelReadin
     }
   }
   return out
+}
+
+/** Of the models shared with this machine's owner, those a `grid_swarm_offers` answer says they offer to the Swarm
+ *  (`lib/swarmOffers.ts`, owner 2026-10-23: offering is a choice, not every model shared with someone). */
+export function offered(shared: LocalModelReading[], answer: unknown): LocalModelReading[] {
+  const offers = new Set(list(object(answer).offers).map(o => `${String(o.sharedGrid)}\0${String(o.model)}`))
+  return shared.filter(m => offers.has(`${m.grid}\0${m.model}`))
 }
 
 /** The models a `grid_fleet_models_list` answer says this machine serves on [grid], by the name grid lists each under. */
