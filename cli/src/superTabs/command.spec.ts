@@ -176,3 +176,24 @@ it('gives up after three pending reads, and passes on a refused request without 
   expect(request).toHaveBeenCalledOnce()
   expect(JSON.parse(print.mock.calls.at(-1)![0])).toMatchObject({ error: 'LEAD_REQUIRED' })
 })
+it('lets a machine owner preview and then remove their machine, as the person, without a participating harness', async () => {
+  const print = vi.fn(), close = vi.fn()
+  const request = vi.fn(async (_type: string, payload?: Record<string, unknown>) => payload?.method === 'GET'
+    ? { ok: true, value: { blockedBy: null, agents: [{ id: 'a1', name: 'Builder', projectName: 'App' }], soleSourceProjects: [] } }
+    : { ok: true, value: { revision: 2 } })
+  const deps = { where: () => where, open: async () => ({ request, close, machineId: 'machine' }), print, pane: '%99' }
+  expect(await superTabCommand(['--tab', 'tab', 'remove-machine', 'box'], deps)).toBe(0)
+  expect(request).toHaveBeenCalledTimes(1)
+  expect(request).toHaveBeenLastCalledWith('super_tabs', expect.objectContaining({ action: 'backend', method: 'GET', path: '/api/super-tabs/tab/machines/box/removal' }), 30_000)
+  expect(print.mock.calls.at(-1)![0]).toContain('Builder')
+  expect(await superTabCommand(['--tab', 'tab', 'remove-machine', 'box', '--yes'], deps)).toBe(0)
+  const sent = request.mock.calls.at(-1)![1]!
+  expect(sent).toMatchObject({ action: 'backend', method: 'POST', path: '/api/super-tabs/tab/commands', body: { command: { type: 'machine.remove', machineId: 'box' } } })
+  expect(String((sent.body as Record<string, unknown>).operationId)).toMatch(/^machine-remove-/)
+  request.mockResolvedValueOnce({ error: 'LEAD_PROTECTED', detail: 'This machine runs the Product Manager of App.' } as never)
+  expect(await superTabCommand(['--tab', 'tab', 'remove-machine', 'box', '--yes'], deps)).toBe(1)
+  expect(print.mock.calls.at(-1)![0]).toContain('Product Manager of App')
+  for (const argv of [['--tab', 'tab', 'remove-machine'], ['--tab', 'tab', 'remove-machine', '../x'], ['--tab', 'tab', 'remove-machine', 'box', '--force']]) {
+    expect(() => parseSuperTabArgs(argv, where)).toThrow('harness super-tab')
+  }
+})
