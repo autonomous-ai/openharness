@@ -34,6 +34,7 @@ code = r'''
 #include "focus_faces.h"
 #include "pets.h"
 #include "workspace.h"
+#include "supertab.h"
 #include "command_face.h"
 #include "arc_geometry.inc"
 #include <assert.h>
@@ -72,7 +73,7 @@ static struct {
     uint32_t timer_at;
     cable_swarm_t tabs[SWARMS_MAX];
     struct { char id[64], name[96], state[16]; bool local; } machines[2];
-    char selected_tab[ID_MAX], pending_focus[ID_MAX], opening_notice[ID_MAX], title[80], message[256];
+    char selected_tab[ID_MAX], pending_focus[ID_MAX], opening_notice[ID_MAX], title[80], message[256], stop_agent[ID_MAX];
     cable_notif_t notice[NOTICES];
     notice_receipt_t notice_reads[NOTICES];
     uint8_t notice_read_next;
@@ -189,6 +190,7 @@ static bool carry_emit(const ht_carry_command_t *c, void *ctx) {
     return true;
 }
 static uint32_t fake_ms;
+static char swarm_wire[64][128], stopped_agent[64]; static int swarm_sent;
 static uint32_t ms(void) { return fake_ms ? fake_ms : gesture.began+75; }
 static uint32_t fake_random;   // even: the chef, odd: the builder (focus.c ht_focus_pick_working)
 static uint32_t esp_random(void) { return fake_random; }
@@ -199,6 +201,11 @@ static bool queue(action_t a) {
     if (a.kind==A_TAB_REFRESH) tab_queued=a;
     if (a.kind==A_NOTICE_READ) { notice_reads_sent++; notice_read_queued=a; }
     if (a.kind==A_DESKTOP) { desktop_opens++; COPY(opened_agent,a.id); }
+    if (a.kind==A_SUPERTAB && swarm_sent<64) {
+        static const char *ops[]={"recap.get","open","select"};
+        snprintf(swarm_wire[swarm_sent++],sizeof swarm_wire[0],"%s %s %s",ops[a.value],a.text,a.id);
+    }
+    if (a.kind==A_STOP_YES) COPY(stopped_agent,a.id);
     return true;
 }
 static bool scroll_emit(ht_scroll_phase_t phase, int dy, int velocity, void *ctx) {
@@ -214,12 +221,22 @@ code += function('color')
 code += function('settings_item') + function('settings_count') + function('hit_contains')
 code += function('find')
 code += 'static void notice_expire(uint32_t now);\n'
-for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'tabs_open', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_skin', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
-    code += function(name)
+swarm_core = source[source.index('/*\n * THE SWARMS'):source.index('static void tabs_open(void)')]
+swarm_parts = {
+    'swarm_core': swarm_core,
+    'render_swarm_face': 'static void render_focus_panes(ht_scene_t *f);\n' + function('render_swarm_face'),
+    # with the last `swarms` list it keeps beside it
+    'swarms_apply': source[source.index('// The last `swarms` list as it came'):source.index('void ui_swarms_replace(')],
+}
+for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'swarm_core', 'tabs_open', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_skin', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'render_swarm_face', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'swarms_apply', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+    code += swarm_parts[name] if name in swarm_parts else function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
 code += function('focus_centred') + function('focus_header') + function('focus_clipped') + function('tabs_move') + function('tab_name') + function('tab_split') + function('tab_fade') + function('tab_neighbour') + function('focus_carousel') + function('tab_label') + function('render_focus_tabs') + function('pane_label') + function('render_focus_panes') + function('render_agents') + function('render_tabs') + function('page_controls') + function('render_notice') + function('css_line') + function('inbox_line') + function('inbox_page') + function('render_focus_inbox') + function('render_list')
-for name in ['notice_remove', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_add', 'notice_expire', 'on_face', 'notice_read_now', 'ui_notify_summary', 'ui_turn_error', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt']:
+for name in ['notice_remove', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_add', 'notice_expire', 'on_face', 'notice_read_now', 'ui_notify_summary', 'ui_turn_error', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt',
+             'utf8_trim', 'swarm_notice', 'swarm_notice_mark', 'swarm_notice_raise', 'swarm_notice_drop', 'swarm_events',
+             'swarm_tabs_changed', 'ui_supertabs_ids', 'ui_supertab', 'ui_supertab_recap', 'ui_supertab_focus',
+             'ui_supertab_wait', 'ui_supertab_wait_close', 'ui_supertabs_clear']:
     code += function(name)
 code += '#define ui_notify_task_done(a,b,c,d) ui_notify_summary(a,b,c,d,"alert",false,false)\n'
 for name in ['event', 'ui_project_emit', 'ui_project_restore_event', 'ui_project_clear_event', 'ui_project_set_name', 'ui_project_remove', 'ui_project_clear_all', 'ui_project_apply_order']:
@@ -235,6 +252,12 @@ code+='static void visit_work(action_t a) { switch(a.kind) { case A_VISIT_SEND:'
 carry_actions = source.split('case A_CARRY:\n',1)[1].split('case A_NAP:',1)[0]
 code += 'static void carry_action(action_t a) { switch(a.kind) { case A_CARRY:\n' + carry_actions + 'default: break; } }\n'
 code += 'static void dispatch(action_t a);\n'
+lead_actions = source.split('    case A_LEAD: {',1)[1].split('    case A_READER:',1)[0]
+panes_actions = source.split('    case A_AGENTS: {',1)[1].split('    case A_AGENT: {',1)[0]
+code += '#define TAB_ROWS 4\nstatic void panes_action(action_t a) { switch(a.kind) { case A_AGENTS: {'+panes_actions+'default: break; } }\n'
+stop_actions = source.split('    case A_STOP_YES:\n',1)[1].split('    case A_MODELS:',1)[0]
+code += 'static void stop_action(action_t a) { switch(a.kind) { case A_STOP_YES:\n'+stop_actions+'default: break; } }\n'
+code += 'static void lead_action(action_t a) { switch(a.kind) { case A_LEAD: {'+lead_actions+'default: break; } }\n'
 question_actions = source.split('    case A_QUESTION_CHOICES:\n',1)[1].split('    case A_INBOX:',1)[0]
 code += 'static void question_action(action_t a) { switch(a.kind) { case A_QUESTION_CHOICES:\n'+question_actions+'default: break; } }\n'
 draft_actions = source.split('    case A_DRAFT_EDIT:\n',1)[1].split('    case A_HOME:',1)[0]
@@ -264,15 +287,15 @@ static void dispatch(action_t a) {
     else if (a.kind == A_RETURN || a.kind == A_LATEST) { if(a.kind==A_RETURN)returns++; visit_action(a); }
     else if (a.kind == A_PET) boops++;
     else if (a.kind == A_TAB_LIST) tabs_open();                   // mirrors ui_habitat.c's dispatch
+    else if (a.kind == A_LEAD) lead_action(a);
+    else if (a.kind == A_STOP_YES) stop_action(a);
     else if (a.kind == A_AGENT) {
-        switches++; s.active = 0;                                   // the pane with that id, as ui_habitat.c's find
+        swarm_leave(); switches++; s.active = 0;                                   // the pane with that id, as ui_habitat.c's find
         for (int i = 0; i < s.count; i++) if (!strcmp(s.agents[i].id, a.id)) s.active = i;
         view(AGENT);
     } else if (a.kind == A_SETTINGS) view(SETTINGS);
     else if (a.kind == A_FIND) view(FORM);
-    else if (a.kind == A_AGENTS) {                                 // mirrors ui_habitat.c: the pages open on the pane on the face
-        view(AGENTS); ht_tab_carousel_reset(&pane_carousel, s.count, s.active >= 0 && s.active < s.count ? s.active : 0);
-    }
+    else if (a.kind == A_AGENTS) panes_action(a);                // ui_habitat.c's own: the pages open on the pane on the face
     else if (a.kind == A_INBOX) notice_open();
     else if (a.kind == A_HOME) view(HOME);
     else if (a.kind == A_NOTICE) notice_action(a);
@@ -286,6 +309,7 @@ static void dispatch(action_t a) {
 }
 '''
 code += function('habitat_touch') + function('habitat_touch_cancel') + function('habitat_next_wake_ms')
+code += 'static bool audio_client_active(void);\n' + function('ui_boot_pressed')
 code += r'''
 static ht_scene_t scene;
 static void scene_take(void) {
@@ -320,6 +344,8 @@ static void reset(void) {
     recording = congestion = false; starts = stops = boops = switches = question_sends = 0;
     down_reports = moves = ups = travel = waiting_count = 0; target[0] = 0;
     desktop_opens=0; opened_agent[0]=0; notice_reads_sent=0;
+    ht_supertabs_reset(&swarm); memset(&sw,0,sizeof sw); swarm_sent=0; stopped_agent[0]=0;
+    desk_row_count=0; desk_selected[0]=0;
     scene_take();
 }
 static void workspace_setup(void) {
@@ -1307,10 +1333,106 @@ static void tab_frame_checks(void) {
     puts("tab frames: long/UTF-8 names, bounds, clipped movement and exact partial redraw PASS");
     reset();
 }
+
+/*
+ * THE SWARMS (docs/superpowers/specs/2026-10-23-round-swarm-tab-design.md). Three Swarms: "openharness", open on the
+ * desktop as desk tab t1 (which counts no agents), and "studio" and "playground", which the desktop has not opened.
+ * openharness's Leads arrive in the daemon's urgency order and carry their project order.
+ */
+static ht_supertab_t card;
+static void card_begin(const char *id, const char *tab, const char *name) { assert(ht_supertab_init(&card, id, tab, name, 0)); }
+static void card_lead(const char *id, const char *project, const char *engine, const char *local, const char *state, int order, long since) {
+    ht_lead_in_t in = {.id = id, .project = project, .engine = engine, .local = local, .state = state, .order = order, .since = since};
+    assert(ht_supertab_lead_add(&card, &in));
+}
+static bool card_send(void) { card.count = card.lead_n; return ui_supertab(&card); }
+static void openharness_card(void) {
+    card_begin("s1", "t1", "openharness");
+    card_lead("L2", "docs", "claude", "h2", "ask", 2, -1);
+    card_lead("L3", "firmware", "codex", "h3", "stuck", 3, -1);
+    card_lead("L0", "mobile", "claude", "h0", "work", 0, 134);
+    card_lead("L4", "backend", "cursor", "", "work", 4, -1);
+    card_lead("L1", "Round dial firmware release candidate", "claude", "h1", "done", 1, -1);
+}
+static void swarm_setup(void) {
+    reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); fake_ms = 100000;
+    static cable_swarm_t rows[3];
+    memset(rows, 0, sizeof rows);
+    COPY(rows[0].id, "t0"); COPY(rows[0].name, "Harness repo"); rows[0].agents = 1;
+    COPY(rows[1].id, "t1"); COPY(rows[1].name, "openharness"); rows[1].agents = 0;
+    COPY(rows[2].id, "t2"); COPY(rows[2].name, "Research"); rows[2].agents = 1;
+    ui_swarms_replace(rows, 3, "t0");
+    const char ids[3][ID_MAX] = {"s1", "s3", "s2"};
+    ui_supertabs_ids(ids, 3);
+    openharness_card(); card_send();
+    card_begin("s2", "", "playground"); card_lead("P0", "sandbox", "claude", "h9", "work", 0, 12); card_send();
+    card_begin("s3", "", "studio"); card_lead("K0", "sketches", "claude", "", "done", 0, -1);
+    card_lead("K1", "renders", "codex", "h7", "work", 1, 40); card_send();
+    swarm_sent = 0; scene_take();
+}
+static const ht_run_t *big_run(void) {
+    for (int i = 0; i < scene.count; i++) if (scene.runs[i].font == &ht_lv_inter_44.base && scene.runs[i].text[0]) return &scene.runs[i];
+    return NULL;
+}
+static void tabs_at(int index) { dispatch((action_t){.kind = A_TABS}); ht_tab_carousel_reset(&tab_carousel, tabs_total(), index); scene_take(); }
+static void swarm_tabs_checks(const char *dir) {
+    // A desk tab linked to a Swarm keeps its place and name, listed with no agents; it was hidden before the link came.
+    swarm_setup();
+    assert(s.tab_count == 3 && !strcmp(s.tabs[1].id, "t1") && !strcmp(s.tabs[1].name, "openharness"));
+    {
+        reset(); static cable_swarm_t rows[2]; memset(rows, 0, sizeof rows);
+        COPY(rows[0].id, "t0"); rows[0].agents = 1; COPY(rows[1].id, "t1"); rows[1].agents = 0;
+        ui_swarms_replace(rows, 2, "t0"); assert(s.tab_count == 1);
+        const char ids[1][ID_MAX] = {"s1"}; ui_supertabs_ids(ids, 1); openharness_card(); card_send();
+        assert(s.tab_count == 2 && !strcmp(s.tabs[1].id, "t1"));
+    }
+    // The unopened Swarms follow the desk tabs in the `supertabs` order, not the order their cards came in.
+    swarm_setup();
+    assert(tabs_total() == 5 && !strcmp(tab_label(3), "studio") && !strcmp(tab_label(4), "playground"));
+    assert(!strcmp(tab_id_at(1), "t1") && !strcmp(tab_id_at(3), "s3") && !strcmp(tab_id_at(4), "s2"));
+    // Decision 1: a Swarm's page is drawn as any tab's. The centred name of the unopened "playground" and of the desk
+    // tab "Research" share font and ink.
+    tabs_at(2); const ht_run_t desk = *big_run();
+    tabs_at(4); const ht_run_t far = *big_run();
+    assert(!strcmp(far.text, "playground") && far.font == desk.font && far.fg == desk.fg && far.bg == desk.bg);
+    // 1a in "Harness repo", openharness at the right edge; 1b dragging; 1c on openharness; 1d the unopened playground.
+    swarm_setup(); tabs_at(0); FOCUS_PAGE("swarm-tabs-1a");
+    tab_carousel.position = HT_TAB_PITCH / 2; FOCUS_PAGE("swarm-tabs-1b");
+    tabs_at(1); assert(!strcmp(big_run()->text, "openharness")); FOCUS_PAGE("swarm-tabs-1c");
+    tabs_at(4); FOCUS_PAGE("swarm-tabs-1d");
+    // A tap on an unopened Swarm's name enters it: no workspace handshake, no switching view, then select and open
+    // for its first Lead by order.
+    int switched = tab_switches;
+    tap(5000, 233, 233);
+    assert(s.view == HOME && swarm_mode() && !strcmp(sw.tab, "s2") && !strcmp(sw.lead, "P0"));
+    assert(tab_switches == switched && workspace.phase == HT_WORKSPACE_IDLE && !s.loading);
+    assert(swarm_sent == 3 && !strcmp(swarm_wire[0], "select s2 P0") && !strcmp(swarm_wire[1], "open s2 P0") &&
+           !strcmp(swarm_wire[2], "recap.get s2 P0"));
+    // Done on a Swarm the desktop last showed at a Lead opens on that Lead; the Swarm the dial left is closed.
+    ui_supertab_focus("s3", "K1"); assert(!strcmp(sw.tab, "s2"));
+    tabs_at(3); swarm_sent = 0; dispatch((action_t){.kind = A_TAB_DONE});
+    assert(!strcmp(sw.tab, "s3") && !strcmp(sw.lead, "K1") && s.view == HOME && tab_switches == switched);
+    assert(!strcmp(swarm_wire[0], "open s2 ") && !strcmp(swarm_wire[1], "select s3 K1") && !strcmp(swarm_wire[2], "open s3 K1"));
+    // The desk tab linked to openharness enters the Swarm too, at its first project by order ("mobile").
+    tabs_at(1); dispatch((action_t){.kind = A_TAB_DONE});
+    assert(!strcmp(sw.tab, "s1") && !strcmp(sw.lead, "L0") && tab_switches == switched);
+    // Hold on a Swarm's face opens TABS on that Swarm.
+    s.view = HOME; scene_take();
+    habitat_touch(true, 233, 230, 9000); habitat_touch(true, 233, 230, 9700);
+    assert(s.view == TABS && ht_tab_carousel_index(&tab_carousel) == 1 && !starts);
+    habitat_touch(false, 233, 230, 9800);
+    // An ordinary desk tab still takes the workspace handshake, and leaving the Swarm says so.
+    swarm_sent = 0; ht_tab_carousel_reset(&tab_carousel, tabs_total(), 2); scene_take();
+    dispatch((action_t){.kind = A_TAB_DONE});
+    assert(!swarm_mode() && !strcmp(tab_target, "t2") && tab_switches > switched && !strcmp(swarm_wire[0], "open s1 "));
+    puts("Swarm tabs: linked desk tab kept with no agents, unopened Swarms after the desk tabs in list order, same font and ink, entered with no handshake, remembered Lead, hold to TABS, desk tabs unchanged PASS");
+}
+
 int main(int argc, char **argv) {
     test_character = getenv("HABITAT_TEST_TUX") ? HT_CHARACTER_TUX : HT_CHARACTER_TIM;
     notification_read_checks(argc>1 ? argv[1] : NULL);
     bell_checks(argc>1 ? argv[1] : NULL);
+    swarm_tabs_checks(argc>1 ? argv[1] : NULL);
     // The companion screen is gone: character, edge text and still-character are the app's now
     // (Settings > Autonomous robots). What the glass kept is actions, and Nap is the one that moved
     // off that screen into the controls list.
@@ -2873,7 +2995,7 @@ with tempfile.TemporaryDirectory(prefix='harness-touch-ui-') as d:
                     '-fsanitize='+os.environ.get('SANITIZERS','undefined,bounds'),
                     *extra_includes, '-I',str(native),str(out/'touch_ui.c'), *extra_sources, str(native/'gestures.c'),
                     str(native/'form.c'),str(native/'visit.c'),str(native/'draft.c'), str(native/'scroll.c'),str(native/'selection.c'),str(native/'carry.c'),str(native/'tim.c'),str(native/'character_motion.c'),str(native/'character_layout.c'),str(native/'character.c'),str(native/'illustrated.c'),str(native/'tux.c'),str(native/'focus.c'),str(native/'lvgl_fonts.c'),str(native/'lvgl_icons.c'),str(native/'focus_marks.c'),str(native/'focus_faces.c'),str(native/'pets.c'),str(native/'../../pet_store.c'),str(native/'../../elapsed.c'),str(native/'terminal.c'),
-                    str(native/'fonts.c'),str(native/'octopus.c'),str(native/'ascii_clip.c'),str(native/'octopus_font.c'),str(native/'workspace.c'),str(native/'command_face.c'),'-o',str(out/'touch_ui'),'-lm'],check=True)
+                    str(native/'fonts.c'),str(native/'octopus.c'),str(native/'ascii_clip.c'),str(native/'octopus_font.c'),str(native/'workspace.c'),str(native/'supertab.c'),str(native/'command_face.c'),'-o',str(out/'touch_ui'),'-lm'],check=True)
     args=[str(out/'touch_ui')]
     if os.environ.get('HABITAT_PREVIEW_DIR'):
         dest=Path(os.environ['HABITAT_PREVIEW_DIR']);dest.mkdir(parents=True,exist_ok=True)
