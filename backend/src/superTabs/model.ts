@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { downSince } from './machines.js'
-import { canReadAgent, canReadProject, groupProject, ledProject, placeRules, projectsOf, type ProjectVisibility, type SwarmProject } from './projects.js'
+import { canReadAgent, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
 export interface Person { id: string; email: string; role: Role; generation: string }
@@ -146,6 +146,8 @@ export interface SuperTabState {
   projects?: SwarmProject[]
   /** The Leads conversation, outside every project (syncLeads). */
   leadsConversationId?: string
+  /** Read-only, for a Lead's own reads (visibleState): the active work of the other projects it may know about. */
+  otherProjectsWork?: OtherProjectWork[]
   ownerId: string
   environment: string
   /** Fields this tab overrides from its owner's account routing policy (routingPolicy.ts). */
@@ -169,6 +171,16 @@ export interface SuperTabState {
   releasedHarnesses?: Array<{ machineId: string; harnessId: string }>
   /** Sessions of removed agents their host closes, listed to that host until it says they closed (agent.sessionClosed). */
   closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string }>
+}
+export interface OtherProjectWork {
+  conversationId: string
+  projectName: string
+  title: string
+  owns: string[]
+  status: WorkStatus
+  agentName: string
+  /** The first pull request link in the assignment's result, when its agent reported one. */
+  pr: string | null
 }
 export type Actor =
   | { kind: 'person'; userId: string; email: string }
@@ -256,6 +268,20 @@ export function conversation(state: SuperTabState, id: string): Conversation {
  * numbers are never reassigned; the store serializes concurrent additions. */
 export const isLeads = (group: Conversation): boolean => group.kind === 'leads'
 
+/** Work a Lead of another project should know about: assigned and moving, not finished, stuck or archived. */
+export const crossProjectActive = (group: Conversation): boolean => !group.archived && !isLeads(group)
+  && ['working', 'review', 'needs_human'].includes(group.assignment?.status ?? '')
+
+function otherProjectsWork(state: SuperTabState, own: SwarmProject): OtherProjectWork[] {
+  return state.conversations.filter(crossProjectActive).flatMap(group => {
+    const project = groupProject(state, group), assignment = group.assignment!
+    if (project.id === own.id || !sharedWithLeads(project)) return []
+    const worker = state.agents.find(a => a.id === assignment.agentId)
+    return [{ conversationId: group.id, projectName: project.name, title: group.title, owns: group.task?.owns ?? [], status: assignment.status,
+      agentName: worker ? worker.displayName ?? worker.name : '', pr: assignment.result?.match(/https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+/)?.[0] ?? null }]
+  })
+}
+
 /** The Swarm-wide conversation where Leads agree an order across projects and every person reads along. It belongs to no
  *  project and stays after the project conversations; an older Swarm gets it on its next read or write. Its members are
  *  always the projects' current Leads, so only they receive what is posted there. */
@@ -313,6 +339,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     delete visible.leadsConversationId
   }
   assignAgentDisplayNames(visible.agents)
+  const led = actor.kind === 'agent' ? ledProject(visible, actor.agentId) : undefined
+  if (led) visible.otherProjectsWork = otherProjectsWork(visible, led)
   for (const target of visible.agents) {
     const since = downSince(state, target, now)
     if (since) target.downSince = since

@@ -56,6 +56,10 @@ export function ledProject(state: SuperTabState, agentId: string): SwarmProject 
   return projectsOf(state).find(p => state.conversations.some(c => c.id === p.leadConversationId && c.leadId === agentId))
 }
 
+/** Whose active work other projects' Leads see and are alerted about. A private project's work stays with its own people:
+ *  the Leads conversation is read by the whole Swarm. */
+export const sharedWithLeads = (project: SwarmProject): boolean => project.visibility !== 'private'
+
 export function canReadProject(state: SuperTabState, actor: Actor, project: SwarmProject): boolean {
   if (actor.kind === 'agent') {
     const target = state.agents.find(a => a.id === actor.agentId)

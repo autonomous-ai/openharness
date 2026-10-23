@@ -1733,3 +1733,44 @@ describe('Leads conversation', () => {
     expect(f.state.conversations.some(c => c.id === leads)).toBe(true)
   })
 })
+
+describe('other projects\' work for Leads', () => {
+  const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+  const checks = [{ description: 'Done', independent: false }]
+  const task = (owns: string[]) => ({ goal: 'Polish', changes: 'The roster', constraints: 'None', owns })
+  const swarm = () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
+    const project = (name: string, visibility: 'public' | 'private') => {
+      const created = f.run({ type: 'project.create', name, visibility, brief: name }).result as { projectId: string; conversationId: string }
+      return { ...created, lead: f.add(`${name}-lead`, 'owner', created.conversationId, true) }
+    }
+    /** A task in that project, assigned to a new worker. */
+    const work = (projectId: string, title: string, owns: string[]) => {
+      const group = f.run({ type: 'conversation.create', projectId, title, task: task(owns), checks }).result.conversationId as string
+      const worker = f.add(`${title}-worker`, 'owner', group)
+      const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
+      return { group, worker, assignmentId }
+    }
+    return { f, lead, project, work }
+  }
+
+  it('shows a Lead the active work of every other shared project, and nobody else', () => {
+    const { f, lead, project, work } = swarm()
+    const docs = project('Docs', 'public'), secret = project('Secret', 'private')
+    const roster = work(docs.projectId, 'Roster', ['desktop/lib/super_tabs'])
+    f.run({ type: 'work.status', conversationId: roster.group, assignmentId: roster.assignmentId, status: 'review',
+      result: 'Ready: https://github.com/example/project/pull/12 head abc.' }, as(roster.worker))
+    const finished = work(docs.projectId, 'Finished', ['docs'])
+    f.run({ type: 'work.cancel', conversationId: finished.group, assignmentId: finished.assignmentId, reason: 'Not needed.' })
+    work(secret.projectId, 'Hidden', ['backend'])
+    const own = work('lead', 'Own', ['cli'])
+    const workerName = f.state.agents.find(a => a.id === roster.worker)!.displayName
+
+    expect(visibleState(f.state, as(lead)).otherProjectsWork).toEqual([{ conversationId: roster.group, projectName: 'Docs',
+      title: 'Roster', owns: ['desktop/lib/super_tabs'], status: 'review', agentName: workerName, pr: 'https://github.com/example/project/pull/12' }])
+    expect(visibleState(f.state, as(docs.lead)).otherProjectsWork).toEqual([expect.objectContaining({ conversationId: own.group,
+      projectName: 'Pilot', status: 'working', pr: null })])
+    expect(visibleState(f.state, as(roster.worker))).not.toHaveProperty('otherProjectsWork')
+    expect(visibleState(f.state, owner)).not.toHaveProperty('otherProjectsWork')
+  })
+})
