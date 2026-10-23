@@ -35,19 +35,21 @@ void main() {
       c.setDraft('lead', 'Keep discussing this project.');
       c.selectGroupTerminals('lead');
       c.selectDevices();
-      c.rememberDevicesLayout(
-        PaneArrangement(const [
-          Rect.fromLTRB(0, 0, .6, 1),
-          Rect.fromLTRB(.6, 0, 1, 1),
-        ]),
-      );
       c.toggleMachineExpanded('m');
       await c.flush();
       c.dispose();
-      final restored = server.controller(initial: server.saved);
+      final restored = server.controller(
+        initial: {
+          ...server.saved!,
+          // A preference from the former embedded chat must be ignored.
+          'devicesLayout': PaneArrangement(const [
+            Rect.fromLTRB(0, 0, .6, 1),
+            Rect.fromLTRB(.6, 0, 1, 1),
+          ]).toJson(),
+        },
+      );
       await restored.refresh();
       expect(restored.devicesSelected, isTrue);
-      expect(restored.devicesLayout!.tiles.first.width, .6);
       expect(restored.isMachineExpanded('m'), isTrue);
       expect(restored.terminalAgents('lead'), isEmpty);
       expect(restored.draft('lead'), 'Keep discussing this project.');
@@ -55,10 +57,12 @@ void main() {
       expect(restored.devicesSelected, isFalse);
       expect(restored.selectedId, 'lead');
       expect(restored.terminalAgents('lead'), isNotEmpty);
+      await restored.flush();
+      expect(server.saved, isNot(contains('devicesLayout')));
       final other = server.controller(initial: server.saved, account: 'other');
       expect(other.devicesSelected, isFalse);
-      expect(other.devicesLayout, isNull);
       expect(other.isMachineExpanded('m'), isFalse);
+      expect(other.draft('lead'), isEmpty);
       other.dispose();
       restored.dispose();
     },
@@ -120,25 +124,21 @@ void main() {
       expect(c.devicesSelected, isTrue);
       expect(find.byType(DevicesScreen), findsOneWidget);
       expect(find.text('Add your first device'), findsOneWidget);
-      expect(find.text('Devices chat setup'), findsOneWidget);
+      expect(find.text('Devices chat setup'), findsNothing);
       expect(find.byKey(const ValueKey('super-chat')), findsNothing);
-      expect(tab.panes, hasLength(2));
-      final viewer = tab.panes.first;
-      final chat = tab.panes.last;
+      expect(tab.panes, hasLength(1));
+      final viewer = tab.panes.single;
       expect(viewer.isDevices, isTrue);
-      expect(chat.isViewer, isFalse);
-      final left = tester.getRect(
+      expect(viewer.ownerAgentId, isNull);
+      final bounds = tester.getRect(
         find.byKey(ValueKey('pane-frame:${viewer.id}')),
       );
-      final right = tester.getRect(
-        find.byKey(ValueKey('pane-frame:${chat.id}')),
-      );
-      expect(left.right, lessThan(right.left));
-      expect(left.width / (left.width + right.width), closeTo(.7, .01));
+      final center = tester.getRect(find.byType(PaneGrid));
+      expect(bounds.left, closeTo(center.left, 2));
+      expect(bounds.right, closeTo(center.right, 2));
       await tester.tap(find.byKey(const ValueKey('super-your-devices')));
       await tester.pumpAndSettle();
-      expect(tab.panes.first, same(viewer));
-      expect(tab.panes.last, same(chat));
+      expect(tab.panes.single, same(viewer));
       await tester.tap(find.byKey(const ValueKey('super-group-lead')));
       await tester.pumpAndSettle();
       expect(c.devicesSelected, isFalse);
@@ -146,7 +146,9 @@ void main() {
       expect(find.byType(DevicesScreen), findsNothing);
       expect(find.text('An unfinished project message'), findsOneWidget);
       expect(
-        f.connection.calls.where((call) => call.$1 == 'agent_create'),
+        f.connection.calls.where(
+          (call) => call.$1 == 'agent_create' || call.$1 == 'agent_resume',
+        ),
         isEmpty,
       );
       expect(tester.takeException(), isNull);
@@ -158,7 +160,7 @@ void main() {
   );
 
   testWidgets(
-    'late Devices conversation attachment cannot replace a project after navigating away',
+    'stale embedded chat startup and attachment do nothing before or after navigation',
     (tester) async {
       final (f, c) = await mount(tester);
       final tab = f.app.activeSwarm;
@@ -178,7 +180,20 @@ void main() {
       ];
       c.selectDevices();
       await tester.pumpAndSettle();
-      final opening = devices.open(swarmId: tab.id);
+      var finished = false;
+      final opening = devices
+          .open(swarmId: tab.id)
+          .then((_) => finished = true);
+      await tester.pump();
+      expect(
+        finished,
+        isTrue,
+        reason: 'Embedded Devices must not wait for agent inventory',
+      );
+      await f.app.showDevicesTerminal('m', 'devices-chat', swarmId: tab.id);
+      expect(tab.panes, hasLength(1));
+      expect(tab.panes.single.isDevices, isTrue);
+      expect(tab.panes.single.ownerAgentId, isNull);
       c.select('lead');
       await tester.pumpAndSettle();
       loading.complete();
@@ -193,15 +208,19 @@ void main() {
       c.selectDevices();
       await tester.pumpAndSettle();
       await devices.open(swarmId: tab.id);
-      // The native session's loading animation intentionally keeps pumping.
-      await tester.pump(const Duration(milliseconds: 100));
+      await f.app.showDevicesTerminal('m', 'devices-chat', swarmId: tab.id);
+      await tester.pumpAndSettle();
       expect(
         tab.panes.where((pane) => pane.agentId == 'devices-chat'),
-        hasLength(1),
+        isEmpty,
       );
+      expect(tab.panes, hasLength(1));
+      expect(find.text('Devices chat setup'), findsNothing);
       expect(f.app.activeSwarm, same(tab));
       expect(
-        f.connection.calls.where((call) => call.$1 == 'agent_create'),
+        f.connection.calls.where(
+          (call) => call.$1 == 'agent_create' || call.$1 == 'agent_resume',
+        ),
         isEmpty,
       );
       await tester.pumpWidget(const SizedBox());

@@ -91,7 +91,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                   final native = machine?.agents
                       .where((n) => n.id == a.harnessId)
                       .firstOrNull;
-                  return '${a.id}:${native?.isStopped}:${machine?.connectionStatus}:${native != null}';
+                  return '${a.id}:${a.harnessId}:${native?.isStopped}:${machine?.connectionStatus}:${native != null}';
                 })
                 .join(','),
       controller.accountId,
@@ -123,7 +123,6 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
       ) async {
         if (!current()) return;
         final tab = app.swarms.where((s) => s.id == swarmId).firstOrNull;
-        final alreadyDevices = tab?.panes.any((pane) => pane.isDevices) == true;
         // Closing a terminal also removes its owned viewer. Do that first so
         // navigation never records a web/Finder preview as manually dismissed.
         final oldPanes = tab?.panes.toList() ?? <TerminalPane>[];
@@ -131,7 +130,9 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
           (a, b) => (a.isViewer ? 1 : 0).compareTo(b.isViewer ? 1 : 0),
         );
         for (final pane in oldPanes) {
-          if (devices && alreadyDevices) continue;
+          // Keep only the dashboard when revisiting Devices, also removing
+          // the chat slot or session restored from its former split layout.
+          if (devices && pane.isDevices) continue;
           if (!agents.any(
             (a) => a.machineId == pane.machineId && a.harnessId == pane.agentId,
           )) {

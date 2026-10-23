@@ -2927,8 +2927,7 @@ class AppNotifier extends ChangeNotifier {
 
   void _ensureDevicesViewer(Swarm tab) {
     if (!devicesEnabled) return;
-    final opening = !tab.panes.any((pane) => pane.isDevices);
-    if (opening) {
+    if (!tab.panes.any((pane) => pane.isDevices)) {
       final pane = TerminalPane(
         id: _nextPaneId++,
         machineId: '',
@@ -2937,21 +2936,32 @@ class AppNotifier extends ChangeNotifier {
       tab.panes.insert(0, pane);
       tab.focusedPaneId ??= pane.id;
     }
+    if (tab.isSuperTab) {
+      // Your devices is a dashboard in the Swarm, without its own agent.
+      // Clear ownership left by an earlier embedded conversation so closing
+      // that old agent elsewhere cannot remove this independent viewer.
+      final viewer = tab.panes.firstWhere((pane) => pane.isDevices)
+        ..machineId = ''
+        ..ownerAgentId = null
+        ..fixedWidth = null;
+      tab
+        ..focusedPaneId = viewer.id
+        ..previousPaneId = null
+        ..zoomedPaneId = null
+        ..arranged = null
+        ..arrangedKey = null
+        ..arrangedMinimum = null;
+      return;
+    }
     // Reserve the conversation before any network or launch work. Setup and
     // failures belong in this same right-hand pane, never above the dashboard.
     if (!tab.panes.any((pane) => !pane.isViewer)) {
       tab.panes.add(TerminalPane(id: _nextPaneId++, machineId: ''));
     }
-    if (opening && tab.isSuperTab && tab.superTabId != null) {
-      tab.paneSizes['2:manual'] =
-          superTabs.peek(tab.superTabId!)?.devicesLayout ??
-          PaneArrangement.viewerBesideTerminal;
-    } else {
-      tab.paneSizes.putIfAbsent(
-        '2:manual',
-        () => PaneArrangement.viewerBesideTerminal,
-      );
-    }
+    tab.paneSizes.putIfAbsent(
+      '2:manual',
+      () => PaneArrangement.viewerBesideTerminal,
+    );
   }
 
   bool isDevicesWorkspace(Swarm tab) =>
@@ -2978,7 +2988,7 @@ class AppNotifier extends ChangeNotifier {
         .where(
           (tab) =>
               (swarmId == null ? tab.isDevices : tab.id == swarmId) &&
-              isDevicesWorkspace(tab),
+              tab.isDevices,
         )
         .firstOrNull;
     if (tab == null) return;
@@ -4176,13 +4186,6 @@ class AppNotifier extends ChangeNotifier {
         arrangement.tiles.length != panes.length ||
         activeSwarm.arrangedKey != layoutKey) {
       return false;
-    }
-    if (persist &&
-        activeSwarm.superTabId != null &&
-        isDevicesWorkspace(activeSwarm)) {
-      superTabs
-          .peek(activeSwarm.superTabId!)
-          ?.rememberDevicesLayout(arrangement);
     }
     if (identical(activeSwarm.paneSizes[layoutKey], arrangement)) {
       if (persist) _persistLayout();

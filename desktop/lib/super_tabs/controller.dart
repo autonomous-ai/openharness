@@ -6,7 +6,6 @@ import 'package:flutter/foundation.dart';
 
 import '../logging/app_log.dart';
 import '../state/harness_attachments.dart';
-import '../state/pane_arrangement.dart';
 import 'attachment_upload.dart';
 import 'model.dart';
 import 'review_verdict.dart';
@@ -54,12 +53,6 @@ class SuperTabController extends ChangeNotifier {
         (initial['expandedMachines'] as List? ?? const []).whereType<String>(),
       );
       devicesSelected = initial['devicesSelected'] == true;
-      final savedDevicesLayout = PaneArrangement.fromJson(
-        initial['devicesLayout'],
-      );
-      if (savedDevicesLayout?.tiles.length == 2) {
-        devicesLayout = savedDevicesLayout;
-      }
       projectsGroupOpen = initial['projectsGroupOpen'] as bool? ?? true;
       machinesGroupOpen = initial['machinesGroupOpen'] as bool? ?? true;
       offlineMachinesOpen = initial['offlineMachinesOpen'] as bool? ?? false;
@@ -162,7 +155,6 @@ class SuperTabController extends ChangeNotifier {
   final expandedProjects = <String>{};
   final expandedMachines = <String>{};
   bool devicesSelected = false;
-  PaneArrangement? devicesLayout;
   bool projectsGroupOpen = true, machinesGroupOpen = true;
 
   bool isMachineExpanded(String id) => expandedMachines.contains(id);
@@ -180,14 +172,6 @@ class SuperTabController extends ChangeNotifier {
     devicesSelected = true;
     _saveSoon();
     _changed();
-  }
-
-  /// The Devices divider belongs to this personal workspace, independently
-  /// of a workgroup's terminal count or arrangement.
-  void rememberDevicesLayout(PaneArrangement layout) {
-    if (_disposed || accessRevoked || layout.tiles.length != 2) return;
-    devicesLayout = layout;
-    _saveSoon();
   }
 
   /// Whether the Machines group's "Offline · N" disclosure is open; it starts closed.
@@ -379,7 +363,6 @@ class SuperTabController extends ChangeNotifier {
     'expandedProjects': expandedProjects.toList(),
     'expandedMachines': expandedMachines.toList(),
     'devicesSelected': devicesSelected,
-    if (devicesLayout != null) 'devicesLayout': devicesLayout!.toJson(),
     'projectsGroupOpen': projectsGroupOpen,
     'machinesGroupOpen': machinesGroupOpen,
     'offlineMachinesOpen': offlineMachinesOpen,

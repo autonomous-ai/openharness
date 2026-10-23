@@ -1457,8 +1457,7 @@ class _PaneCell extends StatelessWidget {
                               devicesConversation != null &&
                               notifier.swarms.any(
                                 (tab) =>
-                                    notifier.isDevicesWorkspace(tab) &&
-                                    tab.panes.contains(pane),
+                                    tab.isDevices && tab.panes.contains(pane),
                               )
                         ? devicesConversation!(context)
                         : pane.agentId == null &&

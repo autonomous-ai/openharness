@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/finder/finder_roots.dart';
 import 'package:harness/state/pane_arrangement.dart';
+import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/workspace.dart';
 
@@ -17,6 +18,7 @@ Future<(SuperTabLaunchFixture, SuperTabController)> _mount(
   bool web = false,
   bool finder = false,
   int agents = 1,
+  bool legacyDevices = false,
 }) async {
   await tester.binding.setSurfaceSize(const Size(1440, 900));
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -57,6 +59,25 @@ Future<(SuperTabLaunchFixture, SuperTabController)> _mount(
   final c = await f.app.superTabs.open(tabId);
   await c.refresh();
   c.selectGroupTerminals('lead');
+  if (legacyDevices) {
+    final tab = f.app.activeSwarm;
+    tab.panes
+      ..clear()
+      ..addAll([
+        TerminalPane(
+          id: 10001,
+          machineId: 'm',
+          kind: PaneKind.devices,
+          ownerAgentId: 'old-devices-chat',
+        ),
+        TerminalPane(id: 10002, machineId: 'm', agentId: 'old-devices-chat'),
+      ]);
+    tab
+      ..focusedPaneId = 10002
+      ..zoomedPaneId = 10002;
+    tab.paneSizes['2:manual'] = PaneArrangement.viewerBesideTerminal;
+    c.selectDevices();
+  }
   await tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
@@ -119,7 +140,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(c.devicesSelected, isTrue);
         expect(f.app.activeSwarm, same(tab));
-        expect(tab.panes, hasLength(2));
+        expect(tab.panes, hasLength(1));
         expect(tab.panes.where((pane) => pane.isDevices), hasLength(1));
         expect(tab.panes.where((pane) => pane.isWeb || pane.isFinder), isEmpty);
         if (finder) {
@@ -147,28 +168,66 @@ void main() {
   }
 
   testWidgets(
-    'Devices keeps a user-adjusted split after visiting a two-agent workgroup',
+    'Devices stays one pane without changing a two-agent workgroup layout',
     (tester) async {
       final (f, c) = await _mount(tester, agents: 2);
       final tab = f.app.activeSwarm;
-      expect(tab.panes.map((pane) => pane.agentId), ['native-0', 'native-1']);
-      c.selectDevices();
-      await tester.pumpAndSettle();
       final resized = PaneArrangement(const [
         Rect.fromLTRB(0, 0, .58, 1),
         Rect.fromLTRB(.58, 0, 1, 1),
       ]);
       tab.arrangedKey = '2:manual';
       expect(f.app.resizePanes(tab.id, '2:manual', resized), isTrue);
-      expect(tab.paneSizes['2:manual']!.tiles.first.right, .58);
-      c.select('lead');
-      await tester.pumpAndSettle();
-      expect(tab.panes.map((pane) => pane.agentId), ['native-0', 'native-1']);
-      c.selectDevices();
-      await tester.pumpAndSettle();
-      expect(tab.panes.where((pane) => pane.isDevices), hasLength(1));
-      expect(tab.paneSizes['2:manual']!.tiles.first.right, .58);
+      for (var visit = 0; visit < 2; visit++) {
+        c.selectDevices();
+        await tester.pumpAndSettle();
+        expect(tab.panes, hasLength(1));
+        expect(tab.panes.single.isDevices, isTrue);
+        expect(tab.panes.single.ownerAgentId, isNull);
+        expect(tab.manualLayout, isNull);
+        c.select('lead');
+        await tester.pumpAndSettle();
+        expect(tab.panes.map((pane) => pane.agentId), ['native-0', 'native-1']);
+        expect(tab.paneSizes['2:manual']!.tiles, resized.tiles);
+      }
+      expect(
+        f.connection.calls.where(
+          (call) => call.$1 == 'agent_create' || call.$1 == 'agent_resume',
+        ),
+        isEmpty,
+      );
       await _dispose(tester, f, c);
     },
   );
+
+  testWidgets('a saved embedded chat split becomes one independent dashboard', (
+    tester,
+  ) async {
+    final (f, c) = await _mount(tester, agents: 2, legacyDevices: true);
+    final tab = f.app.activeSwarm;
+    expect(c.devicesSelected, isTrue);
+    expect(tab.panes, hasLength(1));
+    expect(tab.panes.single.isDevices, isTrue);
+    expect(tab.panes.single.agentId, isNull);
+    expect(tab.panes.single.ownerAgentId, isNull);
+    expect(tab.panes.single.machineId, isEmpty);
+    expect(tab.focusedPaneId, tab.panes.single.id);
+    expect(tab.zoomedPaneId, isNull);
+    expect(tab.manualLayout, isNull);
+    c.select('lead');
+    await tester.pumpAndSettle();
+    expect(tab.panes.map((pane) => pane.agentId), ['native-0', 'native-1']);
+    c.selectDevices();
+    await tester.pumpAndSettle();
+    expect(tab.panes, hasLength(1));
+    expect(tab.panes.single.isDevices, isTrue);
+    expect(
+      f.connection.calls.where(
+        (call) => call.$1 == 'agent_create' || call.$1 == 'agent_resume',
+      ),
+      isEmpty,
+    );
+    expect(tester.takeException(), isNull);
+    await _dispose(tester, f, c);
+  });
 }

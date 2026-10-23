@@ -5,7 +5,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/engine_availability.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/devices/devices_harness_controller.dart';
-import 'package:harness/settings/experimental_features.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/state/swarm.dart';
@@ -209,8 +208,7 @@ void main() {
         ..engines.replace([
           const EngineAvailability(engine: 'codex', installed: true),
         ]);
-      final next = await embeddedDevices();
-      final second = devices.open(swarmId: next.tab.id);
+      final second = devices.open(swarmId: previousTab.id);
       connection.holdCreation!.complete();
       await Future.wait([first, second]);
 
@@ -222,10 +220,9 @@ void main() {
         hasLength(2),
       );
       expect(app.attachments, [
-        (account: 'b', workspace: next.tab.id, agent: 'manager-2'),
+        (account: 'b', workspace: previousTab.id, agent: 'manager-2'),
       ]);
-      expect(previousTab.panes.where((pane) => pane.agentId != null), isEmpty);
-      expect(next.tab.panes.last.agentId, 'manager-2');
+      expect(previousTab.panes.last.agentId, 'manager-2');
       expect(
         app.allPanes.where((pane) => pane.agentId == 'manager-1'),
         isEmpty,
@@ -233,15 +230,20 @@ void main() {
     },
   );
 
-  test('a second Devices destination waits for the first and reuses the same '
-      'created conversation in both workspaces', () async {
+  test('embedded Devices ignores a launch already pending for standalone '
+      'Devices without retargeting its receipt', () async {
     connection.holdCreation = Completer<void>();
     final previousTab = app.activeSwarm;
     final first = devices.open();
     await Future<void>.delayed(Duration.zero);
     expect(connection.creations, hasLength(1));
     final next = await embeddedDevices();
-    final second = devices.open(swarmId: next.tab.id);
+    var finished = false;
+    final second = devices
+        .open(swarmId: next.tab.id)
+        .then((_) => finished = true);
+    await Future<void>.delayed(Duration.zero);
+    expect(finished, isTrue);
     connection.holdCreation!.complete();
     await Future.wait([first, second]);
 
@@ -249,36 +251,42 @@ void main() {
     expect(connection.creations, hasLength(1));
     expect(app.attachments, [
       (account: 'a', workspace: previousTab.id, agent: 'manager'),
-      (account: 'a', workspace: next.tab.id, agent: 'manager'),
     ]);
     expect(previousTab.panes.last.agentId, 'manager');
-    expect(next.tab.panes.last.agentId, 'manager');
+    expect(next.tab.panes, hasLength(1));
+    expect(next.tab.panes.single.isDevices, isTrue);
+    expect(next.tab.panes.single.ownerAgentId, isNull);
     expect(app.activeSwarm, same(next.tab));
   });
 
-  test(
-    'a queued Devices destination left before creation finishes stays in chat',
-    () async {
-      connection.holdCreation = Completer<void>();
-      final previousTab = app.activeSwarm;
-      final first = devices.open();
-      await Future<void>.delayed(Duration.zero);
-      expect(connection.creations, hasLength(1));
+  for (final existingConversation in [false, true]) {
+    test('embedded Devices never probes, starts or reuses a conversation '
+        '(existing standalone conversation: $existingConversation)', () async {
+      final standalone = app.activeSwarm;
+      if (existingConversation) await devices.open();
       final next = await embeddedDevices();
-      final second = devices.open(swarmId: next.tab.id);
-      next.controller.select('lead');
-      connection.holdCreation!.complete();
-      await Future.wait([first, second]);
-
-      expect(connection.creations, hasLength(1));
-      expect(app.attachments, [
-        (account: 'a', workspace: previousTab.id, agent: 'manager'),
-      ]);
-      expect(next.controller.devicesSelected, isFalse);
-      expect(next.tab.panes.where((pane) => pane.agentId != null), isEmpty);
+      connection.requests.clear();
+      final before = app.attachments.toList();
+      await devices.open(swarmId: next.tab.id);
+      expect(connection.requests, isEmpty);
+      expect(connection.creations, hasLength(existingConversation ? 1 : 0));
+      expect(app.resumes, 0);
+      expect(app.attachments, before);
+      expect(next.tab.panes, hasLength(1));
+      expect(next.tab.panes.single.isDevices, isTrue);
+      expect(next.tab.panes.single.ownerAgentId, isNull);
+      await app.showDevicesTerminal('m', 'manager', swarmId: next.tab.id);
+      expect(next.tab.panes, hasLength(1));
+      expect(next.tab.panes.single.agentId, isNull);
+      expect(next.tab.panes.single.ownerAgentId, isNull);
+      expect(standalone.panes, hasLength(2));
+      expect(
+        standalone.panes.last.agentId,
+        existingConversation ? 'manager' : null,
+      );
       expect(app.activeSwarm, same(next.tab));
-    },
-  );
+    });
+  }
 }
 
 class _DevicesTestApp extends ModelManagerTestApp {
@@ -307,6 +315,7 @@ class _DevicesTestApp extends ModelManagerTestApp {
 class _DevicesConnection extends ModelManagerConnection {
   String? refusal;
   bool uniqueAgentIds = false;
+  final requests = <String>[];
   final server = ConversationServer();
 
   @override
@@ -315,6 +324,7 @@ class _DevicesConnection extends ModelManagerConnection {
     Map<String, dynamic> payload = const {},
     Duration timeout = const Duration(seconds: 20),
   }) async {
+    requests.add(type);
     if (type == 'agent_create' && refusal != null) {
       throw WsRequestFailure(
         responseType: 'agent_create_result',

@@ -6,10 +6,12 @@ native utility harnesses such as Devices and companions, not just Store web
 viewers. The chat is the real agent terminal, with its existing input, approval,
 session, and resume behavior. Do not build a second chat implementation.
 
-In a Swarm, **Your devices** hosts this same workspace in the center area of the
-current tab. It keeps the Swarm sidebar and roster; returning to a project restores
-its draft and conversation choice. Starting or retrying Devices must not add a
-top-level tab or attach a late reply over a project selected in the meantime.
+In a Swarm, **Your devices** is a dashboard-only exception. It fills the center
+area of the current tab, keeping the Swarm sidebar and roster visible. It does
+not start, resume, attach, or reserve a Devices agent or chat pane. Returning to a
+project restores its draft and conversation choice. Saved embedded viewer/chat
+layouts normalize to this single dashboard; no new top-level tab is opened.
+Standalone Devices outside a Swarm retains the viewer/chat workspace below.
 
 Use the shared `PaneGrid` and `PaneArrangement.viewerBesideTerminal`. Reserve
 both slots before asynchronous setup starts. Keep the chat slot visible while
@@ -32,8 +34,12 @@ instruction. A failed edit stays beside the affected device control.
 
 Verify the actual workspace, not a dashboard rendered alone:
 
+- For Your devices inside a Swarm, verify one dashboard fills the center at narrow
+  and wide sizes, no conversation is created, and returning to a project preserves
+  its draft, selected workgroup, and any existing viewers.
 - Measure left/right placement and the 70/30 split before startup, after failure,
-  after a successful retry, and after restore. Check user-resized layouts too.
+  after a successful retry, and after restore for standalone DSH workspaces.
+  Check user-resized layouts too.
 - Test a missing bundled package and an unavailable engine. A ready-agent-only
   preview misses the failure that previously removed Devices chat.
 - Check disconnected hosts disappear without messages, and reconnect with their

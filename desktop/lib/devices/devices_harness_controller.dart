@@ -24,6 +24,11 @@ class DevicesHarnessController extends ChangeNotifier {
   Future<void> open({String? swarmId}) {
     final workspaceId =
         swarmId ?? app.swarms.where((tab) => tab.isDevices).firstOrNull?.id;
+    // Swarm's Your devices is a dashboard only. Even a stale retry from its
+    // former chat pane must not probe, create, resume or attach an agent.
+    if (!app.swarms.any((tab) => tab.id == workspaceId && tab.isDevices)) {
+      return Future.value();
+    }
     final account = app.currentUser?.id;
     if (_opening case final pending?) {
       if (_workspaceId == workspaceId && _openingAccount == account) {
@@ -34,9 +39,7 @@ class DevicesHarnessController extends ChangeNotifier {
       return pending.then<void>((_) async {
         if (_disposed ||
             app.currentUser?.id != account ||
-            !app.swarms.any(
-              (tab) => tab.id == workspaceId && app.isDevicesWorkspace(tab),
-            )) {
+            !app.swarms.any((tab) => tab.id == workspaceId && tab.isDevices)) {
           return;
         }
         await open(swarmId: workspaceId);
@@ -58,9 +61,7 @@ class DevicesHarnessController extends ChangeNotifier {
       app.devicesEnabled &&
       app.currentUser?.id == _account &&
       identical(app.stateOf(owner.machine.machineId), owner) &&
-      app.swarms.any(
-        (tab) => tab.id == _workspaceId && app.isDevicesWorkspace(tab),
-      );
+      app.swarms.any((tab) => tab.id == _workspaceId && tab.isDevices);
 
   Future<void> _open() async {
     if (!app.devicesEnabled || _workspaceId == null) return;

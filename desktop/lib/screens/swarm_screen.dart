@@ -4610,13 +4610,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
   Widget _devicesViewer(BuildContext context) {
     final viewerId = app.panes.where((pane) => pane.isDevices).firstOrNull?.id;
     final key = '${app.currentUser?.id}:${app.activeSwarmId}:$viewerId';
-    if (app.isDevicesWorkspace(app.activeSwarm) &&
+    if (app.activeSwarm.isDevices &&
         app.devicesEnabled &&
         _devicesAttemptedKey != key) {
       _devicesAttemptedKey = key;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted &&
-            app.isDevicesWorkspace(app.activeSwarm) &&
+            app.activeSwarm.isDevices &&
             app.devicesEnabled &&
             key ==
                 '${app.currentUser?.id}:${app.activeSwarmId}:${app.panes.where((pane) => pane.isDevices).firstOrNull?.id}') {

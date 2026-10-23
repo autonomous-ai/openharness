@@ -106,8 +106,14 @@ align with the project name. An expanded project without workgroups says **No wo
 current Swarm, preserving project drafts and the selected workgroup. Ordinary tabs retain
 their standalone Devices workspace. The navigation, conversation and people panes have
 draggable dividers; their default side widths are 300 and 280 pixels, respecting saved resizes.
+The right pane is a stable directory of all humans and agents in the current Swarm that the
+viewer can access. Selecting a project, workgroup or Devices does not filter that directory;
+local machine inventory does not add people or agents to it.
 Agents have individual display names and the same avatar treatment as people. Their role badges
-are **PM**, **Dev** and **Rev**; project context appears underneath. Engine names belong in details.
+are **PM**, **Dev** and **Rev**. The name, role badge and compact project tag share the first line;
+the existing status icon and activity or assigned task appear underneath. Shortened names and
+tags retain their full text on hover. Reuse observed status and assignment data; do not generate
+activity summaries or infer a work timer from the session's age. Engine names belong in details.
 Chat headings and quoted replies use the same current agent identity as the roster, including
 older messages. When an agent has left, its recorded author name remains available in history.
 Machine rows show a computer icon, name, owner avatar, status and right-hand disclosure.
