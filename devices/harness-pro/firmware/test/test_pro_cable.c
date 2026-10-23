@@ -1126,6 +1126,25 @@ static void test_swarm_cards(void)
     CHECK(rec_card.leads[1].state == POD_LEAD_STUCK && !strcmp(rec_card.leads[1].owner, "Mai") && rec_card.leads[1].projectId[0] == 0 &&
           rec_card.leads[2].state == POD_LEAD_WORK && rec_card.leads[2].since_s == 9);
 
+    // a daemon from the round dial's Swarm tab on adds `order` to each Lead: the Pro reads past it to the same model
+    static const char *plain_leads = "{\"id\":\"L1\",\"projectId\":\"P1\",\"project\":\"mobile\",\"engine\":\"claude\",\"owner\":\"\",\"local\":\"H1\",\"state\":\"ask\",\"since\":134},"
+                                     "{\"id\":\"L2\",\"project\":\"web\",\"engine\":\"codex\",\"owner\":\"Mai\",\"local\":\"\",\"state\":\"done\"}";
+    static const char *order_leads = "{\"id\":\"L1\",\"projectId\":\"P1\",\"project\":\"mobile\",\"engine\":\"claude\",\"owner\":\"\",\"local\":\"H1\",\"state\":\"ask\",\"order\":2,\"since\":134},"
+                                     "{\"order\":0,\"id\":\"L2\",\"project\":\"web\",\"engine\":\"codex\",\"owner\":\"Mai\",\"local\":\"\",\"state\":\"done\"}";
+    reset();
+    feedf("{\"t\":\"supertab\",\"id\":\"S1\",\"tab\":\"T1\",\"name\":\"openharness\",\"count\":2,\"leads\":[%s]}", plain_leads);
+    pod_swarm_t plain = rec_card;
+    reset();
+    feedf("{\"t\":\"supertab\",\"id\":\"S1\",\"tab\":\"T1\",\"name\":\"openharness\",\"count\":2,\"leads\":[%s]}", order_leads);
+    CHECK(nev == 1 && evs[0].kind == EV_SUPERTAB && rec_card.lead_n == 2 && plain.lead_n == 2);
+    CHECK(!strcmp(rec_card.id, plain.id) && !strcmp(rec_card.tab, plain.tab) && !strcmp(rec_card.name, plain.name) && rec_card.count == plain.count);
+    for (int i = 0; i < 2; i++) {
+        const pod_lead_t *a = &plain.leads[i], *b = &rec_card.leads[i];
+        CHECK(!strcmp(a->id, b->id) && !strcmp(a->projectId, b->projectId) && !strcmp(a->project, b->project) && !strcmp(a->engine, b->engine) &&
+              !strcmp(a->owner, b->owner) && !strcmp(a->local, b->local) && a->state == b->state && a->since_s == b->since_s &&
+              a->recap == b->recap && a->text == b->text && a->text_at == b->text_at);
+    }
+
     // 15 Leads -> 12; count absent -> the Leads listed
     reset();
     w = snprintf(big, sizeof big, "{\"t\":\"supertab\",\"id\":\"s\",\"name\":\"n\",\"count\":15,\"leads\":[");

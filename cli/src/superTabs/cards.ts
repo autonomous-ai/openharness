@@ -15,7 +15,8 @@ import { identifier, object } from './wire.js'
 
 type Json = Record<string, unknown>
 export type LeadState = 'ask' | 'stuck' | 'work' | 'done'
-export interface SwarmLead { id: string; projectId: string; project: string; engine: string; owner: string; local: string; state: LeadState; since?: number }
+/** `order`: the project's index in the Swarm (the app's order), so a dial can show the Leads as the app does whatever their urgency. */
+export interface SwarmLead { id: string; projectId: string; project: string; engine: string; owner: string; local: string; state: LeadState; order: number; since?: number }
 export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[] }
 export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean }
 
@@ -38,7 +39,8 @@ function cut(text: string, bytes: number): string {
 const list = (v: unknown): Json[] => Array.isArray(v) ? v.map(object) : []
 
 /**
- * One Lead per project of the Swarm, in project order then by urgency. `live` says whether this machine's core has a
+ * One Lead per project of the Swarm, most urgent first with ties in project order; the 12 most urgent are kept, and each
+ * carries its project's index as `order` (gaps where a project has no Lead or was cut). `live` says whether this machine's core has a
  * harness and whether it is in a turn (null: not here); `me` is the signed-in person's id, so a Lead on someone else's
  * machine names that owner (people[] has an email, which is the name a Swarm shows a person by).
  */
@@ -48,7 +50,7 @@ export function leadsOf(state: Json, machineId: string, live: (harnessId: string
   const projects = Array.isArray(state.projects) ? list(state.projects) : [{ id: 'lead', name: state.name, leadConversationId: 'lead' }]
   const paused = state.paused === true
   const leads: SwarmLead[] = []
-  for (const project of projects) {
+  for (const [order, project] of projects.entries()) {
     const lead = conversations.find(c => c.id === project.leadConversationId)
     const agent = lead && agents.find(a => a.id === lead.leadId)
     if (!agent) continue
@@ -69,7 +71,7 @@ export function leadsOf(state: Json, machineId: string, live: (harnessId: string
     leads.push({
       id: String(agent.id), projectId: String(project.id ?? 'lead'), project: cut(String(project.name ?? ''), NAME_BYTES), engine: String(object(agent.configuration).engine ?? ''),
       owner: owner && typeof owner.email === 'string' ? cut(owner.email, NAME_BYTES) : '',
-      local: here && cardId(harnessId) ? harnessId : '', state, ...(since !== undefined ? { since } : {}),
+      local: here && cardId(harnessId) ? harnessId : '', state, order, ...(since !== undefined ? { since } : {}),
     })
   }
   // Array.sort is stable: equal urgency keeps the project order.

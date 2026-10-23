@@ -2657,7 +2657,7 @@ export class CableSession {
       const tab = desk.find((s) => s.superTabId === card.id)?.id ?? ''
       const frame = { t: 'supertab', id: card.id, tab, name: card.name, count: card.count,
         leads: card.leads.slice(0, SWARM_LEADS_MAX).map((l) => ({ id: l.id, projectId: l.projectId, project: l.project,
-          engine: l.engine, owner: l.owner, local: l.local, state: l.state, ...(l.since === undefined ? {} : { since: l.since }) })) }
+          engine: l.engine, owner: l.owner, local: l.local, state: l.state, order: l.order, ...(l.since === undefined ? {} : { since: l.since }) })) }
       const key = JSON.stringify(frame)
       if (this.cardKeys.get(card.id) === key) continue
       this.cardKeys.set(card.id, key)
