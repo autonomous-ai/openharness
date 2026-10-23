@@ -2463,4 +2463,14 @@ describe('a Swarm written by a later release', () => {
     // A later release, which knows the kind, puts it back from here.
     expect(written.parkedConversations).toEqual([later])
   })
+
+  it('never gives a new conversation the number of a conversation it set aside', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Rollout numbers')).id
+    const stored = (await db.superTab.findUniqueOrThrow({ where: { id: tab } })).state as unknown as { conversations: Array<Record<string, unknown>> }
+    stored.conversations.push({ id: 'later', kind: 'later-kind', number: 7, title: 'From a later release', leadId: null, agentIds: [],
+      archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 })
+    await db.superTab.update({ where: { id: tab }, data: { state: stored as never } })
+    const created = String((await run(tab, { type: 'conversation.create', title: 'New work', brief: '', checks: [] })).result.conversationId)
+    expect((await store.read(owner, tab)).state.conversations.find(c => c.id === created)!.number).toBe(8)
+  })
 })

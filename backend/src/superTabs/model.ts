@@ -330,7 +330,7 @@ export function numberConversations(state: SuperTabState): void {
   }
 }
 export function nextConversationNumber(state: SuperTabState): number {
-  return Math.max(state.retiredConversationNumber ?? 0, 0, ...state.conversations.map(c => c.number ?? 0)) + 1
+  return Math.max(state.retiredConversationNumber ?? 0, 0, ...[...state.conversations, ...state.parkedConversations ?? []].map(c => c.number ?? 0)) + 1
 }
 export function author(state: SuperTabState, actor: Actor, write = false): Author {
   if (actor.kind === 'person') {
