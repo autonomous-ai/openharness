@@ -7,6 +7,7 @@ import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
 import 'project_visibility.dart';
+import 'roles_editor.dart';
 
 Future<void> showProjectAction(
   BuildContext context,
@@ -22,7 +23,7 @@ Future<void> showProjectAction(
   var visibility = project.isPrivate ? 'private' : 'public';
   final members = project.memberIds.toSet();
   var minutes = project.updateMinutes;
-  var mode = project.skillMode;
+  var mode = project.skillSet;
   var busy = false;
   await showAppDialog<void>(
     context: context,
@@ -132,33 +133,82 @@ Future<void> showProjectAction(
                         ),
                       ],
                       if (action == 'skills')
-                        RadioGroup<String>(
-                          groupValue: mode,
-                          onChanged: (value) {
-                            if (busy || !canManage || value == null) return;
-                            update(() => mode = value);
-                          },
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              RadioListTile<String>(
-                                value: 'default',
-                                enabled: !busy && canManage,
-                                contentPadding: EdgeInsets.zero,
-                                title: const Text(
-                                  'Default — the team process; agents otherwise work their usual way',
-                                ),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            RadioGroup<String>(
+                              groupValue: mode,
+                              onChanged: (value) {
+                                if (busy ||
+                                    !canManage ||
+                                    value == null ||
+                                    (value == 'custom' &&
+                                        current?.roles == null)) {
+                                  return;
+                                }
+                                update(() => mode = value);
+                              },
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  RadioListTile<String>(
+                                    value: 'default',
+                                    enabled: !busy && canManage,
+                                    contentPadding: EdgeInsets.zero,
+                                    title: const Text(
+                                      'Default — the team process; agents otherwise work their usual way',
+                                    ),
+                                  ),
+                                  RadioListTile<String>(
+                                    value: 'orchestration',
+                                    enabled: !busy && canManage,
+                                    contentPadding: EdgeInsets.zero,
+                                    title: const Text(
+                                      'Harness orchestration — adds Harness practices: plans, test-first, review rounds',
+                                    ),
+                                  ),
+                                  RadioListTile<String>(
+                                    value: 'custom',
+                                    enabled:
+                                        !busy &&
+                                        canManage &&
+                                        current?.roles != null,
+                                    contentPadding: EdgeInsets.zero,
+                                    title: const Text('Custom'),
+                                  ),
+                                ],
                               ),
-                              RadioListTile<String>(
-                                value: 'orchestration',
-                                enabled: !busy && canManage,
-                                contentPadding: EdgeInsets.zero,
-                                title: const Text(
-                                  'Harness orchestration — adds Harness practices: plans, test-first, review rounds',
-                                ),
-                              ),
-                            ],
-                          ),
+                            ),
+                            if (canManage)
+                              current?.roles == null
+                                  ? OutlinedButton(
+                                      onPressed:
+                                          busy || c.saving || c.hasPendingAction
+                                          ? null
+                                          : () async {
+                                              update(() => busy = true);
+                                              await c.command({
+                                                'type': 'project.roles.create',
+                                                'projectId': project.id,
+                                                'roles': defaultProjectRoles(),
+                                              });
+                                              if (context.mounted) {
+                                                update(() => busy = false);
+                                              }
+                                            },
+                                      child: const Text('Create custom set'),
+                                    )
+                                  : TextButton(
+                                      onPressed: busy
+                                          ? null
+                                          : () => showRolesEditor(
+                                              context,
+                                              c,
+                                              project.id,
+                                            ),
+                                      child: const Text('Edit custom roles'),
+                                    ),
+                          ],
                         ),
                       if (readOnly) ...[
                         Text(
@@ -213,6 +263,9 @@ Future<void> showProjectAction(
                             c.saving ||
                             c.hasPendingAction ||
                             name.trim().isEmpty ||
+                            (action == 'skills' &&
+                                mode == 'custom' &&
+                                current?.roles == null) ||
                             (action != 'cadence' && !canManage)
                         ? null
                         : () async {
