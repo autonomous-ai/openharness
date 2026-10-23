@@ -568,7 +568,9 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
 
   async submitText(runtime: TmuxRuntimeRef, text: string, options?: SubmitOptions): Promise<TerminalActionResult> {
     const sent = await sendToTmux(runtime.paneId, text, options?.beforeEnter, options?.allowed)
-    return typeof sent === 'boolean' ? legacyActionResult(sent, 'tmux submission') : terminalEnterWithheld(sent.withheld)
+    if (typeof sent === 'boolean') return legacyActionResult(sent, 'tmux submission')
+    if ('notPasted' in sent) return terminalActionNotStarted(sent.notPasted)
+    return terminalEnterWithheld(sent.withheld)
   }
 
   async sendKey(runtime: TmuxRuntimeRef, key: TerminalLogicalKey): Promise<TerminalActionResult> {
