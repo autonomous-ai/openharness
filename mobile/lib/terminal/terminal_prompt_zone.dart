@@ -134,6 +134,41 @@ String? openCodePromptText(Buffer buffer) {
   return parts.isEmpty ? null : parts.join(' ');
 }
 
+/// What is typed into [engine]'s prompt, on one line: OpenCode's box ([openCodePromptText]), or
+/// the `❯`/`›` prompt Claude Code and Codex draw ([promptInputRange]), its wrapped rows joined.
+/// Null when nothing is typed, only the placeholder shows, or the prompt cannot be read.
+String? typedPromptText(Buffer buffer, String? engine) {
+  if (engine == 'opencode') return openCodePromptText(buffer);
+  final range = promptInputRange(buffer);
+  if (range == null) return null;
+  final text = buffer.getText(range).replaceAll(RegExp(r'\s+'), ' ').trim();
+  return text.isEmpty ? null : text;
+}
+
+/// Whether the cursor is in [engine]'s prompt: on Claude Code's or Codex's `❯`/`›` line or a row
+/// its text wrapped onto, or inside OpenCode's box — where all three keep the terminal's own cursor,
+/// shown, at the end of what is typed (measured in tmux on 2026-10-23: Claude Code 2.1.309, Codex
+/// 0.163.0, OpenCode 1.19.0). False for any other engine.
+bool cursorInPrompt(Buffer buffer, String? engine) {
+  final cursor = buffer.absoluteCursorY;
+  if (cursor < 0 || cursor >= buffer.lines.length) return false;
+  if (engine == 'opencode') {
+    final side = buffer.lines[cursor].getText().indexOf('┃');
+    return side >= 0 && buffer.cursorX > side;
+  }
+  if (engine != 'claude' && engine != 'codex') return false;
+  return emptyPromptAtCursor(buffer) || promptInputRange(buffer) != null;
+}
+
+/// Whether the cursor sits on a Claude Code or Codex prompt with nothing typed in it — its glyph
+/// alone, or its grey placeholder: the TUI is drawn and waiting for its first words.
+bool emptyPromptAtCursor(Buffer buffer) {
+  final cursor = buffer.absoluteCursorY;
+  if (cursor < 0 || cursor >= buffer.lines.length) return false;
+  return _promptGlyphColumn(buffer.lines[cursor]) != null &&
+      promptInputRange(buffer) == null;
+}
+
 /// What an agent's prompt starts with, in column 0 or just inside a box's side: Claude Code's `❯`
 /// (`>` in older builds), its `!` shell mode and `#` memory mode, and Codex's `›`. A shell themed
 /// with a `❯` prompt reads the same way, and rightly: what follows it is what was typed.

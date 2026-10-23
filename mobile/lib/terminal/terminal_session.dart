@@ -470,6 +470,11 @@ class TerminalSession extends ChangeNotifier {
   /// — but when it did not (seen 2026-10-06), the cursor stayed at the bottom row, under the status
   /// lines and against the key bar, until the first key typed made Claude Code draw again. So the
   /// cursor is not shown until the program's next output, whichever of the two that is.
+  ///
+  /// ⚠️ **Not when the screen the shrink is answered with has the cursor in the prompt** (owner,
+  /// 2026-10-23: a keyboard up over a prompt shows the caret blinking in it). There it is where the
+  /// program keeps it ([cursorInPrompt]), and hiding it waited on output that had already come:
+  /// a redraw that landed before this keyframe left the prompt with no caret until a key was typed.
   bool _cursorAwaitsProgram = false;
 
   /// The pane height whose shrinking cut rows drawn under the cursor ([_noteCutUnderCursor]), spent
@@ -1387,7 +1392,9 @@ class TerminalSession extends ChangeNotifier {
       // The answer to the shrink that cut rows under the cursor. A keyframe at the old size, sent
       // before the resize landed, leaves it for the one that is.
       _cutUnderCursorFrom = null;
-      if (!replacement.isUsingAltBuffer && !_cursorAwaitsProgram) {
+      if (!replacement.isUsingAltBuffer &&
+          !_cursorAwaitsProgram &&
+          !cursorInPrompt(replacement.buffer, engineId)) {
         _cursorAwaitsProgram = true;
         if (kTypingTrace) {
           typingEvent(

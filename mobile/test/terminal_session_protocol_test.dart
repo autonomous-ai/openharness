@@ -377,55 +377,55 @@ void main() {
       },
     );
 
-    test(
-      'heartbeats and resyncs ask the daemon to report a stream it no longer has',
-      () {
-        fakeAsync((async) {
-          final s = session(
-            disposeAtEnd: false,
-            resync: const Duration(seconds: 30),
-          );
-          s.open();
-          async.flushMicrotasks();
-          final streamId = _streamId();
-          s.handleFrame('terminal_ready', {
-            'requestId': wire.last('terminal_open')['requestId'],
-            'agentId': 'a',
-            'protocolVersion': TerminalSession.protocolVersion,
-            'streamId': streamId,
-          });
-          s.handleBinary(_keyframe(streamId));
-          async.flushMicrotasks();
-
-          async.elapse(const Duration(seconds: 5));
-          expect(wire.last('terminal_alive'), {
-            'streamId': streamId,
-            'reportMissing': true,
-          });
-
-          s.handleBinary(_output(streamId, 2, 'gap'));
-          async.flushMicrotasks();
-          expect(wire.last('terminal_resync')['reportMissing'], isTrue);
-          s.dispose();
+    test('heartbeats and resyncs ask the daemon to report a stream it no longer has', () {
+      fakeAsync((async) {
+        final s = session(
+          disposeAtEnd: false,
+          resync: const Duration(seconds: 30),
+        );
+        s.open();
+        async.flushMicrotasks();
+        final streamId = _streamId();
+        s.handleFrame('terminal_ready', {
+          'requestId': wire.last('terminal_open')['requestId'],
+          'agentId': 'a',
+          'protocolVersion': TerminalSession.protocolVersion,
+          'streamId': streamId,
         });
+        s.handleBinary(_keyframe(streamId));
+        async.flushMicrotasks();
+
+        async.elapse(const Duration(seconds: 5));
+        expect(wire.last('terminal_alive'), {
+          'streamId': streamId,
+          'reportMissing': true,
+        });
+
+        s.handleBinary(_output(streamId, 2, 'gap'));
+        async.flushMicrotasks();
+        expect(wire.last('terminal_resync')['reportMissing'], isTrue);
+        s.dispose();
+      });
+    });
+
+    test(
+      'a stream the daemon no longer has is reopened in place at once',
+      () async {
+        final s = session();
+        final opening = s.open();
+        final streamId = await ready(s);
+        await opening;
+        await s.handleBinary(_keyframe(streamId));
+
+        await s.handleFrame('terminal_error', {
+          'streamId': streamId,
+          'code': 'TERMINAL_STREAM_NOT_FOUND',
+        });
+        await until(() => wire.of('terminal_open').length == 2);
+
+        expect(s.status, TerminalSessionStatus.opening);
       },
     );
-
-    test('a stream the daemon no longer has is reopened in place at once', () async {
-      final s = session();
-      final opening = s.open();
-      final streamId = await ready(s);
-      await opening;
-      await s.handleBinary(_keyframe(streamId));
-
-      await s.handleFrame('terminal_error', {
-        'streamId': streamId,
-        'code': 'TERMINAL_STREAM_NOT_FOUND',
-      });
-      await until(() => wire.of('terminal_open').length == 2);
-
-      expect(s.status, TerminalSessionStatus.opening);
-    });
 
     test('a missing-stream report about another stream is ignored', () async {
       final s = session();
@@ -471,11 +471,7 @@ void main() {
     );
 
     /// An open answered, its first screen drawn, on [async]'s clock — a stream the session holds.
-    String liveOn(
-      FakeAsync async,
-      TerminalSession s, {
-      bool readOnly = false,
-    }) {
+    String liveOn(FakeAsync async, TerminalSession s, {bool readOnly = false}) {
       s.open();
       async.flushMicrotasks();
       final streamId = _streamId();
@@ -494,35 +490,32 @@ void main() {
     // A socket left half-open (Wi-Fi giving way to 4G while the app was away) takes every send and
     // brings nothing back: the heartbeat goes out, and the terminal looked live while taking no
     // input for minutes. The daemon sends a sync frame every five seconds, so silence is the sign.
-    test(
-      'a stream quiet for 15s is resynced, and reopened once the resync '
-      'gets no answer',
-      () {
-        fakeAsync((async) {
-          final s = session(disposeAtEnd: false);
-          final streamId = liveOn(async, s);
+    test('a stream quiet for 15s is resynced, and reopened once the resync '
+        'gets no answer', () {
+      fakeAsync((async) {
+        final s = session(disposeAtEnd: false);
+        final streamId = liveOn(async, s);
 
-          // Three beats that heard nothing: the last frame may have landed just before the first.
-          async.elapse(const Duration(seconds: 15));
-          expect(wire.of('terminal_resync'), isEmpty);
-          expect(s.acceptsInput, isTrue);
+        // Three beats that heard nothing: the last frame may have landed just before the first.
+        async.elapse(const Duration(seconds: 15));
+        expect(wire.of('terminal_resync'), isEmpty);
+        expect(s.acceptsInput, isTrue);
 
-          // The fourth: at least fifteen seconds without the sync the daemon sends every five.
-          async.elapse(const Duration(seconds: 5));
-          expect(s.status, TerminalSessionStatus.resyncing);
-          expect(s.errorCode, 'TERMINAL_STREAM_TIMEOUT');
-          expect(wire.of('terminal_resync'), hasLength(1));
+        // The fourth: at least fifteen seconds without the sync the daemon sends every five.
+        async.elapse(const Duration(seconds: 5));
+        expect(s.status, TerminalSessionStatus.resyncing);
+        expect(s.errorCode, 'TERMINAL_STREAM_TIMEOUT');
+        expect(wire.of('terminal_resync'), hasLength(1));
 
-          // Unanswered: two more tries, then the stream is opened again and the old one closed.
-          final opens = wire.of('terminal_open').length;
-          async.elapse(const Duration(milliseconds: 200));
-          expect(wire.of('terminal_resync'), hasLength(3));
-          expect(wire.of('terminal_open'), hasLength(opens + 1));
-          expect(wire.last('terminal_close')['streamId'], streamId);
-          s.dispose();
-        });
-      },
-    );
+        // Unanswered: two more tries, then the stream is opened again and the old one closed.
+        final opens = wire.of('terminal_open').length;
+        async.elapse(const Duration(milliseconds: 200));
+        expect(wire.of('terminal_resync'), hasLength(3));
+        expect(wire.of('terminal_open'), hasLength(opens + 1));
+        expect(wire.last('terminal_close')['streamId'], streamId);
+        s.dispose();
+      });
+    });
 
     test('the sync frames an idle stream sends keep it from a resync', () {
       fakeAsync((async) {
@@ -1285,34 +1278,44 @@ void main() {
         expect(s.showsEarlierScreen, isFalse);
       });
 
-      test('lost with its socket, the screen stays and the stream says why', () async {
-        final (s, _) = await live(screen: 'what was read');
+      test(
+        'lost with its socket, the screen stays and the stream says why',
+        () async {
+          final (s, _) = await live(screen: 'what was read');
 
-        s.transportLost('Connection lost. Reconnecting…');
+          s.transportLost('Connection lost. Reconnecting…');
 
-        expect(s.lostWithTransport, isTrue);
-        expect(s.hasScreen, isTrue);
-        expect(_screen(s), contains('what was read'));
-      });
+          expect(s.lostWithTransport, isTrue);
+          expect(s.hasScreen, isTrue);
+          expect(_screen(s), contains('what was read'));
+        },
+      );
 
-      test('reopened, it is an earlier screen until the new one lands', () async {
-        final (s, _) = await live(screen: 'what was read');
-        s.transportLost('Connection lost. Reconnecting…');
+      test(
+        'reopened, it is an earlier screen until the new one lands',
+        () async {
+          final (s, _) = await live(screen: 'what was read');
+          s.transportLost('Connection lost. Reconnecting…');
 
-        await s.reopen();
+          await s.reopen();
 
-        expect(s.hasScreen, isFalse, reason: 'the new stream has no frame yet');
-        expect(s.showsEarlierScreen, isTrue);
-        expect(s.lostWithTransport, isFalse);
-        expect(_screen(s), contains('what was read'));
+          expect(
+            s.hasScreen,
+            isFalse,
+            reason: 'the new stream has no frame yet',
+          );
+          expect(s.showsEarlierScreen, isTrue);
+          expect(s.lostWithTransport, isFalse);
+          expect(_screen(s), contains('what was read'));
 
-        final next = await ready(s);
-        await s.handleBinary(_keyframe(next, text: 'what is now'));
+          final next = await ready(s);
+          await s.handleBinary(_keyframe(next, text: 'what is now'));
 
-        expect(s.showsEarlierScreen, isFalse);
-        expect(s.hasScreen, isTrue);
-        expect(_screen(s), contains('what is now'));
-      });
+          expect(s.showsEarlierScreen, isFalse);
+          expect(s.hasScreen, isTrue);
+          expect(_screen(s), contains('what is now'));
+        },
+      );
 
       test('an open that starts on a blank terminal forgets the earlier '
           'screen', () async {
@@ -1468,24 +1471,27 @@ void main() {
       expect(await s.pasteText('hi'), isFalse);
     });
 
-    test('a line sent — a Return, or a message that went — is said, once each', () async {
-      final (s, _) = await live();
-      var sent = 0;
-      s.onLineSent = () => sent++;
+    test(
+      'a line sent — a Return, or a message that went — is said, once each',
+      () async {
+        final (s, _) = await live();
+        var sent = 0;
+        s.onLineSent = () => sent++;
 
-      s.terminal.textInput('l');
-      s.terminal.textInput('s');
-      await Future<void>.delayed(const Duration(milliseconds: 10));
-      expect(sent, 0, reason: 'keys typed are not a line sent');
-      s.terminal.textInput('\r');
-      await Future<void>.delayed(const Duration(milliseconds: 10));
-      expect(sent, 1);
+        s.terminal.textInput('l');
+        s.terminal.textInput('s');
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        expect(sent, 0, reason: 'keys typed are not a line sent');
+        s.terminal.textInput('\r');
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        expect(sent, 1);
 
-      expect(await s.sendComposerText('  '), isFalse);
-      expect(sent, 1, reason: 'nothing went');
-      expect(await s.sendComposerText('fix it'), isTrue);
-      expect(sent, 2);
-    });
+        expect(await s.sendComposerText('  '), isFalse);
+        expect(sent, 1, reason: 'nothing went');
+        expect(await s.sendComposerText('fix it'), isTrue);
+        expect(sent, 2);
+      },
+    );
 
     test('a line that cannot go is not said', () async {
       final s = session();
@@ -1843,6 +1849,66 @@ void main() {
 
       expect(wire.of('terminal_scroll'), isEmpty);
       expect(viewport.scrolls, [(1, 10, 0)]);
+    });
+
+    group('a shrink that cuts rows under the cursor', () {
+      // Claude Code's screen at 80×24: its prompt between two rules, two status lines under it, and
+      // the cursor at the end of what is typed.
+      final claudeScreen =
+          '\x1b[?25h${'\r\n' * 18}${'─' * 79}\r\n❯ hello world\r\n${'─' * 79}'
+          '\r\n  ? for shortcuts\r\n  auto mode on\x1b[20;14H';
+
+      TerminalBinaryFrame answer(String streamId, String text) =>
+          TerminalBinaryFrame(
+            kind: TerminalBinaryKind.keyframe,
+            streamId: streamId,
+            seq: 1,
+            bytes: Uint8List.fromList(utf8.encode(text)),
+            compressed: false,
+            cols: 80,
+            rows: 18,
+          );
+
+      Future<(TerminalSession, String)> shrunk() async {
+        final (s, streamId) = await live(screen: claudeScreen);
+        expect(s.terminal.cursorVisibleMode, isTrue);
+        // The keyboard comes up: tmux drops the rows under the prompt.
+        s.resize(80, 18);
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+        expect(wire.of('terminal_resize'), isNotEmpty);
+        return (s, streamId);
+      }
+
+      test('keeps the cursor shown when the answer has it in the prompt', () async {
+        final (s, streamId) = await shrunk();
+
+        await s.handleBinary(
+          answer(
+            streamId,
+            '\x1b[?25h${'\r\n' * 12}${'─' * 79}\r\n❯ hello world\r\n${'─' * 79}'
+            '\r\n  ? for shortcuts\r\n  auto mode on\x1b[14;14H',
+          ),
+        );
+
+        expect(s.terminal.cursorVisibleMode, isTrue);
+      });
+
+      test('hides a cursor left under the status lines until the program '
+          'draws again', () async {
+        final (s, streamId) = await shrunk();
+
+        await s.handleBinary(
+          answer(
+            streamId,
+            '\x1b[?25h${'\r\n' * 12}${'─' * 79}\r\n❯ hello world\r\n${'─' * 79}'
+            '\r\n  ? for shortcuts\r\n  auto mode on\x1b[18;1H',
+          ),
+        );
+        expect(s.terminal.cursorVisibleMode, isFalse);
+
+        await s.handleBinary(_output(streamId, 2, '\x1b[14;14H'));
+        expect(s.terminal.cursorVisibleMode, isTrue);
+      });
     });
 
     test('the cursor blinks locally, never into the stream', () async {

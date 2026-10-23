@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/phone/voice_input_controller.dart';
@@ -289,5 +290,113 @@ void main() {
     await voice.stopListening();
 
     expect(backend.calls.single.lang, 'vi');
+  });
+
+  group('a pretend take', () {
+    test('listens without asking for the microphone or opening it', () async {
+      recorder.permitted = false;
+      voice.pretend = () => 'make a page';
+
+      await voice.startListening();
+
+      expect(voice.status, VoiceInputStatus.listening);
+      expect(recorder.starts, 0);
+      expect(recorder.recording, isFalse);
+    });
+
+    test('is heard as what pretend says when it ends, and nothing is uploaded '
+        'or recorded', () async {
+      var prompt = 'make a page';
+      voice.pretend = () => prompt;
+      await voice.startListening();
+      // Changed while the take was on: the take is heard as the prompt at its end.
+      prompt = 'make a page with a clock';
+      final sent = <String>[];
+
+      await voice.submit((text) async {
+        sent.add(text);
+        return true;
+      });
+
+      expect(sent, ['make a page with a clock']);
+      expect(backend.calls, isEmpty);
+      expect(recorder.stops, 0);
+      expect(voice.isIdle, isTrue);
+    });
+
+    test('stays pretend when pretend is cleared mid-take', () async {
+      voice.pretend = () => 'make a page';
+      await voice.startListening();
+      voice.pretend = null;
+      final sent = <String>[];
+
+      await voice.submit((text) async {
+        sent.add(text);
+        return true;
+      });
+
+      expect(sent, ['make a page']);
+      expect(recorder.starts, 0);
+      expect(backend.calls, isEmpty);
+    });
+
+    test('moves its meter while it listens, and rests it after', () {
+      fakeAsync((async) {
+        voice.pretend = () => 'make a page';
+        unawaited(voice.startListening());
+        async.flushMicrotasks();
+        final levels = <double>{};
+        for (var i = 0; i < 10; i++) {
+          async.elapse(const Duration(milliseconds: 90));
+          levels.add(voice.level.value);
+        }
+        expect(levels.length, greaterThan(1));
+        expect(levels.every((level) => level > 0), isTrue);
+
+        voice.clear();
+        async.elapse(const Duration(milliseconds: 200));
+        expect(voice.level.value, 0);
+        expect(voice.status, VoiceInputStatus.idle);
+      });
+    });
+
+    test(
+      'hands the keyboard nothing: what it stands for is in the prompt',
+      () async {
+        voice.pretend = () => 'make a page';
+        await voice.startListening();
+
+        expect(await voice.takeTranscript(), isEmpty);
+        expect(voice.isIdle, isTrue);
+      },
+    );
+
+    test('an empty prompt is heard as nothing, and nothing is sent', () async {
+      voice.pretend = () => '  ';
+      await voice.startListening();
+      var sends = 0;
+
+      await voice.submit((_) async {
+        sends++;
+        return true;
+      });
+
+      expect(sends, 0);
+      expect(voice.notice, VoiceNotice.nothingHeard);
+    });
+
+    test('the take after pretend is cleared records again', () async {
+      voice.pretend = () => 'make a page';
+      await voice.startListening();
+      await voice.submit((_) async => true);
+      voice.pretend = null;
+      backend.replies.add('add a test');
+
+      await voice.startListening();
+      await voice.stopListening();
+
+      expect(recorder.starts, 1);
+      expect(voice.transcript, 'add a test');
+    });
   });
 }

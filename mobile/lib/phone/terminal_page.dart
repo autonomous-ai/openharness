@@ -492,6 +492,7 @@ class _TerminalPageState extends State<TerminalPage>
     // The keyboard has stopped moving, so whether it is up is now a fact: a
     // question read while it moved is decided here. See [_raiseForQuestion].
     _raiseForQuestion();
+    _raiseForFirstSession();
   }
 
   /// What the last build read from the notifier — the baseline [_onNotifier]
@@ -597,6 +598,7 @@ class _TerminalPageState extends State<TerminalPage>
     });
     if (_questionWatcher?.queued == null) _queueRaisedFor = null;
     _raiseForQuestion();
+    _raiseForFirstSession();
   }
 
   /// The daemon on this phone, cached so a page going can take its report back
@@ -676,7 +678,8 @@ class _TerminalPageState extends State<TerminalPage>
     _raiseKeyboardForQuestion();
   }
 
-  /// Open the keyboard because an agent is waiting on an answer.
+  /// Open the keyboard because an agent is waiting on an answer — or because the first session has
+  /// just opened over its task ([_raiseForFirstSession]).
   ///
   /// ⚠️ **Not [_raiseKeyboard], and synchronous where that one is not.** That
   /// one belongs to a TAP on the terminal, and awaits the mic's transcript to
@@ -790,7 +793,10 @@ class _TerminalPageState extends State<TerminalPage>
     final accepts = facts.session?.acceptsInput ?? false;
     if (accepts != _acceptedInput) {
       _acceptedInput = accepts;
-      if (accepts) _raiseForQuestion();
+      if (accepts) {
+        _raiseForQuestion();
+        _raiseForFirstSession();
+      }
     }
     if (facts == _facts) return;
     if (kTypingTrace) typingCount('page.rebuild(facts)');
@@ -805,6 +811,10 @@ class _TerminalPageState extends State<TerminalPage>
     _lifecycle =
         WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed;
     widget.notifier.addListener(_onNotifier);
+    // A session already taking input when the page comes ticks nothing to raise from.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _raiseForFirstSession();
+    });
   }
 
   @override
@@ -852,6 +862,7 @@ class _TerminalPageState extends State<TerminalPage>
         ?.session;
     if (session?.voiceDeliver == _deliverVoice) session?.voiceDeliver = null;
     if (session?.onLineSent == _onLineSent) session?.onLineSent = null;
+    _stopFirstTaskWait();
     // Said once: leaving the session spends the onboarding's line too. Not the onboarding's first
     // message: a line sent in any other session still answers it ([_onLineSent]), and a sign-out
     // ends it cancelled.
@@ -1108,24 +1119,26 @@ class _TerminalPageState extends State<TerminalPage>
     if (_firstSessionLine() case final line?) {
       final session = _facts?.session;
       final fresh = line == OnboardingCopy.micSayWhat;
-      final typed = _preTypedStarter(session);
-      if ((fresh || typed != null) &&
-          session != null &&
-          const ['claude', 'codex', 'opencode'].contains(session.engineId)) {
+      if (session != null &&
+          _firstTaskSession(session) &&
+          (fresh || _typedTask(session) != null)) {
         // A take is on: the mic's own face speaks, and the suggestion waits with its line — a line
         // left over an empty row would point at nothing. Both are back if the take is dropped.
         if (VoiceLine.shows(widget.voice)) return null;
-        final suggestion = typed ?? firstTaskIdeas.first;
         return _FirstSessionSuggestion(
           line: line,
-          suggestion: suggestion,
+          suggestion: _firstTask(session),
           onSend: session.acceptsInput
               ? () {
                   // Read at the tap, not at the last frame: a send that landed since has spent the
-                  // line, and the button is still on screen until the next frame draws that.
+                  // line, and the button is still on screen until the next frame draws that. The
+                  // task too: the prompt as it stands, with whatever was changed in it since.
                   if (_firstSessionLine() == null) return;
                   unawaited(
-                    widget.voice.submitText(suggestion, session.sendFirstTask),
+                    widget.voice.submitText(
+                      _firstTask(session),
+                      session.sendFirstTask,
+                    ),
                   );
                 }
               : null,
@@ -1136,13 +1149,112 @@ class _TerminalPageState extends State<TerminalPage>
     return null;
   }
 
-  /// The task Desktop typed into OpenCode's box and did not send, while the first session's line is
-  /// still up. Null for any other pane, line or empty box.
-  String? _preTypedStarter(TerminalSession? session) =>
-      _firstSessionLine() == OnboardingCopy.micSendIt &&
-          session?.engineId == 'opencode'
-      ? openCodePromptText(session!.terminal.buffer)
+  /// Whether [session] is the first session handing its task over, on the page the onboarding
+  /// opened: a fresh Claude Code or Codex ("Say what to build, or send this:"), or OpenCode with
+  /// Desktop's starter ("Send it, or say anything."). The engines whose prompt the phone can clear
+  /// before it sends ([TerminalSession.sendFirstTask]).
+  bool _firstTaskSession(TerminalSession session) {
+    final line = _firstSessionLine();
+    return (line == OnboardingCopy.micSayWhat ||
+            line == OnboardingCopy.micSendIt) &&
+        const ['claude', 'codex', 'opencode'].contains(session.engineId);
+  }
+
+  /// What the first session's prompt holds now: Desktop's starter in OpenCode's box, the task this
+  /// page typed into Claude Code or Codex ([_typeFirstTask]), or whatever it was changed to since.
+  /// Null outside the first session, and for an empty prompt.
+  String? _typedTask(TerminalSession session) => _firstTaskSession(session)
+      ? typedPromptText(session.terminal.buffer, session.engineId)
       : null;
+
+  /// The first session's task as it stands — [_typedTask], else the first New Harness idea: what
+  /// its Send sends, and what its mic is heard as ([_heardInFirstSession]).
+  String _firstTask(TerminalSession session) =>
+      _typedTask(session) ?? firstTaskIdeas.first;
+
+  /// What a take in the first session is heard as, read as it ends: the task in the prompt.
+  String _heardInFirstSession() {
+    final session = widget.notifier
+        .paneOfAgent(widget.machineId, widget.agentId)
+        ?.session;
+    return session == null ? firstTaskIdeas.first : _firstTask(session);
+  }
+
+  /// The mic of the first session pretends (owner, 2026-10-23): a take there opens no microphone
+  /// and asks for no permission, and is heard as the task in the prompt — see
+  /// [VoiceInputController.pretend]. Only from the page on screen; any other leaves it alone.
+  void _syncPretendVoice(TerminalSession? session) {
+    final voice = widget.voice;
+    if (widget.isActive && session != null && _firstTaskSession(session)) {
+      voice.pretend = _heardInFirstSession;
+    } else if (voice.pretend == _heardInFirstSession) {
+      voice.pretend = null;
+    }
+  }
+
+  /// The first session's keyboard has been raised — once: put away, it stays away.
+  bool _firstSessionRaised = false;
+
+  /// The first session opens with the keyboard up over its task, typed into the prompt (owner,
+  /// 2026-10-23): Return sends it as it stands, and the words are there to change. Put away, the
+  /// keyboard stays away, and Send and the mic send the same task. Asked as the page first draws,
+  /// when the session starts taking input ([_onNotifier]), when a question goes
+  /// ([_onQuestionPane]) and when the keyboard stops moving ([_endSettle]).
+  void _raiseForFirstSession() {
+    if (_firstSessionRaised || _keyboardSettling || !widget.isActive) return;
+    final session = _readFacts().session;
+    if (session == null ||
+        !session.acceptsInput ||
+        !_firstTaskSession(session) ||
+        // A dialog first — Claude Code's trust prompt — is answered where it is drawn; the keyboard
+        // would cover it.
+        _questionWatcher?.view != null) {
+      return;
+    }
+    _firstSessionRaised = true;
+    _typeFirstTask(session);
+    _raiseKeyboardForQuestion();
+  }
+
+  /// The pane [_typeFirstTask] is waiting on, and its listener.
+  TerminalSession? _firstTaskWaitOn;
+  VoidCallback? _firstTaskWait;
+
+  /// Types the first New Harness idea into a fresh Claude Code or Codex prompt, unsent, as soon as
+  /// the prompt is drawn and still empty — OpenCode's arrives typed by Desktop. Watches the pane's
+  /// output until then, and gives up the moment something is typed there first or the line goes.
+  void _typeFirstTask(TerminalSession session) {
+    if (_firstSessionLine() != OnboardingCopy.micSayWhat ||
+        !const ['claude', 'codex'].contains(session.engineId)) {
+      return;
+    }
+    void attempt() {
+      final buffer = session.terminal.buffer;
+      final waiting =
+          mounted &&
+          session.acceptsInput &&
+          _firstSessionLine() == OnboardingCopy.micSayWhat &&
+          typedPromptText(buffer, session.engineId) == null;
+      if (waiting && !emptyPromptAtCursor(buffer)) return;
+      _stopFirstTaskWait();
+      if (!waiting) return;
+      session.terminal.textInput(firstTaskIdeas.first);
+      session.resetInputBuffer();
+    }
+
+    _stopFirstTaskWait();
+    _firstTaskWaitOn = session;
+    _firstTaskWait = attempt;
+    session.outputTicks.addListener(attempt);
+    attempt();
+  }
+
+  void _stopFirstTaskWait() {
+    final wait = _firstTaskWait;
+    if (wait != null) _firstTaskWaitOn?.outputTicks.removeListener(wait);
+    _firstTaskWait = null;
+    _firstTaskWaitOn = null;
+  }
 
   /// The onboarding's line by the mic, when this page is the session it opened on: "Send it, or say
   /// anything." Null on every other page, and once spent.
@@ -1158,6 +1270,10 @@ class _TerminalPageState extends State<TerminalPage>
 
   /// Takes the onboarding's line away, if it is this page's. True when it was.
   bool _spendFirstSessionLine() {
+    // From here a take is a recording again — see [_syncPretendVoice].
+    if (widget.voice.pretend == _heardInFirstSession) {
+      widget.voice.pretend = null;
+    }
     if (_firstSessionLine() == null) return false;
     widget.notifier.firstSessionLine = null;
     return true;
@@ -1182,7 +1298,12 @@ class _TerminalPageState extends State<TerminalPage>
     // only the one it opened: a person signing in again may go straight to a session of their own,
     // which read as no first message (1 in 3 on 2026-10-19). Nothing once it has ended.
     onboarding.end(ProductFlow.firstMessage, ProductOutcome.ok);
+    final session = _readFacts().session;
+    final firstTask = session != null && _firstTaskSession(session);
     if (!_spendFirstSessionLine()) return;
+    // The first session's task is on its way: the keyboard goes, and what the harness does with it
+    // is on screen (owner, 2026-10-23). Only this once — Return in a session at work keeps it up.
+    if (firstTask) _dismissInput();
     setState(() {});
   }
 
@@ -1364,8 +1485,8 @@ class _TerminalPageState extends State<TerminalPage>
     final session = await _sessionForInput();
     if (session == null) return false;
     if (_questionWatcher?.view != null) return _answerByVoice(session, text);
-    // Words spoken over a starter Desktop typed replace it, as Send does: never joined to it.
-    final sent = _preTypedStarter(session) != null
+    // The first session's task replaces what its prompt holds, as Send does: never joined to it.
+    final sent = _firstTaskSession(session)
         ? await session.sendFirstTask(text)
         : await session.sendComposerText(text);
     // After the send is acknowledged, never before: a tap felt first would be a promise.
@@ -1905,8 +2026,13 @@ class _TerminalPageState extends State<TerminalPage>
 
   /// Puts the keyboard away without leaving the page — the `⌄` key on
   /// [TerminalKeyBar]. Dropping focus is what closes the input connection.
+  ///
+  /// ⚠️ **Through [dismissKeyboardForSwipe], not a bare `unfocus()`.** The inset is still falling
+  /// for ~250ms after it, [_keyboardIsUp] stays true, and [_shouldFocus] with it: a keyframe that
+  /// lands meanwhile — the harness answering the very line that put the keyboard away — had the
+  /// panel claim it straight back, and the keyboard never went.
   void _dismissInput() {
-    FocusManager.instance.primaryFocus?.unfocus();
+    dismissKeyboardForSwipe();
     if (_keyboardRequested) setState(() => _keyboardRequested = false);
     // The same move as [_raiseKeyboard], run backwards. See [_armSettle].
     _armSettle();
@@ -2245,6 +2371,7 @@ class _TerminalPageState extends State<TerminalPage>
     // While the agent's question is open, a voice take answers it — never a paste and a blind
     // Return into the dialog. See [_answerByVoice].
     session?.voiceDeliver = _deliverVoice;
+    _syncPretendVoice(session);
     // What this page sends: the first send on the phone asks for notifications, and answers the
     // onboarding's line by the mic. See [_onLineSent].
     session?.onLineSent = _onLineSent;
@@ -2964,9 +3091,11 @@ class _TerminalPageState extends State<TerminalPage>
               PhoneSheetAction(
                 icon: LucideIcons.messageSquareText300,
                 label: 'Rate task outcome',
-                onTap: () => showTaskFeedback(context,
+                onTap: () => showTaskFeedback(
+                  context,
                   choice: () => widget.notifier.api.productUsageSettings(),
-                  send: widget.notifier.api.productUsageFeedback),
+                  send: widget.notifier.api.productUsageFeedback,
+                ),
               ),
             PhoneSheetAction(
               icon: LucideIcons.settings300,
@@ -3718,7 +3847,8 @@ class _ReconnectingState extends State<_Reconnecting> {
         child: TweenAnimationBuilder<double>(
           tween: Tween(begin: 0, end: 1),
           duration: still ? Duration.zero : const Duration(milliseconds: 180),
-          builder: (context, fade, child) => Opacity(opacity: fade, child: child),
+          builder: (context, fade, child) =>
+              Opacity(opacity: fade, child: child),
           child: Stack(
             fit: StackFit.expand,
             children: [

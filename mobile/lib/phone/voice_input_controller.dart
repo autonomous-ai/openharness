@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
@@ -111,6 +112,22 @@ class VoiceInputController extends ChangeNotifier {
   /// [clear], where words arriving late would bring back what was dropped.
   int _take = 0;
 
+  /// While set, a take opens no microphone and asks for no permission: it shows as listening, its
+  /// meter moving as if somebody spoke, and when it ends it is heard as what this returns then.
+  ///
+  /// The first session's mic (owner, 2026-10-23): speaking there sends the task in the prompt,
+  /// whatever was said — a microphone permission prompt in the middle of the onboarding costs it
+  /// more than the words are worth. Set and cleared by the page showing that session
+  /// (`terminal_page.dart`); read as a take starts, so clearing it never turns a take in progress
+  /// into a recording.
+  String Function()? pretend;
+
+  /// The take in progress is [pretend]'s, and this is what it will be heard as.
+  String Function()? _pretending;
+  final ValueNotifier<double> _pretendLevel = ValueNotifier(0);
+  Timer? _pretendMeter;
+  final Random _pretendRandom = Random(7);
+
   bool get isSending => _isSending;
   VoiceInputStatus get status => _status;
   String get transcript => _heard;
@@ -119,10 +136,12 @@ class VoiceInputController extends ChangeNotifier {
   /// How loud the microphone is right now, 0…1 — what the waveform beside the
   /// mic draws while a take is recorded. Silence from a recorder that has no
   /// meter (see [VoiceLevelMeter]).
-  ValueListenable<double> get level => switch (_recorder) {
-    final VoiceLevelMeter meter => meter.level,
-    _ => _silence,
-  };
+  ValueListenable<double> get level => _pretending != null
+      ? _pretendLevel
+      : switch (_recorder) {
+          final VoiceLevelMeter meter => meter.level,
+          _ => _silence,
+        };
 
   static final ValueListenable<double> _silence = ValueNotifier(0);
 
@@ -160,6 +179,10 @@ class VoiceInputController extends ChangeNotifier {
       return;
     }
     final take = ++_take;
+    if (pretend case final heard?) {
+      _startPretending(heard);
+      return;
+    }
     _setStatus(VoiceInputStatus.starting);
     if (!await _micAllowed()) {
       if (take != _take) return;
@@ -311,8 +334,15 @@ class VoiceInputController extends ChangeNotifier {
   ///
   /// Nothing while a send is on its way: those words are already the message,
   /// and handing them to the keyboard too would put them in the prompt twice.
+  ///
+  /// Nothing for a [pretend] take either: nothing was said in it, and what it stands for is the
+  /// prompt's own text, already there.
   Future<String> takeTranscript() async {
     if (_isSending) return '';
+    if (_pretending != null) {
+      clear();
+      return '';
+    }
     if (_status == VoiceInputStatus.listening) await _transcribeTake();
     final text = transcript;
     clear();
@@ -323,6 +353,7 @@ class VoiceInputController extends ChangeNotifier {
   void dispose() {
     _abandonTake();
     _noticeLimit?.cancel();
+    _pretendLevel.dispose();
     _disposed = true;
     unawaited(_recorder.dispose());
     super.dispose();
@@ -333,6 +364,16 @@ class VoiceInputController extends ChangeNotifier {
     final take = _take;
     _takeLimit?.cancel();
     _takeClock?.stop();
+    if (_pretending case final heard?) {
+      _stopPretending();
+      final words = heard().trim();
+      _heard = _joinWords(_heard, words);
+      _setStatus(
+        VoiceInputStatus.idle,
+        notice: words.isEmpty ? VoiceNotice.nothingHeard : null,
+      );
+      return words.isEmpty ? _Take.failed : _Take.heard;
+    }
     _setStatus(VoiceInputStatus.transcribing);
     try {
       final recording = await _recorder.stop();
@@ -386,10 +427,37 @@ class VoiceInputController extends ChangeNotifier {
     }
   }
 
+  /// A [pretend] take: listening at once, with no microphone to open, and a meter shaped like
+  /// speech — a syllable's rise and fall, with some breath in it.
+  void _startPretending(String Function() heard) {
+    _pretending = heard;
+    var beats = 0;
+    _pretendMeter = Timer.periodic(const Duration(milliseconds: 90), (_) {
+      beats++;
+      final syllable = (sin(beats * 0.9) + 1) / 2;
+      _pretendLevel.value =
+          0.15 + 0.6 * syllable * (0.6 + 0.4 * _pretendRandom.nextDouble());
+    });
+    _takeLimit = Timer(maxTake, () => unawaited(stopListening()));
+    _takeClock = Stopwatch()..start();
+    _setStatus(VoiceInputStatus.listening);
+  }
+
+  void _stopPretending() {
+    _pretending = null;
+    _pretendMeter?.cancel();
+    _pretendMeter = null;
+    _pretendLevel.value = 0;
+  }
+
   void _abandonTake() {
     _take++;
     _takeLimit?.cancel();
     _takeClock?.stop();
+    if (_pretending != null) {
+      _stopPretending();
+      return;
+    }
     if (_status == VoiceInputStatus.starting ||
         _status == VoiceInputStatus.listening) {
       unawaited(_recorder.cancel());
