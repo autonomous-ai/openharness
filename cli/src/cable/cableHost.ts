@@ -111,6 +111,8 @@ export interface CableHostWiring {
   swarmCardRecap?: (tabId: string, leadId: string) => Promise<LeadRecap | null>
   /** The recap a device (one cable `session`) has open, or null once closed. */
   swarmCardOpen?: (session: string, tabId: string, leadId: string | null) => void
+  /** Words for a Lead that runs here, posted as the person in its Swarm chat; false when the harness leads no project. */
+  swarmSay?: (harnessId: string, text: string) => Promise<boolean>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
   superTabSelected?: (superTabId: string, projectId: string) => void
   /** A finger on the dial's glass, in pieces, while it is down. */
@@ -427,6 +429,10 @@ export class DaemonCableHost implements CableHost {
 
   swarmCardOpen(session: string, tabId: string, leadId: string | null): void {
     this.wiring.swarmCardOpen?.(session, tabId, leadId)
+  }
+
+  swarmSay(harnessId: string, text: string): Promise<boolean> {
+    return this.wiring.swarmSay?.(harnessId, text) ?? Promise.resolve(false)
   }
 
   superTabSelected(superTabId: string, projectId: string): void {

@@ -8,6 +8,7 @@
  * `stuck` (`blocked`), `work` (the Lead runs here and is in a turn, or an assignment works or is in review), else `done`.
  * A paused Swarm keeps its card and every Lead reads `done`.
  */
+import { randomUUID } from 'node:crypto'
 import type { CoreApi } from '../core/api.js'
 import { backend, SuperTabHostError } from './host.js'
 import { identifier, object } from './wire.js'
@@ -282,6 +283,20 @@ export class SwarmCards {
       this.recaps.set(key, { sequence: found.sequence, recap })
       return recap
     } finally { this.recapsRunning-- }
+  }
+
+  /** Words spoken on a Pro to a Lead that runs here (its harness): posted as the person in that Lead's conversation, as typed in
+   *  the Swarm chat. False when that harness leads no project in the Swarms as last read, so the caller sends the turn as before. */
+  async say(harnessId: string, text: string): Promise<boolean> {
+    for (const [tabId, { state }] of this.tabs) {
+      const agent = list(state.agents).find(a => a.machineId === this.machineId && a.harnessId === harnessId)
+      const found = agent && cardId(agent.id) ? this.leadConversation(tabId, agent.id) : null
+      if (!found) continue
+      await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `pro-voice-${randomUUID()}`,
+        command: { type: 'message.send', conversationId: found.id, text, replyTo: null, recipientIds: [] } })
+      return true
+    }
+    return false
   }
 
   /** Remembered recaps are kept only for Leads that are still in a tab. */

@@ -343,6 +343,8 @@ export interface CableHost {
   swarmCardRecap?(tabId: string, leadId: string): Promise<LeadRecap | null>
   /** The recap a device has open (its Lead), or null once it closes: the only one pushed when its text changes. */
   swarmCardOpen?(session: string, tabId: string, leadId: string | null): void
+  /** Words for a Lead that runs here: posted as the person in its Swarm chat. False: not a Lead, send the turn as before. */
+  swarmSay?(harnessId: string, text: string): Promise<boolean>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
   superTabSelected?(superTabId: string, projectId: string): void
   /** The Swarm tab the window has on screen and the project open in it; null when the active tab is not a Swarm or there is no window. */
@@ -2255,6 +2257,14 @@ export class CableSession {
       if (!state.ok) { await reply({ t: 'voice.error', message: state.error }); return }
       this.voiceDraftCreation = { uploadId, id: state.id }
       await reply({ t: 'voice.draft', ...state }); return
+    }
+    // Spoken to a Swarm Lead (its card or its tile): the words go to the Swarm chat as the person's, where everyone in the
+    // tab sees them, not typed into the Lead's terminal. Any other harness, or a failed post, gets the turn as before.
+    if (turn.agentId && !carried && !selection?.ok && await this.host.swarmSay?.(agentId, instruction).catch(() => false)) {
+      if (!current()) return
+      this.log(`cable: voice → Swarm chat of ${agentId.slice(0, 8)}`)
+      await reply({ t: 'voice.transcript', routeId: '', text: transcript, agentId, agentName, needsConfirm: false })
+      return
     }
     const text = carried ? withCarriedPassage(instruction, carried)
       : selection?.ok && selection.text ? withSelectedPassage(instruction, selection.text) : instruction
