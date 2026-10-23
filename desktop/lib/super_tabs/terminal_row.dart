@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import 'message_row.dart';
@@ -34,7 +35,7 @@ class SuperTabTerminalRow extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(top: 1, right: 6),
             child: Icon(
-              alert ? Icons.warning_amber_rounded : Icons.keyboard_outlined,
+              alert ? AppIcons.triangleAlert : AppIcons.keyboard,
               size: 14,
               color: alert ? grid.AppPalette.warn : style.color,
             ),
@@ -45,22 +46,21 @@ class SuperTabTerminalRow extends StatelessWidget {
     );
   }
 
-  /// The backend quotes what was typed in backticks (`` `2` + Enter ``): shown
-  /// in the terminal's face instead, so the typed text stands apart from the
-  /// sentence around it.
+  /// The backend wraps what was typed in one pair of backticks
+  /// (`` `2` + Enter ``), and the text inside is the Lead's as typed, backticks
+  /// included (`` `echo `date`` ``): so the first and the last backtick are the
+  /// wrapper, and what lies between is shown whole, in the terminal's face.
   static TextSpan _typed(String text, TextStyle style) {
-    final parts = text.split('`');
-    if (parts.length.isEven) return TextSpan(text: text);
+    final open = text.indexOf('`'), close = text.lastIndexOf('`');
+    if (open < 0 || close == open) return TextSpan(text: text);
     return TextSpan(
       children: [
-        for (var i = 0; i < parts.length; i++)
-          if (parts[i].isNotEmpty)
-            TextSpan(
-              text: parts[i],
-              style: i.isOdd
-                  ? style.copyWith(fontFamily: grid.AppType.monoFamily)
-                  : null,
-            ),
+        TextSpan(text: text.substring(0, open)),
+        TextSpan(
+          text: text.substring(open + 1, close),
+          style: style.copyWith(fontFamily: grid.AppType.monoFamily),
+        ),
+        TextSpan(text: text.substring(close + 1)),
       ],
     );
   }

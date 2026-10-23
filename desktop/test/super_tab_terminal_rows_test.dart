@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/terminal_row.dart';
@@ -74,6 +75,12 @@ void main() {
           'agentId': 'builder',
           'requestId': 'r1',
         });
+        // Text the Lead typed may hold backticks of its own; only the backend's wrapper goes.
+        row('Wren typed `echo `date`` in Sage\'s terminal', 'lead-agent', {
+          'kind': 'terminal-input',
+          'agentId': 'builder',
+          'requestId': 'r2',
+        });
         row(
           'Sage hit a usage limit. Routing skips it until 15:00 UTC.',
           'builder',
@@ -113,9 +120,9 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        // Three notes, one per row, each with what happened and nothing else.
+        // One note per row, each with what happened and nothing else.
         final notes = find.byType(SuperTabTerminalRow);
-        expect(notes, findsNWidgets(3));
+        expect(notes, findsNWidgets(4));
         for (final text in [
           'Sage is waiting at a prompt in its terminal.',
           'Sage hit a usage limit. Routing skips it until 15:00 UTC.',
@@ -125,7 +132,7 @@ void main() {
             findsOneWidget,
           );
         }
-        // What was typed is set apart from the words around it; the backticks are not shown.
+        // What was typed is set apart from the words around it; the backend's wrapper is not shown.
         final typed = find.descendant(
           of: notes,
           matching: find.text(
@@ -134,19 +141,25 @@ void main() {
           ),
         );
         expect(typed, findsOneWidget);
-        expect(find.textContaining('`'), findsNothing);
-        // The input is a keyboard note; both alerts are warnings.
         expect(
           find.descendant(
             of: notes,
-            matching: find.byIcon(Icons.keyboard_outlined),
+            matching: find.text(
+              'Wren typed echo `date` in Sage\'s terminal',
+              findRichText: true,
+            ),
           ),
           findsOneWidget,
+        );
+        // Both inputs are keyboard notes; both alerts are warnings.
+        expect(
+          find.descendant(of: notes, matching: find.byIcon(AppIcons.keyboard)),
+          findsNWidgets(2),
         );
         expect(
           find.descendant(
             of: notes,
-            matching: find.byIcon(Icons.warning_amber_rounded),
+            matching: find.byIcon(AppIcons.triangleAlert),
           ),
           findsNWidgets(2),
         );
