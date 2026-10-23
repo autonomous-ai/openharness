@@ -925,7 +925,7 @@ static void handle_supertabs(const cJSON *p)
 {
     const cJSON *ids = cJSON_GetObjectItemCaseSensitive(p, "ids");
     if (!cJSON_IsArray(ids)) return;
-    static char rows[HT_SUPERTABS_MAX][ID_MAX];
+    static EXT_RAM_BSS_ATTR char rows[HT_SUPERTABS_MAX][ID_MAX];
     int n = 0;
     const cJSON *it = NULL;
     cJSON_ArrayForEach(it, ids) {
