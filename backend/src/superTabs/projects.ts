@@ -1,4 +1,5 @@
 import { activeWork, agent, author, conversation, fail, nextConversationNumber, person, type Actor, type Agent, type Conversation, type SuperTabState } from './model.js'
+import type { SwarmRule } from './rules.js'
 
 export type ProjectVisibility = 'public' | 'private'
 export interface SwarmProject {
@@ -110,6 +111,8 @@ export function deleteProject(state: SuperTabState, actor: Actor, projectId: str
   if (groups.some(activeWork)) fail('WORK_ACTIVE', 'Resolve this project’s active work before deleting it.')
   state.retiredConversationNumber = nextConversationNumber(state) - 1
   state.projects = state.projects!.filter(p => p.id !== project.id)
+  state.rules = state.rules?.filter(r => r.projectId !== project.id)
+  if (!state.rules?.length) delete state.rules
   state.conversations = state.conversations.filter(c => !groupIds.has(c.id))
   state.starts = state.starts?.filter(s => !groupIds.has(s.request.conversationId))
   // A pending invitation is to the Swarm, not to this project: it lands somewhere that is left instead.
@@ -119,6 +122,21 @@ export function deleteProject(state: SuperTabState, actor: Actor, projectId: str
     delete state.project
     state.machines = state.machines?.filter(m => m.scope === 'swarm')
   }
+}
+
+/** Rules were the Swarm's until 2026-10-23, when one project's rules refused every other project's Lead. A rule from then
+ * belongs to the project whose chat it was asked in, else to the project of a remaining Lead chat (inviteLanding). */
+export function placeRules(state: SuperTabState): void {
+  for (const rule of state.rules ?? []) {
+    if (rule.projectId) continue
+    const asked = rule.askedIn && state.conversations.find(c => c.id === rule.askedIn!.conversationId)
+    const landing = state.conversations.find(c => c.id === inviteLanding(state))
+    rule.projectId = asked ? groupProject(state, asked).id : landing ? groupProject(state, landing).id : 'lead'
+  }
+}
+
+export function projectRules(state: SuperTabState, projectId: string): SwarmRule[] {
+  return (state.rules ?? []).filter(r => r.projectId === projectId)
 }
 
 /** Where an invited person lands: the asked-for group while it exists, else a remaining project's Lead
