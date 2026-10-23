@@ -166,6 +166,16 @@ describe('built-in Swarm skills', () => {
       recordSwarmSkillNotice(workspace, skill, back)
       expect(refreshSwarmSkill(workspace, skill, 'default')).toMatchObject({ owed: false, change: 2 })
     })
+    it('tells an agent with a record from before modes again when it switches back after an unrecorded notice', () => {
+      const workspace = fixture(), { file } = prepareSwarmSkill(workspace, skill), text = readFileSync(file, 'utf8')
+      // What #1585 left: the orchestration text, told, with no rewrite count.
+      writeFileSync(join(dirname(file), 'version.json'), JSON.stringify({ text: sha(text), notified: sha(text) }))
+      // Switched to Default and its notice sent, then the daemon stopped before recording it.
+      expect(refreshSwarmSkill(workspace, skill, 'default')).toMatchObject({ owed: true })
+      expect(refreshSwarmSkill(workspace, skill, 'orchestration')).toMatchObject({ owed: true,
+        notice: expect.stringMatching(/^This project now uses the Harness orchestration skills\./) })
+      expect(readFileSync(file, 'utf8')).toBe(text)
+    })
     it('does nothing for a session whose skill was never prepared in this workspace', () => {
       expect(refreshSwarmSkill(fixture(), skill, 'orchestration')).toBeNull()
       expect(refreshSwarmSkill(join(fixture(), 'removed-worktree'), skill, 'orchestration')).toBeNull()

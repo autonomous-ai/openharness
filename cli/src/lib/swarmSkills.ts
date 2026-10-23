@@ -525,8 +525,7 @@ export function prepareSwarmSkill(workspace: string, saved: SwarmSkill): { file:
 
 /** Which built-in text a session's skill file holds and of which mode, how many times the file was rewritten, and the text,
  * mode and rewrite its agent was last confirmed told about (the launch prompt is rewrite 0). A file from before this record
- * counts as holding its own content, already told; one from before modes, as orchestration. A record from before
- * `toldChange` (#1585) is owed a notice while its told text differs, until its next notice is recorded. */
+ * counts as holding its own content, already told; one from before modes, as orchestration. */
 interface SkillRecord { text: string; notified: string; change?: number; mode?: SwarmSkillMode; told?: SwarmSkillMode; toldChange?: number }
 /** `change` counts rewrites, so a notice for a switch back to an earlier mode's text is a new notice, not a repeat. */
 export interface SkillRefresh { file: string; version: string; owed: boolean; change: number; notice: string }
@@ -546,10 +545,13 @@ export function refreshSwarmSkill(workspace: string, saved: SwarmSkill, mode: Sw
   plainFile(file)
   const text = skills[mode][saved.role], version = textVersion(text)
   const held = textVersion(readFileSync(file, 'utf8'))
-  let record = readRecord(dir)
-  if (!record) {
-    record = { text: held, notified: held }
-    if (held !== version) writeRecord(dir, record)
+  let record = readRecord(dir) ?? { text: held, notified: held }
+  if (record.toldChange === undefined) {
+    // A record from before rewrite counts (#1585) gets its baseline first, so a rewrite after it is owed by count, never by
+    // comparing texts: a switch away and back would otherwise match the text last told and leave the agent on the other.
+    const change = record.change ?? 0
+    record = { ...record, change, toldChange: record.notified === record.text ? change : change - 1 }
+    writeRecord(dir, record)
   }
   if (record.text !== version) {
     replaceFile(file, text)
@@ -564,7 +566,7 @@ export function refreshSwarmSkill(workspace: string, saved: SwarmSkill, mode: Sw
   const change = record.change ?? 0
   // A notice counts once it is recorded: one sent whose record was lost may have moved the agent to another text, so a
   // later rewrite is owed even when it brings back the text last confirmed.
-  const owed = record.toldChange === undefined ? record.notified !== version : record.toldChange !== change
+  const owed = record.toldChange !== change
   const switched = (record.told ?? 'orchestration') !== mode || owed && record.notified === version
   const reread = `Before your next step, read ${JSON.stringify(file)} again with your file or shell tool and follow`
   return { file, version, owed, change,
