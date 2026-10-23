@@ -171,7 +171,14 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const decisions = Array.isArray(past.decisions) ? list(past.decisions) : null
   const attempts = Array.isArray(past.attempts) ? list(past.attempts) : null
   const ended = endedWork(conversations, decisions, attempts, input.conversationId)
+  // The member's machine saw a usage-limit screen (superTabs/terminal.ts): it sits out until the reset, which the backend
+  // sets to an hour when the screen named none (spec/2026-10-23-lead-sees-agent-terminal.md).
+  const limited = (agentId: string | undefined) => {
+    const until = Date.parse(String(members.find(m => m.id === agentId)?.limitedUntil))
+    return until > Date.now() ? [`Its screen showed a usage limit until ${new Date(until).toISOString()}.`] : []
+  }
   const probes = probed.flat().map(p => p.kind === 'member' ? { ...p, repo: repoMatch(folder, p.frame ?? null, p.machineId === where.machineId),
+    refusals: [...p.refusals, ...limited(p.agentId)],
     earlier: ended.filter(e => e.agentId === p.agentId).reverse().slice(0, 3).map(e => ({ group: e.group, outcome: e.outcome })) } : p)
   // Picks started or assigned and still at work hold part of their account's quota; the log, and so this, is per Swarm.
   const working = (decisions ?? []).filter(d => d.final && d.outcome === null && typeof d.account === 'string')

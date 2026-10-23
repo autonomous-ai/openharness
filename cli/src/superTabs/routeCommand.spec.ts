@@ -415,6 +415,17 @@ describe('routeTask', () => {
     await routeTask(input, t, where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], usage: { providers: [] } })))
     expect((recorded(t).command.decision.candidates as Array<{ title: string }>).some(c => c.title.startsWith('Multiply'))).toBe(true)
   })
+  it('skips a member whose screen showed a usage limit until its reset time, and offers it again after', async () => {
+    const limited = (until: string | null) => { const t = tab(); t.state.agents = agents.map(a => a.id === 'a1' ? { ...a, limitedUntil: until } : a); return t }
+    const s = scoped({ tab: limited(new Date(Date.now() + 30 * 60_000).toISOString()) })
+    await routeTask(input, s, where as never, opener())
+    expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([{ title: 'Multiply · Claude sonnet medium · remote-1', reason: expect.stringContaining('usage limit') }]))
+    for (const until of [new Date(Date.now() - 60_000).toISOString(), null]) {
+      const t = scoped({ tab: limited(until) })
+      await routeTask(input, t, where as never, opener())
+      expect((recorded(t).command.decision.candidates as Array<{ title: string }>).some(c => c.title.startsWith('Multiply'))).toBe(true)
+    }
+  })
   it('uses the real admission texts the member refusal filter keys on', () => {
     const quota = quotaOf({ providers: [{ provider: 'claude', outcome: 'answered', httpStatus: 200, body: { five_hour: { utilization: 100 } } }] }, 'claude', false)
     const requirements = { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: ['git'], devices: ['/dev/x'], quotaRequired: false }
