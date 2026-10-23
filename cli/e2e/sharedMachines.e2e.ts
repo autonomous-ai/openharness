@@ -73,6 +73,7 @@ describe('a machine shared across accounts', () => {
     })
     await Promise.all(daemons.map((daemon) => daemon.start()))
     await until('both machines on the relay', () => backend!.nodeUp(deeSpec.machineId) && backend!.nodeUp(kimSpec.machineId), 30_000)
+    await until('both shared-machine services ready', () => daemons.every(daemon => daemon.log().includes('[service sharedMachines] connected to the core')), 30_000)
 
     // Not shared: Kim's computer has no way to Dee's machine.
     expect(await select(kim, deeSpec.machineId)).toBe(4404)

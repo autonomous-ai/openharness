@@ -155,7 +155,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     }
     machines.set(String(pool.machineId), { name: String(pool.name), status: 'contributed', account: false, pool })
   }
-  const enabled = policy.models.filter(m => m.enabled)
+  const enabled = policy.models.filter(m => m.enabled && ENGINES.includes(m.engine))
 
   // The probes do not wait for the context reads: the machines, the task's folder and the group's talk and log are read
   // together, and each read that is only context gives up after three seconds. What needs several of them (whether a
@@ -171,7 +171,14 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const decisions = Array.isArray(past.decisions) ? list(past.decisions) : null
   const attempts = Array.isArray(past.attempts) ? list(past.attempts) : null
   const ended = endedWork(conversations, decisions, attempts, input.conversationId)
+  // The member's machine saw a usage-limit screen (superTabs/terminal.ts): it sits out until the reset, which the backend
+  // sets to an hour when the screen named none (spec/2026-10-23-lead-sees-agent-terminal.md).
+  const limited = (agentId: string | undefined) => {
+    const until = Date.parse(String(members.find(m => m.id === agentId)?.limitedUntil))
+    return until > Date.now() ? [`Its screen showed a usage limit until ${new Date(until).toISOString()}.`] : []
+  }
   const probes = probed.flat().map(p => p.kind === 'member' ? { ...p, repo: repoMatch(folder, p.frame ?? null, p.machineId === where.machineId),
+    refusals: [...p.refusals, ...limited(p.agentId)],
     earlier: ended.filter(e => e.agentId === p.agentId).reverse().slice(0, 3).map(e => ({ group: e.group, outcome: e.outcome })) } : p)
   // Picks started or assigned and still at work hold part of their account's quota; the log, and so this, is per Swarm.
   const working = (decisions ?? []).filter(d => d.final && d.outcome === null && typeof d.account === 'string')
@@ -193,7 +200,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   return {
     ok: true, ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : { unrecorded: true }),
     pick: publicOf(verdict.pick), via: verdict.via, p: verdict.p, belowFloor: choice.belowFloor, why: verdict.why,
-    alternatives: choice.shown.filter(s => s.id !== verdict.pick.id).slice(0, 2).map(publicOf),
+    alternatives: alternativesTo(verdict.pick, choice.shown).map(publicOf),
     warnings: [...(Array.isArray(effective.warnings) ? effective.warnings : []), ...(value.machinesUnreadable === true ? [MACHINES_UNREADABLE] : []),
       ...(choice.shown.some(p => p.kind === 'member' && p.terminalUnverified) ? ["A member's terminal could not be verified from its machine's snapshot. Check it before assignment."] : []),
       ...(choice.short ? [choice.short] : [])],
@@ -205,9 +212,18 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   }
 }
 
+/** The next two rows, and the best row of every other machine, so the Lead can choose another machine with an overrideReason. */
+function alternativesTo<T extends { id: string; machineId: string }>(pick: T, shown: T[]): T[] {
+  const seen = new Set([pick.machineId])
+  return shown.filter(s => s.id !== pick.id).filter((s, i) => { const best = !seen.has(s.machineId); seen.add(s.machineId); return i < 2 || best })
+}
+
 async function probeMachine(machineId: string, { name: machineName, status, account, pool }: { name: string; status: string; account: boolean; pool?: Json },
   members: Json[], allModels: Policy['models'], policy: Policy, a: Assessment, where: Where, open: typeof openDaemon): Promise<Probe[]> {
-  const models = pool ? allModels.filter(m => Array.isArray(pool.engines) && pool.engines.includes(m.engine)) : account ? allModels : []
+  const listedEngines = Array.isArray(pool?.engines) ? pool.engines.filter((engine): engine is string => typeof engine === 'string') : []
+  const legacy = listedEngines.some(engine => !ENGINES.includes(engine))
+  const installed = legacy ? list(object(pool?.observation).quotas).map(quota => quota.engine) : listedEngines
+  const models = pool ? allModels.filter(m => installed.includes(m.engine)) : account ? allModels : []
   const engines = [...new Set([...models.map(m => m.engine), ...members.map(m => String(object(m.configuration).engine) as 'claude' | 'codex')])]
   const memberProbe = (m: Json, refusals: string[] = [], quota = UNKNOWN_QUOTA, frame: MemberFrame | null = null, terminalUnverified = false): Probe => {
     const c = object(m.configuration), engine = String(c.engine) as 'claude' | 'codex'

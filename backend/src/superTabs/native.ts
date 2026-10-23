@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { Prisma, SuperTab, SuperTabNativeContext } from '@prisma/client'
 import { z } from 'zod'
 import type { AuthUser } from '../lib/ssoAuth.js'
-import { activeWork, agent, author, conversation, fail, stableId, SuperTabError,
+import { activeWork, agent, author, conversation, fail, isLeads, stableId, SuperTabError,
   type Actor, type Agent, type Author, type Conversation, type SuperTabState } from './model.js'
 import { canReadProject, groupProject, readConversation } from './projects.js'
 import { noteProjectReports } from './projectUpdates.js'
@@ -80,6 +80,7 @@ export class SuperTabNativeStore {
       const operator = author(state, { kind: 'person', userId: user.sub, email: user.email }, true)
       const target = agent(state, request.agentId)
       const group = readConversation(state, { kind: 'person', userId: user.sub, email: user.email }, request.conversationId)
+      groupProject(state, group) // A terminal opens only in a project's conversation, never in the Leads conversation.
       if (group.archived || !group.agentIds.includes(target.id)) fail('AGENT_UNAVAILABLE', 'Choose an agent in this conversation.')
       await this.deps.agentGrant(tx, state, target)
       const grant = await this.deps.contribution(tx, state, { kind: 'person', userId: user.sub, email: user.email }, target)
@@ -224,7 +225,8 @@ export async function revokeNativeContexts(tx: Transaction, before: SuperTabStat
   for (const group of before.conversations) {
     const current = after.conversations.find(c => c.id === group.id)
     if (!current || current.archived) conditions.push({ conversationId: group.id })
-    else {
+    // No terminal opens in the Leads conversation (open), so it holds no context to revoke.
+    else if (!isLeads(current)) {
       for (const member of after.people) {
         if (!canReadProject(after, { kind: 'person', userId: member.id, email: member.email }, groupProject(after, current))) {
           conditions.push({ conversationId: group.id, userId: member.id })

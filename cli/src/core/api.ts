@@ -1,3 +1,4 @@
+import type { MessageHold } from '../engines/facets/screen.js'
 import type { ProductUsageLaunchSignal } from '../lib/productUsageSignals.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import type { PreparedHandoff, HandoffPermit, HandoffOutcome } from '../lib/handoffAuthority.js'
@@ -652,7 +653,7 @@ export const MEMORY_REQUESTS = ['memory_snapshot', 'memory_about_put', 'memory_d
  *  the client that asks, which acts on it. */
 export const ROUTER_REQUESTS = ['route_decide'] as const
 export const SUPER_TAB_REQUESTS = ['super_tabs'] as const
-export interface SuperTabsPort { connected(): void; disconnected(): void; stop(): void; swarmRole(harnessId: string): Promise<import('../lib/swarmSkills.js').SwarmRole | null | undefined> }
+export interface SuperTabsPort { connected(): void; disconnected(): void; stop(): void; swarmRole(harnessId: string): Promise<import('../lib/swarmSkills.js').SwarmSkillGrant | null | undefined> }
 export const SUPER_TAB_FALLBACKS: PortFallbacks<SuperTabsPort> = { connected: undefined, disconnected: undefined, stop: undefined, swarmRole: later(undefined) }
 /** The project and folder readers (services/projects.ts). */
 export const PROJECTS_REQUESTS = ['git_pull_request', 'git_pull_requests_status', 'git_project_info', 'scm_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file'] as const
@@ -1182,7 +1183,18 @@ export interface SuperTabsCore {
   cards(items: SwarmCard[]): void
   /** What one Lead last said, pushed when the recap on a Harness Pro's screen moved on. */
   cardRecap(recap: LeadRecap): void
+  /** Members may watch an agent of this machine's: Share must run to invite them (superTabs/observers.ts). Its saved
+   *  state wakes it only as the core starts, so a machine that joined a Swarm while running never invited anyone and
+   *  each member's pane read "must be online" (River on a contributed machine, 2026-10-23). */
+  shareObservers(): void
+  /** A member's terminal as plain text for its Lead (core/superTabTerminal.ts): the visible screen, with up to 200 lines
+   *  of scrollback when asked, and what the screen reader says it waits on (a permission prompt, a question). */
+  screen(agentId: string, scrollback: number): Promise<SuperTabScreen>
+  /** Text, then each key by its tmux name, typed into a member's terminal under the pane's write lock. */
+  input(agentId: string, text: string, keys: string[]): Promise<SuperTabTyped>
 }
+export type SuperTabScreen = { ok: true; text: string; hold: MessageHold | null } | { ok: false; error: string }
+export type SuperTabTyped = { ok: true } | { ok: false; error: string }
 
 /** What the cloud service answers the core: done, or why not, in words a person reads. */
 export type CloudResult = { ok: true; detail?: string } | { ok: false; error: string; detail?: string }

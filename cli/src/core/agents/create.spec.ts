@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, opendirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, opendirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -175,6 +175,17 @@ describe('creating an agent', () => {
       const place = vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2]
       expect(place.swarmInstructions).toContain(`swarm-${role}/SKILL.md`)
     }
+  })
+
+  it.each(['default', 'orchestration'] as const)('writes the %s skill text and its prompt line for the project\'s mode', async mode => {
+    const cwd = folder()
+    await setup().create(request({ cwd, swarmRole: 'dev', swarmSkillMode: mode }))
+    const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
+    expect(pane.swarmSkill).toEqual({ role: 'dev', key: pane.sessionLabel, mode })
+    const place = vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2]
+    const file = JSON.parse(/read (".*") with/.exec(place.swarmInstructions!)![1]!)
+    expect(readFileSync(file, 'utf8').includes('Work otherwise the way you normally do.')).toBe(mode === 'default')
+    expect(place.swarmInstructions!.startsWith(mode === 'default' ? 'Use the swarm-dev skill for this session: the team process' : 'Use the built-in swarm-dev skill')).toBe(true)
   })
 
   it('keeps a selected Store harness when attaching a Swarm skill', async () => {

@@ -123,6 +123,7 @@ class _ReviewApp extends AppNotifier {
     String? codexHome,
     String? dsh,
     String? swarmRole,
+    String? swarmSkillMode,
     GridModel? model,
     String? prompt,
     String? name,

@@ -227,9 +227,28 @@ describe('the core API a light service runs on in its own process', () => {
     const recap = { tabId: 't1', leadId: 'l1', text: 'Shipped', at: 1, none: false }
     doors.cards([])
     doors.cardRecap(recap)
+    doors.shareObservers()
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(ask).toHaveBeenCalledWith('super_tab_cards', { items: [] })
     expect(ask).toHaveBeenCalledWith('super_tab_card_recap', { recap })
+    expect(ask).toHaveBeenCalledWith('super_tab_observers', {})
+  })
+
+  it('asks the core to read and type a member\'s terminal, and answers plainly when the core cannot be asked', async () => {
+    const ask = vi.fn(async (query: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> =>
+      query === 'super_tab_screen' ? { ok: true, text: 'Allow?', hold: 'permission_open' } : { ok: true })
+    const doors = processCoreApi('/data', 'superTabs', { ask }).superTabs!
+    expect(await doors.screen('h1', 20)).toEqual({ ok: true, text: 'Allow?', hold: 'permission_open' })
+    expect(ask).toHaveBeenLastCalledWith('super_tab_screen', { agentId: 'h1', scrollback: 20 })
+    expect(await doors.input('h1', 'yes', ['Enter'])).toEqual({ ok: true })
+    expect(ask).toHaveBeenLastCalledWith('super_tab_input', { agentId: 'h1', text: 'yes', keys: ['Enter'] })
+    ask.mockRejectedValue(new Error('gone'))
+    expect(await doors.screen('h1', 0)).toEqual({ ok: false, error: 'This machine\'s daemon could not be asked. Try again in a moment.' })
+    expect(await doors.input('h1', 'x', [])).toEqual({ ok: false, error: 'This machine\'s daemon could not be asked. Try again in a moment.' })
+    ask.mockResolvedValue({ error: 'NOT_SUPER_TABS' })
+    expect(await doors.input('h1', 'x', [])).toEqual({ ok: false, error: 'NOT_SUPER_TABS' })
+    ask.mockResolvedValue({})
+    expect(await doors.screen('h1', 0)).toEqual({ ok: false, error: 'The terminal could not be reached.' })
   })
 
   it('acts on the core for an experiment: agents made, turns stopped and delivered, windows told, each asked', async () => {

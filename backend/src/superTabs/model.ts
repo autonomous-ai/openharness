@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { downSince } from './machines.js'
-import { canReadAgent, canReadProject, groupProject, placeRules, projectsOf, type ProjectVisibility, type SwarmProject } from './projects.js'
+import { canReadAgent, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
 export interface Person { id: string; email: string; role: Role; generation: string }
@@ -41,6 +41,10 @@ export interface Agent {
   downSince?: string
   /** The down time already named in the Lead's scheduled wake-up (projectUpdates.ts), so each time down is named once. */
   downNamed?: string
+  /** A usage limit seen on its terminal; routing skips the agent until then. Shown as null once passed (terminal.ts). */
+  limitedUntil?: string | null
+  /** Terminal alert episodes in progress, so each one posts a single row (terminal.ts). */
+  alerting?: Array<'prompt' | 'limit'>
 }
 export type AgentRole = 'builder' | 'reviewer'
 export const agentRole = (agent: Pick<Agent, 'role'>): AgentRole => agent.role ?? 'builder'
@@ -110,6 +114,8 @@ export function renderWorkTask(task: WorkTask): string {
 
 export interface Conversation {
   id: string
+  /** The Swarm-wide Leads conversation (syncLeads); absent on every project conversation. */
+  kind?: 'leads'
   projectId?: string
   /** Stable, tab-local workgroup reference. Lead has no number. */
   number?: number
@@ -138,6 +144,12 @@ export interface SuperTabState {
   name: string
   project?: { machineId: string; cwd: string; repositoryUrl: string | null }
   projects?: SwarmProject[]
+  /** The Leads conversation, outside every project (syncLeads). */
+  leadsConversationId?: string
+  /** Pairs of tasks ("a:b", sorted ids) whose Leads were told their owned code overlaps, so each pair is told once. */
+  overlapAlerts?: string[]
+  /** Read-only, for a Lead's own reads (visibleState): the active work of the other projects it may know about. */
+  otherProjectsWork?: OtherProjectWork[]
   ownerId: string
   environment: string
   /** Fields this tab overrides from its owner's account routing policy (routingPolicy.ts). */
@@ -159,6 +171,18 @@ export interface SuperTabState {
   harnessReservations?: Array<{ machineId: string; harnessId: string; generation: string; renewed: boolean }>
   /** Native stop receipts survive late replaceable machine observations. */
   releasedHarnesses?: Array<{ machineId: string; harnessId: string }>
+  /** Sessions of removed agents their host closes, listed to that host until it says they closed (agent.sessionClosed). */
+  closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string }>
+}
+export interface OtherProjectWork {
+  conversationId: string
+  projectName: string
+  title: string
+  owns: string[]
+  status: WorkStatus
+  agentName: string
+  /** The first pull request link in the assignment's result, when its agent reported one. */
+  pr: string | null
 }
 export type Actor =
   | { kind: 'person'; userId: string; email: string }
@@ -182,6 +206,8 @@ export interface CommandEffects {
   previousAttempts: Array<{ conversationId: string; brief: string; checks: Check[]; assignment: Assignment }>
   routeDecisions: RouteDecisionEffect[]
   result: Record<string, unknown>
+  /** A terminal request or its answer, written outside the tab state by the store (terminal.ts). */
+  terminal?: import('./terminal.js').TerminalEffect
 }
 export class SuperTabError extends Error {
   constructor(readonly code: string, message: string, readonly status = 409) {
@@ -240,13 +266,40 @@ export function conversation(state: SuperTabState, id: string): Conversation {
   return state.conversations.find(c => c.id === id) ?? fail('NOT_FOUND', 'This conversation is unavailable.', 404)
 }
 
+export const isLeads = (group: Conversation): boolean => group.kind === 'leads'
+
+/** Work a Lead of another project should know about: assigned and moving, not finished, stuck or archived. */
+export const crossProjectActive = (group: Conversation): boolean => !group.archived && !isLeads(group)
+  && ['working', 'review', 'needs_human'].includes(group.assignment?.status ?? '')
+
+function otherProjectsWork(state: SuperTabState, own: SwarmProject): OtherProjectWork[] {
+  return state.conversations.filter(crossProjectActive).flatMap(group => {
+    const project = groupProject(state, group), assignment = group.assignment!
+    if (project.id === own.id || !sharedWithLeads(project)) return []
+    const worker = state.agents.find(a => a.id === assignment.agentId)
+    return [{ conversationId: group.id, projectName: project.name, title: group.title, owns: group.task?.owns ?? [], status: assignment.status,
+      agentName: worker ? worker.displayName ?? worker.name : '', pr: assignment.result?.match(/https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+/)?.[0] ?? null }]
+  })
+}
+
+/** The Swarm-wide conversation where Leads agree an order across projects and every person reads along. It belongs to no
+ *  project and stays after the project conversations; an older Swarm gets it on its next read or write. Its members are
+ *  always the projects' current Leads, so only they receive what is posted there. */
+export function syncLeads(state: SuperTabState): void {
+  const id = state.leadsConversationId ??= stableId(state.id, 'leads')
+  const group = state.conversations.find(c => c.id === id) ?? { id, kind: 'leads', title: 'Leads', leadId: null, agentIds: [],
+    archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 }
+  state.conversations = [...state.conversations.filter(c => c !== group), group]
+  group.agentIds = state.agents.filter(a => ledProject(state, a.id)).map(a => a.id)
+}
+
 /** Legacy groups keep their append order, including archived groups. Persisted
  * numbers are never reassigned; the store serializes concurrent additions. */
 export function numberConversations(state: SuperTabState): void {
   let next = nextConversationNumber(state)
   const leads = new Set(projectsOf(state).map(p => p.leadConversationId))
   for (const group of state.conversations) {
-    if (!leads.has(group.id) && group.number == null) group.number = next++
+    if (!leads.has(group.id) && !isLeads(group) && group.number == null) group.number = next++
   }
 }
 export function nextConversationNumber(state: SuperTabState): number {
@@ -273,6 +326,7 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
   }
   // A new Swarm's first project starts in Default; only a project from before skill modes reads as Harness orchestration.
   state.projects = [{ ...projectsOf(state)[0]!, ...(visibility ? { visibility } : {}), skillMode: 'default' }]
+  syncLeads(state)
   return state
 }
 
@@ -280,23 +334,36 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
 export function visibleState(state: SuperTabState, actor: Actor, now = Date.now()): SuperTabState {
   author(state, actor)
   const visible = structuredClone(state)
+  syncLeads(visible)
+  // People and Leads read the Leads conversation; it is not there for any other agent.
+  if (actor.kind === 'agent' && !ledProject(visible, actor.agentId)) {
+    visible.conversations = visible.conversations.filter(c => !isLeads(c))
+    delete visible.leadsConversationId
+  }
   assignAgentDisplayNames(visible.agents)
+  const led = actor.kind === 'agent' ? ledProject(visible, actor.agentId) : undefined
+  if (led) visible.otherProjectsWork = otherProjectsWork(visible, led)
   for (const target of visible.agents) {
     const since = downSince(state, target, now)
     if (since) target.downSince = since
     delete target.downNamed
+    if (target.limitedUntil && Date.parse(target.limitedUntil) <= now) target.limitedUntil = null
   }
   delete visible.sharing
   delete visible.harnessReservations
   delete visible.releasedHarnesses
+  delete visible.overlapAlerts
+  // Only that machine's host roster lists them (store.ts hostTabs); a removed private agent's session is not every member's.
+  delete visible.closingSessions
   numberConversations(visible)
   delete visible.retiredConversationNumber
   placeRules(visible)
   if (visible.rules) visible.rules = visible.rules.filter(r => projectsOf(state).some(p => p.id === r.projectId && canReadProject(state, actor, p)))
   if (visible.projects) {
     visible.projects = visible.projects.filter(p => canReadProject(state, actor, p))
-    visible.conversations = visible.conversations.filter(c => canReadProject(state, actor, groupProject(state, c)))
+    visible.conversations = visible.conversations.filter(c => isLeads(c) || canReadProject(state, actor, groupProject(state, c)))
     visible.agents = visible.agents.filter(a => canReadAgent(state, actor, a))
+    for (const group of visible.conversations.filter(isLeads)) group.agentIds = group.agentIds.filter(id => visible.agents.some(a => a.id === id))
     visible.starts = visible.starts?.filter(s => visible.conversations.some(c => c.id === s.request.conversationId))
     if (!visible.projects.some(p => p.id === 'lead')) {
       delete visible.project

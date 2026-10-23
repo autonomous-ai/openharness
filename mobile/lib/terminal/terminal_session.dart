@@ -470,6 +470,11 @@ class TerminalSession extends ChangeNotifier {
   /// — but when it did not (seen 2026-10-06), the cursor stayed at the bottom row, under the status
   /// lines and against the key bar, until the first key typed made Claude Code draw again. So the
   /// cursor is not shown until the program's next output, whichever of the two that is.
+  ///
+  /// ⚠️ **Not when the screen the shrink is answered with has the cursor in the prompt** (owner,
+  /// 2026-10-23: a keyboard up over a prompt shows the caret blinking in it). There it is where the
+  /// program keeps it ([cursorInPrompt]), and hiding it waited on output that had already come:
+  /// a redraw that landed before this keyframe left the prompt with no caret until a key was typed.
   bool _cursorAwaitsProgram = false;
 
   /// The pane height whose shrinking cut rows drawn under the cursor ([_noteCutUnderCursor]), spent
@@ -1387,7 +1392,9 @@ class TerminalSession extends ChangeNotifier {
       // The answer to the shrink that cut rows under the cursor. A keyframe at the old size, sent
       // before the resize landed, leaves it for the one that is.
       _cutUnderCursorFrom = null;
-      if (!replacement.isUsingAltBuffer && !_cursorAwaitsProgram) {
+      if (!replacement.isUsingAltBuffer &&
+          !_cursorAwaitsProgram &&
+          !cursorInPrompt(replacement.buffer, engineId)) {
         _cursorAwaitsProgram = true;
         if (kTypingTrace) {
           typingEvent(
@@ -1583,6 +1590,13 @@ class TerminalSession extends ChangeNotifier {
   /// blind. Set and cleared by the page; null the rest of the time.
   Future<bool> Function(String text)? voiceDeliver;
 
+  /// While this pane is the onboarding's first session, its mic's takes pretend: no microphone, no
+  /// permission prompt, each heard as what this says when it ends — the task in the prompt
+  /// (`VoiceInputController.startListening`). Null from it means an ordinary recording: the first send
+  /// has gone, or a question is open that a spoken answer is for. Set and cleared by the page; read
+  /// only by this pane's own mic (`voice_mic_action.dart`), never by Find's or New's.
+  String? Function()? voicePretend;
+
   /// Called each time this pane sends a line on the person's behalf: a Return typed or pressed —
   /// it crosses [_onTerminalOutput] — or a composed message that went ([sendComposerText]). Set by
   /// the page showing the pane, which asks for notifications after the phone's first send
@@ -1600,6 +1614,22 @@ class TerminalSession extends ChangeNotifier {
     });
     if (sent) onLineSent?.call();
     return sent;
+  }
+
+  /// First-task suggestions replace the prompt rather than appending to it.
+  /// Wait for the clear's ordered input queue before the separate message frame:
+  /// otherwise a fast message could arrive before its clear. These are the
+  /// engines whose clear-prompt keys we support; never guess for another TUI.
+  Future<bool> sendFirstTask(String text) async {
+    if (!acceptsInput ||
+        !const ['claude', 'codex', 'opencode'].contains(engineId)) {
+      return false;
+    }
+    clearPrompt();
+    await _flushInput();
+    await _inputSendTail;
+    if (!acceptsInput) return false;
+    return sendComposerText(text);
   }
 
   /// A clipboard paste made directly into this pane, delivered as one atomic unit instead of going

@@ -36,13 +36,13 @@ export async function prepareContribution(core: CoreApi, input: Json, deps = {
   const connection = await deps.open({ dataDir: core.dataDir, port: core.daemon.port, machineId })
   try {
     const [probe, capability] = await Promise.all([
-      connection.request('engines_probe', { accounts: true }, 20_000),
+      connection.request('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000),
       deps.capacity({ cwd, tools: ['git'], devices: [] }),
     ])
     const engines = (Array.isArray(probe.engines) ? probe.engines.map(object) : [])
-      .filter(e => identifier(e.engine) && e.engine !== 'terminal' && e.installed === true && e.signedIn !== false)
+      .filter(e => (e.engine === 'claude' || e.engine === 'codex') && e.installed === true)
       .map(e => e.engine as string)
-    if (!engines.length) throw new Error('Sign in to an agent on this machine, then try again.')
+    if (!engines.length) throw new Error('Install Claude Code or Codex on this machine, then try again.')
     const resources = object('resources' in capability ? capability.resources : null)
     if (capability.ok !== true || typeof resources.projectDiskFreeBytes !== 'number') throw new Error('The project folder is unavailable on this machine.')
     const total = typeof resources.memoryTotalBytes === 'number' ? resources.memoryTotalBytes : 0

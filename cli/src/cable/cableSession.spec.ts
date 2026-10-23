@@ -797,6 +797,23 @@ describe('cable session', () => {
     await session.stop()
   })
 
+  it('posts words spoken to a Swarm Lead in its Swarm chat, and types them for any other harness', async () => {
+    const swarmSay = vi.fn(async (id: string) => id === 'a1')
+    const host = makeHost({ transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay })
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' }); await settle()
+      port.say({ t: 'voice.begin', uploadId: 'lead', agentId: 'a1' })
+      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(port.sent.find(x => x.t === 'voice.transcript')).toMatchObject({ agentId: 'a1', text: 'ship it' }))
+      expect(swarmSay).toHaveBeenCalledWith('a1', 'ship it')
+      expect(host.sendTurn).not.toHaveBeenCalled()
+      port.say({ t: 'voice.begin', uploadId: 'tile', agentId: 'a2' })
+      port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+      await vi.waitFor(() => expect(host.sendTurn).toHaveBeenCalledWith('a2', 'ship it'))
+    } finally { await session.stop() }
+  })
+
   it('delivers a turn through the host, not through the protocol', async () => {
     const host = makeHost()
     const { session, port } = await connect(host)

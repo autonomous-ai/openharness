@@ -301,6 +301,30 @@ describe('owner authority and read-only observation', () => {
       expect(frames.at(-1)).toMatchObject({ id: 'observer:new', type: 'observer_closed' })
     })
 
+    it('keeps Swarm invitations while no roster is in force, and withdraws one only when its member leaves', async () => {
+      await owner.stop()
+      rosters.mockResolvedValue(null)
+      const carol = { agentId: 'agent', email: 'carol@example.com', tab: 'super:tab', name: 'api', engine: 'codex' }
+      let known: Array<typeof carol> | null = [carol]
+      owner = new HarnessShareOwner({ machineId: () => machineId, identity, grants: store, rosters,
+        derivedGrants: () => known, resolveAgent: id => agents.get(id), send, publish, terminals: {} as TerminalBackendCoordinator })
+      await derive()
+      expect(publish.mock.calls.map(c => c[0])).toEqual(['PUT'])
+      // The host stalled: its roster lapsed. Neither the clock's derivation nor a nudge withdraws or sends anything again.
+      known = null
+      await vi.advanceTimersByTimeAsync(3000); await owner.sync()
+      expect(await derive()).toEqual({ invited: 0, revoked: 0 })
+      known = [carol]
+      await vi.advanceTimersByTimeAsync(3000); await owner.sync()
+      expect(publish.mock.calls.map(c => c[0])).toEqual(['PUT'])
+      expect(carolOf().revoked).toBe(false)
+      // A roster in force that no longer lists her is a real change: withdrawn at the next tick.
+      known = []
+      await vi.advanceTimersByTimeAsync(1000); await owner.sync()
+      expect(carolOf().revoked).toBe(true)
+      expect(publish.mock.calls.map(c => c[0])).toEqual(['PUT', 'DELETE'])
+    })
+
     it('derives a grant for every other account in the tab, publishes it, and lets that observer watch', async () => {
       holding(tab())
       expect(await derive()).toEqual({ invited: 2, revoked: 0 })
