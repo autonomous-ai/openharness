@@ -429,6 +429,25 @@ describe('service links', () => {
     ]))
   })
 
+  it('logs what a failed question threw, bounded to one line', async () => {
+    const thrown: unknown[] = [Object.assign(new Error('ENGINE_STALE_REPLY'), { name: 'EngineReadError' }), new Error(`line one\nline two ${'x'.repeat(400)}`), 'a bare string']
+    const links = make({ answer: () => { throw thrown.shift() } })
+    const search = sink()
+    const link = links.accept('search', TOKEN, search, vi.fn())!
+    link.receive({ type: 'service_query', payload: { requestId: 'q1', query: 'runtimeModels' } })
+    link.receive({ type: 'service_query', payload: { requestId: 'q2', query: 'q'.repeat(100) } })
+    link.receive({ type: 'service_query', payload: { requestId: 'q3', query: 'agents' } })
+    await vi.waitFor(() => expect(search.sent).toHaveLength(3))
+    // The service is still told only QUERY_FAILED: what failed inside the core is the core's log's.
+    expect(search.sent.map((frame) => frame.payload)).toEqual([
+      { error: 'QUERY_FAILED', requestId: 'q1' }, { error: 'QUERY_FAILED', requestId: 'q2' }, { error: 'QUERY_FAILED', requestId: 'q3' },
+    ])
+    const failed = lines.filter((line) => line.includes('could not be answered'))
+    expect(failed[0]).toBe('[services] search\'s query "runtimeModels" could not be answered: EngineReadError: ENGINE_STALE_REPLY')
+    expect(failed[1]).toBe(`[services] search's query "${'q'.repeat(40)}" could not be answered: Error: line one line two ${'x'.repeat(175)}`)
+    expect(failed[2]).toBe('[services] search\'s query "agents" could not be answered: a bare string')
+  })
+
   it('tells a connected service what it needs to know, and says when none is listening', () => {
     const links = make()
     expect(links.notify('search', { type: 'service_event', payload: { kind: 'touch' } })).toBe(false)
