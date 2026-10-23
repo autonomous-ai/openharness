@@ -1,6 +1,6 @@
 // Cross-cutting interaction checks over the fixture build.
 //
-//   node checks.mjs <build-dir> <out-dir>
+//   node tool/web_ux/checks.mjs <build-dir> <out-dir>
 //
 // 1. Tap targets: on the phone widths, every control the accessibility tree
 //    exposes whose box is under 44 px in either direction.
@@ -10,14 +10,15 @@
 //    and the page after Tab presses, to see whether a focus ring shows.
 // Results go to <out-dir>/checks.json, with before/after images under
 // <out-dir>/checks/.
-import { chromium } from 'playwright';
+import { chromium } from './playwright.mjs';
 import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { FLOWS } from './flows.mjs';
+import { loadFlows } from './load-flows.mjs';
 import { VIEWPORTS, contextFor, runStep, settle, urlFor } from './capture.mjs';
 import { serve } from './serve.mjs';
 
+const FLOWS = await loadFlows();
 const flow = (name) => FLOWS.find((f) => f.name === name);
 const PHONES = VIEWPORTS.filter((v) => v.width < 720);
 const COMPUTER = VIEWPORTS.find((v) => v.name === '1440');

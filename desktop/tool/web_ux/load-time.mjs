@@ -1,6 +1,6 @@
 // First load of a release build of the web app, as a new visitor sees it.
 //
-//   node load-time.mjs <release-build-dir> [screenshot-dir]
+//   node tool/web_ux/load-time.mjs <release-build-dir> [screenshot-dir]
 //
 // <release-build-dir> is `flutter build web --release --no-wasm-dry-run
 // --no-web-resources-cdn --base-href=/harness-web/` (scripts/build-web-release.sh
@@ -11,7 +11,7 @@
 // the screen stops changing (the sign-in page drawn; a release build has no
 // accessibility tree to wait on), and bytes transferred. The last screen of
 // each profile is saved beside the results so the end state can be checked.
-import { chromium } from 'playwright';
+import { chromium } from './playwright.mjs';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';

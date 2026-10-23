@@ -1,6 +1,6 @@
-// Screenshots every flow in flows.mjs at the audit's widths.
+// Screenshots every flow in flows/ at the audit's widths.
 //
-//   node capture.mjs <build-dir> <out-dir> [flow ...]
+//   node tool/web_ux/capture.mjs <build-dir> <out-dir> [flow ...]
 //
 // <build-dir> is `flutter build web --no-web-resources-cdn
 // --dart-define=HARNESS_TEST=true -t tool/web_ux_fixture.dart` (the release
@@ -11,12 +11,14 @@
 // that leaves the served origin is blocked and listed in blocked.json, so a
 // fixture can never reach a backend; only Google's font CDN, which the engine
 // falls back to for missing glyphs in production too, is let through.
-// Set CHROME_PATH to use an already-installed Chromium, and WIDTHS=360,1440
-// to capture only some widths (separate runs can go in parallel). FLOWS names
-// another flow list, such as ./super-tab-flows.mjs for the Super Tab fixture.
-import { chromium, devices } from 'playwright';
+// Run from desktop/ with PLAYWRIGHT_DIR set (see playwright.mjs). CHROME_PATH
+// uses an already-installed Chromium; WIDTHS=360,1440 captures only some widths
+// (separate runs can go in parallel); FIXTURE=super-tab captures the Super Tab
+// flows from a build of tool/super_tab_mobile_fixture.dart.
+import { chromium, devices } from './playwright.mjs';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { loadFlows } from './load-flows.mjs';
 import { serve } from './serve.mjs';
 
 export const VIEWPORTS = [
@@ -60,9 +62,12 @@ export function urlFor(origin, flow, theme) {
   return hash ? `${url}#${hash}` : `${url}`;
 }
 
-/// Flutter is up once its view is in the page and the first frames are done.
+/// Flutter is up once its view is in the page, the first frames are done and
+/// the network is quiet: glyphs the bundled fonts lack (●, ✓) arrive from the
+/// font CDN later, and a capture taken before them drops those characters.
 export async function settle(page) {
   await page.waitForSelector('flutter-view', { timeout: 30000 });
+  await page.waitForLoadState('networkidle');
   await page.waitForTimeout(1500);
 }
 
@@ -113,8 +118,9 @@ async function shoot(context, origin, flow, viewport, theme, outDir) {
 
 async function main() {
   const [buildDir, outDir, ...only] = process.argv.slice(2);
-  const { FLOWS, THEMES } = await import(process.env.FLOWS ?? './flows.mjs');
-  const flows = only.length ? FLOWS.filter((f) => only.includes(f.name)) : FLOWS;
+  const fixture = process.env.FIXTURE ?? 'app';
+  const all = await loadFlows(fixture);
+  const flows = only.length ? all.filter((f) => only.includes(f.name)) : all;
   const server = await serve(buildDir);
   const origin = server.origin;
   const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH });
@@ -122,7 +128,7 @@ async function main() {
   const results = [];
   const widths = process.env.WIDTHS?.split(',');
   for (const viewport of VIEWPORTS.filter((v) => !widths || widths.includes(v.name))) {
-    for (const theme of THEMES ?? viewport.themes) {
+    for (const theme of viewport.themes) {
       const context = await contextFor(browser, viewport, theme, origin, blocked);
       for (const flow of flows) {
         const result = await shoot(context, origin, flow, viewport, theme, outDir);
@@ -132,7 +138,7 @@ async function main() {
       await context.close();
     }
   }
-  const tag = widths ? `-${widths.join('-')}` : '';
+  const tag = `${fixture === 'app' ? '' : `-${fixture}`}${widths ? `-${widths.join('-')}` : ''}`;
   writeFileSync(join(outDir, `captures${tag}.json`), JSON.stringify(results, null, 2));
   writeFileSync(join(outDir, `blocked${tag}.json`), JSON.stringify([...blocked], null, 2));
   await browser.close();

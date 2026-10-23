@@ -5,7 +5,8 @@ This audit covers every screen of the Harness web app (the Flutter web build of 
 and a computer. It records what a person can reach, what goes wrong, and how the fixes could
 be split. It changes no product code.
 
-- **Source revision:** branch `super-tab/fc53732c35338a2ea34cb592`, from `main` at `d763e16d6`.
+- **Source revision:** audited on branch `super-tab/fc53732c35338a2ea34cb592` (`a521af922`),
+  from `main` at `d763e16d6`. The review tooling then moved to `main` (`desktop/tool/web_ux/`).
 - **Evidence:** every screenshot here comes from the no-login review fixture, which renders
   the real widgets with fake data. A live pass against the owner's account did not run;
   see [Live pass](#live-pass). Every finding is tagged **fixture**, and also says whether
@@ -32,36 +33,50 @@ be split. It changes no product code.
 
 ## How to reproduce
 
+The screenshots this README links to are on the audit branch
+(`super-tab/fc53732c35338a2ea34cb592`, revision `a521af922`), not on `main`, so `main` does not
+carry 11 MB of images. Every `screens/…` and `checks/…` link opens that revision on GitHub.
+The baseline results it was written from are here: `checks.json` and `load-time.json`.
+
+Run from `desktop/`:
+
 ```bash
-cd desktop
 # The whole app, signed in as a fake account; ?scenario= picks the state.
 flutter build web --no-web-resources-cdn --dart-define=HARNESS_TEST=true \
   -t tool/web_ux_fixture.dart -o /tmp/web-ux
-# The Super Tab, from PR #1570's fixture; ?theme=dark added for this audit.
+# The Super Tab, from PR #1570's fixture; ?theme=dark is the Graphite theme.
 flutter build web --no-web-resources-cdn --dart-define=HARNESS_TEST=true \
   -t tool/super_tab_mobile_fixture.dart -o /tmp/web-ux-super-tab
 
-# Playwright lives outside the repo: any folder with `pnpm add playwright` and a copy of
-# these scripts. CHROME_PATH may point at an installed Chromium.
-node capture.mjs /tmp/web-ux out                                 # screens/<flow>/<width>-<theme>.png
-FLOWS=./super-tab-flows.mjs node capture.mjs /tmp/web-ux-super-tab out   # super-tab-* flows
-node checks.mjs /tmp/web-ux out                                  # tap sizes, wheel, swipe, hover, focus
+# Playwright is not a dependency of this repository: install it once outside it.
+pnpm --dir ~/.cache/web-ux-playwright add playwright
+export PLAYWRIGHT_DIR=~/.cache/web-ux-playwright      # CHROME_PATH may name an installed Chromium
+
+node tool/web_ux/capture.mjs /tmp/web-ux out                          # out/screens/<flow>/<width>-<theme>.png
+FIXTURE=super-tab node tool/web_ux/capture.mjs /tmp/web-ux-super-tab out   # the super-tab-* flows
+node tool/web_ux/checks.mjs /tmp/web-ux out                           # tap sizes, wheel, swipe, hover, focus
 flutter build web --release --no-wasm-dry-run --no-web-resources-cdn \
   --base-href=/harness-web/ -o /tmp/web-release
-node load-time.mjs /tmp/web-release                              # first load, three network profiles
+node tool/web_ux/load-time.mjs /tmp/web-release out                   # first load, three network profiles
 ```
 
 | File | What it is |
 | --- | --- |
 | `tool/web_ux_fixture.dart` | Runs the real `HarnessApp` (store bar, `RootShell`, browser workspace) on a fake account |
-| `tool/web_ux_scenarios.dart` | The `?scenario=` names and the state each one seeds |
+| `tool/web_ux_scenarios.dart` | Merges every fix group's scenarios into the `?scenario=` names |
+| `tool/web_ux/scenarios/<group>.dart` | One file per fix group (`menus`, `store`, `first_computer`, `first_load`, `pane`, `welcome`, `states`) plus `base`: the state each scenario seeds |
 | `tool/web_ux_seed.dart` | Fake person, computers, tabs and terminal text |
 | `test/support/web_ux_app.dart` | The fake `AppNotifier`: never signs in, reads or dials; API base is a closed loopback port |
 | `test/web_ux_app_test.dart` | Its test |
-| `flows.mjs`, `super-tab-flows.mjs` | Each flow: a scenario plus the clicks a person makes, by accessible name |
-| `capture.mjs`, `serve.mjs` | Screenshots; blocks every request that leaves the page (`blocked*.json` is empty) |
-| `checks.mjs` | Cross-cutting interaction checks, results in `checks.json` and `checks/` |
-| `load-time.mjs` | First load of a release build; results in `load-time.json` |
+| `tool/web_ux/flows/<group>.mjs` | One file per fix group, same keys: each flow is a scenario plus the clicks a person makes, by accessible name. `load-flows.mjs` reads every file in the folder |
+| `tool/web_ux/capture.mjs`, `serve.mjs` | Screenshots; blocks every request that leaves the page (`blocked*.json` is empty) |
+| `tool/web_ux/checks.mjs` | Cross-cutting interaction checks, results in `checks.json` and `checks/` |
+| `tool/web_ux/load-time.mjs` | First load of a release build; results in `load-time.json` |
+| `tool/web_ux/playwright.mjs` | Finds Playwright in `PLAYWRIGHT_DIR` |
+
+A fix group adds its scenarios and flows to its own two files and edits nothing else; a name
+used by two groups stops the fixture or the capture with an error. Flow names are the audit's,
+unchanged.
 
 Flows reach dialogs and panels by clicking through the accessibility tree, the way a person
 does. A flow that cannot be clicked through is recorded as failed in `captures*.json`
@@ -70,7 +85,7 @@ instead of being opened in code.
 ## Inventory
 
 Every screen and state a web user can reach, with its source and its screenshots under
-`screens/<flow>/` (`360-dark`, `390-dark`, `390-light`, `768-dark`, `1440-dark`,
+[`screens/<flow>/`](https://github.com/autonomous-ai/openharness/tree/a521af922/desktop/design/web-ux-audit/screens) on the audit branch (`360-dark`, `390-dark`, `390-light`, `768-dark`, `1440-dark`,
 `1440-light`). "Web" means the widget lives in `lib/web/`; everything else is shared with the
 Desktop app. A few controls exist only at some widths, so their flows do too:
 - **Phone only (below 720 px):** the tab switcher, the footer dropdown and the Super Tab
@@ -204,7 +219,7 @@ Every finding is tagged **fixture**, because the live pass did not run.
 
 #### B1 · The Store cannot be used on a phone
 - **Screen, width:** Store and a Store product page · 360, 390. At 768 it is tight but usable.
-- **Screenshots:** `screens/store/360-dark.png`, `screens/store/390-dark.png`, `screens/store-product/390-dark.png`
+- **Screenshots:** [`screens/store/360-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/store/360-dark.png), [`screens/store/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/store/390-dark.png), [`screens/store-product/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/store-product/390-dark.png)
 - **Steps:** on a phone, Menu ▸ Store, then open Claude.
 - **What goes wrong:** the Store keeps its computer layout. Its own left rail (Discover, All
   harnesses, Disciplines) takes about 45% of the screen, so the catalogue is ~150 px wide. Headings
@@ -219,7 +234,7 @@ Every finding is tagged **fixture**, because the live pass did not run.
 
 #### B2 · A Swarm cannot be created with a mouse or on a phone
 - **Screen, width:** app menu, All commands, New tab page · all widths.
-- **Screenshots:** `screens/app-menu/1440-dark.png`, `screens/all-commands/1440-dark.png`, `screens/new-tab/1440-dark.png`
+- **Screenshots:** [`screens/app-menu/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/app-menu/1440-dark.png), [`screens/all-commands/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/all-commands/1440-dark.png), [`screens/new-tab/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/new-tab/1440-dark.png)
 - **Steps:** look for a way to start a new Swarm.
 - **What goes wrong:** New Swarm (`super_tab.new`) is `hidden: true`
   (`lib/shortcuts/keymap_commands.dart:712-718`), so All commands does not list it. No menu or
@@ -235,10 +250,15 @@ Every finding is tagged **fixture**, because the live pass did not run.
 #### S1 · Tap targets under 44 px on phones
 - **Screen, width:** app menu, tab switcher, footer dropdown, Machines actions, Settings back, pane
   header controls · 360, 390.
-- **Screenshots:** `screens/app-menu/390-dark.png`, `screens/tab-switcher/390-dark.png`,
-  `screens/footer-menu/390-dark.png`, `screens/machines/390-dark.png`; measurements in `checks.json` (`tapTargets`).
+- **Screenshots:** [`screens/app-menu/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/app-menu/390-dark.png), [`screens/tab-switcher/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/tab-switcher/390-dark.png),
+  [`screens/footer-menu/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/footer-menu/390-dark.png), [`screens/machines/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/machines/390-dark.png); measurements in `checks.json` (`tapTargets`).
 - **Steps:** open any menu on a phone.
-- **What goes wrong:** TAPSUMMARY
+- **What goes wrong:** every phone screen has controls under 44 px (`checks.json`,
+  `tapTargets`, 360 and 390): in the top bar, Menu 31×28, New Tab 23×28, Open Harness and
+  Notifications 31×28; in the pane header, Close Pane 28×28 and the agent and model labels
+  28 tall; app menu and footer dropdown rows 32 tall; tab switcher rows 40; Machines actions
+  (Rename, Remove, Add machine, History…) 28; picker filter chips 32; Store Back and Forward
+  32×30; New tab page rows 24; Settings rows and Back 38; New Harness form fields 32.
 - **Fix:** on compact web, give menu rows and bar controls a 44 px minimum hit area. The
   visible size can stay as it is.
 - **Files, size:** `lib/web/shell/web_app_menu.dart`, `web_menu_items.dart`,
@@ -249,8 +269,8 @@ Every finding is tagged **fixture**, because the live pass did not run.
 
 #### S2 · On phones and tablets the pane header hides the harness name and its state
 - **Screen, width:** any pane · 360, 390, and 768 with three panes.
-- **Screenshots:** `screens/workspace/390-dark.png`, `screens/opening/390-dark.png`,
-  `screens/offline/390-dark.png`, `screens/taken-over/360-dark.png`, `screens/workspace/768-dark.png`
+- **Screenshots:** [`screens/workspace/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/workspace/390-dark.png), [`screens/opening/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/opening/390-dark.png),
+  [`screens/offline/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/offline/390-dark.png), [`screens/taken-over/360-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/taken-over/360-dark.png), [`screens/workspace/768-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/workspace/768-dark.png)
 - **Steps:** open a harness on a phone.
 - **What goes wrong:** the name shrinks to "Fix chec…" while "Claude Code Anthropic" keeps its
   full width. Status words that a computer shows ("Connecting", "Offline", "Take control")
@@ -264,11 +284,11 @@ Every finding is tagged **fixture**, because the live pass did not run.
 
 #### S3 · A computer that is connecting or reconnecting shows only a ⊘ icon
 - **Screen, width:** pane and tab · all widths.
-- **Screenshots:** `screens/connecting/1440-dark.png`, `screens/reconnecting/1440-dark.png`, `screens/reconnecting/390-dark.png`
+- **Screenshots:** [`screens/connecting/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/connecting/1440-dark.png), [`screens/reconnecting/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/reconnecting/1440-dark.png), [`screens/reconnecting/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/reconnecting/390-dark.png)
 - **Steps:** the relay drops while a terminal is open.
 - **What goes wrong:** the terminal looks live and accepts focus. The only signal is a small ⊘
   beside the tab and pane names. Its meaning appears only in a tooltip, which phones never show.
-  An offline computer gets a labelled "Offline" chip (`screens/offline/1440-dark.png`), but this
+  An offline computer gets a labelled "Offline" chip ([`screens/offline/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/offline/1440-dark.png)), but this
   state gets none.
 - **Fix:** a "Reconnecting…" chip with the same look as "Offline", and dim the input until the
   connection is back.
@@ -278,7 +298,7 @@ Every finding is tagged **fixture**, because the live pass did not run.
 
 #### S4 · A view-only terminal does not say it is view only
 - **Screen, width:** pane · all widths.
-- **Screenshots:** `screens/view-only/1440-dark.png`, `screens/view-only/390-dark.png`
+- **Screenshots:** [`screens/view-only/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/view-only/1440-dark.png), [`screens/view-only/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/view-only/390-dark.png)
 - **Steps:** open a terminal this browser may watch but not control.
 - **What goes wrong:** only the model name turns grey. Nothing says typing is off, and the cursor
   still blinks.
@@ -288,8 +308,8 @@ Every finding is tagged **fixture**, because the live pass did not run.
 
 #### S5 · When the only computer goes offline, its panes give way to setup instructions
 - **Screen, width:** workspace · all widths.
-- **Screenshots:** `screens/offline-only/1440-dark.png`, `screens/offline-only/390-dark.png`;
-  compare `screens/offline/1440-dark.png` (another computer still connected).
+- **Screenshots:** [`screens/offline-only/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/offline-only/1440-dark.png), [`screens/offline-only/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/offline-only/390-dark.png);
+  compare [`screens/offline/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/offline/1440-dark.png) (another computer still connected).
 - **Steps:** have one computer and let it sleep.
 - **What goes wrong:** the tab row stays, but the open terminals are replaced by "Connect your
   computer" and the install commands. The person loses the output they were reading and is
@@ -304,7 +324,7 @@ Every finding is tagged **fixture**, because the live pass did not run.
 
 #### S6 · First load shows a page and then replaces it
 - **Screen, width:** after sign-in · all widths.
-- **Screenshots:** `screens/first-machine-loading/1440-dark.png`, then `screens/first-machine/1440-dark.png`
+- **Screenshots:** [`screens/first-machine-loading/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/first-machine-loading/1440-dark.png), then [`screens/first-machine/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/first-machine/1440-dark.png)
 - **Steps:** sign in on an account with no computer.
 - **What goes wrong:** until the machine list answers, the New tab page shows (search, Quick
   start, Keyboard practice, Store cards, footer "Harnesses 0"). It then jumps to "Connect a
@@ -317,7 +337,7 @@ Every finding is tagged **fixture**, because the live pass did not run.
 
 #### S7 · The New tab page sells keyboard chords to a mouse-first web
 - **Screen, width:** New tab · all widths, phones included.
-- **Screenshots:** `screens/new-tab/1440-dark.png`, `screens/new-tab/390-dark.png`, `screens/empty-tab/390-dark.png`
+- **Screenshots:** [`screens/new-tab/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/new-tab/1440-dark.png), [`screens/new-tab/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/new-tab/390-dark.png), [`screens/empty-tab/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/empty-tab/390-dark.png)
 - **Steps:** press +.
 - **What goes wrong:** "Harness like a boss." and a table of Alt+N / Alt+P / Alt+I / Alt+M /
   Ctrl+Alt+S, in the terminal style, even on a phone. The web hides key hints everywhere else
@@ -333,10 +353,10 @@ Every finding is tagged **fixture**, because the live pass did not run.
 
 #### S8 · Keyboard instructions on touch screens
 - **Screen, width:** New Harness form, Take control banner, Settings ▸ Keyboard shortcuts, All commands · phones.
-- **Screenshots:** `screens/split-pane/390-dark.png` ("ctrl-enter create · tab / shift-tab
-  fields · esc close"), `screens/taken-over/390-dark.png` ("Click here or press ⏎"),
-  `screens/settings-keyboard-shortcuts/390-dark.png` ("↑↓ Browse · Return Practice"),
-  `screens/all-commands/390-dark.png` (Alt+B beside rows)
+- **Screenshots:** [`screens/split-pane/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/split-pane/390-dark.png) ("ctrl-enter create · tab / shift-tab
+  fields · esc close"), [`screens/taken-over/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/taken-over/390-dark.png) ("Click here or press ⏎"),
+  [`screens/settings-keyboard-shortcuts/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/settings-keyboard-shortcuts/390-dark.png) ("↑↓ Browse · Return Practice"),
+  [`screens/all-commands/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/all-commands/390-dark.png) (Alt+B beside rows)
 - **What goes wrong:** instructions a phone cannot follow take space and suggest the wrong way
   to act. On a computer browser, "cmd-enter" is wrong on Windows and Linux.
 - **Fix:** honour `showsKeyHints: false` in these four places, and hide Keyboard shortcuts and
@@ -347,7 +367,7 @@ Every finding is tagged **fixture**, because the live pass did not run.
 
 #### S9 · Three ways to download on a phone, two of them for a computer
 - **Screen, width:** sign-in, workspace, first computer · 360, 390, 768.
-- **Screenshots:** `screens/signin/390-dark.png`, `screens/workspace/390-dark.png`, `screens/first-machine/390-dark.png`
+- **Screenshots:** [`screens/signin/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/signin/390-dark.png), [`screens/workspace/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/workspace/390-dark.png), [`screens/first-machine/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/first-machine/390-dark.png)
 - **What goes wrong:** the store bar says **Get the app** (the phone app). The sign-in page also
   shows **Download app** at the top right, and the workspace footer shows a blue **Download
   app**, and both send a phone to the desktop download. The footer button takes a third of
@@ -360,7 +380,7 @@ Every finding is tagged **fixture**, because the live pass did not run.
 
 #### S10 · Right-click on a tab does nothing; rename only by double-click
 - **Screen, width:** tab row · 768, 1440.
-- **Screenshots:** `screens/tab-menu/1440-dark.png`
+- **Screenshots:** [`screens/tab-menu/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/tab-menu/1440-dark.png)
 - **Steps:** right-click a tab to rename or close it.
 - **What goes wrong:** a tab has a context menu only when it has sharing actions
   (`lib/widgets/desktop_workspace_tab.dart:202-208`, `_hasMenu`). An ordinary tab shows nothing, and
@@ -373,7 +393,7 @@ Every finding is tagged **fixture**, because the live pass did not run.
 
 #### S11 · The new-device band cuts off what it is asking about
 - **Screen, width:** band above the workspace · 360, 390.
-- **Screenshots:** `screens/new-device/390-dark.png`, `screens/new-device/360-dark.png`
+- **Screenshots:** [`screens/new-device/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/new-device/390-dark.png), [`screens/new-device/360-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/new-device/360-dark.png)
 - **What goes wrong:** "Jamie's iPhone signed in to y…" is cut to one line beside **It's mine** and
   **Review**. The person must confirm a device without reading the sentence.
 - **Fix:** below 720 px, let the text wrap above the two buttons.
@@ -382,7 +402,7 @@ Every finding is tagged **fixture**, because the live pass did not run.
 
 #### S12 · Super Tab: an error and an endless "Loading" at once
 - **Screen, width:** Super Tab with the backend unreachable · all widths.
-- **Screenshots:** `screens/super-tab-offline/1440-dark.png`, `screens/super-tab-offline/390-dark.png`
+- **Screenshots:** [`screens/super-tab-offline/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/super-tab-offline/1440-dark.png), [`screens/super-tab-offline/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/super-tab-offline/390-dark.png)
 - **What goes wrong:** "Could not refresh this conversation. Try again." with Retry sits above a
   body and composer that say "Loading conversation…" forever.
 - **Fix:** when the first read fails, show the error as the empty state and disable the composer.
@@ -391,7 +411,7 @@ Every finding is tagged **fixture**, because the live pass did not run.
 
 #### S13 · An incomplete viewer link is a raw error
 - **Screen, width:** `/?viewer=1` · all widths.
-- **Screenshots:** `screens/viewer-incomplete/1440-dark.png`, `screens/viewer-incomplete/390-dark.png`
+- **Screenshots:** [`screens/viewer-incomplete/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/viewer-incomplete/1440-dark.png), [`screens/viewer-incomplete/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/viewer-incomplete/390-dark.png)
 - **What goes wrong:** large red text with yellow double underlines (no `Material` above it),
   "This viewer link is incomplete. Run hn view again.", and no way back to the workspace.
 - **Fix:** a styled message with `hn view` as code and an **Open Harness** button.
@@ -401,7 +421,7 @@ Every finding is tagged **fixture**, because the live pass did not run.
 
 #### S14 · Screen readers find buttons hidden under "Connect a computer"
 - **Screen, width:** first computer · all widths.
-- **Screenshots:** `screens/first-machine/1440-dark.png`; the tree is in `checks.json`
+- **Screenshots:** [`screens/first-machine/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/first-machine/1440-dark.png); the tree is in `checks.json`
   (`tapTargets`, `first-machine`: Keyboard practice, New Pane and New Tab under the page)
 - **Steps:** with a screen reader, or by role in a test, look for the page's buttons.
 - **What goes wrong:** the New tab page stays mounted under the first-computer page and keeps
@@ -416,7 +436,7 @@ Every finding is tagged **fixture**, because the live pass did not run.
 
 #### S15 · A sign-in error lands below the fold on a computer
 - **Screen, width:** sign-in after a failure · 1440×900.
-- **Screenshots:** `screens/signin-error/1440-dark.png`
+- **Screenshots:** [`screens/signin-error/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/signin-error/1440-dark.png)
 - **Steps:** a sign-in fails and the page comes back.
 - **What goes wrong:** only the first line, "Could not sign in", shows at the bottom edge. The
   reason and **Try again** are below the fold, under a hero that fills most of the screen.
@@ -450,7 +470,7 @@ Every finding is tagged **fixture**, because the live pass did not run.
 
 #### P1 · Faint text is below 4.5:1
 - **Where:** "End-to-end encrypted" on sign-in, meta lines and hints across the app.
-- **Screenshots:** `screens/signin/390-dark.png`, `screens/signin/1440-light.png`
+- **Screenshots:** [`screens/signin/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/signin/390-dark.png), [`screens/signin/1440-light.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/signin/1440-light.png)
 - **What goes wrong:** `AppPalette.textFaint` (`lib/shared/theme/app_theme.dart:394`) measures
   3.46:1 on the dark page (#6E6E68 on #181818), 3.25:1 on cards (#1E1E1E), 2.87:1 on the
   workspace (#282828), 4.18:1 on the light page and 3.49:1 on the light workspace (`tool/contrast.py`).
@@ -461,7 +481,7 @@ Every finding is tagged **fixture**, because the live pass did not run.
 - **Source:** widget code · fixture.
 
 #### P2 · The viewer page ignores the theme and is hard to read
-- **Screenshots:** `screens/viewer-page/390-light.png`, `screens/viewer-page/1440-dark.png`
+- **Screenshots:** [`screens/viewer-page/390-light.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/viewer-page/390-light.png), [`screens/viewer-page/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/viewer-page/1440-dark.png)
 - **What goes wrong:** the page stays black in light mode. Its message ("This harness has no
   viewer.") is small dark-red monospace text on black.
 - **Fix:** draw it on the theme's page colour with the app's empty-state style.
@@ -479,15 +499,15 @@ Every finding is tagged **fixture**, because the live pass did not run.
 
   Also: "1 linked machines" (`swarm_screen.dart:1637`); "Rename this tab" where the action name
   is **Rename Tab**; "Run hn view again" without code formatting.
-- **Screenshots:** `screens/settings-account/1440-dark.png`, `screens/settings-tab-invites/390-dark.png`,
-  `screens/store-product/1440-dark.png`, `screens/footer-menu/390-dark.png`
+- **Screenshots:** [`screens/settings-account/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/settings-account/1440-dark.png), [`screens/settings-tab-invites/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/settings-tab-invites/390-dark.png),
+  [`screens/store-product/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/store-product/1440-dark.png), [`screens/footer-menu/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/footer-menu/390-dark.png)
 - **Fix:** use "this browser" or the computer's name on web, and fix the plural.
 - **Files, size:** as listed (shared; most need a `kIsWeb` wording or the machine name). S.
 - **Source:** widget code · fixture. The Tab invites and Routing pages also show "Sign in to use
   Swarm" while signed in. That comes from fixture data (no account id) and needs a live check.
 
 #### P4 · Store cards on the New tab page break words on phones
-- **Screenshots:** `screens/empty-tab/390-dark.png`, `screens/empty-tab/360-dark.png`
+- **Screenshots:** [`screens/empty-tab/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/empty-tab/390-dark.png), [`screens/empty-tab/360-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/empty-tab/360-dark.png)
 - **What goes wrong:** "Brows e the Harne ss" and "Meet the Harne ss": the card keeps its picture
   width and squeezes the title.
 - **Fix:** stack picture over title below 720 px, or drop the picture.
@@ -495,7 +515,7 @@ Every finding is tagged **fixture**, because the live pass did not run.
 - **Source:** widget code · fixture.
 
 #### P5 · Swarm with no projects has no button
-- **Screenshots:** `screens/super-tab-empty/1440-dark.png`, `screens/super-tab-empty/390-dark.png`
+- **Screenshots:** [`screens/super-tab-empty/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/super-tab-empty/1440-dark.png), [`screens/super-tab-empty/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/super-tab-empty/390-dark.png)
 - **What goes wrong:** "Create a project to get started." with the action somewhere else.
 - **Fix:** a **New project** button under the sentence.
 - **Files, size:** `lib/super_tabs/view.dart` (shared). S.
@@ -503,7 +523,7 @@ Every finding is tagged **fixture**, because the live pass did not run.
   sidebar shows **New project** needs a live check.
 
 #### P6 · Settings ▸ Usage on web is an empty box
-- **Screenshots:** `screens/settings-usage/1440-dark.png`, `screens/settings-usage/390-dark.png`
+- **Screenshots:** [`screens/settings-usage/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/settings-usage/1440-dark.png), [`screens/settings-usage/390-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/settings-usage/390-dark.png)
 - **What goes wrong:** one sentence, and a full-height panel saying "Start your first harness to
   begin tracking." The browser counts only its own activity, so the page is nearly always empty.
 - **Fix:** show the account's subscriptions (as the footer does), or hide the section on web
@@ -512,14 +532,14 @@ Every finding is tagged **fixture**, because the live pass did not run.
 - **Source:** widget code · fixture.
 
 #### P7 · Sign-in hero labels are unreadable on phones
-- **Screenshots:** `screens/signin/360-dark.png`
+- **Screenshots:** [`screens/signin/360-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/signin/360-dark.png)
 - **What goes wrong:** the fleet map's labels ("home · claude, codex", "under the desk") are about 8 px.
 - **Fix:** below 480 px, hide the small labels or the map.
 - **Files, size:** `lib/widgets/login_fleet_map.dart` (shared). S.
 - **Source:** widget code · fixture.
 
 #### P8 · Keyboard focus is hard to see
-- **Screenshots:** `checks/focus-signin.png`, `checks/focus-first-machine.png`, `checks/focus-settings.png`
+- **Screenshots:** [`checks/focus-signin.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/checks/focus-signin.png), [`checks/focus-first-machine.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/checks/focus-first-machine.png), [`checks/focus-settings.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/checks/focus-settings.png)
 - **What goes wrong:** after four presses of Tab, sign-in and the first-computer page show no
   focus ring. Settings shows only a faint fill on the focused row. The terminal takes Tab, as
   it should.
@@ -541,7 +561,7 @@ not drawn; clipping was judged from the screenshots.
 | Tap targets under 44 px on phones | **Fail → S1.** Every phone screen has some. Top bar: Menu 31×28, New Tab 23×28, Open Harness 31×28, Notifications 31×28. Pane header: Close Pane 28×28, agent and model 28 tall. App menu rows 32 tall; footer dropdown rows 32; tab switcher rows 40; Machines actions (Rename, Remove, Add machine, History…) 28; picker filter chips 32; Store Back and Forward 32×30; New tab page rows 24; Settings rows 38; New Harness form fields 32. |
 | Mouse wheel on every scrolling area (1440, mouse) | **Pass.** The tab row with 16 tabs scrolls with the vertical wheel, Shift+wheel and a sideways trackpad swipe, and its arrows scroll it too. The Store page, picker filter chips, All commands, Appearance panel, Settings ▸ Keyboard shortcuts and the New Harness form all scroll. The first run reported the tab row as stuck: it starts scrolled to its end (the active tab is the last), so the check now wheels backwards. |
 | Touch swipe (390) | **Pass.** The app menu, Store, Keyboard shortcuts, All commands, Machines and the first-computer page scroll by finger. The tab switcher (16 tabs), the Settings list and sign-in fit without scrolling. |
-| Hover (1440) | **Pass.** All ten controls tried (New Tab, Open Harness, Close Pane, agent label, footer Harnesses, a tab, a menu row, Continue with Google, Download app, a Settings row) change on hover and show a pointer cursor. Tooltips stay up after a click until the mouse moves (`screens/store/1440-dark.png`, `screens/harness-monitor/1440-dark.png`). |
+| Hover (1440) | **Pass.** All ten controls tried (New Tab, Open Harness, Close Pane, agent label, footer Harnesses, a tab, a menu row, Continue with Google, Download app, a Settings row) change on hover and show a pointer cursor. Tooltips stay up after a click until the mouse moves ([`screens/store/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/store/1440-dark.png), [`screens/harness-monitor/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/harness-monitor/1440-dark.png)). |
 | Focus | **Weak → P8.** No visible focus ring on sign-in or the first-computer page after Tab; a faint fill in Settings. |
 | Contrast (`tool/contrast.py`) | The standing checks pass in both themes. **Fail → P1** for `textFaint` (2.87–4.18:1), and **P2** for the viewer page. |
 | Text clipping and overflow | **Fail → B1, S2, S11, S15, P4, P7.** |
@@ -580,9 +600,9 @@ faithfully, so they were not judged.
 | Live terminal behaviour: streaming output, reflow on resize, scrollback, typing latency, P2P against the relay | The fixture writes fixed text into the terminal before layout and has no transport (`tool/web_ux_seed.dart`) |
 | How long Connecting and Reconnecting last, and what a real drop looks like | Needs the relay and a machine |
 | On-screen keyboard over the composer and bars (`lib/web/shell/web_hidden_under_keyboard.dart`), safe areas (notch, home bar), pinch zoom (`web/index.html` viewport rules) | Headless Chrome has no on-screen keyboard or safe-area insets |
-| Add your phone QR | The fixture shows "The computer is offline": the pairing code needs a machine RPC (`screens/add-phone/1440-dark.png`) |
-| Harness Monitor | Opening it installs and talks to a machine; the fixture shows a "Lost the connection" toast (`screens/harness-monitor/1440-dark.png`) |
-| Models and subscription figures ("Checking usage…", "not signed in on the harness's machine") | Needs `usage_read` from a machine (`screens/models/1440-dark.png`) |
+| Add your phone QR | The fixture shows "The computer is offline": the pairing code needs a machine RPC ([`screens/add-phone/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/add-phone/1440-dark.png)) |
+| Harness Monitor | Opening it installs and talks to a machine; the fixture shows a "Lost the connection" toast ([`screens/harness-monitor/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/harness-monitor/1440-dark.png)) |
+| Models and subscription figures ("Checking usage…", "not signed in on the harness's machine") | Needs `usage_read` from a machine ([`screens/models/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/models/1440-dark.png)) |
 | Settings ▸ Experimental, Privacy, Routing, Tab invites with real data | Their errors in the captures come from the fixture having no account id or API |
 | Store install, Remove, Install anyway | Need a machine to install on |
 | Shared harness `/s/…` beyond the incomplete-link state: private, not invited, owner offline, comments | Need the backend and an owner daemon (`lib/sharing/shared_agent_page.dart`) |
@@ -591,7 +611,7 @@ faithfully, so they were not judged.
 | Browser notification permission prompt | Needs a real browser prompt (Settings ▸ Notifications ▸ Desktop notifications) |
 | Device bands other than New device (removal, departed, conflict) and the shared-tab invite band | Not seeded in this pass (`lib/widgets/new_device_notice.dart`, `shared_tab_notice.dart`) |
 | Close confirmation for a working harness (Stop / Cancel) | Needs live activity from a machine |
-| Password link dialog after a refused trusted dial | The fake refuses at once, so the page shows "Couldn't connect" (`screens/link-password/1440-dark.png`) |
+| Password link dialog after a refused trusted dial | The fake refuses at once, so the page shows "Couldn't connect" ([`screens/link-password/1440-dark.png`](https://github.com/autonomous-ai/openharness/blob/a521af922/desktop/design/web-ux-audit/screens/link-password/1440-dark.png)) |
 | Hub return (`/hub…`) | Needs the Hub's session handoff |
 | Agent Messages and the Tab Activity dock | Need the account experiment and a shared tab |
 | First load on a real phone network and the production host's compression | Measured locally with throttling (see [First load](#first-load)) |
