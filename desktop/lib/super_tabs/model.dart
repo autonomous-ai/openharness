@@ -78,6 +78,10 @@ class SuperTabConversation {
         row['checks'] ?? const [],
         (check) => Map<String, dynamic>.unmodifiable(check),
       ),
+      pullRequestUrls = List.unmodifiable(
+        (row['pullRequestUrls'] as List?)?.whereType<String>() ??
+            const <String>[],
+      ),
       brief = _text(row, 'brief'),
       task = row['task'] is Map
           ? SuperTabTask.fromJson(superTabMap(row['task']))
@@ -94,6 +98,9 @@ class SuperTabConversation {
   final List<String> agentIds;
   final bool archived;
   final List<Map<String, dynamic>> checks;
+
+  /// Persisted links may be absent on older backends; loaded messages still supply links.
+  final List<String> pullRequestUrls;
   final int lastMessageSequence;
   final Map<String, dynamic>? assignment;
 }

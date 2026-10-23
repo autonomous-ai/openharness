@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { Prisma, SuperTab, SuperTabNativeContext } from '@prisma/client'
 import { z } from 'zod'
 import type { AuthUser } from '../lib/ssoAuth.js'
-import { activeWork, agent, author, conversation, fail, stableId, SuperTabError,
+import { activeWork, agent, appendPullRequestUrls, author, conversation, fail, stableId, SuperTabError,
   type Actor, type Agent, type Author, type Conversation, type SuperTabState } from './model.js'
 import { canReadProject, groupProject, readConversation } from './projects.js'
 import { noteProjectReports } from './projectUpdates.js'
@@ -187,6 +187,8 @@ export class SuperTabNativeStore {
       const observedBy = author(state, { kind: 'agent', agentId: target.id, machineOwnerId: user.sub }, true)
       const text = recovery?.source.required ? recovery.text : event.kind === 'gap'
         ? 'Some terminal activity could not be recorded. Check the native session for the full conversation.' : event.text
+      // Leave a legacy group's list absent so the next read can recover its older links too.
+      if (group.pullRequestUrls !== undefined) appendPullRequestUrls(group, [text])
       // Inform the coordinating lead without replaying this input into the agent
       // that already received it. Its resulting programmatic turn is not native input.
       const recipients = (event.kind !== 'gap' || recovery?.source.required) && group.leadId && group.leadId !== target.id ? [group.leadId] : []

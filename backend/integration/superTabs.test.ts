@@ -71,6 +71,80 @@ afterAll(async () => {
   await replica?.stop()
 })
 
+describe('durable group pull request links', () => {
+  const pr = (number: number) => `https://github.com/example/project/pull/${number}`
+  const links = async (tab: string, groupId = 'lead') => {
+    const group = (await store.read(owner, tab)).state.conversations.find(c => c.id === groupId)!
+    return (group as unknown as { pullRequestUrls?: string[] }).pullRequestUrls
+  }
+
+  it('keeps one link beyond the latest 100 messages and reconstructs an older group on read', async () => {
+    const { tab } = await fixture()
+    await run(tab, message(`Review ${pr(41)}`))
+    await run(tab, message(`Same PR again: ${pr(41)}`))
+    expect(await links(tab)).toEqual([pr(41)])
+    await db.superTabMessage.createMany({ data: Array.from({ length: 101 }, (_, i) => ({
+      id: randomUUID(), tabId: tab, conversationId: 'lead', sequence: 1000 + i,
+      author: { kind: 'person', id: owner.sub, name: owner.email }, text: `Later note ${i}`,
+      replyTo: null, recipientIds: [],
+    })) })
+    expect((await store.messages(owner, tab, 'lead', {})).messages).toHaveLength(100)
+    expect((await store.messages(owner, tab, 'lead', {})).messages.some(row => row.text.includes(pr(41)))).toBe(false)
+    expect(await links(tab)).toEqual([pr(41)])
+
+    const stored = await db.superTab.findUniqueOrThrow({ where: { id: tab } })
+    const state = stored.state as { conversations: Array<{ id: string; pullRequestUrls?: string[] }> }
+    delete state.conversations.find(group => group.id === 'lead')!.pullRequestUrls
+    await db.superTab.update({ where: { id: tab }, data: { state } })
+    let historyScans = 0
+    const observed = db.$extends({ query: { superTabMessage: { async findMany({ args, query }) {
+      historyScans++
+      return query(args)
+    } } } })
+    const observedStore = new SuperTabStore(observed as unknown as PrismaClient)
+    expect((await observedStore.read(owner, tab)).state.conversations[0]!.pullRequestUrls).toEqual([pr(41)])
+    expect(historyScans).toBe(1)
+    const backfilled = (await db.superTab.findUniqueOrThrow({ where: { id: tab } })).state as typeof state
+    expect(backfilled.conversations.find(group => group.id === 'lead')!.pullRequestUrls).toEqual([pr(41)])
+    expect((await observedStore.read(owner, tab)).state.conversations[0]!.pullRequestUrls).toEqual([pr(41)])
+    expect(historyScans).toBe(1)
+    await run(tab, message('One more note after the older link was found.'))
+    const saved = (await db.superTab.findUniqueOrThrow({ where: { id: tab } })).state as typeof state
+    expect(saved.conversations.find(group => group.id === 'lead')!.pullRequestUrls).toEqual([pr(41)])
+  })
+
+  it('lists links from check evidence and a work result even when no message has those links', async () => {
+    const { tab, lead } = await fixture()
+    await run(tab, { type: 'work.define', conversationId: 'lead', brief: 'Record work',
+      checks: [{ description: 'Reviewed', independent: false }] })
+    const assignmentId = String((await run(tab, { type: 'work.assign', conversationId: 'lead', agentId: lead })).result.assignmentId)
+    const checkId = (await store.read(owner, tab)).state.conversations[0]!.checks[0]!.id
+    await run(tab, { type: 'work.check', conversationId: 'lead', assignmentId, checkId, passed: true,
+      evidence: `Reviewed ${pr(42)} and ${pr(42)}` }, host, lead)
+    expect((await store.messages(owner, tab, 'lead', {})).messages.some(row => row.text.includes(pr(42)))).toBe(false)
+    await run(tab, { type: 'work.status', conversationId: 'lead', assignmentId, status: 'working', result: `Built ${pr(43)}` }, host, lead)
+    expect(await links(tab)).toEqual([pr(42), pr(43)])
+
+    await db.superTabMessage.deleteMany({ where: { tabId: tab, conversationId: 'lead', text: { contains: pr(43) } } })
+    const stored = await db.superTab.findUniqueOrThrow({ where: { id: tab } })
+    const state = stored.state as { conversations: Array<{ id: string; pullRequestUrls?: string[] }> }
+    delete state.conversations.find(group => group.id === 'lead')!.pullRequestUrls
+    await db.superTab.update({ where: { id: tab }, data: { state } })
+    expect((await store.messages(owner, tab, 'lead', {})).messages.some(row => /github\.com/.test(row.text))).toBe(false)
+    expect(await links(tab)).toEqual([pr(42), pr(43)])
+
+    await run(tab, { type: 'work.status', conversationId: 'lead', assignmentId, status: 'done', result: `Built ${pr(43)}` }, host, lead)
+    await run(tab, { type: 'work.define', conversationId: 'lead', brief: 'Next work',
+      checks: [{ description: 'Next check', independent: false }] })
+    await db.superTabMessage.deleteMany({ where: { tabId: tab, conversationId: 'lead', text: { contains: pr(43) } } })
+    const old = await db.superTab.findUniqueOrThrow({ where: { id: tab } })
+    const oldState = old.state as typeof state
+    delete oldState.conversations.find(group => group.id === 'lead')!.pullRequestUrls
+    await db.superTab.update({ where: { id: tab }, data: { state: oldState } })
+    expect(await links(tab)).toEqual([pr(42), pr(43)])
+  })
+})
+
 describe('native recording restart recovery', () => {
   async function recoveryFixture(status: 'working' | 'review' = 'working') {
     const { tab, lead } = await fixture()
@@ -104,6 +178,37 @@ describe('native recording restart recovery', () => {
     }
     return { tab, lead, group, worker, assignmentId, contextId, checkpoint, checkpointRow, gap, interruption, state, gapDeliveries, append }
   }
+
+  it('keeps a PR link from a native message after that message leaves the latest page', async () => {
+    const f = await recoveryFixture()
+    const url = 'https://github.com/example/project/pull/44'
+    await f.append({ turnId: 'saved_turn', kind: 'answer', previousEventId: f.checkpoint.eventId,
+      text: `Opened ${url}`, truncated: false, interrupted: false })
+    const group = () => store.read(owner, f.tab).then(row => row.state.conversations.find(c => c.id === f.group)!)
+    expect((await group()).pullRequestUrls).toEqual([url])
+    await db.superTabMessage.createMany({ data: Array.from({ length: 101 }, (_, i) => ({
+      id: randomUUID(), tabId: f.tab, conversationId: f.group, sequence: 1000 + i,
+      author: { kind: 'person', id: owner.sub, name: owner.email }, text: `Later note ${i}`,
+      replyTo: null, recipientIds: [],
+    })) })
+    expect((await store.messages(owner, f.tab, f.group, {})).messages.some(row => row.text.includes(url))).toBe(false)
+    expect((await group()).pullRequestUrls).toEqual([url])
+  })
+
+  it('keeps older links when a native message arrives before a legacy group is backfilled', async () => {
+    const f = await recoveryFixture()
+    const oldUrl = 'https://github.com/example/project/pull/45'
+    const newUrl = 'https://github.com/example/project/pull/46'
+    await run(f.tab, { type: 'message.send', conversationId: f.group, text: oldUrl, replyTo: null, recipientIds: [] })
+    const stored = await db.superTab.findUniqueOrThrow({ where: { id: f.tab } })
+    const state = stored.state as { conversations: Array<{ id: string; pullRequestUrls?: string[] }> }
+    delete state.conversations.find(group => group.id === f.group)!.pullRequestUrls
+    await db.superTab.update({ where: { id: f.tab }, data: { state } })
+    await f.append({ turnId: 'saved_turn', kind: 'answer', previousEventId: f.checkpoint.eventId,
+      text: newUrl, truncated: false, interrupted: false })
+    const group = (await store.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!
+    expect(group.pullRequestUrls).toEqual([oldUrl, newUrl])
+  })
 
   it.each(['recording_restarted', 'history_lost', 'agent_stopped'] as const)('wakes only the Lead and blocks working work for %s with a checkpoint time and no visible ids', async reason => {
     const f = await recoveryFixture(), event = f.interruption(reason)

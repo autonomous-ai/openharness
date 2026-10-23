@@ -104,6 +104,11 @@ class _SuperTabPullRequestsState extends State<SuperTabPullRequests> {
     }
 
     for (final group in _groups) {
+      for (final stored in group.pullRequestUrls) {
+        for (final link in superTabPullRequestLinks(stored)) {
+          include(link, group.title);
+        }
+      }
       for (final message in c.messages(group.id)) {
         for (final link in superTabPullRequestLinks(message.text)) {
           include(link, group.title);

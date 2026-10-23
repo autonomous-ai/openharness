@@ -15,7 +15,7 @@ import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import {
-  activeWork, actorKey, agent, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
+  activeWork, actorKey, agent, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
   SuperTabError, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
 } from './model.js'
 import { holdNoticeText, type HoldReason } from './holdNotice.js'
@@ -34,6 +34,29 @@ const stateOf = (row: SuperTab): SuperTabState => {
   const state = row.state as unknown as SuperTabState
   if (state.version !== 1) fail('UPDATE_REQUIRED', 'Update Harness to open this Super Tab.', 409)
   return state
+}
+
+/** Old groups have no link list. Reconstruct theirs from complete stored history once; current groups accumulate
+ * links on write. */
+async function restorePullRequestUrls(tx: Transaction, tabId: string, state: SuperTabState): Promise<void> {
+  const missing = state.conversations.filter(group => group.pullRequestUrls === undefined)
+  if (!missing.length) return
+  const conversationIds = missing.map(group => group.id)
+  const [messages, attempts] = await Promise.all([
+    tx.superTabMessage.findMany({ where: { tabId, conversationId: { in: conversationIds }, text: { contains: 'https://github.com/' } },
+      select: { conversationId: true, text: true }, orderBy: { sequence: 'asc' } }),
+    tx.superTabAttempt.findMany({ where: { tabId, conversationId: { in: conversationIds } },
+      select: { conversationId: true, snapshot: true }, orderBy: { createdAt: 'asc' } }),
+  ])
+  for (const group of missing) {
+    const prior = attempts.filter(attempt => attempt.conversationId === group.id)
+      .map(attempt => attempt.snapshot as unknown as { checks?: Array<{ evidence?: string | null }>; assignment?: { result?: string | null } })
+    appendPullRequestUrls(group, [
+      ...messages.filter(message => message.conversationId === group.id).map(message => message.text),
+      ...prior.flatMap(attempt => [...(attempt.checks ?? []).map(check => check.evidence), attempt.assignment?.result]),
+      ...group.checks.map(check => check.evidence), group.assignment?.result,
+    ])
+  }
 }
 const indexes = (state: SuperTabState) => ({
   memberIds: state.people.map(p => p.id), invitedEmails: state.invitations.map(i => i.email),
@@ -282,6 +305,12 @@ export class SuperTabStore {
       const row = await this.row(tx, user, tabId)
       const state = stateOf(row)
       const actor = await this.actor(tx, user, state, asAgentId)
+      if (state.conversations.some(group => group.pullRequestUrls === undefined)) {
+        await restorePullRequestUrls(tx, tabId, state)
+        // Keep the revision: this adds optional metadata and does not change work or messages. A concurrent
+        // command with a newer revision owns the state; its write also reconstructs any missing link lists.
+        await tx.superTab.updateMany({ where: { id: tabId, revision: row.revision }, data: { state: json(state) } })
+      }
       const visible = visibleState(state, actor, this.now())
       return { revision: row.revision, state: { ...visible, machines: visible.machines?.map(pool => ({
         ...pool, availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, state.machines!.find(m => m.machineId === pool.machineId)!)),
@@ -422,7 +451,14 @@ export class SuperTabStore {
       // A dispatch reads its start's decision only to see whether a person chose this start by hand (rules.ts).
       const dispatched = command.type === 'agent.startDispatch' ? original.starts?.find(s => s.id === command.startId)?.routeDecisionId : undefined
       if (dispatched) context.routeDecision = await readDecision(tx, tabId, dispatched) ?? undefined
+      await restorePullRequestUrls(tx, tabId, original)
       const effects = applyCommand(original, actor, command, context)
+      for (const group of effects.state.conversations) {
+        appendPullRequestUrls(group, [
+          ...effects.messages.filter(message => message.conversationId === group.id).map(message => message.text),
+          ...group.checks.map(check => check.evidence), group.assignment?.result,
+        ])
+      }
       if (command.type === 'agent.rebind') {
         const target = agent(effects.state, command.agentId)
         // A terminal can already belong to a different project or Swarm on this host. The pure
