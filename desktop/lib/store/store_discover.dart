@@ -281,7 +281,7 @@ class StoreDiscover extends StatelessWidget {
                     // A browser runs no harness: no computer will answer.
                     const SizedBox(height: 32),
                     Text(
-                      kStoreOnAComputer,
+                      'Open the Harness app on a computer to see more harnesses.',
                       style: grid.AppType.body(
                         height: 1.5,
                         color: grid.AppPalette.textSecondary,

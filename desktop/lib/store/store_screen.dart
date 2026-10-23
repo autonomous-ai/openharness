@@ -624,10 +624,82 @@ class _Nav {
   final Map<String, int> counts;
   final ValueChanged<_Shelf> onSelect;
 
-  bool get onDiscover => !hasProduct && shelf is _Discover;
-  bool get onAll => !hasProduct && shelf is _All;
-  bool get onSessions => !hasProduct && shelf is _Sessions;
-  bool get offersSessions => sessionCount > 0 || shelf is _Sessions;
+  /// Every shelf the Store offers, in order: the rail and a phone's chip row
+  /// both draw this list.
+  List<_ShelfChoice> get choices => [
+    _ShelfChoice(
+      id: 'discover',
+      kind: _ShelfKind.browse,
+      icon: AppIcons.sparkles,
+      label: 'Discover',
+      selected: !hasProduct && shelf is _Discover,
+      onTap: () => onSelect(const _Discover()),
+    ),
+    _ShelfChoice(
+      id: 'all',
+      kind: _ShelfKind.browse,
+      icon: AppIcons.layoutGrid,
+      label: 'All harnesses',
+      selected: !hasProduct && shelf is _All,
+      onTap: () => onSelect(const _All()),
+    ),
+    if (sessionCount > 0 || shelf is _Sessions)
+      _ShelfChoice(
+        id: 'sessions',
+        kind: _ShelfKind.browse,
+        icon: AppIcons.play,
+        label: 'Featured',
+        tooltip: '$sessionCount recorded runs',
+        selected: !hasProduct && shelf is _Sessions,
+        onTap: () => onSelect(const _Sessions()),
+      ),
+    for (final name in categories)
+      _ShelfChoice(
+        id: 'category:$name',
+        kind: _ShelfKind.discipline,
+        icon: _categoryIcon(name),
+        label: name,
+        tooltip: name,
+        count: counts[name],
+        selected: selectedCategory == name,
+        onTap: () => onSelect(_Category(name)),
+      ),
+    _ShelfChoice(
+      id: 'viewers',
+      kind: _ShelfKind.viewers,
+      icon: AppIcons.panelsTopLeft,
+      label: 'Viewers',
+      selected: shelf is _Viewers,
+      onTap: () => onSelect(const _Viewers()),
+    ),
+  ];
+}
+
+/// Where the rail puts a shelf: the browse entries, the disciplines under
+/// their heading, and Viewers at its foot.
+enum _ShelfKind { browse, discipline, viewers }
+
+class _ShelfChoice {
+  const _ShelfChoice({
+    required this.id,
+    required this.kind,
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.tooltip,
+    this.count,
+  });
+
+  /// Keys the rail's entry `store-shelf-<id>` and the chip `store-chip:<id>`.
+  final String id;
+  final _ShelfKind kind;
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final String? tooltip;
+  final int? count;
 }
 
 class _StoreNav extends StatelessWidget {
@@ -638,8 +710,10 @@ class _StoreNav extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     TerminalFontScope.watch(context);
-    final _Nav(:shelf, :categories, :selectedCategory, :counts, :onSelect) =
-        nav;
+    final choices = nav.choices;
+    Iterable<_ShelfChoice> of(_ShelfKind kind) =>
+        choices.where((choice) => choice.kind == kind);
+    final viewers = of(_ShelfKind.viewers).single;
     final textScale = grid.appTextScaleOf(context).clamp(1.0, 1.5);
     return Container(
       width:
@@ -652,28 +726,14 @@ class _StoreNav extends StatelessWidget {
             child: ListView(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 22),
               children: [
-                SidebarItem(
-                  key: const ValueKey('store-shelf-discover'),
-                  icon: AppIcons.sparkles,
-                  label: 'Discover',
-                  selected: nav.onDiscover,
-                  onTap: () => onSelect(const _Discover()),
-                ),
-                SidebarItem(
-                  key: const ValueKey('store-shelf-all'),
-                  icon: AppIcons.layoutGrid,
-                  label: 'All harnesses',
-                  selected: nav.onAll,
-                  onTap: () => onSelect(const _All()),
-                ),
-                if (nav.offersSessions)
+                for (final choice in of(_ShelfKind.browse))
                   SidebarItem(
-                    key: const ValueKey('store-shelf-sessions'),
-                    icon: AppIcons.play,
-                    label: 'Featured',
-                    tooltip: '${nav.sessionCount} recorded runs',
-                    selected: nav.onSessions,
-                    onTap: () => onSelect(const _Sessions()),
+                    key: ValueKey('store-shelf-${choice.id}'),
+                    icon: choice.icon,
+                    label: choice.label,
+                    tooltip: choice.tooltip,
+                    selected: choice.selected,
+                    onTap: choice.onTap,
                   ),
                 const SizedBox(height: 22),
                 Padding(
@@ -686,13 +746,13 @@ class _StoreNav extends StatelessWidget {
                     ),
                   ),
                 ),
-                for (final name in categories)
+                for (final choice in of(_ShelfKind.discipline))
                   SidebarItem(
-                    key: ValueKey('store-shelf-category:$name'),
-                    icon: _categoryIcon(name),
-                    label: name,
-                    tooltip: name,
-                    selected: selectedCategory == name,
+                    key: ValueKey('store-shelf-${choice.id}'),
+                    icon: choice.icon,
+                    label: choice.label,
+                    tooltip: choice.tooltip,
+                    selected: choice.selected,
                     trailingAlwaysVisible: true,
                     trailingWidth: 22,
                     trailing: textScale > 1.2
@@ -700,13 +760,13 @@ class _StoreNav extends StatelessWidget {
                         : Align(
                             alignment: Alignment.centerRight,
                             child: Text(
-                              '${counts[name]}',
+                              '${choice.count}',
                               style: grid.AppType.caption(
                                 color: grid.AppPalette.textFaint,
                               ),
                             ),
                           ),
-                    onTap: () => onSelect(_Category(name)),
+                    onTap: choice.onTap,
                   ),
               ],
             ),
@@ -717,13 +777,13 @@ class _StoreNav extends StatelessWidget {
               alignment: Alignment.centerLeft,
               child: AppIconButton(
                 key: const ValueKey('store-viewers-button'),
-                icon: AppIcons.panelsTopLeft,
+                icon: viewers.icon,
                 size: 17,
-                color: shelf is _Viewers
+                color: viewers.selected
                     ? grid.AppPalette.textPrimary
                     : grid.AppPalette.textFaint,
-                tooltip: 'Viewers',
-                onPressed: () => onSelect(const _Viewers()),
+                tooltip: viewers.label,
+                onPressed: viewers.onTap,
               ),
             ),
           ),
@@ -740,51 +800,19 @@ class _StoreChips extends StatelessWidget {
   final _Nav nav;
 
   @override
-  Widget build(BuildContext context) {
-    final onSelect = nav.onSelect;
-    return StoreChipRow(
-      chips: [
+  Widget build(BuildContext context) => StoreChipRow(
+    chips: [
+      for (final choice in nav.choices)
         StoreChip(
-          id: 'discover',
-          icon: AppIcons.sparkles,
-          label: 'Discover',
-          selected: nav.onDiscover,
-          onTap: () => onSelect(const _Discover()),
+          id: choice.id,
+          icon: choice.icon,
+          label: choice.label,
+          count: choice.count,
+          selected: choice.selected,
+          onTap: choice.onTap,
         ),
-        StoreChip(
-          id: 'all',
-          icon: AppIcons.layoutGrid,
-          label: 'All harnesses',
-          selected: nav.onAll,
-          onTap: () => onSelect(const _All()),
-        ),
-        if (nav.offersSessions)
-          StoreChip(
-            id: 'sessions',
-            icon: AppIcons.play,
-            label: 'Featured',
-            selected: nav.onSessions,
-            onTap: () => onSelect(const _Sessions()),
-          ),
-        for (final name in nav.categories)
-          StoreChip(
-            id: 'category:$name',
-            icon: _categoryIcon(name),
-            label: name,
-            count: nav.counts[name],
-            selected: nav.selectedCategory == name,
-            onTap: () => onSelect(_Category(name)),
-          ),
-        StoreChip(
-          id: 'viewers',
-          icon: AppIcons.panelsTopLeft,
-          label: 'Viewers',
-          selected: nav.shelf is _Viewers,
-          onTap: () => onSelect(const _Viewers()),
-        ),
-      ],
-    );
-  }
+    ],
+  );
 }
 
 IconData _categoryIcon(String category) => switch (category) {

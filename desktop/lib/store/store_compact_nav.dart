@@ -1,10 +1,16 @@
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 
 /// The smallest box a finger can reliably hit on a phone (audit finding S1).
 const double kStoreMinHit = 44;
+
+/// How far each end of the chip row fades over the chips behind it.
+const double _fadeWidth = 32;
 
 /// A [kStoreMinHit] box around a smaller control, for phones: the ring
 /// outside the control does what the control does, and a screen reader finds
@@ -73,8 +79,9 @@ class StoreChip {
 }
 
 /// The Store's rail as a phone has room for it (audit finding B1): one row of
-/// chips above the content. A mouse wheel rolls it sideways, and each end
-/// fades while chips are hidden past it.
+/// chips above the content. A mouse wheel rolls it sideways, each end fades
+/// while chips are hidden past it, and the selected chip is scrolled into
+/// view when the row opens and whenever the selection moves.
 class StoreChipRow extends StatefulWidget {
   const StoreChipRow({super.key, required this.chips});
 
@@ -86,13 +93,64 @@ class StoreChipRow extends StatefulWidget {
 
 class _StoreChipRowState extends State<StoreChipRow> {
   final _scroll = ScrollController();
+  final _chipKeys = <String, GlobalKey>{};
 
   @override
   void initState() {
     super.initState();
     _scroll.addListener(_changed);
     // The row has no extent until it has laid out once.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _changed());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _changed();
+      _revealSelected(animate: false);
+    });
+  }
+
+  @override
+  void didUpdateWidget(StoreChipRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_selectedOf(oldWidget.chips) == _selectedOf(widget.chips)) return;
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _revealSelected(animate: true),
+    );
+  }
+
+  static String? _selectedOf(List<StoreChip> chips) =>
+      chips.where((chip) => chip.selected).firstOrNull?.id;
+
+  /// Scrolls the least distance that shows the selected chip whole and clear
+  /// of the fades; a chip already in view does not move the row.
+  void _revealSelected({required bool animate}) {
+    final id = _selectedOf(widget.chips);
+    final chip = id == null ? null : _chipKeys[id]?.currentContext;
+    if (!mounted || chip == null || !_scroll.hasClients) return;
+    final box = chip.findRenderObject()!;
+    final viewport = RenderAbstractViewport.of(box);
+    final position = _scroll.position;
+    final atStart = viewport.getOffsetToReveal(box, 0).offset - _fadeWidth;
+    final atEnd = viewport.getOffsetToReveal(box, 1).offset + _fadeWidth;
+    final target = position.pixels > atStart
+        ? atStart
+        : position.pixels < atEnd
+        ? atEnd
+        : null;
+    if (target == null) return;
+    final clamped = target.clamp(
+      position.minScrollExtent,
+      position.maxScrollExtent,
+    );
+    if (!animate || MediaQuery.disableAnimationsOf(context)) {
+      position.jumpTo(clamped);
+      return;
+    }
+    unawaited(
+      position.animateTo(
+        clamped,
+        // As the tab row pages its tabs.
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      ),
+    );
   }
 
   @override
@@ -155,7 +213,10 @@ class _StoreChipRowState extends State<StoreChipRow> {
                   children: [
                     for (final (i, chip) in widget.chips.indexed) ...[
                       if (i > 0) const SizedBox(width: 6),
-                      _ChipButton(chip: chip),
+                      KeyedSubtree(
+                        key: _chipKeys.putIfAbsent(chip.id, GlobalKey.new),
+                        child: _ChipButton(chip: chip),
+                      ),
                     ],
                   ],
                 ),
@@ -192,7 +253,7 @@ class _EdgeFade extends StatelessWidget {
       bottom: 0,
       left: start ? 0 : null,
       right: start ? null : 0,
-      width: 32,
+      width: _fadeWidth,
       child: IgnorePointer(
         child: DecoratedBox(
           decoration: BoxDecoration(

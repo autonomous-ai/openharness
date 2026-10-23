@@ -217,6 +217,14 @@ Future<void> _openEnginesOnlyDiscover(
   ),
 );
 
+/// [chip] lies wholly inside the screen's width, clear of the row's fades.
+void _expectFullyShown(WidgetTester tester, Finder chip) {
+  final rect = tester.getRect(chip);
+  final width = tester.view.physicalSize.width / tester.view.devicePixelRatio;
+  expect(rect.left, greaterThanOrEqualTo(0), reason: '$chip');
+  expect(rect.right, lessThanOrEqualTo(width), reason: '$chip');
+}
+
 void _expectHitArea(WidgetTester tester, Finder target) {
   final rect = tester.getSemantics(target).rect;
   expect(rect.width, greaterThanOrEqualTo(44), reason: '$target');
@@ -277,6 +285,105 @@ void main() {
     );
     final page = find.byKey(const ValueKey('store-page:autonomous/strudel'));
     expect(tester.getSize(page).width, _smallPhone.width);
+  });
+
+  testWidgets('a product page in a discipline past the edge scrolls its chip '
+      'into view', (tester) async {
+    await _open(
+      tester,
+      size: _smallPhone,
+      web: true,
+      initialHarness: 'autonomous/ollama',
+    );
+    final chip = _chip('category:Local AI');
+
+    expect(tester.getSemantics(chip), isSemantics(isSelected: true));
+    _expectFullyShown(tester, chip);
+  });
+
+  testWidgets('going back to a shelf past the edge scrolls its chip into '
+      'view', (tester) async {
+    await _open(
+      tester,
+      size: _smallPhone,
+      web: true,
+      initialHarness: 'autonomous/ollama',
+    );
+    final mouse = TestPointer(1, PointerDeviceKind.mouse);
+    await tester.sendEventToBinding(mouse.hover(tester.getCenter(_chips)));
+    await tester.sendEventToBinding(mouse.scroll(const Offset(0, 5000)));
+    await tester.pumpAndSettle();
+    expect(tester.getRect(_chip('discover')).right, lessThan(0));
+
+    await tester.tap(find.byKey(const ValueKey('store-back-hit')));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.getSemantics(_chip('discover')),
+      isSemantics(isSelected: true),
+    );
+    _expectFullyShown(tester, _chip('discover'));
+  });
+
+  testWidgets('the chips offer the rail\'s shelves, in the rail\'s order', (
+    tester,
+  ) async {
+    await _open(tester, size: const Size(1440, 900), web: true);
+    final rail = [
+      for (final element
+          in find
+              .byWidgetPredicate(
+                (widget) =>
+                    widget.key is ValueKey<String> &&
+                    ((widget.key! as ValueKey<String>).value.startsWith(
+                          'store-shelf-',
+                        ) ||
+                        (widget.key! as ValueKey<String>).value ==
+                            'store-viewers-button'),
+              )
+              .evaluate())
+        (element.widget.key! as ValueKey<String>).value
+            .replaceFirst('store-shelf-', '')
+            .replaceFirst('store-viewers-button', 'viewers'),
+    ];
+
+    await _open(tester, size: _phone, web: true);
+    final chips = [
+      for (final element
+          in find
+              .byWidgetPredicate(
+                (widget) =>
+                    widget.key is ValueKey<String> &&
+                    (widget.key! as ValueKey<String>).value.startsWith(
+                      'store-chip:',
+                    ),
+              )
+              .evaluate())
+        (element.widget.key! as ValueKey<String>).value.replaceFirst(
+          'store-chip:',
+          '',
+        ),
+    ];
+
+    expect(rail, [
+      'discover',
+      'all',
+      for (final name in [
+        'Coding',
+        'Design',
+        'Engineering',
+        'Media',
+        'Music',
+        'Productivity',
+        'Science & Data',
+        'Simulation',
+        'Games',
+        'Local AI',
+      ])
+        'category:$name',
+      'viewers',
+    ]);
+    expect(chips, rail);
   });
 
   testWidgets('Desktop keeps its rail in a window narrower than the web\'s '
@@ -443,7 +550,10 @@ void main() {
     await _openEnginesOnlyDiscover(tester, web: true);
 
     expect(find.byType(SkeletonBlock), findsNothing);
-    expect(find.text(_onAComputer), findsOneWidget);
+    expect(
+      find.text('Open the Harness app on a computer to see more harnesses.'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('Desktop Discover still waits for this computer', (tester) async {
