@@ -29,9 +29,13 @@ export async function readDecision(tx: Tx, tabId: string, id: string): Promise<R
 export async function writeRouteEffects(tx: Tx, tabId: string, effects: RouteDecisionEffect[], now: number): Promise<void> {
   for (const effect of effects) {
     if (effect.op === 'create') {
-      // One open decision per group: a newer route supersedes the open one.
-      await tx.superTabRouteDecision.updateMany({ where: { tabId, conversationId: effect.conversationId, ...open },
-        data: { outcome: 'superseded', outcomeAt: new Date(now) } })
+      // A newer route supersedes unused proposals; queued starts and assignments keep their quota until work ends.
+      // This Prisma/Mongo client cannot filter `isSet` on a Json field; reading it maps both unset and null to null.
+      const prior = await tx.superTabRouteDecision.findMany({ where: { tabId, conversationId: effect.conversationId, ...open },
+        select: { id: true, final: true, assignmentId: true } })
+      const unusedIds = prior.filter(row => row.final === null && row.assignmentId === null).map(row => row.id)
+      if (unusedIds.length) await tx.superTabRouteDecision.updateMany({ where: { tabId, conversationId: effect.conversationId,
+        id: { in: unusedIds }, ...open }, data: { outcome: 'superseded', outcomeAt: new Date(now) } })
       await tx.superTabRouteDecision.create({ data: { id: effect.id, tabId, conversationId: effect.conversationId,
         record: json(effect.record), createdAt: new Date(now) } })
       await tx.superTabRouteDecision.deleteMany({ where: { tabId, createdAt: { lt: new Date(now - RETENTION_MS) } } })
@@ -61,4 +65,14 @@ export async function closeAssignment(tx: Tx, tabId: string, assignmentId: strin
     }
   }
   await tx.superTabRouteDecision.updateMany({ where: { tabId, assignmentId, ...open }, data: { outcome, outcomeAt: new Date(now) } })
+}
+
+/** A failed start or removed agent releases its hold only while the start has no linked assignment. */
+export async function closeUnassignedStart(tx: Tx, tabId: string, decisionId: string, startId: string, outcome: 'failed' | 'stopped', now: number): Promise<void> {
+  const row = await tx.superTabRouteDecision.findFirst({ where: { id: decisionId, tabId, ...open }, select: { final: true, assignmentId: true } })
+  const final = row?.final as { kind?: unknown; startId?: unknown } | null | undefined
+  if (row?.assignmentId != null || final?.kind !== 'new' || final.startId !== startId) return
+  await tx.superTabRouteDecision.updateMany({ where: { id: decisionId, tabId,
+    AND: [open, { OR: [{ assignmentId: null }, { assignmentId: { isSet: false } }] }] },
+    data: { outcome, outcomeAt: new Date(now) } })
 }

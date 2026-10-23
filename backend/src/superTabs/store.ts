@@ -19,7 +19,7 @@ import {
   SuperTabError, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
 } from './model.js'
 import { holdNoticeText, type HoldReason } from './holdNotice.js'
-import { closeAssignment, readDecision, recentRoutes, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
+import { closeAssignment, closeUnassignedStart, readDecision, recentRoutes, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
@@ -524,6 +524,15 @@ export class SuperTabStore {
         revision, state: json(effects.state), ...indexes(effects.state),
       } })
       await writeRouteEffects(tx, tabId, effects.routeDecisions, context.now)
+      if (command.type === 'agent.startFailed') {
+        const start = original.starts?.find(s => s.id === command.startId)
+        if (start?.routeDecisionId) await closeUnassignedStart(tx, tabId, start.routeDecisionId, start.id, 'failed', context.now)
+      }
+      if (command.type === 'agent.remove' && actor.kind === 'agent' && actor.agentId === command.agentId) {
+        const start = original.starts?.find(s => s.routeDecisionId && s.harnessId &&
+          stableId(s.request.machineId, s.harnessId) === command.agentId)
+        if (start?.routeDecisionId) await closeUnassignedStart(tx, tabId, start.routeDecisionId, start.id, 'stopped', context.now)
+      }
       if (command.type === 'work.cancel') {
         await closeAssignment(tx, tabId, command.assignmentId, 'cancelled', context.now)
       }

@@ -34,6 +34,18 @@ async function fixture() {
     name: 'Lead', configuration: config, lead: true })).result.agentId as string
   return { tab, lead }
 }
+async function routedStart(tab: string, lead: string, role?: 'reviewer') {
+  const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
+    candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high',
+      quality: 2, cost: 2, title: 'New agent', label: 'New agent' }],
+    excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
+  const routeDecisionId = String((await run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)).result.routeDecisionId)
+  const request = { conversationId: 'lead', machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high',
+    name: 'Builder', cwd: '/fixture/repo', worktree: false, ...(role ? { role } : {}),
+    requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+  const startId = String((await run(tab, { type: 'agent.start', request, routeDecisionId } as Command, host, lead)).result.startId)
+  return { routeDecisionId, startId }
+}
 const message = (text: string): Command => ({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })
 async function invite(tab: string, role: 'collaborator' | 'viewer' = 'collaborator') {
   const invitation = await run(tab, { type: 'invite.create', email: peer.email, role, conversationId: 'lead' })
@@ -1251,6 +1263,9 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const request = { conversationId: 'lead', machineId: 'test-host', engine: 'claude', model: 'haiku', effort: 'auto', name: 'Builder', cwd: '/fixture/repo', worktree: false,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const startId = (await run(tab, { type: 'agent.start', request, routeDecisionId } as Command, host, lead)).result.startId as string
+    // A queued start already holds its account's quota when the Lead routes again.
+    await run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)
+    expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBeNull()
     await expect(run(tab, { type: 'route.modelResult', decisionId: routeDecisionId, startId: 'other', model: 'sonnet', effort: 'auto' } as Command, host, lead))
       .rejects.toMatchObject({ code: 'ROUTE_MISMATCH' })
     const before = (await store.messages(owner, tab, 'lead', {})).messages.length
@@ -1259,6 +1274,25 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const read = async () => (await app.inject({ url: `/api/super-tabs/${tab}/route-decisions/${routeDecisionId}`, headers: { authorization: `Bearer ${owner.sub}` } })).json().data
     expect(await read()).toMatchObject({ outcome: null, outcomeAt: null, createdAt: expect.any(String),
       final: { kind: 'new', startId, model: 'sonnet', effort: 'auto', requested: { model: 'haiku', effort: 'auto' } } })
+  })
+
+  it('releases a queued start\'s route hold when that start fails', async () => {
+    const { tab, lead } = await fixture()
+    const { routeDecisionId, startId } = await routedStart(tab, lead)
+    expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBeNull()
+    await run(tab, { type: 'agent.startFailed', startId, error: 'Launch refused.' }, host, lead)
+    expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBe('failed')
+  })
+
+  it('releases a started agent\'s route hold when the host stops it before assignment', async () => {
+    const { tab, lead } = await fixture()
+    const { routeDecisionId, startId } = await routedStart(tab, lead, 'reviewer')
+    const agentId = String((await run(tab, { type: 'agent.started', startId, harnessId: randomUUID(), configuration: config }, host, lead)).result.agentId)
+    expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBeNull()
+    await run(tab, { type: 'agent.release', agentId, decision: 'stop' }, host, lead)
+    const releaseId = (await store.read(owner, tab)).state.agents.find(agent => agent.id === agentId)!.releaseId!
+    await run(tab, { type: 'agent.remove', agentId, releaseId }, host, agentId)
+    expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBe('stopped')
   })
 
   it('names the failing field when a command is invalid', async () => {
@@ -1281,6 +1315,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const routeDecisionId = (await run(tab, { type: 'route.record', conversationId: group, decision } as Command, host, lead)).result.routeDecisionId as string
     const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker, routeDecisionId } as Command, host, lead)).result.assignmentId as string
     expect(await store.routeDecision(owner, tab, routeDecisionId)).toMatchObject({ assignmentId, final: { kind: 'member', agentId: worker } })
+    await run(tab, { type: 'route.record', conversationId: group, decision } as Command, host, lead)
+    expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBeNull()
     await store.stopped(host, tab, assignmentId, 'native-stop-receipt')
     expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBe('stopped')
   })

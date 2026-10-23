@@ -322,6 +322,18 @@ describe('routeTask', () => {
     expect(recorded(s).command.decision.candidates.every((c: { fit: { status: string; account: string } }) => c.fit.status === 'short' && c.fit.account === 'acct')).toBe(true)
     expect(result.warnings).toEqual(['w', expect.stringMatching(/^No candidate is expected to cover this task; its 5-hour quota is expected to run out partway and resets in 3h\.$/)])
   })
+  it('keeps a queued start in the reroute quota hold until its linked work finishes', async () => {
+    const queued = { id: 'queued', conversationId: 'g1', account: 'acct', spend: { '5-hour': 45 }, size: 'medium',
+      final: { kind: 'new', startId: 'start-1', engine: 'claude', model: 'opus' }, assignmentId: null,
+      outcome: null as string | null, createdAt: new Date().toISOString() }
+    const routeWith = async (decision: typeof queued) => {
+      const s = scoped({ history: { ok: true, value: { decisions: [decision], attempts: [] } } })
+      await routeTask(input, s, where as never, opener(), () => 'op')
+      return recorded(s).command.decision.candidates as Array<{ fit: { status: string } }>
+    }
+    expect((await routeWith(queued)).every(candidate => candidate.fit.status === 'short')).toBe(true)
+    expect((await routeWith({ ...queued, outcome: 'done' })).some(candidate => candidate.fit.status === 'fits')).toBe(true)
+  })
   it('records again in the shape an older backend knows when it refuses the new fields as invalid', async () => {
     const s = scoped(), base = s.getMockImplementation()!
     let refused = 0
