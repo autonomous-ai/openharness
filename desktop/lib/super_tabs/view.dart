@@ -1662,9 +1662,9 @@ class _SuperTabViewState extends State<SuperTabView>
                       child: Align(
                         alignment: Alignment.centerRight,
                         child: SizedBox(
-                          width: constraints.maxWidth
-                              .clamp(0, SuperTabPaneLayout.rightWidth)
-                              .toDouble(),
+                          width: SuperTabPaneLayout.drawerWidth(
+                            constraints.maxWidth,
+                          ),
                           child: roster,
                         ),
                       ),

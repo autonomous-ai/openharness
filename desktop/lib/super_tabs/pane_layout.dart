@@ -24,6 +24,14 @@ class SuperTabPaneLayout extends StatefulWidget {
   static const storageKey = 'super-tab-pane-widths';
   static const leftWidth = 300.0;
   static const rightWidth = 280.0;
+
+  /// The roster drawer's share of a narrow window at most. On a phone it filled the screen, leaving no
+  /// veil to tap, so closing it was hard (owner, 2026-10-23).
+  static const drawerMaxFraction = 0.7;
+
+  /// The roster drawer's width in a window [available] wide.
+  static double drawerWidth(double available) =>
+      (available * drawerMaxFraction).clamp(0, rightWidth).toDouble();
   final Widget? left, right;
   final Widget center;
   final VoidCallback onLeave;
