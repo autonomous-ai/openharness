@@ -159,6 +159,8 @@ export interface SuperTabState {
   harnessReservations?: Array<{ machineId: string; harnessId: string; generation: string; renewed: boolean }>
   /** Native stop receipts survive late replaceable machine observations. */
   releasedHarnesses?: Array<{ machineId: string; harnessId: string }>
+  /** Sessions of removed agents their host closes, listed to that host until it says they closed (agent.sessionClosed). */
+  closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string }>
 }
 export type Actor =
   | { kind: 'person'; userId: string; email: string }
