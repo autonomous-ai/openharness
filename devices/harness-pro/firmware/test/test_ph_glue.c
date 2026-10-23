@@ -1805,8 +1805,8 @@ static void lead_retry(void) {
     CHECK(take() == 3);
     render(6000);
     CHECK(take() == 2);
-    pod_ui_supertab_unsent(&U, Q[0].t);
-    pod_ui_supertab_unsent(&U, Q[1].t);
+    pod_ui_supertab_unsent(&U, &Q[0]);
+    pod_ui_supertab_unsent(&U, &Q[1]);
     render(8999);
     CHECK(take() == 0);
     render(9000);
@@ -1825,7 +1825,7 @@ static void lead_retry(void) {
     CHECK(take() == 2);
     render(6000);
     CHECK(take() == 1);
-    pod_ui_supertab_unsent(&U, Q[0].t);
+    pod_ui_supertab_unsent(&U, &Q[0]);
     render(9000);
     CHECK(take() == 1 && is_q(0, "supertab.open", "sw1", "l2"));
     // a full queue records nothing: the next sync sends the whole of it
@@ -1897,7 +1897,8 @@ static void lead_scrolls(void) {
     render(3500);
     CHECK(pod_scroll_max(&U.nav, &U.model) > 1 && top()->scroll == 0);
     t_(true, 360, 500, 4000); t_(true, 360, 400, 4100); t_(true, 360, 300, 4200); t_(false, 360, 300, 4250);
-    CHECK(top()->view == POD_V_LEAD && top()->scroll >= 1 && top()->lead == 0 && sc_events == 0 && take() == 0);   // the drag moved the text, not the host's pane, and sent nothing
+    CHECK(top()->view == POD_V_LEAD && top()->scroll >= 1 && top()->lead == 0 && take() == 0);   // the drag moved the text and sent no Swarm frame
+    CHECK(sc_down == 1 && sc_move > 0 && sc_up == 1);   // and the desktop's chat follows it, as an agent screen's drag scrolls its pane
     t_(true, 360, 300, 5000); t_(true, 360, 500, 5100); t_(true, 360, 700, 5200); t_(false, 360, 700, 5250);
     CHECK(top()->scroll == 0);
 }
