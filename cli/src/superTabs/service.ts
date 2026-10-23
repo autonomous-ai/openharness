@@ -54,6 +54,19 @@ const HELP = {
 }
 
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
+const OTHER_WORK_FIELDS = ['conversationId', 'projectName', 'title', 'owns', 'status', 'agentName', 'pr'] as const
+
+/** Leads see each other's work and talk (spec 2026-10-23): a Lead reads other projects' active work in the backend's
+ *  fields alone; an agent that leads no group reads neither it nor the Leads conversation, even from a server that sent it. */
+function statusView(answer: Record<string, unknown>, agentId: string): Record<string, unknown> {
+  const { otherProjectsWork, leadsConversationId, ...state } = object(answer.state)
+  if (list(state.conversations).some(c => c.leadId === agentId && c.archived !== true)) {
+    return { ...answer, state: { ...state, ...(leadsConversationId !== undefined ? { leadsConversationId } : {}),
+      ...(Array.isArray(otherProjectsWork) ? { otherProjectsWork: list(otherProjectsWork).map(work =>
+        Object.fromEntries(OTHER_WORK_FIELDS.filter(key => key in work).map(key => [key, work[key]]))) } : {}) } }
+  }
+  return { ...answer, state: { ...state, conversations: list(state.conversations).filter(c => c.kind !== 'leads' && c.id !== leadsConversationId) } }
+}
 
 function taskCommand(command: Record<string, unknown>): Record<string, unknown> {
   if (command.type !== 'conversation.create' && command.type !== 'work.define') return command
@@ -208,7 +221,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'startStatus' && identifier(payload.startId)) {
           return { ok: true, value: await backend(core, 'GET', `${path}/starts/${payload.startId}?${identity}`) }
         }
-        if (payload.action === 'status') return { ok: true, value: answer }
+        if (payload.action === 'status') return { ok: true, value: statusView(answer, agentId) }
         // A Lead's terminal read or typing (`screen`, `type`): the backend answers only the agent that asked.
         if (payload.action === 'terminalResult') {
           if (!identifier(payload.terminalRequestId)) return { error: 'INVALID_REQUEST' }
