@@ -161,6 +161,42 @@ void main() {
   });
 
   testWidgets(
+    'on a phone the roster drawer leaves 30% of the screen to tap closed',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(360, 720));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final server = ConversationServer();
+      final controller = server.controller();
+      await controller.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabView(
+              controller: controller,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Test Mac',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Members and machines'));
+      await tester.pumpAndSettle();
+      final roster = find.byType(SuperTabRoster);
+      expect(tester.getSize(roster).width, 360 * 0.7);
+      await tester.tapAt(const Offset(40, 360));
+      await tester.pumpAndSettle();
+      expect(roster, findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await controller.flush();
+      controller.dispose();
+    },
+  );
+
+  testWidgets(
     'the narrow sidebar owns keyboard focus and Escape returns to the draft',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(600, 520));

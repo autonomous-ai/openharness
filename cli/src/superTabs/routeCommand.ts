@@ -155,7 +155,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     }
     machines.set(String(pool.machineId), { name: String(pool.name), status: 'contributed', account: false, pool })
   }
-  const enabled = policy.models.filter(m => m.enabled)
+  const enabled = policy.models.filter(m => m.enabled && ENGINES.includes(m.engine))
 
   // The probes do not wait for the context reads: the machines, the task's folder and the group's talk and log are read
   // together, and each read that is only context gives up after three seconds. What needs several of them (whether a
@@ -207,7 +207,10 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
 
 async function probeMachine(machineId: string, { name: machineName, status, account, pool }: { name: string; status: string; account: boolean; pool?: Json },
   members: Json[], allModels: Policy['models'], policy: Policy, a: Assessment, where: Where, open: typeof openDaemon): Promise<Probe[]> {
-  const models = pool ? allModels.filter(m => Array.isArray(pool.engines) && pool.engines.includes(m.engine)) : account ? allModels : []
+  const listedEngines = Array.isArray(pool?.engines) ? pool.engines.filter((engine): engine is string => typeof engine === 'string') : []
+  const legacy = listedEngines.some(engine => !ENGINES.includes(engine))
+  const installed = legacy ? list(object(pool?.observation).quotas).map(quota => quota.engine) : listedEngines
+  const models = pool ? allModels.filter(m => installed.includes(m.engine)) : account ? allModels : []
   const engines = [...new Set([...models.map(m => m.engine), ...members.map(m => String(object(m.configuration).engine) as 'claude' | 'codex')])]
   const memberProbe = (m: Json, refusals: string[] = [], quota = UNKNOWN_QUOTA, frame: MemberFrame | null = null, terminalUnverified = false): Probe => {
     const c = object(m.configuration), engine = String(c.engine) as 'claude' | 'codex'

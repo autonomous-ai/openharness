@@ -13,17 +13,29 @@ function fixture() {
   const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['codex'], paused: false },
     harnessIds: ['running', 'stopped'], starts: [{ id: 'start', dispatched: false }], paused: false }
   const backend = vi.fn(async (_core: unknown, method: string, path: string, _body?: unknown): Promise<unknown> => path.endsWith('/pools') ? [pool] : { revision: 1 })
-  const request = vi.fn(async () => ({ providers: [{ provider: 'codex', outcome: 'answered', httpStatus: 200,
+  const request = vi.fn(async (_type: string): Promise<Record<string, unknown>> => ({ providers: [{ provider: 'codex', outcome: 'answered', httpStatus: 200,
     body: { account_email: 'private@example.com', secret: 'private-token', rate_limit: { primary_window: { used_percent: 25, reset_at: 1234567890 } } } }] }))
   const close = vi.fn(), open = vi.fn(async () => ({ machineId: 'host', request, close }))
   const capabilities = vi.fn(async (_input: { cwd: string; tools: string[]; devices: string[] }) => ({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 }, tools: { git: true } }))
   const start = vi.fn(async () => ({ ok: true }))
   const prepare = vi.fn(async () => {})
   const machine = new ContributedMachines(core, 'host', { backend, open, capabilities, start, prepare, now: () => now } as never)
-  return { machine, pool, core, backend, open, close, capabilities, start, prepare, advance: () => { now += 16000 }, step: (ms: number) => { now += ms } }
+  return { machine, pool, core, backend, open, request, close, capabilities, start, prepare, advance: () => { now += 16000 }, step: (ms: number) => { now += ms } }
 }
 
 describe('contributed machine executor', () => {
+  it('reports only installed supported engines for a legacy OpenCode contribution', async () => {
+    const f = fixture()
+    f.pool.machine.engines = ['opencode']
+    const usage = f.request.getMockImplementation()!
+    f.request.mockImplementation(async type => type === 'engines_probe'
+      ? { engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: false }] }
+      : usage(type))
+    await f.machine.tick()
+    const body = f.backend.mock.calls.find(c => c[1] === 'POST')![3]
+    expect(body).toMatchObject({ quotas: [{ engine: 'claude' }] })
+    expect(f.request).toHaveBeenCalledWith('engines_probe', { engines: ['claude', 'codex'] }, 20_000)
+  })
   it('prepares a swarm project before dispatch and durably rejects an unsafe checkout', async () => {
     const f = fixture()
     Object.assign(f.pool.machine, { scope: 'swarm' })
@@ -144,7 +156,7 @@ describe('contributed machine executor', () => {
 
   it('a lead queues a contributed start without connecting to that computer', async () => {
     const open = vi.fn()
-    const scoped = vi.fn(async () => ({ ok: true, value: { creationId: 'creation', poolGeneration: 'grant', request: { machineId: 'host' } } }))
+    const scoped = vi.fn(async () => ({ ok: true, value: { creationId: 'creation', poolGeneration: 'grant', request: { machineId: 'host', engine: 'claude' } } }))
     const reply = await startAgent({ startId: 'start' }, scoped, { port: 14001, machineId: 'lead', dataDir: '/fixture' }, open)
     expect(reply).toMatchObject({ ok: true, queued: true, startId: 'start', machineId: 'host' })
     expect(open).not.toHaveBeenCalled()

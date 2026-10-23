@@ -57,6 +57,7 @@ void main() {
       ];
       final c = await f.app.superTabs.open(tabId);
       await c.refresh();
+      c.select('mobile-lead');
       c.selectDevices();
       await tester.pumpWidget(
         MaterialApp(
@@ -74,7 +75,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(c.devicesSelected, isTrue);
-      expect(c.selectedId, 'lead');
+      expect(c.selectedId, 'mobile-lead');
       await tester.tap(find.byKey(const ValueKey('super-member-nova')));
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(FilledButton, 'Open terminal'));
@@ -95,7 +96,7 @@ void main() {
       await tester.tap(open);
       await tester.pumpAndSettle();
       expect(c.devicesSelected, isTrue);
-      expect(c.selectedId, 'lead');
+      expect(c.selectedId, 'mobile-lead');
       expect(f.app.panes.any((pane) => pane.agentId == 'native-nova'), isFalse);
 
       await tester.tap(

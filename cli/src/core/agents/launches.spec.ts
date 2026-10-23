@@ -275,6 +275,22 @@ describe('agent_create, refused before any pane exists', () => {
     expect(await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev', resumeSessionId: 'old-session' })).toMatchObject({ error: 'INVALID_SESSION' })
   })
 
+  it('passes the project\'s skill mode with a Swarm role, and refuses one it does not know before dispatch', async () => {
+    const { ask, create } = setup()
+    for (const swarmSkillMode of ['default', 'orchestration']) {
+      await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev', swarmSkillMode })
+      expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'dev', swarmSkillMode })
+    }
+    // From a start before modes: the session launches as it did then.
+    await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev' })
+    expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmSkillMode')
+    const calls = vi.mocked(create!).mock.calls.length
+    for (const swarmSkillMode of ['light', 7, null]) {
+      expect(await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev', swarmSkillMode })).toMatchObject({ error: 'INVALID_SWARM_ROLE' })
+    }
+    expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
+  })
+
   it('a first prompt that is not text, too long, or for an engine that cannot take one', async () => {
     const { ask, create } = setup()
     expect(await ask({ engine: 'claude', cwd: '/w', prompt: 7 })).toStrictEqual({ error: 'INVALID_PROMPT', detail: 'prompt must be a string' })

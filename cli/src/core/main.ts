@@ -870,7 +870,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const coreApi = createCoreApi({
     nativeTurns: async (agentId, cursor) => nativeTurns.read(agentId, cursor),
     cloud: cloudDoors,
-    superTabs: { attention: (items) => superTabWaits.attention(items), cards: (items) => superTabCards.cards(items), cardRecap: (recap) => superTabCards.recap(recap) },
+    superTabs: { attention: (items) => superTabWaits.attention(items), cards: (items) => superTabCards.cards(items), cardRecap: (recap) => superTabCards.recap(recap),
+      // In the core's own process Share was started with it; out of it, the master starts Share's process.
+      shareObservers: () => { if (outOfProcess.has('sharing')) coreLink.want('sharing') } },
     // The devices' `cardsWanted`, `cardRecap` and `cardOpen`, and no other action of the Super Tab service (core/superTabCards.ts `ask`).
     superTabRequest: (payload) => superTabCards.ask(payload),
     cloudRows: () => (cloudAgents?.dialRows() ?? []) as unknown as RegisteredSession[],

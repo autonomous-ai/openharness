@@ -475,6 +475,18 @@ it('starts only in the chosen conversation, captures authority, and never assign
   expect(() => f.run({ type: 'agent.start', request, ...via }, actor, { contribution, ...decisionIn(group) })).toThrow('paused')
 })
 
+it.each(['opencode', 'kilo'])('refuses to dispatch a stored legacy %s start before native launch', engine => {
+  const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+  const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+  const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+  const request = { conversationId: group, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
+    requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
+  const startId = f.run({ type: 'agent.start', request, ...via }, actor, { contribution, ...decisionIn(group) }).result.startId as string
+  f.state.starts![0]!.request.engine = engine // Simulate a start stored before the engine restriction.
+  expect(() => f.run({ type: 'agent.startDispatch', startId }, actor, { contribution })).toThrow('Claude Code or Codex')
+  expect(f.state.starts![0]!.dispatched).toBe(false)
+})
+
 describe('agent.start on the Swarm\'s listed machines', () => {
   const request = (group: string, machineId: string) => ({ conversationId: group, machineId, engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } })
@@ -798,15 +810,18 @@ it('assigns stable workgroup numbers through old snapshots, rename, archive and 
   const third = f.group()
   expect(f.state.conversations.map(c => [c.id, c.number])).toEqual([['lead', undefined], [first, 1], [second, 2], [third, 3]])
 })
-it('records the lead project once and accepts installed engines beyond Claude and Codex', () => {
+it('records the lead project once and accepts only Claude Code and Codex contributions', () => {
   const f = fixture(), project = { cwd: '/repo', repositoryUrl: 'https://github.com/example/project' }
   f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'lead', name: 'Lead', configuration: config, lead: true, project }, owner,
     { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
   expect(f.state.project).toEqual({ machineId: 'host', ...project })
   expect(() => f.run({ type: 'tab.project', machineId: 'host', project })).toThrow('already has a project')
-  const command = commandSchema.parse({ type: 'machine.contribute', machineId: 'host', name: 'Workstation', cwd: '/repo', engines: ['claude', 'codex', 'pi', 'opencode'], maxAgents: 4 })
+  const command = commandSchema.parse({ type: 'machine.contribute', machineId: 'host', name: 'Workstation', cwd: '/repo', engines: ['claude', 'codex'], maxAgents: 4 })
   f.run(command, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
-  expect(f.state.machines![0]!.engines).toEqual(['claude', 'codex', 'pi', 'opencode'])
+  expect(f.state.machines![0]!.engines).toEqual(['claude', 'codex'])
+  for (const engine of ['opencode', 'kilo']) {
+    expect(commandSchema.safeParse({ ...command, engines: ['claude', engine] }).success).toBe(false)
+  }
 })
 it('accepts POSIX, Windows drive and UNC folders and refuses relative, drive-relative and control-character ones', () => {
   const contribute = (cwd: string) => commandSchema.safeParse({ type: 'machine.contribute', machineId: 'host', name: 'PC', cwd, engines: ['claude'], maxAgents: 1 })
@@ -1038,6 +1053,21 @@ describe('Reviewer role', () => {
   it('starts a Reviewer only on Claude Code or Codex', () => {
     const f = fixture(), group = f.group()
     expect(() => f.run({ type: 'agent.start', request: request(group, { role: 'reviewer', engine: 'opencode' }) } as Command, owner, { contribution })).toThrow('Claude Code or Codex')
+  })
+
+  it.each(['opencode', 'kilo'])('refuses %s for a Builder before a machine can launch it', engine => {
+    const f = fixture(), group = f.group()
+    const start = { type: 'agent.start', request: request(group, { engine }) }
+    expect(commandSchema.safeParse(start).success).toBe(false)
+    expect(() => f.run(start as Command, owner, { contribution })).toThrow('Claude Code or Codex')
+  })
+
+  it('does not add an existing OpenCode session as a Swarm member', () => {
+    const f = fixture()
+    expect(() => f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'open', name: 'Open',
+      configuration: { ...config, engine: 'opencode' }, lead: false }, owner,
+    { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })).toThrow('Claude Code or Codex')
+    expect(f.state.agents).toHaveLength(0)
   })
 
   it('refuses to assign, route work to or make a Lead of a Reviewer', () => {

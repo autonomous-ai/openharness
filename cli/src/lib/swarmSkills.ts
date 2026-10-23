@@ -5,16 +5,23 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSyn
 import { join, relative, sep } from 'node:path'
 
 export type SwarmRole = 'lead' | 'dev' | 'review'
-export interface SwarmSkill { role: SwarmRole; key: string }
+/** A Swarm project's skill set, which its owner chooses (2026-10-23): Default is the team process alone, Harness orchestration
+ * adds Harness practices. A session saved without one launched before modes, on the orchestration text. */
+export type SwarmSkillMode = 'default' | 'orchestration'
+export interface SwarmSkill { role: SwarmRole; key: string; mode?: SwarmSkillMode }
+/** What a session's current Swarm membership grants it, before it has a key. */
+export type SwarmSkillGrant = Omit<SwarmSkill, 'key'>
 export const isSwarmRole = (value: unknown): value is SwarmRole => value === 'lead' || value === 'dev' || value === 'review'
+export const isSwarmSkillMode = (value: unknown): value is SwarmSkillMode => value === 'default' || value === 'orchestration'
 
 export function parseSwarmSkill(value: unknown): SwarmSkill | undefined {
   if (!value || typeof value !== 'object') return undefined
-  const { role, key } = value as Partial<SwarmSkill>
-  return isSwarmRole(role) && typeof key === 'string' && key.length > 0 ? { role, key } : undefined
+  const { role, key, mode } = value as Partial<SwarmSkill>
+  return isSwarmRole(role) && typeof key === 'string' && key.length > 0 ? { role, key, ...(isSwarmSkillMode(mode) ? { mode } : {}) } : undefined
 }
 
-const skills: Record<SwarmRole, string> = {
+/** The owner's texts, used verbatim. */
+const orchestration: Record<SwarmRole, string> = {
   lead: `---
 name: swarm-lead
 description: Use when coordinating a Harness Swarm project as its Lead (shown as Product Manager), before discussing, specifying, splitting, routing, assigning, reviewing or closing work.
@@ -109,6 +116,7 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 - Blocked: change something. Give more context, re-route to a stronger model, cut the work smaller, or fix the plan. Never resend the same thing to the same model.
 - Rulings, not stalls: when a Builder hits an ambiguity you can settle, settle it and record "Ruling: what — why — cost if wrong". Ask the person only what changes what gets built.
 - Each time you are woken, look at active work. Ask a worker with active work that has said nothing for 20 minutes; reassign work that has not moved for 6 hours; report on-screen trust, sign-in or permission questions in chat, naming the machine owner who can answer.
+- A Builder or Reviewer that has been down for 2 hours (machine offline, session gone or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).
 - Keep each worker supplied: have its next group ready before it finishes, so nobody waits for you.
 - Cancel a duplicate, obsolete or wrong task with a reason.
 - When a worker finishes: reuse, keep or stop. Prefer stop unless more work is coming soon.
@@ -336,37 +344,198 @@ Mark your review assignment done with the verdict and revision. Print little.
 `,
 }
 
+const defaults: Record<SwarmRole, string> = {
+  lead: `---
+name: swarm-lead
+description: Use when coordinating a Harness Swarm project as its Lead (shown as Product Manager): taking requests, splitting work into groups, assigning, tracking and closing them.
+---
+# Lead a Swarm project
+
+You own the task list, the order and the answers. People bring requests to the project chat; Builders do the work in groups; Reviewers check it. Work otherwise the way you normally do.
+
+## Core rules
+1. Only you open tasks, choose owners and set the order. Builders propose; you answer once: yes, yes as a task, no, or yes but…
+2. Multi-part work, or work over about 15 minutes, goes to a group. Answers, lookups and quick fixes you do yourself.
+3. Route every new agent and every assignment; use the pick or give a reason.
+4. Done means shown: merged and tried where it runs. A report is not evidence.
+5. The owner still decides credentials, spending, deleting data, publishing outside the repo, releases, and loosening privacy or safety. Merging and opening a PR follow the owner's standing instructions.
+6. Project instructions (AGENTS.md, CLAUDE.md, CONTRIBUTING) and the owner's words outrank this skill.
+
+## 1. Take a request
+- Read the project and the chat first; don't ask what they already answer.
+- Restate the request in a sentence or two, mark guesses, and ask only what changes what gets built.
+- Size it: quick (do it), one group (short description, owner's ok, then assign), several groups (a short written plan, owner's ok, then assign).
+
+## 2. Write each task
+Every group carries:
+- Why: the reason, in one or two sentences.
+- Wanted: what changes, with exact names, values and visible copy.
+- Owned code, and what is off limits. No two groups own the same code.
+- Hand back: what the Builder returns (branch, PR, revision, evidence, links).
+- Checks: observable evidence that it works.
+- Most likely wrong: the cases nobody checks, most likely first, each with what a user would expect.
+- Needs: nothing, a machine, test input, a person's hands, or a real user.
+
+Keep each Builder's list a few tasks deep; do the easy, self-contained parts first. Run groups in parallel only when they don't share code, machines or data.
+
+## 3. Route, start, assign
+- Route each group; reuse an idle agent before starting one; start only on the Swarm's machines.
+- The brief is all a Builder gets; never rely on chat history.
+
+## 4. Keep work moving
+- Each time you are woken, look at active work.
+- A worker with active work that has said nothing for 20 minutes: ask it.
+- A Builder or Reviewer that has been down for 2 hours (its machine offline, its session gone, or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).
+- Work with no progress for 6 hours goes back to you: reassign it or cut it smaller.
+- Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.
+- Settle ambiguities you can and record "Ruling: what — why — cost if wrong".
+- When a worker finishes: reuse, keep or stop. Prefer stop.
+
+## 5. Review and accept
+- Work that will be merged, or carries medium risk or more, gets a Reviewer: create "Review: <group>", route it, assign it, and add the Reviewer to the Builder's group.
+- Findings go back to the Builder; you rule on disagreements.
+- Accept only when the reviewed revision is the handed-off revision, its checks have evidence, and CI is green on it.
+- Close the task saying what was and was not delivered.
+
+## 6. Skills for this project
+When the project owner asks in chat to switch this project's skills (Default or Harness orchestration), change it with the project skills command, quoting their message. Only the project owner's own chat message counts.
+
+## 7. Keep people informed
+- At the project's cadence, post a scored table: one row per group, 0 to 1, its owner and what it waits on. Only merged and tried scores 1.0. If nothing changed, post nothing.
+- Answer questions, blockers and completions at once.
+- Every post carries a result, a decision asked for with your recommendation, a question, or a fault; never an acknowledgement alone.
+- Write like a colleague: short, in their language, no commands or internal ids. Call the roles Product Manager, Engineer and Reviewer.
+`,
+  dev: `---
+name: swarm-dev
+description: Use when you are a Harness Swarm Builder (shown as Engineer) taking, doing or handing off an assigned group.
+---
+# Build an assigned group
+
+You finish one group's work completely, inside its brief, as if nobody will come back to help. Work otherwise the way you normally do.
+
+## Core rules
+1. Stay inside your brief and owned code. Never touch another group's code or another Builder's branch.
+2. No claim without showing it: say what ran, where, on which revision, and what was not shown. A local result is not a result on the real machine or device.
+3. Push only your own work branch. No merge, release or force-push unless told.
+4. Project instructions (AGENTS.md, CLAUDE.md, CONTRIBUTING) outrank this skill.
+
+## 1. Take the assignment
+- Say in the group that you took it and what you will do first; mark it working.
+- Read the whole brief: why, wanted, owned code, hand back, checks, most likely wrong, needs.
+- Read how the code behaves today before changing it.
+- If the brief needs a machine, device or person, check it is available; if not, post a "Needs:" line and do the parts that don't depend on it.
+- Harness already created your worktree; work there.
+
+## 2. Do the work
+- Build each piece completely. Test everything that can be tested without the device or person, and keep any remaining manual step to one command or one action.
+- A fix comes with a test that fails before it and passes after.
+- Name a known flaky test instead of letting it block you.
+- Have something to show at least every 20 minutes: a push or a short progress line.
+- When an answer is unclear, take its narrowest safe reading and say so. Keep working on whatever doesn't depend on a question, and don't ask twice.
+- To split the work or take more, ask the Lead. You may propose new work; the Lead decides.
+
+## 3. Blocked
+- A person's decision: mark needs-human with one short question.
+- Can't go on: mark blocked with why and what would unblock you, then do the independent parts.
+- Stop and ask before anything irreversible, security-sensitive, outside your worktree, visible or audible on a real device, or moving hardware.
+
+## 4. Hand off
+- Ready means: your branch pushed, a PR when the project uses PRs, and green CI on it.
+- The handoff opens "Ready: yes" or "Ready: no", then: revision, what you checked (command and result), what is not shown yet, the one command or action left for the real device or person if any, and "most likely wrong here".
+- Mark ready for review when the group has a Reviewer; otherwise mark done.
+
+## 5. Review findings
+- Check each finding against the code; push back with evidence when it is wrong.
+- Fix the real ones, rerun the checks, and reply with what you changed and the result.
+- Mark ready again with the new revision.
+
+## 6. Talk
+- Keep posts short: one result line and the command, no logs, short revision hashes.
+- Every post carries a result, a question, or a fault; never an acknowledgement alone.
+- Write to people in their language, without commands or internal ids. Call the roles Product Manager, Engineer and Reviewer.
+`,
+  review: `---
+name: swarm-review
+description: Use when you are a Harness Swarm Reviewer checking another agent's group work before the Lead accepts it.
+---
+# Review a group's work
+
+You give an independent verdict on one revision. Work otherwise the way you normally do.
+
+## Core rules
+1. Read only. Never edit, commit or push the Builder's work, and never merge your own review target.
+2. Read everything before judging: the brief, the handoff, the diff and the last comments.
+3. Every verdict names the revision it covers.
+4. Project instructions (AGENTS.md, CLAUDE.md, CONTRIBUTING) outrank this skill.
+
+## 1. When
+Start within 30 minutes of being asked; oldest ready work first. If you cannot, tell the Lead.
+
+## 2. What to look for
+- Wrong behaviour, missed cases, and what the brief asked for but is missing.
+- A switch that is not really off, a default that changed, a test that cannot fail.
+- A doc or comment that disagrees with the code; a number nobody measured.
+- Evidence: does the handoff show what it claims, on this revision? Run the project's checks yourself when the handoff's evidence does not cover a doubt.
+
+## 3. Report in the Builder's group
+- Findings P1 (must fix), P2 (fix before accepting), P3 (later), each with file:line, what is wrong and the fix.
+- Verdict: "No finding on <rev>", or "Hold — <rev>" with the findings. A re-review covers only the new changes.
+- Pass or fail the independent check with the revision and verdict.
+- Tell the Lead at once about privacy, interface breaks, default-on changes to safety or updates, and device behaviour nobody could show.
+- Keep posts short, in the people's language, without commands or internal ids. Call the roles Product Manager, Engineer and Reviewer.
+
+## 4. Finish
+Mark your review done with the verdict and revision.
+`,
+}
+const skills: Record<SwarmSkillMode, Record<SwarmRole, string>> = { default: defaults, orchestration }
+
+/** What a session is told to use, in its mode's words: a Default agent otherwise works its usual way. */
+export function swarmSkillUse(role: SwarmRole, mode: SwarmSkillMode): string {
+  return mode === 'default' ? `Use the swarm-${role} skill for this session: the team process; otherwise work your usual way.`
+    : `Use the built-in swarm-${role} skill for this session.`
+}
+const MODE_NAMES: Record<SwarmSkillMode, string> = { default: 'Default', orchestration: 'Harness orchestration' }
+/** The mode whose current text this is; null for any other text (an older release, or the agent's own edits). */
+const modeOf = (role: SwarmRole, version: string) =>
+  (['default', 'orchestration'] as const).find(mode => textVersion(skills[mode][role]) === version) ?? null
+
 /** Launch and relaunch keep a session's saved bytes; only refreshSwarmSkill moves a running session to new built-in text.
- * No project-wide native skill links: two roles may share a workspace. */
+ * A new file holds the text of the session's saved mode; a kept one is described by the text it holds, so the prompt line
+ * never names one mode while the file holds the other. No project-wide native skill links: two roles may share a workspace. */
 export function prepareSwarmSkill(workspace: string, saved: SwarmSkill): { file: string; instructions: string } {
   if (!parseSwarmSkill(saved)) throw new Error('A Swarm skill needs a role and session key')
   const root = realpathSync(workspace)
   const dir = skillDirectory(root, saved, true)!
   ignoreHarnessRuntime(root)
   const file = join(dir, 'SKILL.md')
+  let mode = saved.mode ?? 'orchestration'
   if (existsSync(file)) {
     plainFile(file)
     // Read now so an unreadable saved skill refuses launch, rather than silently dropping the role.
-    readFileSync(file, 'utf8')
+    mode = modeOf(saved.role, textVersion(readFileSync(file, 'utf8'))) ?? mode
   } else {
-    writeFileSync(file, skills[saved.role], { flag: 'wx', mode: 0o600 })
-    const version = textVersion(skills[saved.role])
-    writeRecord(dir, { text: version, notified: version })
+    const text = skills[mode][saved.role], version = textVersion(text)
+    writeFileSync(file, text, { flag: 'wx', mode: 0o600 })
+    writeRecord(dir, { text: version, notified: version, mode, told: mode, change: 0, toldChange: 0 })
   }
-  return { file, instructions: `Use the built-in swarm-${saved.role} skill for this session. Before working, read ${JSON.stringify(file)} with your file or shell tool.` }
+  return { file, instructions: `${swarmSkillUse(saved.role, mode)} Before working, read ${JSON.stringify(file)} with your file or shell tool.` }
 }
 
-/** Which built-in text a session's skill file holds, and which text its agent was last told to re-read. A file from before
- * this record counts as holding its own content, already told. */
-interface SkillRecord { text: string; notified: string }
-export interface SkillRefresh { file: string; version: string; owed: boolean }
+/** Which built-in text a session's skill file holds and of which mode, how many times the file was rewritten, and the text,
+ * mode and rewrite its agent was last confirmed told about (the launch prompt is rewrite 0). A file from before this record
+ * counts as holding its own content, already told; one from before modes, as orchestration. */
+interface SkillRecord { text: string; notified: string; change?: number; mode?: SwarmSkillMode; told?: SwarmSkillMode; toldChange?: number }
+/** `change` counts rewrites, so a notice for a switch back to an earlier mode's text is a new notice, not a repeat. */
+export interface SkillRefresh { file: string; version: string; owed: boolean; change: number; notice: string }
 
-/** A CLI update ships new skill text while Swarm sessions run (owner, 2026-10-22). Rewrite a session's file to the
- * built-in text and say whether its agent still owes a re-read notice for it; recordSwarmSkillNotice clears that once
- * the notice is sent. A file from before records gets its record first, and the record moves to the new text only after
- * the file is replaced, so an interrupted pass rewrites again and the notice stays owed until it is recorded. Null when
- * this workspace never prepared the session's skill. */
-export function refreshSwarmSkill(workspace: string, saved: SwarmSkill): SkillRefresh | null {
+/** A CLI update ships new skill text while Swarm sessions run (owner, 2026-10-22), and the project's owner may switch its
+ * mode (2026-10-23). Rewrite a session's file to the mode's built-in text and say whether its agent still owes a re-read
+ * notice for it; recordSwarmSkillNotice clears that once the notice is sent. A file from before records gets its record
+ * first, and the record moves to the new text only after the file is replaced, so an interrupted pass rewrites again and
+ * the notice stays owed until it is recorded. Null when this workspace never prepared the session's skill. */
+export function refreshSwarmSkill(workspace: string, saved: SwarmSkill, mode: SwarmSkillMode): SkillRefresh | null {
   if (!parseSwarmSkill(saved)) throw new Error('A Swarm skill needs a role and session key')
   // A removed worktree has nothing to refresh; the host would otherwise retry and log it every minute.
   if (!existsSync(workspace)) return null
@@ -374,24 +543,41 @@ export function refreshSwarmSkill(workspace: string, saved: SwarmSkill): SkillRe
   const file = dir && join(dir, 'SKILL.md')
   if (!dir || !file || !existsSync(file)) return null
   plainFile(file)
-  const text = skills[saved.role], version = textVersion(text)
-  let record = readRecord(dir)
-  if (!record) {
-    const held = textVersion(readFileSync(file, 'utf8'))
-    record = { text: held, notified: held }
-    if (held !== version) writeRecord(dir, record)
+  const text = skills[mode][saved.role], version = textVersion(text)
+  const held = textVersion(readFileSync(file, 'utf8'))
+  let record = readRecord(dir) ?? { text: held, notified: held }
+  if (record.toldChange === undefined) {
+    // A record from before rewrite counts (#1585) gets its baseline first, so a rewrite after it is owed by count, never by
+    // comparing texts: a switch away and back would otherwise match the text last told and leave the agent on the other.
+    const change = record.change ?? 0
+    record = { ...record, change, toldChange: record.notified === record.text ? change : change - 1 }
+    writeRecord(dir, record)
   }
   if (record.text !== version) {
     replaceFile(file, text)
-    record = { ...record, text: version }
+    record = { ...record, text: version, mode, change: (record.change ?? 0) + 1 }
     writeRecord(dir, record)
+  } else if (held !== version && modeOf(saved.role, held)) {
+    // A switch stopped after replacing the file and before its record, and the project switched back: the record already
+    // describes this text and no notice went out for the other, so only the file is put back. The agent's own edits are
+    // no built-in text and stay.
+    replaceFile(file, text)
   }
-  return { file, version, owed: record.notified !== version }
+  const change = record.change ?? 0
+  // A notice counts once it is recorded: one sent whose record was lost may have moved the agent to another text, so a
+  // later rewrite is owed even when it brings back the text last confirmed.
+  const owed = record.toldChange !== change
+  const switched = (record.told ?? 'orchestration') !== mode || owed && record.notified === version
+  const reread = `Before your next step, read ${JSON.stringify(file)} again with your file or shell tool and follow`
+  return { file, version, owed, change,
+    notice: switched ? `This project now uses the ${MODE_NAMES[mode]} skills. ${reread} it in place of your earlier swarm-${saved.role} skill.`
+      : `Harness updated your ${mode === 'default' ? '' : 'built-in '}swarm-${saved.role} skill. ${reread} the new version.` }
 }
-export function recordSwarmSkillNotice(workspace: string, saved: SwarmSkill, version: string): void {
+/** The notice for that refresh's rewrite was sent. A later rewrite since then stays owed. */
+export function recordSwarmSkillNotice(workspace: string, saved: SwarmSkill, sent: Pick<SkillRefresh, 'version' | 'change'>): void {
   const dir = skillDirectory(realpathSync(workspace), saved, false)
   const record = dir && readRecord(dir)
-  if (dir && record) writeRecord(dir, { ...record, notified: version })
+  if (dir && record) writeRecord(dir, { ...record, notified: sent.version, toldChange: sent.change, told: modeOf(saved.role, sent.version) ?? record.told })
 }
 
 const textVersion = (text: string) => createHash('sha256').update(text).digest('hex')
@@ -421,7 +607,10 @@ function readRecord(dir: string): SkillRecord | null {
   if (!existsSync(file)) return null
   plainFile(file)
   const record = JSON.parse(readFileSync(file, 'utf8')) as Partial<SkillRecord>
-  return typeof record.text === 'string' && typeof record.notified === 'string' ? { text: record.text, notified: record.notified } : null
+  return typeof record.text === 'string' && typeof record.notified === 'string'
+    ? { text: record.text, notified: record.notified, ...(typeof record.change === 'number' ? { change: record.change } : {}),
+      ...(isSwarmSkillMode(record.mode) ? { mode: record.mode } : {}), ...(isSwarmSkillMode(record.told) ? { told: record.told } : {}),
+      ...(typeof record.toldChange === 'number' ? { toldChange: record.toldChange } : {}) } : null
 }
 function writeRecord(dir: string, record: SkillRecord): void {
   replaceFile(join(dir, 'version.json'), JSON.stringify(record))

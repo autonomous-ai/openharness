@@ -16,6 +16,7 @@ const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
 const reason = z.string().trim().min(1).max(300)
 const text = z.string().trim().min(1).max(32_000)
+const swarmEngine = z.string().min(1).max(80).refine((engine): boolean => engine === 'claude' || engine === 'codex', 'A Swarm agent runs only Claude Code or Codex.')
 const configuration = z.object({
   engine: z.string().min(1).max(80), model: z.string().max(200).nullable(),
   effort: z.string().max(80).nullable(), contextWindow: z.number().int().positive().safe().nullable(),
@@ -36,7 +37,7 @@ const repositoryUrl = z.string().max(4096).refine(value => {
 }, 'Share a repository URL without credentials.')
 const project = z.object({ cwd: path, repositoryUrl: repositoryUrl.nullable() }).strict()
 export const startRequestSchema = z.object({
-  conversationId: id, machineId: id, engine: z.string().min(1).max(80), name: title, cwd: path, role: z.enum(['builder', 'reviewer']).optional(),
+  conversationId: id, machineId: id, engine: swarmEngine, name: title, cwd: path, role: z.enum(['builder', 'reviewer']).optional(),
   worktree: z.boolean(), branchRef: z.string().max(1024).regex(/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/).optional(),
   model: z.string().trim().min(1).max(200).optional(), effort: z.string().trim().min(1).max(80).optional(),
   permissionMode: z.string().min(1).max(80).optional(), codexHome: path.optional(),
@@ -52,7 +53,7 @@ const task = z.object({
 }).strict()
 
 export const commandSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('machine.contribute'), machineId: id, name: title, cwd: path, scope: z.literal('swarm').optional(), engines: z.array(z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/)).min(1).max(32), maxAgents: z.number().int().min(1).max(16),
+  z.object({ type: z.literal('machine.contribute'), machineId: id, name: title, cwd: path, scope: z.literal('swarm').optional(), engines: z.array(swarmEngine).min(1).max(2), maxAgents: z.number().int().min(1).max(16),
     ifMissing: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('machine.pause'), machineId: id, paused: z.boolean() }).strict(),
   z.object({ type: z.literal('machine.remove'), machineId: id }).strict(),
@@ -420,6 +421,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     }
     case 'machine.contribute': {
+      if (command.engines.some(engine => engine !== 'claude' && engine !== 'codex')) fail('SWARM_ENGINE', 'A Swarm machine runs only Claude Code or Codex.', 400)
       if (actor.kind !== 'person' || context.contribution?.machineOwnerId !== actor.userId) fail('OWNER_REQUIRED', 'Only the machine owner can contribute it.', 403)
       const contributor = person(state, actor.userId)
       state.machines ??= []
@@ -575,6 +577,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     }
     case 'agent.add': {
+      if (!['claude', 'codex'].includes(command.configuration.engine)) fail('SWARM_ENGINE', 'A Swarm agent runs only Claude Code or Codex.', 400)
       controls(state, actor, command.conversationId)
       const group = open(state, command.conversationId)
       const project = groupProject(state, group)
@@ -624,8 +627,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       routed(command.routeDecisionId)
       requireWorkerDecisions(state, actor, open(state, command.request.conversationId))
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
-      if (command.request.role === 'reviewer' && !['claude', 'codex'].includes(command.request.engine)) {
-        fail('REVIEWER_ENGINE', 'A Reviewer runs on Claude Code or Codex.', 400)
+      if (!['claude', 'codex'].includes(command.request.engine)) {
+        fail('SWARM_ENGINE', 'A Swarm agent runs only Claude Code or Codex.', 400)
       }
       // The Lead's account has machines the Swarm never prepared (no clone of the project), so a Lead may start only where the
       // Swarm already lists a machine: a contributed one, or one an agent of the Swarm runs on. A person's start may name any
@@ -668,6 +671,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       controls(state, actor, start.request.conversationId)
       if (command.type === 'agent.startDispatch') {
         if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
+        if (!['claude', 'codex'].includes(start.request.engine)) {
+          fail('SWARM_ENGINE', 'A Swarm agent runs only Claude Code or Codex.', 400)
+        }
         // A start recorded before a rule was added is not launched past it, unless a person asked for it by hand.
         const why = actor.kind === 'agent' && !(start.routeDecisionId && context.routeDecision?.override?.by === 'person') && broken(groupRules(start.request.conversationId), startTarget(start.request))
         if (why) fail('RULE_BROKEN', `${why} This start was not launched. Route again.`, 403)

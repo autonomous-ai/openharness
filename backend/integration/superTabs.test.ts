@@ -605,6 +605,13 @@ describe('since when a worker is down', () => {
     let now = 1_000_000
     const timed = new SuperTabStore(db, () => now)
     const tab = (await timed.create(owner, randomUUID(), 'Down since', legacy ? undefined : 'public')).id
+    if (legacy) {
+      // New Swarms always store a project; emulate one created before projects existed.
+      const stored = await db.superTab.findUniqueOrThrow({ where: { id: tab } })
+      const state = stored.state as { projects?: unknown }
+      delete state.projects
+      await db.superTab.update({ where: { id: tab }, data: { state } })
+    }
     const execute = (command: Command, user = owner, asAgentId?: string) =>
       timed.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
     const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })

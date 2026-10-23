@@ -90,7 +90,6 @@ export function admission(capacity: Json, engine: Json, quota: ReturnType<typeof
   const reasons: string[] = [], unknown: string[] = []
   const resources = object(capacity.resources), tools = object(capacity.tools), devices = object(capacity.devices), toolProbeErrors = object(capacity.toolProbeErrors)
   if (engine.installed !== true) reasons.push('The selected agent engine is not installed on this machine.')
-  if (engine.signedIn === false && !customAccount) reasons.push('The selected agent engine is not signed in on this machine.')
   const memory = finite(resources.memoryTotalBytes) && finite(resources.memoryUsedBytes)
     ? resources.memoryTotalBytes - resources.memoryUsedBytes : null
   for (const [label, value, needed] of [

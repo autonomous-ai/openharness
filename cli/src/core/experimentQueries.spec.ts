@@ -28,7 +28,7 @@ describe('the cloud agents\' doors', () => {
 
 describe('the Super Tab service\'s door', () => {
   it('is the Super Tab service\'s alone, and hands its members\' waits to the core whole', async () => {
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() }
     const core = fakeCore({ superTabs })
     const both = new Set(['orchestrator', 'superTabs'])
     const item = { agentId: 'a1', requestId: 'supertab:x:blocked', superTab: 'Pilot', attention: 'stuck', text: 'Stuck: no key' }
@@ -41,7 +41,7 @@ describe('the Super Tab service\'s door', () => {
   })
 
   it('hands it the Swarm cards and a Lead\'s recap the same way, to the Super Tab service alone', async () => {
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() }
     const core = fakeCore({ superTabs })
     const both = new Set(['orchestrator', 'superTabs'])
     const recap = { tabId: 't1', leadId: 'l1', text: 'Shipped', at: 1, none: false }
@@ -51,10 +51,16 @@ describe('the Super Tab service\'s door', () => {
     expect(superTabs.cards).toHaveBeenLastCalledWith([])
     expect(await answerExperimentQuery(core, both, 'superTabs', 'super_tab_card_recap', { recap })).toEqual({})
     expect(superTabs.cardRecap).toHaveBeenLastCalledWith(recap)
-    for (const query of ['super_tab_cards', 'super_tab_card_recap']) {
+    for (const query of ['super_tab_cards', 'super_tab_card_recap', 'super_tab_observers']) {
       expect(await answerExperimentQuery(core, both, 'orchestrator', query, {})).toEqual({ error: 'NOT_SUPER_TABS' })
       expect(await answerExperimentQuery(fakeCore(), both, 'superTabs', query, {})).toEqual({ error: 'NOT_SUPER_TABS' })
     }
+  })
+
+  it('asks for Share when a Swarm host here has members to show its agents to', async () => {
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn() }
+    expect(await answerExperimentQuery(fakeCore({ superTabs }), new Set(['superTabs']), 'superTabs', 'super_tab_observers', {})).toEqual({})
+    expect(superTabs.shareObservers).toHaveBeenCalledOnce()
   })
 })
 

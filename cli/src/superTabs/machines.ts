@@ -105,6 +105,14 @@ export class ContributedMachines {
           if (result?.value !== null && result?.value !== undefined) reportedTools[name] = result.value
           else toolProbeErrors[name] = result?.detail ?? 'The tool probe did not complete.'
         }
+        const listedEngines = Array.isArray(pool.engines) ? pool.engines.filter((engine): engine is string => typeof engine === 'string') : []
+        const supported = (engine: string) => engine === 'claude' || engine === 'codex'
+        // Older contributions may name only OpenCode or another retired Swarm engine. Probe this host so their
+        // replacement choices reflect the engines actually installed here, without changing the owner's slot limit.
+        const engines = listedEngines.some(engine => !supported(engine))
+          ? list(object(await local.request('engines_probe', { engines: ['claude', 'codex'] }, 20_000).catch(() => ({}))).engines)
+            .filter(engine => supported(String(engine.engine)) && engine.installed === true).map(engine => String(engine.engine))
+          : listedEngines.filter(supported)
         const observation = { generation: pool.generation, tools: reportedTools,
           ...(Object.keys(toolProbeErrors).length ? { toolProbeErrors } : {}),
           resources: { cpuPercent: finite(resources.cpuPercent), memoryUsedBytes: finite(resources.memoryUsedBytes), memoryTotalBytes: finite(resources.memoryTotalBytes),
@@ -112,7 +120,7 @@ export class ContributedMachines {
             deviceType: typeof resources.deviceType === 'string' ? resources.deviceType : null,
             chip: typeof resources.chip === 'string' ? resources.chip : null, os: typeof resources.os === 'string' ? resources.os : null,
             gpuPercent: gpus.length ? Math.max(...gpus) : null },
-          quotas: (Array.isArray(pool.engines) ? pool.engines : []).filter((e): e is string => typeof e === 'string').map(engine => {
+          quotas: engines.map(engine => {
             const q = quotaOf(readings, engine, false)
             return { engine, known: q.known, windows: q.windows }
           }), runningHarnessIds: running, stoppedHarnessIds: stopped,

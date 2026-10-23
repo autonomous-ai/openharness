@@ -79,6 +79,16 @@ describe('a start on a contributed machine', () => {
     expect(refusal(f.state, f.request())!.message).toContain('it contributes no engines')
   })
 
+  it('uses only installed Claude or Codex from an older contribution with unsupported engines', () => {
+    const f = setup()
+    const pool = f.state.machines![0]!
+    pool.engines = ['opencode', 'kilo']
+    pool.observation = { ...observation, quotas: [{ engine: 'claude', known: false, windows: [] }] }
+    expect(refusal(f.state, f.request({ engine: 'claude' }))).toBeNull()
+    expect(refusal(f.state, f.request({ engine: 'codex' }))).toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
+    expect(refusal(f.state, f.request({ engine: 'opencode' }))).toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
+  })
+
   it.each(['codexHome', 'gridModel', 'gridName'] as const)('names %s as the refused account setting, and not its value', field => {
     const f = setup()
     const error = refusal(f.state, f.request({ [field]: '/Users/lead/.secret-profile' }))!
