@@ -241,7 +241,7 @@ class Installed {
   }
 
   async status(): Promise<Row | null> {
-    return fetch(`http://127.0.0.1:${this.daemon.port}/api/status`).then((response) => response.json() as Promise<Row>).catch(() => null)
+    return fetch(`http://127.0.0.1:${this.daemon.port}/api/status`, { headers: this.daemon.localHeaders() }).then((response) => response.json() as Promise<Row>).catch(() => null)
   }
 
   async version(): Promise<string | null> { return (await this.status())?.version ?? null }
