@@ -24,6 +24,13 @@ class _App extends AppNotifier {
   @override
   bool get machineInventoryLoaded => loaded;
 
+  /// The first machine list's failure, as the app reports it.
+  String? listError;
+  @override
+  String? get machineListError => listError;
+  @override
+  String? get lastError => listError ?? super.lastError;
+
   /// The quiet machine-list reads asked for while waiting on a computer.
   var rereads = 0;
   @override
@@ -344,6 +351,21 @@ void main() {
     },
   );
 
+  const failed = 'Could not load machines: the server did not answer.';
+
+  testWidgets('a failed list: said once, by the page, not the banner too', (
+    tester,
+  ) async {
+    final app = await mount(tester, answers: false);
+    app.listError = failed;
+    app.notifyListeners();
+    await tester.pump();
+
+    expect(find.byKey(_connectPage), findsOneWidget);
+    expect(find.text(failed), findsNothing);
+    await unmount(tester, app);
+  });
+
   testWidgets('connected before the list answers: the workspace, no page', (
     tester,
   ) async {
@@ -406,6 +428,16 @@ void main() {
         find.byTooltip('Mac is offline. Retained output is read only.'),
         findsOneWidget,
       );
+      await unmount(tester, app);
+    });
+
+    testWidgets('a failed list: the banner, as before', (tester) async {
+      final app = await mount(tester, answers: false, connectPage: false);
+      app.listError = failed;
+      app.notifyListeners();
+      await tester.pump();
+
+      expect(find.text(failed), findsOneWidget);
       await unmount(tester, app);
     });
 

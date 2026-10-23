@@ -7535,6 +7535,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
     );
   }
 
+  /// The shared error banner shows — except when its only message is the
+  /// machine list's failure, which the host's connect page already shows with
+  /// its own Retry: a phone would read it twice.
+  bool get _showsErrorBanner {
+    if (_projects.error != null) return true;
+    final error = app.lastError;
+    if (error == null) return false;
+    return !(_firstMachineCovers &&
+        !app.machineInventoryLoaded &&
+        error == app.machineListError);
+  }
+
   /// The host's connect-a-computer page over the whole workspace — tabs synced
   /// from the account's desk would otherwise show panes for computers this
   /// browser cannot reach yet. Null when not needed, and for a host without one.
@@ -8179,7 +8191,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                         ),
                       ),
                     ?_asleepBand(),
-                    if (_projects.error != null || app.lastError != null)
+                    if (_showsErrorBanner)
                       Material(
                         color: grid.AppPalette.panelBg,
                         child: Padding(
