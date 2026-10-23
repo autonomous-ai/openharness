@@ -156,7 +156,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // The devices' (core/devicesLink.ts): a Harness Pro that shows the Swarm cards is attached or gone, wants a Lead's recap, or
         // has one open. They read the account's Swarms as the person, and need no agent.
         // Only this computer's own devices ask: an account owner on another machine does not make this one read the Swarms.
-        if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen') {
+        if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen' || payload.action === 'cardSay') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
           if (payload.action === 'cardsWanted') {
             const include = Array.isArray(payload.include) ? payload.include.filter(cardId) : []
@@ -164,6 +164,9 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             return { ok: true }
           }
           if (payload.action === 'cardRecap' && cardId(payload.tabId) && cardId(payload.leadId)) return { ok: true, ...await cards().recap(payload.tabId, payload.leadId) }
+          if (payload.action === 'cardSay' && cardId(payload.harnessId) && typeof payload.text === 'string' && payload.text.trim() && payload.text.length <= 32_000) {
+            return { ok: true, said: await cards().say(payload.harnessId, payload.text.trim()) }
+          }
           if (payload.action === 'cardOpen' && cardId(payload.session) && cardId(payload.tabId) && (payload.leadId === null || cardId(payload.leadId))) {
             cards().open(payload.session, payload.tabId, payload.leadId)
             return { ok: true }
