@@ -11,6 +11,7 @@ import 'store_editorial.dart';
 import 'store_exploration.dart';
 import 'store_explore_widgets.dart';
 import 'store_featured_art.dart';
+import 'store_host.dart';
 import 'store_listing.dart';
 import 'store_models.dart';
 
@@ -271,6 +272,16 @@ class StoreDiscover extends StatelessWidget {
                     const SizedBox(height: 6),
                     Text(
                       'Learn the next craft through the things you build.',
+                      style: grid.AppType.body(
+                        height: 1.5,
+                        color: grid.AppPalette.textSecondary,
+                      ),
+                    ),
+                  ] else if (storeRunsNoHarness(context)) ...[
+                    // A browser runs no harness: no computer will answer.
+                    const SizedBox(height: 32),
+                    Text(
+                      kStoreOnAComputer,
                       style: grid.AppType.body(
                         height: 1.5,
                         color: grid.AppPalette.textSecondary,

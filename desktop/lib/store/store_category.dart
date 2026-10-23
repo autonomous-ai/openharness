@@ -71,6 +71,8 @@ class _StoreCategoryState extends State<StoreCategory> {
     grid.AppTheme.watch(context);
     final name = widget.name;
     final loaded = widget.loaded;
+    // A browser runs no harness, so it has no computer to ask.
+    final runsNoHarness = storeRunsNoHarness(context);
     final ratingFor = widget.ratingFor;
     final installed = widget.installed;
     final onOpen = widget.onOpen;
@@ -160,12 +162,13 @@ class _StoreCategoryState extends State<StoreCategory> {
                       ),
                     )
                   else if (entries.isEmpty)
-                    // A browser runs no harness, so it has no computer to ask.
-                    loaded || storeRunsNoHarness(context)
+                    loaded || runsNoHarness
                         ? Padding(
                             padding: const EdgeInsets.symmetric(vertical: 36),
                             child: Text(
-                              'Nothing here yet.',
+                              runsNoHarness
+                                  ? kStoreOnAComputer
+                                  : 'Nothing here yet.',
                               style: TextStyle(
                                 color: grid.AppPalette.textSecondary,
                               ),

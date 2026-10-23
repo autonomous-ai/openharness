@@ -14,6 +14,8 @@ import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/workspace_chrome.dart';
+import 'package:harness/shared/widgets/skeleton.dart';
+import 'package:harness/store/store_category.dart';
 import 'package:harness/store/store_controller.dart';
 import 'package:harness/store/store_discover.dart';
 import 'package:harness/store/store_models.dart';
@@ -149,6 +151,71 @@ ScrollPosition _chipScroll(WidgetTester tester) => tester
       find.descendant(of: _chips, matching: find.byType(Scrollable)),
     )
     .position;
+
+const _onAComputer = 'Open the Harness app on a computer to see these.';
+
+/// One of the Store's pages on its own, inside the web's chrome when [web],
+/// else with none, as on Desktop.
+Future<void> _mount(
+  WidgetTester tester, {
+  required bool web,
+  required Widget page,
+}) async {
+  final app = _App();
+  addTearDown(app.dispose);
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: web
+            ? WorkspaceChromeScope(chrome: webWorkspaceChrome(app), child: page)
+            : page,
+      ),
+    ),
+  );
+  await tester.pump();
+}
+
+/// An empty discipline, before ([loaded] false) or after a computer answered.
+Future<void> _openEmptyDiscipline(
+  WidgetTester tester, {
+  required bool web,
+  required bool loaded,
+}) => _mount(
+  tester,
+  web: web,
+  page: StoreCategory(
+    name: 'Music',
+    categories: const ['Music'],
+    onCategory: (_) {},
+    entries: const [],
+    loaded: loaded,
+    ratingFor: (entry) => StoreRating.none(entry.id),
+    installed: (_) => false,
+    onOpen: (_) {},
+  ),
+);
+
+/// Discover with only the built-in engines, as a browser has it, while no
+/// computer has answered.
+Future<void> _openEnginesOnlyDiscover(
+  WidgetTester tester, {
+  required bool web,
+}) => _mount(
+  tester,
+  web: web,
+  page: StoreDiscover(
+    entries: [
+      for (final id in ['claude', 'codex'])
+        DshEntry(id: id, name: id, engine: id, kind: 'engine'),
+    ],
+    loaded: false,
+    ratingFor: (entry) => StoreRating.none(entry.id),
+    onOpen: (_) {},
+    onCategory: (_) {},
+    onAll: () {},
+    onEngines: () {},
+  ),
+);
 
 final _thisComputer = find.textContaining(
   RegExp('this computer', caseSensitive: false),
@@ -299,10 +366,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(_thisComputer, findsNothing);
-    expect(
-      find.text('Viewers appear here in the Harness app on a computer.'),
-      findsOneWidget,
-    );
+    expect(find.text(_onAComputer), findsOneWidget);
   });
 
   testWidgets('in a browser a product page says where to get it, not that it '
@@ -320,6 +384,40 @@ void main() {
       find.text('Get it in the Harness app on a computer.'),
       findsOneWidget,
     );
+  });
+
+  testWidgets('in a browser an empty discipline says where its harnesses are, '
+      'instead of waiting on a computer', (tester) async {
+    await _openEmptyDiscipline(tester, web: true, loaded: false);
+
+    expect(_thisComputer, findsNothing);
+    expect(find.text(_onAComputer), findsOneWidget);
+    expect(find.byType(SkeletonBlock), findsNothing);
+  });
+
+  testWidgets('on Desktop an empty discipline waits for this computer, then '
+      'says nothing is here', (tester) async {
+    await _openEmptyDiscipline(tester, web: false, loaded: false);
+    expect(find.text('Asking this computer…'), findsOneWidget);
+
+    await _openEmptyDiscipline(tester, web: false, loaded: true);
+    expect(find.text('Nothing here yet.'), findsOneWidget);
+  });
+
+  testWidgets('in a browser Discover does not wait on a computer', (
+    tester,
+  ) async {
+    await _openEnginesOnlyDiscover(tester, web: true);
+
+    expect(find.byType(SkeletonBlock), findsNothing);
+    expect(find.text(_onAComputer), findsOneWidget);
+  });
+
+  testWidgets('Desktop Discover still waits for this computer', (tester) async {
+    await _openEnginesOnlyDiscover(tester, web: false);
+
+    expect(find.byType(SkeletonBlock), findsOneWidget);
+    expect(find.text(_onAComputer), findsNothing);
   });
 
   testWidgets('Desktop still says it is connecting to this computer', (

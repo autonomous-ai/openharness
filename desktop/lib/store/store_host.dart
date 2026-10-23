@@ -14,3 +14,8 @@ bool storeIsCompact(BuildContext context) =>
 /// ([WorkspaceChrome.newHarnessMachine]); Desktop never does.
 bool storeRunsNoHarness(BuildContext context) =>
     WorkspaceChrome.of(context).newHarnessMachine != null;
+
+/// What a shelf whose harnesses come from a computer says where
+/// [storeRunsNoHarness]: why it is empty and what to do, never that there is
+/// nothing.
+const kStoreOnAComputer = 'Open the Harness app on a computer to see these.';

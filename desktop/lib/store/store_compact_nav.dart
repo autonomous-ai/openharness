@@ -148,10 +148,15 @@ class _StoreChipRowState extends State<StoreChipRow> {
               SingleChildScrollView(
                 controller: _scroll,
                 scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 14),
+                // The content's own gutter on a phone, so the first chip
+                // lines up with the page under it.
+                padding: const EdgeInsets.symmetric(horizontal: 20),
                 child: Row(
                   children: [
-                    for (final chip in widget.chips) _ChipButton(chip: chip),
+                    for (final (i, chip) in widget.chips.indexed) ...[
+                      if (i > 0) const SizedBox(width: 6),
+                      _ChipButton(chip: chip),
+                    ],
                   ],
                 ),
               ),

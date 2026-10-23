@@ -878,7 +878,9 @@ class _Shelf$View extends StatelessWidget {
                   child: Text(
                     shelf is _Search
                         ? 'No matching harnesses. Try a name or something you want to make.'
-                        : loaded || storeRunsNoHarness(context)
+                        : storeRunsNoHarness(context)
+                        ? kStoreOnAComputer
+                        : loaded
                         ? 'Nothing here yet.'
                         : 'Asking this computer…',
                     style: grid.AppType.body(

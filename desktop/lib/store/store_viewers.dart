@@ -41,7 +41,7 @@ class StoreViewers extends StatelessWidget {
         if (viewers.isEmpty)
           Text(
             storeRunsNoHarness(context)
-                ? 'Viewers appear here in the Harness app on a computer.'
+                ? kStoreOnAComputer
                 : loaded
                 ? 'No viewers reported by this computer.'
                 : 'Asking this computer…',

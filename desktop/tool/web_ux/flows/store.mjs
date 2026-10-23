@@ -7,6 +7,10 @@ const toStore = {
   compact: [['exact', 'Menu'], ['exact', 'Store']],
 };
 const claude = ['text', 'Work with Claude directly'];
+// The rail's entry on a computer and a tablet, its chip on a phone.
+const allHarnesses = ['exact', 'All harnesses'];
+// A shelf a browser has no computer to fill: it says where to see it.
+const viewers = ['exact', 'Viewers'];
 
 export const FLOWS = [
   { name: 'store', scenario: 'workspace', ...toStore },
@@ -15,5 +19,17 @@ export const FLOWS = [
     scenario: 'workspace',
     wide: [...toStore.wide, claude],
     compact: [...toStore.compact, claude],
+  },
+  {
+    name: 'store-all',
+    scenario: 'workspace',
+    wide: [...toStore.wide, allHarnesses],
+    compact: [...toStore.compact, allHarnesses],
+  },
+  {
+    name: 'store-viewers',
+    scenario: 'workspace',
+    wide: [...toStore.wide, viewers],
+    compact: [...toStore.compact, viewers],
   },
 ];
