@@ -283,6 +283,39 @@ it('persists a deferred close, survives a daemon restart and waits for sustained
   await service.tick()
   expect(deps.stop).toHaveBeenCalledOnce()
 })
+
+it('durably records a deferred close that arrives during a registry discovery transaction', async () => {
+  let finish!: () => void
+  const hold = new Promise<void>(resolve => { finish = resolve })
+  const transaction = registry.transaction(async () => { await hold })
+  try {
+    const closing = service.request(request('after_task'))
+    await vi.waitFor(() => expect(deps.activity).toHaveBeenCalledOnce())
+    await new Promise(resolve => setImmediate(resolve))
+    expect(row.closePlan).toBeUndefined()
+    finish()
+    await transaction
+    expect(await closing).toEqual({ deferred: true })
+    expect(registry.byAgent(row.agentId)?.closePlan?.state).toBe('waiting')
+    registry.load()
+    expect(registry.byAgent(row.agentId)?.closePlan?.state).toBe('waiting')
+  } finally { finish(); await transaction }
+})
+
+it('does not defer a close if its conversation changes before the discovery transaction commits', async () => {
+  let finish!: () => void
+  const hold = new Promise<void>(resolve => { finish = resolve })
+  const transaction = registry.transaction(async () => { await hold })
+  try {
+    const closing = service.request(request('after_task'))
+    await vi.waitFor(() => expect(deps.activity).toHaveBeenCalledOnce())
+    row.sessionId = 'another-conversation'
+    finish()
+    await transaction
+    expect(await closing).toEqual({ error: 'AGENT_CHANGED' })
+    expect(row.closePlan).toBeUndefined()
+  } finally { finish(); await transaction }
+})
 it('keeps questions and subsequent turns alive during a deferred close', async () => {
   await service.request(request('after_task'))
   await service.tick()

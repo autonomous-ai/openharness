@@ -101,7 +101,7 @@ function matches(s: RegisteredSession | undefined, request: AgentCloseRequest, a
 }
 
 export interface CloseAgentServiceDeps {
-  registry: Pick<typeof liveRegistry, 'byAgent' | 'list' | 'setClosePlan'>
+  registry: Pick<typeof liveRegistry, 'byAgent' | 'list' | 'setClosePlan' | 'afterTransaction'>
   activity(s: RegisteredSession): Promise<CloseActivity>
   /** Cheap revocation after the final activity read, at each physical Stop boundary. */
   idleCurrent?(s: RegisteredSession): boolean
@@ -269,9 +269,18 @@ export class CloseAgentService {
       if (request.mode === 'inspect') return { activity }
       if (request.mode === 'after_task') {
         if (s.closePlan?.identity === target && s.closePlan.state === 'waiting') return { deferred: true }
-        const updated = this.deps.registry.setClosePlan(s.agentId, { id: randomUUID(), identity: target, requestedAt: this.now(), state: 'waiting' })
+        let created = false
+        const updated = await this.deps.registry.afterTransaction(() => {
+          const latest = current()
+          if (!latest) return null
+          if (latest.closePlan?.identity === target && latest.closePlan.state === 'waiting') return latest
+          const saved = this.deps.registry.setClosePlan(latest.agentId, { id: randomUUID(), identity: target, requestedAt: this.now(), state: 'waiting' })
+          created = !!saved
+          return saved
+        })
+        if (!updated) return { error: 'AGENT_CHANGED' }
         this.idleSince.delete(s.agentId)
-        if (updated) this.deps.changed(updated)
+        if (created) this.deps.changed(updated)
         this.schedule()
         return { deferred: true }
       }

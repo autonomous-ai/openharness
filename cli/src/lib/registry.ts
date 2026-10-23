@@ -1071,6 +1071,7 @@ class Registry {
   private terminalAvailableAgents = new Set<string>()
   private transactionDepth = 0
   private savePending = false
+  private readonly afterTransactionCallbacks: Array<{ run: () => void; reject: (error: unknown) => void }> = []
   /** Root corruption/unknown schemas are read-only until the operator restores valid bytes. */
   private writeBlocked = false
   /** Last committed row bytes, used for a three-way merge with daemon-down hook writes. */
@@ -2618,9 +2619,17 @@ class Registry {
       if (!holding) return
       holding = false
       this.transactionDepth--
-      if (this.transactionDepth === 0 && this.savePending) {
-        this.savePending = false
-        this.save()
+      if (this.transactionDepth === 0) {
+        try {
+          if (this.savePending) {
+            this.savePending = false
+            this.save()
+          }
+        } catch (error) {
+          for (const callback of this.afterTransactionCallbacks.splice(0)) callback.reject(error)
+          throw error
+        }
+        while (this.transactionDepth === 0 && this.afterTransactionCallbacks.length) this.afterTransactionCallbacks.shift()!.run()
       }
     }
     const timer = options.holdSavesMs === undefined ? undefined : setTimeout(() => {
@@ -2636,6 +2645,18 @@ class Registry {
       clearTimeout(timer)
       release()
     }
+  }
+
+  /** Run a durability-sensitive action only after the current discovery batch has committed. */
+  afterTransaction<T>(action: () => T): Promise<T> {
+    if (this.transactionDepth === 0) {
+      try { return Promise.resolve(action()) } catch (error) { return Promise.reject(error) }
+    }
+    return new Promise<T>((resolve, reject) => {
+      this.afterTransactionCallbacks.push({ run: () => {
+        try { resolve(action()) } catch (error) { reject(error) }
+      }, reject })
+    })
   }
 
   flush(options: { exiting?: boolean } = {}): void {
