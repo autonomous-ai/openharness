@@ -2,7 +2,7 @@
 // listen fails with EADDRINUSE as a pipe's does); the real pipe is checked in dataFolderClaim.real.spec.ts.
 import { randomBytes } from 'node:crypto'
 import { connect, createServer, type Server } from 'node:net'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { claimDataFolder, dataFolderClaimPipe, type DataFolderClaim, type DataFolderClaimDeps } from './dataFolderClaim.js'
@@ -118,6 +118,18 @@ describe.skipIf(process.platform === 'win32')('the data folder claim, a Unix soc
       claim.release()
       expect(lines.at(-1)).toBe(`[cli] something that is not Harness holds ${path}; starting without the data folder claim`)
     }
+  })
+
+  // DESKTOP-0TFH0OJ, 2026-10-23: a core started over ssh as administrator held the claim; the Desktop then started one
+  // with an ordinary token, whose ask was refused with EPERM. It read that as "not Harness" and ran beside the first:
+  // two hosts wrote one observer file and claimed the same deliveries. A socket nobody may write stands in for that pipe.
+  it.skipIf(process.getuid?.() === 0)('refuses the start when the holder of its name may not be asked', async () => {
+    const { dataDir, deps } = folder()
+    await take(dataDir, TOKEN, { ...deps, holder: { pid: process.pid, corePid: process.pid } })
+    const path = deps.pipeFor!(dataDir)
+    chmodSync(path, 0)
+    await expect(claimDataFolder(dataDir, TOKEN, deps)).rejects.toMatchObject({ code: 'EADDRINUSE',
+      message: `${path} is held by something this process may not open, most likely a Harness daemon started as administrator or in another Windows session. Stop it there, then start Harness again.` })
   })
 
   it('starts without the claim when the core holding it proves another token', async () => {
