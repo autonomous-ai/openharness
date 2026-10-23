@@ -213,7 +213,10 @@ Events are encrypted full objects:
 ```
 
 Kinds include `receipt.updated`, `turn.started`, `turn.done`, `turn.error`, `turn.summary`,
-`turn.tool`, `agent.error`, `question.open`, `question.close`.
+`turn.tool`, `agent.error`, `question.open`, `question.close`, and with the add-on capabilities
+`addon.proposal` and `addon.republish` ([device add-ons](autonomous-device-addons.md)).
+**A device ignores an event `kind` it does not know**: newer computers add kinds, and an older device
+must keep working beside them.
 
 For an enriched `turn.summary` with resultId/correlation, use that event's fullText exclusively;
 never fetch latest recap to identify its result. The [summary contract](autonomous-device-result-correlation.md)
