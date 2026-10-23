@@ -6,7 +6,8 @@
  *
  * Status of a project's Lead, most pressing first: `ask` (an assignment of the project needs a person, `needs_human`),
  * `stuck` (`blocked`), `work` (an agent of the project, the Lead or a worker, runs here and is in a turn, as the app marks each
- * agent working by its own live turn; or an assignment works or is in review, all there is for agents on other machines), else `done`.
+ * agent working by its own live turn, `since` from the earliest of those turns; or an assignment works or is in review, all there is for agents on
+ * other machines), else `done`.
  * A paused Swarm keeps its card and every Lead reads `done`.
  */
 import { randomUUID } from 'node:crypto'
@@ -53,7 +54,7 @@ export function leadsOf(state: Json, machineId: string, live: (harnessId: string
   // An agent's project as the app's roster reads it: its own, else the first group that has it or that it leads.
   const projectOf = (a: Json) => typeof a.projectId === 'string' ? a.projectId
     : conversations.find(c => (Array.isArray(c.agentIds) && c.agentIds.includes(a.id)) || c.leadId === a.id)?.projectId ?? 'lead'
-  const inTurnHere = (a: Json) => a.machineId === machineId && typeof a.harnessId === 'string' && a.harnessId !== '' && live(a.harnessId)?.inTurn === true
+  const turnHere = (a: Json) => a.machineId === machineId && typeof a.harnessId === 'string' && a.harnessId !== '' ? live(a.harnessId) : null
   const leads: SwarmLead[] = []
   for (const [order, project] of projects.entries()) {
     const lead = conversations.find(c => c.id === project.leadConversationId)
@@ -68,9 +69,15 @@ export function leadsOf(state: Json, machineId: string, live: (harnessId: string
     if (!paused) {
       if (waits.has('needs_human')) state = 'ask'
       else if (waits.has('blocked')) state = 'stuck'
-      else if (here?.inTurn) { state = 'work'; since = here.since }
-      else if (agents.some(a => a !== agent && projectOf(a) === (project.id ?? 'lead') && inTurnHere(a))) state = 'work'
-      else if (waits.has('working') || waits.has('review')) state = 'work'
+      else {
+        // The project's clock is its earliest turn here (the most seconds in), the Lead's or a worker's.
+        const turns = [here, ...agents.filter(a => a !== agent && projectOf(a) === (project.id ?? 'lead')).map(turnHere)].filter(t => t?.inTurn)
+        if (turns.length) {
+          state = 'work'
+          const secs = turns.map(t => t!.since).filter((v): v is number => typeof v === 'number')
+          if (secs.length) since = Math.max(...secs)
+        } else if (waits.has('working') || waits.has('review')) state = 'work'
+      }
     }
     const ownerId = agent.machineOwnerId
     const owner = me && typeof ownerId === 'string' && ownerId !== me ? people.find(p => p.id === ownerId) : undefined
