@@ -3485,7 +3485,12 @@ class AppNotifier extends ChangeNotifier {
       // A Swarm pane is only a view into shared work. This guard also covers
       // the close shortcut, native menu and whole-tab dismissal, including a
       // regular tab becoming a Swarm while a close review is pending.
-      if (tab.isSuperTab) return false;
+      // A Product Manager keeps running when its ordinary view closes too.
+      if (tab.isSuperTab ||
+          superTabs.leadProtectionReasonForHarness(machineId, agentId) !=
+              null) {
+        return false;
+      }
       if (!swarms.contains(tab) ||
           (wholeTab &&
               (tab.panes.length != closing.length ||

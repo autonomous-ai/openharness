@@ -3,11 +3,32 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/widgets/desktop_prompt_surface.dart';
 import 'package:harness/widgets/delete_agent_dialog.dart';
 import 'package:harness/widgets/delete_harness_dialog.dart';
 
-import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
+import 'super_tab_launch_test.dart'
+    show SuperTabFixtureConnection, SuperTabLaunchFixture, tabId;
 import 'swarm_screen_test.dart' show mount, terminal;
+
+class _CloseFixtureConnection extends SuperTabFixtureConnection {
+  _CloseFixtureConnection(super.store);
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    if (type != 'agent_close') {
+      return super.request(type, payload: payload, timeout: timeout);
+    }
+    calls.add((type, Map.of(payload)));
+    if (payload['mode'] == 'inspect') return {'activity': 'working'};
+    await event('agent_deleted', {'agentId': payload['agentId']});
+    return {'closed': true};
+  }
+}
 
 void main() {
   for (final action in ['stop', 'stop terminal', 'delete']) {
@@ -76,7 +97,10 @@ void main() {
       if (action == 'delete') {
         expect(find.textContaining('To keep the conversation'), findsNothing);
       } else {
-        expect(find.textContaining('Its panes close across tabs'), findsNothing);
+        expect(
+          find.textContaining('Its panes close across tabs'),
+          findsNothing,
+        );
       }
       final confirm = find.byKey(
         Key(action == 'delete' ? 'agent-delete-confirm' : 'agent-stop-confirm'),
@@ -250,22 +274,99 @@ void main() {
       await mount(tester, f.app);
       unawaited(f.app.requestClosePane(pane.id));
       await tester.pumpAndSettle();
-      expect(
-        find.textContaining('Product Manager of project Pilot'),
-        findsOneWidget,
-      );
-      expect(
-        tester
-            .widget<FilledButton>(find.byKey(const Key('session-close-now')))
-            .onPressed,
-        isNull,
-      );
-      await tester.tap(find.byKey(const Key('session-close-view')));
-      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('session-close-now')), findsNothing);
       expect(f.app.allPanes, isEmpty);
       expect(
         f.connection.calls.where((call) => call.$1 == 'agent_close'),
         isEmpty,
+      );
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+    },
+  );
+
+  testWidgets(
+    'closing a mixed tab stops its Engineer but keeps its Product Manager',
+    (tester) async {
+      final f = SuperTabLaunchFixture(
+        connectionFactory: (store) => _CloseFixtureConnection(store),
+      );
+      final swarmId = f.app.activeSwarmId;
+      f.app.bindSuperTab(swarmId, tabId, 'Pilot');
+      f.connection.server.state['agents'] = [
+        {
+          'id': 'pm',
+          'name': 'Quinn',
+          'machineId': 'm',
+          'harnessId': 'native-pm',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'claude'},
+        },
+        {
+          'id': 'worker',
+          'name': 'Sage',
+          'machineId': 'm',
+          'harnessId': 'native-worker',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'claude'},
+        },
+      ];
+      (f.connection.server.state['conversations'] as List)[0]['leadId'] = 'pm';
+      Agent closeable(String id, String name) => Agent(
+        id: id,
+        name: name,
+        engine: 'claude',
+        createdAt: DateTime.utc(2026, 9, 30, 12),
+        sessionId: 'saved-$id',
+        closeSupported: true,
+        terminalAvailable: true,
+      );
+      f.app.machineStates['m']!.agents = [
+        closeable('native-pm', 'Quinn'),
+        closeable('native-worker', 'Sage'),
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await f.app.requestCloseSwarm(swarmId);
+      f.app.adoptSessionForTest(terminal('native-pm', []));
+      f.app.adoptSessionForTest(terminal('native-worker', []));
+      final ordinaryTab = f.app.activeSwarm;
+      await mount(tester, f.app);
+
+      unawaited(f.app.requestCloseSwarm(ordinaryTab.id));
+      await tester.pumpAndSettle();
+      final closePrompt = find.byType(DesktopPromptSurface);
+      final stop = find.descendant(
+        of: closePrompt,
+        matching: find.widgetWithText(FilledButton, 'Stop'),
+      );
+      expect(stop, findsOneWidget);
+      expect(tester.widget<FilledButton>(stop).onPressed, isNotNull);
+      expect(
+        find.descendant(of: closePrompt, matching: find.text('Sage')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: closePrompt, matching: find.text('Quinn')),
+        findsNothing,
+      );
+      await tester.tap(stop);
+      await tester.pumpAndSettle();
+
+      final closes = f.connection.calls
+          .where((call) => call.$1 == 'agent_close')
+          .map((call) => call.$2)
+          .toList();
+      expect(closes.map((call) => call['agentId']), [
+        'native-worker',
+        'native-worker',
+      ]);
+      expect(closes.map((call) => call['mode']), ['inspect', 'now']);
+      expect(f.app.swarms, isNot(contains(ordinaryTab)));
+      expect(
+        f.app.machineStates['m']!.agents.any((a) => a.id == 'native-pm'),
+        isTrue,
       );
       await tester.pumpWidget(const SizedBox());
       await c.flush();

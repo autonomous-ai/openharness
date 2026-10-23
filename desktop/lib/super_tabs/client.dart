@@ -49,6 +49,23 @@ class SuperTabClient {
   SuperTabController? peek(String id) => _loaded[id];
   Iterable<SuperTabController> get loadedControllers => _loaded.values;
 
+  /// Native close actions name the machine's harness id, not the Swarm agent id.
+  String? leadProtectionReasonForHarness(String machineId, String harnessId) {
+    for (final controller in loadedControllers) {
+      final snapshot = controller.snapshot;
+      if (snapshot == null) continue;
+      for (final agent in snapshot.agents) {
+        if (agent.machineId != machineId || agent.harnessId != harnessId) {
+          continue;
+        }
+        if (snapshot.leadProtectionReason(agent.id) case final reason?) {
+          return reason;
+        }
+      }
+    }
+    return null;
+  }
+
   /// The tabs closed on this computer. Only discovery says which of them the
   /// account still belongs to.
   Set<String> get hiddenIds => Set.unmodifiable(_hidden);

@@ -6,17 +6,5 @@ String? superTabLeadProtectionReason(
   String machineId,
   String harnessId,
 ) {
-  for (final controller in app.superTabs.loadedControllers) {
-    final snapshot = controller.snapshot;
-    if (snapshot == null) continue;
-    for (final agent in snapshot.agents) {
-      if (agent.machineId != machineId || agent.harnessId != harnessId) {
-        continue;
-      }
-      if (snapshot.leadProtectionReason(agent.id) case final reason?) {
-        return reason;
-      }
-    }
-  }
-  return null;
+  return app.superTabs.leadProtectionReasonForHarness(machineId, harnessId);
 }

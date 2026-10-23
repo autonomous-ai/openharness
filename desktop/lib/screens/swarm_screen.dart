@@ -2918,23 +2918,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
       });
     }
 
-    // A native session may also be shown in an ordinary tab. Closing that view
-    // must not turn its Product Manager into a stoppable session.
-    if (targets.any(
-      (target) =>
-          superTabLeadProtectionReason(app, target.$1, target.$2.id) != null,
-    )) {
-      if (await choose() != 'close_view' || !mounted) return false;
-      return targets.every((target) {
-        final current = app
-            .stateOf(target.$1)
-            ?.agents
-            .where((agent) => agent.id == target.$2.id)
-            .firstOrNull;
-        return current == null || current.continuesSession(target.$2);
-      });
-    }
-
     Future<String?> inspectFrom(int start) async {
       for (var i = start; i < requests.length; i++) {
         if (!mounted) return null;
