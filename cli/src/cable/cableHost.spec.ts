@@ -963,7 +963,7 @@ describe('DaemonCableHost player library and member ids', () => {
 })
 
 describe('Swarm cards', () => {
-  const card = { id: 'st1', name: 'openharness', count: 1, leads: [{ id: 'l1', projectId: 'p1', project: 'mobile', engine: 'claude', owner: '', local: '', state: 'work' as const }] }
+  const card = { id: 'st1', name: 'openharness', count: 1, leads: [{ id: 'l1', projectId: 'p1', project: 'mobile', engine: 'claude', owner: '', local: '', state: 'work' as const, order: 0 }] }
 
   it('keeps the list the core last handed it, and names a Swarm tab\'s Swarm on the desk row', () => {
     const host = new DaemonCableHost(wiring())

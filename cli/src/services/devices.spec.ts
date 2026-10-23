@@ -553,7 +553,7 @@ describe('what the windows say, reaching the dial', () => {
   })
 
   describe('the Swarm cards for a Harness Pro', () => {
-    const lead = { id: 'lead1', projectId: 'proj1', project: 'mobile', engine: 'claude', owner: '', local: '', state: 'work' as const }
+    const lead = { id: 'lead1', projectId: 'proj1', project: 'mobile', engine: 'claude', owner: '', local: '', state: 'work' as const, order: 0 }
     const cards = [{ id: 'st1', name: 'openharness', count: 1, leads: [lead] }]
     const withRequest = (superTabRequest?: CoreApi['superTabRequest']) => start({ core: { ...fakeCore({ dataDir }), ...(superTabRequest ? { superTabRequest } : {}) } as CoreApi })
 
