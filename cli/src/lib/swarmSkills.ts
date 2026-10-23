@@ -501,6 +501,17 @@ export function swarmSkillUse(role: SwarmRole, mode: SwarmSkillMode): string {
     : `Use the built-in swarm-${role} skill for this session.`
 }
 const MODE_NAMES: Record<SwarmSkillMode, string> = { default: 'Default', orchestration: 'Harness orchestration' }
+/** Which set a session's file was last written from: a built-in mode, or the project's Custom set (spec 2026-10-23). */
+type SkillSet = SwarmSkillMode | 'custom'
+const isSkillSet = (value: unknown): value is SkillSet => isSwarmSkillMode(value) || value === 'custom'
+/** A role of the project's Custom set, its text as the project owner wrote it. */
+export interface CustomSwarmRole { name: string; text: string }
+/** Installed under the kind's own skill name, with the one front matter block Harness writes: any block the owner's text
+ *  starts with (the copied Default texts bring one) is dropped. */
+function customText(role: SwarmRole, custom: CustomSwarmRole): string {
+  const body = custom.text.replace(/^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/, '')
+  return `---\nname: swarm-${role}\ndescription: ${JSON.stringify(`The ${custom.name} role of this project's Custom skills.`)}\n---\n${body}`
+}
 /** The mode whose current text this is; null for any other text (an older release, or the agent's own edits). */
 const modeOf = (role: SwarmRole, version: string) =>
   (['default', 'orchestration'] as const).find(mode => textVersion(skills[mode][role]) === version) ?? null
@@ -530,16 +541,16 @@ export function prepareSwarmSkill(workspace: string, saved: SwarmSkill): { file:
 /** Which built-in text a session's skill file holds and of which mode, how many times the file was rewritten, and the text,
  * mode and rewrite its agent was last confirmed told about (the launch prompt is rewrite 0). A file from before this record
  * counts as holding its own content, already told; one from before modes, as orchestration. */
-interface SkillRecord { text: string; notified: string; change?: number; mode?: SwarmSkillMode; told?: SwarmSkillMode; toldChange?: number }
+interface SkillRecord { text: string; notified: string; change?: number; mode?: SkillSet; told?: SkillSet; toldChange?: number }
 /** `change` counts rewrites, so a notice for a switch back to an earlier mode's text is a new notice, not a repeat. */
-export interface SkillRefresh { file: string; version: string; owed: boolean; change: number; notice: string }
+export interface SkillRefresh { file: string; version: string; owed: boolean; change: number; notice: string; set?: SkillSet }
 
 /** A CLI update ships new skill text while Swarm sessions run (owner, 2026-10-22), and the project's owner may switch its
  * mode (2026-10-23). Rewrite a session's file to the mode's built-in text and say whether its agent still owes a re-read
  * notice for it; recordSwarmSkillNotice clears that once the notice is sent. A file from before records gets its record
  * first, and the record moves to the new text only after the file is replaced, so an interrupted pass rewrites again and
  * the notice stays owed until it is recorded. Null when this workspace never prepared the session's skill. */
-export function refreshSwarmSkill(workspace: string, saved: SwarmSkill, mode: SwarmSkillMode): SkillRefresh | null {
+export function refreshSwarmSkill(workspace: string, saved: SwarmSkill, mode: SwarmSkillMode, custom?: CustomSwarmRole): SkillRefresh | null {
   if (!parseSwarmSkill(saved)) throw new Error('A Swarm skill needs a role and session key')
   // A removed worktree has nothing to refresh; the host would otherwise retry and log it every minute.
   if (!existsSync(workspace)) return null
@@ -547,7 +558,9 @@ export function refreshSwarmSkill(workspace: string, saved: SwarmSkill, mode: Sw
   const file = dir && join(dir, 'SKILL.md')
   if (!dir || !file || !existsSync(file)) return null
   plainFile(file)
-  const text = skills[mode][saved.role], version = textVersion(text)
+  // A Custom role's file is overwritten on each new text (call 14): the agent's own edits are kept for built-in texts only.
+  const set: SkillSet = custom ? 'custom' : mode
+  const text = custom ? customText(saved.role, custom) : skills[mode][saved.role], version = textVersion(text)
   const held = textVersion(readFileSync(file, 'utf8'))
   let record = readRecord(dir) ?? { text: held, notified: held }
   if (record.toldChange === undefined) {
@@ -559,7 +572,7 @@ export function refreshSwarmSkill(workspace: string, saved: SwarmSkill, mode: Sw
   }
   if (record.text !== version) {
     replaceFile(file, text)
-    record = { ...record, text: version, mode, change: (record.change ?? 0) + 1 }
+    record = { ...record, text: version, mode: set, change: (record.change ?? 0) + 1 }
     writeRecord(dir, record)
   } else if (held !== version && modeOf(saved.role, held)) {
     // A switch stopped after replacing the file and before its record, and the project switched back: the record already
@@ -571,17 +584,19 @@ export function refreshSwarmSkill(workspace: string, saved: SwarmSkill, mode: Sw
   // A notice counts once it is recorded: one sent whose record was lost may have moved the agent to another text, so a
   // later rewrite is owed even when it brings back the text last confirmed.
   const owed = record.toldChange !== change
-  const switched = (record.told ?? 'orchestration') !== mode || owed && record.notified === version
+  const switched = (record.told ?? 'orchestration') !== set || owed && record.notified === version
   const reread = `Before your next step, read ${JSON.stringify(file)} again with your file or shell tool and follow`
-  return { file, version, owed, change,
-    notice: switched ? `This project now uses the ${MODE_NAMES[mode]} skills. ${reread} it in place of your earlier swarm-${saved.role} skill.`
-      : `Harness updated your ${mode === 'default' ? '' : 'built-in '}swarm-${saved.role} skill. ${reread} the new version.` }
+  const instead = `${reread} it in place of your earlier swarm-${saved.role} skill.`
+  return { file, version, owed, change, set,
+    notice: custom ? switched ? `This project now uses its Custom skills, as ${custom.name}. ${instead}` : `The project owner updated your ${custom.name} role. ${reread} the new version.`
+      : switched ? `This project now uses the ${MODE_NAMES[mode]} skills. ${instead}`
+        : `Harness updated your ${mode === 'default' ? '' : 'built-in '}swarm-${saved.role} skill. ${reread} the new version.` }
 }
 /** The notice for that refresh's rewrite was sent. A later rewrite since then stays owed. */
-export function recordSwarmSkillNotice(workspace: string, saved: SwarmSkill, sent: Pick<SkillRefresh, 'version' | 'change'>): void {
+export function recordSwarmSkillNotice(workspace: string, saved: SwarmSkill, sent: Pick<SkillRefresh, 'version' | 'change' | 'set'>): void {
   const dir = skillDirectory(realpathSync(workspace), saved, false)
   const record = dir && readRecord(dir)
-  if (dir && record) writeRecord(dir, { ...record, notified: sent.version, toldChange: sent.change, told: modeOf(saved.role, sent.version) ?? record.told })
+  if (dir && record) writeRecord(dir, { ...record, notified: sent.version, toldChange: sent.change, told: sent.set ?? modeOf(saved.role, sent.version) ?? record.told })
 }
 
 const textVersion = (text: string) => createHash('sha256').update(text).digest('hex')
@@ -613,7 +628,7 @@ function readRecord(dir: string): SkillRecord | null {
   const record = JSON.parse(readFileSync(file, 'utf8')) as Partial<SkillRecord>
   return typeof record.text === 'string' && typeof record.notified === 'string'
     ? { text: record.text, notified: record.notified, ...(typeof record.change === 'number' ? { change: record.change } : {}),
-      ...(isSwarmSkillMode(record.mode) ? { mode: record.mode } : {}), ...(isSwarmSkillMode(record.told) ? { told: record.told } : {}),
+      ...(isSkillSet(record.mode) ? { mode: record.mode } : {}), ...(isSkillSet(record.told) ? { told: record.told } : {}),
       ...(typeof record.toldChange === 'number' ? { toldChange: record.toldChange } : {}) } : null
 }
 function writeRecord(dir: string, record: SkillRecord): void {
