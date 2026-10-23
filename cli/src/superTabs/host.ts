@@ -547,7 +547,7 @@ export class SuperTabHost {
     try {
       const refresh = refreshSwarmSkill(session.cwd, skill, mode)
       if (!refresh?.owed) return
-      if (await this.tellSkill(target, refresh)) recordSwarmSkillNotice(session.cwd, skill, refresh.version)
+      if (await this.tellSkill(target, refresh)) recordSwarmSkillNotice(session.cwd, skill, refresh)
       else this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
     } catch (error) {
       this.log(error instanceof Error ? error.message : String(error))

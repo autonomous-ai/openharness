@@ -518,15 +518,16 @@ export function prepareSwarmSkill(workspace: string, saved: SwarmSkill): { file:
   } else {
     const text = skills[mode][saved.role], version = textVersion(text)
     writeFileSync(file, text, { flag: 'wx', mode: 0o600 })
-    writeRecord(dir, { text: version, notified: version, mode, told: mode })
+    writeRecord(dir, { text: version, notified: version, mode, told: mode, change: 0, toldChange: 0 })
   }
   return { file, instructions: `${swarmSkillUse(saved.role, mode)} Before working, read ${JSON.stringify(file)} with your file or shell tool.` }
 }
 
-/** Which built-in text a session's skill file holds and of which mode, which text and mode its agent was last told to
- * re-read, and how many times the file was rewritten. A file from before this record counts as holding its own content,
- * already told; one from before modes, as orchestration. */
-interface SkillRecord { text: string; notified: string; change?: number; mode?: SwarmSkillMode; told?: SwarmSkillMode }
+/** Which built-in text a session's skill file holds and of which mode, how many times the file was rewritten, and the text,
+ * mode and rewrite its agent was last confirmed told about (the launch prompt is rewrite 0). A file from before this record
+ * counts as holding its own content, already told; one from before modes, as orchestration. A record from before
+ * `toldChange` (#1585) is owed a notice while its told text differs, until its next notice is recorded. */
+interface SkillRecord { text: string; notified: string; change?: number; mode?: SwarmSkillMode; told?: SwarmSkillMode; toldChange?: number }
 /** `change` counts rewrites, so a notice for a switch back to an earlier mode's text is a new notice, not a repeat. */
 export interface SkillRefresh { file: string; version: string; owed: boolean; change: number; notice: string }
 
@@ -544,9 +545,9 @@ export function refreshSwarmSkill(workspace: string, saved: SwarmSkill, mode: Sw
   if (!dir || !file || !existsSync(file)) return null
   plainFile(file)
   const text = skills[mode][saved.role], version = textVersion(text)
+  const held = textVersion(readFileSync(file, 'utf8'))
   let record = readRecord(dir)
   if (!record) {
-    const held = textVersion(readFileSync(file, 'utf8'))
     record = { text: held, notified: held }
     if (held !== version) writeRecord(dir, record)
   }
@@ -554,17 +555,27 @@ export function refreshSwarmSkill(workspace: string, saved: SwarmSkill, mode: Sw
     replaceFile(file, text)
     record = { ...record, text: version, mode, change: (record.change ?? 0) + 1 }
     writeRecord(dir, record)
+  } else if (held !== version && modeOf(saved.role, held)) {
+    // A switch stopped after replacing the file and before its record, and the project switched back: the record already
+    // describes this text and no notice went out for the other, so only the file is put back. The agent's own edits are
+    // no built-in text and stay.
+    replaceFile(file, text)
   }
-  const switched = (record.told ?? 'orchestration') !== mode
+  const change = record.change ?? 0
+  // A notice counts once it is recorded: one sent whose record was lost may have moved the agent to another text, so a
+  // later rewrite is owed even when it brings back the text last confirmed.
+  const owed = record.toldChange === undefined ? record.notified !== version : record.toldChange !== change
+  const switched = (record.told ?? 'orchestration') !== mode || owed && record.notified === version
   const reread = `Before your next step, read ${JSON.stringify(file)} again with your file or shell tool and follow`
-  return { file, version, owed: record.notified !== version, change: record.change ?? 0,
+  return { file, version, owed, change,
     notice: switched ? `This project now uses the ${MODE_NAMES[mode]} skills. ${reread} it in place of your earlier swarm-${saved.role} skill.`
       : `Harness updated your ${mode === 'default' ? '' : 'built-in '}swarm-${saved.role} skill. ${reread} the new version.` }
 }
-export function recordSwarmSkillNotice(workspace: string, saved: SwarmSkill, version: string): void {
+/** The notice for that refresh's rewrite was sent. A later rewrite since then stays owed. */
+export function recordSwarmSkillNotice(workspace: string, saved: SwarmSkill, sent: Pick<SkillRefresh, 'version' | 'change'>): void {
   const dir = skillDirectory(realpathSync(workspace), saved, false)
   const record = dir && readRecord(dir)
-  if (dir && record) writeRecord(dir, { ...record, notified: version, ...(version === record.text && record.mode ? { told: record.mode } : {}) })
+  if (dir && record) writeRecord(dir, { ...record, notified: sent.version, toldChange: sent.change, told: modeOf(saved.role, sent.version) ?? record.told })
 }
 
 const textVersion = (text: string) => createHash('sha256').update(text).digest('hex')
@@ -596,7 +607,8 @@ function readRecord(dir: string): SkillRecord | null {
   const record = JSON.parse(readFileSync(file, 'utf8')) as Partial<SkillRecord>
   return typeof record.text === 'string' && typeof record.notified === 'string'
     ? { text: record.text, notified: record.notified, ...(typeof record.change === 'number' ? { change: record.change } : {}),
-      ...(isSwarmSkillMode(record.mode) ? { mode: record.mode } : {}), ...(isSwarmSkillMode(record.told) ? { told: record.told } : {}) } : null
+      ...(isSwarmSkillMode(record.mode) ? { mode: record.mode } : {}), ...(isSwarmSkillMode(record.told) ? { told: record.told } : {}),
+      ...(typeof record.toldChange === 'number' ? { toldChange: record.toldChange } : {}) } : null
 }
 function writeRecord(dir: string, record: SkillRecord): void {
   replaceFile(join(dir, 'version.json'), JSON.stringify(record))

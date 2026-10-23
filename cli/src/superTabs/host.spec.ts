@@ -1056,10 +1056,10 @@ describe('built-in skill text after a CLI update', () => {
     await f.pass()
     const lead = join(dirname(f.files.lead!), 'version.json'), record = JSON.parse(readFileSync(lead, 'utf8'))
     // The send succeeded, the record did not survive, and the Lead's group was archived meanwhile.
-    writeFileSync(lead, JSON.stringify({ ...record, notified: 'older' }))
+    writeFileSync(lead, JSON.stringify({ ...record, notified: 'older', toldChange: undefined }))
     f.setGroups([{ id: 'lead-group', archived: true, leadId: 'a-lead', agentIds: ['a-lead'] }, { id: 'next', leadId: 'a-lead', agentIds: ['a-lead'] }])
     await f.pass()
-    expect(JSON.parse(readFileSync(lead, 'utf8')).notified).toBe(record.notified)
+    expect(JSON.parse(readFileSync(lead, 'utf8'))).toMatchObject({ notified: record.notified, toldChange: record.toldChange })
     expect(f.t.log).not.toHaveBeenCalled()
     const calls = vi.mocked(f.t.core.account.backend).mock.calls.length
     await f.pass()

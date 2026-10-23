@@ -91,7 +91,7 @@ describe('built-in Swarm skills', () => {
       expect(readFileSync(file, 'utf8')).toBe(readFileSync(prepareSwarmSkill(fixture(), skill).file, 'utf8'))
       // Not yet recorded: a later pass, or another daemon, still owes the same notice for the same text.
       expect(refreshSwarmSkill(workspace, skill, 'orchestration')).toEqual(sync)
-      recordSwarmSkillNotice(workspace, skill, sync.version)
+      recordSwarmSkillNotice(workspace, skill, sync)
       expect(refreshSwarmSkill(workspace, skill, 'orchestration')).toMatchObject({ file, owed: false })
       // The agent's own edits after the update are its own: the record says the file already holds this text.
       writeFileSync(file, 'edited')
@@ -124,19 +124,47 @@ describe('built-in Swarm skills', () => {
       expect(toOrchestration).toMatchObject({ file, owed: true, change: 1,
         notice: `This project now uses the Harness orchestration skills. Before your next step, read ${JSON.stringify(file)} again with your file or shell tool and follow it in place of your earlier swarm-dev skill.` })
       expect(readFileSync(file, 'utf8')).toBe(readFileSync(prepareSwarmSkill(fixture(), skill).file, 'utf8'))
-      recordSwarmSkillNotice(workspace, skill, toOrchestration.version)
+      recordSwarmSkillNotice(workspace, skill, toOrchestration)
       expect(refreshSwarmSkill(workspace, skill, 'orchestration')).toMatchObject({ owed: false, change: 1 })
       const back = refreshSwarmSkill(workspace, skill, 'default')!
       expect(back).toMatchObject({ owed: true, change: 2,
         notice: `This project now uses the Default skills. Before your next step, read ${JSON.stringify(file)} again with your file or shell tool and follow it in place of your earlier swarm-dev skill.` })
       expect(readFileSync(file, 'utf8')).toBe(defaultText)
       // The same text as at launch, but a new change: its notice is not the launch's (there was none) nor a retry of another.
-      recordSwarmSkillNotice(workspace, skill, back.version)
+      recordSwarmSkillNotice(workspace, skill, back)
       expect(refreshSwarmSkill(workspace, skill, 'default')).toMatchObject({ owed: false, change: 2 })
       // A relaunch keeps the file and says what it holds, whatever mode the session was first started in.
       refreshSwarmSkill(workspace, skill, 'orchestration')
       expect(prepareSwarmSkill(workspace, { ...skill, mode: 'default' }).instructions)
         .toBe(`Use the built-in swarm-dev skill for this session. Before working, read ${JSON.stringify(file)} with your file or shell tool.`)
+    })
+    it('puts back the mode\'s text when a switch was cut off after its file and before its record', () => {
+      const workspace = fixture(), { file } = prepareSwarmSkill(workspace, { ...skill, mode: 'default' })
+      const defaultText = readFileSync(file, 'utf8'), record = join(dirname(file), 'version.json'), before = readFileSync(record, 'utf8')
+      refreshSwarmSkill(workspace, skill, 'orchestration')
+      // The pass stopped after replacing SKILL.md: the record still says Default, the file holds orchestration.
+      writeFileSync(record, before)
+      expect(readFileSync(file, 'utf8')).not.toBe(defaultText)
+      // The project switched back before the retry: the file is Default again, and the agent, never told, owes nothing.
+      expect(refreshSwarmSkill(workspace, skill, 'default')).toMatchObject({ owed: false })
+      expect(readFileSync(file, 'utf8')).toBe(defaultText)
+      // The same retry without a switch back finishes the switch and owes its notice.
+      refreshSwarmSkill(workspace, skill, 'orchestration'); writeFileSync(record, before)
+      expect(refreshSwarmSkill(workspace, skill, 'orchestration')).toMatchObject({ owed: true,
+        notice: expect.stringMatching(/^This project now uses the Harness orchestration skills\./) })
+    })
+    it('tells the agent again when it switches back after a notice that was sent but never recorded', () => {
+      const workspace = fixture(), { file } = prepareSwarmSkill(workspace, { ...skill, mode: 'default' })
+      // Sent, then the daemon stopped before recordSwarmSkillNotice: the agent may be following the orchestration text.
+      expect(refreshSwarmSkill(workspace, skill, 'orchestration')).toMatchObject({ owed: true, change: 1 })
+      const back = refreshSwarmSkill(workspace, skill, 'default')!
+      expect(back).toMatchObject({ owed: true, change: 2,
+        notice: `This project now uses the Default skills. Before your next step, read ${JSON.stringify(file)} again with your file or shell tool and follow it in place of your earlier swarm-dev skill.` })
+      // Recording an earlier rewrite's notice does not cover this one.
+      recordSwarmSkillNotice(workspace, skill, { version: 'any', change: 1 })
+      expect(refreshSwarmSkill(workspace, skill, 'default')).toMatchObject({ owed: true, change: 2 })
+      recordSwarmSkillNotice(workspace, skill, back)
+      expect(refreshSwarmSkill(workspace, skill, 'default')).toMatchObject({ owed: false, change: 2 })
     })
     it('does nothing for a session whose skill was never prepared in this workspace', () => {
       expect(refreshSwarmSkill(fixture(), skill, 'orchestration')).toBeNull()
