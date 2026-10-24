@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
+import '../state/workspace_chrome.dart';
 import 'box_chrome.dart';
 import 'desktop_chrome.dart';
 
@@ -27,7 +28,8 @@ import 'desktop_chrome.dart';
 /// Right-click (or the context-menu key, or the "Tab options" accessibility
 /// action) opens the menu the native tab has: Invite People…, Show Agent
 /// Messages, Stop Sharing Tab, Move Here, Leave Tab — each row only where its
-/// callback is given.
+/// callback is given. A host whose [WorkspaceChrome.menuOnEveryTab] is on (the
+/// web) gives every tab that menu, with Rename Tab… first and Close Tab last.
 class DesktopWorkspaceTab extends StatefulWidget {
   const DesktopWorkspaceTab({
     super.key,
@@ -199,7 +201,19 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
   bool _hovered = false, _focused = false;
   final _menu = MenuController();
 
+  /// The host's [WorkspaceChrome.menuOnEveryTab]: Desktop leaves it off, so
+  /// only a tab with sharing rows has a menu there.
+  bool _everyTab = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _everyTab = WorkspaceChrome.of(context).menuOnEveryTab;
+    _syncBrowserMenu();
+  }
+
   bool get _hasMenu =>
+      (_everyTab && (widget.onRename != null || widget.onClose != null)) ||
       widget.onPauseNewWork != null ||
       widget.onInvitePeople != null ||
       widget.onShowAgentMessages != null ||
@@ -255,15 +269,15 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
           },
         );
     return [
-      if (widget.onPauseNewWork != null) ...[
-        if (widget.onRename != null)
-          row('rename', 'Rename Tab…', widget.onRename),
+      if (widget.onRename != null &&
+          (_everyTab || widget.onPauseNewWork != null))
+        row('rename', 'Rename Tab…', widget.onRename),
+      if (widget.onPauseNewWork != null)
         row(
           'pause',
           widget.newWorkPaused ? 'Resume new work' : 'Pause new work',
           widget.onPauseNewWork,
         ),
-      ],
       if (widget.onInvitePeople != null)
         row('invite', 'Invite People…', widget.onInvitePeople),
       if (widget.onShowAgentMessages != null)
@@ -273,6 +287,8 @@ class _DesktopWorkspaceTabState extends State<DesktopWorkspaceTab> {
       if (widget.onMoveHere != null)
         row('move', 'Move Here', widget.onMoveHere),
       if (widget.onLeave != null) row('leave', 'Leave Tab', widget.onLeave),
+      if (_everyTab && widget.onClose != null)
+        row('close', 'Close Tab', widget.onClose),
     ];
   }
 
