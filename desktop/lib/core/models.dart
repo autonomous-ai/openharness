@@ -151,6 +151,11 @@ class Machine {
   /// Set when another account shares this whole machine with this one; null for the account's own.
   final MachineShare? machineShare;
 
+  /// On a Mac's Harness Team account, the machine of that Mac: the separate macOS user that runs teammates' Swarm
+  /// agents without reaching its owner's files (docs/plans/2026-10-24-swarm-team-account.md). Lists show the Mac
+  /// alone ([foldsIntoHost]). Null on every other machine, a machine used only for agents included.
+  final String? hostMachineId;
+
   const Machine({
     required this.machineId,
     this.apiKey = '',
@@ -164,6 +169,7 @@ class Machine {
     this.sharedHarnesses = const [],
     this.status,
     this.machineShare,
+    this.hostMachineId,
   });
 
   /// Another account's machine, shared with this one: this account is a guest there, with its own space and
@@ -214,6 +220,10 @@ class Machine {
     machineShare: j['share'] is Map
         ? MachineShare.fromJson(Map<String, dynamic>.from(j['share'] as Map))
         : null,
+    hostMachineId: switch (j['hostMachineId']) {
+      final String id when id.isNotEmpty => id,
+      _ => null,
+    },
   );
 
   Machine copyWith({String? name}) => Machine(
@@ -229,7 +239,15 @@ class Machine {
     sharedHarnesses: sharedHarnesses,
     status: status,
     machineShare: machineShare,
+    hostMachineId: hostMachineId,
   );
+}
+
+/// Whether [machine] is a Mac's Harness Team account whose Mac is in the same list ([listed]): the list shows that
+/// Mac alone, one row per computer. The account is how teammates' agents run there, not a computer of its own.
+bool foldsIntoHost(Machine machine, bool Function(String machineId) listed) {
+  final host = machine.hostMachineId;
+  return host != null && host != machine.machineId && listed(host);
 }
 
 /// Whether an agent on a Local model can search the web, as the daemon decided when it built the

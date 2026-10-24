@@ -97,8 +97,8 @@ TaskRouteChoices taskRouteChoices(AppNotifier app, {DateTime? now}) {
   final since = (now ?? DateTime.now()).subtract(stoppedSessionsWithin);
   final machines =
       [
-            ...app.machineStates.values.where((m) => m.isLocalMachine),
-            ...app.machineStates.values.where((m) => !m.isLocalMachine),
+            ...app.listedMachines.where((m) => m.isLocalMachine),
+            ...app.listedMachines.where((m) => !m.isLocalMachine),
           ]
           // Machines a task can reach now: the app also remembers the sessions of machines that are off.
           .where(

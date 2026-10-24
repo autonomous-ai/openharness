@@ -283,6 +283,34 @@ class SuperTabSnapshot {
   String agentName(String id, {String fallback = 'Agent'}) =>
       agent(id)?.displayName ?? agent(id)?.name ?? fallback;
 
+  /// [machineId]'s contribution to this Swarm, if it has one.
+  Map<String, dynamic>? pool(String machineId) =>
+      machines.where((m) => m['machineId'] == machineId).firstOrNull;
+
+  /// The Mac's Harness Team account folded into [machineId]'s row: its pool names [machineId] as `hostMachineId`
+  /// (docs/plans/2026-10-24-swarm-team-account.md). The backend adds it with its Mac and changes it with it.
+  Map<String, dynamic>? teamPoolOf(String machineId) => pool(machineId) == null
+      ? null
+      : machines
+            .where(
+              (m) =>
+                  m['hostMachineId'] == machineId &&
+                  m['machineId'] != machineId,
+            )
+            .firstOrNull;
+
+  /// The machine [machineId] is shown as, one row per computer: the Mac, for its Harness Team account while that
+  /// Mac is in the Swarm too; [machineId] itself otherwise, a machine used only for agents included.
+  String placeOf(String machineId) {
+    final host = pool(machineId)?['hostMachineId'];
+    return host is String && teamPoolOf(host)?['machineId'] == machineId
+        ? host
+        : machineId;
+  }
+
+  /// Whether more than one person can start work here: teammates' agents are a question only then.
+  bool get hasTeammates => people.where((p) => p.role != 'viewer').length > 1;
+
   // Resolve the person shown in chat from the same identity as the roster.
   // Recorded labels remain the fallback for agents no longer in the Swarm.
   String authorName(SuperTabMessage message) => message.fromAgent

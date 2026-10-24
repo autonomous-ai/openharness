@@ -3256,11 +3256,11 @@ class NewHarnessController extends ChangeNotifier {
   /// folder search must never filter the machine inventory.
   List<NewHarnessOption> get machineChoices => [
     for (final machine in [
-      ...app.machineStates.values.where((m) => m.isLocalMachine),
-      ...app.machineStates.values.where(
+      ...app.listedMachines.where((m) => m.isLocalMachine),
+      ...app.listedMachines.where(
         (m) => !m.isLocalMachine && _machineUsable(m),
       ),
-      ...app.machineStates.values.where(
+      ...app.listedMachines.where(
         (m) => !m.isLocalMachine && !_machineUsable(m),
       ),
     ])
@@ -3375,8 +3375,8 @@ class NewHarnessController extends ChangeNotifier {
   List<NewHarnessOption> _recentProjects() {
     final result = <NewHarnessOption>[];
     for (final machine in [
-      ...app.machineStates.values.where((m) => m.isLocalMachine),
-      ...app.machineStates.values.where((m) => !m.isLocalMachine),
+      ...app.listedMachines.where((m) => m.isLocalMachine),
+      ...app.listedMachines.where((m) => !m.isLocalMachine),
     ].where((m) => !m.machine.isShared)) {
       final id = machine.machine.machineId;
       if (_desktopChoices && id != _machineId) continue;

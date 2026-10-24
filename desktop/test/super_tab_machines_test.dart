@@ -1991,6 +1991,39 @@ void main() {
   );
 
   testWidgets(
+    'Add machine: a Mac\'s Harness Team account is not offered beside its Mac; the backend adds it with the Mac',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      const team = Machine(
+        machineId: 'm-team',
+        authMode: MachineAuthMode.remote,
+        name: 'This Mac · Team',
+        hostMachineId: 'm',
+      );
+      f.app.machines = [...f.app.machines, team];
+      f.app.machineStates['m-team'] = MachineState(team)
+        ..nodeOnline = true
+        ..connectionStatus = ConnectionStatus.connected
+        ..agentLoadStatus = AgentLoadStatus.loaded;
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openAddMachineDialog(tester, f, c);
+
+      await tester.tap(_picker);
+      await tester.pumpAndSettle();
+      expect(_option('m'), findsOneWidget);
+      expect(_option('m-team'), findsNothing);
+      expect(find.textContaining('This Mac · Team'), findsNothing);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
     'Add machine: offline and unlinked owned machines are disabled with status tooltips; shared machines stay excluded',
     (tester) async {
       final f = SuperTabLaunchFixture();

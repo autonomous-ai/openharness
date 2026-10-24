@@ -1592,7 +1592,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       scope: scope,
       machines: {
         if (!app.isGuest)
-          for (final machine in app.machineStates.values)
+          for (final machine in app.listedMachines)
             if (!machine.isLocalMachine &&
                 !machine.machine.isShared &&
                 machine.needsLink &&
@@ -1666,7 +1666,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   WorkspaceSubscriptionUsage get _subscriptionUsage =>
       WorkspaceSubscriptionUsage.fromRows(_modelsMenu?.rows ?? const []);
 
-  List<MachineState> get _footerMachines => app.machineStates.values
+  List<MachineState> get _footerMachines => app.listedMachines
       .where(
         (machine) =>
             !machine.machine.isShared &&
@@ -2300,7 +2300,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       for (final tab in app.swarms)
         for (final pane in tab.panes) (pane.machineId, pane.agentId),
     };
-    final machines = app.machineStates.values.take(128);
+    final machines = app.listedMachines.take(128);
     // Compare only visible values before building/encoding a potentially large
     // inventory. Tab focus, palette and attention changes use the small update
     // message; they never resend or decode every agent on the native thread.
@@ -6362,7 +6362,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
               id: agentDestinationId(agent.machineId, agent.harnessId),
               title: agent.name,
               detail:
-                  '${engineIdentity(agent.engine).label} · ${app.stateOf(agent.machineId)?.machine.displayName ?? 'Shared agent'}',
+                  '${engineIdentity(agent.engine).label} · ${app.shownMachineName(agent.machineId) ?? 'Shared agent'}',
               swarmId: superTabTarget.swarmId,
               current: false,
               machineId: agent.machineId,
@@ -7468,7 +7468,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// up — and while any is connected, on its way, or waiting to be linked.
   List<MachineState> get _asleepComputers {
     final own = [
-      for (final machine in app.machineStates.values)
+      for (final machine in app.listedMachines)
         if (!machine.machine.isShared &&
             !app.removedMachines.containsKey(machine.machine.machineId))
           machine,

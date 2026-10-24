@@ -284,20 +284,19 @@ class _MachinesPanelState extends State<_MachinesPanel>
   }
 
   List<MachineState> get _remotes =>
-      app.machineStates.values.where((m) => !m.isLocalMachine).toList()
-        ..sort((a, b) {
-          int order(MachineState m) => m.nodeOnline == false
-              ? 2
-              : m.needsLink && !m.machine.isShared
-              ? 0
-              : 1;
-          final availability = order(a).compareTo(order(b));
-          return availability != 0
-              ? availability
-              : a.machine.displayName.toLowerCase().compareTo(
-                  b.machine.displayName.toLowerCase(),
-                );
-        });
+      app.listedMachines.where((m) => !m.isLocalMachine).toList()..sort((a, b) {
+        int order(MachineState m) => m.nodeOnline == false
+            ? 2
+            : m.needsLink && !m.machine.isShared
+            ? 0
+            : 1;
+        final availability = order(a).compareTo(order(b));
+        return availability != 0
+            ? availability
+            : a.machine.displayName.toLowerCase().compareTo(
+                b.machine.displayName.toLowerCase(),
+              );
+      });
 
   @override
   void initState() {

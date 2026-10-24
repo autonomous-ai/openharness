@@ -72,14 +72,15 @@ class SuperTabAgentInfo {
       _known(agent.configuration['model'] as String?);
   String? get engine =>
       _known(agent.engine) == null ? null : engineIdentity(agent.engine).label;
-  String? get machine =>
-      _known(app?.stateOf(agent.machineId)?.machine.displayName) ??
-      _known(
-        controller.snapshot?.machines
-                .where((m) => m['machineId'] == agent.machineId)
-                .firstOrNull?['name']
-            as String?,
-      );
+
+  /// The computer it runs on: the Mac, for an agent in that Mac's Harness Team account ([SuperTabSnapshot.placeOf]).
+  String? get machine {
+    final place =
+        controller.snapshot?.placeOf(agent.machineId) ?? agent.machineId;
+    return _known(app?.shownMachineName(place)) ??
+        _known(controller.snapshot?.pool(place)?['name'] as String?);
+  }
+
   String? get folder => _known(native?.project?.cwd);
   DateTime? get started => native?.createdAt;
   DateTime? get lastActive => native?.lastActivityAt;

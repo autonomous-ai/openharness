@@ -116,8 +116,7 @@ Map<String, Object?> _location(
   return {
     'tabId': tab?.id,
     'tabName': tab == null ? 'Other sessions' : names[tab.id],
-    'machineName':
-        app.stateOf(machineId)?.machine.displayName ?? 'Unavailable machine',
+    'machineName': app.shownMachineName(machineId) ?? 'Unavailable machine',
   };
 }
 
