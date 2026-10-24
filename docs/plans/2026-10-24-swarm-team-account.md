@@ -156,3 +156,49 @@ VMs; team accounts on Windows and Linux (dedicated machines use `harness team on
 **Not exercised.** A real owner sign-in, and minting and redeeming against production. A real owner today takes the stand-in's path: the code is minted without `kind`, and the redeemed session has no `kind`, so it is revoked. Also not exercised: a team daemon signing in through setup; Desktop's automatic setup (join, contribute, startup); the 5-minute recheck while serving a Swarm (kickstart was used instead); finishing engine sign-in (a device code needs a person); and a Swarm start landing in the team account.
 
 Tests: `npx vitest run src/team src/superTabs/machines.spec.ts src/superTabs/service.spec.ts`: 209 passed. `npm run typecheck` is clean.
+
+## Validation, second VM run (24 Oct 2026)
+
+Fixes for open bugs 5, 6 and 7, checked in another fresh VM from the same image (macOS 26.6.2, build 25G83). The CLI was bundled from this branch and installed by the real installer from a local manifest. The owner sign-in and the backend were the loopback stand-ins of the first run; the stand-in also answered `GET /api/machines` and `DELETE /api/machines/:id`, and redeemed codes as `kind: "team"`, so the team account was signed in (`hta_`/`htr_`) throughout. Nothing ran on a developer's own Mac.
+
+**What changed.**
+- *Bug 5.* Setup gives the account a 40-character random password, made in the root script from `/dev/urandom` and handed to dscl on its input (`printf 'passwd …' | dscl .`; `printf` is the shell's own), never printed, logged, stored or on a command line. Only when the account has no `ShadowHash` authority, so a repair run keeps it and an account made by the first version gets one. Root sets it, so the account has no secure token.
+- *Bug 6.* Removal deletes the account first, after only stopping the daemon. When macOS refuses, it starts the daemon again and exits 9 with nothing else changed. In a terminal, `harness team remove` runs the script with sudo there instead of the dialog. The team sign-in now ends from the owner's side after the account is gone: the script names the team computer, and the owner's CLI deletes that team machine from the account, which signs its session out (#1691). The script no longer runs `team __signout`.
+- *Bug 7.* Setup marks `/Library/Application Support/Harness` when it creates it; removal deletes it only when marked and empty. A folder made by the first version is left in place.
+- A repair run's dialog says "Harness wants to repair the Harness Team account…". The dialog's title stays "osascript": osascript cannot change it.
+- `lib/guestHelperInstall.ts` splits osascript's stderr on CR and LF, as `team/admin.ts` does.
+
+**What macOS 26 lets delete an account.** Each was run as root through the real administrator prompt on throwaway accounts, except where noted.
+
+| Mechanism | Result |
+|---|---|
+| `dscl . -delete /Users/x` | ✗ `DS Error: -14120 (eDSPermissionError)` |
+| `sysadminctl -deleteUser x` | ✗ record kept, `### Error:-14120`, but exit 0, after it had already killed the account's processes and deleted its home (`-keepHome` "is not available on this system") |
+| one-shot LaunchDaemon (`launchctl bootstrap`) running `dscl . -delete` | ✗ -14120 |
+| the same job running `sysadminctl -deleteUser` | ✗ as above |
+| `launchctl submit … dscl . -delete` | ✗ -14120 |
+| `sudo dscl . -delete` in Terminal | macOS asks "Terminal would like to administer your computer". Don't Allow: -14120; Allow: ✓ |
+| System Settings > Users & Groups > Delete User | ✓ |
+| setting a password (`dscl` from input, `dscl . -passwd`), deleting an attribute | ✓ through the prompt |
+
+The unified log gives the reason. opendirectoryd has sandboxd ask TCC for `kTCCServiceSystemPolicyAllFiles`, then `kTCCServiceSystemPolicySysAdminFiles`, for the responsible process. Behind the prompt that process is `authtrampoline`, and TCC answers "Platform binary prompting is 'Deny'", so no prompt appears. A Terminal decision lives in the person's TCC database, and `tccutil reset SystemPolicySysAdminFiles com.apple.Terminal` makes macOS ask again. Over ssh, the first run's delete worked because `sshd-keygen-wrapper` has Full Disk Access (Remote Login's).
+
+| Step | Result |
+|---|---|
+| Setup through the real prompt | ✓ create dialog, exit 0, `✓ The Harness Team account is signed in.`, `✓ Private`. A `ps` sampler during setup (2.1 million lines) saw the root `dscl .` with no other argument and no 40-character token anywhere |
+| Listed in Users & Groups | ✓ "Harness Team · Standard" (it was hidden in the first run). `Password: ********`, `;ShadowHash;HASHLIST:<SALTED-SHA512-PBKDF2,SRP-RFC5054-4096-SHA512-PBKDF2>`, `Secure token is DISABLED`, not in `admin` |
+| Login window | ✓ lists Harness Team. A guessed password is refused (`Authentication failed … ODErrorCredentialsInvalid` for its GeneratedUID); `dscl /Local/Default -authonly harnessteam ''` and a guess give `eDSAuthFailed` |
+| Privacy check | ✓ `Private ✓`; `cat`/`ls` of the sentinel, `/Users/admin`, `~/.gitconfig` and `~/code` as `harnessteam` each give `Permission denied` |
+| Repair run | ✓ repair dialog. Before/after snapshot: same uid 600, same password (`ShadowHashData` SHA-256 `895034f17cc5a78b`), same session file, same plist; only the job's pid changed |
+| Removal through the prompt (not a terminal) | ✗ as expected, safely: `✗ macOS kept the Harness Team account: could not delete the account harnessteam: macOS did not allow it (eDSPermissionError). Nothing was removed: the Harness Team account and its daemon run as before.`, then both ways to finish. Afterwards: account, password, session file, plist and shared folder unchanged, daemon running again (`privacy check passed` 8 s later), `sign-in ✓`; the stand-in saw no revoke, no machine call |
+| Removal in Terminal | ✓ `sudo` asked for the password with the dialog's sentence, macOS asked to let Terminal administer the computer, Allow: `✓ Removed …`, `✓ Took its computer off your Harness account, which signs it out.` The stand-in logged `GET /api/machines` and `DELETE /api/machines/<the team machine>` only, never the owner's |
+| Removal in Terminal, Don't Allow | ✓ nothing removed and the daemon runs again; the message gives `tccutil reset SystemPolicySysAdminFiles com.apple.Terminal` |
+| Users & Groups, then `harness team remove` again | ✓ with "Don't change the home folder" (macOS renames it `/Users/harnessteam (Deleted)`, owned by uid 600) the removal stops the account's leftover processes, deletes that folder and the rest, and takes its computer off the account |
+| Nothing left behind | ✓ no account, home, plist, job, uid-600 process, sentinel, staging folder or `/Library/Application Support/Harness`; `status`: `No Harness Team account on this computer.` |
+| `/Users/admin` | ✓ `drwx------` after every removal |
+
+Three bugs found here were fixed and checked again in the VM. The team computer id is read from `~/.harness/computer-id`, not the data folder. A home left by an account deleted elsewhere is judged by uid, because `stat -f %Su` prints such an owner as `(600)` on macOS 26; the first version's check refused it. The removal also handles the `(Deleted)` folder Users & Groups leaves. Setup, the Users & Groups fallback and removal in Terminal were run again with the final bundle.
+
+**Not exercised.** Removal through the prompt with the deletion allowed (macOS 26 has no way). `harness team remove` from a terminal other than Terminal.app, or inside a Harness pane, where the responsible process is the daemon's Node. A real owner sign-in, production minting, redeeming and machine deletion: the stand-ins answered, so the team session ending with its machine rests on #1691's backend tests. Desktop's automatic setup. A team account made by the first version, repaired to get a password. The guest helper's install: its parsing fix has a spec only. In the VM image `admin` has passwordless sudo; that file was moved aside to see sudo's prompt, then put back. Rig: tart's VNC server crashed the VM five times on connect; `vmn-start` brought it back each time.
+
+Tests: `npx vitest run src/team src/lib/guestHelperInstall.spec.ts src/superTabs/machines.spec.ts src/superTabs/service.spec.ts src/services/guestLaunches.spec.ts src/services/sharedMachines.spec.ts src/cliCommand.spec.ts src/architecture.spec.ts`: 318 passed. `npm run typecheck` is clean. No coverage gate covers `src/team` or `src/lib/guestHelperInstall.ts`.
