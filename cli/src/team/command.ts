@@ -351,7 +351,7 @@ async function teamOn(deps: TeamCommandDeps, json: boolean, yes: boolean): Promi
   }
   const label = `${deps.hostname().slice(0, 60)} · Team`
   const unchanged = (error: unknown) => error instanceof TeamSignInError
-    ? new TeamSignInError(`${error.message} Nothing was changed on this computer.`, error.code) : error
+    ? new TeamSignInError(`${error.message}${/[.!?]$/.test(error.message) ? '' : '.'} Nothing was changed on this computer.`, error.code) : error
   // A code that turns this very computer into a team machine, keeping its computer id (./handoff.ts).
   let code: string
   try {
