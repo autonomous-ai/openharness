@@ -12,6 +12,7 @@ import '../widgets/new_harness_attachments.dart';
 import '../widgets/new_harness_paste.dart';
 import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
+import '../state/workspace_chrome.dart';
 import 'roster.dart';
 import 'recording_notice.dart';
 import 'pull_requests.dart';
@@ -1040,6 +1041,33 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
+  /// On the web a conversation is read before anything else is drawn
+  /// ([WorkspaceChrome.superTabRecovers]); Desktop keeps "Loading" meanwhile.
+  bool get _readsFirst => WorkspaceChrome.of(context).superTabRecovers;
+
+  Widget _firstReadFailed(String error) => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            error,
+            textAlign: TextAlign.center,
+            style: DesktopChrome.text(color: DesktopChrome.muted),
+          ),
+          if (!c.accessRevoked) ...[
+            const SizedBox(height: 12),
+            TextButton(
+              onPressed: () => unawaited(c.refresh()),
+              child: const Text('Retry'),
+            ),
+          ],
+        ],
+      ),
+    ),
+  );
+
   Widget _date(DateTime time) => Padding(
     padding: const EdgeInsets.fromLTRB(24, 20, 24, 4),
     child: Row(
@@ -1069,6 +1097,14 @@ class _SuperTabViewState extends State<SuperTabView>
                 'Create a project to get started.',
                 style: DesktopChrome.text(color: DesktopChrome.muted),
               ),
+              if (WorkspaceChrome.of(context).superTabRecovers &&
+                  widget.onNewProject != null) ...[
+                const SizedBox(height: 12),
+                FilledButton(
+                  onPressed: c.canWrite ? widget.onNewProject : null,
+                  child: const Text('New project'),
+                ),
+              ],
               if (c.operationError != null) ...[
                 const SizedBox(height: 12),
                 Text(c.operationError!, style: DesktopChrome.metadata()),
@@ -1111,9 +1147,11 @@ class _SuperTabViewState extends State<SuperTabView>
         : messages.where((message) => message.sequence > newAfter).length;
     final reply = _replies[c.selectedId];
     final choices = _completionChoices;
+    // No conversation read yet: its error is the page itself, not a line over "Loading".
+    final unread = _readsFirst && c.snapshot == null;
     return Column(
       children: [
-        if (c.error != null)
+        if (c.error != null && !unread)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
             child: Row(
@@ -1130,6 +1168,8 @@ class _SuperTabViewState extends State<SuperTabView>
         Expanded(
           child: c.loading
               ? const Center(child: CircularProgressIndicator())
+              : unread && c.error != null
+              ? _firstReadFailed(c.error!)
               : messages.isEmpty
               ? Center(
                   child: Text(
@@ -1518,7 +1558,10 @@ class _SuperTabViewState extends State<SuperTabView>
                                           color: DesktopChrome.muted,
                                         ),
                                         contentPadding: EdgeInsets.zero,
-                                        hintText: group == null
+                                        hintText:
+                                            _readsFirst && c.snapshot == null
+                                            ? null
+                                            : group == null
                                             ? 'Loading conversation…'
                                             : c.canWrite
                                             ? c.snapshot!.isProjectLead(
