@@ -23,6 +23,7 @@ import '../state/harness_placement.dart';
 import '../state/swarm_navigation.dart';
 import '../state/swarm_search.dart';
 import '../terminal/terminal_text.dart';
+import 'finger_target.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import 'account_device_detail.dart'
@@ -719,16 +720,19 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         );
         return Semantics(
           liveRegion: action.label == 'Working…',
-          child: DesktopPill(
-            key: ValueKey('resource-action:${action.command}'),
-            focusNode: node,
-            label: action.label,
-            compact: true,
-            onPressed: invoke,
-            foregroundColor: action.command == 'picker.resource_remove'
-                ? Theme.of(context).colorScheme.error
-                : null,
-            tooltip: [action.label, ?shortcut].join(' · '),
+          child: fingerTarget(
+            enabled: workspaceIsCompact(context),
+            DesktopPill(
+              key: ValueKey('resource-action:${action.command}'),
+              focusNode: node,
+              label: action.label,
+              compact: true,
+              onPressed: invoke,
+              foregroundColor: action.command == 'picker.resource_remove'
+                  ? Theme.of(context).colorScheme.error
+                  : null,
+              tooltip: [action.label, ?shortcut].join(' · '),
+            ),
           ),
         );
       }

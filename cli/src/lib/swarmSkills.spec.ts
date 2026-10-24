@@ -94,6 +94,43 @@ describe('built-in Swarm skills', () => {
     expect(prepared.instructions).toBe(`Use the swarm-${role} skill for this session: the team process; otherwise work your usual way. Before working, read ${JSON.stringify(prepared.file)} with your file or shell tool.`)
   })
 
+  // Custom roles and skills per project (spec 2026-10-23, call 14): a custom role's text is installed as the skill of its
+  // kind, under that kind's name, with the one front matter block Harness writes. Owners' texts may bring their own block.
+  describe('a project on its Custom skills', () => {
+    const skill = { role: 'lead' as const, key: 'custom' }
+    const head = (name: string) => `---\nname: swarm-lead\ndescription: ${JSON.stringify(`The ${name} role of this project's Custom skills.`)}\n---\n`
+    const shipped = () => readFileSync(prepareSwarmSkill(fixture(), { ...skill, mode: 'default' }).file, 'utf8')
+    it.each([
+      ['the shipped Default text', () => shipped(), () => shipped().replace(/^---\n[\s\S]*?\n---\n/, '')],
+      ['a text with its own front matter', () => '---\nname: my-pm\ntitle: Ours\n---\n# Our way\nShip small.\n', () => '# Our way\nShip small.\n'],
+      ['a text without front matter', () => '# Our way\n---\nShip small.\n', () => '# Our way\n---\nShip small.\n'],
+    ])('installs %s under the kind\'s skill name with one front matter block', (_case, text, body) => {
+      const workspace = fixture(), { file } = prepareSwarmSkill(workspace, { ...skill, mode: 'default' })
+      expect(refreshSwarmSkill(workspace, skill, 'default', { name: 'Planner', text: text() })).toMatchObject({ file, owed: true })
+      expect(file.endsWith(join('swarm', 'skills', 'swarm-lead', 'SKILL.md'))).toBe(true)
+      expect(readFileSync(file, 'utf8')).toBe(head('Planner') + body())
+    })
+    it('tells the agent its role\'s text once, then each time the owner changes it, overwriting its own edits', () => {
+      const workspace = fixture(), { file } = prepareSwarmSkill(workspace, { ...skill, mode: 'default' })
+      const reread = `Before your next step, read ${JSON.stringify(file)} again with your file or shell tool and follow`
+      const first = refreshSwarmSkill(workspace, skill, 'default', { name: 'Planner', text: 'Plan.\n' })!
+      expect(first).toMatchObject({ owed: true, change: 1,
+        notice: `This project now uses its Custom skills, as Planner. ${reread} it in place of your earlier swarm-lead skill.` })
+      recordSwarmSkillNotice(workspace, skill, first)
+      expect(refreshSwarmSkill(workspace, skill, 'default', { name: 'Planner', text: 'Plan.\n' })).toMatchObject({ owed: false, change: 1 })
+      writeFileSync(file, 'edited')
+      const edit = refreshSwarmSkill(workspace, skill, 'default', { name: 'Planner', text: 'Plan, then ship.\n' })!
+      expect(edit).toMatchObject({ owed: true, change: 2,
+        notice: `The project owner updated your Planner role. ${reread} the new version.` })
+      expect(readFileSync(file, 'utf8')).toBe(head('Planner') + 'Plan, then ship.\n')
+      recordSwarmSkillNotice(workspace, skill, edit)
+      // Back to a built-in set: told as a switch, not as an update.
+      expect(refreshSwarmSkill(workspace, skill, 'default')).toMatchObject({ owed: true, change: 3,
+        notice: `This project now uses the Default skills. ${reread} it in place of your earlier swarm-lead skill.` })
+      expect(readFileSync(file, 'utf8')).toBe(shipped())
+    })
+  })
+
   describe('a running session after a CLI update', () => {
     const skill = { role: 'dev' as const, key: 'running' }
     // What an older CLI left: its own text, and either no record (before records) or a record of that text.

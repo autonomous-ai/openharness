@@ -164,6 +164,9 @@ class TerminalPane {
   /// pane pays a network round trip per keystroke. Off by default, and remembered, so the choice
   /// survives a restart the way the rest of the layout does.
   bool composerVisible = false;
+
+  /// First-arrival suggestion, local to this view and never part of the shared layout.
+  String? firstTask;
 }
 
 /// A tile as it survives a restart: intent only, never the session.

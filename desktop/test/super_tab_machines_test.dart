@@ -508,6 +508,24 @@ void main() {
         find.descendant(of: dev, matching: find.text('Dev')),
         findsOneWidget,
       );
+      server.state['projects'] = [
+        {
+          ...projectFixture('lead', 'Pilot', 'lead'),
+          'skillSet': 'custom',
+          'roles': [
+            {'id': 'lead', 'name': 'Product Manager', 'kind': 'lead', 'version': 'v1'},
+            {'id': 'research', 'name': 'Research Engineer', 'kind': 'builder', 'version': 'v1'},
+          ],
+        },
+      ];
+      (server.state['agents'] as List)[1]['roleId'] = 'research';
+      await c.refresh();
+      await show();
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(of: dev, matching: find.text('Research Engineer')),
+        findsOneWidget,
+      );
       expect(
         tester
             .widget<SuperTabAvatar>(

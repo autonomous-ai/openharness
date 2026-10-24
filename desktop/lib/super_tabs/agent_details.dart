@@ -257,11 +257,12 @@ Future<void> showSuperTabAgentDetails(
                   children: [
                     _fact(
                       'Role',
-                      controller.snapshot?.isLead(agent.id) == true
-                          ? 'Product Manager'
-                          : current.isReviewer
-                          ? 'Reviewer'
-                          : 'Engineer',
+                      controller.snapshot?.activeRoleForAgent(current)?.name ??
+                          (controller.snapshot?.isLead(agent.id) == true
+                              ? 'Product Manager'
+                              : current.isReviewer
+                              ? 'Reviewer'
+                              : 'Engineer'),
                     ),
                     if (info.engine case final value?) _fact('Engine', value),
                     if (current.name != name) _fact('Agent name', current.name),

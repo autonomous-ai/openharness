@@ -1153,6 +1153,8 @@ class AppNotifier extends ChangeNotifier {
   // Account and inventory replies belong to the session that requested them.
   // Signing out invalidates them before asynchronous connection cleanup.
   int _authRevision = 0;
+  /// Cancels work across account changes, independently of measurement preferences.
+  int get accountGeneration => _authRevision;
   Future<void>? _profileInFlight;
 
   bool _authWorkCurrent(int revision) =>
@@ -1251,7 +1253,7 @@ class AppNotifier extends ChangeNotifier {
       readiness.plan.any((item) => item.requiresTerminal);
 
   /// A computer new to Harness builds its first workspace behind the welcome tour, once signed in
-  /// and ready, so the agents have started and OpenCode's task is typed by the time the tour hands
+  /// and ready, so one harness and its editable task are ready when the tour hands
   /// over: OpenCode's own first start took about 12 s after the tour had ended (fresh macOS VM,
   /// 2026-10-09). The workspace joins this run when it appears ([FirstArrival.run]).
   ///
@@ -1655,6 +1657,7 @@ class AppNotifier extends ChangeNotifier {
   /// frames reach only a computer's own windows, so the browser reads on open,
   /// after its actions and every 60 s in front.
   late final sharedTabs = SharedTabsController(
+    measurement: productMeasurement,
     request: (payload) {
       final target = sharedTabsTarget;
       if (target == null) {
@@ -14046,8 +14049,9 @@ class AppNotifier extends ChangeNotifier {
     String? swarmId,
     HarnessPlacement? placement,
     TakeOver? takeOver,
+    AgentCreationAttempt? attempt,
   }) async {
-    final attempt = AgentCreationAttempt();
+    final creation = attempt ?? AgentCreationAttempt();
     final error = await _create(
       machineId,
       {
@@ -14060,9 +14064,9 @@ class AppNotifier extends ChangeNotifier {
       },
       swarmId: swarmId,
       placement: placement,
-      attempt: attempt,
+      attempt: creation,
     );
-    return (error: error, refusal: error == null ? null : attempt.refusal);
+    return (error: error, refusal: error == null ? null : creation.refusal);
   }
 
   Future<String?> _create(
@@ -15475,13 +15479,29 @@ class AppNotifier extends ChangeNotifier {
         retryable: false,
       );
     }
+    final resuming = attempt.agent?.isStopped == true;
+    if (resuming && machine.connectionStatus != ConnectionStatus.connected) {
+      final connected = await connectTrusted(machineId);
+      if (!_restartCurrent(attempt, beforeSend: !attempt.awaitingConfirmation)) {
+        return const RestartAgentResult(
+          error: 'The harness changed while connecting. Select it again.',
+          retryable: false,
+        );
+      }
+      if (!connected) {
+        return RestartAgentResult(
+          error: machine.needsLink
+              ? 'Connect this computer in Machines, then open the saved harness again.'
+              : 'This computer is not connected. Bring it online and try again. Your saved conversation is kept.',
+        );
+      }
+    }
     var checking = attempt.awaitingConfirmation;
     if (!checking) {
       attempt._id = _newCreationId();
       attempt._startedRevision = machine._agentRevision;
     }
     attempt._awaitingConfirmation = true;
-    final resuming = attempt.agent?.isStopped == true;
     final measurementKey = _turnActivityKey(machineId, agentId);
     if (resuming &&
         !checking &&
@@ -15499,6 +15519,21 @@ class AppNotifier extends ChangeNotifier {
       _measurementResumes[measurementKey] = productMeasurement.begin(
         ProductFlow.resumeRecovery,
       );
+    }
+    RestartAgentResult refused(String code, Object? detail) {
+      attempt._awaitingConfirmation = false;
+      if (resuming && code == 'AGENT_BUSY') {
+        final live = machine.agents.where((a) => a.id == agentId).firstOrNull;
+        if (live?.terminalAvailable == true &&
+            live?.sessionId == attempt.agent?.sessionId &&
+            live?.launchState != 'failed' &&
+            live?.launchState != 'starting') {
+          _agentRestarts.remove((machineId, agentId));
+          return const RestartAgentResult();
+        }
+      }
+      _measurementResumes.remove(measurementKey)?.call(ProductOutcome.failed);
+      return RestartAgentResult(error: _restartFailure(code, detail, resuming: resuming));
     }
     final unknown = RestartAgentResult(
       error: resuming
@@ -15531,6 +15566,15 @@ class AppNotifier extends ChangeNotifier {
           payload: {'creationId': attempt._id, 'agentId': agentId},
         );
       }
+    } on WsRequestFailure catch (failure) {
+      // Refusals travel as exceptions in WsConn, not successful reply maps.
+      // Treating every exception as a lost reply left a rejected resume on
+      // "Check status" forever, hiding both its cause and the retry action.
+      result = {
+        ...failure.payload,
+        'error': failure.code,
+        'detail': ?failure.detail,
+      };
     } catch (_) {
       return unknown;
     }
@@ -15556,11 +15600,7 @@ class AppNotifier extends ChangeNotifier {
           ].contains(code)) {
         return unknown;
       }
-      attempt._awaitingConfirmation = false;
-      _measurementResumes.remove(measurementKey)?.call(ProductOutcome.failed);
-      return RestartAgentResult(
-        error: _restartFailure(code, result['detail'], resuming: resuming),
-      );
+      return refused(code, result['detail']);
     }
     switch (result['state']) {
       case 'pending':
@@ -15581,15 +15621,7 @@ class AppNotifier extends ChangeNotifier {
       case 'failed':
         final failure = result['failure'];
         if (failure is! Map || failure['code'] is! String) return unknown;
-        attempt._awaitingConfirmation = false;
-        _measurementResumes.remove(measurementKey)?.call(ProductOutcome.failed);
-        return RestartAgentResult(
-          error: _restartFailure(
-            failure['code'] as String,
-            failure['detail'],
-            resuming: resuming,
-          ),
-        );
+        return refused(failure['code'] as String, failure['detail']);
       case 'created':
       case null:
         break;
@@ -15661,7 +15693,15 @@ class AppNotifier extends ChangeNotifier {
   }) => code == 'PTY_HOST_UNAVAILABLE'
       // Its detail is written for the log.
       ? 'Harness could not open a terminal on this machine. Run harness start on it, then try again.'
-      : detail is String && detail.isNotEmpty
+      : detail is String && detail.isNotEmpty &&
+          !const {
+            'IDENTITY_UNAVAILABLE',
+            'CWD_NOT_FOUND',
+            'SESSION_FOLDER_GONE',
+            'GRID_CREDENTIAL_REQUIRED',
+            'ENGINE_NOT_INSTALLED',
+            'ENGINE_UNAVAILABLE',
+          }.contains(code)
       ? detail
       : switch (code) {
           'ENGINE_LAUNCH_REFUSED' =>
@@ -15676,6 +15716,14 @@ class AppNotifier extends ChangeNotifier {
           'RESUME_UNAVAILABLE' => 'The saved conversation is unavailable. The harness can still be started fresh.',
           'RESUME_SESSION_MISMATCH' => 'The harness came back on a different conversation. The saved one is still kept.',
           'RESUME_FAILED' => 'The harness did not come back. Its output and conversation are kept.',
+          'IDENTITY_UNAVAILABLE' =>
+            'The saved conversation could not be verified. Check that its agent account and project are still available, then retry. You can also start a new harness; the saved one is kept.',
+          'CWD_NOT_FOUND' || 'SESSION_FOLDER_GONE' =>
+            'The project folder is unavailable. Restore it, then retry, or start a new harness in another folder.',
+          'GRID_CREDENTIAL_REQUIRED' =>
+            'Reconnect the model provider in Models, then retry. Your saved conversation is kept.',
+          'ENGINE_NOT_INSTALLED' || 'ENGINE_UNAVAILABLE' =>
+            'Install this agent on the computer, then retry.',
           _ =>
             resuming
                 ? 'Could not open this harness: $code'
@@ -20262,6 +20310,8 @@ class AppNotifier extends ChangeNotifier {
           _eventAgentId(machine, event, payload),
         )) {
       productMeasurement.milestone(ProductHealthMeasure.funnelFirstResponse);
+      final id = _eventAgentId(machine, event, payload);
+      if (id != null) productMeasurement.firstRunResponse(machineId, id);
     }
     if (reportedActivity == null &&
         event['replay'] != true &&
@@ -20833,6 +20883,7 @@ class AppNotifier extends ChangeNotifier {
           if (type == 'turn_started' && event['replay'] != true) {
             machine.liveTurnAgents.add(agentId);
             productMeasurement.milestone(ProductHealthMeasure.funnelFirstWork);
+            productMeasurement.firstRunWork(machineId, agentId);
             _measurementResumes
                 .remove(_turnActivityKey(machineId, agentId))
                 ?.call(ProductOutcome.ok);

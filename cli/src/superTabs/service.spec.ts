@@ -183,15 +183,22 @@ it('documents how a lead shares its project repository for other machines', asyn
 it('tells the Lead how to switch a project\'s skills on its owner\'s own request', async () => {
   const t = setup()
   const answer = await t.ask({ action: 'help' }, owner) as { help: { command: string; commands: Array<Record<string, unknown>> } }
-  expect(answer.help.commands).toContainEqual({ type: 'project.skills', projectId: 'PROJECT', mode: 'default|orchestration',
+  expect(answer.help.commands).toContainEqual({ type: 'project.skills', projectId: 'PROJECT', mode: 'default|orchestration|custom',
     askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } })
-  expect(answer.help.command).toContain('project.skills switches a project between the Default and Harness orchestration skills: only its project owner does, or its Lead passing on that owner\'s own chat message, with askedIn naming it.')
+  expect(answer.help.command).toContain('project.skills switches a project between the Default, Harness orchestration and Custom skills (Custom once its owner has made the project\'s roles): only its project owner does, or its Lead passing on that owner\'s own chat message, with askedIn naming it.')
 })
 it('tells the Lead that start works only on a machine in the Swarm\'s Machines list', async () => {
   const t = setup()
   const answer = await t.ask({ action: 'help' }, owner) as { help: { start: string } }
   expect(answer.help.start).toContain('create one agent in a conversation on a machine in this Swarm\'s Machines list; to use another machine, a person adds it to the Swarm first.')
   expect(answer.help.start).toContain('Repeat exactly after an interruption')
+})
+// Custom roles and skills per project (spec 2026-10-23): a Lead starts and assigns by role, from the roles status shows.
+it('explains a project\'s Custom roles: where status shows them, and starting or assigning with one', async () => {
+  const answer = await setup().ask({ action: 'help' }, owner) as { help: { status: string; start: string; command: string } }
+  expect(answer.help.status).toContain('A project on Custom skills lists its roles (id, name, kind) in status.')
+  expect(answer.help.start).toContain('On Custom skills, add "roleId" to the start request to start the agent in that role of its kind')
+  expect(answer.help.command).toContain('work.assign takes "roleId" too')
 })
 it('explains to a Lead other projects\' work and the Leads conversation', async () => {
   const answer = await setup().ask({ action: 'help' }, owner) as { help: { status: string; leads: string } }

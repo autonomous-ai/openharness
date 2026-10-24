@@ -789,6 +789,14 @@ class SetupTourScreen extends StatefulWidget {
 }
 
 class _SetupTourScreenState extends State<SetupTourScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.app.productMeasurement.setupShown();
+    });
+  }
+
   late final SetupProgressTracker _progress = SetupProgressTracker(
     setup: widget.app,
     readiness: () => widget.app.environmentReadiness,
@@ -803,6 +811,7 @@ class _SetupTourScreenState extends State<SetupTourScreen> {
   @override
   void dispose() {
     _progress.dispose();
+    widget.app.productMeasurement.setupHidden();
     super.dispose();
   }
 

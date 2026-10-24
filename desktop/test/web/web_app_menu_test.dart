@@ -84,10 +84,11 @@ void main() {
         Focus.of(tester.element(find.byKey(ValueKey('web-menu:$id'))))
             .hasPrimaryFocus;
     // Opened by a click: the pointer picks the row, so none starts lit.
-    expect(lit('machines.list'), isFalse);
+    expect(lit('super_tab.new'), isFalse);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
-    expect(lit('machines.list'), isTrue);
+    // The first row: New Swarm.
+    expect(lit('super_tab.new'), isTrue);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.byKey(const ValueKey('web-menu:machines.list')), findsNothing);

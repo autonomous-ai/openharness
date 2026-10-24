@@ -873,6 +873,46 @@ void main() {
     await f.close(tester);
   });
 
+  testWidgets('custom role name appears in the roster and agent details', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    final project = (f.server.state['projects'] as List).first as Map;
+    project['skillSet'] = 'custom';
+    project['roles'] = [
+      {
+        'id': 'lead',
+        'name': 'Product Manager',
+        'kind': 'lead',
+        'version': 'v1',
+      },
+      {
+        'id': 'research',
+        'name': 'Research Engineer',
+        'kind': 'builder',
+        'version': 'v1',
+      },
+    ];
+    (f.server.state['agents'] as List)[1]['roleId'] = 'research';
+    await f.controller.refresh();
+    await f.show(tester);
+    expect(f.inRow(1, find.text('Research Engineer')), findsOneWidget);
+    expect(f.inRow(1, find.text('Dev')), findsNothing);
+    final details = showSuperTabAgentDetails(
+      tester.element(f.row(1)),
+      f.controller,
+      f.app,
+      f.controller.snapshot!.agent('agent-1')!,
+      (_) {},
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Research Engineer'), findsWidgets);
+    await tester.tap(find.widgetWithText(TextButton, 'Close'));
+    await tester.pumpAndSettle();
+    await details;
+    await f.close(tester);
+  });
+
   Future<RosterFixture> fixtureWithPeople(
     WidgetTester tester,
     int count,

@@ -123,6 +123,43 @@ app episodes, can cross UTC days, and do not establish a joined signup conversio
 cohorts use explicit composer messages; terminal keystrokes and automatic work remain unclassified.
 Weekly bins cover completed weeks from installations that report again, so non-returners can be missing.
 
+Desktop's focused first arrival has its own population, separate from those routine app sessions.
+`health_desktop_first_run_started` enrolls one consented first-arrival episode in the current app
+run. `first_run_ready`, `first_run_work` and `first_run_response` count opening its harness, a live
+turn on that harness and a live text response after that turn. Other harnesses, replayed history
+and repeated retry clicks cannot advance it. The response also has `under_1m`, `1m_to_5m` and
+`over_5m` buckets, measured from first arrival after sign-in. All stages are attributed to the
+episode's start UTC day, for at most 24 hours and only while the same app run and sharing choice
+remain active. The machine/agent pair stays in RAM and never enters a report.
+If the account preference is still loading, enrollment waits for its initial confirmation;
+work and responses before that confirmation are not collected. An opt-out discards the
+pending eligibility, and preference loading never cancels the user's harness.
+
+The daily report's `health.daily[].firstRun.responsePercent` is
+`100 × first_run_response / first_run_started`. Show the numerator and denominator alongside it,
+and treat an incomplete follow-up day as provisional. This is first-session activation, not
+unique people, install-to-signup conversion, completed tasks or a cross-restart 24-hour cohort.
+There is no historical baseline for these new counters. The existing `firstLaunchCohorts`
+24-hour response rate remains a separate, comparable historical measure: its first measured
+launches also include existing users who updated. Do not compare the two percentages directly.
+Version comparisons are descriptive; small samples, rollout mix and report loss can change them.
+
+The setup milestone now comes from a rendered setup screen or tour, rather than every readiness
+probe. It still counts observed setup episodes, not deduplicated installations. Signed-out setup
+totals and signed-in totals cannot be joined or subtracted to infer individual sign-in conversion.
+
+Shared-tab invitation actions have `ui_desktop_share_invite_*` and `ui_desktop_share_accept_*`
+outcomes and wait buckets. A batch invitation also counts the acknowledged `shared_invites_sent`
+and `shared_invites_refused` under `health_desktop_`, by list length only. An acceptance waiting for
+trust confirmation is unknown until a later confirmed action; an acknowledgement alone does not
+prove the invited person worked. These are action/result counts, not unique recipients or a joined
+referral funnel. No addresses, invitation ids or tab ids are reported.
+
+These first-arrival and invitation counters wait in the bounded RAM queue until the local CLI
+advertises usage vocabulary 5. Publish backend vocabulary support before the CLI and Desktop;
+an older proxy must never receive names it would reject. Turning sharing off or changing accounts
+discards the episode and its queued counts. A close or crash can still lose unsent counters.
+
 Native Desktop observes main-frame/first-frame viewer loading, updater apply acknowledgements and
 the next observed version, explicit versus automatic connections, and resume-to-observed-work.
 Known-unlinked native Desktop retry probes do not start additional automatic connection
