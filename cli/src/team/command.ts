@@ -106,6 +106,9 @@ export interface TeamCommandDeps {
   stopDaemon(): Promise<boolean>
   startDaemon(): Promise<void>
   signIn?(restart: boolean): Promise<void>
+  /** What Desktop's automatic offer remembers (./autoSetup.ts): a setup that made the account forgets a cancelled prompt,
+   *  and a removal is remembered as one, so the account is not made again on its own. */
+  setupDecision?: { clear(): void; decline(): void }
 }
 
 export async function teamCommand(argv: string[], deps: TeamCommandDeps): Promise<number> {
@@ -212,6 +215,7 @@ async function setup(deps: TeamCommandDeps, json: boolean, signInAgain: boolean)
     if (result.code === 'CANCELLED') return fail(deps, json, 'CANCELLED', 'Nothing was changed: the administrator prompt was cancelled.')
     return fail(deps, json, 'SETUP_FAILED', `The Harness Team account was not finished: ${result.message} Run \`harness team setup\` again; it repairs what is there.`)
   }
+  try { deps.setupDecision?.clear() } catch { /* only Desktop's offer reads it */ }
   const handedOver = /handed a sign-in to the team account/.test(result.stdout)
   if (!json) deps.out(handedOver ? 'Waiting for the team daemon to sign in and check its privacy…' : 'Waiting for the team daemon to check its privacy…')
   // The daemon reports through its status file (./privacy.ts): the sign-in when it redeemed one, the check every start.
@@ -317,10 +321,12 @@ async function remove(deps: TeamCommandDeps, json: boolean): Promise<number> {
     if (result.code === 'CANCELLED') return fail(deps, json, 'CANCELLED', 'Nothing was removed: the administrator prompt was cancelled.')
     return fail(deps, json, 'REMOVE_FAILED', `The Harness Team account was not fully removed: ${result.message} Run \`harness team remove\` again.`)
   }
+  try { deps.setupDecision?.decline() } catch { /* only Desktop's offer reads it */ }
   if (json) deps.out(JSON.stringify({ ok: true, removed: true }))
   else {
     deps.out(`✓ Removed the Harness Team account (${TEAM_USER}), ${TEAM_HOME} and the daemon ${TEAM_LABEL}.`)
     deps.out(`  Your home folder stays private (mode 700). Its computer stays in your list until you remove it: harness machines`)
+    deps.out('  Harness will not make it again on its own when you join a Swarm; harness team setup makes it again.')
   }
   return 0
 }

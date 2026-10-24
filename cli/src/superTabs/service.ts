@@ -12,6 +12,7 @@ import { messageIdOf } from './attach.js'
 import { cardId, SwarmCards } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
 import { teamEngineReporter, type TeamEngineReporter } from '../team/engines.js'
+import { AUTO_SETUP_REASONS, realTeamAutoSetup, type AutoSetupReason, type TeamAutoSetup } from '../team/autoSetup.js'
 
 const POST_HELP = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID. --attach sends a file (a screenshot, a log; up to 10 files of 10 MB each), and TEXT may then be empty.'
 const HELP = {
@@ -127,6 +128,21 @@ function markAnswered(page: unknown, later: unknown[], agentId: string): unknown
   }) }
 }
 
+/** Whether this machine is in a Swarm with other people in it: a contribution of its own to a tab whose people are more
+ *  than its owner. False when that cannot be read. */
+export async function sharedSwarm(core: CoreApi): Promise<boolean> {
+  const machineId = core.daemon.machineId()
+  if (!identifier(machineId)) return false
+  const pools = await backend(core, 'GET', `/api/super-tabs/hosts/${machineId}/pools`).catch(() => [])
+  for (const row of Array.isArray(pools) ? pools.map(object) : []) {
+    if (!identifier(row.tabId)) continue
+    const tab = object(await backend(core, 'GET', `/api/super-tabs/${row.tabId}`).catch(() => ({})))
+    const people = object(tab.state).people
+    if (Array.isArray(people) && people.length > 1) return true
+  }
+  return false
+}
+
 export interface SuperTabServiceOptions {
   prepareContribution?: typeof prepareContribution
   capacity?: typeof readCapabilities
@@ -138,6 +154,8 @@ export interface SuperTabServiceOptions {
   githubTokens?: (core: CoreApi) => Pick<GitHubTokenRefresher, 'start' | 'stop'>
   /** What reports the Harness Team account's own engines to its owner (team/engines.ts), for a spec. */
   teamEngines?: () => Pick<TeamEngineReporter, 'start' | 'stop'>
+  /** What sets up the Harness Team account when Desktop asks (team/autoSetup.ts), for a spec. */
+  teamSetup?: () => Promise<Pick<TeamAutoSetup, 'offer'>>
 }
 export function superTabService(core: CoreApi, options: SuperTabServiceOptions = {}): { requests: ServiceRequests; port: SuperTabsPort } {
   const preparations = new ContributionPreparations(input => (options.prepareContribution ?? prepareContribution)(core, input))
@@ -173,6 +191,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   const tokens = (options.githubTokens ?? (api => new GitHubTokenRefresher(api)))(core)
   // In the Harness Team account only: whether its Claude Code and Codex are installed and signed in, for its owner to read.
   const engines = (options.teamEngines ?? teamEngineReporter)()
+  let autoSetup: Promise<Pick<TeamAutoSetup, 'offer'>> | null = null
   const disconnect = () => { preparations.clear(); host?.stop(); host = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop(); engines.stop() }
   const port = {
     connected: () => {
@@ -206,6 +225,15 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'githubToken') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
           return await githubToken(core, String(payload.harnessId ?? ''))
+        }
+        // Desktop on this Mac, as the person joins a Swarm, adds this Mac to one, or opens the app (team/autoSetup.ts): the
+        // Harness Team account, behind macOS's own administrator prompt. Never through the relay, with nobody at this Mac.
+        if (payload.action === 'teamSetup') {
+          if (!asker.local) return { error: 'OWNER_REQUIRED' }
+          if (!AUTO_SETUP_REASONS.includes(payload.reason as AutoSetupReason)) return { error: 'INVALID_REQUEST' }
+          autoSetup ??= (options.teamSetup ?? (() => realTeamAutoSetup(core.dataDir, line => console.log(`[team] ${line}`))))()
+            .catch(error => { autoSetup = null; throw error })
+          return { ok: true, ...await (await autoSetup).offer(payload.reason as AutoSetupReason, () => sharedSwarm(core)) }
         }
         if (payload.action === 'swarmRole') {
           const grant = await port.swarmRole(String(payload.harnessId ?? ''))

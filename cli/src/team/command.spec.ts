@@ -109,6 +109,22 @@ describe('harness team setup', () => {
     expect(JSON.parse(json.out.at(-1)!)).toMatchObject({ ok: true, engines: null })
   })
 
+  it('forgets a prompt Desktop saw cancelled once it makes the account, and a removal is remembered as declined', async () => {
+    const decision = { clear: vi.fn(), decline: vi.fn() }
+    const made = fake({ statusAfter: reported, setupDecision: decision })
+    expect(await teamCommand(['setup'], made.deps)).toBe(0)
+    expect(decision.clear).toHaveBeenCalledTimes(1)
+    const cancelled = fake({ adminResult: { ok: false, code: 'CANCELLED', message: 'x' }, setupDecision: decision })
+    await teamCommand(['setup'], cancelled.deps)
+    expect(decision.clear).toHaveBeenCalledTimes(1)
+    const removed = fake({ readConfig: () => config, setupDecision: decision })
+    expect(await teamCommand(['remove'], removed.deps)).toBe(0)
+    expect(decision.decline).toHaveBeenCalledTimes(1)
+    expect(removed.out.join('\n')).toContain('will not make it again on its own')
+    const failing = fake({ statusAfter: reported, setupDecision: { clear: () => { throw new Error('read-only') }, decline: vi.fn() } })
+    expect(await teamCommand(['setup'], failing.deps)).toBe(0)
+  })
+
   it('reports a failed privacy check or sign-in, and returns failure', async () => {
     const f = fake({ statusAfter: (t) => ({ version: 1, signIn: { state: 'failed', at: t + 1, detail: 'code refused' },
       privacy: { passed: false, item: 'gitconfig', detail: 'The team account could read ~/.gitconfig.', checkedAt: t + 1 } }) })

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { CoreApi } from '../core/api.js'
-import { superTabService } from './service.js'
+import { sharedSwarm, superTabService } from './service.js'
 import { object } from './wire.js'
 
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
@@ -690,6 +690,49 @@ describe('GitHub App tokens through the service', () => {
     service.port.stop()
     expect(tokens.stop).toHaveBeenCalledTimes(2)
     expect(engines.stop).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('the Harness Team account, offered by Desktop on this Mac', () => {
+  it('runs only for the local owner, for a moment the person is there, and says whether it started', async () => {
+    const offer = vi.fn(async (_reason: string, _shared: () => Promise<boolean>) => ({ state: 'started' as const }))
+    const make = vi.fn(async () => ({ offer }))
+    const service = superTabService(fakeCore(), { teamSetup: make })
+    expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'join' }, owner)).toEqual({ ok: true, state: 'started' })
+    expect(offer).toHaveBeenCalledWith('join', expect.any(Function))
+    for (const asker of [visitor, { local: false, owner: true, accountOwner: true }]) {
+      expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'join' }, asker as never)).toEqual({ error: 'OWNER_REQUIRED' })
+    }
+    for (const reason of [undefined, 'background', 7]) {
+      expect(await service.requests.super_tabs({ action: 'teamSetup', reason }, owner)).toEqual({ error: 'INVALID_REQUEST' })
+    }
+    await service.requests.super_tabs({ action: 'teamSetup', reason: 'startup' }, owner)
+    expect(make).toHaveBeenCalledTimes(1)
+    expect(offer).toHaveBeenCalledTimes(2)
+  })
+
+  it('tries again to make its setup when making it failed', async () => {
+    const make = vi.fn().mockRejectedValueOnce(new Error('import failed')).mockResolvedValueOnce({ offer: async () => ({ state: 'exists' }) })
+    const service = superTabService(fakeCore(), { teamSetup: make })
+    expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'join' }, owner)).toMatchObject({ error: 'SUPER_TAB_UNAVAILABLE' })
+    expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'join' }, owner)).toEqual({ ok: true, state: 'exists' })
+  })
+
+  it('at app start, counts a Swarm this Mac is in with anyone else in it', async () => {
+    const answers = (pools: unknown, tabs: Record<string, unknown>) => vi.fn<CoreApi['account']['backend']>(async (_method, path) => {
+      if (path.endsWith('/pools')) return pools instanceof Error ? { status: 503, body: { success: false } } : { status: 200, body: { success: true, data: pools } }
+      const tab = tabs[path.split('/').pop()!]
+      return tab ? { status: 200, body: { success: true, data: tab } } : { status: 403, body: { success: false, error: { code: 'FORBIDDEN' } } }
+    })
+    const core = (call: CoreApi['account']['backend'], machineId = 'machine-1') => fakeCore({ account: { backend: call }, daemon: { machineId: () => machineId } as never })
+    const shared = answers([{ tabId: 'solo' }, { tabId: 'gone' }, { tabId: 'team' }],
+      { solo: { state: { people: [{ id: 'me' }] } }, team: { state: { people: [{ id: 'me' }, { id: 'kim' }] } } })
+    expect(await sharedSwarm(core(shared))).toBe(true)
+    expect(shared).toHaveBeenCalledWith('GET', '/api/super-tabs/hosts/machine-1/pools', undefined)
+    expect(await sharedSwarm(core(answers([{ tabId: 'solo' }, { tabId: '../x' }], { solo: { state: { people: [{ id: 'me' }] } } })))).toBe(false)
+    expect(await sharedSwarm(core(answers(new Error('down'), {})))).toBe(false)
+    expect(await sharedSwarm(core(answers({ not: 'a list' }, {})))).toBe(false)
+    expect(await sharedSwarm(core(answers([], {}), ''))).toBe(false)
   })
 })
 
