@@ -2448,6 +2448,7 @@ class _TerminalPanelState extends State<TerminalPanel>
                           onTakeControl: _inputBlocked
                               ? () => unawaited(_takeControl())
                               : null,
+                          keyHints: WorkspaceChrome.of(context).showsKeyHints,
                         ),
                       ),
                     if (session.uploadProgress != null ||
@@ -3868,12 +3869,17 @@ class _ControlBanner extends StatelessWidget {
   /// person can act on. Null for the takeover band above.
   final TerminalNotice? notice;
 
+  /// False where the host hides key hints ([WorkspaceChrome.showsKeyHints]):
+  /// the band names the click alone, and its button draws no ⏎. Audit S8.
+  final bool keyHints;
+
   const _ControlBanner({
     required this.busy,
     required this.nudged,
     required this.nudge,
     required this.onTakeControl,
     this.takerName,
+    this.keyHints = true,
   }) : notice = null;
 
   /// The band for a notice that offers a way out — the same strip, the same
@@ -3884,7 +3890,8 @@ class _ControlBanner extends StatelessWidget {
       nudged = false,
       nudge = 0,
       onTakeControl = null,
-      takerName = null;
+      takerName = null,
+      keyHints = true;
 
   String get title => notice != null
       ? notice!.label
@@ -3897,8 +3904,14 @@ class _ControlBanner extends StatelessWidget {
   String? get detail {
     if (notice != null) return notice!.detail;
     if (busy) return null;
-    if (nudged) return 'Keys are ignored — press ⏎ to take control.';
-    return 'Typing is paused. Click here or press ⏎ to take control.';
+    if (nudged) {
+      return keyHints
+          ? 'Keys are ignored — press ⏎ to take control.'
+          : 'Keys are ignored — click here to take control.';
+    }
+    return keyHints
+        ? 'Typing is paused. Click here or press ⏎ to take control.'
+        : 'Typing is paused. Click here to take control.';
   }
 
   @override
@@ -4015,7 +4028,10 @@ class _ControlBanner extends StatelessWidget {
                             ))
                     : busy
                     ? null
-                    : _ControlBannerButton(onPressed: onTakeControl);
+                    : _ControlBannerButton(
+                        onPressed: onTakeControl,
+                        showReturnKey: keyHints,
+                      );
                 final secondary = notice?.secondaryLabel;
                 final button = secondary == null
                     ? primary
