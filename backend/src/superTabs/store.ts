@@ -845,6 +845,31 @@ export class SuperTabStore {
     })
   }
 
+  /**
+   * What a contributed machine's host needs to prepare a queued start's folder before the agent exists (routes/superTabs.ts,
+   * a start's `github-token`): the start's project repository, whom the work is for, and whether it is the machine owner's
+   * own project. Only the host of that start, while nothing has started or failed yet, as `start()` reads it.
+   */
+  async githubStart(user: AuthUser, tabId: string, startId: string, machineId: string) {
+    return transaction(this.db, async tx => {
+      const state = stateOf(await this.row(tx, user, tabId))
+      const actor = await this.poolHostActor(tx, user, state, machineId, startId)
+      const start = state.starts?.find(s => s.id === startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
+      if (start.harnessId || start.error) fail('START_SETTLED', 'This start has already started or failed; its folder is not prepared again.', 409)
+      const group = readConversation(state, actor, start.request.conversationId)
+      if (group.archived) fail('ARCHIVED', 'This conversation is archived.')
+      const grant = await this.contribution(tx, state, actor, start.request, true)
+      if (grant.machineOwnerId !== start.machineOwnerId || (grant.hostGrant ?? null) !== start.hostGrant) {
+        fail('CONTRIBUTION_REVOKED', 'This start belongs to a machine grant that was revoked.', 403)
+      }
+      const project = groupProject(state, group)
+      const owner = await tx.user.findUnique({ where: { id: project.ownerId }, select: { name: true, email: true } })
+      const email = owner?.email ?? state.people.find(p => p.id === project.ownerId)?.email ?? ''
+      return { tabId, startId, repositoryUrl: project.repository?.repositoryUrl ?? null, own: project.ownerId === start.machineOwnerId,
+        requester: { name: owner?.name?.trim() || null, email } }
+    })
+  }
+
   /** Streams one file into the bucket for a later `message.send` by the same actor in the same conversation. Access is
    * checked before a byte is stored; the row that makes it sendable is written only once the whole file is. */
   async upload(user: AuthUser, tabId: string, conversationId: string, file: { name: string; mime: string; body: Readable }, asAgentId?: string) {

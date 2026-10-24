@@ -605,6 +605,20 @@ describe('agent_create with a receipt', () => {
     expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ cwd: '/projects/prepared', scmLaunchRecord: { kind: 'git' } })
   })
 
+  it('fetches nothing with this machine\'s login for another person\'s Swarm worktree: its host already fetched with the app\'s token', async () => {
+    const { ask, replies } = setup()
+    await ask({ engine: 'codex', projectSource: 'worktree', gitSource: '/swarm/project', branchName: 'super-tab/start-1', branchBase: 'default',
+      swarmRole: 'dev', swarmGitHub: true, creationId: CREATION })
+    await vi.waitFor(() => expect(replies).toHaveLength(1))
+    expect(prepareProjectFolder).toHaveBeenLastCalledWith({ source: 'worktree', gitSource: '/swarm/project', branchName: 'super-tab/start-1',
+      fromDefaultBranch: true, offline: true }, expect.anything())
+    // A Swarm start that is the machine owner's own fetches as before.
+    await ask({ engine: 'codex', projectSource: 'worktree', gitSource: '/swarm/project', branchName: 'super-tab/start-2', branchBase: 'default',
+      swarmRole: 'dev', creationId: `${CREATION}-own` })
+    await vi.waitFor(() => expect(replies).toHaveLength(2))
+    expect(vi.mocked(prepareProjectFolder).mock.calls.at(-1)![0]).not.toHaveProperty('offline')
+  })
+
   it('records a folder it could not prepare as failed, in the folder\'s own words when it has them', async () => {
     const { ask, create, replies } = setup()
     vi.mocked(prepareProjectFolder).mockRejectedValueOnce(new ProjectFolderError('CLONE_FAILED', 'Could not clone it.')).mockRejectedValueOnce(new Error('disk full'))

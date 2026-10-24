@@ -12,6 +12,9 @@ import type { GitHubRepository } from './repository.js'
 /** What a Swarm agent's token may do, and nothing more: push to and read the repository, open and update pull requests,
  *  and read checks and workflow runs to see whether its pull request passes. */
 export const TOKEN_PERMISSIONS = { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read' } as const
+/** What preparing an agent's folder may do before the agent has a task: clone and fetch the repository, nothing more. */
+export const PREPARE_PERMISSIONS = { contents: 'read', metadata: 'read' } as const
+export type TokenPermissions = Readonly<Record<string, 'read' | 'write'>>
 
 /** A refusal with the code clients act on; `details` adds fields beside it, such as the install link. */
 export class GitHubAppError extends Error {
@@ -155,9 +158,9 @@ export class GitHubApp {
   }
 
   /** A token for [repository] alone, with TOKEN_PERMISSIONS alone. */
-  async createToken(installationId: number, repository: GitHubRepository): Promise<{ token: string; expiresAt: string }> {
+  async createToken(installationId: number, repository: GitHubRepository, permissions: TokenPermissions = TOKEN_PERMISSIONS): Promise<{ token: string; expiresAt: string }> {
     const answer = await this.call('POST', `/app/installations/${installationId}/access_tokens`, `Bearer ${this.jwt()}`,
-      { repositories: [repository.name], permissions: TOKEN_PERMISSIONS })
+      { repositories: [repository.name], permissions })
     const body = answer.body as Record<string, unknown>
     if (answer.status === 201 && typeof body.token === 'string' && typeof body.expires_at === 'string' && Number.isFinite(Date.parse(body.expires_at))) {
       return { token: body.token, expiresAt: body.expires_at }

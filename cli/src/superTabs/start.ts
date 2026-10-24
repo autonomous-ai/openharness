@@ -180,7 +180,11 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
       // The backend starts a Reviewer only on Claude Code or Codex, the engines with built-in Swarm skills.
       const skilled = ['claude', 'codex'].includes(String(request.engine)), reviewer = request.role === 'reviewer'
       const role = reviewer ? 'review' : 'dev', facts = skilled ? await projectFacts(scoped, request.conversationId, start.machineOwnerId) : null
-      const mode = facts?.mode ?? null, github = facts?.github ?? null
+      // A contributed machine's host cannot read the tab as a Lead does: it asked the backend whose work this is when it
+      // readied the start, and prepared it with the app's token if it is another person's (superTabs/projectFolder.ts).
+      const hosted = input.hostDispatch === true ? object(input.github) : null
+      const mode = facts?.mode ?? null
+      const github = hosted ? (typeof hosted.requester === 'string' && hosted.requester ? { requester: hosted.requester } : null) : facts?.github ?? null
       const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: true,
         ...(permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
         ...(mode ? { swarmRole: role, swarmSkillMode: mode } : {}),

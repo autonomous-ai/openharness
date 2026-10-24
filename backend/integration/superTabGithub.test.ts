@@ -35,7 +35,8 @@ beforeAll(async () => {
   db = new PrismaClient({ datasources: { db: { url: uri } } })
   await db.user.create({ data: { id: owner.sub, externalId: `fixture-${owner.sub}`, email: owner.email, autonomousEnv: 'prod', name: 'Olive Owner' } })
   await db.user.create({ data: { id: host.sub, externalId: `fixture-${host.sub}`, email: host.email, autonomousEnv: 'prod' } })
-  for (const [machineId, userId, name] of [['gh-host', host.sub, 'Fixture Mac'], ['gh-host-mini', host.sub, 'Fixture Mini'], ['owner-mac', owner.sub, 'Owner Mac']]) {
+  for (const [machineId, userId, name] of [['gh-host', host.sub, 'Fixture Mac'], ['gh-host-mini', host.sub, 'Fixture Mini'], ['owner-mac', owner.sub, 'Owner Mac'],
+    ['gh-pool', host.sub, 'Fixture Pool'], ['owner-pool', owner.sub, 'Owner Pool']]) {
     await db.machine.create({ data: { machineId: machineId!, userId: userId!, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod',
       authMode: 'remote', name } })
   }
@@ -173,6 +174,79 @@ describe('the GitHub token endpoint', () => {
     expect(response.json().error.code).toBe('GITHUB_APP_NOT_CONFIGURED')
     const read = await env.app.inject({ method: 'GET', url: `/api/super-tabs/${tab}`, headers: { authorization: `Bearer ${owner.sub}` } })
     expect(read.json().data).not.toHaveProperty('githubApp')
+  })
+})
+
+describe('a queued start\'s preparation token', () => {
+  const observed = { resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
+    projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null }, quotas: [], tools: { git: true },
+    runningHarnessIds: [], stoppedHarnessIds: [] }
+  /** The owner's project on github.com, with a start queued on [machineId], a machine its owner [contributor] added to the Swarm. */
+  async function queued(env: Env, machineId = 'gh-pool', contributor = host, repositoryUrl: string | null = 'https://github.com/example/app.git') {
+    const tab = (await env.store.create(owner, randomUUID(), 'Pool')).id
+    await env.run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'Lead',
+      configuration: config, lead: true, project: { cwd: '/work/app', repositoryUrl } } as Command)
+    if (contributor !== owner) {
+      const invitation = await env.run(tab, { type: 'invite.create', email: contributor.email, role: 'collaborator', conversationId: 'lead' } as Command)
+      await env.run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string } as Command, contributor)
+    }
+    await env.run(tab, { type: 'machine.contribute', machineId, name: 'Pool', cwd: '/swarm-root', scope: 'swarm', engines: ['codex'], maxAgents: 2 } as Command, contributor)
+    const pool = (await env.store.hostPools(contributor, machineId)).find(p => p.tabId === tab)!
+    await env.store.observeMachine(contributor, tab, machineId, { generation: pool.machine.generation, ...observed })
+    const startId = String((await env.run(tab, { type: 'agent.start', request: { conversationId: 'lead', machineId, engine: 'codex', name: 'Builder',
+      cwd: '/swarm-root/lead', permissionMode: 'full', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as Command)).result.startId)
+    return { tab, startId }
+  }
+  const prepare = (env: Env, tab: string, startId: string, machineId = 'gh-pool', user = host, payload: Record<string, unknown> = {}) => env.app.inject({ method: 'POST',
+    url: `/api/super-tabs/hosts/${machineId}/starts/${tab}/${startId}/github-token`, headers: { authorization: `Bearer ${user.sub}` }, payload })
+
+  it('gives the host of another person\'s start a token that only reads the project\'s repository, and says whom the work is for', async () => {
+    const env = await fresh()
+    const { tab, startId } = await queued(env)
+    const pools = await env.app.inject({ method: 'GET', url: '/api/super-tabs/hosts/gh-pool/pools', headers: { authorization: `Bearer ${host.sub}` } })
+    expect(pools.json().data.find((row: { tabId: string }) => row.tabId === tab)).toMatchObject({ githubApp: true })
+    const response = await prepare(env, tab, startId)
+    expect(response.statusCode, response.body).toBe(200)
+    expect(response.json().data).toMatchObject({ github: true, token: 'ghs_fixture_1', repository: 'example/app', requestedBy: { name: 'Olive Owner', email: owner.email } })
+    const minted = env.github.calls.find(c => c.path === '/app/installations/91/access_tokens')!
+    expect(minted.body).toEqual({ repositories: ['app'], permissions: { contents: 'read', metadata: 'read' } })
+  })
+
+  it('answers no token for the machine owner\'s own project, unless its host asks for one anyway', async () => {
+    const env = await fresh()
+    const { tab, startId } = await queued(env, 'owner-pool', owner)
+    expect((await prepare(env, tab, startId, 'owner-pool', owner)).json().data).toEqual({ github: false })
+    expect(env.github.calls).toEqual([])
+    expect((await prepare(env, tab, startId, 'owner-pool', owner, { always: true })).json().data).toMatchObject({ github: true, token: 'ghs_fixture_1' })
+  })
+
+  it('refuses anyone but the start\'s host, a start that already started, and a project without a GitHub repository', async () => {
+    const env = await fresh()
+    const { tab, startId } = await queued(env)
+    expect((await prepare(env, tab, startId, 'gh-pool', owner)).statusCode).toBe(403)
+    expect((await prepare(env, tab, startId, 'gh-host-mini')).statusCode).toBe(403)
+    expect((await prepare(env, tab, 'missing-start')).statusCode).toBe(404)
+    expect((await prepare(env, tab, startId, 'gh-pool', host, { machineId: 'gh-pool' })).statusCode).toBe(400)
+    const hostRun = (command: Command) => env.store.execute(host, tab, { operationId: randomUUID(), command }, undefined, 'gh-pool')
+    await hostRun({ type: 'agent.startDispatch', startId } as Command)
+    await hostRun({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config } as Command)
+    const settled = await prepare(env, tab, startId)
+    expect(settled.statusCode).toBe(409)
+    expect(settled.json().error.code).toBe('START_SETTLED')
+    const bare = await fresh()
+    const none = await queued(bare, 'gh-pool', host, null)
+    expect((await prepare(bare, none.tab, none.startId)).json().error.code).toBe('REPOSITORY_NOT_GITHUB')
+    expect([...env.github.calls, ...bare.github.calls].filter(c => c.path.endsWith('/access_tokens'))).toEqual([])
+  })
+
+  it('answers not configured when the server has no app, and its host rows do not claim one', async () => {
+    const env = await fresh({ github: false })
+    const { tab, startId } = await queued(env)
+    const response = await prepare(env, tab, startId)
+    expect(response.statusCode).toBe(503)
+    expect(response.json().error.code).toBe('GITHUB_APP_NOT_CONFIGURED')
+    const pools = await env.app.inject({ method: 'GET', url: '/api/super-tabs/hosts/gh-pool/pools', headers: { authorization: `Bearer ${host.sub}` } })
+    expect(pools.json().data.find((row: { tabId: string }) => row.tabId === tab)).not.toHaveProperty('githubApp')
   })
 })
 

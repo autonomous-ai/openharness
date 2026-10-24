@@ -831,6 +831,19 @@ describe('Swarm starts for another person\'s project', () => {
     expect(await started({ state: legacy, githubApp: true })).toMatchObject({ swarmGitHub: true })
   })
 
+  it('on a contributed machine, goes by what its host readied: the app for whom it named, nothing when it named no one', async () => {
+    const hosted = async (github: unknown) => {
+      const f = fixture({ state, githubApp: true })
+      Object.assign(f.start, { machineOwnerId: 'host-1' })
+      expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start', hostDispatch: true, ...(github === undefined ? {} : { github }) }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+      return f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
+    }
+    const payload = await hosted({ requester: 'olive@example.com' })
+    expect(payload).toMatchObject({ swarmRole: 'dev', swarmGitHub: true })
+    expect(String(payload.prompt)).toContain('Requested by olive@example.com through Harness.')
+    for (const github of [undefined, null, {}, { requester: '' }]) expect(await hosted(github)).not.toHaveProperty('swarmGitHub')
+  })
+
   it('launches as before for the machine owner\'s own project, on a server without the app, or when the Swarm cannot be read', async () => {
     for (const [options, owner] of [[{ state, githubApp: true }, 'owner-1'], [{ state }, 'host-1'], [{ state: new Error('offline'), githubApp: true }, 'host-1'],
       [{ state: { ...state, conversations: [{ id: 'other' }] }, githubApp: true }, 'host-1'], [{ state: { ...state, people: [] }, githubApp: true }, 'host-1']] as const) {

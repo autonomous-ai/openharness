@@ -9,7 +9,7 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import type { Redis } from 'ioredis'
 import { logger } from '../utils/logger.js'
-import { GitHubApp, GitHubAppError, cacheSecret, githubAppConfig, type BranchProtection } from './app.js'
+import { GitHubApp, GitHubAppError, PREPARE_PERMISSIONS, cacheSecret, githubAppConfig, type BranchProtection } from './app.js'
 import type { GitHubRepository } from './repository.js'
 import type { WorkHold } from './holds.js'
 
@@ -146,6 +146,18 @@ export class GitHubTokens {
     const branch = await this.app.defaultBranch(request.repository, entry.token)
     return { token: entry.token, expiresAt: entry.expiresAt, repository, defaultBranch: branch.branch,
       defaultBranchProtected: branch.protection === 'pull_request', defaultBranchProtection: branch.protection }
+  }
+
+  /**
+   * A token that only reads [repository], for a machine preparing a Swarm agent's folder before the agent exists (routes/
+   * superTabs.ts, a start's `github-token`): the clone and the fetch of its default branch, so that the machine's own git
+   * login is never used for another person's project. Never cached: one start asks once, and it lasts at most an hour.
+   */
+  async prepare(repository: GitHubRepository): Promise<{ token: string; expiresAt: string; repository: string }> {
+    const installation = await this.app.installation(repository)
+    if (installation === null) throw this.app.notInstalled(repository)
+    const minted = await this.app.createToken(installation, repository, PREPARE_PERMISSIONS)
+    return { ...minted, repository: repository.fullName }
   }
 
   private async revoke(tabId: string, agentId: string, entry: Entry, why: string): Promise<void> {

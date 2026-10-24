@@ -79,6 +79,32 @@ describe('contributed machine executor', () => {
     expect(f.prepare).toHaveBeenCalledTimes(2)
     expect(f.start).toHaveBeenCalledTimes(2)
   })
+  it('starts another person\'s work with the app for whom it is, and fails a start whose token cannot be had', async () => {
+    const f = fixture()
+    f.prepare.mockResolvedValueOnce({ requester: 'olive@example.com' } as never)
+    await f.machine.tick()
+    expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', hostDispatch: true, github: { requester: 'olive@example.com' } })
+    f.prepare.mockRejectedValueOnce(new Error('This machine could not get a Harness GitHub App token for this project'))
+    f.advance()
+    await f.machine.tick()
+    expect(f.start).toHaveBeenCalledTimes(1)
+    const failed = f.backend.mock.calls.find(c => JSON.stringify(c[3] ?? {}).includes('could not get a Harness GitHub App token'))!
+    expect(failed[3]).toMatchObject({ command: { type: 'agent.startFailed', startId: 'start' } })
+  })
+  it('readies a start with the backend, as a team account when this daemon runs team work only', async () => {
+    for (const team of [false, true]) {
+      const f = fixture()
+      const machine = new ContributedMachines(f.core, 'host', { backend: f.backend, open: f.open, capabilities: f.capabilities, start: f.start,
+        log: f.log, env: {}, privacy: () => null, team: () => team, now: () => 1000 } as never)
+      Object.assign(f.pool, { githubApp: true })
+      f.backend.mockImplementation(async (_core: unknown, _method: string, path: string): Promise<unknown> => path.endsWith('/pools') ? [f.pool]
+        : path.endsWith('/github-token') ? { github: false } : { revision: 1 })
+      await machine.tick()
+      const asked = f.backend.mock.calls.find(c => String(c[2]).endsWith('/github-token'))!
+      expect(asked[3]).toEqual(team ? { always: true } : {})
+      expect(f.start).toHaveBeenCalledTimes(team ? 0 : 1)
+    }
+  })
   it('publishes only scoped measurements and executes through the owner start endpoint', async () => {
     const f = fixture()
     await f.machine.tick()

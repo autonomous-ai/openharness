@@ -57,6 +57,45 @@ export function gitConfigParameters(helper: string, hooks: string): string {
   return entries.map(([key, value]) => `${shellWord(key)}=${shellWord(value)}`).join(' ')
 }
 
+/**
+ * The environment for the git a machine runs itself to prepare a Swarm agent's folder before the agent exists: the clone
+ * and the fetch of the default branch (superTabs/projectFolder.ts), with [token], a read-only Harness GitHub App token for
+ * the project's one repository. Nothing of the machine owner's git setup takes part: their global and system config are
+ * not read (credential helpers, a rewrite of https to ssh, an http header), the helpers git has so far are emptied for
+ * Harness's alone, ssh remotes of github.com go over https, and nothing prompts. The token is in this environment only,
+ * read by the helper from `HARNESS_SWARM_GIT_TOKEN`, never written to disk or put on a command line.
+ */
+export function swarmGitPrepareEnv(token: string, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  if (!TOKEN.test(token)) throw new Error('The Harness GitHub App token is not in the form GitHub gives.')
+  const env: NodeJS.ProcessEnv = { ...base }
+  // Config from the environment, a prompt program, or an ssh setup of the owner's would put their login back in.
+  for (const key of Object.keys(env)) if (/^GIT_CONFIG_(KEY|VALUE)_\d+$/.test(key)) delete env[key]
+  for (const key of ['GIT_CONFIG_COUNT', 'GIT_CONFIG', 'GIT_ASKPASS', 'SSH_ASKPASS', 'GIT_SSH', 'GIT_SSH_COMMAND', 'GIT_DIR', 'GIT_WORK_TREE',
+    ...SWARM_GITHUB_CLEAR_ENV]) delete env[key]
+  const helper = '!f() { test "$1" = get || return 0; echo username=x-access-token; echo "password=$HARNESS_SWARM_GIT_TOKEN"; }; f'
+  const entries: Array<[string, string]> = [
+    ['credential.helper', ''],
+    ['credential.https://github.com.helper', ''],
+    ['credential.https://github.com.helper', helper],
+    ['url.https://github.com/.insteadof', 'git@github.com:'],
+    ['url.https://github.com/.insteadof', 'ssh://git@github.com/'],
+    // Large files still arrive as git-lfs would bring them, when it is installed: its filter is in the global config skipped above.
+    ['filter.lfs.process', 'git-lfs filter-process'],
+    ['filter.lfs.clean', 'git-lfs clean -- %f'],
+    ['filter.lfs.smudge', 'git-lfs smudge -- %f'],
+  ]
+  return {
+    ...env,
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_PARAMETERS: entries.map(([key, value]) => `${shellWord(key)}=${shellWord(value)}`).join(' '),
+    GIT_TERMINAL_PROMPT: '0',
+    GCM_INTERACTIVE: 'Never',
+    GIT_SSH_COMMAND: 'ssh -oBatchMode=yes -oConnectTimeout=20',
+    HARNESS_SWARM_GIT_TOKEN: token,
+  }
+}
+
 export function credentialHelperScript(input: { command: string; port: number; machineId: string; dataDir: string }): string {
   return '#!/bin/sh\n'
     + '# Written by Harness for Swarm agents\' git (docs/swarm-github-app.md); rewritten as agents start.\n'

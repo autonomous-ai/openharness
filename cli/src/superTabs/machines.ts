@@ -8,7 +8,8 @@ import { backend, SuperTabHostError } from './host.js'
 import { identifier, object } from './wire.js'
 import { readCapabilities, quotaOf, meteredEngine } from './capacity.js'
 import { startAgent, type ScopedRequest } from './start.js'
-import { prepareSwarmProject } from './projectFolder.js'
+import { prepareSwarmStart } from './projectFolder.js'
+import { readAuthSession } from '../lib/authSession.js'
 import { createSwarmCloneTrustRepair, swarmCloneRoots } from './cloneTrust.js'
 import { git } from '../lib/worktreeSweep.js'
 import { projectsRoot } from '../lib/projectFolder.js'
@@ -115,7 +116,12 @@ export class ContributedMachines {
   }
   constructor(private readonly core: CoreApi, private readonly machineId: string,
     private readonly deps: { backend: typeof backend; open: typeof openDaemon; capabilities: typeof readCapabilities;
-      start: typeof startAgent; now: () => number; prepare?: typeof prepareSwarmProject; log?: (message: string) => void; env?: NodeJS.ProcessEnv
+      start: typeof startAgent; now: () => number; log?: (message: string) => void; env?: NodeJS.ProcessEnv
+      /** Readies a queued start before its agent is created (superTabs/projectFolder.ts `prepareSwarmStart`): whom the
+       *  work is for when it uses the Harness GitHub App, else null. */
+      prepare?: (core: CoreApi, row: Record<string, unknown>, start: Record<string, unknown>) => Promise<{ requester: string } | null | void>
+      /** Whether this daemon runs team work only (a Harness Team account, `harness team on`): it has no git login of its own. */
+      team?: () => boolean
       /** The Harness Team account's privacy check (team/privacy.ts): null for the owner's own daemon. */
       privacy?: () => PrivacyObservation | null } =
       { backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }) {}
@@ -279,16 +285,21 @@ export class ContributedMachines {
                   error: `This computer's Harness Team account is not private (${privacy.item}): ${privacy.detail} Its owner can run \`harness team setup\` to repair it.` } })
               continue
             }
-            if (pool.scope === 'swarm' && !start.dispatched) {
-              try { await (this.deps.prepare ?? prepareSwarmProject)(this.core, row, start) }
-              catch (error) {
+            // Another person's project is cloned and fetched with the Harness GitHub App's token, never this machine's own
+            // git login; a token that cannot be had fails the start (superTabs/projectFolder.ts).
+            let github: { requester: string } | null = null
+            if (!start.dispatched) {
+              try {
+                github = (await (this.deps.prepare ?? ((core, pooled, queued) => prepareSwarmStart(core, pooled, queued,
+                  { backend: this.deps.backend, team: (this.deps.team ?? (() => readAuthSession()?.kind === 'team'))() })))(this.core, row, start)) ?? null
+              } catch (error) {
                 await scoped({ action: 'command', operationId: `prepare-failed-${start.id}`,
                   command: { type: 'agent.startFailed', startId: start.id,
                     error: error instanceof Error ? error.message : 'Could not prepare this project on the machine.' } })
                 continue
               }
             }
-            const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true }, scoped, where, this.deps.open)
+            const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, ...(github ? { github } : {}) }, scoped, where, this.deps.open)
             if (result.ok === true && identifier(result.harnessId)) {
               this.waiting.delete(start.id)
               // Before the start settles: a settled start is no longer listed, so a missed record would never be made.

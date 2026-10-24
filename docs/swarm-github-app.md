@@ -115,8 +115,32 @@ Harness wires the app into an agent when the start meets all of these conditions
 A person's own agents, starts on a server without the app, and computers whose Harness
 is too old to understand the request keep using the computer's own git and gh
 configuration. The decision is recorded with the session, so a relaunch keeps it.
-In the planned team account, every Swarm agent qualifies, because the owner's login
-is not there. Windows is not wired yet.
+In a team account (a Mac's Harness Team account, or a computer after `harness team on`),
+every Swarm agent qualifies, because the owner's login is not there. Windows is not
+wired yet.
+
+## Preparing the folder before the agent starts
+
+Before a contributed computer creates the agent, it clones the project into its Swarm
+folder and fetches the default branch the worktree starts from. For another person's
+project it does this with the app too, never with its owner's git login:
+
+1. The host asks `POST /api/super-tabs/hosts/:machineId/starts/:tabId/:startId/github-token`.
+   For another person's project the answer is a token that can only read the project's
+   repository (`contents: read`, `metadata: read`), and whom the work is for. For the
+   machine owner's own project the answer is `{ "github": false }` and the owner's login
+   prepares it as before. A team account sends `{ "always": true }`, because it has no
+   login of its own.
+2. The clone and the fetch run with that token alone: the owner's global and system git
+   config are not read, `git@github.com:` addresses go over HTTPS, and nothing prompts.
+   The token is in the git process's environment only.
+3. The agent is created with `swarmGitHub`, and the daemon does not fetch again.
+
+If the token cannot be had (the app is not installed on the repository, the project has
+no GitHub address, or a team account's server has no app), the start fails with that
+reason. It is never prepared with the owner's login instead. A server's host rows say
+`githubApp: true` when it has the app; a server without the app, or one from before this
+endpoint, leaves an owner's computer preparing as before.
 
 ## How git and gh get the token
 
@@ -232,9 +256,8 @@ The server never logs a token.
 
 ## Known limits
 
-- Preparing a Swarm worktree still fetches with the computer's own git setup, in
-  the daemon, before the agent starts. A team account has no such login, so its first
-  fetch of a private repository is a follow-up.
+- A Lead that starts an agent on its own computer for another person's project starts
+  the worktree from what that computer's checkout has: nothing fetches it first.
 - On a personal computer, startup files that export `GITHUB_TOKEN` reach Claude
   Code's and Codex's commands again. gh then uses that token. The team account has
   no such files.

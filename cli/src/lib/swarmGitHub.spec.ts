@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { GIT_HOOK_NAMES, gitConfigParameters, shellWord, swarmGitHubLaunch, swarmGitHubSessionDir, writeSessionGitHub, writeSwarmGitHubTools } from './swarmGitHub.js'
+import { GIT_HOOK_NAMES, gitConfigParameters, shellWord, swarmGitHubLaunch, swarmGitHubSessionDir, swarmGitPrepareEnv, writeSessionGitHub, writeSwarmGitHubTools } from './swarmGitHub.js'
 
 // Real git against folders made here, with a home of its own and no system config: never this machine's git settings,
 // and nothing reaches github.com (only `git credential fill` and `git ls-remote --get-url`, which make no connection).
@@ -48,6 +48,33 @@ describe('git configuration for a Swarm session', () => {
 })
 
 describe('the shared helper and hooks', () => {
+  it('prepares a Swarm folder with the app\'s token alone: none of the owner\'s git setup, ssh over https, and nothing on a command line', () => {
+    const dir = fresh('prepare')
+    const ownerLog = join(dir, 'owner.log')
+    const owner = script(join(dir, 'owner-helper'), `echo "$1" >> '${ownerLog}'\n[ "$1" = get ] && printf 'username=owner\\npassword=owner-secret\\n'`)
+    // An owner whose global config has a credential helper and sends github.com over their own ssh key.
+    const ownerHome = fresh('owner-home')
+    writeFileSync(join(ownerHome, '.gitconfig'), `[credential]\n\thelper = ${owner}\n[url "git@github.com:"]\n\tinsteadOf = https://github.com/\n`)
+    const token = `ghs_${'t'.repeat(36)}`
+    const env = swarmGitPrepareEnv(token, { PATH: process.env.PATH!, HOME: ownerHome, GIT_ASKPASS: '/owner/askpass', GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: owner, GH_TOKEN: 'owner-gh-token', GIT_SSH_COMMAND: 'ssh -i /owner/key' })
+    for (const key of ['GIT_ASKPASS', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0', 'GH_TOKEN']) expect(env).not.toHaveProperty(key)
+    expect(env.GIT_SSH_COMMAND).not.toContain('/owner/key')
+    expect(env.GIT_CONFIG_PARAMETERS).not.toContain(token)
+    const run = (args: string[], input?: string) => spawnSync('git', args, { cwd: dir, input, encoding: 'utf8', env: env as Record<string, string> })
+    const filled = run(['credential', 'fill'], 'url=https://github.com/acme/app.git\n\n')
+    expect(filled.status).toBe(0)
+    expect(filled.stdout).toContain('username=x-access-token')
+    expect(filled.stdout).toContain(`password=${token}`)
+    expect(existsSync(ownerLog)).toBe(false)
+    // The owner's rewrite to ssh is not read; ssh addresses of github.com go over https.
+    expect(run(['ls-remote', '--get-url', 'https://github.com/acme/app.git']).stdout.trim()).toBe('https://github.com/acme/app.git')
+    expect(run(['ls-remote', '--get-url', 'git@github.com:acme/app.git']).stdout.trim()).toBe('https://github.com/acme/app.git')
+    expect(run(['config', '--get-all', 'credential.helper']).stdout).not.toContain('owner-helper')
+    // A token not in GitHub's form is refused before any git runs with it.
+    expect(() => swarmGitPrepareEnv('not a token; rm -rf /')).toThrow('not in the form GitHub gives')
+  })
+
   it('writes the helper for this daemon\'s CLI and one hook for every hook git runs, private to its user, once', () => {
     const dataDir = fresh('data')
     const { helper, hooks } = writeSwarmGitHubTools({ dataDir, command: "'/opt/node' '/opt/harness/cli.js'", port: 18500, machineId: 'machine-1' })

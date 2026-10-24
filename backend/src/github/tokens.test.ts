@@ -18,6 +18,22 @@ const setup = (cacheOverride?: TokenCache) => {
 }
 const request = (assignmentId = 'attempt-1', agentId = 'agent-1') => ({ tabId: 'tab-1', agentId, assignmentId, repository })
 
+describe('preparation tokens', () => {
+  it('only read the repository, and are minted each time, never cached', async () => {
+    const { tokens, github } = setup()
+    expect(await tokens.prepare(repository)).toMatchObject({ token: 'ghs_fixture_1', repository: 'acme/app' })
+    expect((await tokens.prepare(repository)).token).toBe('ghs_fixture_2')
+    const minted = github.calls.filter(c => c.path.endsWith('/access_tokens'))
+    expect(minted.map(c => c.body)).toEqual([0, 1].map(() => ({ repositories: ['app'], permissions: { contents: 'read', metadata: 'read' } })))
+  })
+
+  it('refuses a repository the app is not installed on', async () => {
+    const { tokens, github } = setup()
+    github.installed.clear()
+    await expect(tokens.prepare(repository)).rejects.toMatchObject({ code: 'GITHUB_APP_NOT_INSTALLED' })
+  })
+})
+
 describe('agent tokens', () => {
   it('mints one for the task and gives the same token again until ten minutes before it expires', async () => {
     const { tokens, github, advance } = setup()
