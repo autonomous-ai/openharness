@@ -47,7 +47,11 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/workspace_bar_style.dart';
 import '../theme/app_theme.dart';
 import 'engine_identity.dart';
+import 'finger_target.dart';
 import 'harness_agent_control.dart';
+import 'harness_agent_picker.dart';
+import 'pane_menu.dart';
+import 'workspace_bar_control.dart';
 import '../agent_messages/pane_message_mark.dart';
 import '../agent_messages/pane_shared_chips.dart';
 import 'harness_activity_mark.dart';
@@ -2802,6 +2806,157 @@ class _TerminalHeader extends StatelessWidget {
   Widget build(BuildContext context) =>
       MediaQuery.withNoTextScaling(child: Builder(builder: _buildHeader));
 
+  /// The header on a phone ([WorkspaceChrome.compactPaneHeaderAt]): the name
+  /// first, the pane's state in words, agent and model behind one menu, and
+  /// controls a finger can hit. Audit findings S2 and S1.
+  Widget _phoneHeader(
+    BuildContext context, {
+    required String title,
+    required TextStyle titleStyle,
+    required String identityDetail,
+    required bool renamable,
+    required TerminalNotice? status,
+    required Color statusColor,
+    required VoidCallback? statusAction,
+    required ModelStartPhase? starting,
+    required Agent? agent,
+    required bool canChangeModel,
+  }) {
+    final machine = notifier.stateOf(session.machineId);
+    final openAgentPicker = notifier.openAgentPicker;
+    final changeAgent =
+        agent != null &&
+            openAgentPicker != null &&
+            machine?.machine.isShared == false &&
+            machine?.nodeOnline != false
+        ? () => openAgentPicker(session.machineId, agent.id)
+        : null;
+    final changeModel =
+        canChangeModel && onOpenModels != null && !readOnly && !session.readOnly
+        ? pickerController?.open
+        : null;
+    return SizedBox(
+      height: kFingerTarget,
+      child: Padding(
+        padding: const EdgeInsets.only(
+          left: _stripPadding,
+          right: grid.AppDesktop.paneCloseInset,
+        ),
+        child: LayoutBuilder(
+          builder: (context, constraints) => Row(
+            children: [
+              Expanded(
+                child: Tooltip(
+                  message: identityDetail,
+                  waitDuration: const Duration(milliseconds: 500),
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onDoubleTap: renamable
+                        ? () => unawaited(
+                            showAgentRenameDialog(
+                              context,
+                              notifier,
+                              session.machineId,
+                              session.agentId,
+                              session.agentName,
+                            ),
+                          )
+                        : null,
+                    child: Text(
+                      title,
+                      key: const ValueKey('terminal-pane-title'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: titleStyle,
+                    ),
+                  ),
+                ),
+              ),
+              // A state in words says what the activity mark's ⊘ would.
+              if (status == null)
+                HarnessActivityMark(
+                  app: notifier,
+                  machineId: session.machineId,
+                  agentId: session.agentId,
+                ),
+              if (status != null || starting != null) const SizedBox(width: 8),
+              if (status != null)
+                ConstrainedBox(
+                  key: const ValueKey('pane-header-status'),
+                  constraints: BoxConstraints(
+                    maxWidth: constraints.maxWidth * .45,
+                  ),
+                  child: _PaneStatusChip(
+                    status: status,
+                    color: statusColor,
+                    onPressed: statusAction,
+                  ),
+                )
+              else if (starting != null)
+                PaneStartingChip(phase: starting, narrow: true),
+              if (canChangeModel) _modelPicker(context, agent, menuOnly: true),
+              fingerTarget(
+                enabled: true,
+                _PaneIdentityMenuButton(
+                  engine: session.engineId,
+                  agentLabel: agent == null
+                      ? null
+                      : HarnessAgentPicker.label(agent.engine ?? ''),
+                  model: agent?.gridModel ?? agent?.modelName,
+                  onChangeAgent: changeAgent,
+                  onChangeModel: changeModel,
+                ),
+              ),
+              if (onClose != null)
+                fingerTarget(
+                  enabled: true,
+                  PaneCloseButton(onPressed: onClose!),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// This pane's model control: the header's label, or with [menuOnly] none,
+  /// opened from elsewhere through [pickerController].
+  GridModelPicker _modelPicker(
+    BuildContext context,
+    Agent? agent, {
+    bool compact = false,
+    bool menuOnly = false,
+  }) => GridModelPicker(
+    key: ValueKey(('pane-model', session.machineId, session.agentId)),
+    paneHeader: true,
+    menuOnly: menuOnly,
+    onOpen: onOpenModels,
+    enabled: !readOnly && !session.readOnly,
+    compact: compact,
+    notifier: notifier,
+    machineId: session.machineId,
+    currentModel: agent?.gridModel,
+    subscriptionModel: agent?.modelName,
+    webSearch: agent?.gridWebSearch,
+    engineLabel: session.engineId,
+    controller: pickerController,
+    onSelected: (model) => unawaited(
+      notifier.retargetAgentToGridModel(
+        session.machineId,
+        session.agentId,
+        model.id,
+        gridName: model.grid,
+      ),
+    ),
+    onUseOwnLogin: () =>
+        unawaited(notifier.clearAgentGrid(session.machineId, session.agentId)),
+    // Discovery opens the local Models popover. Selection above
+    // continues to target this pane's existing session.
+    onRunLocalModel: () => unawaited(
+      notifier.runLocalModel(context, machineId: session.machineId),
+    ),
+  );
+
   Widget _buildHeader(BuildContext context) {
     TerminalFontScope.watch(context);
     final titleStyle = workspaceBarTextStyle(
@@ -2921,478 +3076,443 @@ class _TerminalHeader extends StatelessWidget {
     // A fork says so first: "forked from X" is the one fact about this pane
     // that the folder and the branch — shared with its source — cannot tell.
     final forkedFrom = agent?.forkedFrom;
-    final header = SizedBox(
-      height: compact ? 38 : 46,
-      child: Padding(
-        padding: const EdgeInsets.only(
-          left: _stripPadding,
-          right: grid.AppDesktop.paneCloseInset,
-        ),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final scale = grid.appTextScaleOf(context);
-            final narrow = constraints.maxWidth < 560 * math.max(1, scale);
-            final controlsWidth = onClose != null
-                ? PaneHeaderButton.width
-                : 0.0;
-            final actionsWidth = pickerWidth + controlsWidth;
-            // At the smallest widths, connection state takes the leading
-            // mark's place so the pane name survives beside the fixed tools.
-            final leadingStatus =
-                compact && constraints.maxWidth < 280 && status != null;
-            Widget statusButton() => Tooltip(
-              message: '${status!.label}: ${status.detail}',
-              child: IconButton(
-                tooltip: status.actionLabel ?? status.label,
-                onPressed: statusAction,
-                icon: Icon(status.icon, size: 14),
-                style: IconButton.styleFrom(
-                  foregroundColor: color,
-                  disabledForegroundColor: color,
-                  fixedSize: const Size(28, 28),
-                  minimumSize: const Size(28, 28),
-                  padding: EdgeInsets.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
+    final header =
+        WorkspaceChrome.of(context)
+            .compactPaneHeaderAt(MediaQuery.sizeOf(context).width)
+        ? _phoneHeader(
+            context,
+            title: title,
+            titleStyle: titleStyle,
+            identityDetail: identityDetail,
+            renamable: roleTitle == null,
+            status: status,
+            statusColor: color,
+            statusAction: statusAction,
+            starting: starting,
+            agent: agent,
+            canChangeModel: showModelPicker,
+          )
+        : SizedBox(
+            height: compact ? 38 : 46,
+            child: Padding(
+              padding: const EdgeInsets.only(
+                left: _stripPadding,
+                right: grid.AppDesktop.paneCloseInset,
               ),
-            );
-            // Workspace panes show PR state once in the main status bar.
-            // Standalone terminals retain their own PR badge.
-            final showPr =
-                !compact &&
-                agent != null &&
-                project?.shownBranch != null &&
-                constraints.maxWidth >= 360 * math.max(1, scale);
-            final badgeWidth = showPr ? (narrow ? 150.0 : 180.0) : 0.0;
-            // The room the left side needs: the mark, the whole name as it will be drawn, and
-            // the status beside it — capped at 45% so a very long name still leaves the right
-            // side most of the header.
-            double titleRoom() {
-              final name = TextPainter(
-                text: TextSpan(text: title, style: titleStyle),
-                textDirection: TextDirection.ltr,
-                textScaler: MediaQuery.textScalerOf(context),
-                maxLines: 1,
-              )..layout();
-              final width = name.width;
-              name.dispose();
-              final statusRoom = status != null
-                  ? 120.0
-                  : starting != null
-                  ? paneStartingChipWidth(
-                      starting,
-                      MediaQuery.textScalerOf(context),
-                    )
-                  : 16.0;
-              return math.min(
-                (showIdentityMark ? 27 : 0) + width + 8 + statusRoom + 8,
-                constraints.maxWidth * .45,
-              );
-            }
-
-            final desiredRightWidth = narrow
-                ? math.max(
-                    controlsWidth +
-                        (showModelPicker ? 96.0 : 0.0) +
-                        (agent != null ? 90.0 : 0.0) +
-                        badgeWidth,
-                    constraints.maxWidth * .36,
-                  )
-                : math.max(
-                    actionsWidth + badgeWidth,
-                    // Everything the name does not use. A fixed 55% left the folder and branch
-                    // shortened to "…" beside a short name with half the header empty.
-                    constraints.maxWidth - titleRoom(),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final scale = grid.appTextScaleOf(context);
+                  final narrow =
+                      constraints.maxWidth < 560 * math.max(1, scale);
+                  final controlsWidth = onClose != null
+                      ? PaneHeaderButton.width
+                      : 0.0;
+                  final actionsWidth = pickerWidth + controlsWidth;
+                  // At the smallest widths, connection state takes the leading
+                  // mark's place so the pane name survives beside the fixed tools.
+                  final leadingStatus =
+                      compact && constraints.maxWidth < 280 && status != null;
+                  Widget statusButton() => Tooltip(
+                    message: '${status!.label}: ${status.detail}',
+                    child: IconButton(
+                      tooltip: status.actionLabel ?? status.label,
+                      onPressed: statusAction,
+                      icon: Icon(status.icon, size: 14),
+                      style: IconButton.styleFrom(
+                        foregroundColor: color,
+                        disabledForegroundColor: color,
+                        fixedSize: const Size(28, 28),
+                        minimumSize: const Size(28, 28),
+                        padding: EdgeInsets.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
                   );
-            // Budget the title's fixed neighbours too. An activity mark and
-            // connection status must not consume the name's entire flex width
-            // when the model/agent controls share a narrow split pane.
-            final hasActivity =
-                harnessActivity(notifier, session.machineId, session.agentId) !=
-                null;
-            final activityWidth = hasActivity
-                ? workspaceBarCellSizeOf(context).width * 2
-                : 0.0;
-            final leadingWidth = leadingStatus
-                ? 34.0
-                : showIdentityMark
-                ? 27.0
-                : 0.0;
-            final statusWidth = status != null && !leadingStatus
-                ? 36.0
-                : starting != null
-                ? 8 +
-                      paneStartingChipWidth(
-                        starting,
-                        MediaQuery.textScalerOf(context),
-                        narrow: narrow,
-                      )
-                : 0.0;
-            final minimumLeftWidth = compact
-                ? 56 + leadingWidth + activityWidth + statusWidth + 8
-                : 99.0;
-            final rightWidth = math.min(
-              compact ? actionsWidth : desiredRightWidth,
-              math.max(0.0, constraints.maxWidth - minimumLeftWidth),
-            );
-            return Row(
-              children: [
-                if (leadingStatus)
-                  statusButton()
-                else if (agent != null && showIdentityMark)
-                  EngineMark.forAgent(agent, size: 17)
-                else if (showIdentityMark)
-                  EngineMark(engine: session.engineId, size: 17),
-                if (leadingStatus || showIdentityMark)
-                  SizedBox(width: leadingStatus ? 6 : 10),
-                Expanded(
-                  child: LayoutBuilder(
-                    builder: (context, inner) {
-                      // Who started it, after the name, where the details row
-                      // that says it in a wide header is not drawn: a pane in
-                      // a tab has a compact header, and there it said so only
-                      // in the name's tooltip (a clean VM, #1217). Never more
-                      // than its share of the row, and never so much that the
-                      // name, the marks and the status beside it go short;
-                      // left out only where a few words would not fit at all.
-                      final gap = workspaceBarCellSizeOf(context).width;
-                      final chipRoom = status != null && !leadingStatus
-                          ? (narrow ? 36.0 : constraints.maxWidth * .22) + 8
-                          : starting != null
-                          ? statusWidth + 8
-                          : 0.0;
-                      final startedRoom =
-                          math.min(
-                            inner.maxWidth * .45,
-                            inner.maxWidth -
-                                activityWidth -
-                                chipRoom -
-                                64 * math.max(1, scale),
-                          ) -
-                          gap;
-                      final showStartedBy =
-                          startedBy != null &&
-                          (compact || narrow) &&
-                          startedRoom >= 72 * math.max(1, scale);
-                      return Row(
-                        children: [
-                          // Four parts to an Agent Messages mark's one while it
-                          // shows; alone, the title has all the room.
-                          Flexible(
-                            flex: 4,
-                            child: Tooltip(
-                              message: identityDetail,
-                              waitDuration: const Duration(milliseconds: 500),
-                              child: GestureDetector(
-                                behavior: HitTestBehavior.opaque,
-                                onDoubleTap: roleTitle != null
-                                    ? null
-                                    : () => unawaited(
-                                        showAgentRenameDialog(
-                                          context,
-                                          notifier,
-                                          session.machineId,
-                                          session.agentId,
-                                          session.agentName,
+                  // Workspace panes show PR state once in the main status bar.
+                  // Standalone terminals retain their own PR badge.
+                  final showPr =
+                      !compact &&
+                      agent != null &&
+                      project?.shownBranch != null &&
+                      constraints.maxWidth >= 360 * math.max(1, scale);
+                  final badgeWidth = showPr ? (narrow ? 150.0 : 180.0) : 0.0;
+                  // The room the left side needs: the mark, the whole name as it will be drawn, and
+                  // the status beside it — capped at 45% so a very long name still leaves the right
+                  // side most of the header.
+                  double titleRoom() {
+                    final name = TextPainter(
+                      text: TextSpan(text: title, style: titleStyle),
+                      textDirection: TextDirection.ltr,
+                      textScaler: MediaQuery.textScalerOf(context),
+                      maxLines: 1,
+                    )..layout();
+                    final width = name.width;
+                    name.dispose();
+                    final statusRoom = status != null
+                        ? 120.0
+                        : starting != null
+                        ? paneStartingChipWidth(
+                            starting,
+                            MediaQuery.textScalerOf(context),
+                          )
+                        : 16.0;
+                    return math.min(
+                      (showIdentityMark ? 27 : 0) + width + 8 + statusRoom + 8,
+                      constraints.maxWidth * .45,
+                    );
+                  }
+
+                  final desiredRightWidth = narrow
+                      ? math.max(
+                          controlsWidth +
+                              (showModelPicker ? 96.0 : 0.0) +
+                              (agent != null ? 90.0 : 0.0) +
+                              badgeWidth,
+                          constraints.maxWidth * .36,
+                        )
+                      : math.max(
+                          actionsWidth + badgeWidth,
+                          // Everything the name does not use. A fixed 55% left the folder and branch
+                          // shortened to "…" beside a short name with half the header empty.
+                          constraints.maxWidth - titleRoom(),
+                        );
+                  // Budget the title's fixed neighbours too. An activity mark and
+                  // connection status must not consume the name's entire flex width
+                  // when the model/agent controls share a narrow split pane.
+                  final hasActivity =
+                      harnessActivity(
+                        notifier,
+                        session.machineId,
+                        session.agentId,
+                      ) !=
+                      null;
+                  final activityWidth = hasActivity
+                      ? workspaceBarCellSizeOf(context).width * 2
+                      : 0.0;
+                  final leadingWidth = leadingStatus
+                      ? 34.0
+                      : showIdentityMark
+                      ? 27.0
+                      : 0.0;
+                  final statusWidth = status != null && !leadingStatus
+                      ? 36.0
+                      : starting != null
+                      ? 8 +
+                            paneStartingChipWidth(
+                              starting,
+                              MediaQuery.textScalerOf(context),
+                              narrow: narrow,
+                            )
+                      : 0.0;
+                  final minimumLeftWidth = compact
+                      ? 56 + leadingWidth + activityWidth + statusWidth + 8
+                      : 99.0;
+                  final rightWidth = math.min(
+                    compact ? actionsWidth : desiredRightWidth,
+                    math.max(0.0, constraints.maxWidth - minimumLeftWidth),
+                  );
+                  return Row(
+                    children: [
+                      if (leadingStatus)
+                        statusButton()
+                      else if (agent != null && showIdentityMark)
+                        EngineMark.forAgent(agent, size: 17)
+                      else if (showIdentityMark)
+                        EngineMark(engine: session.engineId, size: 17),
+                      if (leadingStatus || showIdentityMark)
+                        SizedBox(width: leadingStatus ? 6 : 10),
+                      Expanded(
+                        child: LayoutBuilder(
+                          builder: (context, inner) {
+                            // Who started it, after the name, where the details row
+                            // that says it in a wide header is not drawn: a pane in
+                            // a tab has a compact header, and there it said so only
+                            // in the name's tooltip (a clean VM, #1217). Never more
+                            // than its share of the row, and never so much that the
+                            // name, the marks and the status beside it go short;
+                            // left out only where a few words would not fit at all.
+                            final gap = workspaceBarCellSizeOf(context).width;
+                            final chipRoom = status != null && !leadingStatus
+                                ? (narrow ? 36.0 : constraints.maxWidth * .22) +
+                                      8
+                                : starting != null
+                                ? statusWidth + 8
+                                : 0.0;
+                            final startedRoom =
+                                math.min(
+                                  inner.maxWidth * .45,
+                                  inner.maxWidth -
+                                      activityWidth -
+                                      chipRoom -
+                                      64 * math.max(1, scale),
+                                ) -
+                                gap;
+                            final showStartedBy =
+                                startedBy != null &&
+                                (compact || narrow) &&
+                                startedRoom >= 72 * math.max(1, scale);
+                            return Row(
+                              children: [
+                                // Four parts to an Agent Messages mark's one while it
+                                // shows; alone, the title has all the room.
+                                Flexible(
+                                  flex: 4,
+                                  child: Tooltip(
+                                    message: identityDetail,
+                                    waitDuration: const Duration(
+                                      milliseconds: 500,
+                                    ),
+                                    child: GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      onDoubleTap: roleTitle != null
+                                          ? null
+                                          : () => unawaited(
+                                              showAgentRenameDialog(
+                                                context,
+                                                notifier,
+                                                session.machineId,
+                                                session.agentId,
+                                                session.agentName,
+                                              ),
+                                            ),
+                                      child: Text(
+                                        title,
+                                        key: const ValueKey(
+                                          'terminal-pane-title',
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: titleStyle,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                HarnessActivityMark(
+                                  app: notifier,
+                                  machineId: session.machineId,
+                                  agentId: session.agentId,
+                                ),
+                                if (showStartedBy)
+                                  Padding(
+                                    padding: EdgeInsets.only(left: gap),
+                                    child: ConstrainedBox(
+                                      constraints: BoxConstraints(
+                                        maxWidth: startedRoom,
+                                      ),
+                                      child: Text(
+                                        'started by $startedBy',
+                                        key: const ValueKey('pane-started-by'),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: titleStyle.copyWith(
+                                          color:
+                                              (titleStyle.color ??
+                                                      grid
+                                                          .AppPalette
+                                                          .textPrimary)
+                                                  .withValues(alpha: .55),
                                         ),
                                       ),
-                                child: Text(
-                                  title,
-                                  key: const ValueKey('terminal-pane-title'),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                PaneSharedChips(
+                                  app: notifier,
+                                  machineId: session.machineId,
+                                  agentId: session.agentId,
                                   style: titleStyle,
                                 ),
-                              ),
-                            ),
-                          ),
-                          HarnessActivityMark(
-                            app: notifier,
-                            machineId: session.machineId,
-                            agentId: session.agentId,
-                          ),
-                          if (showStartedBy)
-                            Padding(
-                              padding: EdgeInsets.only(left: gap),
-                              child: ConstrainedBox(
-                                constraints: BoxConstraints(
-                                  maxWidth: startedRoom,
+                                PaneMessageMarkView(
+                                  controller: notifier.agentMessages,
+                                  machineId: session.machineId,
+                                  agentId: session.agentId,
+                                  style: titleStyle,
                                 ),
-                                child: Text(
-                                  'started by $startedBy',
-                                  key: const ValueKey('pane-started-by'),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: titleStyle.copyWith(
-                                    color:
-                                        (titleStyle.color ??
-                                                grid.AppPalette.textPrimary)
-                                            .withValues(alpha: .55),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          PaneSharedChips(
-                            app: notifier,
-                            machineId: session.machineId,
-                            agentId: session.agentId,
-                            style: titleStyle,
-                          ),
-                          PaneMessageMarkView(
-                            controller: notifier.agentMessages,
-                            machineId: session.machineId,
-                            agentId: session.agentId,
-                            style: titleStyle,
-                          ),
-                          if ((status != null && !leadingStatus) ||
-                              starting != null ||
-                              !compact)
-                            const SizedBox(width: 8),
-                          if (status != null && narrow && !leadingStatus)
-                            statusButton()
-                          else if (status != null && !leadingStatus)
-                            ConstrainedBox(
-                              constraints: BoxConstraints(
-                                maxWidth: math.max(
-                                  0,
-                                  math.min(
-                                    constraints.maxWidth * .22,
-                                    constraints.maxWidth - actionsWidth - 110,
-                                  ),
-                                ),
-                              ),
-                              child: Align(
-                                alignment: Alignment.centerLeft,
-                                child: Tooltip(
-                                  message: status.detail,
-                                  child: TextButton(
-                                    onPressed: statusAction,
-                                    style: TextButton.styleFrom(
-                                      foregroundColor: color,
-                                      disabledForegroundColor:
-                                          AppColors.textSoft,
-                                      minimumSize: Size.zero,
-                                      tapTargetSize:
-                                          MaterialTapTargetSize.shrinkWrap,
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 4,
+                                if ((status != null && !leadingStatus) ||
+                                    starting != null ||
+                                    !compact)
+                                  const SizedBox(width: 8),
+                                if (status != null && narrow && !leadingStatus)
+                                  statusButton()
+                                else if (status != null && !leadingStatus)
+                                  ConstrainedBox(
+                                    constraints: BoxConstraints(
+                                      maxWidth: math.max(
+                                        0,
+                                        math.min(
+                                          constraints.maxWidth * .22,
+                                          constraints.maxWidth -
+                                              actionsWidth -
+                                              110,
+                                        ),
                                       ),
                                     ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(status.icon, size: 14),
-                                        const SizedBox(width: 6),
-                                        Flexible(
-                                          child: Text(
-                                            // The chip names the STATE; what
-                                            // pressing it does is in the tooltip
-                                            // and in `actionLabel`. "Link
-                                            // required" that can be pressed reads
-                                            // better than a bare verb where every
-                                            // neighbour is a status.
-                                            status.label,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: grid.AppType.monoLabel(
-                                              fontWeight: FontWeight.w400,
-                                            ),
-                                          ),
+                                    child: Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: _PaneStatusChip(
+                                        status: status,
+                                        color: color,
+                                        onPressed: statusAction,
+                                      ),
+                                    ),
+                                  )
+                                else if (status == null &&
+                                    starting != null &&
+                                    narrow)
+                                  PaneStartingChip(
+                                    phase: starting,
+                                    narrow: true,
+                                  )
+                                else if (status == null && starting != null)
+                                  // Never wider than the room this row is sure to have: the name's
+                                  // share (at most 45%) or what the actions and the PR badge leave —
+                                  // less [_headerFurniture]. Its words shorten rather than push the
+                                  // row past the header's edge.
+                                  ConstrainedBox(
+                                    constraints: BoxConstraints(
+                                      maxWidth: math.max(
+                                        0,
+                                        math.min(
+                                          constraints.maxWidth * .45 -
+                                              _headerFurniture,
+                                          constraints.maxWidth -
+                                              actionsWidth -
+                                              badgeWidth -
+                                              _headerFurniture,
                                         ),
-                                      ],
+                                      ),
+                                    ),
+                                    child: PaneStartingChip(phase: starting),
+                                  )
+                                else if (!compact)
+                                  Padding(
+                                    padding: const EdgeInsets.all(4),
+                                    child: Tooltip(
+                                      message: 'Terminal connected',
+                                      child: Container(
+                                        width: 8,
+                                        height: 8,
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          color: color,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // Keep sharing status outside the model/action width budget.
+                      // It follows the title and precedes the model and pane controls.
+                      if (agent != null && PaneShareStatus.visibleOf(context))
+                        PaneShareBadge(
+                          notifier: notifier,
+                          machineId: session.machineId,
+                          agentId: agent.id,
+                          name: agent.displayName,
+                          compact: narrow,
+                        ),
+                      // Which of the three paths carries this pane's bytes. Absent for a local machine's own
+                      // terminal, which has no such distinction and so gets no badge.
+                      //
+                      // The wire word and the word a person reads differ for the middle state, deliberately:
+                      // the CLI sends 'turn' (it is a TURN allocation) but both middle and last are relays to
+                      // a reader, so they read as "relay" and "ws". 'relay' on the wire kept its original
+                      // meaning — the backend WebSocket — so an older CLI is never mislabelled.
+                      if (!compact && !narrow && session.linkMode != null)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 2),
+                          child: _LinkModeMark(mode: session.linkMode!),
+                        ),
+                      ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: math.max(0, rightWidth - controlsWidth),
+                        ),
+                        child: PaneHeaderActions(
+                          agentPicker: agent == null
+                              ? null
+                              : HarnessAgentControl(
+                                  app: notifier,
+                                  machineId: session.machineId,
+                                  agent: agent,
+                                  enabled:
+                                      machine?.machine.isShared == false &&
+                                      machine?.nodeOnline != false,
+                                ),
+                          trailing: showPr
+                              ? ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    maxWidth: badgeWidth,
+                                  ),
+                                  child: PullRequestBadge(
+                                    compact: narrow,
+                                    foreground: notifier.foreground,
+                                    identity: (
+                                      session.machineId,
+                                      agent.id,
+                                      project?.cwd,
+                                      project?.shownBranch,
+                                    ),
+                                    read: () => notifier.readAgentPullRequest(
+                                      session.machineId,
+                                      agent.id,
+                                    ),
+                                  ),
+                                )
+                              : null,
+                          modelPicker: showModelPicker
+                              ? _modelPicker(context, agent, compact: narrow)
+                              : null,
+                          details: compact || narrow
+                              ? null
+                              : Tooltip(
+                                  message: [
+                                    if (forkedFrom != null)
+                                      'Forked from ${forkedFrom.name}',
+                                    if (startedBy != null)
+                                      'Started by $startedBy',
+                                    if (project != null) project.cwd,
+                                    ?project?.branchDetail,
+                                    machineName,
+                                  ].join('\n'),
+                                  child: PromptContextView(
+                                    contextData: PromptContext(
+                                      // This computer goes without saying.
+                                      machine: machine?.isLocalMachine == true
+                                          ? null
+                                          : machineName,
+                                      // The folder as it was chosen and its repository's branch;
+                                      // the full working folder is in the tooltip.
+                                      project: narrow ? null : project?.label,
+                                      // Not a branch Harness made up that waits for the
+                                      // session's name, nor a commit an agent checked out.
+                                      branch: narrow
+                                          ? null
+                                          : project?.shownBranch,
+                                      // Then who started it: the one fact a
+                                      // harness an agent opened beside it has
+                                      // that its folder cannot tell.
+                                      leading: narrow
+                                          ? null
+                                          : forkedFrom != null
+                                          ? 'forked from ${forkedFrom.name}'
+                                          : startedBy != null
+                                          ? 'started by $startedBy'
+                                          : null,
                                     ),
                                   ),
                                 ),
-                              ),
-                            )
-                          else if (status == null && starting != null && narrow)
-                            PaneStartingChip(phase: starting, narrow: true)
-                          else if (status == null && starting != null)
-                            // Never wider than the room this row is sure to have: the name's
-                            // share (at most 45%) or what the actions and the PR badge leave —
-                            // less [_headerFurniture]. Its words shorten rather than push the
-                            // row past the header's edge.
-                            ConstrainedBox(
-                              constraints: BoxConstraints(
-                                maxWidth: math.max(
-                                  0,
-                                  math.min(
-                                    constraints.maxWidth * .45 -
-                                        _headerFurniture,
-                                    constraints.maxWidth -
-                                        actionsWidth -
-                                        badgeWidth -
-                                        _headerFurniture,
-                                  ),
-                                ),
-                              ),
-                              child: PaneStartingChip(phase: starting),
-                            )
-                          else if (!compact)
-                            Padding(
-                              padding: const EdgeInsets.all(4),
-                              child: Tooltip(
-                                message: 'Terminal connected',
-                                child: Container(
-                                  width: 8,
-                                  height: 8,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: color,
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
-                      );
-                    },
-                  ),
-                ),
-                const SizedBox(width: 8),
-                // Keep sharing status outside the model/action width budget.
-                // It follows the title and precedes the model and pane controls.
-                if (agent != null && PaneShareStatus.visibleOf(context))
-                  PaneShareBadge(
-                    notifier: notifier,
-                    machineId: session.machineId,
-                    agentId: agent.id,
-                    name: agent.displayName,
-                    compact: narrow,
-                  ),
-                // Which of the three paths carries this pane's bytes. Absent for a local machine's own
-                // terminal, which has no such distinction and so gets no badge.
-                //
-                // The wire word and the word a person reads differ for the middle state, deliberately:
-                // the CLI sends 'turn' (it is a TURN allocation) but both middle and last are relays to
-                // a reader, so they read as "relay" and "ws". 'relay' on the wire kept its original
-                // meaning — the backend WebSocket — so an older CLI is never mislabelled.
-                if (!compact && !narrow && session.linkMode != null)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 2),
-                    child: _LinkModeMark(mode: session.linkMode!),
-                  ),
-                ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxWidth: math.max(0, rightWidth - controlsWidth),
-                  ),
-                  child: PaneHeaderActions(
-                    agentPicker: agent == null
-                        ? null
-                        : HarnessAgentControl(
-                            app: notifier,
-                            machineId: session.machineId,
-                            agent: agent,
-                            enabled:
-                                machine?.machine.isShared == false &&
-                                machine?.nodeOnline != false,
-                          ),
-                    trailing: showPr
-                        ? ConstrainedBox(
-                            constraints: BoxConstraints(maxWidth: badgeWidth),
-                            child: PullRequestBadge(
-                              compact: narrow,
-                              foreground: notifier.foreground,
-                              identity: (
-                                session.machineId,
-                                agent.id,
-                                project?.cwd,
-                                project?.shownBranch,
-                              ),
-                              read: () => notifier.readAgentPullRequest(
-                                session.machineId,
-                                agent.id,
-                              ),
-                            ),
-                          )
-                        : null,
-                    modelPicker: showModelPicker
-                        ? GridModelPicker(
-                            key: ValueKey((
-                              'pane-model',
-                              session.machineId,
-                              session.agentId,
-                            )),
-                            paneHeader: true,
-                            onOpen: onOpenModels,
-                            enabled: !readOnly && !session.readOnly,
-                            compact: narrow,
-                            notifier: notifier,
-                            machineId: session.machineId,
-                            currentModel: agent?.gridModel,
-                            subscriptionModel: agent?.modelName,
-                            webSearch: agent?.gridWebSearch,
-                            engineLabel: session.engineId,
-                            controller: pickerController,
-                            onSelected: (model) => unawaited(
-                              notifier.retargetAgentToGridModel(
-                                session.machineId,
-                                session.agentId,
-                                model.id,
-                                gridName: model.grid,
-                              ),
-                            ),
-                            onUseOwnLogin: () => unawaited(
-                              notifier.clearAgentGrid(
-                                session.machineId,
-                                session.agentId,
-                              ),
-                            ),
-                            // Discovery opens the local Models popover. Selection above
-                            // continues to target this pane's existing session.
-                            onRunLocalModel: () => unawaited(
-                              notifier.runLocalModel(
-                                context,
-                                machineId: session.machineId,
-                              ),
-                            ),
-                          )
-                        : null,
-                    details: compact || narrow
-                        ? null
-                        : Tooltip(
-                            message: [
-                              if (forkedFrom != null)
-                                'Forked from ${forkedFrom.name}',
-                              if (startedBy != null) 'Started by $startedBy',
-                              if (project != null) project.cwd,
-                              ?project?.branchDetail,
-                              machineName,
-                            ].join('\n'),
-                            child: PromptContextView(
-                              contextData: PromptContext(
-                                // This computer goes without saying.
-                                machine: machine?.isLocalMachine == true
-                                    ? null
-                                    : machineName,
-                                // The folder as it was chosen and its repository's branch;
-                                // the full working folder is in the tooltip.
-                                project: narrow ? null : project?.label,
-                                // Not a branch Harness made up that waits for the
-                                // session's name, nor a commit an agent checked out.
-                                branch: narrow ? null : project?.shownBranch,
-                                // Then who started it: the one fact a
-                                // harness an agent opened beside it has
-                                // that its folder cannot tell.
-                                leading: narrow
-                                    ? null
-                                    : forkedFrom != null
-                                    ? 'forked from ${forkedFrom.name}'
-                                    : startedBy != null
-                                    ? 'started by $startedBy'
-                                    : null,
-                              ),
-                            ),
-                          ),
-                  ),
-                ),
-                if (onClose != null) PaneCloseButton(onPressed: onClose!),
-              ],
-            );
-          },
-        ),
-      ),
-    );
+                        ),
+                      ),
+                      if (onClose != null) PaneCloseButton(onPressed: onClose!),
+                    ],
+                  );
+                },
+              ),
+            ),
+          );
     final strip = header;
     final handle = paneDrag;
     if (handle == null) return strip;
@@ -3435,6 +3555,139 @@ class _TerminalHeader extends StatelessWidget {
 /// layout. The wire name `relay` still means the backend WebSocket; only its human-facing label is WS.
 /// Underlines the link under the pointer, in each span's own text colour —
 /// the terminal's cells carry no underline for it, so this paints on top.
+/// A pane's state as a chip: its icon and its word, the detail in the tooltip,
+/// pressed for the way out it offers when it offers one.
+class _PaneStatusChip extends StatelessWidget {
+  const _PaneStatusChip({
+    required this.status,
+    required this.color,
+    required this.onPressed,
+  });
+
+  final TerminalNotice status;
+  final Color color;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: status.detail,
+    child: TextButton(
+      onPressed: onPressed,
+      style: TextButton.styleFrom(
+        foregroundColor: color,
+        disabledForegroundColor: AppColors.textSoft,
+        minimumSize: Size.zero,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(status.icon, size: 14),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              // The chip names the STATE; what pressing it does is in the
+              // tooltip and in `actionLabel`. "Link required" that can be
+              // pressed reads better than a bare verb where every neighbour is
+              // a status.
+              status.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: grid.AppType.monoLabel(fontWeight: FontWeight.w400),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+/// Agent and model behind one control, for a phone's header: the engine's
+/// mark, and a menu with a row for each picker the header would show.
+class _PaneIdentityMenuButton extends StatelessWidget {
+  const _PaneIdentityMenuButton({
+    required this.engine,
+    required this.agentLabel,
+    required this.model,
+    required this.onChangeAgent,
+    required this.onChangeModel,
+  });
+
+  final String? engine;
+  final String? agentLabel;
+  final String? model;
+  final VoidCallback? onChangeAgent, onChangeModel;
+
+  Future<void> _open(BuildContext context) async {
+    final box = context.findRenderObject() as RenderBox?;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (box == null || overlay == null) return;
+    final origin = box.localToGlobal(Offset.zero, ancestor: overlay);
+    final choice = await showPaneMenu<VoidCallback>(
+      context: context,
+      // Opened by a press: no row is lit until the pointer picks one.
+      focusFirst: false,
+      position: RelativeRect.fromLTRB(
+        origin.dx,
+        origin.dy + box.size.height,
+        overlay.size.width - origin.dx - box.size.width,
+        0,
+      ),
+      minWidth: 220,
+      maxWidth: 320,
+      children: (close) => [
+        for (final (title, detail, action) in [
+          ('Agent', agentLabel, onChangeAgent),
+          ('Model', model, onChangeModel),
+        ])
+          if (action != null)
+            paneMenuItem(
+              onTap: () => close(action),
+              child: fingerTarget(
+                enabled: true,
+                PaneMenuRow(selected: false, title: title, status: detail),
+              ),
+            ),
+      ],
+    );
+    // Run once the menu has closed and handed focus back.
+    choice?.call();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final foreground = terminalThemeFor(
+      grid.AppTheme.palette.value,
+      terminalThemeStore.value,
+    ).foreground;
+    final enabled = onChangeAgent != null || onChangeModel != null;
+    return WorkspaceBarControl(
+      label: 'Agent and model',
+      tooltip: [?agentLabel, ?model].join(' · '),
+      foreground: foreground,
+      onPressed: enabled ? () => unawaited(_open(context)) : null,
+      builder: (context, emphasized) => SizedBox(
+        height: workspaceBarControlHeight(context),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            EngineMark(engine: engine, size: 14, enabled: enabled),
+            Icon(
+              AppIcons.chevronDown,
+              size: 12,
+              color: foreground.withValues(alpha: emphasized ? 1 : .75),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// A lock in the cursor's cell, for a terminal that cannot be typed into.
 class _CursorLockPainter extends CustomPainter {
   _CursorLockPainter({
