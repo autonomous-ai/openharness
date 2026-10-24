@@ -191,9 +191,7 @@ class _TabInvitesSectionState extends State<TabInvitesSection> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Harness could not reach this computer. Check that it is online, then try again.',
-            ),
+            Text(unreachableComputer),
             TextButton(
               onPressed: () => unawaited(shares.refresh()),
               child: const Text('Try again'),
