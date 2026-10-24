@@ -9,6 +9,7 @@ import '../auth/sign_in_provider.dart';
 import '../shared/widgets/qr_code_view.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
+import '../widgets/finger_target.dart' show kFingerTarget;
 import '../widgets/login_fleet_map.dart';
 import '../widgets/login_relay_diagram.dart';
 import '../widgets/or_divider.dart';
@@ -626,6 +627,13 @@ class _ErrorTile extends StatelessWidget {
             alignment: Alignment.centerLeft,
             child: OutlinedButton(
               onPressed: onRetry,
+              // A finger's size on a phone, as the buttons below it are; the
+              // web's phone layout starts under 720 px.
+              style: MediaQuery.sizeOf(context).width < 720
+                  ? OutlinedButton.styleFrom(
+                      minimumSize: const Size.square(kFingerTarget),
+                    )
+                  : null,
               child: const Text('Try again'),
             ),
           ),

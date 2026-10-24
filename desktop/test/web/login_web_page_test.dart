@@ -104,6 +104,25 @@ void main() {
     );
   });
 
+  // Found in review: Try again was 32 px tall on a phone.
+  testWidgets('on a phone Try again is a finger\'s size; wide, as it was', (
+    tester,
+  ) async {
+    Size retry() => tester.getSize(
+      find.ancestor(
+        of: find.text('Try again'),
+        matching: find.byType(OutlinedButton),
+      ),
+    );
+    for (final phone in [const Size(360, 740), const Size(390, 844)]) {
+      await _open(tester, size: phone, error: _failure);
+      expect(retry().height, greaterThanOrEqualTo(44), reason: '$phone');
+      expect(retry().width, greaterThanOrEqualTo(44), reason: '$phone');
+    }
+    await _open(tester, error: _failure);
+    expect(retry().height, lessThan(44));
+  });
+
   testWidgets('without a failure the page has no error tile', (tester) async {
     await _open(tester);
     expect(find.text('Could not sign in'), findsNothing);
