@@ -45,6 +45,7 @@ const connectorIcons = <String, String>{
   'incident_io': 'assets/connector-icons/incident_io.png',
   'indeed': 'assets/connector-icons/indeed.png',
   'jam': 'assets/connector-icons/jam.png',
+  'keenable': 'assets/connector-icons/keenable.svg',
   'klaviyo': 'assets/connector-icons/klaviyo.png',
   'linear': 'assets/connector-icons/linear.png',
   'mailerlite': 'assets/connector-icons/mailerlite.png',
