@@ -77,7 +77,7 @@ class SuperTabAgentInfo {
   String? get machine {
     final place =
         controller.snapshot?.placeOf(agent.machineId) ?? agent.machineId;
-    return _known(app?.shownMachineName(place)) ??
+    return _known(app?.stateOf(place)?.machine.displayName) ??
         _known(controller.snapshot?.pool(place)?['name'] as String?);
   }
 

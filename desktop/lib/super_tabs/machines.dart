@@ -486,10 +486,15 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         m['machineId'] as String,
     };
     // Unavailable computers stay inspectable in the picker, but another
-    // account's computers must never be offered for contribution.
-    // One choice per computer: a Mac's Harness Team account joins the Swarm with its Mac (the backend adds it).
-    List<MachineState> ownedMachines() =>
-        app.listedMachines.where((m) => !m.belongsToOtherAccount).toList();
+    // account's computers must never be offered for contribution. One choice
+    // per computer: a Mac's Harness Team account in this Swarm is part of its
+    // Mac's row, and joins and leaves with it (SuperTabSnapshot.placeOf).
+    bool ownRow(MachineState m) =>
+        (c.snapshot?.placeOf(m.machine.machineId) ?? m.machine.machineId) ==
+        m.machine.machineId;
+    List<MachineState> ownedMachines() => app.machineStates.values
+        .where((m) => !m.belongsToOtherAccount && ownRow(m))
+        .toList();
     ({IconData icon, String message})? unavailable(MachineState m) {
       if (!isExisting(m) && contributed.contains(m.machine.machineId)) {
         return (icon: AppIcons.circleCheck, message: 'Already in this Swarm');
@@ -918,7 +923,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     final team = snapshot.teamPoolOf(id);
     final teamId = team?['machineId'] as String?;
     final agents = snapshot.agents
-        .where((a) => a.machineId == id || a.machineId == teamId)
+        .where((a) => snapshot.placeOf(a.machineId) == id)
         .toList();
     final contributor =
         shared?['contributorId'] as String? ??
@@ -1176,10 +1181,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   /// Every agent of the Swarm on [machineId]'s row, its Mac's Harness Team account's included: removing the machine
   /// takes them all with it.
   List<SuperTabAgent> _agentsOn(String machineId) {
-    final team = c.snapshot?.teamPoolOf(machineId)?['machineId'];
+    final snapshot = c.snapshot;
     return [
-      for (final a in c.snapshot?.agents ?? const <SuperTabAgent>[])
-        if (a.machineId == machineId || a.machineId == team) a,
+      for (final a in snapshot?.agents ?? const <SuperTabAgent>[])
+        if (snapshot!.placeOf(a.machineId) == machineId) a,
     ];
   }
 

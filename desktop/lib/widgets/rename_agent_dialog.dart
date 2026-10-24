@@ -20,7 +20,7 @@ Future<void> showAgentRenameDialog(
     keymap: keymap,
     builder: (_) => TerminalNamePrompt(
       title: 'Rename Harness',
-      detail: notifier.shownMachineName(machineId),
+      detail: notifier.stateOf(machineId)?.machine.displayName,
       name: notifier.pendingAgentName(machineId, agentId) ?? currentName,
       fieldKey: const Key('agent-rename-input'),
       fieldLabel: 'Harness name',

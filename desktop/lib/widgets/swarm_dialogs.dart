@@ -162,7 +162,7 @@ class _ProjectDialogState extends State<_ProjectDialog> {
                             value: machineId!,
                             options: [
                               for (final machine
-                                  in widget.notifier.listedMachines)
+                                  in widget.notifier.machineStates.values)
                                 SelectOption(
                                   value: machine.machine.machineId,
                                   label: machine.isLocalMachine

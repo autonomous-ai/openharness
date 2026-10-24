@@ -1738,7 +1738,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
       (machine.nodeOnline == true && !machine.needsLink);
 
   List<MachineState> get _orderedMachines {
-    final machines = widget.notifier.listedMachines
+    final machines = widget.notifier.machineStates.values
         .where((m) => !m.machine.isShared)
         .toList();
     int priority(MachineState machine) => machine.isLocalMachine
@@ -1777,7 +1777,7 @@ class _NewAgentDialogState extends State<_NewAgentDialog> {
         .map((machine) => machine.machine.machineId)
         .toList(),
     options: [
-      for (final machine in widget.notifier.listedMachines)
+      for (final machine in widget.notifier.machineStates.values)
         if (!machine.machine.isShared)
           SelectOption(
             value: machine.machine.machineId,

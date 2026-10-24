@@ -90,13 +90,11 @@ class _App extends AppNotifier {
     bool local = false,
     bool linked = false,
     bool online = true,
-    String? host,
   }) {
     final machine = Machine(
       machineId: id,
       name: name,
       authMode: MachineAuthMode.remote,
-      hostMachineId: host,
     );
     machineStates[id] = MachineState(machine)
       ..localOnly = local
@@ -566,38 +564,6 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
-
-  testWidgets('a Mac\'s Harness Team account is not a second row of its Mac', (
-    tester,
-  ) async {
-    // This Mac's team account, and another Mac's: each Mac is one row. A team account whose Mac is not on the
-    // account any more shows on its own, as before.
-    app.add('local-team', 'M2 · Team', linked: true, host: 'local');
-    app.add('mac', 'MacBook Pro', linked: true);
-    app.add('mac-team', 'MacBook Pro · Team', linked: true, host: 'mac');
-    app.add('orphan', 'Studio · Team', linked: true, host: 'gone');
-    await mount(tester);
-    expect(find.byKey(const ValueKey('machine-local')), findsOneWidget);
-    expect(find.byKey(const ValueKey('machine-mac')), findsOneWidget);
-    expect(find.byKey(const ValueKey('machine-orphan')), findsOneWidget);
-    expect(find.byKey(const ValueKey('machine-local-team')), findsNothing);
-    expect(find.byKey(const ValueKey('machine-mac-team')), findsNothing);
-    expect(find.text('MacBook Pro · Team'), findsNothing);
-  });
-
-  testWidgets('a Mac\'s row counts the harnesses in its Harness Team account', (
-    tester,
-  ) async {
-    app.add('mac', 'MacBook Pro', linked: true);
-    app.add('mac-team', 'MacBook Pro · Team', linked: true, host: 'mac');
-    app.stateOf('mac')!.agents = [const Agent(id: 'own', name: 'Own')];
-    app.stateOf('mac-team')!.agents = [
-      const Agent(id: 'mate-1', name: 'Teammate 1'),
-      const Agent(id: 'mate-2', name: 'Teammate 2'),
-    ];
-    await mount(tester);
-    expect(find.text('3 harnesses'), findsOneWidget);
-  });
 
   testWidgets('another arrival never replaces the password being typed', (
     tester,

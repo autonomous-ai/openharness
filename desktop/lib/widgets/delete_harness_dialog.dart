@@ -154,7 +154,7 @@ class _DeleteHarnessPromptState extends State<_DeleteHarnessPrompt> {
                 widget.name,
                 style: DesktopChrome.text(size: 14, medium: true),
               ),
-              if (widget.notifier.shownMachineName(widget.machineId)
+              if (widget.notifier.stateOf(widget.machineId)?.machine.displayName
                   case final machine?) ...[
                 const SizedBox(height: 4),
                 Text(machine, style: DesktopChrome.metadata()),

@@ -124,6 +124,39 @@ void main() {
   );
 
   testWidgets(
+    'an account set up again leaves its old pool listed: still one row, read from the newer account',
+    (tester) async {
+      final server = _swarm();
+      // The owner is away from the Mac. The old account stopped reporting; the new one runs teammates' work.
+      server.state['machines'] = [
+        _pool('mac', age: _offlineAge),
+        _pool('mac-team-new', host: 'mac'),
+        _pool('mac-team-old', host: 'mac', age: _offlineAge * 2),
+      ];
+      server.state['agents'] = [
+        _agent('a1', 'mac-team-old'),
+        _agent('a2', 'mac-team-new'),
+      ];
+      // A teammate reads the team account that runs their agents.
+      final c = await _mount(tester, server);
+      expect(_row('mac'), findsOneWidget);
+      expect(_row('mac-team-new'), findsNothing);
+      expect(_row('mac-team-old'), findsNothing);
+      expect(_state('mac', 'live'), findsOneWidget);
+      expect(c.snapshot!.teamPoolOf('mac')!['machineId'], 'mac-team-new');
+      await tester.tap(find.byKey(const ValueKey('super-machine-toggle-mac')));
+      await tester.pumpAndSettle();
+      for (final agent in ['a1', 'a2']) {
+        expect(
+          find.byKey(ValueKey('super-machine-agent-mac-$agent')),
+          findsOneWidget,
+        );
+      }
+      await _unmount(tester, c);
+    },
+  );
+
+  testWidgets(
     'a Harness Team account whose Mac is not in the Swarm is a row of its own',
     (tester) async {
       final server = _swarm();

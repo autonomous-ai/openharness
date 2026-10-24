@@ -11,7 +11,6 @@ import 'package:harness/screens/swarm_screen.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/terminal/terminal_binary.dart';
-import 'package:harness/terminal/terminal_session.dart';
 
 import 'swarm_state_test.dart' show createApp;
 import 'swarm_screen_test.dart' show terminal;
@@ -281,86 +280,6 @@ void main() {
       await stale.future;
       expect(app.focusedPane, same(pane));
       expect(app.swarms, hasLength(2));
-      await tester.pumpWidget(const SizedBox());
-      app.dispose();
-      projects.dispose();
-    },
-  );
-  testWidgets(
-    'a Mac\'s Harness Team account\'s harnesses are listed under the Mac and open where they run',
-    (tester) async {
-      const channel = MethodChannel('harness/swarm_tabs');
-      final messenger = tester.binding.defaultBinaryMessenger;
-      final messages = <MethodCall>[];
-      messenger.setMockMethodCallHandler(channel, (call) async {
-        messages.add(call);
-        return true;
-      });
-      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
-      final app = createApp();
-      const team = Machine(
-        machineId: 'm-team',
-        authMode: MachineAuthMode.remote,
-        name: 'Test host · Team',
-        hostMachineId: 'm',
-      );
-      app.machines.add(team);
-      app.machineStates['m-team'] = MachineState(team)
-        ..nodeOnline = true
-        ..agentLoadStatus = AgentLoadStatus.loaded
-        ..agents = [
-          const Agent(id: 'ta', name: 'Teammate', terminalAvailable: true),
-        ];
-      final input = <TerminalBinaryFrame>[];
-      final original = app.activeSwarmId;
-      final pane = app.adoptSessionForTest(
-        TerminalSession(
-            machineId: 'm-team',
-            agentId: 'ta',
-            agentName: 'Session ta',
-            engineId: 'codex',
-            send: (_, _) async => true,
-            sendBinary: (frame) async {
-              if (frame.kind == TerminalBinaryKind.input) input.add(frame);
-              return true;
-            },
-          )
-          ..status = TerminalSessionStatus.controlling
-          ..streamId = 'stream-ta',
-      );
-      app.newSwarm(name: 'Second');
-      final projects = SwarmProjectStore();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: SwarmScreen(
-            notifier: app,
-            nativeTabs: true,
-            projectStore: projects,
-          ),
-        ),
-      );
-      await tester.pump();
-      final snapshot =
-          messages.lastWhere((c) => c.method == 'machinesState').arguments
-              as Map;
-      // One row, the Mac's, with its own 70 harnesses and the team account's one.
-      final machine = (snapshot['machines'] as List).single as Map;
-      expect(machine['id'], 'm');
-      expect(machine['agentCount'], 71);
-      expect((machine['agents'] as List).last, containsPair('id', 'ta'));
-      expect((machine['agents'] as List).last, containsPair('canOpen', true));
-      final reply = Completer<void>();
-      messenger.handlePlatformMessage(
-        channel.name,
-        const StandardMethodCodec().encodeMethodCall(
-          const MethodCall('machineAgent', {'machineId': 'm', 'agentId': 'ta'}),
-        ),
-        (_) => reply.complete(),
-      );
-      await tester.pumpAndSettle();
-      await reply.future;
-      expect(app.activeSwarmId, original);
-      expect(app.focusedPane, same(pane));
       await tester.pumpWidget(const SizedBox());
       app.dispose();
       projects.dispose();

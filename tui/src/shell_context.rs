@@ -672,8 +672,7 @@ fn context_rows(app: &App, host: bool) -> Vec<Row> {
     if host {
         // ("This computer" only until this computer has its own name: then it would be it twice.)
         let named = app.fleet.registered_local_machine().is_some();
-        // (One per computer: a Harness Team account is its Mac's, never a shell's host of its own.)
-        app.fleet.machines.iter().filter(|m| !m.shared && !(named && crate::local::is_local(&m.id)) && app.fleet.listed_as(&m.id) == m.id).map(|m| {
+        app.fleet.machines.iter().filter(|m| !m.shared && !(named && crate::local::is_local(&m.id))).map(|m| {
             let mut row = Row::new(m.id.clone(), m.name.clone()).extra(m.id.clone())
                 .right(if m.usable() { "connected" } else { "unavailable" });
             row.disabled = !m.usable(); row

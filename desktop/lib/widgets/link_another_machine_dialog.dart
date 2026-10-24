@@ -143,7 +143,7 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
   }
 
   List<MachineState> get _remotes =>
-      app.listedMachines.where((state) => !state.isLocalMachine).toList()
+      app.machineStates.values.where((state) => !state.isLocalMachine).toList()
         ..sort((a, b) {
           if (a.needsLink != b.needsLink) return a.needsLink ? -1 : 1;
           return a.machine.displayName.toLowerCase().compareTo(

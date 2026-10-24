@@ -114,7 +114,7 @@ class _MachinesManagerState extends State<_MachinesManager> {
           ),
       ];
     }
-    final machines = app.listedMachines.toList()
+    final machines = app.machineStates.values.toList()
       ..sort((a, b) {
         if (a.isLocalMachine != b.isLocalMachine) {
           return a.isLocalMachine ? -1 : 1;

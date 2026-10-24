@@ -16,7 +16,7 @@ String? webNewHarnessMachine(AppNotifier app) {
   if (selected != null && webMachineReady(selected)) {
     return selected.machine.machineId;
   }
-  return app.listedMachines
+  return app.machineStates.values
       .where(webMachineReady)
       .firstOrNull
       ?.machine

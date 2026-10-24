@@ -1758,11 +1758,9 @@ class SwarmSearchController extends ChangeNotifier {
             id: session.id,
             title: session.agent.displayName,
             detail: '${session.status} · ${session.question!.prompt}',
-            machineLabel:
-                app.shownMachineName(session.machine.machine.machineId) ??
-                session.machine.machine.displayName,
+            machineLabel: session.machine.machine.displayName,
             terminalDetail:
-                '${session.status} · ${app.shownMachineName(session.machine.machine.machineId) ?? session.machine.machine.displayName}',
+                '${session.status} · ${session.machine.machine.displayName}',
             promptContext: original?.promptContext,
             machineId: session.machineId,
             agentId: session.agent.id,
@@ -2110,7 +2108,8 @@ class SwarmSearchController extends ChangeNotifier {
             externalSessionDestination(
               hit,
               external,
-              machineLabel: app.shownMachineName(hit.machineId) ?? '',
+              machineLabel:
+                  app.stateOf(hit.machineId)?.machine.displayName ?? '',
             ),
       ];
     }

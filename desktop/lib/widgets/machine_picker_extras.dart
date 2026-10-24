@@ -95,10 +95,7 @@ class MachineWindowChoice extends StatelessWidget {
   Widget build(BuildContext context) {
     final selected = app.machineProfileId;
     final localId = app.localMachineState?.machine.machineId;
-    final machines = [
-      for (final machine in app.machines)
-        if (!app.foldedIntoHost(machine.machineId)) machine,
-    ];
+    final machines = app.machines;
     final names = <String, int>{};
     for (final machine in machines) {
       names[machine.displayName] = (names[machine.displayName] ?? 0) + 1;

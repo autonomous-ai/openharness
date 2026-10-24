@@ -4639,41 +4639,6 @@ class AppNotifier extends ChangeNotifier {
 
   MachineState? stateOf(String machineId) => machineStates[machineId];
 
-  /// Whether [machineId] is a Mac's Harness Team account whose Mac is on this account too ([foldsIntoHost]). Lists
-  /// show the Mac alone; the account stays in [machineStates], so the agents running there still open.
-  bool foldedIntoHost(String machineId) {
-    final machine = machineStates[machineId]?.machine;
-    return machine != null && foldsIntoHost(machine, machineStates.containsKey);
-  }
-
-  /// The machines a list shows, in [machineStates]' order: one row per computer, never a Mac's Harness Team
-  /// account beside its Mac ([foldedIntoHost]).
-  Iterable<MachineState> get listedMachines =>
-      machineStates.values.where((m) => !foldedIntoHost(m.machine.machineId));
-
-  /// The machine [machineId] is shown as: its Mac for a folded Harness Team account, else itself. What an agent
-  /// running in that account reads as being "on".
-  String shownMachineId(String machineId) => foldedIntoHost(machineId)
-      ? machineStates[machineId]!.machine.hostMachineId!
-      : machineId;
-
-  /// The name of the machine [machineId] is shown as ([shownMachineId]); null for one the app does not know.
-  String? shownMachineName(String machineId) =>
-      machineStates[shownMachineId(machineId)]?.machine.displayName;
-
-  /// The Harness Team accounts folded into [machineId]'s row ([foldedIntoHost]): a list shows their harnesses under
-  /// the Mac, each still opened on the machine it runs on.
-  Iterable<MachineState> foldedInto(String machineId) =>
-      machineStates.values.where(
-        (m) =>
-            m.machine.hostMachineId == machineId &&
-            foldedIntoHost(m.machine.machineId),
-      );
-
-  /// How many harnesses run in the Harness Team accounts folded into [machineId]'s row, for its count.
-  int foldedHarnesses(String machineId) =>
-      foldedInto(machineId).fold(0, (sum, m) => sum + m.agents.length);
-
   // ── the grid ────────────────────────────────────────────────────────────────────────────────────
 
   /// Null means "remember nothing", which is what a test gets by default.
@@ -4874,20 +4839,13 @@ class AppNotifier extends ChangeNotifier {
     final ordered = <Machine>[
       ...machines.where((m) => stateOf(m.machineId)?.isLocalMachine == true),
       ...machines.where((m) => stateOf(m.machineId)?.isLocalMachine != true),
-    ].where((m) => !foldedIntoHost(m.machineId));
+    ];
     for (final machine in ordered) {
       rows.add(RailRow(machineId: machine.machineId));
       if (!expandedMachines.contains(machine.machineId)) continue;
-      // The Mac's harnesses, then its Harness Team account's, each on the machine it runs on.
-      for (final state in [
-        ?stateOf(machine.machineId),
-        ...foldedInto(machine.machineId),
-      ]) {
-        for (final agent in state.agents) {
-          rows.add(
-            RailRow(machineId: state.machine.machineId, agentId: agent.id),
-          );
-        }
+      for (final agent
+          in stateOf(machine.machineId)?.agents ?? const <Agent>[]) {
+        rows.add(RailRow(machineId: machine.machineId, agentId: agent.id));
       }
     }
     return rows;
@@ -18754,7 +18712,7 @@ class AppNotifier extends ChangeNotifier {
           tab,
           historyId: 'closed-${_nextClosedHistoryId++}',
           name: agent?.name ?? pane.session?.agentName ?? pane.agentId!,
-          machineName: shownMachineName(pane.machineId) ?? pane.machineId,
+          machineName: machine?.machine.displayName ?? pane.machineId,
           engine: agent?.identityEngine ?? pane.session?.engineId,
         ),
       );

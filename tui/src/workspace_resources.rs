@@ -6,7 +6,7 @@ pub struct Counts { pub harnesses: usize, pub machines: usize, pub models: Optio
 
 pub fn counts(app: &App) -> Counts {
     let owned: HashSet<_> = app.fleet.visible_machines().filter(|m| !m.shared && (m.local || m.reach != Reach::NeedsLink)).map(|m| m.id.as_str()).collect();
-    let harnesses = app.fleet.agents.values().filter(|a| owned.contains(app.fleet.listed_as(&a.machine_id)) && a.status != "stopped"
+    let harnesses = app.fleet.agents.values().filter(|a| owned.contains(a.machine_id.as_str()) && a.status != "stopped"
         && (a.terminal_available || a.launch == "starting")
         && app.fleet.machine(&a.machine_id).is_some_and(|m| m.usable() && m.online())).count();
     let inventories: Vec<_> = app.models_view.local.iter().filter(|(m, _)| owned.contains(m.as_str())).collect();

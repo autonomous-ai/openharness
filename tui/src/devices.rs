@@ -1382,7 +1382,7 @@ fn reach(app: &App, m: &crate::fleet::Machine) -> (&'static str, Color, String) 
 
 /// Its harnesses in counts (`2 waiting · 1 working`).
 fn counts(app: &App, machine: &str) -> String {
-    let here: Vec<State> = app.fleet.agents.values().filter(|a| app.fleet.listed_under(&a.machine_id, machine) && a.engine != "terminal").map(|a| app.fleet.state_of(a)).collect();
+    let here: Vec<State> = app.fleet.agents.values().filter(|a| a.machine_id == machine && a.engine != "terminal").map(|a| app.fleet.state_of(a)).collect();
     let n = |s: State| here.iter().filter(|x| **x == s).count();
     let said = [(State::NeedsInput, "waiting"), (State::Failed, "failed"), (State::Done, "done"), (State::Working, "working"), (State::Ready, "idle")]
         .iter().filter(|(s, _)| n(*s) > 0).map(|(s, w)| format!("{} {w}", n(*s))).collect::<Vec<_>>().join(" · ");
@@ -1414,8 +1414,7 @@ fn connect_rows(app: &App) -> Vec<Row> {
         return vec![account_row(app), info("local-use", "Local harnesses work without an account.", "This computer"), setup()];
     }
     let (mut ready, mut done, mut away) = (Vec::new(), Vec::new(), Vec::new());
-    // (A Harness Team account is its Mac's, never linked on its own here.)
-    for m in app.fleet.machines.iter().filter(|m| !m.local && !m.shared && app.fleet.listed_as(&m.id) == m.id) {
+    for m in app.fleet.machines.iter().filter(|m| !m.local && !m.shared) {
         let (glyph, color, word) = reach(app, m);
         let linking = app.devices.link.as_ref().is_some_and(|l| l.machine == m.id && l.result.is_none());
         // (One just linked stays in view, how it went beside it.)
@@ -1479,8 +1478,7 @@ fn machines_rows(app: &App) -> Vec<Row> {
 
     // A row is its name and one word or count at the right; the rest is in the preview.
     let yours = "Your machines";
-    // (One row per computer: a Harness Team account is its Mac's row.)
-    for m in app.fleet.machines.iter().filter(|m| !m.shared && !app.fleet.shares.contains_key(&m.id) && app.fleet.listed_as(&m.id) == m.id) {
+    for m in app.fleet.machines.iter().filter(|m| !m.shared && !app.fleet.shares.contains_key(&m.id)) {
         if crate::local::is_local(&m.id) { continue }
         let (_, _, word) = reach(app, m);
         rows.push(machine_row(app, m, yours).extra(format!("{} {word}", m.id)));
@@ -1520,7 +1518,7 @@ fn machine_state(app: &App, m: &crate::fleet::Machine) -> String {
         let (_, _, word) = reach(app, m);
         return match word.as_str() { "online · not linked" => "not linked".into(), w @ ("offline" | "online" | "connecting…") => w.into(), _ => "error".into() };
     }
-    let n = app.fleet.agents.values().filter(|a| app.fleet.listed_under(&a.machine_id, &m.id) && a.engine != "terminal").count();
+    let n = app.fleet.agents.values().filter(|a| a.machine_id == m.id && a.engine != "terminal").count();
     match n { 0 => "no harnesses".into(), 1 => "1 harness".into(), n => format!("{n} harnesses") }
 }
 
@@ -1866,7 +1864,7 @@ fn machine_lines(app: &App, id: &str) -> Vec<Line<'static>> {
         _ => {}
     }
     out.push(kv("harnesses", counts(app, id)));
-    let mut agents: Vec<_> = app.fleet.agents.values().filter(|a| app.fleet.listed_under(&a.machine_id, id) && a.status != "stopped").collect();
+    let mut agents: Vec<_> = app.fleet.agents.values().filter(|a| a.machine_id == id && a.status != "stopped").collect();
     agents.sort_by_key(|a| std::cmp::Reverse(a.recency()));
     for a in agents.iter().take(6) { out.push(Line::from(vec![Span::raw(format!("  {}", a.name)), dim(format!("  {}", a.project))])) }
     if !m.online() && !m.local { out.push(Line::raw("")); out.push(dim(format!("Open Harness on {} to bring it online.", m.name)).into()) }
@@ -2629,32 +2627,6 @@ mod tests {
         go_to(&mut app, &format!("m:{LOCAL}"));
         press(&mut app, KeyCode::Enter);
         assert!(!ids(&app).iter().any(|r| r.starts_with("act:remove")), "this computer cannot be removed here");
-    }
-
-    /// A Mac's Harness Team account (backend `hostMachineId`) is not another machine of yours: the Mac's row stands
-    /// for both, with the team account's harnesses in its count and its preview.
-    #[test]
-    fn a_harness_team_account_is_part_of_its_macs_row() {
-        const TEAM: &str = "efefefefefefefefefefefefefefefef";
-        const ALONE: &str = "abababababababababababababababab";
-        let mut app = app((150, 42));
-        let _log = fake(&mut app);
-        app.fleet.machines.push(crate::fleet::Machine { shared: false, id: TEAM.into(), name: "gpu-box · Team".into(), local: false, status: "online".into(), reach: Reach::NeedsLink });
-        app.fleet.machines.push(crate::fleet::Machine { shared: false, id: ALONE.into(), name: "Mac mini · Team".into(), local: false, status: "online".into(), reach: Reach::Ready });
-        app.fleet.take_hosts(&[json!({ "machineId": TEAM, "hostMachineId": REMOTE }), json!({ "machineId": ALONE, "hostMachineId": "a-deleted-mac" })]);
-        app.fleet.machine_mut(REMOTE).unwrap().reach = Reach::Ready;
-        app.fleet.merge_roster(REMOTE, &[json!({"id": "gpu", "name": "Render", "engine": "claude"})]);
-        app.fleet.merge_roster(TEAM, &[json!({"id": "mate", "name": "Teammate task", "engine": "codex"})]);
-        crate::input::run(&mut app, "devices");
-        let rows = ids(&app);
-        assert_eq!(rows, vec!["account".to_string(), "pw:".into(), "share:".into(), format!("m:{LOCAL}"), format!("m:{REMOTE}"), format!("m:{OFF}"), format!("m:{ALONE}"), "add:".into()]);
-        assert_eq!(row_of(&app, &format!("m:{REMOTE}")).map(|r| r.right.as_str()), Some("2 harnesses"));
-        let said = preview(&app, View::Machines, &format!("m:{REMOTE}")).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
-        assert!(said.contains("Teammate task") && said.contains("Render"), "{said}");
-        // Connect does not offer it to link on its own either.
-        press(&mut app, KeyCode::Esc);
-        crate::input::run(&mut app, "connect-machine");
-        assert!(!ids(&app).contains(&format!("m:{TEAM}")), "{:?}", ids(&app));
     }
 
     #[test]

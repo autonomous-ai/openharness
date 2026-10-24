@@ -31,7 +31,7 @@ class WebYourComputers extends StatefulWidget {
   /// The ones to list: the account's own, not those shared with it, one per name
   /// ([newestOfEachName]).
   static List<MachineState> listed(AppNotifier app) => newestOfEachName([
-    for (final state in app.listedMachines)
+    for (final state in app.machineStates.values)
       if (!state.machine.isShared) state,
   ], app.removedMachines);
 

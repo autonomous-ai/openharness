@@ -65,7 +65,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     // The Mac, for an agent in that Mac's Harness Team account.
     final place = c.snapshot?.placeOf(agent.machineId) ?? agent.machineId;
     final machine =
-        widget.app?.shownMachineName(place) ??
+        widget.app?.stateOf(place)?.machine.displayName ??
         c.snapshot?.pool(place)?['name'] as String? ??
         'its computer';
     await showAppDialog<void>(

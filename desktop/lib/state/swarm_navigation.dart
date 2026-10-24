@@ -588,14 +588,11 @@ class SwarmSearchCatalog {
       for (final entry in entries)
         if (entry.agentId != null) entry.id: entry,
     };
-    // One destination per computer: harnesses in a Mac's Harness Team account count as the Mac's.
     final machineMembers = <String, Set<String>>{};
     for (final entry in agentsById.values) {
-      (machineMembers[app.shownMachineId(entry.machineId!)] ??= {}).add(
-        entry.id,
-      );
+      (machineMembers[entry.machineId!] ??= {}).add(entry.id);
     }
-    for (final machine in app.listedMachines) {
+    for (final machine in app.machineStates.values) {
       final id = machine.machine.machineId;
       final members = machineMembers[id] ?? const <String>{};
       entries.add(
@@ -719,7 +716,7 @@ class SwarmLocationCatalog {
   ) {
     final machine = app.machineStates[pane.machineId];
     final project = agent == null ? null : machine?.projectOf(agent);
-    final machineLabel = app.shownMachineName(pane.machineId) ?? pane.machineId;
+    final machineLabel = machine?.machine.displayName ?? pane.machineId;
     final engine = agent?.identityEngine ?? pane.session?.engineId;
     final label = _harnessLabel(machine, engine, agent?.identityDisplayName);
     final detail = _harnessDetail(
@@ -1269,12 +1266,11 @@ String _countLabel(int count, String noun) {
 }
 
 String _swarmMachineLabel(AppNotifier app, Iterable<String> machineIds) {
-  // Counted per computer: a Mac's Harness Team account is that Mac.
-  final ids = machineIds.map(app.shownMachineId).toSet();
+  final ids = machineIds.toSet();
   if (ids.isEmpty) return '';
   if (ids.length > 1) return '${ids.length} machines';
   final id = ids.single;
-  return app.shownMachineName(id) ?? id;
+  return app.stateOf(id)?.machine.displayName ?? id;
 }
 
 List<SwarmDestination> closedWorkDestinations(AppNotifier app) => [
@@ -1309,7 +1305,8 @@ List<SwarmDestination> closedWorkDestinations(AppNotifier app) => [
         swarmId: null,
         machineId: entry.machineId,
         machineLabel:
-            app.shownMachineName(entry.machineId) ?? entry.machineName,
+            app.stateOf(entry.machineId)?.machine.displayName ??
+            entry.machineName,
         agentId: entry.agentId,
         engine: entry.engine,
         current: false,
@@ -1430,7 +1427,7 @@ List<SwarmDestination> swarmDestinations(
     final agentId = row?.$2.id ?? pane!.agentId!;
     final machine = app.machineStates[machineId];
     final project = row?.$1.projectOf(row.$2);
-    final machineName = app.shownMachineName(machineId) ?? machineId;
+    final machineName = machine?.machine.displayName ?? machineId;
     final engine = row?.$2.identityEngine ?? pane?.session?.engineId;
     final type = _harnessType(machine, engine);
     final label = _harnessLabel(machine, engine, row?.$2.identityDisplayName);

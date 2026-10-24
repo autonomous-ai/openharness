@@ -67,7 +67,6 @@ import { connectionsCommand, connectionsUsage } from './lib/connectors/command.j
 import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { machineChoices, newCommand, type MachineRow, type NewMachine } from './lib/newCommand.js'
-import { foldTeamMachines } from './lib/oneMachine.js'
 import { gridSetupCommand } from './lib/gridSetupCommand.js'
 import { localCredentialHeaders } from './lib/localCredential.js'
 import { WebSocket as NewCommandSocket } from 'ws'
@@ -2411,8 +2410,6 @@ interface OwnerMachineRow {
   hostname: string | null
   status: string
   agentCount: number
-  /** A Harness Team account's machine: the Mac it lives on, whose row it is listed in (lib/oneMachine.ts). */
-  hostMachineId?: string | null
 }
 
 /** The caller's machines, newest first. The backend already excludes deleted ones. */
@@ -2450,8 +2447,7 @@ function matchesMachineId(machineId: string, id: string): boolean {
   return machineId === id || machineId.startsWith(id)
 }
 
-/** `harness machines` — every machine on this account, with this computer's own marked. A Mac's Harness Team account is
- *  listed as that Mac (lib/oneMachine.ts); `--json` keeps every row, each with the Mac it lives on. */
+/** `harness machines` — every machine on this account, with this computer's own marked. */
 async function machinesListCommand(json: boolean): Promise<void> {
   const { session, headers } = await controlPlaneAuth()
   const machines = await fetchMachines(headers)
@@ -2465,11 +2461,11 @@ async function machinesListCommand(json: boolean): Promise<void> {
     console.log('\n  No machines on this account yet.\n  Run `harness start` to connect this computer as one.\n')
     process.exit(0)
   }
-  const rows = foldTeamMachines(machines).map((machine) => ({
+  const rows = machines.map((machine) => ({
     id: machine.machineId.slice(0, 8),
     name: machineLabel(machine),
     status: machine.status || 'unknown',
-    agents: String([machine, ...machine.team].reduce((sum, row) => sum + (row.agentCount ?? 0), 0)),
+    agents: String(machine.agentCount ?? 0),
     current: machine.machineId === session.machineId,
   }))
   const nameWidth = Math.max(4, ...rows.map((row) => row.name.length))

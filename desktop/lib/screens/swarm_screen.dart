@@ -1592,7 +1592,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       scope: scope,
       machines: {
         if (!app.isGuest)
-          for (final machine in app.listedMachines)
+          for (final machine in app.machineStates.values)
             if (!machine.isLocalMachine &&
                 !machine.machine.isShared &&
                 machine.needsLink &&
@@ -1666,7 +1666,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   WorkspaceSubscriptionUsage get _subscriptionUsage =>
       WorkspaceSubscriptionUsage.fromRows(_modelsMenu?.rows ?? const []);
 
-  List<MachineState> get _footerMachines => app.listedMachines
+  List<MachineState> get _footerMachines => app.machineStates.values
       .where(
         (machine) =>
             !machine.machine.isShared &&
@@ -2300,22 +2300,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       for (final tab in app.swarms)
         for (final pane in tab.panes) (pane.machineId, pane.agentId),
     };
-    final machines = app.listedMachines.take(128);
-    // A Mac's harnesses, then its Harness Team account's, under the one row;
-    // each keeps the machine it runs on.
-    List<(String, Agent)> harnesses(MachineState machine) => [
-      for (final state in [
-        machine,
-        ...app.foldedInto(machine.machine.machineId),
-      ])
-        for (final agent in state.agents) (state.machine.machineId, agent),
-    ];
-    int? count(MachineState machine) =>
-        machine.agents.isNotEmpty ||
-            machine.agentLoadStatus == AgentLoadStatus.loaded
-        ? machine.agents.length +
-              app.foldedHarnesses(machine.machine.machineId)
-        : null;
+    final machines = app.machineStates.values.take(128);
     // Compare only visible values before building/encoding a potentially large
     // inventory. Tab focus, palette and attention changes use the small update
     // message; they never resend or decode every agent on the native thread.
@@ -2329,14 +2314,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
           machine.isLocalMachine,
           machine.nodeOnline,
           machine.needsLink,
-          count(machine),
+          machine.agents.isNotEmpty ||
+                  machine.agentLoadStatus == AgentLoadStatus.loaded
+              ? machine.agents.length
+              : null,
         ),
-        for (final (where, agent) in harnesses(machine).take(512))
+        for (final agent in machine.agents.take(512))
           (
             agent.id,
             agent.displayName,
             agent.engine,
-            agent.terminalAvailable || openAgents.contains((where, agent.id)),
+            agent.terminalAvailable ||
+                openAgents.contains((machine.machine.machineId, agent.id)),
             // Part of the row now (" · stopped", and whether it opens), so a
             // harness stopping or resuming redraws the menu like a rename does.
             agent.isStopped,
@@ -2355,9 +2344,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
               'local': machine.isLocalMachine,
               'shared': machine.machine.isShared,
               'ownerName': machine.machine.ownerName,
-              'agentCount': count(machine),
+              'agentCount':
+                  machine.agents.isNotEmpty ||
+                      machine.agentLoadStatus == AgentLoadStatus.loaded
+                  ? machine.agents.length
+                  : null,
               'agents': [
-                for (final (where, agent) in harnesses(machine).take(512))
+                for (final agent in machine.agents.take(512))
                   {
                     'id': agent.id,
                     'title': agent.displayName,
@@ -2372,7 +2365,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     'canOpen':
                         agent.terminalAvailable ||
                         agent.isStopped ||
-                        openAgents.contains((where, agent.id)),
+                        openAgents.contains((
+                          machine.machine.machineId,
+                          agent.id,
+                        )),
                     'stopped': agent.isStopped,
                   },
               ],
@@ -2750,19 +2746,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
           );
         }
       case 'machineAgent':
-        final row = args['machineId'], agentId = args['agentId'];
-        // The menu lists a Mac's Harness Team account's harnesses under the
-        // Mac (_syncMachines): each opens on the machine it runs on.
-        bool runs(String id) =>
-            app.stateOf(id)?.agents.any((agent) => agent.id == agentId) ==
-            true;
-        final machineId = row is! String
-            ? null
-            : [
-                row,
-                for (final team in app.foldedInto(row)) team.machine.machineId,
-              ].where(runs).firstOrNull;
-        if (machineId != null && agentId is String) {
+        final machineId = args['machineId'], agentId = args['agentId'];
+        if (machineId is String &&
+            agentId is String &&
+            app
+                    .stateOf(machineId)
+                    ?.agents
+                    .any((agent) => agent.id == agentId) ==
+                true) {
           final entry = swarmDestinations(app)
               .where(
                 (entry) => entry.id == agentDestinationId(machineId, agentId),
@@ -6371,7 +6362,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
               id: agentDestinationId(agent.machineId, agent.harnessId),
               title: agent.name,
               detail:
-                  '${engineIdentity(agent.engine).label} · ${app.shownMachineName(agent.machineId) ?? 'Shared agent'}',
+                  '${engineIdentity(agent.engine).label} · ${app.stateOf(agent.machineId)?.machine.displayName ?? 'Shared agent'}',
               swarmId: superTabTarget.swarmId,
               current: false,
               machineId: agent.machineId,
@@ -7477,7 +7468,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// up — and while any is connected, on its way, or waiting to be linked.
   List<MachineState> get _asleepComputers {
     final own = [
-      for (final machine in app.listedMachines)
+      for (final machine in app.machineStates.values)
         if (!machine.machine.isShared &&
             !app.removedMachines.containsKey(machine.machine.machineId))
           machine,

@@ -515,9 +515,6 @@ pub struct Fleet {
     /// Machines shared with this account's domain, not added yet: (id, name, share). Machines &
     /// devices lists them, and Enter adds one.
     pub to_add: Vec<(String, String, MachineShare)>,
-    /// A Mac's Harness Team account, the second macOS user that runs teammates' Swarm agents, is a machine of the
-    /// account too (backend `Machine.hostMachineId`): its id, and the Mac's. hn lists the two as one machine.
-    pub hosts: HashMap<String, String>,
 }
 
 /// Match the desktop and phone: the app's saved name, or its stable machine-id label.
@@ -555,28 +552,6 @@ impl Fleet {
         rows
     }
 
-    /// The Mac each Harness Team account in the account's list ([rows]) runs on, as the list says it now. A row
-    /// without one (any other machine, an older backend) runs on no other.
-    pub fn take_hosts(&mut self, rows: &[Value]) {
-        self.hosts = rows.iter().filter_map(|row| {
-            let id = row.get("machineId").and_then(Value::as_str).filter(|id| !id.is_empty())?;
-            let host = row.get("hostMachineId").and_then(Value::as_str).filter(|host| !host.is_empty() && *host != id)?;
-            Some((id.to_string(), host.to_string()))
-        }).collect();
-    }
-
-    /// The machine [id] is listed as: the Mac its Harness Team account runs on while that Mac is listed, else itself.
-    /// It stays in [machines], so its harnesses open and its link is kept.
-    pub fn listed_as<'a>(&'a self, id: &'a str) -> &'a str {
-        match self.hosts.get(id) {
-            Some(host) if self.machine(host).is_some() && !self.hosts.contains_key(host) => host,
-            _ => id,
-        }
-    }
-
-    /// Whether a harness on [machine] is one of [listed]'s, the machine a list shows.
-    pub fn listed_under(&self, machine: &str, listed: &str) -> bool { machine == listed || self.listed_as(machine) == listed }
-
     pub fn machine(&self, id: &str) -> Option<&Machine> { self.machines.iter().find(|m| m.id == id) }
     /// Another account's machine, shared view-only ([Machine::shared]) or whole ([shares]): its daemon
     /// answers as its owner, so a harness there is never this account's to move (desktop's
@@ -594,7 +569,6 @@ impl Fleet {
     }
     pub fn machine_name(&self, id: &str) -> String {
         if crate::local::is_local(id) { return self.local_machine_name() }
-        let id = self.listed_as(id);
         machine_display_name(id, self.machine(id).map(|m| m.name.as_str()))
     }
     /// New work from a local shell goes through Harness when its daemon is connected.
@@ -605,11 +579,9 @@ impl Fleet {
         }
         id
     }
-    /// The machines a list shows: one per computer — this computer's shells under its account machine once that is
-    /// connected, a Harness Team account under its Mac.
     pub fn visible_machines(&self) -> impl Iterator<Item = &Machine> {
         let connected_local = self.registered_local_machine().is_some_and(Machine::usable);
-        self.machines.iter().filter(move |m| (!connected_local || !crate::local::is_local(&m.id)) && self.listed_as(&m.id) == m.id)
+        self.machines.iter().filter(move |m| !connected_local || !crate::local::is_local(&m.id))
     }
     pub fn agent(&self, machine: &str, id: &str) -> Option<&Agent> { self.agents.get(&(machine.to_string(), id.to_string())) }
 
@@ -713,8 +685,6 @@ impl Fleet {
         for m in value.get("machines").and_then(Value::as_array).into_iter().flatten() {
             let id = s(m, "id");
             if id.is_empty() || self.machine(&id).is_some() { continue }
-            let host = s(m, "host");
-            if !host.is_empty() && host != id { self.hosts.insert(id.clone(), host); }
             self.machines.push(Machine { shared: m["shared"] == true, name: s(m, "name"), local: m.get("local").and_then(Value::as_bool).unwrap_or(false), status: s(m, "status"), reach: Reach::Unknown, id });
         }
         for a in value.get("agents").and_then(Value::as_array).into_iter().flatten() {
@@ -728,16 +698,9 @@ impl Fleet {
         }
     }
 
-    /// A machine as the cache keeps it, with the Mac it runs on when it is a Harness Team account.
-    fn cached_machine(&self, m: &Machine) -> Value {
-        let mut row = serde_json::json!({ "id": m.id, "name": m.name, "local": m.local, "shared": m.shared, "status": m.status });
-        if let Some(host) = self.hosts.get(&m.id) { row["host"] = Value::from(host.as_str()) }
-        row
-    }
-
     pub fn save_cache(&self) {
         if self.agents.is_empty() || self.local_id.is_empty() || crate::local::is_local(&self.local_id) { return }
-        let machines: Vec<Value> = self.machines.iter().map(|m| self.cached_machine(m)).collect();
+        let machines: Vec<Value> = self.machines.iter().map(|m| serde_json::json!({ "id": m.id, "name": m.name, "local": m.local, "shared": m.shared, "status": m.status })).collect();
         let agents: Vec<Value> = self.agents.values().map(|a| serde_json::json!({
             "machine": a.machine_id, "activeAt": a.active_at,
             "row": { "id": a.id, "sessionId": a.session_id, "name": a.name, "engine": a.engine, "status": a.status,
@@ -838,36 +801,6 @@ mod tests {
         fleet.machine_mut("registered-local").unwrap().name.clear();
         assert_eq!(fleet.machine_name(shell), "machine-register");
         assert_eq!(Fleet::default().machine_name(shell), "This computer");
-    }
-
-    /// A Mac's Harness Team account is a second machine on the account (backend `hostMachineId`): hn lists the Mac
-    /// once, and the team account's harnesses read as the Mac's.
-    #[test]
-    fn a_harness_team_account_is_listed_as_the_mac_it_runs_on() {
-        use serde_json::json;
-        let mut fleet = Fleet { local_id: "mac".into(), ..Default::default() };
-        for (id, name) in [("mac", "MacBook Pro"), ("team", "MacBook Pro · Team"), ("box", "GPU box"), ("alone", "Mac mini · Team")] {
-            fleet.machines.push(Machine { shared: false, id: id.into(), name: name.into(), local: id == "mac", status: "running".into(), reach: Reach::Ready });
-        }
-        fleet.take_hosts(&[json!({ "machineId": "mac", "hostMachineId": null }), json!({ "machineId": "team", "hostMachineId": "mac" }),
-            json!({ "machineId": "box" }), json!({ "machineId": "alone", "hostMachineId": "deleted-mac" })]);
-        // One row per Mac. A team account whose Mac is not listed stands on its own.
-        assert_eq!(fleet.visible_machines().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["mac", "box", "alone"]);
-        assert_eq!((fleet.listed_as("team"), fleet.listed_as("alone"), fleet.listed_as("box")), ("mac", "alone", "box"));
-        assert!(fleet.listed_under("team", "mac") && fleet.listed_under("mac", "mac") && !fleet.listed_under("box", "mac"));
-        assert_eq!(fleet.machine_name("team"), "MacBook Pro");
-        assert_eq!(fleet.machine_name("alone"), "Mac mini · Team");
-        // Still in the fleet: its harnesses open, its link is kept.
-        assert!(fleet.machine("team").is_some());
-        // It is cached with its Mac, so a restart does not list it on its own until the list arrives.
-        let saved: Vec<Value> = fleet.machines.iter().map(|m| fleet.cached_machine(m)).collect();
-        let mut restored = Fleet::default();
-        restored.restore_cache(&json!({ "owner": "mac", "machines": saved, "agents": [] }), "mac");
-        assert_eq!(restored.visible_machines().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["mac", "box", "alone"]);
-        // A list without the field (an older backend) lists it on its own again; nothing folds into itself.
-        fleet.take_hosts(&[json!({ "machineId": "team" }), json!({ "machineId": "mac", "hostMachineId": "mac" })]);
-        assert_eq!(fleet.visible_machines().count(), 4);
-        assert_eq!(fleet.machine_name("team"), "MacBook Pro · Team");
     }
 
     #[test]

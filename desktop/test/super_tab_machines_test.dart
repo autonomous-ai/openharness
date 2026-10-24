@@ -1991,15 +1991,19 @@ void main() {
   );
 
   testWidgets(
-    'Add machine: a Mac\'s Harness Team account is not offered beside its Mac; the backend adds it with the Mac',
+    'Add machine: a Mac\'s Harness Team account in the Swarm is not offered beside its Mac; it joins and leaves with the Mac',
     (tester) async {
       final f = SuperTabLaunchFixture();
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      // Its pool names the Mac (stamped by the backend); the account's machine itself is an ordinary one to the app.
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner'},
+        {'machineId': 'm-team', 'contributorId': 'owner', 'hostMachineId': 'm'},
+      ];
       const team = Machine(
         machineId: 'm-team',
         authMode: MachineAuthMode.remote,
         name: 'This Mac · Team',
-        hostMachineId: 'm',
       );
       f.app.machines = [...f.app.machines, team];
       f.app.machineStates['m-team'] = MachineState(team)

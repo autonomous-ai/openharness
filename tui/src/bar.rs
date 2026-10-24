@@ -329,27 +329,26 @@ fn harness_entry(app: &App, c: &Colours, width: u16, a: &crate::fleet::Agent, pr
 /// harnesses no window here shows, the latest first, three of them and `+ N more`.
 fn machine_entries(app: &App, c: &Colours, width: u16) -> Vec<Entry> {
     let windows: Vec<usize> = (0..app.tabs.len()).collect();
-    // Each window's machines: its panes', in order (none yet: this computer's). A Harness Team account's are its Mac's.
+    // Each window's machines: its panes', in order (none yet: this computer's).
     let on: Vec<Vec<String>> = app.tabs.iter().map(|t| {
         let mut ms: Vec<String> = Vec::new();
-        for p in t.panes() { if let Some(m) = app.panes.get(&p).map(|p| app.fleet.listed_as(&p.machine_id).to_string()) { if !ms.contains(&m) { ms.push(m) } } }
+        for p in t.panes() { if let Some(m) = app.panes.get(&p).map(|p| p.machine_id.clone()) { if !ms.contains(&m) { ms.push(m) } } }
         if ms.is_empty() { ms.push(app.fleet.local_id.clone()) }
         ms
     }).collect();
-    // The machines: this computer first, then the account's (one per computer), then any a window names that the
+    // The machines: this computer first, then the account's, then any a window names that the
     // account's list does not have (yet).
     let mut machines: Vec<String> = Vec::new();
     if !app.fleet.local_id.is_empty() { machines.push(app.fleet.local_id.clone()) }
-    for m in &app.fleet.machines { let id = app.fleet.listed_as(&m.id); if !machines.iter().any(|x| x == id) { machines.push(id.to_string()) } }
+    for m in &app.fleet.machines { if !machines.contains(&m.id) { machines.push(m.id.clone()) } }
     for ms in &on { for m in ms { if !machines.contains(m) { machines.push(m.clone()) } } }
     let mut out = Vec::new();
     for id in machines {
         let mine: Vec<usize> = windows.iter().copied().filter(|i| on[*i].contains(&id)).collect();
         let machine = app.fleet.machine(&id);
-        // Each harness from a machine that is ready: this one's, and its Harness Team account's.
-        let mut harnesses: Vec<&crate::fleet::Agent> = app.fleet.agents.values().filter(|a| app.fleet.listed_under(&a.machine_id, &id)
-            && app.fleet.machine(&a.machine_id).is_some_and(|m| m.usable())
-            && a.status != "stopped" && a.engine != "terminal" && app.find_pane(&a.machine_id, &a.id).is_none()).collect();
+        let mut harnesses: Vec<&crate::fleet::Agent> = if machine.is_some_and(|m| m.usable()) {
+            app.fleet.agents.values().filter(|a| a.machine_id == id && a.status != "stopped" && a.engine != "terminal" && app.find_pane(&id, &a.id).is_none()).collect()
+        } else { Vec::new() };
         harnesses.sort_by(|a, b| b.recency().cmp(&a.recency()).then_with(|| a.name.cmp(&b.name)));
         let more = harnesses.len().saturating_sub(HARNESS_ROWS);
         harnesses.truncate(HARNESS_ROWS);
@@ -448,7 +447,7 @@ pub fn draw(buf: &mut Buffer, app: &mut App) {
         let top = Rect::new(content.x, content.y, width, top_h);
         let header = |buf: &mut Buffer, y: u16, title: &str| { put(buf, content.x, y, content.right(), &[(title.to_string(), Style::default().fg(c.muted).add_modifier(Modifier::BOLD))]); };
         // The top's header: the machine you are on — the focused pane's, else this computer.
-        let here = app.focused().and_then(|f| app.panes.get(&f)).map(|p| app.fleet.listed_as(&p.machine_id).to_string()).unwrap_or_else(|| app.fleet.local_id.clone());
+        let here = app.focused().and_then(|f| app.panes.get(&f)).map(|p| p.machine_id.clone()).unwrap_or_else(|| app.fleet.local_id.clone());
         put(buf, content.x + 1, top.y, content.right().saturating_sub(6), &machine_spans(app, &c, &here, width.saturating_sub(6)));
         crate::workspace_controls::side_actions(buf, app, Rect::new(content.right().saturating_sub(5), top.y, 4, 1), Style::default().fg(c.muted), false);
         let area = Rect::new(top.x, top.y + HEADER, width, top_h.saturating_sub(HEADER));
@@ -1046,37 +1045,6 @@ mod tests {
         let mut app = with_grid(2);
         let (s, _) = screen(&mut app);
         assert!(s.contains("└─ Grid task 1") && !s.contains("more"), "{s}");
-    }
-
-    /// A Mac's Harness Team account (backend `hostMachineId`) is the Mac's: one heading, the team account's
-    /// harnesses under it with the Mac's own, and a window on it under the Mac too.
-    #[test]
-    fn a_harness_team_account_is_listed_under_its_mac() {
-        let mut app = app((120, 50), "left");
-        for (id, name) in [("mac", "MacBook Pro"), ("team", "MacBook Pro · Team")] {
-            app.fleet.machines.push(crate::fleet::Machine { shared: false, id: id.into(), name: name.into(), local: false, status: "online".into(), reach: crate::fleet::Reach::Ready });
-        }
-        app.fleet.take_hosts(&[json!({ "machineId": "team", "hostMachineId": "mac" })]);
-        app.fleet.merge_roster("mac", &[json!({"id": "m0", "name": "Own task", "engine": "claude"})]);
-        app.fleet.merge_roster("team", &[json!({"id": "t0", "name": "Teammate task", "engine": "codex"}), json!({"id": "t1", "name": "Teammate review", "engine": "codex"})]);
-        let mut tab = Tab::new("review");
-        tab.root = Some(Node::new(5, 40, 20));
-        tab.focus = Some(5);
-        let mut pane = Pane::new(5, "team", "t1", 40, 20);
-        pane.phase = Phase::Live;
-        app.panes.insert(5, pane);
-        app.tabs.push(tab);
-        app.fit_panes();
-        let (s, _) = screen(&mut app);
-        assert!(s.contains("MacBook Pro") && !s.contains("· Team"), "{s}");
-        assert!(!app.bar.hits.iter().any(|(_, h)| matches!(h, Hit::Machine(m, _) if m == "team")), "{:?}", app.bar.hits);
-        let heading = s.lines().position(|l| l.contains("MacBook Pro")).unwrap();
-        let under: Vec<&str> = s.lines().skip(heading + 1).take(3).collect();
-        assert!(under.iter().any(|l| l.contains("Own task")) && under.iter().any(|l| l.contains("Teammate task")), "{under:?}\n{s}");
-        // (Its window is named for the harness it shows.)
-        assert!(under.iter().any(|l| l.contains(":Teammate review")), "the window on the team account sits under the Mac: {under:?}\n{s}");
-        assert!(app.bar.hits.iter().any(|(_, h)| *h == harness("team", "t0")), "a click still opens it on its own machine");
-        assert!(app.bar.hits.iter().any(|(_, h)| matches!(h, Hit::Machine(m, Some(_)) if m == "mac")), "{:?}", app.bar.hits);
     }
 
     #[test]

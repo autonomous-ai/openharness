@@ -89,7 +89,8 @@ class WelcomeSessions extends ChangeNotifier {
             externalSessionDestination(
               hit,
               ref,
-              machineLabel: app.shownMachineName(hit.machineId) ?? '',
+              machineLabel:
+                  app.stateOf(hit.machineId)?.machine.displayName ?? '',
             ),
     ];
     _external = external;
