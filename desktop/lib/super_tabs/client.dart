@@ -5,6 +5,7 @@ import '../core/local_key_value_store.dart';
 import 'attachment_upload.dart';
 import 'controller.dart';
 import 'model.dart';
+import 'notifications.dart';
 
 typedef SuperTabTransport = Future<Object?> Function(
   String method,
@@ -23,6 +24,7 @@ class SuperTabClient {
     this.onSnapshot,
     this.onTabs,
     this.onSelection,
+    this.onMention,
     this.upload = refuseUpload,
     this.discoveryInterval = const Duration(seconds: 15),
   });
@@ -33,6 +35,9 @@ class SuperTabClient {
 
   /// A tab's selected conversation changed, by a click here or by a device.
   final void Function(SuperTabController)? onSelection;
+
+  /// A Lead tagged this account in an open Swarm while the app was open.
+  final void Function(SuperTabMention)? onMention;
   final SuperTabUpload upload;
   final Duration discoveryInterval;
   String? _account;
@@ -277,6 +282,9 @@ class SuperTabClient {
         onSnapshot?.call(controller);
       }
     });
+    if (onMention case final notify?) {
+      SuperTabMentions.of(controller).onArrived = notify;
+    }
     _loaded[id] = controller;
     controller.start();
     return controller;
