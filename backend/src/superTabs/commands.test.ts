@@ -2055,3 +2055,52 @@ describe('the Local models add-on', () => {
     expect(effectivePolicy(saved, { localModels: { quality: 2, enabled: true } }).policy.localModels).toEqual({ quality: 2, enabled: true })
   })
 })
+
+describe('Lead mentions', () => {
+  const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+  const send = (conversationId: string, mentions: string[]): Command => ({ type: 'message.send', conversationId, text: 'Please confirm the copy.',
+    replyTo: null, recipientIds: [], mentions })
+  const swarm = () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
+    f.invite()
+    const created = f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: 'Secret' }).result as { projectId: string; conversationId: string }
+    return { f, lead, secret: { ...created, lead: f.add('secret-lead', 'owner', created.conversationId, true) } }
+  }
+
+  it('lets a project Lead tag readers in its own project and puts them on the message once', () => {
+    const { f, lead } = swarm(), group = f.group()
+    expect(f.run(send(group, ['peer', 'owner', 'peer']), as(lead)).messages[0]!.mentions).toEqual(['peer', 'owner'])
+    expect(f.run(send('lead', []), as(lead)).messages[0]).not.toHaveProperty('mentions')
+  })
+
+  it('refuses a person, a non-Lead agent and another project’s Lead', () => {
+    const { f, lead, secret } = swarm(), group = f.group(), worker = f.add('worker', 'owner', group)
+    expect(() => f.run(send(group, ['peer']))).toThrow('Only a project’s Lead can tag people.')
+    expect(() => f.run(send(group, ['peer']), as(worker))).toThrow('Only a project’s Lead can tag people.')
+    expect(() => f.run(send(group, ['owner']), as(secret.lead))).toThrow('This project is unavailable.')
+    expect(() => f.run(send(f.state.leadsConversationId!, ['owner']), as(lead))).toThrow('A Lead can tag people only in its own project’s conversations.')
+  })
+
+  it('refuses a person who cannot read the conversation or is not in the Swarm', () => {
+    const { f, secret } = swarm()
+    expect(() => f.run(send(secret.conversationId, ['peer']), as(secret.lead))).toThrow('peer@example.com cannot read this conversation.')
+    expect(() => f.run(send(secret.conversationId, ['stranger']), as(secret.lead))).toThrow('Tag a person in this Swarm.')
+    expect(f.run(send(secret.conversationId, ['owner']), as(secret.lead)).messages[0]!.mentions).toEqual(['owner'])
+  })
+
+  it('tags at most five people', () => {
+    expect(commandSchema.safeParse(send('lead', ['a', 'b', 'c', 'd', 'e'])).success).toBe(true)
+    expect(commandSchema.safeParse(send('lead', ['a', 'b', 'c', 'd', 'e', 'f'])).success).toBe(false)
+  })
+
+  it('lets only the tagged person mark a mention done, a viewer included', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
+    f.invite('viewer')
+    const mention = { id: 'mention-1', personId: 'peer', conversationId: 'lead' }
+    const done: Command = { type: 'mention.done', mentionId: 'mention-1' }
+    expect(f.run(done, peer, { mention }).result).toEqual({ mentionId: 'mention-1' })
+    expect(() => f.run(done, owner, { mention })).toThrow('This mention is unavailable.')
+    expect(() => f.run(done, peer)).toThrow('This mention is unavailable.')
+    expect(() => f.run(done, as(lead), { mention })).toThrow('This mention is unavailable.')
+  })
+})
