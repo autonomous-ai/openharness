@@ -1,0 +1,114 @@
+[
+  {
+    "flow": "workspace",
+    "width": "360",
+    "downloadApp": 1,
+    "getTheApp": 0,
+    "desktopApp": 0
+  },
+  {
+    "flow": "first-machine",
+    "width": "360",
+    "downloadApp": 2,
+    "getTheApp": 0,
+    "desktopApp": 1
+  },
+  {
+    "flow": "signin",
+    "width": "360",
+    "downloadApp": 1,
+    "getTheApp": 0,
+    "desktopApp": 0
+  },
+  {
+    "flow": "new-tab",
+    "width": "360",
+    "downloadApp": 1,
+    "getTheApp": 0,
+    "desktopApp": 0
+  },
+  {
+    "flow": "workspace",
+    "width": "390",
+    "downloadApp": 1,
+    "getTheApp": 0,
+    "desktopApp": 0
+  },
+  {
+    "flow": "first-machine",
+    "width": "390",
+    "downloadApp": 2,
+    "getTheApp": 0,
+    "desktopApp": 1
+  },
+  {
+    "flow": "signin",
+    "width": "390",
+    "downloadApp": 1,
+    "getTheApp": 0,
+    "desktopApp": 0
+  },
+  {
+    "flow": "new-tab",
+    "width": "390",
+    "downloadApp": 1,
+    "getTheApp": 0,
+    "desktopApp": 0
+  },
+  {
+    "flow": "workspace",
+    "width": "768",
+    "downloadApp": 1,
+    "getTheApp": 0,
+    "desktopApp": 0
+  },
+  {
+    "flow": "first-machine",
+    "width": "768",
+    "downloadApp": 2,
+    "getTheApp": 0,
+    "desktopApp": 1
+  },
+  {
+    "flow": "signin",
+    "width": "768",
+    "downloadApp": 1,
+    "getTheApp": 0,
+    "desktopApp": 0
+  },
+  {
+    "flow": "new-tab",
+    "width": "768",
+    "downloadApp": 1,
+    "getTheApp": 0,
+    "desktopApp": 0
+  },
+  {
+    "flow": "workspace",
+    "width": "1440",
+    "downloadApp": 1,
+    "getTheApp": 0,
+    "desktopApp": 0
+  },
+  {
+    "flow": "first-machine",
+    "width": "1440",
+    "downloadApp": 2,
+    "getTheApp": 0,
+    "desktopApp": 1
+  },
+  {
+    "flow": "signin",
+    "width": "1440",
+    "downloadApp": 1,
+    "getTheApp": 0,
+    "desktopApp": 0
+  },
+  {
+    "flow": "new-tab",
+    "width": "1440",
+    "downloadApp": 1,
+    "getTheApp": 0,
+    "desktopApp": 0
+  }
+]

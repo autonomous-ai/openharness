@@ -1,0 +1,650 @@
+[
+  {
+    "flow": "workspace",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/workspace/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/first-machine/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/settings/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/signin/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-waiting",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/signin-waiting/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-error",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/signin-error/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-expired",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/signin-expired/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-qr",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/signin-qr/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-confirm",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/signin-confirm/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/new-tab/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab-new-swarm",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/new-tab-new-swarm/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "empty-tab",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/empty-tab/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "split-pane",
+    "width": "360",
+    "theme": "dark",
+    "shot": "screens/split-pane/360-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "workspace",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/workspace/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/first-machine/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/settings/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/signin/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-waiting",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/signin-waiting/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-error",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/signin-error/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-expired",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/signin-expired/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-qr",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/signin-qr/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-confirm",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/signin-confirm/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/new-tab/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab-new-swarm",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/new-tab-new-swarm/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "empty-tab",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/empty-tab/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "split-pane",
+    "width": "390",
+    "theme": "dark",
+    "shot": "screens/split-pane/390-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "workspace",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/workspace/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/first-machine/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/settings/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/signin/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-waiting",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/signin-waiting/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-error",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/signin-error/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-expired",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/signin-expired/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-qr",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/signin-qr/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-confirm",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/signin-confirm/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/new-tab/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab-new-swarm",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/new-tab-new-swarm/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "empty-tab",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/empty-tab/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "split-pane",
+    "width": "390",
+    "theme": "light",
+    "shot": "screens/split-pane/390-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "workspace",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/workspace/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/first-machine/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/settings/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/signin/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-waiting",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/signin-waiting/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-error",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/signin-error/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-expired",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/signin-expired/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-qr",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/signin-qr/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-confirm",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/signin-confirm/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/new-tab/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab-new-swarm",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/new-tab-new-swarm/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "empty-tab",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/empty-tab/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "split-pane",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/split-pane/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-keyboard-shortcuts",
+    "width": "768",
+    "theme": "dark",
+    "shot": "screens/settings-keyboard-shortcuts/768-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "workspace",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/workspace/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/first-machine/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/settings/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/signin/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-waiting",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/signin-waiting/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-error",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/signin-error/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-expired",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/signin-expired/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-qr",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/signin-qr/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-confirm",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/signin-confirm/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/new-tab/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab-new-swarm",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/new-tab-new-swarm/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "empty-tab",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/empty-tab/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "split-pane",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/split-pane/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-keyboard-shortcuts",
+    "width": "1440",
+    "theme": "dark",
+    "shot": "screens/settings-keyboard-shortcuts/1440-dark.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "workspace",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/workspace/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "first-machine",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/first-machine/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/settings/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/signin/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-waiting",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/signin-waiting/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-error",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/signin-error/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-expired",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/signin-expired/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-qr",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/signin-qr/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "signin-confirm",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/signin-confirm/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/new-tab/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "new-tab-new-swarm",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/new-tab-new-swarm/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "empty-tab",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/empty-tab/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "split-pane",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/split-pane/1440-light.png",
+    "failed": null,
+    "errors": []
+  },
+  {
+    "flow": "settings-keyboard-shortcuts",
+    "width": "1440",
+    "theme": "light",
+    "shot": "screens/settings-keyboard-shortcuts/1440-light.png",
+    "failed": null,
+    "errors": []
+  }
+]

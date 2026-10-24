@@ -1,0 +1,707 @@
+{
+  "light": [
+    {
+      "flow": "workspace",
+      "width": "360",
+      "failed": null
+    },
+    {
+      "flow": "first-machine",
+      "width": "360",
+      "failed": null
+    },
+    {
+      "flow": "settings",
+      "width": "360",
+      "failed": null
+    },
+    {
+      "flow": "signin",
+      "width": "360",
+      "failed": null
+    },
+    {
+      "flow": "signin-waiting",
+      "width": "360",
+      "failed": null
+    },
+    {
+      "flow": "signin-error",
+      "width": "360",
+      "failed": null
+    },
+    {
+      "flow": "signin-expired",
+      "width": "360",
+      "failed": null
+    },
+    {
+      "flow": "signin-qr",
+      "width": "360",
+      "failed": null
+    },
+    {
+      "flow": "signin-confirm",
+      "width": "360",
+      "failed": null
+    },
+    {
+      "flow": "new-tab",
+      "width": "360",
+      "failed": null
+    },
+    {
+      "flow": "new-tab-new-swarm",
+      "width": "360",
+      "failed": null
+    },
+    {
+      "flow": "empty-tab",
+      "width": "360",
+      "failed": null
+    },
+    {
+      "flow": "split-pane",
+      "width": "360",
+      "failed": null
+    },
+    {
+      "flow": "workspace",
+      "width": "768",
+      "failed": null
+    },
+    {
+      "flow": "first-machine",
+      "width": "768",
+      "failed": null
+    },
+    {
+      "flow": "settings",
+      "width": "768",
+      "failed": null
+    },
+    {
+      "flow": "signin",
+      "width": "768",
+      "failed": null
+    },
+    {
+      "flow": "signin-waiting",
+      "width": "768",
+      "failed": null
+    },
+    {
+      "flow": "signin-error",
+      "width": "768",
+      "failed": null
+    },
+    {
+      "flow": "signin-expired",
+      "width": "768",
+      "failed": null
+    },
+    {
+      "flow": "signin-qr",
+      "width": "768",
+      "failed": null
+    },
+    {
+      "flow": "signin-confirm",
+      "width": "768",
+      "failed": null
+    },
+    {
+      "flow": "new-tab",
+      "width": "768",
+      "failed": null
+    },
+    {
+      "flow": "new-tab-new-swarm",
+      "width": "768",
+      "failed": null
+    },
+    {
+      "flow": "empty-tab",
+      "width": "768",
+      "failed": null
+    },
+    {
+      "flow": "split-pane",
+      "width": "768",
+      "failed": null
+    },
+    {
+      "flow": "settings-keyboard-shortcuts",
+      "width": "768",
+      "failed": null
+    }
+  ],
+  "chords": [
+    {
+      "flow": "workspace",
+      "width": "360",
+      "chords": []
+    },
+    {
+      "flow": "first-machine",
+      "width": "360",
+      "chords": []
+    },
+    {
+      "flow": "settings",
+      "width": "360",
+      "chords": []
+    },
+    {
+      "flow": "signin",
+      "width": "360",
+      "chords": []
+    },
+    {
+      "flow": "signin-waiting",
+      "width": "360",
+      "chords": []
+    },
+    {
+      "flow": "signin-error",
+      "width": "360",
+      "chords": []
+    },
+    {
+      "flow": "signin-expired",
+      "width": "360",
+      "chords": []
+    },
+    {
+      "flow": "signin-qr",
+      "width": "360",
+      "chords": []
+    },
+    {
+      "flow": "signin-confirm",
+      "width": "360",
+      "chords": []
+    },
+    {
+      "flow": "new-tab",
+      "width": "360",
+      "chords": []
+    },
+    {
+      "flow": "new-tab-new-swarm",
+      "width": "360",
+      "chords": []
+    },
+    {
+      "flow": "empty-tab",
+      "width": "360",
+      "chords": []
+    },
+    {
+      "flow": "split-pane",
+      "width": "360",
+      "chords": []
+    },
+    {
+      "flow": "workspace",
+      "width": "390",
+      "chords": []
+    },
+    {
+      "flow": "first-machine",
+      "width": "390",
+      "chords": []
+    },
+    {
+      "flow": "settings",
+      "width": "390",
+      "chords": []
+    },
+    {
+      "flow": "signin",
+      "width": "390",
+      "chords": []
+    },
+    {
+      "flow": "signin-waiting",
+      "width": "390",
+      "chords": []
+    },
+    {
+      "flow": "signin-error",
+      "width": "390",
+      "chords": []
+    },
+    {
+      "flow": "signin-expired",
+      "width": "390",
+      "chords": []
+    },
+    {
+      "flow": "signin-qr",
+      "width": "390",
+      "chords": []
+    },
+    {
+      "flow": "signin-confirm",
+      "width": "390",
+      "chords": []
+    },
+    {
+      "flow": "new-tab",
+      "width": "390",
+      "chords": []
+    },
+    {
+      "flow": "new-tab-new-swarm",
+      "width": "390",
+      "chords": []
+    },
+    {
+      "flow": "empty-tab",
+      "width": "390",
+      "chords": []
+    },
+    {
+      "flow": "split-pane",
+      "width": "390",
+      "chords": []
+    },
+    {
+      "flow": "workspace",
+      "width": "768",
+      "chords": []
+    },
+    {
+      "flow": "first-machine",
+      "width": "768",
+      "chords": []
+    },
+    {
+      "flow": "settings",
+      "width": "768",
+      "chords": []
+    },
+    {
+      "flow": "signin",
+      "width": "768",
+      "chords": []
+    },
+    {
+      "flow": "signin-waiting",
+      "width": "768",
+      "chords": []
+    },
+    {
+      "flow": "signin-error",
+      "width": "768",
+      "chords": []
+    },
+    {
+      "flow": "signin-expired",
+      "width": "768",
+      "chords": []
+    },
+    {
+      "flow": "signin-qr",
+      "width": "768",
+      "chords": []
+    },
+    {
+      "flow": "signin-confirm",
+      "width": "768",
+      "chords": []
+    },
+    {
+      "flow": "new-tab",
+      "width": "768",
+      "chords": []
+    },
+    {
+      "flow": "new-tab-new-swarm",
+      "width": "768",
+      "chords": []
+    },
+    {
+      "flow": "empty-tab",
+      "width": "768",
+      "chords": []
+    },
+    {
+      "flow": "split-pane",
+      "width": "768",
+      "chords": []
+    },
+    {
+      "flow": "settings-keyboard-shortcuts",
+      "width": "768",
+      "chords": [
+        "Find in the focused terminal, Alt+F. Practice shortcut",
+        "Keyboard shortcuts, Alt+/. Practice shortcut",
+        "New Harness, Alt+N. Practice shortcut",
+        "New Tab, Alt+T. Practice shortcut",
+        "Open Project, Alt+O. Practice shortcut",
+        "Search commands, Alt+Shift+P. Practice shortcut",
+        "Zoom or restore the focused pane, Alt+enter. Practice shortcut",
+        "Close Tab, Alt+W. Practice shortcut",
+        "Go back, Alt+[. Practice shortcut",
+        "Go forward, Alt+]. Practice shortcut",
+        "Next Tab, Alt+Shift+]. Practice shortcut",
+        "Next terminal match, Alt+G. Practice shortcut",
+        "Previous Tab, Alt+Shift+[. Practice shortcut",
+        "Previous terminal match, Alt+Shift+G. Practice shortcut",
+        "Select tab 1, Alt+1. Practice shortcut",
+        "Select tab 2, Alt+2. Practice shortcut",
+        "Select tab 3, Alt+3. Practice shortcut",
+        "Select tab 4, Alt+4. Practice shortcut",
+        "Select tab 5, Alt+5. Practice shortcut",
+        "Select tab 6, Alt+6. Practice shortcut",
+        "Select tab 7, Alt+7. Practice shortcut",
+        "Select tab 8, Alt+8. Practice shortcut",
+        "Select tab 9, Alt+9. Practice shortcut"
+      ]
+    },
+    {
+      "flow": "workspace",
+      "width": "1440",
+      "chords": []
+    },
+    {
+      "flow": "first-machine",
+      "width": "1440",
+      "chords": []
+    },
+    {
+      "flow": "settings",
+      "width": "1440",
+      "chords": []
+    },
+    {
+      "flow": "signin",
+      "width": "1440",
+      "chords": []
+    },
+    {
+      "flow": "signin-waiting",
+      "width": "1440",
+      "chords": []
+    },
+    {
+      "flow": "signin-error",
+      "width": "1440",
+      "chords": []
+    },
+    {
+      "flow": "signin-expired",
+      "width": "1440",
+      "chords": []
+    },
+    {
+      "flow": "signin-qr",
+      "width": "1440",
+      "chords": []
+    },
+    {
+      "flow": "signin-confirm",
+      "width": "1440",
+      "chords": []
+    },
+    {
+      "flow": "new-tab",
+      "width": "1440",
+      "chords": []
+    },
+    {
+      "flow": "new-tab-new-swarm",
+      "width": "1440",
+      "chords": []
+    },
+    {
+      "flow": "empty-tab",
+      "width": "1440",
+      "chords": []
+    },
+    {
+      "flow": "split-pane",
+      "width": "1440",
+      "chords": []
+    },
+    {
+      "flow": "settings-keyboard-shortcuts",
+      "width": "1440",
+      "chords": [
+        "Find in the focused terminal, Alt+F. Practice shortcut",
+        "Keyboard shortcuts, Alt+/. Practice shortcut",
+        "New Harness, Alt+N. Practice shortcut",
+        "New Tab, Alt+T. Practice shortcut",
+        "Open Project, Alt+O. Practice shortcut",
+        "Search commands, Alt+Shift+P. Practice shortcut",
+        "Zoom or restore the focused pane, Alt+enter. Practice shortcut",
+        "Close Tab, Alt+W. Practice shortcut",
+        "Go back, Alt+[. Practice shortcut",
+        "Go forward, Alt+]. Practice shortcut",
+        "Next Tab, Alt+Shift+]. Practice shortcut",
+        "Next terminal match, Alt+G. Practice shortcut",
+        "Previous Tab, Alt+Shift+[. Practice shortcut",
+        "Previous terminal match, Alt+Shift+G. Practice shortcut",
+        "Select tab 1, Alt+1. Practice shortcut",
+        "Select tab 2, Alt+2. Practice shortcut",
+        "Select tab 3, Alt+3. Practice shortcut",
+        "Select tab 4, Alt+4. Practice shortcut",
+        "Select tab 5, Alt+5. Practice shortcut",
+        "Select tab 6, Alt+6. Practice shortcut",
+        "Select tab 7, Alt+7. Practice shortcut",
+        "Select tab 8, Alt+8. Practice shortcut",
+        "Select tab 9, Alt+9. Practice shortcut",
+        "Show harnesses needing input, Alt+Shift+I. Practice shortcut",
+        "Choose a layout, Alt+Shift+L. Practice shortcut",
+        "Close the focused pane, Alt+Shift+W. Practice shortcut",
+        "Focus the pane above, Alt+K / Alt+↑. Practice shortcut",
+        "Focus the pane below, Alt+J / Alt+↓. Practice shortcut",
+        "Focus the pane to the left, Alt+H / Alt+←. Practice shortcut",
+        "Focus the pane to the right, Alt+L / Alt+→. Practice shortcut",
+        "Move the pane down, Alt+Shift+↓. Practice shortcut",
+        "Move the pane left, Alt+Shift+←. Practice shortcut",
+        "Move the pane right, Alt+Shift+→. Practice shortcut",
+        "Move the pane to another tab, Alt+Shift+M. Practice shortcut",
+        "Move the pane up, Alt+Shift+↑. Practice shortcut",
+        "Split down…, Alt+D. Practice shortcut",
+        "Split right…, Alt+R. Practice shortcut",
+        "Toggle pane shading, Alt+Shift+F. Practice shortcut"
+      ]
+    }
+  ],
+  "tapTargets": [
+    {
+      "flow": "new-tab",
+      "width": "360",
+      "buttons": [
+        {
+          "label": "Open Harness",
+          "w": 31,
+          "h": 28
+        },
+        {
+          "label": "Open Harness",
+          "w": 127,
+          "h": 44
+        },
+        {
+          "label": "Machines",
+          "w": 102,
+          "h": 44
+        },
+        {
+          "label": "New Swarm",
+          "w": 115,
+          "h": 44
+        },
+        {
+          "label": "Store",
+          "w": 76,
+          "h": 44
+        }
+      ]
+    },
+    {
+      "flow": "empty-tab",
+      "width": "360",
+      "buttons": [
+        {
+          "label": "Open Harness",
+          "w": 31,
+          "h": 28
+        },
+        {
+          "label": "Open Harness",
+          "w": 127,
+          "h": 44
+        },
+        {
+          "label": "Machines",
+          "w": 102,
+          "h": 44
+        },
+        {
+          "label": "New Swarm",
+          "w": 115,
+          "h": 44
+        },
+        {
+          "label": "Store",
+          "w": 76,
+          "h": 44
+        }
+      ]
+    },
+    {
+      "flow": "new-tab",
+      "width": "390",
+      "buttons": [
+        {
+          "label": "Open Harness",
+          "w": 31,
+          "h": 28
+        },
+        {
+          "label": "Open Harness",
+          "w": 127,
+          "h": 44
+        },
+        {
+          "label": "Machines",
+          "w": 102,
+          "h": 44
+        },
+        {
+          "label": "New Swarm",
+          "w": 115,
+          "h": 44
+        },
+        {
+          "label": "Store",
+          "w": 76,
+          "h": 44
+        }
+      ]
+    },
+    {
+      "flow": "empty-tab",
+      "width": "390",
+      "buttons": [
+        {
+          "label": "Open Harness",
+          "w": 31,
+          "h": 28
+        },
+        {
+          "label": "Open Harness",
+          "w": 127,
+          "h": 44
+        },
+        {
+          "label": "Machines",
+          "w": 102,
+          "h": 44
+        },
+        {
+          "label": "New Swarm",
+          "w": 115,
+          "h": 44
+        },
+        {
+          "label": "Store",
+          "w": 76,
+          "h": 44
+        }
+      ]
+    }
+  ],
+  "hover": [
+    {
+      "name": "New Swarm",
+      "changed": true,
+      "cursor": "pointer"
+    }
+  ],
+  "downloads": [
+    {
+      "flow": "workspace",
+      "width": "360",
+      "downloads": []
+    },
+    {
+      "flow": "signin",
+      "width": "360",
+      "downloads": []
+    },
+    {
+      "flow": "new-tab",
+      "width": "360",
+      "downloads": []
+    },
+    {
+      "flow": "empty-tab",
+      "width": "360",
+      "downloads": []
+    },
+    {
+      "flow": "workspace",
+      "width": "390",
+      "downloads": []
+    },
+    {
+      "flow": "signin",
+      "width": "390",
+      "downloads": []
+    },
+    {
+      "flow": "new-tab",
+      "width": "390",
+      "downloads": []
+    },
+    {
+      "flow": "empty-tab",
+      "width": "390",
+      "downloads": []
+    },
+    {
+      "flow": "workspace",
+      "width": "768",
+      "downloads": []
+    },
+    {
+      "flow": "signin",
+      "width": "768",
+      "downloads": []
+    },
+    {
+      "flow": "new-tab",
+      "width": "768",
+      "downloads": []
+    },
+    {
+      "flow": "empty-tab",
+      "width": "768",
+      "downloads": []
+    },
+    {
+      "flow": "workspace",
+      "width": "1440",
+      "downloads": []
+    },
+    {
+      "flow": "signin",
+      "width": "1440",
+      "downloads": []
+    },
+    {
+      "flow": "new-tab",
+      "width": "1440",
+      "downloads": []
+    },
+    {
+      "flow": "empty-tab",
+      "width": "1440",
+      "downloads": []
+    }
+  ],
+  "signinError": [
+    {
+      "viewport": [
+        1440,
+        900
+      ],
+      "boxes": {
+        "Could not complete sign-in. Please sign in again.": null,
+        "Try again": {
+          "x": 476,
+          "y": 663.25,
+          "width": 81.375,
+          "height": 32
+        }
+      }
+    }
+  ],
+  "blocked": []
+}
