@@ -44,6 +44,8 @@ interface Node {
   /** What this machine's copy of the account's machine list says each machine is; `kindOf` for any it does not name. */
   kinds: Map<string, 'team' | 'computer' | null>
   kindOf: 'team' | 'computer' | null
+  /** No team machine ever on this computer (machineKinds.ts teamFree): the trust group as before team machines. */
+  teamFree: boolean
   /** How often the list was read again. */
   reads: number
 }
@@ -74,6 +76,7 @@ function fleet(): { add: (name: string, machine?: boolean) => Node; link: (joine
       droppedSessions: [],
       kinds: new Map(),
       kindOf: 'computer',
+      teamFree: false,
       reads: 0,
     } as unknown as Node
     node.syncer = new S.GroupSyncer({
@@ -87,6 +90,7 @@ function fleet(): { add: (name: string, machine?: boolean) => Node; link: (joine
       machineKinds: {
         kind: (machineId) => node.kinds.has(machineId) ? node.kinds.get(machineId)! : node.kindOf,
         fresh: async () => { node.reads++ },
+        teamFree: () => node.teamFree,
       },
       request: async (machineId, frame: Frame) => {
         const target = nodes.find((n) => n.machineId === machineId)
@@ -227,6 +231,23 @@ describe('GroupSyncer', () => {
     a.kindOf = 'computer'
     b.kindOf = 'computer'
     expect(await a.syncer.syncWith(b.machineId!)).toBe(true)
+    for (const n of f.nodes) n.syncer.stop()
+  })
+
+  it('syncs as before team machines on a computer that never had one, whatever the list says or fails to say', async () => {
+    vi.useFakeTimers()
+    const f = fleet()
+    const [a, b] = [f.add('a'), f.add('b')]
+    f.link(a, b)
+    // A regular user: no list read yet, a stale one, or a new machine not on it.
+    for (const n of [a, b]) { n.kindOf = null; n.teamFree = true }
+    const handle = vi.spyOn(b.syncer, 'handle')
+    expect(await a.syncer.syncWith(b.machineId!)).toBe(true)
+    expect(handle).toHaveBeenCalled()
+    const self = { pub: a.pub, kind: 'machine', label: 'a', machineId: a.machineId, at: S.SELF_STAMP }
+    expect(b.syncer.handle(a.pub, { self, members: [], removed: [] }).error).toBeUndefined()
+    const stray = C.b64e(C.newIdentity().pub)
+    expect(b.syncer.handle(stray, { self: { pub: stray, kind: 'machine', label: 's', at: S.SELF_STAMP }, members: [], removed: [] }).error).toBeUndefined()
     for (const n of f.nodes) n.syncer.stop()
   })
 

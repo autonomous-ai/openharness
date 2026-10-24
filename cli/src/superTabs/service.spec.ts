@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { CoreApi } from '../core/api.js'
@@ -6,7 +9,7 @@ import { sharedSwarm, superTabService } from './service.js'
 import { object } from './wire.js'
 
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
-import { SuperTabHostError, type SuperTabHost, type SuperTabHostOptions } from './host.js'
+import { hostJournalFile, SuperTabHostError, type SuperTabHost, type SuperTabHostOptions } from './host.js'
 
 const owner = { local: true, owner: true }, visitor = { local: false, owner: false }
 function setup(options: { prepareContribution?: typeof import('./contribution.js').prepareContribution } = {}) {
@@ -706,9 +709,23 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
     for (const reason of [undefined, 'background', 7]) {
       expect(await service.requests.super_tabs({ action: 'teamSetup', reason }, owner)).toEqual({ error: 'INVALID_REQUEST' })
     }
-    await service.requests.super_tabs({ action: 'teamSetup', reason: 'startup' }, owner)
+    await service.requests.super_tabs({ action: 'teamSetup', reason: 'contribute' }, owner)
     expect(make).toHaveBeenCalledTimes(1)
     expect(offer).toHaveBeenCalledTimes(2)
+  })
+
+  it('at app start, answers at once on a Mac that hosts no Swarm work, as no regular user\'s does', async () => {
+    const offer = vi.fn(async (_reason: string, _shared: () => Promise<boolean>) => ({ state: 'not-shared' as const }))
+    const make = vi.fn(async () => ({ offer }))
+    const dataDir = mkdtempSync(join(tmpdir(), 'team-startup-'))
+    const service = superTabService(fakeCore({ dataDir }), { teamSetup: make })
+    expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'startup' }, owner)).toEqual({ ok: true, state: 'not-shared' })
+    expect(make).not.toHaveBeenCalled()
+    // Once this Mac hosts Swarm work, the offer decides.
+    mkdirSync(dirname(hostJournalFile(dataDir, 'machine-1')), { recursive: true })
+    writeFileSync(hostJournalFile(dataDir, 'machine-1'), '{}')
+    await service.requests.super_tabs({ action: 'teamSetup', reason: 'startup' }, owner)
+    expect(offer).toHaveBeenCalledWith('startup', expect.any(Function))
   })
 
   it('tries again to make its setup when making it failed', async () => {

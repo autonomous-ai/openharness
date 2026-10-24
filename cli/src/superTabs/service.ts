@@ -231,6 +231,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'teamSetup') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
           if (!AUTO_SETUP_REASONS.includes(payload.reason as AutoSetupReason)) return { error: 'INVALID_REQUEST' }
+          // Desktop asks at every launch. A Mac that hosts no Swarm work, as no regular user's does, answers at once:
+          // nothing read, run or asked of the backend.
+          if (payload.reason === 'startup' && !(identifier(core.daemon.machineId()) && existsSync(hostJournalFile(core.dataDir, core.daemon.machineId())))) {
+            return { ok: true, state: 'not-shared' }
+          }
           autoSetup ??= (options.teamSetup ?? (() => realTeamAutoSetup(core.dataDir, line => console.log(`[team] ${line}`))))()
             .catch(error => { autoSetup = null; throw error })
           return { ok: true, ...await (await autoSetup).offer(payload.reason as AutoSetupReason, () => sharedSwarm(core)) }

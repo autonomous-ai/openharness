@@ -75,7 +75,9 @@ export interface GroupSyncerDeps {
   shared?: (pub: string) => boolean
   /** What the account's machine list says a machine is (machineKinds.ts): only `computer`, one of the person's own,
    *  takes part in the group. `team` and unknown (null) never do. `fresh` reads the list again when it is old. */
-  machineKinds: { kind: (machineId: string) => MachineKind | null; fresh?: () => Promise<void> }
+  machineKinds: { kind: (machineId: string) => MachineKind | null; fresh?: () => Promise<void>
+    /** No team machine ever on this computer (machineKinds.ts): every machine syncs as before team machines. */
+    teamFree?: () => boolean }
   /** Whether the roster here is the account's this machine is signed in to (deviceLogSyncer `current`).
    *  While not, nothing is swapped: a daemon started after a switch of accounts read the new account's
    *  log only after its first rounds, and handed the roster of the account it left to the new one's
@@ -338,7 +340,7 @@ export class GroupSyncer {
 
   /** Whether the account's machine list says [machineId] is one of the person's own machines. */
   private ordinary(machineId: string): boolean {
-    return this.deps.machineKinds.kind(machineId) === 'computer'
+    return this.deps.machineKinds.teamFree?.() === true || this.deps.machineKinds.kind(machineId) === 'computer'
   }
 
   /**
@@ -348,6 +350,7 @@ export class GroupSyncer {
    * machine. A peer no record or word of its own makes a machine (a phone, a desktop app) is not a machine at all.
    */
   private machinePeerRefusal(peerPub: string, claimedSelf: unknown): 'TEAM_MACHINE' | 'MACHINE_UNKNOWN' | null {
+    if (this.deps.machineKinds.teamFree?.() === true) return null
     const ids = new Set<string>()
     let machine = false
     for (const p of this.deps.peers.list()) if (p.pub === peerPub) { ids.add(p.machineId); machine = true }
