@@ -20,6 +20,15 @@ function fixture(rows: Row[], answer: (payload: Row) => Promise<unknown> = async
 const row = (patch: Row = {}): Row => ({ tabId: 'tab1', grid: GRID, enabled: true, ready: false, members: ['b@example.com', 'a@example.com', 7], ...patch })
 
 describe('the owner\'s Swarm grids', () => {
+  it('are not asked for by a daemon that runs team work only', async () => {
+    const f = fixture([row()])
+    const team = new SwarmGrids(fakeCore({ dataDir: '/isolated-grid-fixture' }), 'host', { backend: f.backend, open: f.open, now: () => 1_000,
+      newId: () => 'id', team: () => true } as never)
+    await team.tick()
+    expect(f.backend).not.toHaveBeenCalled()
+    expect(f.open).not.toHaveBeenCalled()
+  })
+
   it('brings a turned-on Swarm\'s grid to its people and tells the Swarm, then leaves it alone until something changes', async () => {
     const f = fixture([row()])
     await f.grids.tick()

@@ -10,11 +10,14 @@ import { randomUUID } from 'node:crypto'
 import type { CoreApi } from '../core/api.js'
 import { openDaemon } from '../agentClient/daemon.js'
 import { backend, identifier, object, SuperTabHostError } from './host.js'
+import { readAuthSession } from '../lib/authSession.js'
 
 /** How often the owner's Swarms are read. */
 export const GRID_POLL_MS = 60_000
 
-interface Deps { backend: typeof backend; open: typeof openDaemon; now: () => number; newId: () => string }
+interface Deps { backend: typeof backend; open: typeof openDaemon; now: () => number; newId: () => string
+  /** Whether this daemon runs team work only (a Harness Team account, `harness team on`): it keeps no Swarm's grid. */
+  team?: () => boolean }
 
 export class SwarmGrids {
   private next = 0
@@ -31,6 +34,9 @@ export class SwarmGrids {
   }
 
   private async pass(): Promise<void> {
+    // The owner's computer keeps the owner's Swarms' grids. A team sign-in may not read them, and asking every minute only
+    // filled its log with the refusal (third VM run).
+    if ((this.deps.team ?? (() => readAuthSession()?.kind === 'team'))()) return
     // A backend before the add-on reads `grids` as a Swarm id and answers 404: it has no grids to keep.
     const listed = await this.deps.backend(this.core, 'GET', '/api/super-tabs/grids').catch((error: unknown) => {
       if (error instanceof SuperTabHostError && error.status === 404) return []

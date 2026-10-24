@@ -153,6 +153,9 @@ describe('which machines take a teammate\'s project', () => {
       expect(teamWorkRefusal(offline, NOW)).toEqual({ code: 'MACHINE_OFFLINE',
         reason: 'MacBook Pro is offline, so it cannot show that its Harness Team account is private.' })
     }
+    // A Mac's team account has its Mac's name, and the Mac may be online: the account is what is offline (third VM run).
+    expect(teamWorkRefusal({ ...pool(), hostMachineId: 'mac' }, NOW, true)).toEqual({ code: 'MACHINE_OFFLINE',
+      reason: 'The Harness Team account on MacBook Pro is offline, so it cannot show that it is private.' })
   })
 })
 

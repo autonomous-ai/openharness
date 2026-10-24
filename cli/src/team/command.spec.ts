@@ -39,6 +39,7 @@ function fake(over: Partial<TeamCommandDeps> & { adminResult?: Awaited<ReturnTyp
   const post = vi.fn(async (path: string, _body: unknown, _headers?: Record<string, string>): Promise<unknown> => {
     if (path === '/api/auth/handoff') return { code: CODE, expiresIn: 90 }
     if (path === '/api/auth/handoff/redeem') return { token: 'hna_team', refreshToken: 'hnr_team', expiresIn: 3600, kind: 'team' }
+    if (path === '/api/machines/resolve-computer') return { machine: { machineId: 'm-team' }, created: true }
     return {}
   })
   const deps: TeamCommandDeps = {
@@ -508,6 +509,12 @@ describe('internal verbs', () => {
     expect(f.deps.takeHandoff).toHaveBeenCalledWith('/Users/harnessteam/.harness/team-handoff')
     expect(f.post).toHaveBeenCalledWith('/api/auth/handoff/redeem', { code: CODE, label: 'Mac-placeholder · Team', computerId: 't'.repeat(32) })
     expect(f.session()).toMatchObject({ kind: 'team', computerId: 't'.repeat(32), refreshToken: 'hnr_team' })
+    // Its machine, before its daemon starts: launchd runs the master directly, and `harness start` would have resolved it.
+    expect(f.post.mock.calls.map(([path]) => path)).toEqual(['/api/auth/handoff/redeem', '/api/machines/resolve-computer'])
+    expect(f.post).toHaveBeenLastCalledWith('/api/machines/resolve-computer', { computerId: 't'.repeat(32), label: 'Mac-placeholder · Team' },
+      { authorization: 'Bearer x' })
+    expect(f.session()).toMatchObject({ kind: 'team', machineId: 'm-team', refreshToken: 'hnr_team' })
+    expect(f.out.join('\n')).toContain('[team] runs as machine m-team')
     expect(f.status.get(STATUS)).toMatchObject({ signIn: { state: 'signed-in' }, privacy: { passed: true },
       engines: { claude: { installed: true, signedIn: false }, codex: { installed: true, signedIn: true } } })
     expect(f.deps.engines).toHaveBeenCalledWith(config)
@@ -536,12 +543,51 @@ describe('internal verbs', () => {
     expect(unsafe.status.get(STATUS)?.signIn).toMatchObject({ state: 'failed', detail: 'not this account\'s private file' })
   })
 
-  it('__start leaves an existing sign-in alone, runs the check with no code, and writes nothing outside the team account', async () => {
+  it('__start records the machine of a team sign-in that has none, once, and starts the daemon when it cannot', async () => {
+    // A team account set up before this: signed in, but its daemon ran as its computer id (third VM run).
+    const older = inTeam({ takeHandoff: () => null })
+    older.setSession({ ...computer, kind: 'team', refreshToken: 'htr_old', machineId: undefined })
+    expect(await teamCommand(['__start', '/Users/harnessteam/.harness/team-handoff'], older.deps)).toBe(0)
+    expect(older.post).toHaveBeenCalledWith('/api/machines/resolve-computer', { computerId: 'c'.repeat(32), label: 'Mac-placeholder · Team' },
+      { authorization: 'Bearer x' })
+    expect(older.session()).toMatchObject({ kind: 'team', machineId: 'm-team', refreshToken: 'htr_old' })
+    older.post.mockClear()
+    await teamCommand(['__start'], older.deps)
+    expect(older.post).not.toHaveBeenCalled()
+    const offline = inTeam({ takeHandoff: () => null, post: (async () => { throw new Error('connect ECONNREFUSED') }) as never })
+    offline.setSession({ ...computer, kind: 'team', machineId: undefined })
+    expect(await teamCommand(['__start', '/Users/harnessteam/.harness/team-handoff'], offline.deps)).toBe(0)
+    expect(offline.session()?.machineId).toBeUndefined()
+    expect(offline.out.join('\n')).toContain('could not look up this account\'s machine yet (connect ECONNREFUSED)')
+    expect(offline.status.get(STATUS)).toMatchObject({ privacy: { passed: true } })
+    // Only a team sign-in: the owner's own computer resolves its machine with `harness start`.
+    const owner = fake({ readConfig: () => config, takeHandoff: () => null })
+    owner.setSession({ ...computer, machineId: undefined })
+    await teamCommand(['__start'], owner.deps)
+    expect(owner.post).not.toHaveBeenCalled()
+  })
+
+  it('__start replaces a sign-in with a handed-over code (setup --sign-in-again), and keeps it when the code is refused', async () => {
     const signed = inTeam()
-    signed.setSession({ ...computer, kind: 'team' })
+    signed.setSession({ ...computer, kind: 'team', refreshToken: 'htr_old' })
     await teamCommand(['__start', '/Users/harnessteam/.harness/team-handoff'], signed.deps)
-    expect(signed.post).not.toHaveBeenCalled()
-    expect(signed.out.join('\n')).toContain('was not used')
+    expect(signed.post).toHaveBeenCalledWith('/api/auth/handoff/redeem', { code: CODE, label: 'Mac-placeholder · Team', computerId: 't'.repeat(32) })
+    expect(signed.session()).toMatchObject({ kind: 'team', refreshToken: 'hnr_team' })
+    expect(signed.post).toHaveBeenCalledWith('/api/auth/revoke', { refreshToken: 'htr_old' })
+    expect(signed.out.join('\n')).toContain('signed in for team work again; the previous sign-in was ended')
+    expect(signed.status.get(STATUS)?.signIn).toMatchObject({ state: 'signed-in' })
+    const refused = inTeam({ post: (async (path: string) => {
+      if (path === '/api/auth/handoff/redeem') throw Object.assign(new Error('expired'), { status: 401 })
+      return {}
+    }) as never })
+    refused.setSession({ ...computer, kind: 'team', refreshToken: 'htr_old' })
+    await teamCommand(['__start', '/Users/harnessteam/.harness/team-handoff'], refused.deps)
+    expect(refused.session()).toMatchObject({ kind: 'team', refreshToken: 'htr_old', machineId: 'm1' })
+    expect(refused.out.join('\n')).toContain('the previous sign-in is kept')
+    expect(refused.status.get(STATUS)?.signIn).toMatchObject({ state: 'failed' })
+  })
+
+  it('__start runs the check with no code, and writes nothing outside the team account', async () => {
     const failing = inTeam({ takeHandoff: () => null, privacy: () => ({ passed: false, item: 'ssh', detail: 'could read ~/.ssh', checkedAt: 1 }) })
     await teamCommand(['__start', '/Users/harnessteam/.harness/team-handoff'], failing.deps)
     expect(failing.out.join('\n')).toContain('privacy check FAILED (ssh)')

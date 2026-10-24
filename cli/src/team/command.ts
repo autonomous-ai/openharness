@@ -489,6 +489,33 @@ async function handoff(deps: TeamCommandDeps): Promise<number> {
 }
 
 /**
+ * The team account's machine id, in its session file, before its daemon starts. `harness start` resolves a session's machine
+ * (cli.ts `resolveMachineIfUnknown`), but launchd runs this account's master directly, so without this its daemon ran as its
+ * computer id: its gateway counted it signed out and never put its key on the device key log, so its Mac's daemon could not
+ * reach it to add it to a Swarm, and its Swarm host polled under an id that is not its machine (third VM run,
+ * docs/plans/2026-10-24-swarm-team-account.md). The first resolve creates its machine, named "<this Mac> · Team".
+ * Never fails the start: the next start tries again.
+ */
+async function recordTeamMachine(deps: TeamCommandDeps, label: string, log: (line: string) => void): Promise<void> {
+  const session = deps.session()
+  if (session?.kind !== 'team' || session.machineId) return
+  try {
+    const { headers } = await deps.auth()
+    const answer = await deps.post<{ machine?: { machineId?: unknown } }>('/api/machines/resolve-computer',
+      { computerId: session.computerId, label }, headers)
+    const machineId = answer?.machine?.machineId
+    if (typeof machineId !== 'string' || !machineId) throw new Error('Harness answered without a machine id')
+    // A refresh may have rewritten the session meanwhile: the machine id goes into the newest one.
+    const latest = deps.session()
+    if (latest?.kind !== 'team' || latest.computerId !== session.computerId) return
+    if (latest.machineId !== machineId) deps.writeSession({ ...latest, machineId, updatedAt: deps.now() })
+    log(`runs as machine ${machineId}`)
+  } catch (error) {
+    log(`could not look up this account's machine yet (${(error as Error).message}); the next start tries again`)
+  }
+}
+
+/**
  * `team __start <file>`: run by the team daemon's job, as the team account, before its master starts. Its lines go
  * to the daemon's log. Always exits 0: the daemon starts either way, signed out if the sign-in failed, and reports
  * the privacy check it failed. Team work never runs as the owner instead.
@@ -502,6 +529,7 @@ async function jobStart(deps: TeamCommandDeps, file: string | undefined): Promis
     if (!mine) return
     try { deps.writeStatus(statusFile, update) } catch (error) { log(`could not write ${statusFile}: ${(error as Error).message}`) }
   }
+  const label = `${deps.hostname().slice(0, 60)} · Team`
   if (file) {
     let code: string | null = null
     try {
@@ -510,23 +538,24 @@ async function jobStart(deps: TeamCommandDeps, file: string | undefined): Promis
       log((error as Error).message)
       report({ signIn: { state: 'failed', at: deps.now(), detail: (error as Error).message } })
     }
-    if (code && deps.session()) {
-      log('already signed in; the handed-over sign-in code was not used')
-      report({ signIn: { state: 'signed-in', at: deps.now() } })
-    } else if (code) {
-      const label = `${deps.hostname().slice(0, 60)} · Team`
+    // Setup hands a code over only when this account has no sign-in, or when its owner asked for a new one
+    // (`--sign-in-again`): a sign-in already here is replaced, and kept when the new one cannot be had.
+    if (code) {
+      const previous = deps.session()
       try {
         const computerId = deps.computerId()
         const tokens = await redeemTeamHandoff(code, label, computerId, { post: deps.post, sleep: deps.sleep, now: deps.now })
         deps.writeSession(teamSession(tokens, computerId, deps.autonomousEnv, deps.now()))
-        log('signed in for team work')
+        if (previous) await revokeHarnessRefresh(deps.post, previous.refreshToken)
+        log(previous ? 'signed in for team work again; the previous sign-in was ended' : 'signed in for team work')
         report({ signIn: { state: 'signed-in', at: deps.now() } })
       } catch (error) {
-        log(`sign-in failed: ${(error as Error).message}`)
+        log(`sign-in failed: ${(error as Error).message}${previous ? '; the previous sign-in is kept' : ''}`)
         report({ signIn: { state: 'failed', at: deps.now(), detail: (error as Error).message } })
       }
     }
   }
+  await recordTeamMachine(deps, label, log)
   if (mine) {
     const privacy = deps.privacy(mine)
     log(privacy.passed ? 'privacy check passed' : `privacy check FAILED (${privacy.item}): ${privacy.detail}`)

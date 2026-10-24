@@ -1,5 +1,6 @@
 import { readCapabilities } from './capacity.js'
 import { existsSync } from 'node:fs'
+import { readAuthSession } from '../lib/authSession.js'
 import { createHash } from 'node:crypto'
 import type { CoreApi, ServiceRequests, SuperTabsPort } from '../core/api.js'
 import { backend, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHost, SuperTabHostError, type SuperTabHostOptions } from './host.js'
@@ -156,6 +157,8 @@ export interface SuperTabServiceOptions {
   teamEngines?: () => Pick<TeamEngineReporter, 'start' | 'stop'>
   /** What sets up the Harness Team account when Desktop asks (team/autoSetup.ts), for a spec. */
   teamSetup?: () => Promise<Pick<TeamAutoSetup, 'offer'>>
+  /** Whether this daemon runs team work only (a Harness Team account, `harness team on`), for a spec. */
+  team?: () => boolean
 }
 export function superTabService(core: CoreApi, options: SuperTabServiceOptions = {}): { requests: ServiceRequests; port: SuperTabsPort } {
   const preparations = new ContributionPreparations(input => (options.prepareContribution ?? prepareContribution)(core, input))
@@ -197,7 +200,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     connected: () => {
       tokens.start()
       engines.start()
-      if (identifier(core.daemon.machineId()) && existsSync(hostJournalFile(core.dataDir, core.daemon.machineId()))) wake()
+      // A daemon that runs team work only is there for its Swarms: its host runs from its first connection. Its Mac's daemon adds
+      // a Harness Team account to a Swarm without waking it (host.ts joinTeams), and a host that never ran reports no privacy
+      // check, so the Swarm read the account as offline and never sent it a teammate's work (third VM run).
+      if (identifier(core.daemon.machineId()) && (existsSync(hostJournalFile(core.dataDir, core.daemon.machineId()))
+        || (options.team ?? (() => readAuthSession()?.kind === 'team'))())) wake()
     },
     disconnected: disconnect,
     stop: disconnect,

@@ -150,7 +150,10 @@ export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow =
   const reading = pool.observation, name = pool.name
   if (!teamRow && reading?.sessionKind !== 'team' && !teamAccountRequired()) return null
   if (!reading || now - reading.receivedAt > MACHINE_FRESH_MS) {
-    return { code: 'MACHINE_OFFLINE', reason: `${name} is offline, so it cannot show that its Harness Team account is private.` }
+    // A Mac's team account goes by its Mac's name ("One machine"), and the Mac itself may well be online.
+    return { code: 'MACHINE_OFFLINE', reason: pool.hostMachineId
+      ? `The Harness Team account on ${name} is offline, so it cannot show that it is private.`
+      : `${name} is offline, so it cannot show that its Harness Team account is private.` }
   }
   if (!teamRow && reading.sessionKind !== 'team') return { code: 'TEAM_ACCOUNT_REQUIRED', reason: `${name} has no Harness Team account yet, ${ONLY_OWN}.` }
   const privacy = reading.privacy
