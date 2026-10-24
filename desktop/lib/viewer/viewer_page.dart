@@ -31,7 +31,14 @@ class _ViewerPageState extends State<ViewerPage> {
       title: text,
       action: retry == null
           ? null
-          : OutlinedButton(onPressed: retry, child: const Text('Retry')),
+          : OutlinedButton(
+              // A thumb's target on a phone.
+              style: const ButtonStyle(
+                tapTargetSize: MaterialTapTargetSize.padded,
+              ),
+              onPressed: retry,
+              child: const Text('Retry'),
+            ),
     ),
   );
 

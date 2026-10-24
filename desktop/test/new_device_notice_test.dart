@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/account_devices.dart' hide NewDeviceNotice;
 import 'package:harness/viewer/device_history.dart'
     show DevLogHistoryRow, DeviceLogHistory;
@@ -21,12 +22,17 @@ void main() {
   setUp(() => app = FakeDevicesApp());
   tearDown(() => app.dispose());
 
-  Future<void> mount(WidgetTester tester, {double width = 1200}) async {
+  Future<void> mount(
+    WidgetTester tester, {
+    double width = 1200,
+    ThemeData? theme,
+  }) async {
     tester.view.physicalSize = Size(width, 900);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(
       MaterialApp(
+        theme: theme,
         home: Scaffold(
           // As the app shell draws it: rebuilt whenever the app changes.
           body: ListenableBuilder(
@@ -152,7 +158,7 @@ void main() {
         tester,
       ) async {
         jamie();
-        await mount(tester, width: width);
+        await mount(tester, width: width, theme: grid.buildAppTheme());
         final paragraph = tester.renderObject<RenderParagraph>(
           find.descendant(of: sentence, matching: find.byType(RichText)),
         );
@@ -165,6 +171,9 @@ void main() {
           tester.getBottomLeft(sentence).dy,
           lessThanOrEqualTo(tester.getTopLeft(mine).dy),
         );
+        // A thumb's target each.
+        expect(tester.getSize(mine).height, greaterThanOrEqualTo(44));
+        expect(tester.getSize(review).height, greaterThanOrEqualTo(44));
         expect(tester.takeException(), isNull);
       });
     }
@@ -173,7 +182,7 @@ void main() {
       tester,
     ) async {
       jamie();
-      await mount(tester, width: 880);
+      await mount(tester, width: 880, theme: grid.buildAppTheme());
       expect(
         tester
             .widget<Text>(find.byKey(const Key('new-device-notice')))

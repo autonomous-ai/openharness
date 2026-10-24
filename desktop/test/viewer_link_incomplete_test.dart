@@ -53,6 +53,11 @@ void main() {
     tester,
   ) async {
     final opened = await mount(tester);
+    // A thumb's target on a phone.
+    expect(
+      tester.getSize(find.widgetWithText(FilledButton, 'Open Harness')).height,
+      greaterThanOrEqualTo(44),
+    );
     await tester.tap(find.widgetWithText(FilledButton, 'Open Harness'));
     await tester.pump();
     expect(opened, [Uri.parse('https://harness.example/')]);

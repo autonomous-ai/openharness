@@ -59,6 +59,10 @@ class ViewerLinkIncomplete extends StatelessWidget {
             ),
             const SizedBox(height: 18),
             FilledButton(
+              // A thumb's target on a phone.
+              style: const ButtonStyle(
+                tapTargetSize: MaterialTapTargetSize.padded,
+              ),
               onPressed: () => open(ViewerLocation.workspaceOf(location)),
               child: const Text('Open Harness'),
             ),

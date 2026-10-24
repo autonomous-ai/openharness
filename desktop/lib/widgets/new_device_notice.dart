@@ -48,9 +48,12 @@ class NewDeviceNotice extends StatelessWidget {
                   overflow: phone ? TextOverflow.clip : TextOverflow.ellipsis,
                   style: grid.AppType.body(color: grid.AppPalette.textPrimary),
                 );
+                // A phone gets a thumb's target; Desktop keeps the theme's compact buttons.
+                final thumb = phone ? const ButtonStyle(tapTargetSize: MaterialTapTargetSize.padded) : null;
                 final buttons = [
                   TextButton(
                     key: const Key('new-device-dismiss'),
+                    style: thumb,
                     // A fork's suspension is not the banner's to lift (it would be back on the next read):
                     // that device's own page shows it, and lifts it there.
                     onPressed: notice.suspended
@@ -60,6 +63,7 @@ class NewDeviceNotice extends StatelessWidget {
                   ),
                   OutlinedButton(
                     key: const Key('new-device-review'),
+                    style: thumb,
                     // One new device goes straight to its key code; several go to Machines, where each is a row.
                     onPressed: () => more == 0
                         ? unawaited(showAccountDeviceDetail(context, notifier, pub: notice.pub, isNew: true))

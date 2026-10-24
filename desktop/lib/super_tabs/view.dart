@@ -1045,6 +1045,11 @@ class _SuperTabViewState extends State<SuperTabView>
   /// ([WorkspaceChrome.superTabRecovers]); Desktop keeps "Loading" meanwhile.
   bool get _readsFirst => WorkspaceChrome.of(context).superTabRecovers;
 
+  /// A thumb's target on a phone, for the buttons only [_readsFirst] adds.
+  static const _thumb = ButtonStyle(
+    tapTargetSize: MaterialTapTargetSize.padded,
+  );
+
   Widget _firstReadFailed(String error) => Center(
     child: Padding(
       padding: const EdgeInsets.all(24),
@@ -1059,6 +1064,7 @@ class _SuperTabViewState extends State<SuperTabView>
           if (!c.accessRevoked) ...[
             const SizedBox(height: 12),
             TextButton(
+              style: _thumb,
               onPressed: () => unawaited(c.refresh()),
               child: const Text('Retry'),
             ),
@@ -1101,6 +1107,7 @@ class _SuperTabViewState extends State<SuperTabView>
                   widget.onNewProject != null) ...[
                 const SizedBox(height: 12),
                 FilledButton(
+                  style: _thumb,
                   onPressed: c.canWrite ? widget.onNewProject : null,
                   child: const Text('New project'),
                 ),

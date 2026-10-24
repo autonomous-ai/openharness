@@ -294,6 +294,13 @@ void main() {
           find.ancestor(of: message, matching: find.byType(Material)).first,
         );
         expect(page.color, theme.scaffoldBackgroundColor);
+      app.inventoryError = 'Inventory is unavailable';
+      app.notifyListeners();
+      await tester.pump();
+      expect(
+        tester.getSize(find.widgetWithText(OutlinedButton, 'Retry')).height,
+        greaterThanOrEqualTo(44),
+      );
       },
     );
   }

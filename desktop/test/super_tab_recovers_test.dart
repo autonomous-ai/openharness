@@ -75,6 +75,7 @@ void main() {
       expect(retry, findsOneWidget);
       expect(loading, findsNothing);
       expect(composer(tester).enabled, isFalse);
+      expect(tester.getSize(retry).height, greaterThanOrEqualTo(44));
     });
 
     testWidgets('Retry shows loading, then the conversation', (tester) async {
@@ -117,6 +118,7 @@ void main() {
         tester.getTopLeft(button).dy,
         greaterThan(tester.getBottomLeft(sentence).dy),
       );
+      expect(tester.getSize(button).height, greaterThanOrEqualTo(44));
       await tester.tap(button);
       expect(made, 1);
     });
