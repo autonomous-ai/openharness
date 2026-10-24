@@ -110,6 +110,9 @@ export const TEAM_ROUTES: readonly TeamRoute[] = [
   { method: 'POST', url: '/api/super-tabs/hosts/:machineId/terminal', scope: 'machine' },
   { method: 'GET', url: '/api/super-tabs/hosts/:machineId/starts/:tabId/:startId', scope: 'machine' },
   { method: 'POST', url: '/api/super-tabs/hosts/:machineId/starts/:tabId/:startId', scope: 'machine' },
+  // A read-only token for a queued start's repository, to clone and fetch its folder before the agent exists: a team account
+  // has no git login of its own (routes/superTabs.ts).
+  { method: 'POST', url: '/api/super-tabs/hosts/:machineId/starts/:tabId/:startId/github-token', scope: 'machine' },
   { method: 'POST', url: '/api/super-tabs/:tabId/machines/:machineId', scope: 'machine' },
   // Reads as one of its agents.
   { method: 'GET', url: '/api/super-tabs/:tabId', scope: 'agent' },

@@ -856,7 +856,9 @@ export class SuperTabStore {
       const actor = await this.poolHostActor(tx, user, state, machineId, startId)
       const start = state.starts?.find(s => s.id === startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
       if (start.harnessId || start.error) fail('START_SETTLED', 'This start has already started or failed; its folder is not prepared again.', 409)
+      if (person(state, start.contributorId).generation !== start.membershipGeneration) fail('FORBIDDEN', 'Only the original initiating lead can resume this start.', 403)
       const group = readConversation(state, actor, start.request.conversationId)
+      if (actor.kind === 'agent' && group.leadId !== actor.agentId) fail('LEAD_REQUIRED', 'The coordinating lead changed.', 403)
       if (group.archived) fail('ARCHIVED', 'This conversation is archived.')
       const grant = await this.contribution(tx, state, actor, start.request, true)
       if (grant.machineOwnerId !== start.machineOwnerId || (grant.hostGrant ?? null) !== start.hostGrant) {

@@ -81,7 +81,10 @@ function recorder() {
         return name === 'githubAssignment'
           ? { tabId: 'tab-1', agentId: 'agent-1', assignmentId: 'assignment-1', repositoryUrl: 'https://github.com/example/project',
             requester: { name: 'Owner', email: 'owner@example.com' }, agentName: 'Builder', machineName: 'MacBook Pro · Team' }
-          : { ok: true }
+          : name === 'githubStart'
+            ? { tabId: 'tab-1', startId: 'start-1', repositoryUrl: 'https://github.com/example/project', own: true, requester: { name: 'Owner', email: 'owner@example.com' } }
+            // The pools route marks each row with the app (routes/superTabs.ts), so its store answers rows.
+            : name === 'hostPools' ? [] : { ok: true }
       } })
   return { store: methods() as unknown as SuperTabStore, calls }
 }
@@ -103,7 +106,8 @@ beforeEach(async () => {
   app.setErrorHandler(errorHandler)
   registerAuthMiddleware(app, authenticate as never)
   // A GitHub App that hands out a fixed token: the route's own checks are the store's (githubAssignment).
-  const github = { issue: vi.fn(async () => ({ token: 'fixture-token', expiresAt: new Date(0).toISOString() })), release: vi.fn(async () => {}) }
+  const github = { issue: vi.fn(async () => ({ token: 'fixture-token', expiresAt: new Date(0).toISOString() })), release: vi.fn(async () => {}),
+    prepare: vi.fn(async () => ({ token: 'fixture-read-token', expiresAt: new Date(0).toISOString(), repository: 'example/project' })) }
   await app.register(superTabRoutes, { store: store.store, github: github as never })
   await app.register(harnessShareRoutes)
   await app.register(deviceKeyRoutes)
@@ -170,6 +174,13 @@ describe('a team session on its own machine', () => {
     expect(store.calls).toEqual([{ method: 'githubAssignment', args: [expect.objectContaining({ harnessSessionKind: 'team' }), 'tab-1', 'agent-1', 'team-mac'] }])
   })
 
+  it('asks for a queued start\'s read-only token on its own machine, always: it has no git login of its own', async () => {
+    const res = await call('POST', '/api/super-tabs/hosts/team-mac/starts/tab-1/start-1/github-token', { always: true })
+    expect(res.statusCode, res.body).toBe(200)
+    expect(res.json().data).toMatchObject({ github: true, token: 'fixture-read-token', repository: 'example/project' })
+    expect(store.calls).toEqual([{ method: 'githubStart', args: [expect.objectContaining({ harnessSessionKind: 'team' }), 'tab-1', 'start-1', 'team-mac'] }])
+  })
+
   it('registers its own computer, as a team machine', async () => {
     const res = await call('POST', '/api/machines/resolve-computer', { computerId: TEAM_COMPUTER.toUpperCase(), label: 'MacBook Pro · Team' })
     expect(res.statusCode, res.body).toBe(200)
@@ -205,6 +216,7 @@ describe('a team session reaching past its own machine', () => {
       ['POST', '/api/super-tabs/hosts/owner-mac/terminal', undefined],
       ['GET', '/api/super-tabs/hosts/owner-mac/starts/tab-1/start-1', undefined],
       ['POST', '/api/super-tabs/hosts/owner-mac/starts/tab-1/start-1', startOp],
+      ['POST', '/api/super-tabs/hosts/owner-mac/starts/tab-1/start-1/github-token', { always: true }],
       ['POST', '/api/super-tabs/tab-1/machines/owner-mac', observation],
     ] as const) limited(await call(method, url, payload))
     expect(store.calls).toEqual([])

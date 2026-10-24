@@ -1,9 +1,9 @@
-import { randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import Fastify, { type FastifyInstance } from 'fastify'
@@ -192,7 +192,15 @@ describe('a queued start\'s preparation token', () => {
     }
     await env.run(tab, { type: 'machine.contribute', machineId, name: 'Pool', cwd: '/swarm-root', scope: 'swarm', engines: ['codex'], maxAgents: 2 } as Command, contributor)
     const pool = (await env.store.hostPools(contributor, machineId)).find(p => p.tabId === tab)!
-    await env.store.observeMachine(contributor, tab, machineId, { generation: pool.machine.generation, ...observed })
+    if (contributor === owner) await env.store.observeMachine(contributor, tab, machineId, { generation: pool.machine.generation, ...observed })
+    else {
+      // Another person's project runs only on a Team machine (#1694): this one is used only for agents (`harness team on`).
+      const computerId = createHash('sha256').update(machineId).digest('hex').slice(0, 32)
+      await db.machine.update({ where: { machineId }, data: { computerId, sessionKind: 'team' } })
+      onTestFinished(async () => { await db.machine.update({ where: { machineId }, data: { computerId: null, sessionKind: null } }) })
+      const team: AuthUser = { ...contributor, harnessSessionId: `team-${machineId}`, harnessSessionKind: 'team', harnessComputerId: computerId }
+      await env.store.observeMachine(team, tab, machineId, { generation: pool.machine.generation, ...observed, privacy: { mode: 'dedicated' } })
+    }
     const startId = String((await env.run(tab, { type: 'agent.start', request: { conversationId: 'lead', machineId, engine: 'codex', name: 'Builder',
       cwd: '/swarm-root/lead', permissionMode: 'full', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as Command)).result.startId)
     return { tab, startId }
