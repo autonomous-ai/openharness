@@ -7,7 +7,7 @@ import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { requiredToolReason, startRequirements } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { choose, decide, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { API_BUILDERS, choose, decide, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, type Assessment, type Commitment, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
 
@@ -180,10 +180,11 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const probes = probed.flat().map(p => p.kind === 'member' ? { ...p, repo: repoMatch(folder, p.frame ?? null, p.machineId === where.machineId),
     refusals: [...p.refusals, ...limited(p.agentId)],
     earlier: ended.filter(e => e.agentId === p.agentId).reverse().slice(0, 3).map(e => ({ group: e.group, outcome: e.outcome })) } : p)
+  probes.push(...localProbes(state, policy, probes, assessment, review))
   // Picks started or assigned and still at work hold part of their account's quota; the log, and so this, is per Swarm.
   const working = (decisions ?? []).filter(d => d.final && d.outcome === null && typeof d.account === 'string')
     .map(d => ({ account: d.account, spend: object(d.spend), size: d.size, createdAt: Date.parse(String(d.createdAt)) }) as Commitment)
-  const choice = choose(probes, policy, assessment, Date.now(), working, rules)
+  const choice = choose(probes, policy, assessment, Date.now(), working, rules, heldLocalModels(state))
   if ('error' in choice) return choice
   const verdict = decide(choice)
   const operationId = `route-${newId()}`
@@ -196,7 +197,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const routeDecisionId = recorded.ok === true ? object(object(recorded.value).result).routeDecisionId : undefined
   const decision = typeof routeDecisionId === 'string' ? `,"routeDecisionId":"${routeDecisionId}"` : ''
   const publicOf = (s: typeof verdict.pick) => ({ id: s.id, kind: s.kind, ...(s.agentId ? { agentId: s.agentId } : {}), machineId: s.machineId,
-    engine: s.engine, model: s.model, effort: s.effort, title: s.title })
+    engine: s.engine, model: s.model, effort: s.effort, title: s.title, ...(s.gridModel ? { gridModel: s.gridModel, gridName: s.gridName } : {}) })
   return {
     ok: true, ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : { unrecorded: true }),
     pick: publicOf(verdict.pick), via: verdict.via, p: verdict.p, belowFloor: choice.belowFloor, why: verdict.why,
@@ -207,8 +208,10 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     next: verdict.pick.kind === 'member'
       ? `Assign with: command OPERATION_ID {"type":"work.assign","conversationId":"${input.conversationId}","agentId":"${verdict.pick.agentId}"${decision}}`
       : `Start with: start OPERATION_ID ${JSON.stringify({ conversationId: input.conversationId, name: review ? 'Reviewer' : 'Builder', ...(review ? { role: 'reviewer' } : {}), cwd: text(machines.get(verdict.pick.machineId)?.pool?.cwd) ?? assessment.needs.cwd ?? '/absolute/repo/on/that/machine',
-        worktree: true, requirements: startRequirements(assessment.needs), machineId: verdict.pick.machineId, engine: verdict.pick.engine, model: verdict.pick.model,
-        effort: verdict.pick.effort, ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : {}) })}, then assign the started agent${decision ? ' with the same routeDecisionId' : ''}. It starts from the repository's default branch, fetched first; add "branchRef":"refs/remotes/origin/BRANCH" to start from another branch.`,
+        worktree: true, requirements: startRequirements(assessment.needs), machineId: verdict.pick.machineId, engine: verdict.pick.engine,
+        // A local model is named by the grid alone: no subscription model or effort goes with it.
+        ...(verdict.pick.gridModel ? { gridModel: verdict.pick.gridModel, gridName: verdict.pick.gridName } : { model: verdict.pick.model, effort: verdict.pick.effort }),
+        ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : {}) })}, then assign the started agent${decision ? ' with the same routeDecisionId' : ''}. It starts from the repository's default branch, fetched first; add "branchRef":"refs/remotes/origin/BRANCH" to start from another branch.`,
   }
 }
 
@@ -216,6 +219,81 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
 function alternativesTo<T extends { id: string; machineId: string }>(pick: T, shown: T[]): T[] {
   const seen = new Set([pick.machineId])
   return shown.filter(s => s.id !== pick.id).filter((s, i) => { const best = !seen.has(s.machineId); seen.add(s.machineId); return i < 2 || best })
+}
+
+/** A reading this old says nothing is served (backend `MACHINE_FRESH_MS`). */
+const LOCAL_FRESH_MS = 45_000
+/** Refusals about a subscription's allowance, which a local model does not spend. */
+const SUBSCRIPTION = /subscription/i
+
+interface Served { grid: string; model: string; label: string; kind: 'local' | 'api' | 'shared'; machines: Set<string> | null; holders: string[] }
+
+/** The models served for the Swarm while the owner has the add-on on and a fresh reading lists them, by grid and model, each
+ * with the Builders on it: one started on a model, or starting on it, holds it until it leaves the Swarm. */
+function servedModels(state: Json, swarm: string, now: number): Map<string, Served> {
+  // By grid and model: its label, and the machines that may run it (null: any).
+  const served = new Map<string, Served>()
+  for (const machine of list(state.machines)) {
+    const observed = object(machine.observation)
+    if (!finite(observed.receivedAt) || now - observed.receivedAt > LOCAL_FRESH_MS) continue
+    for (const l of list(observed.localModels)) {
+      if (typeof l.grid !== 'string' || typeof l.model !== 'string') continue
+      const key = `${l.grid}\0${l.model}`, anywhere = l.grid === swarm
+      const kind = l.kind === 'api' || l.kind === 'shared' ? l.kind : anywhere ? 'local' : 'shared'
+      const known = served.get(key) ?? { grid: l.grid, model: l.model, label: text(l.name) ?? l.model, kind, machines: anywhere ? null : new Set<string>(), holders: [] }
+      known.machines?.add(String(machine.machineId))
+      served.set(key, known)
+    }
+  }
+  const agents = new Map(list(state.agents).map(agent => [String(agent.harnessId), text(agent.displayName) ?? text(agent.name) ?? 'a Builder']))
+  for (const start of list(state.starts)) {
+    const request = object(start.request)
+    if (typeof request.gridModel !== 'string' || start.error || (start.harnessId && !agents.has(String(start.harnessId)))) continue
+    served.get(`${typeof request.gridName === 'string' ? request.gridName : swarm}\0${request.gridModel}`)?.holders
+      .push(start.harnessId ? agents.get(String(start.harnessId))! : 'a Builder that is starting')
+  }
+  return served
+}
+
+/** Whether [m] can take another Builder: a local engine or a model shared with a member takes one, an API model up to [API_BUILDERS]. */
+const takesBuilder = (m: Served) => m.holders.length < (m.kind === 'api' ? API_BUILDERS : 1)
+
+/** The Swarm's served models that take no more Builders, and who is on them, then those a fresh reading says Builders are
+ *  never offered, and why (superTabs/machines.ts refusedOn): what the route says when it offers none. */
+export function heldLocalModels(state: Json, now: number = Date.now()): HeldModel[] {
+  const addOn = object(state.localModels)
+  if (addOn.enabled !== true || typeof addOn.grid !== 'string') return []
+  const held: HeldModel[] = [...servedModels(state, addOn.grid, now).values()].filter(m => !takesBuilder(m))
+    .map(({ model, label, kind, holders }) => ({ model, label, kind, holders }))
+  for (const machine of list(state.machines)) {
+    const observed = object(machine.observation)
+    if (!finite(observed.receivedAt) || now - observed.receivedAt > LOCAL_FRESH_MS) continue
+    for (const r of list(observed.refusedModels)) {
+      if (r.grid !== addOn.grid || typeof r.model !== 'string' || typeof r.why !== 'string' || held.some(m => m.model === r.model)) continue
+      held.push({ model: r.model, label: text(r.name) ?? r.model, kind: 'local', holders: [], refused: r.why })
+    }
+  }
+  return held
+}
+
+/** New agents on local models (docs/plans/2026-10-23-swarm-local-models.md), only while the owner has the add-on on and a
+ * fresh reading lists the model. One served on the Swarm's grid, an engine of a member's or an API one shares, is reached
+ * through the grid relay from any Swarm machine that can start Claude Code or Codex. One on another grid, shared with a
+ * machine's owner, only from that machine (owner, 2026-10-23). One Builder per local engine, since it answers one
+ * conversation at a time; up to [API_BUILDERS] per API model (owner, 2026-10-24). Never for a review. */
+export function localProbes(state: Json, policy: Policy, probes: Probe[], a: Assessment, review: boolean, now: number = Date.now()): Probe[] {
+  const addOn = object(state.localModels)
+  const swarm = addOn.enabled === true && typeof addOn.grid === 'string' ? addOn.grid : null
+  if (!swarm || review || (policy.localModels?.enabled === false && !a.local)) return []
+  const served = new Map([...servedModels(state, swarm, now)].filter(([, m]) => takesBuilder(m)))
+  if (!served.size) return []
+  // One base per machine and engine: the first new-agent row the policy offers there, which carries the machine's refusals.
+  const bases = new Map<string, Probe>()
+  for (const p of probes) if (p.kind === 'new' && !p.gridModel && !bases.has(`${p.machineId}\0${p.engine}`)) bases.set(`${p.machineId}\0${p.engine}`, p)
+  const quality = policy.localModels?.quality ?? 1
+  return [...bases.values()].flatMap(base => [...served.values()].filter(m => !m.machines || m.machines.has(base.machineId))
+    .map((m): Probe => ({ ...base, model: 'default', effort: 'default', quality, cost: 1, quota: UNKNOWN_QUOTA, known: true,
+      refusals: base.refusals.filter(r => !SUBSCRIPTION.test(r)), gridModel: m.model, gridName: m.grid, gridLabel: m.label, gridKind: m.kind })))
 }
 
 async function probeMachine(machineId: string, { name: machineName, status, account, pool }: { name: string; status: string; account: boolean; pool?: Json },

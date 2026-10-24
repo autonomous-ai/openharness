@@ -1,4 +1,4 @@
-import { contributedEngines, machineContribution, machineObservationSchema, machineSlots, recordAgentPresence, removalPreview, type MachineObservation } from './machines.js'
+import { contributedEngines, hostLocalGrid, machineContribution, machineObservationSchema, machineSlots, recordAgentPresence, removalPreview, swarmGridRow, type MachineObservation } from './machines.js'
 import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient, SuperTab, SuperTabDelivery } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
@@ -21,6 +21,7 @@ import {
 import { holdNoticeText, type HoldReason } from './holdNotice.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, type TerminalEffect } from './terminal.js'
 import { closeAssignment, closeUnassignedStart, readDecision, recentRoutes, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
+import { listMentions, markDone, mentionsWaiting, readMention, resolveByReply, writeMentions } from './mentions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
@@ -331,7 +332,8 @@ export class SuperTabStore {
         await tx.superTab.updateMany({ where: { id: tabId, revision: row.revision }, data: { state: json(state) } })
       }
       const visible = visibleState(state, actor, this.now())
-      return { revision: row.revision, state: { ...visible, machines: visible.machines?.map(pool => ({
+      const mentions = actor.kind === 'person' ? { mentionsWaiting: await mentionsWaiting(tx, tabId, state, actor, this.now()) } : {}
+      return { revision: row.revision, state: { ...visible, ...mentions, machines: visible.machines?.map(pool => ({
         ...pool, availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, state.machines!.find(m => m.machineId === pool.machineId)!)),
       })) } }
     })
@@ -464,6 +466,7 @@ export class SuperTabStore {
         context.confirmedStopped = !!proof && !!execution && proof.machineId === execution.machineId &&
           proof.harnessId === execution.harnessId && proof.machineOwnerId === execution.machineOwnerId
       }
+      if (command.type === 'mention.done') context.mention = await readMention(tx, tabId, command.mentionId)
       if (command.type === 'message.send' && command.attachmentIds?.length) context.attachments = await this.sendable(tx, tabId, actor, command)
       if (command.type === 'route.record') context.recentRoutes = await recentRoutes(tx, tabId, context.now)
       if (command.type === 'agent.screen' || command.type === 'agent.input') {
@@ -629,6 +632,9 @@ export class SuperTabStore {
         await closeAssignment(tx, tabId, command.assignmentId, command.status, context.now)
       }
       await this.writeMessages(tx, tabId, effects.state, effects.messages, revision)
+      if (command.type === 'message.send' && actor.kind === 'person') await resolveByReply(tx, tabId, command.conversationId, actor.userId, context.now)
+      await writeMentions(tx, tabId, effects.state, effects.messages, context.now)
+      if (command.type === 'mention.done') await markDone(tx, tabId, command.mentionId, context.mention!.personId, context.now)
       if (context.attachments?.length) {
         // Conflicts with a concurrent send of the same file: only one message can take it.
         const taken = await tx.superTabAttachment.updateMany({ where: { tabId, id: { in: context.attachments.map(a => a.id) }, ...unused },
@@ -867,7 +873,7 @@ export class SuperTabStore {
       await tx.superTabMessage.create({ data: { id: message.id, tabId, conversationId: message.conversationId,
         sequence: revision, author: json(message.author), ...(message.source ? { source: json(message.source) } : {}),
         ...(message.attachments ? { attachments: json(message.attachments) } : {}),
-        text: message.text, replyTo: message.replyTo, recipientIds: message.recipients } })
+        text: message.text, replyTo: message.replyTo, recipientIds: message.recipients, mentions: message.mentions ?? [] } })
       for (const recipient of message.recipients) {
         const target = agent(state, recipient)
         const group = conversation(state, message.conversationId)
@@ -897,7 +903,15 @@ export class SuperTabStore {
       const deliveries = page.length ? await tx.superTabDelivery.findMany({ where: { tabId, messageId: { in: page.map(m => m.id) } },
         select: { id: true, messageId: true, agentId: true, status: true, receipt: true,
           holdReason: true, holdSince: true, deliveredAt: true, answeredAt: true, createdAt: true, updatedAt: true } }) : []
-      return { messages: page.map(m => ({ ...m, deliveries: deliveries.filter(d => d.messageId === m.id) })), next, revision: row.revision }
+      return { messages: page.map(m => ({ ...m, mentions: m.mentions ?? [], deliveries: deliveries.filter(d => d.messageId === m.id) })), next, revision: row.revision }
+    })
+  }
+
+  /** The caller's own tags in this Swarm, newest first: still waiting, or answered and marked done. */
+  async mentions(user: AuthUser, tabId: string, state: 'waiting' | 'earlier') {
+    return transaction(this.db, async tx => {
+      const row = await this.row(tx, user, tabId)
+      return { mentions: await listMentions(tx, tabId, stateOf(row), { kind: 'person', userId: user.sub, email: user.email }, this.now(), state === 'waiting') }
     })
   }
 
@@ -979,6 +993,9 @@ export class SuperTabStore {
             groupProject(state, conversation(state, s.request.conversationId)).id === p.id))
             .map(p => ({ id: p.id, leadConversationId: p.leadConversationId, repository: p.repository,
               conversationIds: state.conversations.filter(c => !isLeads(c) && groupProject(state, c).id === p.id).map(c => c.id) })) } : {}),
+          // The Swarm's grid while the Local models add-on is on: the host reports the models it serves there, and asks grid
+          // nothing while it is off.
+          ...hostLocalGrid(state),
           reservations: (state.harnessReservations ?? []).filter(r => r.machineId === machineId).map(({ harnessId, generation }) => ({ harnessId, generation })),
           harnessIds: [...new Set([...state.agents.filter(a => a.machineId === machineId).map(a => a.harnessId), ...(state.harnessReservations ?? []).filter(r => r.machineId === machineId).map(r => r.harnessId), ...(state.starts ?? []).filter(s => s.request.machineId === machineId && s.harnessId).map(s => s.harnessId!)])] }]
       })
@@ -993,6 +1010,12 @@ export class SuperTabStore {
       author(state, actor)
       return removalPreview(state, actor, machineId)
     })
+  }
+
+  /** The owner's Swarms with the Local models add-on: what the owner's computer creates on grid and keeps in step. */
+  async hostGrids(user: AuthUser) {
+    const rows = await this.db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, ownerId: user.sub }, take: 100 })
+    return rows.flatMap(row => swarmGridRow(row.id, stateOf(row)) ?? [])
   }
 
   async observeMachine(user: AuthUser, tabId: string, machineId: string, input: MachineObservation) {

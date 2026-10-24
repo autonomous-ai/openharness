@@ -163,6 +163,17 @@ describe('terminal alerts', () => {
     expect(lead.messages[0]).toMatchObject({ conversationId: 'lead', recipients: [] })
   })
 
+  it('tells the Lead when an agent cannot get answers from its model, once per episode', () => {
+    const s = swarm()
+    const on = () => s.run({ type: 'agent.alert', agentId: s.worker, alert: 'model', active: true }, as(s.worker)).messages
+    expect(on()[0]).toMatchObject({ recipients: [s.lead], source: { kind: 'terminal-alert', agentId: s.worker, alert: 'model' },
+      text: `${name(s, s.worker)} can't get answers from its model: its requests keep failing. Stop it, or give the work to another model.` })
+    expect(on()).toEqual([])
+    expect(s.state.agents.find(a => a.id === s.worker)!.limitedUntil).toBeUndefined()
+    s.run({ type: 'agent.alert', agentId: s.worker, alert: 'model', active: false }, as(s.worker))
+    expect(on()).toHaveLength(1)
+  })
+
   it('takes alerts only from the agent\'s own host', () => {
     const s = swarm()
     expect(() => s.run({ type: 'agent.alert', agentId: s.worker, alert: 'prompt', active: true }, as(s.lead))).toThrow()

@@ -9,6 +9,7 @@ import '../state/app_state.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
+import 'local_models.dart';
 import 'machines.dart';
 import 'model.dart';
 import 'section_heading.dart';
@@ -24,6 +25,8 @@ class ProjectSidebar extends StatelessWidget {
     this.onNewProject,
     this.onYourDevices,
     this.devicesSelected = false,
+    this.onNotifications,
+    this.notificationsSelected = false,
     this.onOpenAgent,
     this.readLocal,
     this.now = DateTime.now,
@@ -36,6 +39,10 @@ class ProjectSidebar extends StatelessWidget {
   final VoidCallback? onNewProject;
   final VoidCallback? onYourDevices;
   final bool devicesSelected;
+
+  /// The reader's tags from every project's Lead; its count is what waits.
+  final VoidCallback? onNotifications;
+  final bool notificationsSelected;
   final ValueChanged<SuperTabAgent>? onOpenAgent;
 
   /// Forwarded to the embedded [SuperTabMachines]; a test gives it to have
@@ -58,6 +65,7 @@ class ProjectSidebar extends StatelessWidget {
     required IconData icon,
     required VoidCallback? onTap,
     bool selected = false,
+    int badge = 0,
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 2),
     child: Material(
@@ -105,6 +113,25 @@ class ProjectSidebar extends StatelessWidget {
                   ),
                 ),
               ),
+              if (badge > 0)
+                Padding(
+                  padding: const EdgeInsets.only(right: 10),
+                  child: Container(
+                    constraints: const BoxConstraints(minWidth: 18),
+                    padding: const EdgeInsets.symmetric(horizontal: 5),
+                    decoration: BoxDecoration(
+                      color: grid.AppPalette.warn.withValues(alpha: .16),
+                      borderRadius: BorderRadius.circular(9),
+                    ),
+                    child: Text(
+                      '$badge',
+                      textAlign: TextAlign.center,
+                      style: DesktopChrome.metadata(
+                        color: grid.AppPalette.warn,
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
@@ -119,7 +146,10 @@ class ProjectSidebar extends StatelessWidget {
     String? label,
     IconData? icon,
   }) {
-    final selected = !devicesSelected && controller.selectedId == group.id;
+    final selected =
+        !devicesSelected &&
+        !notificationsSelected &&
+        controller.selectedId == group.id;
     final groups = project == null
         ? [group]
         : controller.snapshot!.conversations.where(
@@ -365,6 +395,16 @@ class ProjectSidebar extends StatelessWidget {
               icon: AppIcons.plus,
               onTap: controller.canWrite ? onNewProject : null,
             ),
+          // The Swarm's models (docs/plans/2026-10-23-swarm-local-models.md), for everyone: the owner sets them up here,
+          // and everyone runs and shares models here once they are. What each machine offers is on the machine.
+          if (snapshot != null)
+            _navigationRow(
+              key: 'super-local-models',
+              label: 'Manage models',
+              icon: AppIcons.cpu,
+              onTap: () =>
+                  showSwarmLocalModels(context, controller, app: app, now: now),
+            ),
           if (onYourDevices != null)
             _navigationRow(
               key: 'super-your-devices',
@@ -373,7 +413,20 @@ class ProjectSidebar extends StatelessWidget {
               onTap: onYourDevices,
               selected: devicesSelected,
             ),
-          if (onNewProject != null || onYourDevices != null)
+          if (onNotifications != null)
+            _navigationRow(
+              key: 'super-notifications',
+              label: 'Notifications',
+              icon: AppIcons.bell,
+              onTap: onNotifications,
+              selected: notificationsSelected,
+              badge: snapshot?.mentionsWaiting ?? 0,
+            ),
+          if (onNewProject != null ||
+              onYourDevices != null ||
+              onNotifications != null ||
+              controller.isOwner ||
+              snapshot?.localModels?.enabled == true)
             const SizedBox(height: 20),
           // Every person in the Swarm reads where the Product Managers talk.
           if (snapshot?.conversation(snapshot.leadsConversationId ?? '')

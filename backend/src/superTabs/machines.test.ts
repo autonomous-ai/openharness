@@ -13,6 +13,15 @@ it('accepts optional tool probe failures while preserving older observations', (
   expect(machineObservationSchema.safeParse({ ...sent, tools: { git: true }, toolProbeErrors: { flutter: 'interactive shell timed out' } }).success).toBe(true)
 })
 
+it('accepts the served models Builders are not offered, with why', () => {
+  const { receivedAt: _receivedAt, ...sent } = observation
+  const refused = { grid: 'swarm-0123456789ab', model: 'llama3.2:3b', name: 'llama3.2:3b', why: 'llama3.2:3b is too small for a coding agent.' }
+  expect(machineObservationSchema.safeParse({ ...sent, refusedModels: [refused] }).success).toBe(true)
+  expect(machineObservationSchema.safeParse({ ...sent, refusedModels: [{ ...refused, why: '' }] }).success).toBe(false)
+  expect(machineObservationSchema.safeParse({ ...sent, refusedModels: [{ ...refused, extra: 1 }] }).success).toBe(false)
+  expect(machineObservationSchema.safeParse({ ...sent, refusedModels: Array(17).fill(refused) }).success).toBe(false)
+})
+
 function setup(machine: Partial<ContributedMachine> = {}) {
   const state: SuperTabState = createSuperTab('tab', 'Team', { id: 'owner', email: 'owner@example.com' }, 'test')
   state.machines = [{ machineId: 'host', name: 'Studio Mac', contributorId: 'owner', membershipGeneration: 'tab', generation: 'g1',

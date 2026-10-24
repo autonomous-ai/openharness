@@ -3,9 +3,10 @@ import type { openDaemon } from '../agentClient/daemon.js'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { routeTask } from './routeCommand.js'
+import { heldLocalModels, localProbes, routeTask } from './routeCommand.js'
 import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf } from './capacity.js'
+import type { Assessment, Policy, Probe } from './route.js'
 
 const policy = { version: 1, floor: { low: 1, medium: 2, high: 3 }, quotaReserve: 10, notes: '', models: [
   { engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, enabled: true },
@@ -782,5 +783,109 @@ describe('routing contributed capacity', () => {
     Object.assign(unverified.observation, { toolProbeErrors: { git: 'interactive shell timed out' } })
     const failed = await runPool(unverified)
     expect(failed.answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringMatching(/Required tool not verified: git.*interactive shell timed out/) })]))
+  })
+})
+
+describe('local models on the Swarm\'s grid', () => {
+  const GRID = 'swarm-0123456789ab', NOW = 1_000_000_000
+  const served = (models: Array<Record<string, unknown>>, receivedAt: unknown = NOW - 1_000) => ({ machineId: 'm1', observation: { receivedAt, localModels: models } })
+  const state = (patch: Record<string, unknown> = {}) => ({ localModels: { grid: GRID, enabled: true }, machines: [served([{ grid: GRID, model: 'qwen3', name: 'Qwen 3' }])], agents: [], starts: [], ...patch })
+  const base = (patch: Partial<Probe> = {}): Probe => ({ kind: 'new', machineId: 'm1', machineName: 'remote-1', engine: 'claude', model: 'sonnet', effort: 'medium', quality: 2, cost: 2,
+    quota: { known: true, leftPercent: 50, resetsAt: null }, activity: 'new agent', known: true, refusals: [], ...patch })
+  const assessment = { difficulty: 'low', risk: 'low', size: 'medium', why: 'x', needs: { tools: [], devices: [] } } as Assessment
+  const routing = policy as unknown as Policy
+  const offered = (s: Record<string, unknown>, opts: { probes?: Probe[]; a?: Assessment; review?: boolean; policy?: Policy } = {}) =>
+    localProbes(s, opts.policy ?? routing, opts.probes ?? [base()], opts.a ?? assessment, opts.review ?? false, NOW)
+
+  it('offers one new agent per machine and engine on each served model, free and at the policy\'s local quality', () => {
+    const probes = [base(), base({ model: 'opus', effort: 'high' }), base({ engine: 'codex', refusals: ['Its subscription is used up.', 'Too little memory.'] }),
+      base({ kind: 'member', agentId: 'a1' }), base({ gridModel: 'other' })]
+    const rows = offered(state(), { probes, policy: { ...routing, localModels: { quality: 2, enabled: true } } })
+    expect(rows.map(r => [r.engine, r.model, r.effort, r.quality, r.cost, r.gridModel, r.gridName, r.gridLabel, r.refusals])).toEqual([
+      ['claude', 'default', 'default', 2, 1, 'qwen3', GRID, 'Qwen 3', []],
+      ['codex', 'default', 'default', 2, 1, 'qwen3', GRID, 'Qwen 3', ['Too little memory.']],
+    ])
+    expect(rows[0]!.quota).toMatchObject({ known: false })
+    // A backend before the add-on sends no policy for it: quality 1. A model with no name is called by its model.
+    const unnamed = state({ machines: [served([{ grid: GRID, model: 'qwen3' }])] })
+    expect(offered(unnamed)[0]).toMatchObject({ quality: 1, gridLabel: 'qwen3' })
+  })
+  it('offers nothing with the add-on off, for a review, or when the owner turned local models off and nobody asked for one', () => {
+    expect(offered(state({ localModels: undefined }))).toEqual([])
+    expect(offered(state({ localModels: { grid: GRID, enabled: false } }))).toEqual([])
+    expect(offered(state({ localModels: { enabled: true } }))).toEqual([])
+    expect(offered(state(), { review: true })).toEqual([])
+    const off = { ...routing, localModels: { quality: 1, enabled: false } }
+    expect(offered(state(), { policy: off })).toEqual([])
+    expect(offered(state(), { policy: off, a: { ...assessment, local: true } })).toHaveLength(1)
+  })
+  it('reads only fresh readings, and of a model on another grid only on the machine that reaches it', () => {
+    expect(offered(state({ machines: [served([{ grid: GRID, model: 'qwen3' }], NOW - 60_000)] }))).toEqual([])
+    expect(offered(state({ machines: [served([{ grid: GRID, model: 'qwen3' }], 'soon')] }))).toEqual([])
+    expect(offered(state({ machines: [served([{ grid: GRID, model: 7 }, { grid: 3, model: 'x' }])] }))).toEqual([])
+    // Shared with m1's owner on their team grid: offered on m1 alone, while one on the Swarm's grid is offered on both.
+    const reach = state({ machines: [served([{ grid: 'team-grid', model: 'team-model', kind: 'shared' }]), { machineId: 'm2', observation: { receivedAt: NOW - 1_000, localModels: [{ grid: GRID, model: 'qwen3' }] } }] })
+    const rows = offered(reach, { probes: [base(), base({ machineId: 'm2', machineName: 'mac' })] })
+    expect(rows.map(r => [r.machineId, r.gridName, r.gridModel, r.gridKind])).toEqual([
+      ['m1', 'team-grid', 'team-model', 'shared'], ['m1', GRID, 'qwen3', 'local'], ['m2', GRID, 'qwen3', 'local'],
+    ])
+    // An API a member shares, by its kind; another grid's model without one is shared with that machine's owner.
+    const kinds = state({ machines: [served([{ grid: GRID, model: 'ds', kind: 'api' }, { grid: 'team-grid', model: 'tm' }])] })
+    expect(offered(kinds).map(r => [r.gridModel, r.gridKind])).toEqual([['ds', 'api'], ['tm', 'shared']])
+    // A Builder started on the shared model takes it, by its own grid.
+    expect(offered({ ...reach, starts: [{ request: { gridModel: 'team-model', gridName: 'team-grid' } }] }, { probes: [base()] }).map(r => r.gridModel)).toEqual(['qwen3'])
+  })
+  it('keeps a model for the Builder started on it until that Builder leaves the Swarm', () => {
+    const start = (patch: Record<string, unknown>) => ({ request: { gridModel: 'qwen3' }, ...patch })
+    expect(offered(state({ starts: [start({})] }))).toEqual([])
+    expect(offered(state({ starts: [start({ harnessId: 'h9' })], agents: [{ harnessId: 'h9' }] }))).toEqual([])
+    expect(offered(state({ starts: [start({ harnessId: 'h9' })] }))).toHaveLength(1)
+    expect(offered(state({ starts: [start({ error: 'NO_CAPACITY' })] }))).toHaveLength(1)
+    expect(offered(state({ starts: [{ request: { model: 'opus' } }, {}] }))).toHaveLength(1)
+  })
+  it('lets up to four Builders share an API model, which answers several requests at once', () => {
+    const api = state({ machines: [served([{ grid: GRID, model: 'ds', name: 'DeepSeek', kind: 'api' }])] })
+    const starts = (n: number) => Array.from({ length: n }, (_, i) => ({ request: { gridModel: 'ds' }, harnessId: `h${i}` }))
+    const agents = (n: number) => Array.from({ length: n }, (_, i) => ({ harnessId: `h${i}`, name: `B${i}` }))
+    expect(offered({ ...api, starts: starts(3), agents: agents(3) })).toHaveLength(1)
+    expect(offered({ ...api, starts: starts(4), agents: agents(4) })).toEqual([])
+  })
+  it('names the Builders on each model that takes no more, so the route can say why it is not offered', () => {
+    const api = served([{ grid: GRID, model: 'ds', name: 'DeepSeek', kind: 'api' }, { grid: GRID, model: 'qwen3', name: 'Qwen 3' }])
+    const s = state({ machines: [api],
+      starts: [{ request: { gridModel: 'qwen3' }, harnessId: 'h1' }, { request: { gridModel: 'qwen3' } },
+        ...['h2', 'h3', 'h4', 'h5'].map(harnessId => ({ request: { gridModel: 'ds' }, harnessId }))],
+      agents: [{ harnessId: 'h1', displayName: 'Faye', name: 'Builder' }, { harnessId: 'h2', name: 'Wren' }, { harnessId: 'h3' }, { harnessId: 'h4', name: 'Ada' }, { harnessId: 'h5', name: 'Bo' }] })
+    expect(heldLocalModels(s, NOW)).toEqual([
+      { model: 'ds', label: 'DeepSeek', kind: 'api', holders: ['Wren', 'a Builder', 'Ada', 'Bo'] },
+      { model: 'qwen3', label: 'Qwen 3', kind: 'local', holders: ['Faye', 'a Builder that is starting'] },
+    ])
+    // Nothing is held while the add-on is off, or with a model nobody is on.
+    expect(heldLocalModels(state({ localModels: { grid: GRID, enabled: false } }), NOW)).toEqual([])
+    expect(heldLocalModels(state(), NOW)).toEqual([])
+    expect(heldLocalModels(state({ localModels: undefined }))).toEqual([])
+  })
+  it('adds the models a fresh reading says Builders are never offered, with why, once each', () => {
+    const why = 'llama3.2:3b is too small for a coding agent.'
+    const refusing = (receivedAt: unknown, refusedModels: unknown) => ({ machineId: 'm2', observation: { receivedAt, refusedModels } })
+    const s = state({ machines: [served([]), refusing(NOW - 1_000, [
+      { grid: GRID, model: 'llama3.2:3b', why }, { grid: GRID, model: 'llama3.2:3b', why }, { grid: GRID, model: 'tiny', name: 'Tiny 1B', why: 'small' },
+      { grid: 'other-grid', model: 'x', why }, { grid: GRID, model: 7, why }, { grid: GRID, model: 'no-why' }]),
+      refusing(NOW - 60_000, [{ grid: GRID, model: 'stale', why }]), refusing('soon', [{ grid: GRID, model: 'odd', why }])] })
+    expect(heldLocalModels(s, NOW)).toEqual([
+      { model: 'llama3.2:3b', label: 'llama3.2:3b', kind: 'local', holders: [], refused: why },
+      { model: 'tiny', label: 'Tiny 1B', kind: 'local', holders: [], refused: 'small' },
+    ])
+  })
+  it('routes a low task to a served model and starts it on the grid, with no subscription model', async () => {
+    const t = tab(); Object.assign(t.state, { localModels: { grid: GRID, enabled: true },
+      machines: [{ machineId: 'm1', observation: { receivedAt: Date.now(), localModels: [{ grid: GRID, model: 'qwen3', name: 'Qwen 3' }] } }] })
+    const s = scoped({ tab: t })
+    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low', local: true } }, s, where as never, opener(), () => 'op')
+    expect(result).toMatchObject({ ok: true, pick: { kind: 'new', gridModel: 'qwen3', gridName: GRID } })
+    const hint = JSON.parse(/start OPERATION_ID (\{.*\}), then/.exec(result.next as string)![1]!)
+    expect(hint).toMatchObject({ engine: 'claude', gridModel: 'qwen3', gridName: GRID })
+    expect(hint).not.toHaveProperty('model')
+    expect(recorded(s).command.decision.candidates[0]).toMatchObject({ gridModel: 'qwen3', gridName: GRID })
   })
 })

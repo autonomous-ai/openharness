@@ -9,10 +9,11 @@ import '../core/test_run.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../models/api_connections_controller.dart'
-    show ApiModels, contextWindowLabel;
+    show ApiConnection, ApiModels, contextWindowLabel;
 import '../models/local_model.dart';
 import '../models/model_search_catalog.dart';
 import '../core/relative_time.dart';
+import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/fingerprint_text.dart';
 import '../state/account_devices.dart';
@@ -35,6 +36,8 @@ import 'swarm_search_preview.dart';
 import 'swarm_preview_scroll.dart';
 import 'terminal_text_action.dart';
 import 'desktop_chrome.dart';
+import '../models/coding_model.dart';
+import 'swarm_model_tile.dart';
 import 'key_hints.dart';
 
 const resourcePickerCommands = {
@@ -685,7 +688,17 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
 
   List<_ResourceAction> _visibleActions() => [
     ..._actions(),
-    if (!_isManagement && row?.isCreate != true && _commands().isNotEmpty)
+    // A Swarm's Manage models has no Actions menu: an API's one other action, Edit, is beside its button.
+    if (_swarmCards) ...[
+      if (model?.api case final api? when model?.apiModel == null)
+        _ResourceAction(
+          'Edit connection',
+          _pending.contains(row?.id) ? null : () => _editApi(api.id),
+          command: 'picker.resource_settings',
+        ),
+    ] else if (!_isManagement &&
+        row?.isCreate != true &&
+        _commands().isNotEmpty)
       _ResourceAction(
         'Actions…',
         widget.onCommands,
@@ -718,6 +731,30 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
           action.command,
           contextKind: KeymapContext.picker,
         );
+        if (_swarmCards) {
+          // The one action that does what the row is for is filled; a stop is quiet, in the error colour.
+          final primary = action.command == _actions().firstOrNull?.command;
+          final stop = action.label.startsWith('Stop');
+          return Semantics(
+            liveRegion: action.label == 'Working…',
+            child: DesktopPill(
+              key: ValueKey('resource-action:${action.command}'),
+              focusNode: node,
+              label: row?.isCreate == true && primary
+                  ? 'Add connection'
+                  : action.label,
+              capsule: false,
+              onPressed: invoke,
+              surfaceColor: primary && !stop ? grid.AppPalette.accent : null,
+              foregroundColor: primary && !stop
+                  ? DesktopChrome.onSelection
+                  : stop
+                  ? Theme.of(context).colorScheme.error
+                  : null,
+              tooltip: [action.label, ?shortcut].join(' · '),
+            ),
+          );
+        }
         return Semantics(
           liveRegion: action.label == 'Working…',
           child: fingerTarget(
@@ -753,9 +790,17 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
       },
       child: Wrap(
         key: const ValueKey('swarm-search-resource-actions'),
+        alignment: _swarmCards ? WrapAlignment.end : WrapAlignment.start,
         spacing: desktop ? 8 : cell.width * 2,
         runSpacing: desktop ? 8 : cell.height,
-        children: [for (final action in _visibleActions()) button(action)],
+        children: [
+          // A Swarm's bar ends in its main action, at the right, as a dialog's does.
+          for (final action
+              in _swarmCards
+                  ? [..._visibleActions().skip(1), ..._visibleActions().take(1)]
+                  : _visibleActions())
+            button(action),
+        ],
       ),
     );
     void next() => _traverseActions(true);
@@ -929,6 +974,32 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
       final local = model?.local;
       final api = model?.api;
       final owner = model?.controller ?? catalog.manager;
+      // A Swarm's Local models: each model's one action is for the Swarm (SwarmSearchController.swarmModelAction).
+      if (search.swarmModels != null &&
+          !(local != null && owner.downloading(local))) {
+        final swarm = search.swarmModelAction(selected);
+        if (swarm != null) {
+          final run = swarm.run;
+          return [
+            _ResourceAction(
+              swarm.label,
+              !busy && run != null ? () => unawaited(_run(run)) : null,
+              command: swarm.command,
+            ),
+          ];
+        }
+        if (api != null && model?.apiModel == null) {
+          return [
+            if (search.canExpandApi(selected))
+              _ResourceAction(
+                search.actionLabel(selected),
+                _open,
+                command: 'picker.accept',
+              ),
+          ];
+        }
+        return const [];
+      }
       if (local != null && owner.downloading(local)) {
         // A download under way: cancelling it is the one action open while it runs.
         return [
@@ -1285,6 +1356,279 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     ];
   }
 
+  /// The preview is a Swarm's Manage models, drawn as a card of its own rather than ⌘I's lines.
+  bool get _swarmCards =>
+      widget.search.isSwarmModels && DesktopChrome.of(context);
+
+  /// A Swarm's model or API: its mark and kind over its name and status, a sentence on what it is to the Swarm,
+  /// its facts in one framed list, then whatever else it has (the models an API shares), and a warning last.
+  Widget _swarmCard({
+    required SwarmModelKind kind,
+    required String kicker,
+    required String title,
+    String? status,
+    bool live = false,
+    String? blurb,
+    List<(String, String)> facts = const [],
+    Set<String> monospace = const {},
+    List<Widget> extra = const [],
+    String? note,
+    List<String> errors = const [],
+  }) {
+    final error = Theme.of(context).colorScheme.error;
+    return ListView(
+      key: const ValueKey('swarm-model-card'),
+      controller: _scroll,
+      padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SwarmModelTile(kind: kind, size: 44),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    kicker.toUpperCase(),
+                    style: DesktopChrome.text(
+                      size: 11,
+                      medium: true,
+                      height: 1.3,
+                      color: DesktopChrome.muted,
+                    ).copyWith(letterSpacing: .6),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    title,
+                    style: DesktopChrome.text(
+                      size: 18,
+                      medium: true,
+                      height: 1.3,
+                    ).copyWith(fontWeight: FontWeight.w600),
+                  ),
+                  if (status != null) ...[
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        if (live) ...[
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: grid.AppPalette.online,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                        ],
+                        Flexible(
+                          child: Text(
+                            status,
+                            key: const ValueKey('swarm-model-card-status'),
+                            style: DesktopChrome.metadata(),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+        if (blurb != null) ...[
+          const SizedBox(height: 18),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 460),
+            child: Text(
+              blurb,
+              style: DesktopChrome.text(size: 13, height: 1.5),
+            ),
+          ),
+        ],
+        for (final line in errors) ...[
+          const SizedBox(height: 10),
+          Text(line, style: DesktopChrome.text(size: 12, color: error)),
+        ],
+        if (facts.isNotEmpty) ...[
+          const SizedBox(height: 18),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: DesktopChrome.foreground.withValues(alpha: .03),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: DesktopChrome.rim),
+            ),
+            child: Column(
+              children: [
+                for (final (index, (label, value)) in facts.indexed) ...[
+                  if (index > 0) Divider(height: 1, color: DesktopChrome.rim),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 9,
+                    ),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final labelText = Text(
+                          label,
+                          style: DesktopChrome.text(
+                            size: 12,
+                            color: DesktopChrome.muted,
+                          ),
+                        );
+                        final valueText = Text(
+                          monospace.contains(label) || value.isEmpty
+                              ? value
+                              : '${value[0].toUpperCase()}${value.substring(1)}',
+                          style: monospace.contains(label)
+                              ? grid.AppType.monoMeta(
+                                  color: DesktopChrome.foreground,
+                                )
+                              : DesktopChrome.text(size: 13, height: 1.4),
+                        );
+                        final scale =
+                            MediaQuery.textScalerOf(context).scale(12) / 12;
+                        return constraints.maxWidth < 280 * scale
+                            ? Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [labelText, valueText],
+                              )
+                            : Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  SizedBox(
+                                    width: 104 * scale,
+                                    child: labelText,
+                                  ),
+                                  Expanded(child: valueText),
+                                ],
+                              );
+                      },
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+        ...extra,
+        if (note != null) ...[
+          const SizedBox(height: 18),
+          Container(
+            key: const ValueKey('swarm-model-card-note'),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: grid.AppPalette.warn.withValues(alpha: .10),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: grid.AppPalette.warn.withValues(alpha: .30),
+              ),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(top: 1),
+                  child: Icon(
+                    AppIcons.triangleAlert,
+                    size: 15,
+                    color: grid.AppPalette.warn,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    note,
+                    style: DesktopChrome.text(size: 12, height: 1.5),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// The models of the saved API [api] this computer shares with the Swarm, each with Stop sharing.
+  List<Widget> _swarmSharedModels(ApiConnection api) {
+    final swarm = widget.search.swarmModels!;
+    final shared = [
+      for (final key in swarm.shares)
+        if (key.startsWith('${api.id}\u0000')) key.substring(api.id.length + 1),
+    ]..sort();
+    if (shared.isEmpty) return const [];
+    final busy = _pending.contains(row?.id);
+    return [
+      const SizedBox(height: 22),
+      Row(
+        children: [
+          Text(
+            'Shared with this Swarm',
+            style: DesktopChrome.text(
+              size: 12,
+              medium: true,
+            ).copyWith(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(width: 8),
+          SwarmModelPill('${shared.length}'),
+        ],
+      ),
+      const SizedBox(height: 8),
+      for (final model in shared)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Container(
+            key: ValueKey('swarm-shared-model:$model'),
+            padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
+            decoration: BoxDecoration(
+              color: DesktopChrome.foreground.withValues(alpha: .03),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: DesktopChrome.rim),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: grid.AppPalette.online,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    model,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: grid.AppType.monoMeta(
+                      color: DesktopChrome.foreground,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                DesktopPill(
+                  key: ValueKey('swarm-stop-sharing:$model'),
+                  label: 'Stop sharing',
+                  compact: true,
+                  capsule: false,
+                  textSize: 12,
+                  onPressed: busy
+                      ? null
+                      : () => unawaited(
+                          _run(() => swarm.share(api.id, model, start: false)),
+                        ),
+                ),
+              ],
+            ),
+          ),
+        ),
+    ];
+  }
+
   Widget _modelPreview() {
     final catalog = widget.search.models;
     if (catalog == null) return _details(['No matching models']);
@@ -1390,7 +1734,17 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         ? catalog.localStatus(local, controller: owner)
         : entry.status;
 
+    // A Swarm's card collects the facts and warnings below rather than drawing them as lines.
+    final swarmCard = _swarmCards && entry.local != null;
+    final facts = <(String, String)>[];
+    final errors = <String>[];
+    String? swarmBlurb;
+
     Widget labelValue(String label, String value) {
+      if (swarmCard) {
+        label == 'Swarm' ? swarmBlurb = value : facts.add((label, value));
+        return const SizedBox.shrink();
+      }
       if (desktop) return _desktopDetail(label, value);
       return Padding(
         padding: EdgeInsets.only(bottom: cell.height * .6),
@@ -1417,6 +1771,10 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     }
 
     Widget errorLine(String text) {
+      if (swarmCard) {
+        errors.add(text);
+        return const SizedBox.shrink();
+      }
       return Padding(
         padding: EdgeInsets.only(top: cell.height),
         child: Text(
@@ -1431,7 +1789,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
       );
     }
 
-    return ListView(
+    final lines = ListView(
       controller: _scroll,
       padding: EdgeInsets.symmetric(
         horizontal: cell.width * 2,
@@ -1456,6 +1814,22 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
             widget.search.modelUseError != null)
           errorLine(widget.search.modelUseError!),
         SizedBox(height: cell.height),
+        if (widget.search.swarmModels case final swarm?)
+          labelValue(
+            'Swarm',
+            local == null
+                ? swarm.offered(
+                        entry.gridModel?.grid ?? '',
+                        entry.gridModel?.id ?? '',
+                      )
+                      ? 'Offered: the PM can start Builders on your machines on it'
+                      : 'Offer to Swarm lets the PM start Builders on your machines on it'
+                : codingRefusal(local) != null
+                ? 'The Lead routes Builders only onto models that can drive a coding agent.'
+                : local.servedOn(swarm.grid)
+                ? 'Running for this Swarm: the Lead can route Builders on any machine in it onto this model.'
+                : 'Run for Swarm lets the Lead route Builders on any machine in the Swarm onto this model.',
+          ),
         if (local != null) ...[
           // A model another app downloaded starts in that app, joined to the grid from there.
           if (local.app case final app?) labelValue('Runs in', app),
@@ -1580,6 +1954,34 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         if (!desktop) ...[SizedBox(height: cell.height), _actionButtons()],
       ],
     );
+    if (!swarmCard) return lines;
+    final kind = swarmModelKind(widget.search, row!);
+    final swarmStatus = widget.search.modelRowStatus(row!);
+    return _swarmCard(
+      kind: kind,
+      kicker: kind == SwarmModelKind.get
+          ? 'Get for $machineName'
+          : 'Model on $machineName',
+      title: entry.name,
+      status:
+          swarmStatus != null &&
+              swarmStatus != widget.search.modelRowAction(row!)
+          ? swarmStatus
+          : statusWord,
+      live: kind == SwarmModelKind.live,
+      blurb: kind == SwarmModelKind.get
+          ? 'Get downloads it to $machineName. Then run it for the Swarm, and the Lead can route Builders onto it.'
+          : swarmBlurb,
+      facts: facts,
+      errors: errors,
+      // Too small or too slow for a coding agent: Builders are never offered it, running or not (coding_model.dart).
+      note: switch (codingRefusal(local!)) {
+        final why? when local.servedOn(widget.search.swarmModels!.grid) =>
+          'Not offered to Builders: $why',
+        final why? => why,
+        null => null,
+      },
+    );
   }
 
   static const _kGiB = 1024 * 1024 * 1024;
@@ -1618,6 +2020,65 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     final api = entry.api!;
     final listed = widget.search.models!.manager.apis.models[api.id];
     final model = entry.apiModel;
+    final hostLabel = widget.search.models!.manager.apis.hostLabel;
+    if (widget.search.swarmModels case final swarm? when _swarmCards) {
+      const charged =
+          'Builders who use a shared model run on this key, and every request they send is charged to it.';
+      if (model != null) {
+        final shared = swarm.shared(api.id, model.id);
+        return _swarmCard(
+          kind: SwarmModelKind.apiModel,
+          kicker: '${api.name} model',
+          title: entry.name,
+          status: shared ? 'Shared with this Swarm' : 'Not shared',
+          live: shared,
+          blurb: shared
+              ? 'Agents on any machine in this Swarm can run on it, through $hostLabel.'
+              : 'Share with Swarm lets agents on any machine in this Swarm run on it, through $hostLabel.',
+          facts: [
+            if (model.name case final name?) ('Name', name),
+            ('Model', model.id),
+            if (model.contextWindow case final window?)
+              ('Context', contextWindowLabel(window)),
+            ('Via', '${api.name} · ${api.host}'),
+          ],
+          monospace: const {'Model'},
+          note: charged,
+        );
+      }
+      final count = listed?.models.length ?? 0;
+      final shares = widget.search.swarmApiShareCount(row!) ?? 0;
+      return _swarmCard(
+        kind: SwarmModelKind.api,
+        kicker: 'API connection',
+        title: entry.name,
+        status: shares > 0
+            ? '$shares ${shares == 1 ? 'model' : 'models'} shared with the Swarm'
+            : 'Not shared',
+        live: shares > 0,
+        blurb: !api.servesModels
+            ? 'Harness agents on this computer can call it as a tool. It has no models to share with the Swarm.'
+            : shares > 0
+            ? 'Builders anywhere in the Swarm can run on what it shares, through $hostLabel. Show its models to share another.'
+            : 'Show its models to share one with the Swarm. Builders anywhere in it can then run on it, through $hostLabel.',
+        facts: [
+          ('Endpoint', api.baseUrl),
+          ('Key', 'Saved on $hostLabel'),
+          (
+            'Models',
+            switch (listed) {
+              ApiModels(loading: true) when count == 0 => 'Loading…',
+              ApiModels(error: _?) when count == 0 => 'Unavailable',
+              _ => '$count',
+            },
+          ),
+        ],
+        monospace: const {'Endpoint'},
+        extra: _swarmSharedModels(api),
+        errors: [?listed?.error],
+        note: api.servesModels ? charged : null,
+      );
+    }
     if (model != null) {
       final reason = widget.search.modelUseReason(row);
       return _details([
@@ -1631,7 +2092,11 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         if (model.name case final name?) ('Name', name),
         ('Via', '${api.name} · ${api.host}'),
         '',
-        if (reason == null)
+        if (widget.search.swarmModels case final swarm?) ...[
+          swarm.shared(api.id, model.id) ? 'Shared with this Swarm.' : 'Share with Swarm lets agents on any machine in this Swarm run on it.',
+          'They use the key saved on ${widget.search.models!.manager.apis.hostLabel}, '
+              'and every request they send is charged to that key.',
+        ] else if (reason == null)
           'Use runs this harness on it, with the key saved on '
               '${widget.search.models!.manager.apis.hostLabel}.'
         else if (reason == 'Other machine')
@@ -1992,20 +2457,30 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
           grid.AppTheme.palette.value,
           terminalThemeStore.value,
         );
-        final showsHints = KeyHints.visibleOf(context);
+        final showsHints = KeyHints.visibleOf(context) && !_swarmCards;
         final actions = [
-          if (desktop || !_isManagement)
-            Padding(
-              padding: EdgeInsets.fromLTRB(
-                cell.width * 2,
-                cell.height,
-                cell.width * 2,
-                // The hints line is the gap under the buttons; without it
-                // they would sit on the panel's edge.
-                showsHints ? 0 : cell.height,
+          if (_swarmCards)
+            Container(
+              padding: const EdgeInsets.fromLTRB(24, 14, 24, 14),
+              decoration: BoxDecoration(
+                border: Border(top: BorderSide(color: DesktopChrome.rim)),
               ),
               child: _actionButtons(),
-            ),
+            )
+          else ...[
+            if (desktop || !_isManagement)
+              Padding(
+                padding: EdgeInsets.fromLTRB(
+                  cell.width * 2,
+                  cell.height,
+                  cell.width * 2,
+                  // The hints line is the gap under the buttons; without it
+                  // they would sit on the panel's edge.
+                  showsHints ? 0 : cell.height,
+                ),
+                child: _actionButtons(),
+              ),
+          ],
           if (showsHints) _controlHints(),
         ];
         return LayoutBuilder(
@@ -2120,6 +2595,16 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
                           'Saves the current conversation, then starts a new one in the same folder. Your panes stay in place.',
                         ],
                       ])
+                    : row?.isCreate == true && _swarmCards
+                    ? _swarmCard(
+                        kind: SwarmModelKind.add,
+                        kicker: 'New',
+                        title: 'Add API connection',
+                        blurb:
+                            'Connect OpenRouter or any OpenAI-compatible API with its base URL and key. '
+                            'The key stays on this computer, and nothing is shared with the Swarm until you '
+                            'share one of its models.',
+                      )
                     : row?.isCreate == true
                     ? _details([
                         ...widget.search.createDescription.split('\n'),
