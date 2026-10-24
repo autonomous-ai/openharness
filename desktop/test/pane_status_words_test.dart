@@ -107,6 +107,10 @@ Future<void> _unmount(WidgetTester tester, AppNotifier app) async {
   app.dispose();
 }
 
+const _cursorLock = ValueKey('terminal-cursor-lock');
+
+Terminal _terminal(AppNotifier app) => app.panes.single.session!.terminal;
+
 TerminalView _view(WidgetTester tester) =>
     tester.widget<TerminalView>(find.byType(TerminalView));
 
@@ -193,6 +197,53 @@ void main() {
     await _mount(tester, app);
 
     expect(find.text('View only'), findsNothing);
+    await _unmount(tester, app);
+  });
+
+  testWidgets('a view-only terminal on the web shows a lock, not a cursor', (
+    tester,
+  ) async {
+    final app = await _app(tester, [], viewOnly: true);
+
+    await _mount(tester, app, chrome: webWorkspaceChrome(app));
+
+    expect(find.byKey(_cursorLock), findsOneWidget);
+    expect(_terminal(app).cursorVisibleMode, isFalse);
+    await _unmount(tester, app);
+  });
+
+  testWidgets('Desktop keeps a view-only terminal\'s cursor', (tester) async {
+    final app = await _app(tester, [], viewOnly: true);
+
+    await _mount(tester, app);
+
+    expect(find.byKey(_cursorLock), findsNothing);
+    expect(_terminal(app).cursorVisibleMode, isTrue);
+    await _unmount(tester, app);
+  });
+
+  testWidgets('the lock goes once the terminal can be typed into again', (
+    tester,
+  ) async {
+    final app = await _app(tester, []);
+    final session = app.panes.single.session!
+      ..stageInputContext(null, watchOnly: true);
+    await _mount(tester, app, chrome: webWorkspaceChrome(app));
+    expect(find.byKey(_cursorLock), findsOneWidget);
+
+    // Control comes back as a stream does: reopened, then live.
+    session
+      ..stageInputContext(null)
+      ..status = TerminalSessionStatus.opening
+      ..notifyListeners();
+    await tester.pump();
+    session
+      ..status = TerminalSessionStatus.controlling
+      ..notifyListeners();
+    await tester.pump();
+
+    expect(find.byKey(_cursorLock), findsNothing);
+    expect(_terminal(app).cursorVisibleMode, isTrue);
     await _unmount(tester, app);
   });
 }

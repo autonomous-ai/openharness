@@ -284,6 +284,11 @@ class _TerminalPanelState extends State<TerminalPanel>
   String? _passageStream;
   bool _passageRefreshPending = false;
   bool _cursorBlinkVisible = true;
+
+  /// A view-only terminal, where the host labels pane states (the web): a
+  /// lock is drawn where its cursor is, and the cursor is hidden. Audit S4.
+  bool _cursorLocked = false;
+  final _cursorLockKey = GlobalKey(debugLabel: 'terminal cursor lock');
   double _alternateScrollRemainder = 0;
   int? _lastInertiaMicros;
   late final TerminalLinkOpener _linkOpener;
@@ -997,7 +1002,19 @@ class _TerminalPanelState extends State<TerminalPanel>
   void _stopCursorBlink() {
     _cursorBlinkTimer?.cancel();
     _cursorBlinkTimer = null;
-    _setCursorBlinkVisible(true);
+    _setCursorBlinkVisible(!_cursorLocked);
+  }
+
+  /// Follows [_cursorLocked] to what the session is now; read in build, where
+  /// the host's chrome can be.
+  void _syncCursorLock(bool locked) {
+    if (locked == _cursorLocked) return;
+    _cursorLocked = locked;
+    if (locked) {
+      _stopCursorBlink();
+    } else {
+      _setCursorBlinkVisible(true);
+    }
   }
 
   void _setCursorBlinkVisible(bool visible) {
@@ -2194,6 +2211,9 @@ class _TerminalPanelState extends State<TerminalPanel>
     final session = widget.session;
     _syncTerminal(session.terminal);
     _builtStatus = session.status;
+    _syncCursorLock(
+      session.readOnly && WorkspaceChrome.of(context).labelsPaneStatus,
+    );
     final machineState = widget.notifier.stateOf(session.machineId);
     final remote = machineState != null && !machineState.isLocalMachine;
     final showComposer = _showsComposer;
@@ -2457,7 +2477,34 @@ class _TerminalPanelState extends State<TerminalPanel>
                           ],
                         ),
                       ),
-                    // Last, so nothing above moves when it comes and goes.
+                    // Last, so nothing above moves when they come and go.
+                    if (_cursorLocked)
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: KeyedSubtree(
+                            key: const ValueKey('terminal-cursor-lock'),
+                            child: CustomPaint(
+                              key: _cursorLockKey,
+                              painter: _CursorLockPainter(
+                                source: session.terminal,
+                                terminal: _laidOutTerminalView,
+                                host: () =>
+                                    _cursorLockKey.currentContext
+                                            ?.findRenderObject()
+                                        as RenderBox?,
+                                color: terminalThemeFor(
+                                  grid.AppTheme.palette.value,
+                                  terminalThemeStore.value,
+                                ).foreground.withValues(alpha: .70),
+                                repaint: Listenable.merge([
+                                  _scrollController,
+                                  _TerminalChanges(session.terminal),
+                                ]),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     if (widget.notice case final notice?
                         when notice.dimsScreen) ...[
                       Positioned.fill(
@@ -3388,6 +3435,76 @@ class _TerminalHeader extends StatelessWidget {
 /// layout. The wire name `relay` still means the backend WebSocket; only its human-facing label is WS.
 /// Underlines the link under the pointer, in each span's own text colour —
 /// the terminal's cells carry no underline for it, so this paints on top.
+/// A lock in the cursor's cell, for a terminal that cannot be typed into.
+class _CursorLockPainter extends CustomPainter {
+  _CursorLockPainter({
+    required this.source,
+    required this.terminal,
+    required this.host,
+    required this.color,
+    super.repaint,
+  });
+
+  final Terminal source;
+  final TerminalViewState? Function() terminal;
+  final RenderBox? Function() host;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final render = terminal()?.renderTerminal;
+    final box = host();
+    if (render == null || box == null || !render.attached) return;
+    final buffer = source.buffer;
+    final at = box.globalToLocal(
+      render.localToGlobal(
+        render.getOffset(CellOffset(buffer.cursorX, buffer.absoluteCursorY)),
+      ),
+    );
+    final cell = render.cellSize;
+    final icon = AppIcons.lock;
+    final glyph = TextPainter(
+      text: TextSpan(
+        text: String.fromCharCode(icon.codePoint),
+        style: TextStyle(
+          fontFamily: icon.fontFamily,
+          package: icon.fontPackage,
+          fontSize: cell.height * .8,
+          color: color,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    glyph.paint(
+      canvas,
+      at +
+          Offset(
+            (cell.width - glyph.width) / 2,
+            (cell.height - glyph.height) / 2,
+          ),
+    );
+    glyph.dispose();
+  }
+
+  @override
+  bool shouldRepaint(_CursorLockPainter old) =>
+      !identical(old.source, source) || old.color != color;
+}
+
+/// The emulator's change notices as a [Listenable], to repaint by.
+class _TerminalChanges implements Listenable {
+  const _TerminalChanges(this.terminal);
+
+  final Terminal terminal;
+
+  @override
+  void addListener(VoidCallback listener) => terminal.addListener(listener);
+
+  @override
+  void removeListener(VoidCallback listener) =>
+      terminal.removeListener(listener);
+}
+
 class _LinkUnderlinePainter extends CustomPainter {
   _LinkUnderlinePainter({
     required this.spans,
