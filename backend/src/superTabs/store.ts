@@ -1,6 +1,6 @@
 import { contributedEngines, expireRemovals, hostLocalGrid, machineContribution, machineObservationSchema, machineSlots, recordAgentPresence, removalPreview, swarmGridRow, type MachineObservation } from './machines.js'
 import { createHash } from 'node:crypto'
-import type { Prisma, PrismaClient, SuperTab, SuperTabDelivery } from '@prisma/client'
+import type { Prisma, PrismaClient, SuperTab, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { machineAlive } from '../lib/prisma.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
@@ -896,13 +896,19 @@ export class SuperTabStore {
       const actor = await this.actor(tx, user, state, asAgentId)
       readConversation(state, actor, conversationId)
       const forward = cursor.after !== undefined
-      const rows = await tx.superTabMessage.findMany({ where: { tabId, conversationId,
+      const where = { tabId, conversationId,
         ...(cursor.messageId ? { id: cursor.messageId } : {}),
-        ...(forward ? { sequence: { gt: cursor.after } } : cursor.before !== undefined ? { sequence: { lt: cursor.before } } : {}) },
-        orderBy: { sequence: forward ? 'asc' : 'desc' }, take: 101 })
-      const next = rows.length > 100 ? rows[99]!.sequence : null
-      // An agent-only notice is listed for its own recipient alone; the cursor still moves past it.
-      const page = rows.slice(0, 100).filter(m => !agentOnly(m.source) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId)))
+        ...(forward ? { sequence: { gt: cursor.after } } : cursor.before !== undefined ? { sequence: { lt: cursor.before } } : {}) }
+      // An agent-only notice is listed for its own recipient alone. Hidden rows never shorten a page: Desktop reads on from the
+      // last row it shows, so the page reads past them until it has 101 rows this reader may see, or reaches the end.
+      const rows: SuperTabMessage[] = []
+      for (let skip = 0; rows.length <= 100; skip += 101) {
+        const batch = await tx.superTabMessage.findMany({ where, orderBy: { sequence: forward ? 'asc' : 'desc' }, skip, take: 101 })
+        rows.push(...batch.filter(m => !agentOnly(m.source) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId))))
+        if (batch.length < 101) break
+      }
+      const page = rows.slice(0, 100)
+      const next = rows.length > 100 ? page.at(-1)!.sequence : null
       if (!forward) page.reverse()
       const deliveries = page.length ? await tx.superTabDelivery.findMany({ where: { tabId, messageId: { in: page.map(m => m.id) } },
         select: { id: true, messageId: true, agentId: true, status: true, receipt: true,

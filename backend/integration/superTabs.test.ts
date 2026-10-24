@@ -1158,6 +1158,28 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.lastMessageSequence).toBe(before)
   })
 
+  it('reads past more than a page of hidden notices so a person still reaches every later message', async () => {
+    const { tab, lead } = await fixture()
+    const first = (await run(tab, message('Before the notices.'))).result.messageId as string
+    for (let i = 0; i < 120; i++) {
+      await run(tab, { type: 'message.send', conversationId: 'lead', text: `Notice ${i}.`, replyTo: null, recipientIds: [lead], agentOnly: true }, host, lead)
+    }
+    const last = (await run(tab, message('After the notices.'))).result.messageId as string
+    // Desktop's first read, then its next read after the last row it shows (desktop/lib/super_tabs/controller.dart).
+    const opened = await store.messages(owner, tab, 'lead', {})
+    expect(opened.messages.map(m => m.id)).toEqual([first, last])
+    expect(opened.next).toBeNull()
+    const tail = opened.messages[0]!.sequence
+    expect((await store.messages(owner, tab, 'lead', { after: tail })).messages.map(m => m.id)).toEqual([last])
+    expect((await store.messages(owner, tab, 'lead', { before: opened.messages[1]!.sequence })).messages.map(m => m.id)).toEqual([first])
+    // The Lead pages through all of its own notices, a full page then the rest.
+    const page = await store.messages(host, tab, 'lead', {}, lead)
+    expect(page.messages).toHaveLength(100)
+    const rest = await store.messages(host, tab, 'lead', { before: page.next! }, lead)
+    expect([...rest.messages, ...page.messages].map(m => m.text)).toEqual(['Before the notices.', ...Array.from({ length: 120 }, (_, i) => `Notice ${i}.`), 'After the notices.'])
+    expect(rest.next).toBeNull()
+  })
+
   it('accepts an agent-only notice only from an agent to itself alone', async () => {
     const { tab, lead } = await fixture()
     const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Worker', configuration: config, lead: false })).result.agentId as string
