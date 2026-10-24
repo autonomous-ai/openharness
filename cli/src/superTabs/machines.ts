@@ -165,7 +165,9 @@ export class ContributedMachines {
           return Array.isArray(wanted) ? wanted.filter((name): name is string => typeof name === 'string' && /^[A-Za-z0-9_.+-]{1,80}$/.test(name)) : []
         })])].slice(0, 20)
         const signature = JSON.stringify([row.reservations, pool.generation, [...running].sort(), [...stopped].sort(), row.paused === true || pool.paused === true,
-          pending.map(start => start.id).sort()])
+          pending.map(start => start.id).sort(),
+          // A privacy result that changes (a home folder opened again) is sent at once, not on the next beat.
+          privacy ? [privacy.mode, 'passed' in privacy ? privacy.passed : null, 'item' in privacy ? privacy.item : null] : null])
         const last = this.published.get(String(row.tabId))
         if (!last || last.signature !== signature || began - last.at >= MACHINE_HEARTBEAT_MS) {
         local ??= await this.deps.open(where)

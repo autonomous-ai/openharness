@@ -35,7 +35,7 @@ function fake(over: Partial<TeamCommandDeps> & { adminResult?: Awaited<ReturnTyp
   const startedAt = now
   const post = vi.fn(async (path: string, _body: unknown, _headers?: Record<string, string>): Promise<unknown> => {
     if (path === '/api/auth/handoff') return { code: CODE, expiresIn: 90 }
-    if (path === '/api/auth/handoff/redeem') return { token: 'hna_team', refreshToken: 'hnr_team', expiresIn: 3600 }
+    if (path === '/api/auth/handoff/redeem') return { token: 'hna_team', refreshToken: 'hnr_team', expiresIn: 3600, kind: 'team' }
     return {}
   })
   const deps: TeamCommandDeps = {
@@ -241,11 +241,21 @@ describe('harness team on and off', () => {
     expect(JSON.parse(already.out[0]!)).toEqual({ ok: true, changed: false })
   })
 
-  it('on: changes nothing when the backend will not hand out a team sign-in', async () => {
+  it('on: changes nothing when the backend will not hand out a team sign-in, or makes something else', async () => {
     const f = fake({ post: (async () => { throw Object.assign(new Error('Add a phone from a computer'), { status: 403 }) }) as never })
     expect(await teamCommand(['on', '--yes'], f.deps)).toBe(1)
     expect(f.session()).toBe(computer)
     expect(f.deps.stopDaemon).not.toHaveBeenCalled()
+    expect(f.err[0]).toContain('Nothing was changed on this computer.')
+    // A backend from before team sessions: the redeem makes a phone's session, which is signed out again.
+    const old = fake()
+    old.post.mockImplementation(async (path: string) => path === '/api/auth/handoff' ? { code: CODE, expiresIn: 90 }
+      : path === '/api/auth/handoff/redeem' ? { token: 'hna_phone', refreshToken: 'hnr_phone', expiresIn: 3600 } : {})
+    expect(await teamCommand(['on', '--yes', '--json'], old.deps)).toBe(1)
+    expect(JSON.parse(old.out.at(-1)!)).toMatchObject({ ok: false, code: 'NOT_TEAM' })
+    expect(old.post).toHaveBeenCalledWith('/api/auth/revoke', { refreshToken: 'hnr_phone' })
+    expect(old.session()).toBe(computer)
+    expect(old.deps.stopDaemon).not.toHaveBeenCalled()
   })
 
   it('off: signs the team session out, then the ordinary sign-in at a terminal, or says how', async () => {
@@ -296,6 +306,14 @@ describe('internal verbs', () => {
     expect(f.session()).toMatchObject({ kind: 'team', computerId: 't'.repeat(32), refreshToken: 'hnr_team' })
     expect(f.status.get(STATUS)).toMatchObject({ signIn: { state: 'signed-in' }, privacy: { passed: true } })
     expect(f.out.join('\n')).toContain('[team] signed in for team work')
+  })
+
+  it('__start stores nothing when the backend makes a session that is not a team one', async () => {
+    const f = inTeam()
+    f.post.mockImplementation(async (path: string) => path === '/api/auth/handoff/redeem' ? { token: 'hna_phone', refreshToken: 'hnr_phone' } : {})
+    expect(await teamCommand(['__start', '/Users/harnessteam/.harness/team-handoff'], f.deps)).toBe(0)
+    expect(f.session()).toBeNull()
+    expect(f.status.get(STATUS)?.signIn).toMatchObject({ state: 'failed', detail: expect.stringContaining('does not make team sign-ins yet') })
   })
 
   it('__start reports a refused code and an unsafe file, and still exits 0 so the daemon starts', async () => {

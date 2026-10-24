@@ -319,6 +319,18 @@ describe('contributed machine executor', () => {
       expect(f.start).toHaveBeenCalledOnce()
     })
 
+    it('sends a changed result at once, without waiting for the next beat', async () => {
+      let current: PrivacyObservation = passed
+      const f = fixture({}, () => current)
+      await f.machine.tick()
+      f.step(6_000); await f.machine.tick()
+      expect(posts(f)).toHaveLength(1)
+      current = exposed
+      f.step(6_000); await f.machine.tick()
+      expect(posts(f)).toHaveLength(2)
+      expect(posts(f)[1]).toMatchObject({ privacy: { passed: false, item: 'gitconfig' } })
+    })
+
     it('reports a check that throws as unchecked, and refuses on it', async () => {
       const f = fixture({}, () => { throw new Error('config unreadable') })
       await f.machine.tick()

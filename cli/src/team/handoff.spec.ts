@@ -37,7 +37,7 @@ describe('mintTeamHandoff', () => {
 
 describe('redeemTeamHandoff', () => {
   it('redeems for this computer id, with its label', async () => {
-    const post = vi.fn(async () => ({ token: 'hna_t', refreshToken: 'hnr_r', expiresIn: 3600 }))
+    const post = vi.fn(async () => ({ token: 'hna_t', refreshToken: 'hnr_r', expiresIn: 3600, kind: 'team' }))
     await expect(redeemTeamHandoff(CODE, 'Mac · Team', 'id', { post: post as never })).resolves.toMatchObject({ token: 'hna_t' })
     expect(post).toHaveBeenCalledWith('/api/auth/handoff/redeem', { code: CODE, label: 'Mac · Team', computerId: 'id' })
   })
@@ -48,11 +48,23 @@ describe('redeemTeamHandoff', () => {
     expect(refused).toHaveBeenCalledTimes(1)
     let now = 0
     const sleep = vi.fn(async (ms: number) => { now += ms })
-    const flaky = vi.fn().mockRejectedValueOnce(new Error('ECONNRESET')).mockResolvedValueOnce({ token: 'hna_t' })
-    await expect(redeemTeamHandoff(CODE, 'l', 'id', { post: flaky as never, sleep, now: () => now })).resolves.toEqual({ token: 'hna_t' })
+    const flaky = vi.fn().mockRejectedValueOnce(new Error('ECONNRESET')).mockResolvedValueOnce({ token: 'hna_t', kind: 'team' })
+    await expect(redeemTeamHandoff(CODE, 'l', 'id', { post: flaky as never, sleep, now: () => now })).resolves.toEqual({ token: 'hna_t', kind: 'team' })
     const down = vi.fn(async () => { throw Object.assign(new Error('Service unavailable'), { status: 503 }) })
     await expect(redeemTeamHandoff(CODE, 'l', 'id', { post: down as never, sleep, now: () => now, retryForMs: 30_000 })).rejects.toMatchObject({ code: 'BACKEND' })
     expect(down.mock.calls.length).toBeGreaterThan(2)
+  })
+
+  // A backend from before team sessions ignores {kind:"team"} and makes a phone's session, which reaches every
+  // computer on the account. Anything but a session it calls a team one is signed out again and refused.
+  it('fails closed on a session the backend does not call a team one, signing it out again', async () => {
+    const post = vi.fn(async (path: string) => path.endsWith('/redeem') ? { token: 'hna_t', refreshToken: 'hnr_phone', expiresIn: 3600 } : {})
+    await expect(redeemTeamHandoff(CODE, 'l', 'id', { post: post as never })).rejects.toMatchObject({ code: 'NOT_TEAM' })
+    expect(post).toHaveBeenCalledWith('/api/auth/revoke', { refreshToken: 'hnr_phone' })
+    const viewer = vi.fn(async (path: string) => path.endsWith('/redeem') ? { token: 'hna_t', refreshToken: 'hnr_phone', kind: 'viewer' } : {})
+    await expect(redeemTeamHandoff(CODE, 'l', 'id', { post: viewer as never })).rejects.toMatchObject({ code: 'NOT_TEAM' })
+    await expect(mintTeamHandoff(async () => ({ session: computer, headers }), (async () => ({ code: CODE, kind: 'viewer' })) as never))
+      .rejects.toMatchObject({ code: 'BACKEND' })
   })
 
   it('refuses a malformed code and an answer without a session', async () => {

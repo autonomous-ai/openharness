@@ -331,9 +331,15 @@ async function teamOn(deps: TeamCommandDeps, json: boolean, yes: boolean): Promi
     const answer = (await deps.ask('Sign this computer in for team work only? [y/N] ')).trim()
     if (!/^y(es)?$/i.test(answer)) return fail(deps, json, 'CANCELLED', 'Nothing was changed.')
   }
-  const { code } = await mintTeamHandoff(() => deps.auth(), deps.post)
   const label = `${deps.hostname().slice(0, 60)} · Team`
-  const tokens = await redeemTeamHandoff(code, label, session.computerId, { post: deps.post, sleep: deps.sleep, now: deps.now })
+  let tokens: Awaited<ReturnType<typeof redeemTeamHandoff>>
+  try {
+    const { code } = await mintTeamHandoff(() => deps.auth(), deps.post)
+    tokens = await redeemTeamHandoff(code, label, session.computerId, { post: deps.post, sleep: deps.sleep, now: deps.now })
+  } catch (error) {
+    if (error instanceof TeamSignInError) throw new TeamSignInError(`${error.message} Nothing was changed on this computer.`, error.code)
+    throw error
+  }
   // The daemon holds the computer's sign-in in memory: it stops before the file changes, and comes back on the new one.
   const wasRunning = await deps.stopDaemon()
   const previous = deps.session() ?? session

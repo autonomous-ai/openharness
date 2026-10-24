@@ -16,7 +16,7 @@ import { HANDOFF_CODE } from './layout.js'
 export type Post = <T>(path: string, body: unknown, headers?: Record<string, string>) => Promise<T>
 
 export class TeamSignInError extends Error {
-  constructor(message: string, readonly code: 'NOT_SIGNED_IN' | 'TEAM_SESSION' | 'EXPIRED' | 'BACKEND' | 'UNSAFE_FILE') {
+  constructor(message: string, readonly code: 'NOT_SIGNED_IN' | 'TEAM_SESSION' | 'EXPIRED' | 'BACKEND' | 'NOT_TEAM' | 'UNSAFE_FILE') {
     super(message)
     this.name = 'TeamSignInError'
   }
@@ -44,6 +44,9 @@ export async function mintTeamHandoff(
   if (typeof minted?.code !== 'string' || !HANDOFF_CODE.test(minted.code)) {
     throw new TeamSignInError('Harness answered without a team sign-in code.', 'BACKEND')
   }
+  if ((minted as { kind?: unknown }).kind !== undefined && (minted as { kind?: unknown }).kind !== 'team') {
+    throw new TeamSignInError('Harness answered with a sign-in code that is not a team one.', 'BACKEND')
+  }
   return { code: minted.code, expiresIn: typeof minted.expiresIn === 'number' ? minted.expiresIn : 90 }
 }
 
@@ -52,6 +55,8 @@ export interface TeamTokens {
   refreshToken?: string
   expiresIn?: number
   autonomousEnv?: 'prod' | 'stag'
+  /** What the backend made. Required to be `team`: see `redeemTeamHandoff`. */
+  kind?: string
 }
 
 export interface RedeemDeps {
@@ -62,8 +67,15 @@ export interface RedeemDeps {
   retryForMs?: number
 }
 
-/** Redeem [code] for a team session for [computerId]. A refused code is final; an unreachable backend is tried
- *  again until the code would have run out. */
+/**
+ * Redeem [code] for a team session for [computerId]. A refused code is final; an unreachable backend is tried
+ * again until the code would have run out.
+ *
+ * Fails closed on what it gets back. A backend from before team sessions ignores `{kind:"team"}` when the code is
+ * minted, and redeeming that code makes a phone's session, which reaches every computer on the account: far more
+ * than a team session may. So the answer must say it is a team session (`kind: "team"`); anything else is signed
+ * out again at once and refused.
+ */
 export async function redeemTeamHandoff(code: string, label: string, computerId: string, deps: RedeemDeps): Promise<TeamTokens> {
   if (!HANDOFF_CODE.test(code)) throw new TeamSignInError('The team sign-in code is not in the form Harness expects.', 'EXPIRED')
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
@@ -73,12 +85,16 @@ export async function redeemTeamHandoff(code: string, label: string, computerId:
     try {
       const tokens = await deps.post<TeamTokens>('/api/auth/handoff/redeem', { code, label: label.slice(0, 80), computerId })
       if (typeof tokens?.token !== 'string' || !tokens.token) throw new TeamSignInError('Harness answered without a session.', 'BACKEND')
+      if (tokens.kind !== 'team') {
+        await revokeHarnessRefresh(deps.post, tokens.refreshToken)
+        throw new TeamSignInError('This Harness backend does not make team sign-ins yet, so nothing was signed in.', 'NOT_TEAM')
+      }
       return tokens
     } catch (error) {
       if (error instanceof TeamSignInError) throw error
       const status = (error as { status?: number }).status
       if (status !== undefined && status >= 400 && status < 500) {
-        throw new TeamSignInError(`The team sign-in code was refused (${(error as Error).message}). Run \`harness team setup\` again for a new one.`, 'EXPIRED')
+        throw new TeamSignInError(`Harness refused the team sign-in code (${(error as Error).message}).`, 'EXPIRED')
       }
       if (now() >= deadline) throw new TeamSignInError(`Harness could not be reached to sign in: ${(error as Error).message}`, 'BACKEND')
       await sleep(Math.min(10_000, 1_000 * 2 ** attempt))
@@ -88,6 +104,7 @@ export async function redeemTeamHandoff(code: string, label: string, computerId:
 
 /** The session file for a team sign-in: the same shape `harness login` writes, marked `kind: team`. */
 export function teamSession(tokens: TeamTokens, computerId: string, fallbackEnv: 'prod' | 'stag', now: number, extra: Partial<AuthSession> = {}): AuthSession {
+  // `kind` is what the session file says, always team here; the backend's word for it is checked on redeem.
   return {
     version: 1,
     accessToken: tokens.token,
