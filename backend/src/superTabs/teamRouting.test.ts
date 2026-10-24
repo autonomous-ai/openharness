@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { admitMachineStart, machineObservationSchema, observedPrivacy, PRIVACY_FRESH_MS, teamWorkRefusal, type ContributedMachine, type MachinePrivacy } from './machines.js'
+import { admitMachineStart, machineObservationSchema, machineSlots, observedPrivacy, PRIVACY_FRESH_MS, teamWorkRefusal, type ContributedMachine, type MachinePrivacy } from './machines.js'
 import { createSuperTab, SuperTabError, visibleState, type Actor, type AgentConfiguration, type AgentStart, type SuperTabState } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
 
@@ -367,5 +367,140 @@ describe('until a team account is required everywhere', () => {
     const f = swarm(), group = f.group()
     f.machine('mate-team').observation = reading('team', FAILED)
     expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-team') }, owner, f.pooled('mate-team')))?.code).toBe('PRIVACY_CHECK_FAILED')
+  })
+})
+
+// One machine ("One machine" in docs/plans/2026-10-24-swarm-team-account.md): a Mac's Harness Team account is a
+// mechanism under the scenes. Its pool names the Mac it lives on (`hostMachineId`), shows the Mac's name, joins where
+// the Mac was added and follows the Mac's pause, slots and removal. A teammate's project started on the Mac runs in
+// the team account; the Mac's owner's own projects stay with the owner's daemon.
+describe('one machine: a Mac and its Harness Team account', () => {
+  function oneMachine() {
+    const f = swarm()
+    Object.assign(f.machine('mate-team'), { hostMachineId: 'mate-mac', name: 'MacBook Pro', cwd: '/team-swarm' })
+    return f
+  }
+
+  it('a teammate\'s project started on the Mac runs in its Harness Team account, in that account\'s folder', () => {
+    const f = oneMachine(), group = f.group()
+    f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac'))
+    expect(f.state.starts).toEqual([expect.objectContaining({ poolGeneration: 'g1', machineOwnerId: 'mate',
+      request: expect.objectContaining({ machineId: 'mate-team', cwd: '/team-swarm/lead' }) })])
+    // A Lead that already named the team account's folder keeps it.
+    f.run({ type: 'agent.start', request: { ...f.request(group, 'mate-mac'), cwd: '/team-swarm/lead' } }, owner, f.pooled('mate-mac'))
+    expect(f.state.starts![1]!.request).toMatchObject({ machineId: 'mate-team', cwd: '/team-swarm/lead' })
+  })
+
+  it('is refused with the team account\'s own reason, and never falls back to the Mac\'s owner', () => {
+    const f = oneMachine(), group = f.group()
+    f.machine('mate-team').observation = reading('team', FAILED)
+    expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac')))).toMatchObject({
+      code: 'PRIVACY_CHECK_FAILED', message: 'The Harness Team account on MacBook Pro is not private (gitconfig: it could read its owner\'s ~/.gitconfig), so it runs only its owner\'s projects.' })
+    f.machine('mate-team').observation = reading('team', PASSED, NOW - 60_000)
+    expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac')))?.code).toBe('MACHINE_OFFLINE')
+    expect(f.state.starts ?? []).toEqual([])
+  })
+
+  it('leaves the Mac\'s owner\'s own projects on the owner\'s daemon', () => {
+    const f = oneMachine(), mine = f.group(f.mine, mate)
+    f.run({ type: 'agent.start', request: f.request(mine, 'mate-mac', f.mine) }, mate, f.pooled('mate-mac'))
+    expect(f.state.starts![0]!.request).toMatchObject({ machineId: 'mate-mac', cwd: `/swarm/${f.mine}` })
+  })
+
+  it('still takes a start that names the team account\'s machine directly', () => {
+    const f = oneMachine(), group = f.group()
+    f.run({ type: 'agent.start', request: { ...f.request(group, 'mate-team'), cwd: '/team-swarm/lead' } }, owner, f.pooled('mate-team'))
+    expect(f.state.starts![0]!.request).toMatchObject({ machineId: 'mate-team' })
+  })
+
+  it('a Mac whose team account is not in the Swarm refuses as before', () => {
+    const f = oneMachine(), group = f.group()
+    f.state.machines = f.state.machines!.filter(m => m.machineId !== 'mate-team')
+    expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac')))?.code).toBe('TEAM_ACCOUNT_REQUIRED')
+  })
+
+  it('a machines rule naming the Mac allows its team account', () => {
+    const f = oneMachine(), group = f.group()
+    f.run({ type: 'rule.set', projectId: 'lead', rule: { kind: 'machines', machineIds: ['mate-mac'] }, text: 'Only the MacBook Pro.' })
+    const effects = f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac'))
+    expect(effects.result.warnings).toBeUndefined()
+    expect(effects.messages).toEqual([])
+  })
+
+  it('a route that picked the Mac for a teammate\'s project keeps it, and the start there is the pick', () => {
+    const f = oneMachine()
+    const lead = String(f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: 'lead', name: 'Lead', configuration: config, lead: true },
+      owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).result.agentId)
+    const group = f.group(), leadActor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'owner' }
+    const candidate = { id: 'c0', kind: 'new', machineId: 'mate-mac', engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2,
+      title: 'Builder on MacBook Pro', label: 'Codex' }
+    const effects = f.run({ type: 'route.record', conversationId: group, decision: { assessment: { difficulty: 'medium', risk: 'low', why: 'A small change.' },
+      candidates: [candidate], excluded: [], floor: 2, notes: false, pick: 'c0', via: 'order', p: null, belowFloor: false, why: 'Policy order.' } } as Command,
+    leadActor, { recentRoutes: 0 })
+    const recorded = effects.routeDecisions[0] as unknown as { id: string; record: RouteDecision['record'] }
+    expect(recorded.record.candidates).toEqual([expect.objectContaining({ id: 'c0' })])
+    const decision = { id: recorded.id, conversationId: group, record: recorded.record, final: null, override: null, assignmentId: null, outcome: null } as unknown as RouteDecision
+    const started = f.run({ type: 'agent.start', routeDecisionId: recorded.id, request: { ...f.request(group, 'mate-mac'), model: 'default', effort: 'default' } },
+      leadActor, { ...f.pooled('mate-mac'), routeDecision: decision })
+    expect(f.state.starts!.at(-1)!.request.machineId).toBe('mate-team')
+    expect(started.routeDecisions).toEqual([expect.objectContaining({ op: 'final', id: recorded.id })])
+    expect(started.routeDecisions[0]).not.toHaveProperty('override')
+  })
+
+  it('joins by itself where its owner added the Mac, under the Mac\'s name, slots and pause', () => {
+    const f = swarm()
+    f.state.machines = f.state.machines!.filter(m => m.machineId !== 'mate-team')
+    f.machine('mate-mac').paused = true
+    const join = { type: 'machine.contribute', machineId: 'mate-team', name: 'MacBook Pro · Team', cwd: '/team-swarm', scope: 'swarm', engines: ['codex'],
+      maxAgents: 2, ifMissing: true } as Command
+    f.run(join, mate, { contribution: { machineOwnerId: 'mate', contributorId: 'mate', hostMachineId: 'mate-mac' } })
+    expect(f.machine('mate-team')).toMatchObject({ hostMachineId: 'mate-mac', name: 'MacBook Pro', cwd: '/team-swarm', maxAgents: 4, paused: true, contributorId: 'mate' })
+    // Once there, a join again changes nothing.
+    f.run({ ...join, maxAgents: 1 } as Command, mate, { contribution: { machineOwnerId: 'mate', contributorId: 'mate', hostMachineId: 'mate-mac' } })
+    expect(f.machine('mate-team').maxAgents).toBe(4)
+  })
+
+  it('never joins by itself where its Mac is not in the Swarm', () => {
+    const f = swarm()
+    f.state.machines = f.state.machines!.filter(m => m.machineId !== 'mate-team' && m.machineId !== 'mate-mac')
+    expect(refusal(() => f.run({ type: 'machine.contribute', machineId: 'mate-team', name: 'x', cwd: '/team-swarm', scope: 'swarm', engines: ['codex'],
+      maxAgents: 2, ifMissing: true } as Command, mate, { contribution: { machineOwnerId: 'mate', contributorId: 'mate', hostMachineId: 'mate-mac' } }))?.code).toBe('OWNER_REQUIRED')
+  })
+
+  it('follows its Mac: paused, given other slots, renamed and removed with it', () => {
+    const f = oneMachine()
+    const teamAgent = f.member('team-agent', 'mate-team', 'mate')
+    f.run({ type: 'machine.pause', machineId: 'mate-mac', paused: true }, mate)
+    expect(f.machine('mate-team').paused).toBe(true)
+    f.run({ type: 'machine.contribute', machineId: 'mate-mac', name: 'Work MacBook', cwd: '/swarm', scope: 'swarm', engines: ['codex'], maxAgents: 6 }, mate,
+      { contribution: { machineOwnerId: 'mate', contributorId: 'mate' } })
+    expect(f.machine('mate-team')).toMatchObject({ maxAgents: 6, paused: false, name: 'Work MacBook', generation: 'g1' })
+    const removed = f.run({ type: 'machine.remove', machineId: 'mate-mac' }, mate)
+    expect(f.machine('mate-team').removal).toMatchObject({ state: 'cleaning' })
+    expect(removed.result.removedAgents).toContain(teamAgent)
+    expect(f.state.agents.some(a => a.id === teamAgent)).toBe(false)
+  })
+
+  it('a teammate never moves another person\'s team account with their own Mac', () => {
+    const f = oneMachine()
+    f.machine('mate-team').contributorId = 'owner'
+    f.run({ type: 'machine.pause', machineId: 'mate-mac', paused: true }, mate)
+    expect(f.machine('mate-team').paused).toBe(false)
+  })
+})
+
+describe('one machine: the Mac\'s agent slots', () => {
+  it('are shared by the Mac and its Harness Team account', () => {
+    const f = swarm(), group = f.group()
+    Object.assign(f.machine('mate-team'), { hostMachineId: 'mate-mac', name: 'MacBook Pro', cwd: '/team-swarm', maxAgents: 2 })
+    f.machine('mate-mac').maxAgents = 2
+    f.member('mine', 'mate-mac', 'mate', f.mine)
+    f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac'))
+    // One on the owner's daemon and one in the team account: the Mac's two slots are taken, whichever side asks.
+    expect(machineSlots(f.state, f.machine('mate-mac'))).toBe(2)
+    expect(machineSlots(f.state, f.machine('mate-team'))).toBe(2)
+    expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac')))?.code).toBe('MACHINE_FULL')
+    // A machine without a team account counts only its own.
+    expect(machineSlots(f.state, f.machine('owner-mac'))).toBe(0)
   })
 })

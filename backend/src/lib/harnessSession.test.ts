@@ -591,3 +591,106 @@ describe('team sessions — a computer turning itself into a team machine', () =
     }
   })
 })
+
+// One machine (docs/plans/2026-10-24-swarm-team-account.md): a Mac's team account is a mechanism under the scenes, so
+// every list shows that Mac once. Its team machine records the Mac it lives on: the minting computer's own machine, or,
+// from an Autonomous sign-in, the machine the CLI names, which must be one of the account's ordinary machines here.
+describe('team sessions — the Mac a team account lives on', () => {
+  const LAPTOP = 'efefefefefefefefefefefefefefefef'
+  const TEAM = 'abababababababababababababababab'
+  let app: FastifyInstance
+  const signedIn = { sub: USER.id, email: USER.email, role: 'user', autonomousEnv: 'prod' as const }
+  beforeEach(async () => {
+    app = Fastify()
+    app.setErrorHandler(errorHandler)
+    registerAuthMiddleware(app, async (token, env, opts) => token === 'sso-token' ? signedIn : authenticateAccessToken(token, env, opts))
+    await app.register(authRoutes)
+    await app.ready()
+    fakes.machines.push(
+      { userId: USER.id, computerId: LAPTOP, machineId: 'laptop-machine', autonomousEnv: 'prod', sessionKind: 'computer' },
+      { userId: USER.id, computerId: 'c'.repeat(32), machineId: 'other-machine', autonomousEnv: 'prod', sessionKind: 'computer' },
+      { userId: USER.id, computerId: 'd'.repeat(32), machineId: 'older-machine', autonomousEnv: 'prod' },
+      { userId: 'u2', computerId: 'e'.repeat(32), machineId: 'their-machine', autonomousEnv: 'prod', sessionKind: 'computer' },
+      { userId: USER.id, computerId: '1'.repeat(32), machineId: 'stag-machine', autonomousEnv: 'stag', sessionKind: 'computer' },
+      { userId: USER.id, computerId: '2'.repeat(32), machineId: 'gone-machine', autonomousEnv: 'prod', sessionKind: 'computer', deletedAt: new Date() },
+      { userId: USER.id, computerId: '3'.repeat(32), machineId: 'dedicated-machine', autonomousEnv: 'prod', sessionKind: 'team' },
+    )
+  })
+  const mint = (authorization: string, payload: Record<string, unknown>) => app.inject({ method: 'POST', url: '/api/auth/handoff', headers: { authorization }, payload })
+  const redeem = (code: string) => app.inject({ method: 'POST', url: '/api/auth/handoff/redeem', payload: { code, label: 'MacBook Pro · Team', computerId: TEAM } })
+  const handoffCodes = () => [...fakes.redis.keys()].filter((key) => key.startsWith('hnauth:handoff:'))
+  function computerSession(id: string, computerId?: string): string {
+    const token = newHarnessToken(HARNESS_ACCESS_PREFIX)
+    fakes.sessions.push({ id, userId: USER.id, label: 'MacBook Pro', kind: 'computer', refreshHash: `unused-${id}`, ...(computerId ? { computerId } : {}) })
+    fakes.redis.set(`hnauth:access:${harnessTokenHash(token)}`, JSON.stringify({ sessionId: id, userId: USER.id }))
+    return token
+  }
+
+  it('a computer signed in by QR records its own machine, named or not', async () => {
+    const laptop = computerSession('laptop-session', LAPTOP)
+    for (const payload of [{ kind: 'team' }, { kind: 'team', hostMachineId: 'laptop-machine' }]) {
+      const minted = await mint(`Bearer ${laptop}`, payload)
+      expect(minted.statusCode, minted.body).toBe(200)
+      expect((await redeem(minted.json().data.code)).statusCode).toBe(200)
+      expect(fakes.sessions.at(-1)).toMatchObject({ kind: 'team', computerId: TEAM, hostMachineId: 'laptop-machine' })
+    }
+  })
+
+  it('a computer session may not name another machine as its Mac', async () => {
+    const res = await mint(`Bearer ${computerSession('laptop-session', LAPTOP)}`, { kind: 'team', hostMachineId: 'other-machine' })
+    expect(res.statusCode).toBe(403)
+    expect(res.json().error.code).toBe('HANDOFF_NOT_ALLOWED')
+    expect(handoffCodes()).toEqual([])
+  })
+
+  it('an Autonomous sign-in names its own machine, which is recorded', async () => {
+    for (const hostMachineId of ['laptop-machine', 'older-machine']) {
+      const minted = await mint('Bearer sso-token', { kind: 'team', hostMachineId })
+      expect(minted.statusCode, minted.body).toBe(200)
+      expect((await redeem(minted.json().data.code)).statusCode).toBe(200)
+      expect(fakes.sessions.at(-1)).toMatchObject({ kind: 'team', hostMachineId })
+    }
+  })
+
+  it('refuses a machine that is not one of the account\'s ordinary machines in this environment, minting nothing', async () => {
+    for (const hostMachineId of ['their-machine', 'stag-machine', 'gone-machine', 'dedicated-machine', 'no-such-machine']) {
+      const res = await mint('Bearer sso-token', { kind: 'team', hostMachineId })
+      expect(res.statusCode, hostMachineId).toBe(403)
+      expect(res.json().error.code).toBe('HANDOFF_NOT_ALLOWED')
+    }
+    expect(handoffCodes()).toEqual([])
+  })
+
+  it('names a Mac only for a team code, never for a phone or a computer turning itself into one', async () => {
+    for (const payload of [{ hostMachineId: 'laptop-machine' }, { kind: 'viewer', hostMachineId: 'laptop-machine' },
+      { kind: 'team', computerId: LAPTOP, hostMachineId: 'laptop-machine' }]) {
+      const res = await mint('Bearer sso-token', payload)
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400)
+      expect(res.json().error.code).toBe('INVALID_HANDOFF_KIND')
+    }
+    for (const hostMachineId of [1, '', 'x'.repeat(200), null]) {
+      const res = await mint('Bearer sso-token', { kind: 'team', hostMachineId })
+      expect(res.statusCode, JSON.stringify(hostMachineId)).toBe(400)
+      expect(res.json().error.code).toBe('INVALID_MACHINE_ID')
+    }
+    expect(handoffCodes()).toEqual([])
+  })
+
+  it('without a Mac the code mints as before and records none', async () => {
+    const minted = await mint('Bearer sso-token', { kind: 'team' })
+    // What the code holds is the same JSON as before, so a server from before this change redeems it the same way.
+    expect(handoffCodes().map((key) => JSON.parse(fakes.redis.get(key)!))).toEqual([{ userId: USER.id, kind: 'team' }])
+    expect((await redeem(minted.json().data.code)).statusCode).toBe(200)
+    expect(fakes.sessions.at(-1)!.hostMachineId).toBeUndefined()
+  })
+
+  it('redeeming again (a repair run) records the Mac on the team machine that already exists', async () => {
+    fakes.machines.push({ userId: USER.id, computerId: TEAM, machineId: 'team-machine', autonomousEnv: 'prod', sessionKind: 'team' })
+    const minted = await mint('Bearer sso-token', { kind: 'team', hostMachineId: 'laptop-machine' })
+    expect((await redeem(minted.json().data.code)).statusCode).toBe(200)
+    expect(fakes.machines.find((m) => m.machineId === 'team-machine')).toMatchObject({ hostMachineId: 'laptop-machine' })
+    // A dedicated machine and the person's own machines are untouched.
+    expect(fakes.machines.find((m) => m.machineId === 'dedicated-machine')!.hostMachineId).toBeUndefined()
+    expect(fakes.machines.find((m) => m.machineId === 'laptop-machine')!.hostMachineId).toBeUndefined()
+  })
+})
