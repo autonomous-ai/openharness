@@ -27,6 +27,7 @@ import { projectsRoot } from '../../lib/projectFolder.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
 import { agentLaunchArgs } from '../../lib/agentAttribution.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
+import { swarmGitHubLaunch } from '../../lib/swarmGitHub.js'
 
 vi.mock('../../lib/projectFolder.js', async real => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()
@@ -73,6 +74,8 @@ vi.mock('../../engines/launchPrep.js', () => ({ folderTrust: (engine: string, pr
     ? { trusts: (path: string) => trust.claudeTrusts(path), record: (path: string) => trust.preTrustClaudeProject(path) }
     : engine === 'codex' ? { trusts: (path: string) => trust.codexTrusts(path, profile), record: (path: string) => trust.preTrustCodexProject(path, profile) } : null }))
 vi.mock('../../lib/createAgentPane.js', () => ({ createAndRegisterPane: vi.fn() }))
+// The Harness GitHub App's launch writes files in the daemon's folder (lib/swarmGitHub.ts): never this machine's here.
+vi.mock('../../lib/swarmGitHub.js', () => ({ swarmGitHubLaunch: vi.fn(() => null) }))
 // The pull request line (lib/agentAttribution.ts) reads the person's engine settings: never this machine's here.
 vi.mock('../../lib/agentAttribution.js', () => ({
   agentLaunchArgs: vi.fn((_engine: string, startedBy: string | null | undefined) => startedBy === 'agent' ? ['--settings', '{"attribution":{}}'] : []),
@@ -195,6 +198,33 @@ describe('creating an agent', () => {
       dsh: 'blender', swarmSkill: { role: 'dev' }, env: expect.objectContaining({ HARNESS_DSH: 'blender' }),
     })
     expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.extraArgs).toContain('--dsh')
+  })
+
+  it('gives a session doing another person\'s project work the GitHub App\'s git and gh, and keeps that on its skill', async () => {
+    vi.mocked(swarmGitHubLaunch).mockReturnValueOnce({ env: { GIT_CONFIG_PARAMETERS: 'fixture', GH_CONFIG_DIR: '/fixture/gh' }, clearEnv: ['GH_TOKEN'] })
+    expect(await setup().create(request({ cwd: folder(), swarmRole: 'dev', swarmGitHub: true }))).toMatchObject({ ok: true })
+    const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
+    expect(swarmGitHubLaunch).toHaveBeenCalledWith(pane.sessionLabel)
+    expect(pane.swarmSkill).toEqual({ role: 'dev', key: pane.sessionLabel, github: true })
+    expect(pane.env).toMatchObject({ GIT_CONFIG_PARAMETERS: 'fixture', GH_CONFIG_DIR: '/fixture/gh' })
+    expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.clearEnv).toContain('GH_TOKEN')
+  })
+
+  it('launches as before where the GitHub App does not apply, and without a role never asks', async () => {
+    await setup().create(request({ cwd: folder(), swarmRole: 'dev', swarmGitHub: true }))
+    const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
+    expect(pane.swarmSkill).toEqual({ role: 'dev', key: pane.sessionLabel })
+    expect(pane.env).not.toHaveProperty('GIT_CONFIG_PARAMETERS')
+    vi.mocked(swarmGitHubLaunch).mockClear()
+    await setup().create(request({ cwd: folder(), swarmGitHub: true }))
+    expect(swarmGitHubLaunch).not.toHaveBeenCalled()
+  })
+
+  it('refuses before opening a pane when the GitHub App\'s files cannot be written', async () => {
+    vi.mocked(swarmGitHubLaunch).mockImplementationOnce(() => { throw Error('fixture disk full') })
+    expect(await setup().create(request({ cwd: folder(), swarmRole: 'dev', swarmGitHub: true })))
+      .toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED', detail: 'Error: fixture disk full' })
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
   })
 
   it('refuses an unsafe Swarm runtime before opening a pane', async () => {

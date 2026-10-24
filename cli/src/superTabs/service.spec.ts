@@ -661,6 +661,34 @@ describe('a Lead\'s terminal result', () => {
   })
 })
 
+describe('GitHub App tokens through the service', () => {
+  it('gives a local agent its task\'s token, never one asked for through the relay', async () => {
+    const call = vi.fn<CoreApi['account']['backend']>(async (method, path) => ({ status: 200, body: { success: true, data: method === 'GET' && path.endsWith('/machine-1')
+      ? [{ tabId: 'tab-1', agent: { id: 'agent-1', machineId: 'machine-1', harnessId: 'native' } }]
+      : { token: 'ghs_fixtureToken0000001', expiresAt: '2026-10-24T13:00:00.000Z', repository: 'acme/app', trailers: [] } } }))
+    const service = superTabService(fakeCore({ account: { backend: call }, agents: { byAgent: vi.fn(() => ({ agentId: 'native' }) as never) } }),
+      { githubTokens: () => ({ start: vi.fn(), stop: vi.fn() }) })
+    expect(await service.requests.super_tabs({ action: 'githubToken', harnessId: 'native' }, owner))
+      .toMatchObject({ ok: true, value: { token: 'ghs_fixtureToken0000001', tabId: 'tab-1', agentId: 'agent-1' } })
+    expect(call).toHaveBeenCalledWith('POST', '/api/super-tabs/tab-1/github-token?asAgentId=agent-1', { machineId: 'machine-1' })
+    const calls = call.mock.calls.length
+    expect(await service.requests.super_tabs({ action: 'githubToken', harnessId: 'native' }, { local: false, owner: true, accountOwner: true } as never))
+      .toEqual({ error: 'OWNER_REQUIRED' })
+    expect(await service.requests.super_tabs({ action: 'githubToken', harnessId: 'native' }, visitor)).toEqual({ error: 'OWNER_REQUIRED' })
+    expect(call.mock.calls.length).toBe(calls)
+  })
+
+  it('keeps the tokens fresh while connected, and stops with the service', () => {
+    const tokens = { start: vi.fn(), stop: vi.fn() }
+    const service = superTabService(fakeCore(), { githubTokens: () => tokens })
+    service.port.connected()
+    expect(tokens.start).toHaveBeenCalledTimes(1)
+    service.port.disconnected()
+    service.port.stop()
+    expect(tokens.stop).toHaveBeenCalledTimes(2)
+  })
+})
+
 // Lead mentions (spec 2026-10-24-lead-mentions): a post names people by id or email; the backend gets their person ids,
 // and only a Lead's help offers it.
 describe('mentions on a post', () => {

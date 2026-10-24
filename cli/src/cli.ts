@@ -2648,6 +2648,7 @@ async function logsExportCommand(json: boolean): Promise<void> {
 
 import { orchestratorCommand } from './orchestrator/command.js'
 import { superTabCommand } from './superTabs/command.js'
+import { gitCredentialCommand } from './superTabs/gitCredential.js'
 import { paneOwner, sendCommand } from './messages/command.js'
 import { agentOrigin, closeCommand, psCommand, replyCommand, showCommand, waitCommand, whoamiCommand } from './agentClient/commands.js'
 import { agentsHelp, helpFor } from './agentClient/help.js'
@@ -2730,6 +2731,10 @@ switch (cmd) {
     break
   case 'super-tab':
     superTabCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    break
+  case 'git-credential':
+    // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not.
+    gitCredentialCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'login':
     // The result line goes out FIRST (loginCommand prints it), then the daemon is swapped onto the

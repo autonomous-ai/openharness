@@ -319,6 +319,9 @@ describe('built-in Swarm skills', () => {
     // An unknown mode is dropped, not refused: the session keeps its role and launches as before modes.
     expect(parseSwarmSkill({ role: 'dev', key: 'x', mode: 'light' })).toEqual({ role: 'dev', key: 'x' })
     expect(parseSwarmSkill({ role: 'dev', key: 'x', mode: 'orchestration' })).toEqual({ role: 'dev', key: 'x', mode: 'orchestration' })
+    // The Harness GitHub App's flag is kept for relaunches, and only as true.
+    expect(parseSwarmSkill({ role: 'dev', key: 'x', github: true })).toEqual({ role: 'dev', key: 'x', github: true })
+    expect(parseSwarmSkill({ role: 'dev', key: 'x', github: 'yes' })).toEqual({ role: 'dev', key: 'x' })
     expect(() => prepareSwarmSkill(fixture(), { role: 'lead', key: '' })).toThrow()
   })
 

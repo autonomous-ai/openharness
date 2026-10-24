@@ -404,6 +404,12 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     if (swarmSkillMode !== undefined && !isSwarmSkillMode(swarmSkillMode)) {
       reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm skill mode is default or orchestration.' }); return
     }
+    // Another person's project work: git and gh use the Harness GitHub App's token for the task (lib/swarmGitHub.ts).
+    // Only `true`, and only with a role; a start from before the app sends none and launches as it did.
+    const swarmGitHub = payload.swarmGitHub
+    if (swarmGitHub !== undefined && (swarmGitHub !== true || !isSwarmRole(swarmRole))) {
+      reply({ error: 'INVALID_SWARM_ROLE', detail: 'swarmGitHub is true, with a Swarm role.' }); return
+    }
     // Blank is "number it", the same as absent — a client that sends an empty field is not
     // asking for an agent with no name.
     const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : null
@@ -472,7 +478,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       codexHome,
       dsh,
       prompt,
-      ...(isSwarmRole(swarmRole) ? { swarmRole, ...(swarmSkillMode ? { swarmSkillMode } : {}) } : {}),
+      ...(isSwarmRole(swarmRole) ? { swarmRole, ...(swarmSkillMode ? { swarmSkillMode } : {}), ...(swarmGitHub ? { swarmGitHub } : {}) } : {}),
       name,
       agent,
       resumeSessionId,

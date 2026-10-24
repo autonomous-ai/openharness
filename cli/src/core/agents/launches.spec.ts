@@ -291,6 +291,19 @@ describe('agent_create, refused before any pane exists', () => {
     expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
   })
 
+  it('passes the GitHub App flag with a Swarm role only, and refuses anything else before dispatch', async () => {
+    const { ask, create } = setup()
+    await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev', swarmGitHub: true })
+    expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'dev', swarmGitHub: true })
+    await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev' })
+    expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmGitHub')
+    const calls = vi.mocked(create!).mock.calls.length
+    for (const payload of [{ swarmRole: 'dev', swarmGitHub: false }, { swarmRole: 'dev', swarmGitHub: 'yes' }, { swarmGitHub: true }]) {
+      expect(await ask({ engine: 'claude', cwd: '/w', ...payload })).toMatchObject({ error: 'INVALID_SWARM_ROLE' })
+    }
+    expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
+  })
+
   it('a first prompt that is not text, too long, or for an engine that cannot take one', async () => {
     const { ask, create } = setup()
     expect(await ask({ engine: 'claude', cwd: '/w', prompt: 7 })).toStrictEqual({ error: 'INVALID_PROMPT', detail: 'prompt must be a string' })
