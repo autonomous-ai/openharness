@@ -9,7 +9,11 @@ import { claudeAliasForModel } from '../engines/claude/runtimeProfile.js'
 export type Level = 'low' | 'medium' | 'high'
 export type Size = 'small' | 'medium' | 'large'
 /** `kind` is a word the Lead may give (`ui`, `docs`) for the owner's preferred-engine rules; a review group's is `review`. */
-export interface Assessment { difficulty: Level; risk: Level; size: Size; why: string; kind?: string; needs: { tools: string[]; devices: string[]; cwd?: string } }
+/** `local`: a person asked for a local model by hand, so only models served on the Swarm's grid are considered and the
+ * quality floor does not apply (docs/plans/2026-10-23-swarm-local-models.md). */
+/** `model`: a model a person named, in their words ("deepseek 4.1 flash"); only candidates running it are considered,
+ * whatever their strength (owner, 2026-10-23: a Builder on a named API model was ranked below Opus and never offered). */
+export interface Assessment { difficulty: Level; risk: Level; size: Size; why: string; kind?: string; local?: boolean; model?: string; needs: { tools: string[]; devices: string[]; cwd?: string } }
 /** The owner's rules as the backend keeps them (backend/src/superTabs/rules.ts); only the rule and its words are read here. */
 export type Rule =
   | { kind: 'forbidModel'; engine?: string; model: string }
@@ -19,7 +23,9 @@ export type Rule =
   | { kind: 'preferIdle' }
 export interface SwarmRule { rule: Rule; text: string }
 export interface PolicyModel { engine: 'claude' | 'codex'; model: string; effort: string; quality: number; cost: number; enabled: boolean }
-export interface Policy { version: 1; models: PolicyModel[]; floor: Record<Level, number>; quotaReserve: number; notes: string }
+export interface Policy { version: 1; models: PolicyModel[]; floor: Record<Level, number>; quotaReserve: number; notes: string;
+  /** How strong a model served on the Swarm's grid counts; absent from a backend before it, which serves none. */
+  localModels?: { quality: number; enabled: boolean } }
 /** One usage window, named by the reader (`5-hour`, `weekly`); `leftPercent` is what remains of it. */
 export interface QuotaWindow { name: string | null; leftPercent: number; resetsAt: number | null }
 /** `leftPercent` and `resetsAt` are the tightest window's; `windows` is every window. `account` is the reading's hashed
@@ -42,6 +48,9 @@ export interface Probe {
   terminalUnverified?: boolean
   /** New agents: what the machine has. */
   load?: MachineLoad
+  /** A new agent on a model served on the Swarm's grid: free, reached through the grid relay, `model`/`effort` `default`.
+   *  [gridKind]: a member's engine (`local`), a member's API (`api`), or a model shared with this machine's owner. */
+  gridModel?: string; gridName?: string; gridLabel?: string; gridKind?: 'local' | 'api' | 'shared'
 }
 export interface Attempt { agent: string; outcome: string; result?: string }
 export interface RecentRoute { title: string; via?: string; outcome: string | null }
@@ -117,7 +126,10 @@ export function parseAssessment(value: unknown): Assessment | string {
   const cwd = needs.cwd
   if (cwd !== undefined && (typeof cwd !== 'string' || !isAbsolute(cwd))) return 'needs.cwd must be an absolute path.'
   if (v.kind !== undefined && (typeof v.kind !== 'string' || !/^[a-z][a-z0-9-]{0,39}$/.test(v.kind))) return 'Set kind to one lowercase word, such as ui or docs.'
+  if (v.local !== undefined && typeof v.local !== 'boolean') return 'Set local to true only when a person asked for a local model.'
+  if (v.model !== undefined && (typeof v.model !== 'string' || !words(v.model).length || v.model.length > 200)) return 'Set model to the model a person named, in their words.'
   return { difficulty: v.difficulty as Level, risk: v.risk as Level, size: size as Size, why, ...(v.kind ? { kind: v.kind as string } : {}),
+    ...(v.local === true ? { local: true } : {}), ...(typeof v.model === 'string' ? { model: v.model.trim() } : {}),
     needs: { tools: list(needs.tools), devices: list(needs.devices), ...(cwd ? { cwd } : {}) } }
 }
 
@@ -165,7 +177,33 @@ export function rateFor(policy: Policy, engine: string, model: string | null, ef
   return row ? { quality: row.quality, cost: row.cost } : { quality: 1, cost: 1 }
 }
 
-const titleOf = (p: Probe) => cut(`${p.kind === 'member' ? p.name ?? 'Member' : 'New agent'} · ${ENGINE[p.engine]} ${p.model} ${p.effort} · ${p.machineName}`, 160)
+const KIND_WORD = { local: 'local', api: 'API', shared: 'shared' } as const
+const runs = (p: Probe) => p.gridModel ? `${ENGINE[p.engine]} on ${p.gridLabel ?? p.gridModel} (${KIND_WORD[p.gridKind ?? 'local']})` : `${ENGINE[p.engine]} ${p.model} ${p.effort}`
+/** A name's words for matching: lowercase letters and digits, "4.1" read as "41". */
+const words = (text: string) => text.toLowerCase().split(/[^a-z0-9.]+/).map(w => w.replace(/\./g, '')).filter(Boolean)
+/** Whether [p] runs the model a person named: every word of theirs is in its model's name. */
+function runsNamed(p: Probe, named: string): boolean {
+  const name = words([p.gridModel ?? p.model, p.gridLabel ?? '', ENGINE[p.engine]].join(' ')).join('')
+  return words(named).every(w => name.includes(w))
+}
+const NAMED_NONE = (named: string) => `No candidate runs "${named}". Share it with the Swarm (Manage models), or check its name.`
+
+/** How many Builders may run on one API model a member shares: the share answers four requests at once
+ * (cli/src/lib/swarmApiShares.ts CONCURRENCY), unlike a local engine, which answers one conversation at a time. */
+export const API_BUILDERS = 4
+
+/** A model served for the Swarm that takes no more Builders, and who is on it, or that Builders are never offered and why
+ *  ([refused]: too small or too slow to drive a coding agent) (routeCommand.ts heldLocalModels). */
+export interface HeldModel { model: string; label: string; kind: 'local' | 'api' | 'shared'; holders: string[]; refused?: string }
+
+/** Why a held model is not offered, and what frees it: a model in use reads as unshared otherwise (owner, 2026-10-24). */
+function heldReason(m: HeldModel): string {
+  if (m.refused) return `"${m.label}" is shared with the Swarm, but Builders are not offered it: ${m.refused} Ask a member to run a larger model, or share an API (Manage models).`
+  const who = m.holders.length === 1 ? `Builder ${m.holders[0]} is on it` : `Builders ${m.holders.slice(0, -1).join(', ')} and ${m.holders.at(-1)} are on it`
+  const limit = m.kind === 'api' ? `an API model takes ${API_BUILDERS} Builders at a time` : 'a local model serves one Builder at a time'
+  return `"${m.label}" is shared with the Swarm, but ${who}: ${limit}. Assign the work to ${m.holders.length === 1 ? 'that Builder once it is free, or stop it' : 'one of them once it is free, or stop one'} to free the model.`
+}
+const titleOf = (p: Probe) => cut(`${p.kind === 'member' ? p.name ?? 'Member' : 'New agent'} · ${runs(p)} · ${p.machineName}`, 160)
 /** A reset or a last activity is told as how far away it is, which reads the same whenever the log is opened. */
 function span(ms: number): string {
   if (ms < 3_600_000) return `${Math.max(1, Math.round(ms / 60_000))}m`
@@ -204,7 +242,7 @@ function machineText(load: MachineLoad): string[] {
 }
 /** The most telling parts come first and the least last, because the log's limit cuts the end. */
 const labelOf = (p: Probe & Sized, now: number) => cut([
-  p.kind === 'member' ? `Member ${cut(p.name ?? '', 40)}`.trim() : 'New agent', `${ENGINE[p.engine]} ${p.model} ${p.effort}`, `quality ${p.quality}, cost ${p.cost}`,
+  p.kind === 'member' ? `Member ${cut(p.name ?? '', 40)}`.trim() : 'New agent', runs(p), `quality ${p.quality}, cost ${p.cost}`,
   p.text, cut(p.machineName, 40), p.activity, ...(p.kind === 'member' ? memberText(p, now) : p.load ? machineText(p.load) : []),
   ...(p.earlier?.length ? [`earlier here: ${p.earlier.slice(0, 3).map(e => `${cut(e.group, 40)} ${e.outcome}`).join('; ')}`] : []), quotaText(p.quota, now),
 ].join(' · '), 640)
@@ -217,6 +255,11 @@ const round = (n: number) => Math.round(n * 100) / 100
 
 /** How the probe's account would carry a task of this size (phase 1 §2–3). */
 function sizeUp(p: Probe, policy: Policy, a: Assessment, now: number, open: Commitment[]): Sized {
+  // A local model spends no subscription: it always fits, at its policy cost, and its node is its account.
+  if (p.gridModel) {
+    return { fit: { status: 'fits', coverage: null, effectiveCost: p.cost, expiring: 0, spend: { '5-hour': 0, weekly: 0 },
+      account: `local:${p.gridName ?? ''}:${p.gridModel}` }, tight: null, text: 'fits: a local model on the Swarm\'s grid uses no subscription' }
+  }
   const { minutes, spend: base } = SIZES[a.size], runMs = minutes * 60_000
   const account = p.quota.account ?? `${p.machineId}:${p.engine}`
   const spend = { '5-hour': base['5-hour'] * p.cost / 2, weekly: base.weekly * p.cost / 2 }
@@ -248,18 +291,24 @@ function sizeUp(p: Probe, policy: Policy, a: Assessment, now: number, open: Comm
 const WAY = ['right away', 'about a quarter of the way in', 'about halfway', 'about three quarters of the way in', 'near the end']
 const runsOut = (w: Measured) => `The ${w.name} window is expected to run out ${WAY[Math.round(Math.max(0, w.usable / w.needed) * 4)]}${w.resetsIn === null ? '' : `; resets in ${span(w.resetsIn)}`}.`
 const UNREAD = 'Its quota could not be read in full, and another candidate\'s quota fits this task.'
+export const LOCAL_NONE = 'No local model is being served on this Swarm\'s grid. Ask a member to run one or share an API (Manage models, in the Swarm\'s sidebar).'
 
 /** The fixed order: the owner's preferred engine, an idle member before a new agent and a less busy machine first when the
- * owner prefers idle agents; then the policy order: cheaper in effect, stronger, more room on the tightest window, an idle
- * member in the task's repository before a new agent, then by title. */
+ * owner prefers idle agents; then the policy order: cheaper in effect, stronger, a model that runs on a machine before one
+ * reached through a shared API or another grid, more room on the tightest window, an idle member in the task's repository
+ * before a new agent, then by title. */
 function compare(x: Probe & Sized, y: Probe & Sized, soft: Soft): number {
   const placed = (p: Probe) => p.kind === 'member' && (p.repo ?? 'same') === 'same' ? 0 : 1
   const preferred = (p: Probe) => soft.engine && p.engine !== soft.engine ? 1 : 0
   const fresh = (p: Probe) => soft.idle && p.kind === 'new' ? 1 : 0
   const busy = (p: Probe) => soft.idle && p.kind === 'new' ? p.load?.agents ?? 1000 : 0
+  // On-machine first (owner, 2026-10-24): an API spends a member's key and credits, and a model shared on another grid is
+  // someone else's machine; at equal cost and strength the Swarm's own engine goes first.
+  const remote = (p: Probe) => p.gridModel && (p.gridKind === 'api' || p.gridKind === 'shared') ? 1 : 0
   return preferred(x) - preferred(y) || fresh(x) - fresh(y) || busy(x) - busy(y)
     || x.fit.effectiveCost - y.fit.effectiveCost
     || y.quality - x.quality
+    || remote(x) - remote(y)
     || (y.tight?.usable ?? -Infinity) - (x.tight?.usable ?? -Infinity)
     || placed(x) - placed(y)
     || titleOf(x).localeCompare(titleOf(y))
@@ -275,16 +324,30 @@ function withEveryMachine<T extends { machineId: string }>(ranked: T[]): T[] {
   return ranked.filter(p => keep.has(p))
 }
 
-export function choose(probes: Probe[], policy: Policy, a: Assessment, now: number = Date.now(), open: Commitment[] = [], rules: SwarmRule[] = []): Choice | { error: 'NO_CANDIDATE'; excluded: Array<{ title: string; reason: string }> } {
+export function choose(probes: Probe[], policy: Policy, a: Assessment, now: number = Date.now(), open: Commitment[] = [], rules: SwarmRule[] = [], held: HeldModel[] = []): Choice | { error: 'NO_CANDIDATE'; excluded: Array<{ title: string; reason: string }> } {
   // A lifted row can equal another row on the same machine (Codex `default` lifted to high beside Codex high); one is kept.
-  const raised = probes.map(p => lifted(rules, p)), key = (p: Probe) => `${p.kind}\0${p.machineId}\0${p.engine}\0${p.model}\0${p.effort}`
+  // A person asking for a local model considers local models alone, whatever their strength.
+  if (a.local) probes = probes.filter(p => p.gridModel)
+  // A person naming a model considers that model alone.
+  const named = a.model
+  if (named) probes = probes.filter(p => runsNamed(p, named))
+  const raised = probes.map(p => lifted(rules, p)), key = (p: Probe) => `${p.kind}\0${p.machineId}\0${p.engine}\0${p.model}\0${p.effort}\0${p.gridModel ?? ''}`
   const ruled = raised.filter((p, i) => p === probes[i] || !raised.some((q, j) => j !== i && key(q) === key(p) && (q === probes[j] || j < i)))
     .map(p => { const why = breaks(rules, p); return why ? { ...p, refusals: [...p.refusals, why] } : p })
   const excluded = ruled.filter(p => p.refusals.length).map(p => ({ title: titleOf(p), reason: p.refusals.join(' ') }))
   const viable = ruled.filter(p => !p.refusals.length)
+  // Nothing offered: a model that is served but taken says who has it, rather than reading as unshared.
+  const heldNamed = named ? held.filter(m => words(named).every(w => words(`${m.model} ${m.label}`).join('').includes(w))) : []
+  if (named && !probes.length) {
+    if (heldNamed.length) excluded.push(...heldNamed.map(m => ({ title: 'Named model', reason: heldReason(m) })))
+    else excluded.push({ title: 'Named model', reason: NAMED_NONE(named) })
+  } else if (a.local && !probes.length) {
+    if (held.length) excluded.push(...held.map(m => ({ title: 'Local models', reason: heldReason(m) })))
+    else excluded.push({ title: 'Local models', reason: LOCAL_NONE })
+  }
   if (!viable.length) return { error: 'NO_CANDIDATE', excluded }
   const floor = floorFor(policy, a)
-  const meeting = viable.filter(p => p.quality >= floor)
+  const meeting = a.local || named ? viable : viable.filter(p => p.quality >= floor)
   const byFloor = meeting.length ? meeting : viable
   // Strength beats fit (owner, 2026-10-21): a hard task never goes to a weaker model because the strong ones are short of quota.
   const top = Math.max(...byFloor.map(p => p.quality))
@@ -312,7 +375,8 @@ export function recordOf(choice: Choice, verdict: Verdict, a: Assessment, policy
   return {
     assessment: { difficulty: a.difficulty, risk: a.risk, why: a.why, ...(v1 ? {} : { size: a.size }) },
     candidates: choice.shown.map(s => ({ id: s.id, kind: s.kind, ...(s.agentId ? { agentId: s.agentId } : {}), machineId: s.machineId,
-      engine: s.engine, model: s.model, effort: s.effort, quality: s.quality, cost: s.cost, title: s.title, label: s.label, ...(v1 ? {} : { fit: s.fit }) })),
+      engine: s.engine, model: s.model, effort: s.effort, quality: s.quality, cost: s.cost, title: s.title, label: s.label, ...(v1 ? {} : { fit: s.fit }),
+      ...(s.gridModel && s.gridName ? { gridModel: s.gridModel, gridName: s.gridName } : {}) })),
     excluded: choice.excluded.slice(0, 200).map(e => ({ title: e.title, reason: cut(e.reason, 500) })),
     floor: choice.floor, notes: policy.notes.length > 0,
     pick: verdict.pick.id, via: verdict.via, p: verdict.p, belowFloor: choice.belowFloor, why: cut(verdict.why, 300),

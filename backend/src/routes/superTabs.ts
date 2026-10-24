@@ -54,6 +54,7 @@ async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
 /** Uses the normal authenticated control API. It never accepts caller-provided host/contributor identities. */
 export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore } = {}) {
   const store = options.store ?? new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env))
+  app.get('/api/super-tabs/grids', (req, reply) => respond(reply, () => store.hostGrids(req.user!)))
   app.get<{ Params: z.infer<typeof hostParams> }>('/api/super-tabs/hosts/:machineId/pools', { preHandler: validateParams(hostParams) },
     (req, reply) => respond(reply, () => store.hostPools(req.user!, req.params.machineId)))
   app.get<{ Params: z.infer<typeof hostStartParams> }>('/api/super-tabs/hosts/:machineId/starts/:tabId/:startId', { preHandler: validateParams(hostStartParams) },

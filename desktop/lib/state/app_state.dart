@@ -11281,14 +11281,84 @@ class AppNotifier extends ChangeNotifier {
     return connection.request('connectors', payload: payload, timeout: timeout);
   }
 
+  /// Starts or stops a local model; with [grid], on that Swarm's grid instead of the account's own
+  /// (docs/plans/2026-10-23-swarm-local-models.md).
   Future<Map<String, dynamic>> controlLocalModel(
     String machineId,
     String modelId, {
     required bool start,
+    String? grid,
   }) => _conn(machineId).request(
     start ? 'grid_fleet_model_start' : 'grid_fleet_model_stop',
-    payload: {'modelId': modelId},
+    payload: {'modelId': modelId, 'grid': ?grid},
     timeout: const Duration(seconds: 12),
+  );
+
+  /// Sets a Swarm's grid up on [machineId], this computer of the Swarm owner's (CLI `lib/swarmGrid.ts`): `grid`
+  /// installed and signed in with the Harness account when it is not, the grid created, [members] added and anyone
+  /// else removed. Minutes on a computer that has never run grid.
+  Future<Map<String, dynamic>> swarmGridSync(
+    String machineId,
+    String grid,
+    List<String> members,
+  ) => _conn(machineId).request(
+    'grid_swarm_sync',
+    payload: {'grid': grid, 'members': members},
+    timeout: const Duration(minutes: 5),
+  );
+
+  /// The models shared with this person that [machineId] offers to the Swarm whose grid is [grid] (CLI `lib/swarmOffers.ts`).
+  Future<Map<String, dynamic>> swarmOffers(String machineId, String grid) =>
+      _conn(machineId).request(
+        'grid_swarm_offers',
+        payload: {'grid': grid},
+        timeout: const Duration(seconds: 10),
+      );
+
+  /// Offers [model], shared with this person on [sharedGrid], to the Swarm whose grid is [grid], or stops: the Swarm's
+  /// Lead may then start Builders on [machineId] on it.
+  Future<Map<String, dynamic>> swarmOffer(
+    String machineId, {
+    required String grid,
+    required String sharedGrid,
+    required String model,
+    required bool start,
+  }) => _conn(machineId).request(
+    'grid_swarm_offer',
+    payload: {
+      'grid': grid,
+      'sharedGrid': sharedGrid,
+      'model': model,
+      'action': start ? 'start' : 'stop',
+    },
+    timeout: const Duration(seconds: 10),
+  );
+
+  /// The saved APIs [machineId] shares with the Swarm whose grid is [grid] (CLI `lib/swarmApiShares.ts`).
+  Future<Map<String, dynamic>> swarmApiShares(String machineId, String grid) =>
+      _conn(machineId).request(
+        'grid_swarm_api_shares',
+        payload: {'grid': grid},
+        timeout: const Duration(seconds: 10),
+      );
+
+  /// Shares [model] of the saved API [connectionId] with the Swarm whose grid is [grid], or stops: every Builder in
+  /// the Swarm may then run on it, on this computer's key and credits.
+  Future<Map<String, dynamic>> swarmApiShare(
+    String machineId, {
+    required String grid,
+    required String connectionId,
+    required String model,
+    required bool start,
+  }) => _conn(machineId).request(
+    'grid_swarm_api_share',
+    payload: {
+      'grid': grid,
+      'connectionId': connectionId,
+      'model': model,
+      'action': start ? 'start' : 'stop',
+    },
+    timeout: const Duration(minutes: 2),
   );
 
   Future<Map<String, dynamic>> downloadLocalModel(

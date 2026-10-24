@@ -26,6 +26,8 @@ import 'agent_details.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
+import 'local_models.dart';
+import '../models/swarm_models_target.dart' show swarmSharedWithYouShown;
 import 'machine_details.dart';
 import 'machine_status.dart';
 import 'model.dart';
@@ -1050,6 +1052,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                       0,
                       100,
                     ),
+                    note: superMachineAllowanceNote(switch (row['details']) {
+                      final List lines => lines.whereType<String>(),
+                      _ => const <String>[],
+                    }),
                     detail: [
                       account.name,
                       ...switch (row['details']) {
@@ -1060,7 +1066,41 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                     ].join('\n'),
                   ),
           ];
+    // The models this machine offers the Swarm, from the same reading: an API's by its model, without the
+    // provider's folder ("deepseek/…"), the API's name on hover.
+    final apiModels = <_ServedModel>[], localModels = <_ServedModel>[];
+    if (c.snapshot?.localModels case final local? when local.enabled) {
+      for (final m
+          in observation['localModels'] is List
+              ? observation['localModels'] as List
+              : const []) {
+        if (m is! Map || m['model'] is! String) continue;
+        final model = m['model'] as String;
+        final named = m['name'] is String ? m['name'] as String : model;
+        switch (m['kind']) {
+          case 'api' when m['grid'] == local.grid:
+            final via = named.contains(' · ')
+                ? named.substring(named.lastIndexOf(' · ') + 3)
+                : null;
+            apiModels.add((
+              name: model.contains('/')
+                  ? model.substring(model.lastIndexOf('/') + 1)
+                  : model,
+              tip: [model, if (via != null) 'Shared from $via'].join('\n'),
+            ));
+          case 'shared' when swarmSharedWithYouShown:
+            localModels.add((name: named, tip: '$named\nShared with you'));
+          case 'local' || null when m['grid'] == local.grid:
+            localModels.add((
+              name: named,
+              tip: '$named\nRunning on this machine',
+            ));
+        }
+      }
+    }
     return _MachineView(
+      apiModels: apiModels,
+      localModels: localModels,
       id: id,
       name: name,
       owner: person,
@@ -1377,6 +1417,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 cwd: shared?['cwd'] as String?,
                 engines: allowed,
                 accounts: dim ? const [] : accounts,
+                footer: SuperTabMachineLocalModels(
+                  controller: c,
+                  machineId: id,
+                  now: widget.now,
+                ),
               ),
               actions: [
                 if (shared != null && contributor == c.accountId)
@@ -1829,6 +1874,8 @@ class _MachineView {
     required this.engines,
     required this.allowances,
     required this.tip,
+    this.apiModels = const [],
+    this.localModels = const [],
   });
 
   final String id, name, details, tip;
@@ -1850,6 +1897,40 @@ class _MachineView {
 
   /// What the row's chips show, Claude first; empty while offline or out of reach.
   final List<_Allowance> allowances;
+
+  /// What this machine offers the Swarm on its grid, as its reading says: the APIs its person shares, and its own
+  /// models running for the Swarm (docs/plans/2026-10-23-swarm-local-models.md). Empty while the add-on is off.
+  final List<_ServedModel> apiModels, localModels;
+}
+
+/// A model a machine offers its Swarm: its short name on the row, the whole of it on hover.
+typedef _ServedModel = ({String name, String tip});
+
+/// An allowance's note, from its detail lines: the window that stops work first, and its reset. Another machine's
+/// lines put that window first (`5-hour: 44% remaining · resets in 2h 10m`); this computer's name it
+/// (`Limiting window: 5-hour`) and list each window as `5-hour — 44% remaining · resets in 2h 10m`.
+String? superMachineAllowanceNote(Iterable<String> lines) {
+  const limiting = 'Limiting window: ', resets = ' · resets in ';
+  final named = lines
+      .where((line) => line.startsWith(limiting))
+      .firstOrNull
+      ?.substring(limiting.length);
+  final String window;
+  final String? line;
+  if (named != null) {
+    window = named;
+    line = lines.where((l) => l.startsWith('$named — ')).firstOrNull;
+  } else {
+    final first = lines.firstOrNull;
+    if (first == null || !first.contains(': ')) return null;
+    window = first.substring(0, first.indexOf(': '));
+    line = first;
+  }
+  return [
+    '$window limit',
+    if (line != null && line.contains(resets))
+      line.substring(line.indexOf(resets) + 3),
+  ].join(' · ');
 }
 
 /// One engine's allowance on a machine: its mark and remaining share on the row, its windows on hover.
@@ -1860,20 +1941,24 @@ class _Allowance {
     required this.figure,
     required this.left,
     required this.detail,
+    this.note,
   });
 
   final String engine, name, figure, detail;
 
+  /// The window that stops work first and when it resets (`5-hour limit · resets in 2h 10m`), under the figure.
+  final String? note;
+
   /// The share left, 0–100.
   final double left;
 
-  /// Amber below 20%, red below 10%, otherwise the row's quiet metadata ink.
+  /// Amber below 20%, red below 10%, otherwise the reading's own ink.
   Color get ink => statusLineInkOnSurface(
     left < 10
         ? grid.AppPalette.usageCritical
         : left < 20
         ? grid.AppPalette.usageLow
-        : DesktopChrome.muted,
+        : DesktopChrome.foreground,
     DesktopChrome.surface,
   );
 }
@@ -2014,97 +2099,442 @@ class _MachineReadings extends StatelessWidget {
   const _MachineReadings({required this.view});
   final _MachineView view;
 
+  /// A share used, as a bar's tone: amber from 85%, red from 95%, else the reading's own quiet ink.
+  static Color? _tone(double? used) => used == null
+      ? null
+      : used >= .95
+      ? grid.AppPalette.usageCritical
+      : used >= .85
+      ? grid.AppPalette.usageLow
+      : null;
+
   @override
   Widget build(BuildContext context) {
     if (view.dim) return const SizedBox.shrink();
     final resources = view.resources;
-    final usage = <(String, String)>[
-      if (resources?.cpuPercent case final cpu?)
-        ('CPU ${resourcePercent(cpu)}', 'CPU utilization'),
-      if (resources?.busiestGpu?.utilizationPercent case final gpu?)
-        ('GPU ${resourcePercent(gpu)}', 'GPU utilization'),
-    ];
-    final memoryFree =
-        resources?.memoryTotalBytes == null ||
-            resources?.memoryUsedBytes == null
+    final memoryTotal = resources?.memoryTotalBytes;
+    final memoryFree = memoryTotal == null || resources?.memoryUsedBytes == null
         ? null
-        : (resources!.memoryTotalBytes! - resources.memoryUsedBytes!).clamp(
-            0,
-            resources.memoryTotalBytes!,
-          );
+        : (memoryTotal - resources!.memoryUsedBytes!).clamp(0, memoryTotal);
     final diskFree = resources?.projectDiskTotalBytes == null
         ? resources?.diskFreeBytes
         : resources?.projectDiskFreeBytes;
-    final capacity = <(String, String)>[
+    final diskTotal =
+        resources?.projectDiskTotalBytes ?? resources?.diskTotalBytes;
+    final gpu = resources?.busiestGpu?.utilizationPercent;
+    // What is in use as a share, for the bar; RAM and SSD say what is free, as the row's tooltip does.
+    final hardware = <_Reading>[
+      if (resources?.cpuPercent case final cpu?)
+        (
+          name: 'CPU',
+          value: resourcePercent(cpu),
+          used: (cpu / 100).clamp(0, 1).toDouble(),
+          note: 'in use',
+          meaning: 'CPU utilization',
+        ),
+      if (gpu != null)
+        (
+          name: 'GPU',
+          value: resourcePercent(gpu),
+          used: (gpu / 100).clamp(0, 1).toDouble(),
+          note: 'in use',
+          meaning: 'GPU utilization',
+        ),
       if (memoryFree != null)
-        ('RAM ${resourceBytes(memoryFree.toDouble())}', 'Memory available'),
+        (
+          name: 'RAM',
+          value: resourceBytes(memoryFree.toDouble()),
+          used: memoryTotal! > 0 ? 1 - memoryFree / memoryTotal : null,
+          note: 'free of ${resourceBytes(memoryTotal)}',
+          meaning: 'Memory available',
+        ),
       if (diskFree != null)
-        ('SSD ${resourceBytes(diskFree)}', 'Storage available'),
+        (
+          name: 'SSD',
+          value: resourceBytes(diskFree),
+          used: diskTotal != null && diskTotal > 0
+              ? (1 - diskFree / diskTotal).clamp(0, 1).toDouble()
+              : null,
+          note: diskTotal == null
+              ? 'free'
+              : 'free of ${resourceBytes(diskTotal)}',
+          meaning: 'Storage available',
+        ),
     ];
-    final style = DesktopChrome.metadata().copyWith(
-      fontFeatures: const [FontFeature.tabularFigures()],
-    );
-    Widget readings(List<(String, String)> readings) => Wrap(
-      spacing: 10,
-      runSpacing: 2,
-      children: [
-        for (final (label, meaning) in readings)
-          Tooltip(
-            message: meaning,
-            child: Text(label, style: style),
+    final sections = <(String, String?, Widget Function(double))>[
+      if (hardware.isNotEmpty)
+        (
+          'Hardware',
+          null,
+          (width) => _grid(width, width >= 300 ? 4 : 2, [
+            for (final reading in hardware) _hardware(reading),
+          ]),
+        ),
+      if (view.allowances.isNotEmpty)
+        (
+          'Subscriptions',
+          'left now',
+          (width) => _grid(width, width >= 260 ? 2 : 1, [
+            for (final allowance in view.allowances) _allowance(allowance),
+          ]),
+        ),
+      if (view.apiModels.isNotEmpty || view.localModels.isNotEmpty)
+        (
+          'Models for the Swarm',
+          null,
+          (_) => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (view.apiModels.isNotEmpty)
+                _models(AppIcons.cloud, 'API', view.apiModels, 'api'),
+              if (view.apiModels.isNotEmpty && view.localModels.isNotEmpty)
+                const SizedBox(height: 6),
+              if (view.localModels.isNotEmpty)
+                _models(AppIcons.cpu, 'Local', view.localModels, 'local'),
+            ],
           ),
-      ],
-    );
-    if (usage.isEmpty && capacity.isEmpty && view.allowances.isEmpty) {
-      return const SizedBox.shrink();
-    }
+        ),
+    ];
+    if (sections.isEmpty) return const SizedBox.shrink();
     return Padding(
       key: ValueKey('super-machine-readings-${view.id}'),
-      padding: const EdgeInsets.fromLTRB(36, 4, 32, 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (usage.isNotEmpty) readings(usage),
-          if (capacity.isNotEmpty) readings(capacity),
-          if (view.allowances.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Wrap(
-                spacing: 12,
-                runSpacing: 4,
+      padding: const EdgeInsets.fromLTRB(10, 4, 10, 12),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: DesktopChrome.foreground.withValues(alpha: .035),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: DesktopChrome.rim),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              // Large text keeps the narrow arrangement: fewer, wider columns.
+              final width = MediaQuery.textScalerOf(context).scale(12) > 16
+                  ? constraints.maxWidth / 2
+                  : constraints.maxWidth;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  for (final allowance in view.allowances)
-                    Tooltip(
-                      message: allowance.detail,
-                      child: Semantics(
-                        label:
-                            '${allowance.name} ${allowance.figure} remaining',
-                        excludeSemantics: true,
-                        child: Row(
-                          key: ValueKey(
-                            'super-machine-allowance-${view.id}-${allowance.engine}',
-                          ),
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            EngineMark(engine: allowance.engine, size: 14),
-                            const SizedBox(width: 4),
-                            Text(
-                              allowance.figure,
-                              key: ValueKey(
-                                'super-machine-figure-${view.id}-${allowance.engine}',
+                  for (final (index, (title, aside, body))
+                      in sections.indexed) ...[
+                    if (index > 0) const SizedBox(height: 14),
+                    Text.rich(
+                      TextSpan(
+                        text: title,
+                        children: [
+                          if (aside != null)
+                            TextSpan(
+                              text: ' · $aside',
+                              style: DesktopChrome.text(
+                                size: 11,
+                                height: 1.3,
+                                color: DesktopChrome.muted,
                               ),
-                              style: style.copyWith(color: allowance.ink),
                             ),
-                          ],
-                        ),
+                        ],
                       ),
+                      style: DesktopChrome.text(
+                        size: 11,
+                        medium: true,
+                        height: 1.3,
+                        color: DesktopChrome.muted,
+                      ).copyWith(fontWeight: FontWeight.w600),
                     ),
+                    const SizedBox(height: 8),
+                    body(width),
+                  ],
                 ],
-              ),
-            ),
-        ],
+              );
+            },
+          ),
+        ),
       ),
     );
   }
+
+  /// [children] in [columns] equal columns, wrapping into rows.
+  static Widget _grid(double width, int columns, List<Widget> children) =>
+      LayoutBuilder(
+        builder: (context, constraints) {
+          const gap = 8.0;
+          final cell = (constraints.maxWidth - gap * (columns - 1)) / columns;
+          return Wrap(
+            spacing: gap,
+            runSpacing: 10,
+            children: [
+              for (final child in children) SizedBox(width: cell, child: child),
+            ],
+          );
+        },
+      );
+
+  Widget _hardware(_Reading reading) {
+    final tone = _tone(reading.used);
+    final ink = tone == null
+        ? DesktopChrome.foreground
+        : statusLineInkOnSurface(tone, DesktopChrome.surface);
+    return Tooltip(
+      message: reading.meaning,
+      child: Semantics(
+        label: '${reading.name} ${reading.value} ${reading.note}',
+        excludeSemantics: true,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                Text(
+                  reading.name,
+                  style: DesktopChrome.text(
+                    size: 11,
+                    height: 1.3,
+                    color: DesktopChrome.muted,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    reading.value,
+                    key: ValueKey(
+                      'super-machine-hw-${view.id}-${reading.name}',
+                    ),
+                    textAlign: TextAlign.right,
+                    maxLines: 1,
+                    overflow: TextOverflow.fade,
+                    softWrap: false,
+                    style:
+                        DesktopChrome.text(
+                          size: 12,
+                          medium: true,
+                          height: 1.3,
+                          color: ink,
+                        ).copyWith(
+                          fontWeight: FontWeight.w600,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 5),
+            _Meter(share: reading.used ?? 0, tone: tone),
+            const SizedBox(height: 4),
+            Text(
+              reading.note,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.text(
+                size: 10,
+                height: 1.2,
+                color: DesktopChrome.muted,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _allowance(_Allowance allowance) {
+    final tone = allowance.left < 10
+        ? grid.AppPalette.usageCritical
+        : allowance.left < 20
+        ? grid.AppPalette.usageLow
+        : null;
+    return Tooltip(
+      message: allowance.detail,
+      child: Semantics(
+        label: '${allowance.name} ${allowance.figure} remaining',
+        excludeSemantics: true,
+        child: Container(
+          key: ValueKey(
+            'super-machine-allowance-${view.id}-${allowance.engine}',
+          ),
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+          decoration: BoxDecoration(
+            color: DesktopChrome.foreground.withValues(alpha: .045),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  EngineMark(engine: allowance.engine, size: 14),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      allowance.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: DesktopChrome.text(size: 12, height: 1.3),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    allowance.figure,
+                    key: ValueKey(
+                      'super-machine-figure-${view.id}-${allowance.engine}',
+                    ),
+                    style:
+                        DesktopChrome.text(
+                          size: 12,
+                          medium: true,
+                          height: 1.3,
+                          color: allowance.ink,
+                        ).copyWith(
+                          fontWeight: FontWeight.w600,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              // The bar is what is left, as the figure is.
+              _Meter(share: allowance.left / 100, tone: tone),
+              if (allowance.note case final note?) ...[
+                const SizedBox(height: 5),
+                Text(
+                  note,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: DesktopChrome.text(
+                    size: 10,
+                    height: 1.2,
+                    color: DesktopChrome.muted,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// A kind's label, then its models as chips: a long dashed name reads as one name inside its own chip.
+  Widget _models(
+    IconData icon,
+    String label,
+    List<_ServedModel> models,
+    String kind,
+  ) {
+    final local = kind == 'local';
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 52,
+          height: 22,
+          child: Row(
+            children: [
+              Icon(icon, size: 12, color: DesktopChrome.muted),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: DesktopChrome.text(
+                  size: 11,
+                  height: 1.3,
+                  color: DesktopChrome.muted,
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final model in models)
+                Tooltip(
+                  message: model.tip,
+                  child: Container(
+                    height: 22,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    decoration: BoxDecoration(
+                      color: local
+                          ? grid.AppPalette.online.withValues(alpha: .13)
+                          : DesktopChrome.foreground.withValues(alpha: .06),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (local) ...[
+                          Container(
+                            width: 5,
+                            height: 5,
+                            decoration: BoxDecoration(
+                              color: grid.AppPalette.online,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 5),
+                        ],
+                        Flexible(
+                          child: Text(
+                            model.name,
+                            key: ValueKey(
+                              'super-machine-$kind-${view.id}-${model.name}',
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: grid.AppType.monoMeta(
+                              color: DesktopChrome.foreground,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// One hardware reading of a machine: its name and value, the share in use, and a word on what the value is.
+typedef _Reading = ({
+  String name,
+  String value,
+  double? used,
+  String note,
+  String meaning,
+});
+
+/// A thin bar: [share] of it filled, in [tone] when it warns.
+class _Meter extends StatelessWidget {
+  const _Meter({required this.share, this.tone});
+
+  final double share;
+  final Color? tone;
+
+  @override
+  Widget build(BuildContext context) => ClipRRect(
+    borderRadius: BorderRadius.circular(2),
+    child: SizedBox(
+      height: 4,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          ColoredBox(color: DesktopChrome.foreground.withValues(alpha: .09)),
+          FractionallySizedBox(
+            alignment: Alignment.centerLeft,
+            widthFactor: share.clamp(0, 1),
+            child: ColoredBox(
+              color: tone ?? DesktopChrome.foreground.withValues(alpha: .72),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 }

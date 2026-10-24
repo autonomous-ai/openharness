@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { admitMachineStart, expireRemovals, machineContribution, ownedMachine, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
@@ -64,6 +65,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('machine.pause'), machineId: id, paused: z.boolean() }).strict(),
   z.object({ type: z.literal('machine.remove'), machineId: id }).strict(),
   z.object({ type: z.literal('machine.cleaned'), machineId: id, removalId: id }).strict(),
+  z.object({ type: z.literal('localModels.set'), enabled: z.boolean() }).strict(),
+  z.object({ type: z.literal('localModels.status'), grid: z.string().min(1).max(160), ready: z.boolean(), error: z.string().trim().max(500).optional() }).strict(),
   z.object({ type: z.literal('tab.rename'), name: title }).strict(),
   z.object({ type: z.literal('tab.project'), machineId: id, project }).strict(),
   z.object({ type: z.literal('tab.pause'), paused: z.boolean() }).strict(),
@@ -128,7 +131,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   ...(['agent.screenResult', 'agent.inputResult'] as const).map(type => z.object({ type: z.literal(type), requestId: id, ok: z.boolean(),
     text: z.string().refine(value => Buffer.byteLength(value) <= 65_536, 'A screen is at most 64 KB.').optional(),
     error: z.string().trim().min(1).max(500).optional() }).strict().refine(c => c.ok || c.error !== undefined, 'Say why the request failed.')),
-  z.object({ type: z.literal('agent.alert'), agentId: id, alert: z.enum(['prompt', 'limit']), active: z.boolean(), resetAt: z.iso.datetime().optional() }).strict(),
+  z.object({ type: z.literal('agent.alert'), agentId: id, alert: z.enum(['prompt', 'limit', 'model']), active: z.boolean(), resetAt: z.iso.datetime().optional() }).strict(),
   z.object({ type: z.literal('work.check'), conversationId: id, assignmentId: id, checkId: id, passed: z.boolean(), evidence: text }).strict(),
 ])
 export type Command = z.infer<typeof commandSchema>
@@ -744,6 +747,27 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       result.removedAgents = [...removed]
       break
     }
+    case 'localModels.set': {
+      // An add-on the owner turns on: its grid is theirs, and nothing calls grid until they do.
+      if (actor.kind !== 'person' || actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Swarm owner turns Local models on or off.', 403)
+      const current = state.localModels
+      state.localModels = current
+        ? { ...current, enabled: command.enabled }
+        : { grid: swarmGridName(state.id), enabled: command.enabled }
+      if (command.enabled && !current?.ready) { delete state.localModels.ready; delete state.localModels.error }
+      result.grid = state.localModels.grid
+      break
+    }
+    case 'localModels.status': {
+      // The owner's host reports the grid it created and keeps in step with the Swarm's people.
+      if (actor.kind !== 'person' || actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Swarm owner\'s computer reports its grid.', 403)
+      const current = state.localModels
+      if (!current || current.grid !== command.grid) fail('NOT_FOUND', 'This Swarm has no such grid.', 404)
+      current.ready = command.ready
+      if (command.error) current.error = command.error
+      else delete current.error
+      break
+    }
     case 'tab.rename':
       // Writable people manage the swarm even when its original project is
       // gone. Agents retain the existing Lead-conversation authority.
@@ -909,8 +933,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         const r = command.request
         const model = r.model ?? 'default', effort = r.effort ?? 'default'
         const { decision, expected, override } = linkDecision(r.conversationId,
-          c => c.kind === 'new' && c.machineId === r.machineId && c.engine === r.engine && c.model === model && c.effort === effort,
-          () => ({ kind: 'new', startId: operationId, machineId: r.machineId, engine: r.engine, model, effort }), command.overrideReason)
+          c => c.kind === 'new' && c.machineId === r.machineId && c.engine === r.engine && c.model === model && c.effort === effort
+            && (c.gridModel ?? null) === (r.gridModel ?? null) && (c.gridName ?? null) === (r.gridName ?? null),
+          () => ({ kind: 'new', startId: operationId, machineId: r.machineId, engine: r.engine, model, effort,
+            ...(r.gridModel && r.gridName ? { gridModel: r.gridModel, gridName: r.gridName } : {}) }), command.overrideReason)
         if (override) message(r.conversationId, `Lead started ${r.name} instead of ${expected.title}. Reason: ${override.reason}`, [], null,
           { kind: 'route-override', decisionId: decision.id, by: 'lead' })
         personChose = !override && decision.override?.by === 'person'
@@ -1393,6 +1419,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
 }
 
 /** A contribution owns capacity independently of membership. Reuse invalidates every prior stop proof. */
+/** The Swarm's grid name: `swarm-` and 12 hex of sha256(tab id). Derived so it is reproducible when supported; the
+ * stored value is authoritative and never renamed. */
+export function swarmGridName(tabId: string): string {
+  return `swarm-${createHash('sha256').update(tabId).digest('hex').slice(0, 12)}`
+}
+
 function reserveHarnessSlot(state: SuperTabState, machineId: string, harnessId: string, generation: string) {
   const observation = state.machines?.find(m => m.machineId === machineId)?.observation
   const renewed = !!(state.harnessReservations?.some(r => r.machineId === machineId && r.harnessId === harnessId)

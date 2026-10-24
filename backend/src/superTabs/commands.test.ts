@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, PAIR_CHAIN_LIMIT, type Command, type CommandContext } from './commands.js'
-import { machineSlots, removalPreview } from './machines.js'
+import { hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
 import { activeWork, agentRole, createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
 import { agentTarget, broken } from './rules.js'
+import { DEFAULT_ROUTING_POLICY, effectivePolicy } from './routingPolicy.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -1938,5 +1939,119 @@ describe('other projects\' work for Leads', () => {
     }
     expect(f.run({ type: 'conversation.create', projectId: secret.projectId, title: 'Secret too', task: task(['desktop/lib']), checks })
       .messages.filter(m => m.conversationId === f.state.leadsConversationId)).toEqual([])
+  })
+})
+
+describe('the Local models add-on', () => {
+  const served = (f: ReturnType<typeof fixture>, grid: string, model = 'qwen3-30b', receivedAt = 1000) => {
+    f.state.machines = [{ machineId: 'host', name: 'Studio', contributorId: 'owner', membershipGeneration: f.state.people[0]!.generation, generation: 'g1',
+      cwd: '/repo', scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 4, paused: false,
+      observation: { receivedAt, localModels: [{ grid, model, name: 'Qwen3 30B' }] } } as never]
+  }
+  const start = (gridName: string, patch: Record<string, unknown> = {}) => ({ conversationId: 'lead', machineId: 'host', engine: 'claude', name: 'Local builder',
+    cwd: '/repo/lead', worktree: true, gridModel: 'qwen3-30b', gridName, ...patch,
+    requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } })
+  const grant = { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }
+
+  it('is off until the owner turns it on, mints one grid name, and keeps it when turned off', () => {
+    const f = fixture()
+    expect(f.state.localModels).toBeUndefined()
+    f.invite()
+    expect(() => f.run({ type: 'localModels.set', enabled: true }, peer)).toThrow(expect.objectContaining({ code: 'OWNER_REQUIRED' }))
+    const on = f.run({ type: 'localModels.set', enabled: true })
+    expect(on.result.grid).toMatch(/^swarm-[0-9a-f]{12}$/)
+    expect(f.state.localModels).toEqual({ grid: on.result.grid, enabled: true })
+    f.run({ type: 'localModels.set', enabled: false })
+    f.run({ type: 'localModels.set', enabled: true })
+    expect(f.state.localModels).toEqual({ grid: on.result.grid, enabled: true })
+  })
+
+  it('gives the owner\'s computer the grid and the people who may act, and a host the grid only while it is on', () => {
+    const f = fixture()
+    expect(swarmGridRow('tab', f.state)).toBeNull()
+    expect(hostLocalGrid(f.state)).toEqual({})
+    f.invite()
+    const grid = f.run({ type: 'localModels.set', enabled: true }).result.grid as string
+    expect(swarmGridRow('tab', f.state)).toEqual({ tabId: 'tab', grid, enabled: true, ready: null, members: [peer.email] })
+    expect(hostLocalGrid(f.state)).toEqual({ localGrid: grid })
+    f.run({ type: 'localModels.status', grid, ready: true })
+    f.run({ type: 'localModels.set', enabled: false })
+    expect(swarmGridRow('tab', f.state)).toMatchObject({ enabled: false, ready: true })
+    expect(hostLocalGrid(f.state)).toEqual({})
+    // A viewer may not act in the Swarm, so is no member of its grid.
+    const viewing = fixture()
+    viewing.invite('viewer')
+    viewing.run({ type: 'localModels.set', enabled: true })
+    expect(swarmGridRow('tab', viewing.state)!.members).toEqual([])
+  })
+
+  it('takes the owner\'s computer\'s report of its grid, and nothing about another grid', () => {
+    const f = fixture()
+    const grid = f.run({ type: 'localModels.set', enabled: true }).result.grid as string
+    f.run({ type: 'localModels.status', grid, ready: false, error: 'grid: plan limit reached' })
+    expect(f.state.localModels).toMatchObject({ ready: false, error: 'grid: plan limit reached' })
+    f.run({ type: 'localModels.status', grid, ready: true })
+    expect(f.state.localModels).toEqual({ grid, enabled: true, ready: true })
+    expect(() => f.run({ type: 'localModels.status', grid: 'swarm-other', ready: true })).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
+  })
+
+  it('lets a contributed machine run a Builder on a model the Swarm\'s grid serves now, and only then', () => {
+    const f = fixture()
+    const grid = f.run({ type: 'localModels.set', enabled: true }).result.grid as string
+    served(f, grid)
+    f.run({ type: 'agent.start', request: start(grid) }, owner, grant)
+    expect(f.state.starts).toHaveLength(1)
+
+    const refused = (request: Record<string, unknown>, now = 1000) => () => applyCommand(f.state, owner, { type: 'agent.start', request } as Command,
+      { now, operationId: 'op-x', ...grant })
+    expect(refused(start('swarm-other'))).toThrow(expect.objectContaining({ code: 'OUTSIDE_CONTRIBUTION' }))
+    expect(refused(start(grid, { gridModel: 'llama-70b' }))).toThrow(expect.objectContaining({ code: 'OUTSIDE_CONTRIBUTION' }))
+    expect(refused(start(grid, { model: 'opus' }))).toThrow(expect.objectContaining({ code: 'OUTSIDE_CONTRIBUTION' }))
+    // A reading too old to trust says nothing is served.
+    expect(refused(start(grid), 1000 + 60_000)).toThrow(expect.objectContaining({ code: 'OUTSIDE_CONTRIBUTION' }))
+    f.run({ type: 'localModels.set', enabled: false })
+    expect(refused(start(grid))).toThrow(expect.objectContaining({ code: 'OUTSIDE_CONTRIBUTION' }))
+  })
+
+  it('lets a machine run a Builder on a model shared with its owner on another grid, and only that machine', () => {
+    const f = fixture()
+    const grid = f.run({ type: 'localModels.set', enabled: true }).result.grid as string
+    served(f, grid)
+    const host = f.state.machines![0]!
+    host.observation!.localModels = [{ grid: 'team-grid', model: 'qwen3-30b', kind: 'shared' }]
+    // A second machine whose reading does not list it.
+    f.state.machines!.push({ ...structuredClone(host), machineId: 'mini', name: 'Mini', observation: { ...structuredClone(host.observation!), localModels: [] } })
+    const refused = (request: Record<string, unknown>, now = 1000) => () => applyCommand(f.state, owner, { type: 'agent.start', request } as Command,
+      { now, operationId: 'op-x', ...grant })
+    expect(refused(start('team-grid', { machineId: 'mini' }))).toThrow(expect.objectContaining({ code: 'OUTSIDE_CONTRIBUTION' }))
+    expect(refused(start('team-grid', { gridModel: 'llama-70b' }))).toThrow(expect.objectContaining({ code: 'OUTSIDE_CONTRIBUTION' }))
+    expect(refused(start('team-grid'), 1000 + 60_000)).toThrow(expect.objectContaining({ code: 'OUTSIDE_CONTRIBUTION' }))
+    f.run({ type: 'agent.start', request: start('team-grid') }, owner, grant)
+    expect(f.state.starts).toEqual([expect.objectContaining({ request: expect.objectContaining({ machineId: 'host', gridName: 'team-grid', gridModel: 'qwen3-30b' }) })])
+    // Not while the add-on is off.
+    f.run({ type: 'localModels.set', enabled: false })
+    expect(refused(start('team-grid'))).toThrow(expect.objectContaining({ code: 'OUTSIDE_CONTRIBUTION' }))
+  })
+
+  it('matches a start to a local route candidate by its grid model, and records it on the decision', () => {
+    const f = fixture()
+    const lead = f.add('lead', 'owner', 'lead', true)
+    const grid = f.run({ type: 'localModels.set', enabled: true }).result.grid as string
+    served(f, grid)
+    const local = candidate('c0', { machineId: 'host', model: 'default', effort: 'default', quality: 1, cost: 1, gridModel: 'qwen3-30b', gridName: grid })
+    const decision = { routeDecision: { id: 'd1', conversationId: 'lead', record: record({ candidates: [local, candidate('c1')], pick: 'c0' }),
+      final: null, override: null, assignmentId: null, outcome: null } as unknown as RouteDecision }
+    const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    const effects = f.run({ type: 'agent.start', request: start(grid), routeDecisionId: 'd1' }, actor, { ...grant, ...decision })
+    expect(effects.routeDecisions).toEqual([expect.objectContaining({ op: 'final', final: expect.objectContaining({ gridModel: 'qwen3-30b', gridName: grid }) })])
+    expect(effects.messages.some(m => m.source?.kind === 'route-override')).toBe(false)
+  })
+
+  it('reads the policy\'s local quality, low by default, from policies saved before the add-on', () => {
+    expect(effectivePolicy(null, null).policy.localModels).toEqual({ quality: 1, enabled: true })
+    const saved = { ...DEFAULT_ROUTING_POLICY } as Record<string, unknown>
+    delete saved.localModels
+    expect(effectivePolicy(saved, null).policy.localModels).toEqual({ quality: 1, enabled: true })
+    expect(effectivePolicy(saved, { localModels: { quality: 2, enabled: true } }).policy.localModels).toEqual({ quality: 2, enabled: true })
   })
 })
