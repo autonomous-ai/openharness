@@ -1,4 +1,4 @@
-import { contributedEngines, hostLocalGrid, machineContribution, machineObservationSchema, machineSlots, recordAgentPresence, removalPreview, swarmGridRow, type MachineObservation } from './machines.js'
+import { contributedEngines, expireRemovals, hostLocalGrid, machineContribution, machineObservationSchema, machineSlots, recordAgentPresence, removalPreview, swarmGridRow, type MachineObservation } from './machines.js'
 import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient, SuperTab, SuperTabDelivery } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
@@ -1026,8 +1026,18 @@ export class SuperTabStore {
       if (!pool || pool.contributorId !== user.sub || pool.generation !== observation.generation) fail('CONTRIBUTION_REVOKED', 'Read the current machine contribution.', 403)
       const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
       if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
-      recordAgentPresence(state, machineId, observation.runningHarnessIds, this.now())
-      pool.observation = { ...observation, quotas: observation.quotas.filter(q => contributedEngines(pool, observation).includes(q.engine)), receivedAt: this.now() }
+      const now = this.now()
+      // A machine that went silent while cleaning takes the fallback before this fresh reading can bring it back: its records
+      // go, its cleanup waits for this host, as the next sweep would have done (machines.ts expireRemovals).
+      expireRemovals(state, now)
+      if (!state.machines?.includes(pool)) {
+        await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: {
+          state: json(state), revision: row.revision + 1, ...indexes(state),
+        } })
+        return { revision: row.revision + 1 }
+      }
+      recordAgentPresence(state, machineId, observation.runningHarnessIds, now)
+      pool.observation = { ...observation, quotas: observation.quotas.filter(q => contributedEngines(pool, observation).includes(q.engine)), receivedAt: now }
       // Current-generation physical stop proof also finishes a close whose membership was already withdrawn.
       for (const proof of observation.stoppedReservations ?? []) {
         if (!observation.stoppedHarnessIds.includes(proof.harnessId)) continue
