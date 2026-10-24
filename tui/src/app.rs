@@ -1366,6 +1366,8 @@ impl App {
             // say (no `sharedMachines`) keeps the ones it had.
             let before = app.fleet.shares.clone();
             let rows = &app.fleet.take_shared(owned, reply.get("sharedMachines").and_then(Value::as_array));
+            // A Mac's Harness Team account is listed as the Mac (backend `hostMachineId`).
+            app.fleet.take_hosts(rows);
             // A machine its owner stopped sharing leaves the list, and its panes close with it: the
             // status line says why (a fresh list says so; an outage's copy proves nothing).
             if reply["stale"] != true && reply.get("sharedMachines").is_some() {

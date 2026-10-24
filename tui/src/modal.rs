@@ -280,7 +280,7 @@ pub fn agent_rows(app: &App, filter: Filter, machine: Option<&str>, project: Opt
     let mut agents: Vec<&crate::fleet::Agent> = app.fleet.agents.values().collect();
     agents.sort_by(|a, b| b.recency().cmp(&a.recency()).then_with(|| a.name.cmp(&b.name)).then_with(|| a.id.cmp(&b.id)));
     agents.into_iter()
-        .filter(|a| machine.map(|m| a.machine_id == m).unwrap_or(true))
+        .filter(|a| machine.map(|m| app.fleet.listed_under(&a.machine_id, m)).unwrap_or(true))
         .filter(|a| project.map(|p| a.project_root == p || a.cwd == p).unwrap_or(true))
         .filter(|a| filter.keeps(app.fleet.state_of(a)))
         .map(|a| {
@@ -681,7 +681,7 @@ pub const NEEDS_ARGS: &[&str] = &["select-window", "rename-window", "move-window
 pub fn machine_rows(app: &App) -> Vec<Row> {
     app.fleet.visible_machines().map(|m| {
         // Its harnesses by what they do: the fleet's counts, for this machine.
-        let here: Vec<State> = app.fleet.agents.values().filter(|a| a.machine_id == m.id && a.engine != "terminal").map(|a| app.fleet.state_of(a)).collect();
+        let here: Vec<State> = app.fleet.agents.values().filter(|a| app.fleet.listed_under(&a.machine_id, &m.id) && a.engine != "terminal").map(|a| app.fleet.state_of(a)).collect();
         let n = |s: State| here.iter().filter(|x| **x == s).count();
         // (The harnesses' marks, no round ones: `✓` connected, a spinner connecting, `?` to link…)
         let (dot, color) = theme::machine_mark(&m.reach, m.online(), app.tick);
@@ -821,7 +821,7 @@ pub fn theme_options(app: &App, section: &str) -> Vec<Row> {
 pub fn new_machine_rows(app: &App, prefer: &str) -> Vec<Row> {
     let prefer = app.fleet.launch_machine_id(prefer);
     let mut rows: Vec<Row> = app.fleet.visible_machines().filter(|m| m.usable()).map(|m| {
-        let running = app.fleet.agents.values().filter(|a| a.machine_id == m.id && a.status == "active").count();
+        let running = app.fleet.agents.values().filter(|a| app.fleet.listed_under(&a.machine_id, &m.id) && a.status == "active").count();
         Row::new(m.id.clone(), app.fleet.machine_name(&m.id))
             .lead(vec![span(if m.id == prefer { "✓ " } else { "  " }, fg(theme::accent()))])
             .detail(vec![span(format!("{running} running"), fg(theme::MUTED))])
@@ -876,6 +876,41 @@ pub fn route_rows(reply: &Value) -> Vec<Row> {
     }).collect();
     rows.sort_by_key(|r| !r.id.ends_with(best) || best.is_empty());
     rows
+}
+
+#[cfg(test)]
+mod machine_row_tests {
+    use super::*;
+    use crate::app::App;
+    use serde_json::json;
+
+    /// This computer, a Mac with its Harness Team account (backend `hostMachineId`), a harness on each.
+    fn app() -> App {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (150, 42));
+        app.fleet.local_id = "local".into();
+        for (id, name) in [("local", "studio"), ("mac", "MacBook Pro"), ("team", "MacBook Pro · Team")] {
+            app.fleet.machines.push(crate::fleet::Machine { shared: false, id: id.into(), name: name.into(), local: id == "local", status: "online".into(), reach: Reach::Ready });
+        }
+        app.fleet.take_hosts(&[json!({ "machineId": "team", "hostMachineId": "mac" })]);
+        app.fleet.merge_roster("mac", &[json!({"id": "own", "name": "Own task", "engine": "claude", "status": "active"})]);
+        app.fleet.merge_roster("team", &[json!({"id": "mate", "name": "Teammate task", "engine": "codex", "status": "active"})]);
+        app
+    }
+
+    #[test]
+    fn a_harness_team_account_is_one_machine_with_its_mac() {
+        let app = app();
+        assert_eq!(machine_rows(&app).iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["local", "mac"]);
+        // A new harness goes on the Mac itself, never on its team account; the team account's work is counted there.
+        let new = new_machine_rows(&app, "local");
+        assert_eq!(new.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["local", "mac"]);
+        assert!(new[1].detail.iter().any(|s| s.content.contains("2 running")), "{:?}", new[1].detail);
+        // The Mac's harnesses are both, each opened on its own machine, named as on the Mac.
+        let rows = agent_rows(&app, Filter::All, Some("mac"), None);
+        assert_eq!(rows.iter().map(|r| r.id.as_str()).collect::<std::collections::HashSet<_>>(), ["mac:own", "team:mate"].into_iter().collect());
+        assert!(rows.iter().all(|r| r.right.contains("MacBook Pro") && !r.right.contains("Team")), "{:?}", rows.iter().map(|r| &r.right).collect::<Vec<_>>());
+    }
 }
 
 #[cfg(test)]
