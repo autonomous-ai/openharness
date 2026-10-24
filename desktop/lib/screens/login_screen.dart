@@ -96,7 +96,7 @@ class LoginScreen extends StatelessWidget {
                     Text('Harness', style: grid.AppType.heading()),
                   ],
                   const Spacer(),
-                  const WebDownloadButton(),
+                  if (!browserHasAppStore()) const WebDownloadButton(),
                 ],
               ),
             ),
@@ -155,9 +155,28 @@ class LoginScreen extends StatelessWidget {
                                 constraints: BoxConstraints(
                                   maxWidth: compact ? 560 : 960,
                                 ),
-                                child: const LoginFleetMap(seamless: true),
+                                child: LoginFleetMap(
+                                  seamless: true,
+                                  pinDetails:
+                                      MediaQuery.sizeOf(context).width >= 480,
+                                ),
                               ),
                               SizedBox(height: gap),
+                              // Above the ways in, so a failed sign-in's reason
+                              // and Try again land on screen (audit S15).
+                              if (notifier.lastError != null &&
+                                  !notifier.sessionExpired) ...[
+                                ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 520,
+                                  ),
+                                  child: _ErrorTile(
+                                    message: notifier.lastError!,
+                                    onRetry: notifier.retryLogin,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                              ],
                               ConstrainedBox(
                                 constraints: const BoxConstraints(
                                   maxWidth: 520,
@@ -170,19 +189,6 @@ class LoginScreen extends StatelessWidget {
                                   offerPhone: offerPhone,
                                 ),
                               ),
-                              if (notifier.lastError != null &&
-                                  !notifier.sessionExpired) ...[
-                                const SizedBox(height: 16),
-                                ConstrainedBox(
-                                  constraints: const BoxConstraints(
-                                    maxWidth: 520,
-                                  ),
-                                  child: _ErrorTile(
-                                    message: notifier.lastError!,
-                                    onRetry: notifier.retryLogin,
-                                  ),
-                                ),
-                              ],
                               SizedBox(height: gap),
                               const _Seal(divider: false),
                             ],
@@ -656,7 +662,7 @@ class _Seal extends StatelessWidget {
             Text(
               'End-to-end encrypted',
               style: Theme.of(context).textTheme.labelSmall
-                  ?.copyWith(color: grid.AppPalette.textFaint),
+                  ?.copyWith(color: grid.AppPalette.textSecondary),
             ),
           ],
         ),

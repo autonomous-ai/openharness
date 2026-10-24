@@ -57,8 +57,10 @@ class WebFooterBar extends StatelessWidget {
                     ),
                   ),
                 ),
-                // One filled action in the bar: Share when it is on.
-                WebDownloadButton(prominent: share == null),
+                // One filled action in the bar: Share when it is on. A phone's
+                // download is the store bar's.
+                if (!browserHasAppStore())
+                  WebDownloadButton(prominent: share == null),
                 if (share != null) ...[
                   SizedBox(width: workspaceBarCellSizeOf(context).width),
                   _WebShareIconButton(share: share),

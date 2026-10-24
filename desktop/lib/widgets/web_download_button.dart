@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -12,6 +13,16 @@ import 'workspace_share_button.dart';
 /// block as a popup or open as a separate window.
 Future<bool> openInNewTab(Uri uri) =>
     launchUrl(uri, webOnlyWindowName: '_blank');
+
+/// Whether a browser on [platform] (this one when absent) is a phone's or a
+/// tablet's, iOS or Android, where the store bar offers the Harness app
+/// (`web/shell/web_store_banner.dart`): a computer's download is no use there,
+/// so [WebDownloadButton] is left out (audit finding S9).
+bool browserHasAppStore([TargetPlatform? platform]) =>
+    switch (platform ?? defaultTargetPlatform) {
+      TargetPlatform.iOS || TargetPlatform.android => true,
+      _ => false,
+    };
 
 /// The Harness product page.
 final harnessAppPage = Uri.parse('https://www.autonomous.ai/harness-app');
