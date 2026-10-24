@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { activeWork, fail, person, type Actor, type Agent, type AgentStart, type AgentStartRequest, type SuperTabState } from './model.js'
-import { agentProjectId, groupProject, ledProject, projectsOf } from './projects.js'
+import { agentProjectId, groupProject, ledProject, projectsOf, type SwarmProject } from './projects.js'
 import { conversation } from './model.js'
 
 /** An explicit grant for this tab and project. It never creates a MachineShare. */
@@ -16,8 +16,9 @@ export interface ContributedMachine {
   maxAgents: number
   paused: boolean
   /** `sessionKind` is how the reporting machine is signed in, stamped from its session by the store, never taken from
-   *  the report: `team` for a Mac's team account (lib/teamSession.ts), `computer` for any other. Absent on older readings. */
-  observation?: MachineObservation & { receivedAt: number; sessionKind?: 'team' | 'computer' }
+   *  the report: `team` for a Mac's team account (lib/teamSession.ts), `computer` for any other. Absent on older readings.
+   *  `privacy` is kept only from a team session's reading (observedPrivacy). */
+  observation?: Omit<MachineObservation, 'privacy'> & { receivedAt: number; sessionKind?: 'team' | 'computer'; privacy?: StoredPrivacy }
   /** Set by machine.remove: an online machine stays listed, paused, while its host deletes the Swarm's folders there, until
    *  the host says it cleaned up (machine.cleaned) or REMOVAL_FALLBACK_MS passes. An offline one leaves the list at once and
    *  its cleanup waits for its host (expireRemovals). */
@@ -47,6 +48,22 @@ const quota = z.object({ engine: z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), kn
   windows: z.array(z.object({ name: z.string().max(80), usedPercent: z.number().min(0).max(100),
     resetsAt: z.union([z.string().max(80), z.number().finite(), z.null()]) }).strict()).max(10),
 }).strict()
+/** Milliseconds since the epoch, on the reporting Mac's clock. */
+const checkedAt = z.number().finite().nonnegative()
+/**
+ * What a Harness Team daemon says about its privacy check with each reading (cli/src/team/privacy.ts, docs/plans/
+ * 2026-10-24-swarm-team-account.md Task 2): `account`, it runs in a Mac's Harness Team account and the check passed, or
+ * failed with the first failing item (`unchecked` when it could not run); `dedicated`, the whole machine is for agents
+ * (`harness team on`). The owner's own daemon sends none. `item` is a short slug, so a newer CLI's item still reads.
+ */
+export const machinePrivacySchema = z.union([
+  z.object({ mode: z.literal('account'), passed: z.literal(true), checkedAt }).strict(),
+  z.object({ mode: z.literal('account'), passed: z.literal(false), item: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/), detail: z.string().max(1000), checkedAt }).strict(),
+  z.object({ mode: z.literal('dedicated') }).strict(),
+])
+export type MachinePrivacy = z.infer<typeof machinePrivacySchema>
+/** As a pool keeps it: `seenAt` is when this server first received that check's result, on the server's clock. */
+export type StoredPrivacy = MachinePrivacy & { seenAt: number }
 export const machineObservationSchema = z.object({ generation: z.string().max(160), resources: resource,
   tools: z.record(z.string().max(80), z.boolean()).refine(v => Object.keys(v).length <= 20),
   toolProbeErrors: z.record(z.string().max(80), z.string().max(200)).refine(v => Object.keys(v).length <= 20).optional(),
@@ -64,11 +81,100 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
    *  agent (cli/src/lib/codingModel.ts), with why: so the route can tell a Lead asked for one why it is not offered. */
   refusedModels: z.array(z.object({ grid: z.string().min(1).max(160), model: z.string().min(1).max(200),
     name: z.string().max(200).optional(), why: z.string().min(1).max(300) }).strict()).max(16).optional(),
+  /** A Harness Team daemon's privacy check; absent from the owner's own daemon and from hosts before it. The store keeps
+   *  it only when a team session reported it (observedPrivacy). */
+  privacy: machinePrivacySchema.optional(),
 }).strict()
 export type MachineObservation = z.infer<typeof machineObservationSchema>
 
 /** A machine reports every 15 seconds (cli/src/superTabs/machines.ts); three missed beats is offline. */
 export const MACHINE_FRESH_MS = 45_000
+
+// ── Teammates' work runs only on Team machines (docs/plans/2026-10-24-swarm-team-account.md, Task 3) ──────────────
+// A start or an assignment for a project whose owner is not the person whose grant runs the machine is a teammate's
+// work. It would run as that machine's owner, with their files, logins and subscriptions, so it is admitted only on a
+// Team machine — the Mac's Harness Team account, or a machine used only for agents — that shows its privacy now.
+// Everything else refuses it and says why; a person's own projects on their own machines are unchanged.
+
+/** How long a passed privacy check counts, from when this server first received it. The team account checks again
+ *  every 5 minutes (cli/src/team/privacy.ts PRIVACY_RECHECK_MS) and reports within a 15-second beat, so a healthy
+ *  machine's check is never older than about 5 minutes here. 15 minutes allows two missed rechecks (a slow check, a
+ *  daemon restart) before routing stops, and bounds to 15 minutes how long a home folder opened again but no longer
+ *  checked can still be trusted. A failing check counts at once, whatever its age. */
+export const PRIVACY_FRESH_MS = 15 * 60_000
+
+/**
+ * The privacy a reading leaves on the pool: only a team session's, since an ordinary computer's says nothing about a
+ * team account. The same check sent again keeps the date it first arrived, so a check that stops running goes stale on
+ * the server's clock, whatever the reporting Mac's clock says.
+ */
+export function observedPrivacy(previous: StoredPrivacy | undefined, reported: MachinePrivacy | undefined, team: boolean, now: number): StoredPrivacy | undefined {
+  if (!team || !reported) return undefined
+  const same = previous && previous.mode === reported.mode && (reported.mode === 'dedicated'
+    || (previous.mode === 'account' && previous.passed === reported.passed && previous.checkedAt === reported.checkedAt))
+  return { ...reported, seenAt: same ? previous.seenAt : now }
+}
+
+export type TeamWorkCode = 'MACHINE_OFFLINE' | 'TEAM_ACCOUNT_REQUIRED' | 'PRIVACY_UNCHECKED' | 'PRIVACY_CHECK_FAILED' | 'PRIVACY_CHECK_STALE'
+export interface TeamWorkRefusal { code: TeamWorkCode; reason: string }
+/** Refusals that hold until a person acts on the machine; a stale check or an offline machine may pass again by itself. */
+export const LASTING_TEAM_REFUSALS: readonly string[] = ['TEAM_ACCOUNT_REQUIRED', 'PRIVACY_UNCHECKED', 'PRIVACY_CHECK_FAILED']
+
+/** What each item of the privacy check (cli/src/team/privacy.ts) could reach when it failed. */
+const PRIVACY_ITEMS: Record<string, string> = {
+  sentinel: 'it could read the privacy sentinel in its owner\'s home folder', 'home-listing': 'it could list its owner\'s home folder',
+  gitconfig: 'it could read its owner\'s ~/.gitconfig', ssh: 'it could list its owner\'s ~/.ssh', projects: 'it could list its owner\'s project folders',
+  keychain: 'it could list its owner\'s login Keychain folder', chrome: 'it could list its owner\'s Chrome profile', safari: 'it could list its owner\'s Safari folder',
+  'standard-user': 'the team account is an administrator', unchecked: 'the check did not run',
+}
+const ONLY_OWN = 'so it runs only its owner\'s projects'
+
+/** Why this contributed machine may not run a teammate's project now, or null when it may. `teamRow`: its account row
+ *  says it is signed in as a team account (`Machine.sessionKind`), read by the store. */
+export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow = false): TeamWorkRefusal | null {
+  const reading = pool.observation, name = pool.name
+  if (!reading || now - reading.receivedAt > MACHINE_FRESH_MS) {
+    return { code: 'MACHINE_OFFLINE', reason: `${name} is offline, so it cannot show that its Harness Team account is private.` }
+  }
+  if (!teamRow && reading.sessionKind !== 'team') return { code: 'TEAM_ACCOUNT_REQUIRED', reason: `${name} has no Harness Team account yet, ${ONLY_OWN}.` }
+  const privacy = reading.privacy
+  if (!privacy) return { code: 'PRIVACY_UNCHECKED', reason: `${name} has not reported a privacy check from its Harness Team account, ${ONLY_OWN}.` }
+  if (privacy.mode === 'dedicated') return null
+  if (!privacy.passed) {
+    const what = PRIVACY_ITEMS[privacy.item]
+    return { code: 'PRIVACY_CHECK_FAILED', reason: `The Harness Team account on ${name} is not private (${privacy.item}${what ? `: ${what}` : ''}), ${ONLY_OWN}.` }
+  }
+  if (now - privacy.seenAt > PRIVACY_FRESH_MS) {
+    const minutes = Math.floor((now - privacy.seenAt) / 60_000)
+    return { code: 'PRIVACY_CHECK_STALE', reason: `The privacy check on ${name} last passed ${minutes} minutes ago, ${ONLY_OWN} until it passes again.` }
+  }
+  return null
+}
+
+/**
+ * Whether work for [project] may run on [machineId] under [contributorId]'s grant there: the pool's contributor for a
+ * start on a contributed machine, the agent's contributor for an agent already in the Swarm. The project owner's own
+ * grant always may. A teammate's needs a contributed Team machine that shows its privacy (teamWorkRefusal); a machine
+ * outside the Swarm's Machines list reports nothing, so it never does. `teamMachines`: the tab's machines whose account
+ * row is signed in as a team account, read by the store.
+ */
+export function teamWorkCheck(state: SuperTabState, machineId: string, contributorId: string, project: SwarmProject, now: number,
+  teamMachines: readonly string[] = []): TeamWorkRefusal | null {
+  if (project.ownerId === contributorId) return null
+  const pool = state.machines?.find(m => m.machineId === machineId)
+  if (!pool) return { code: 'TEAM_ACCOUNT_REQUIRED', reason: `This machine is not a Team machine of this Swarm, ${ONLY_OWN}.` }
+  return teamWorkRefusal(pool, now, teamMachines.includes(machineId))
+}
+
+/** Refuses with the refusal's code and sentence: 403, or 409 like any start on an offline machine. */
+export function failTeamWork(refusal: TeamWorkRefusal, after = ''): never {
+  fail(refusal.code, `${refusal.reason}${after}`, refusal.code === 'MACHINE_OFFLINE' ? 409 : 403)
+}
+
+export function requireTeamWork(...args: Parameters<typeof teamWorkCheck>): void {
+  const refusal = teamWorkCheck(...args)
+  if (refusal) failTeamWork(refusal)
+}
 
 /** Since when an agent has been down: the stored time a reading first showed its session gone or the host confirmed its
  * stop, or its machine's last reading once that is stale. Nothing is written while a machine is silent, so that case is
@@ -202,7 +308,9 @@ export function localModelAllowed(state: SuperTabState, request: AgentStartReque
     && (pool.observation.localModels ?? []).some(l => l.grid === request.gridName && l.model === request.gridModel)
 }
 
-export function admitMachineStart(state: SuperTabState, request: AgentStartRequest, now: number, start?: AgentStart) {
+/** `teamMachines`: the tab's machines whose account row is signed in as a team account, read by the store. A start is
+ *  admitted again when its host launches it, so a Team machine whose check failed or went stale since never launches it. */
+export function admitMachineStart(state: SuperTabState, request: AgentStartRequest, now: number, start?: AgentStart, teamMachines: readonly string[] = []) {
   const pool = machineContribution(state, request.machineId)
   if (!pool) return null
   if (pool.removal) fail('MACHINE_REMOVED', 'This machine is being removed from the Swarm.')
@@ -210,6 +318,8 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   if (pool.paused) fail('MACHINE_PAUSED', 'New work is paused on this machine.')
   const project = groupProject(state, conversation(state, request.conversationId))
   if (!pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
+  // Before the request's own fields: a machine that takes none of this project's work says so first.
+  requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines)
   const cwd = pool.scope === 'swarm'
     ? project.repository?.machineId === pool.machineId ? project.repository.cwd : `${pool.cwd.replace(/\/+$/, '')}/${project.id}`
     : pool.cwd

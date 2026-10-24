@@ -33,6 +33,18 @@ function fixture() {
   return { run, invite, add, group, get state() { return state } }
 }
 
+/** Makes [machineId] [contributorId]'s contributed machine used only for agents (`harness team on`), reporting now, so a
+ *  teammate's agent there may take another person's project (machines.ts teamWorkCheck). */
+function teamMachine(f: ReturnType<typeof fixture>, contributorId: string, machineId = 'host') {
+  const team = { sessionKind: 'team' as const, privacy: { mode: 'dedicated' as const, seenAt: 1000 } }
+  const existing = f.state.machines?.find(m => m.machineId === machineId)
+  if (existing) return void Object.assign(existing.observation!, team)
+  f.state.machines = [...(f.state.machines ?? []), { machineId, name: 'Studio', contributorId, membershipGeneration: f.state.people.find(p => p.id === contributorId)!.generation,
+    generation: 'g1', cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false, observation: { generation: 'g1', receivedAt: 1000, ...team,
+      resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null,
+        deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] } }]
+}
+
 describe('five-part tasks', () => {
   const task = { goal: 'Save edits', changes: 'Persist the draft', constraints: 'No dependencies', owns: ['backend/src/superTabs'] }
   const brief = 'Goal:\nSave edits\n\nChanges:\nPersist the draft\n\nConstraints:\nNo dependencies\n\nOwns:\n- backend/src/superTabs'
@@ -370,6 +382,7 @@ describe('Super Tab collaboration policy', () => {
   it('withdraws a departing contributor and preserves execution identity until the host confirms a stop', () => {
     const f = fixture()
     f.invite()
+    teamMachine(f, 'peer')
     const group = f.group()
     const worker = f.add('worker', 'peer', group)
     const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
@@ -944,6 +957,7 @@ it('requires the exact stop request for host acknowledgement and prevents promot
 
 it('allows the contributor to keep a completed worker and refuses another project’s Lead', () => {
   const f = fixture(); f.invite()
+  teamMachine(f, 'peer')
   f.add('lead', 'owner', 'lead', true)
   const group = f.group(), worker = f.add('worker', 'peer', group)
   const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
@@ -1733,6 +1747,7 @@ describe('machine.remove', () => {
     f.state.agents.find(a => a.id === lead)!.machineId = 'elsewhere'
     f.invite()
     contribute(f, 'peer')
+    teamMachine(f, 'peer')
     const worker = f.add('worker', 'peer', group), owners = f.add('owners', 'owner')
     f.run({ type: 'work.assign', conversationId: group, agentId: worker })
     f.state.rules = [{ id: 'both', projectId: 'lead', rule: { kind: 'machines', machineIds: ['host', 'elsewhere'] }, text: 'Only these two.',

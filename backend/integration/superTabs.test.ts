@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import Fastify, { type FastifyInstance } from 'fastify'
@@ -49,6 +49,16 @@ async function routedStart(tab: string, lead: string, role?: 'reviewer') {
   return { routeDecisionId, startId }
 }
 const message = (text: string): Command => ({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })
+/** Makes [machineId], a machine of `host`'s, one used only for agents (`harness team on`) for this test: its account row
+ *  is a team machine and it reports from its team session with that privacy, so it may take the owner's projects
+ *  (docs/plans/2026-10-24-swarm-team-account.md, Task 3). A teammate's work runs only on such a machine. */
+async function teamMachine(machineId: string) {
+  const computerId = createHash('sha256').update(machineId).digest('hex').slice(0, 32)
+  await db.machine.update({ where: { machineId }, data: { computerId, sessionKind: 'team' } })
+  onTestFinished(async () => { await db.machine.update({ where: { machineId }, data: { computerId: null, sessionKind: null } }) })
+  const session: AuthUser = { ...host, harnessSessionId: `team-${machineId}`, harnessSessionKind: 'team', harnessComputerId: computerId }
+  return { session, privacy: { mode: 'dedicated' as const } }
+}
 async function invite(tab: string, role: 'collaborator' | 'viewer' = 'collaborator') {
   const invitation = await run(tab, { type: 'invite.create', email: peer.email, role, conversationId: 'lead' })
   await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, peer)
@@ -602,6 +612,7 @@ describe('private swarm projects on the real control API', () => {
     const machineId = 'swarm-pool-host'
     await db.machine.create({ data: { machineId, userId: host.sub, apiKey: 'fixture-swarm-pool', managerId: 'fixture',
       autonomousEnv: 'prod', authMode: 'remote' } })
+    const team = await teamMachine(machineId)
     const project = (await run(tab, { type: 'project.create', name: 'Second project', visibility: 'private', brief: '' })).result
     const conversationId = String(project.conversationId), projectId = String(project.projectId)
     await run(tab, { type: 'agent.add', conversationId, machineId: 'test-host', harnessId: randomUUID(),
@@ -618,10 +629,10 @@ describe('private swarm projects on the real control API', () => {
     await run(tab, { type: 'machine.contribute', machineId, name: 'Shared capacity', cwd: '/swarm-root',
       scope: 'swarm', engines: ['codex'], maxAgents: 2 }, host)
     const pool = (await store.hostPools(host, machineId))[0]!
-    await store.observeMachine(host, tab, machineId, { generation: pool.machine.generation,
+    await store.observeMachine(team.session, tab, machineId, { generation: pool.machine.generation,
       resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, projectDiskFreeBytes: 100e9,
         diskFreeBytes: 100e9, diskTotalBytes: 500e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null },
-      quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [] })
+      quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [], privacy: team.privacy })
     expect(pool.projects).toEqual([])
     await expect(run(tab, { type: 'agent.start', request: { ...request, cwd: '/swarm-root/lead' } }))
       .rejects.toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
@@ -871,6 +882,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
     const contribute = { type: 'machine.contribute' as const, machineId: 'pool-host', name: 'Host laptop', cwd: '/project', engines: ['codex' as const], maxAgents: 1 }
     await db.machine.create({ data: { machineId: 'pool-host', userId: host.sub, apiKey: 'fixture-pool-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    const team = await teamMachine('pool-host')
     await expect(run(tab, contribute)).rejects.toMatchObject({ code: 'HOST_REQUIRED' })
     await run(tab, contribute, host)
     expect(await db.machineShare.findUnique({ where: { machineId: 'pool-host' } })).toBeNull()
@@ -880,7 +892,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const observation = { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
       projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null }, quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [] }
     await expect(store.observeMachine(owner, tab, 'pool-host', observation)).rejects.toMatchObject({ code: 'CONTRIBUTION_REVOKED' })
-    await store.observeMachine(host, tab, 'pool-host', observation)
+    await store.observeMachine(team.session, tab, 'pool-host', { ...observation, privacy: team.privacy })
     const request = { permissionMode: 'full', conversationId: 'lead', machineId: 'pool-host', engine: 'codex', name: 'Builder', cwd: '/project', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     await expect(run(tab, { type: 'agent.start', request: { ...request, cwd: '/private' } })).rejects.toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
@@ -1400,10 +1412,11 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
     await run(tab, { type: 'machine.contribute', machineId: 'test-host', name: 'Host', cwd: '/swarm-root', scope: 'swarm', engines: ['codex'], maxAgents: 2 }, host)
     const pool = (await store.hostPools(host, 'test-host')).find(p => p.tabId === tab)!
-    await store.observeMachine(host, tab, 'test-host', { generation: pool.machine.generation,
+    const team = await teamMachine('test-host')
+    await store.observeMachine(team.session, tab, 'test-host', { generation: pool.machine.generation,
       resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, projectDiskFreeBytes: 100e9,
         diskFreeBytes: 100e9, diskTotalBytes: 500e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null },
-      quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [] })
+      quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [], privacy: team.privacy })
     const request = { conversationId: 'lead', machineId: 'test-host', engine: 'codex', name: 'Builder', cwd: '/work/app', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     await run(tab, { type: 'agent.start', request })
@@ -1921,10 +1934,11 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
     await run(tab, { type: 'machine.contribute', machineId: 'test-host', name: 'Host', cwd: '/fixture/repo', engines: ['codex'], maxAgents: 4 }, host)
     const machine = (await store.hostPools(host, 'test-host')).find(pool => pool.tabId === tab)!.machine
-    await store.observeMachine(host, tab, 'test-host', { generation: machine.generation,
+    const team = await teamMachine('test-host')
+    await store.observeMachine(team.session, tab, 'test-host', { generation: machine.generation,
       resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
         projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
-      quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
+      quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [], privacy: team.privacy })
     const starts = [await routedStart(tab, lead), await routedStart(tab, lead)]
     for (const { routeDecisionId } of starts) expect((await store.routeDecision(owner, tab, routeDecisionId)).outcome).toBeNull()
 

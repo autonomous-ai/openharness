@@ -771,6 +771,27 @@ describe('routing contributed capacity', () => {
     expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm1', engine: 'codex' } })
     expect((answer.alternatives as Array<{ machineId: string; engine: string }>).map(x => [x.machineId, x.engine])).toEqual([['m1', 'claude'], ['m2', 'claude'], ['m3', 'claude']])
   })
+  it('leaves out a machine that cannot take a teammate\'s project, with the backend\'s reason, and keeps its owner\'s own work there', async () => {
+    const reason = 'Contributed laptop has no Harness Team account yet, so it runs only its owner\'s projects.'
+    const refusing = (contributorId: string) => ({ ...healthy(), contributorId, teamWork: { allowed: false, code: 'TEAM_ACCOUNT_REQUIRED', reason } })
+    const owners = { id: 'lead', ownerId: 'owner' }
+    // The Swarm owner's project on a teammate's personal laptop: no new agent there, and not its member either.
+    const teammate = await runPool(refusing('mate'), true, {}, owners)
+    expect(teammate.answer).toMatchObject({ error: 'NO_CANDIDATE' })
+    expect(teammate.answer.excluded).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: expect.stringContaining('Multiply'), reason }),
+      expect.objectContaining({ title: expect.not.stringContaining('Multiply'), reason })]))
+    // The same laptop's own owner's project, as before.
+    expect((await runPool(refusing('mate'), false, {}, { id: 'lead', ownerId: 'mate' })).answer.ok).toBe(true)
+    // A Team machine that takes it, and a backend from before the rule that says nothing.
+    expect((await runPool({ ...healthy(), contributorId: 'mate', teamWork: { allowed: true } }, false, {}, owners)).answer.ok).toBe(true)
+    expect((await runPool({ ...healthy(), contributorId: 'mate' }, false, {}, owners)).answer.ok).toBe(true)
+    // Offline is said once, by the reading's own age.
+    const offline = { ...refusing('mate'), teamWork: { allowed: false, code: 'MACHINE_OFFLINE', reason: 'Contributed laptop is offline.' } }
+    offline.observation.receivedAt = 0
+    const silent = await runPool(offline, false, {}, owners)
+    expect(silent.answer.excluded).not.toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringContaining('Contributed laptop is offline.') })]))
+  })
   it('refuses unobserved tools and devices, without probing arbitrary paths on a teammate computer', async () => {
     expect((await runPool(healthy(), false, { tools: ['docker'], devices: ['/dev/fixture'] })).answer.ok).not.toBe(true)
   })

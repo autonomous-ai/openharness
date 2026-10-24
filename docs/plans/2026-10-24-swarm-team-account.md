@@ -72,9 +72,17 @@ Files: new `cli/src/team/` (setup script, launchd job, privacy check), `cli/src/
 
 Files: `backend/src/superTabs/machines.ts`, `store.ts`, `routeDecisions.ts`; `cli/src/superTabs/host.ts`.
 
-- [ ] Tests: a start for a project owned by someone other than the machine's contributor is refused on a personal machine and admitted on a Team machine whose privacy check passed; routing proposes only eligible machines and says why the others were skipped.
+- [x] Tests: a start for a project owned by someone other than the machine's contributor is refused on a personal machine and admitted on a Team machine whose privacy check passed; routing proposes only eligible machines and says why the others were skipped.
 - [ ] Joining a Swarm, or contributing a Mac, asks the CLI to run `harness team setup` once. A declined or failed prompt leaves the Mac serving only its owner's projects, with one line on the machine saying why.
-- [ ] Migration: existing contributions keep running agents; new cross-person starts follow the rule.
+- [x] Migration: existing contributions keep running agents; new cross-person starts follow the rule.
+
+How it works (`backend/src/superTabs/machines.ts`, `teamWorkCheck`):
+
+- **A teammate's work** is a start, an assignment, a Reviewer added to a group, or a route pick for a project whose owner is not the person whose grant runs the machine: the contributor of a contributed machine, or the agent's own contributor. It is admitted only on a contributed machine that is a Team machine (its account row's `sessionKind` is `team`, or its reading came from a team session) and whose `privacy` is `dedicated`, or `account` with `passed: true` and fresh. Everything else is refused with a code and a sentence: `TEAM_ACCOUNT_REQUIRED` ("MacBook Pro has no Harness Team account yet, so it runs only its owner's projects."), `PRIVACY_UNCHECKED`, `PRIVACY_CHECK_FAILED` (names the item), `PRIVACY_CHECK_STALE` and `MACHINE_OFFLINE`. A machine off the Swarm's Machines list reports no privacy, so it never takes a teammate's work.
+- **Privacy** is kept from a reading only when a team session sent it; an ordinary computer's claim is dropped. Each check is dated by when the server first received it, so the Mac's clock does not matter. A passed check counts for 15 minutes (`PRIVACY_FRESH_MS`): the team account checks every 5, so that allows two missed checks. A failing check counts at once. Only the machine's contributor reads a failing check's `detail`; everyone reads the item.
+- **Enforced** in `admitMachineStart` (on `agent.start` and again on `agent.startDispatch`), on starts off the Machines list, `work.assign`, `conversation.agent` adding a Reviewer, `route.record` and `route.override`. A queued start whose Team machine refuses it for good (no team account, no check, failing check) fails with that reason when its host tries to launch it; one waiting on a stale check keeps waiting.
+- **Routing.** The tab read gives each machine `teamWork`: `{ allowed: true }`, or `{ allowed: false, code, reason }`. The CLI's route leaves those machines out for a teammate's project and lists the reason in `excluded[]`. The backend does the same with any candidate an older CLI still sends, and refuses a pick there ("… Route again.").
+- **Migration.** Nothing is stopped. Agents already running on personal machines keep their current task, its reports, messages and their sessions. New starts, new assignments and new Reviewer groups for another person's project follow the rule. A personal machine contributed with scope "swarm" now serves only its owner's projects. So does a machine contributed before projects (no scope) by someone other than the Swarm's owner: the Swarm's first project is the owner's.
 
 ## Task 4: Harness GitHub App (backend, CLI)
 

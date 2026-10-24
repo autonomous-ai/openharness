@@ -403,6 +403,12 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   delete visible.overlapAlerts
   // Only that machine's host roster lists them (store.ts hostTabs); a removed private agent's session is not every member's.
   delete visible.closingSessions
+  // A failing privacy check's detail is its contributor's: an error from the check can name paths on their Mac. Everyone
+  // else reads which item failed (machines.ts teamWorkRefusal).
+  for (const pool of visible.machines ?? []) {
+    const privacy = pool.observation?.privacy
+    if (privacy && 'detail' in privacy && !(actor.kind === 'person' && actor.userId === pool.contributorId)) delete (privacy as { detail?: string }).detail
+  }
   expireRemovals(visible, now)
   // A read never hands out the cleanup records it just applied (store.ts hostTabs delivers them to the machine's host).
   delete visible.machineCleanups

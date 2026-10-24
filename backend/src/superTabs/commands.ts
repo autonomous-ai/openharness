@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { admitMachineStart, expireRemoval, expireRemovals, machineContribution, machineOffline, ownedMachine, type ContributedMachine } from './machines.js'
+import { admitMachineStart, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, ownedMachine, requireTeamWork, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
@@ -219,6 +219,9 @@ export interface CommandContext {
   terminalRequest?: TerminalRequest
   /** The mention `mention.done` names, read from SuperTabMention by the store. */
   mention?: MentionTarget
+  /** The tab's contributed machines whose account row is signed in as a Harness Team account (`Machine.sessionKind`),
+   *  read by the store for the commands that start, assign or route work (machines.ts teamWorkCheck). */
+  teamMachines?: string[]
 }
 
 /** Messages in a row between the Lead and its worker after which the Lead's message is no longer delivered automatically. */
@@ -503,6 +506,16 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     const override: RouteOverride | undefined = matched ? undefined : { by: 'lead', actorKey: actorKey(actor), reason: reasonText! }
     effects.routeDecisions.push({ op: 'final', id: decision.id, final: finalOf(decision), ...(override ? { override } : {}), ...(assignmentId ? { assignmentId } : {}) })
     return { decision, expected, override }
+  }
+  /** Why a route candidate cannot take a teammate's work in [conversationId], or null (machines.ts teamWorkCheck). A
+   *  member runs under its own contributor's grant; a new agent under the contribution's, or off the Machines list under
+   *  the grant of whoever will start it ([starter]). */
+  const candidateRefusal = (candidate: RouteCandidate, conversationId: string, starter: string) => {
+    const project = groupProject(state, conversation(state, conversationId))
+    const member = candidate.kind === 'member' ? state.agents.find(a => a.id === candidate.agentId) : undefined
+    if (candidate.kind === 'member' && !member) return null
+    const contributor = member?.contributorId ?? state.machines?.find(m => m.machineId === candidate.machineId)?.contributorId ?? starter
+    return teamWorkCheck(state, member?.machineId ?? candidate.machineId, contributor, project, context.now, context.teamMachines)
   }
   /** Deleting its project is the only removal that takes a Lead. `close: false` when its host already closed the session. */
   const removeAgent = (target: Agent, { lead = false, close = true } = {}) => {
@@ -998,7 +1011,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) {
         fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')
       }
-      const pool = admitMachineStart(state, command.request, context.now)
+      const pool = admitMachineStart(state, command.request, context.now, undefined, context.teamMachines)
+      // Off the Machines list, a teammate's project never runs: nothing there shows a privacy check (machines.ts).
+      if (!pool) requireTeamWork(state, command.request.machineId, grant.contributorId, home, context.now, context.teamMachines)
       state.starts.push({ ...(pool ? { poolGeneration: pool.generation } : {}), ...(command.routeDecisionId ? { routeDecisionId: command.routeDecisionId } : {}), id: operationId, creationId: `super-${operationId}`, actorKey: actorKey(actor),
         contributorId: contributor.id, membershipGeneration: contributor.generation, machineOwnerId: grant.machineOwnerId,
         hostGrant: grant.hostGrant ?? null, request: command.request, harnessId: null, dispatched: false, error: null })
@@ -1040,7 +1055,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (grant.machineOwnerId !== start.machineOwnerId || (grant.hostGrant ?? null) !== start.hostGrant) {
           fail('CONTRIBUTION_REVOKED', 'The original machine grant was revoked.', 403)
         }
-        admitMachineStart(state, start.request, context.now, start)
+        admitMachineStart(state, start.request, context.now, start, context.teamMachines)
         if (start.dispatched || start.error || start.harnessId) fail('START_CLAIMED', 'This native start was already requested. Read its creation status; do not start another.')
         start.dispatched = true
         break
@@ -1207,6 +1222,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         group.agentIds = group.agentIds.filter(id => id !== command.agentId)
         if (group.leadId === command.agentId) group.leadId = null
       } else {
+        // A Reviewer added to a group is handed its review, as an assignment hands a Builder its task.
+        if (reviewer) requireTeamWork(state, member.machineId, member.contributorId, groupProject(state, group), context.now, context.teamMachines)
         ruled(agentTarget(state, member), group.id, `${who} added ${member.name}`)
         if (!group.agentIds.includes(command.agentId)) group.agentIds.push(command.agentId)
         // Adding a Reviewer to a group reuses it, as assigning work reuses a Builder.
@@ -1309,26 +1326,37 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     case 'route.record': {
       controls(state, actor, command.conversationId)
-      const chosen = command.decision.candidates.find(c => c.id === command.decision.pick)!
+      // A teammate's work runs only on Team machines: candidates elsewhere leave the decision for its exclusions, with
+      // why, so the Lead and people see it. A pick there is refused; a current CLI already leaves those machines out.
+      const starter = actor.kind === 'agent' ? agent(state, actor.agentId).contributorId : actor.userId
+      const refusals = new Map(command.decision.candidates.flatMap(c => {
+        const refusal = candidateRefusal(c, command.conversationId, starter)
+        return refusal ? [[c.id, refusal] as const] : []
+      }))
+      const pickRefusal = refusals.get(command.decision.pick)
+      if (pickRefusal) failTeamWork(pickRefusal, ' Route again.')
+      const decision = !refusals.size ? command.decision : { ...command.decision,
+        candidates: command.decision.candidates.filter(c => !refusals.has(c.id)),
+        excluded: [...command.decision.candidates.flatMap(c => refusals.has(c.id) ? [{ title: c.title, reason: refusals.get(c.id)!.reason }] : []),
+          ...command.decision.excluded].slice(0, 200) }
+      const chosen = decision.candidates.find(c => c.id === decision.pick)!
       const member = chosen.kind === 'member' ? state.agents.find(a => a.id === chosen.agentId) : undefined
       if (member) assignable(conversation(state, command.conversationId), member)
       // Only the pick is checked, so an older CLI that still lists a ruled-out candidate records an allowed pick.
       ruled(member ? agentTarget(state, member) : chosen, command.conversationId, `${who} routed to ${chosen.title}`)
       requireWorkerDecisions(state, actor, open(state, command.conversationId), chosen.kind === 'member' ? chosen.agentId : undefined)
       if ((context.recentRoutes ?? 0) >= 30) fail('RATE_LIMITED', 'This Super Tab routed 30 tasks in the last hour. Wait before routing again.', 429)
-      const decision = command.decision
-      const pick = decision.candidates.find(c => c.id === decision.pick)!
       const via = decision.via === 'jev' ? `Jev ${Math.round((decision.p ?? 0) * 100)}%`
         : decision.via === 'only' ? 'only candidate' : 'by policy order'
       effects.routeDecisions.push({ op: 'create', id: operationId, conversationId: command.conversationId, record: decision })
       result.routeDecisionId = operationId
       // The row quotes the Lead's reason for the task; the verdict's own text stays in the decision record.
       const reason = decision.assessment.why
-      message(command.conversationId, `Routed to ${pick.title} — ${via} · "${reason}"`, [], null, {
+      message(command.conversationId, `Routed to ${chosen.title} — ${via} · "${reason}"`, [], null, {
         kind: 'route', decisionId: operationId, via: decision.via, p: decision.p, belowFloor: decision.belowFloor, why: reason,
         ...(decision.via === 'order' && decision.fallback ? { fallback: decision.fallback } : {}),
-        pick: { id: pick.id, title: pick.title },
-        alternatives: decision.candidates.filter(c => c.id !== pick.id).map(c => ({ id: c.id, title: c.title })),
+        pick: { id: chosen.id, title: chosen.title },
+        alternatives: decision.candidates.filter(c => c.id !== chosen.id).map(c => ({ id: c.id, title: c.title })),
       })
       break
     }
@@ -1351,6 +1379,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const chosen = decision.record.candidates.find(c => c.id === command.candidateId) ?? fail('NOT_FOUND', 'Choose one of this decision’s candidates.', 404)
       if (chosen.id === current) fail('ALREADY_CHOSEN', 'That candidate is already the choice.')
       if (chosen.kind === 'member' && !state.agents.some(a => a.id === chosen.agentId)) fail('CANDIDATE_UNAVAILABLE', 'That agent left this Super Tab. Choose another.')
+      // Its machine may have stopped showing its privacy since the route; the group's Lead is who would start it.
+      const leadId = conversation(state, decision.conversationId).leadId
+      const teamRefusal = candidateRefusal(chosen, decision.conversationId, state.agents.find(a => a.id === leadId)?.contributorId ?? actor.userId)
+      if (teamRefusal) failTeamWork(teamRefusal)
       ruled(chosen.kind === 'member' ? agentTarget(state, agent(state, chosen.agentId!)) : chosen, decision.conversationId, `${who} chose ${chosen.title}`)
       effects.routeDecisions.push({ op: 'override', id: decision.id, override: { by: 'person', actorKey: actorKey(actor), candidateId: chosen.id, reason: command.reason } })
       const lead = conversation(state, decision.conversationId).leadId
@@ -1393,6 +1425,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const home = groupProject(state, group)
       if (command.roleId) worker.roleId = chosenRole(home, command.roleId, agentKind(state, worker)).id
       else requireCustomRole(home, agentKind(state, worker))
+      // A teammate's agent on a personal machine keeps what it has; it takes no new task for another person's project.
+      requireTeamWork(state, worker.machineId, worker.contributorId, home, context.now, context.teamMachines)
       requireWorkerDecisions(state, actor, group, worker.id)
       if (worker.workDecision === 'stop') fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
       if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === worker.id)) fail('AGENT_BUSY', 'This agent already owns an active assignment.')

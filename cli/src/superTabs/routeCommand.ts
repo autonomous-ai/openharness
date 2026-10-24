@@ -144,9 +144,16 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // The Lead's own machine is the account's even when the list could not be read.
   if (!machines.has(where.machineId)) machines.set(where.machineId, { name: where.machineId, status: 'unknown', account: true })
   for (const m of members) if (!machines.has(String(m.machineId))) machines.set(String(m.machineId), { name: String(m.machineId), status: 'unknown', account: false })
+  // A teammate's project runs only on Team machines: the backend says per machine whether it takes one now, and why not
+  // (backend superTabs/machines.ts teamWorkRefusal). Its project owner's own machines take its work as before.
+  const projectOwner = project?.ownerId ?? state.ownerId
   for (const original of list(state.machines)) {
     const repository = object(project?.repository)
+    const teamWork = object(original.teamWork)
     const pool: Json = { ...original,
+      // Offline is said once, by the reading's own age below.
+      ...(teamWork.allowed === false && teamWork.code !== 'MACHINE_OFFLINE' && typeof teamWork.reason === 'string'
+        ? { teammatesRefused: teamWork.reason, projectOwnerId: projectOwner } : {}),
       ...(original.scope === 'swarm' ? { cwd: repository.machineId === original.machineId
         ? repository.cwd : `${String(original.cwd).replace(/\/+$/, '')}/${projectId}` } : {}),
       ...(original.scope !== 'swarm' && projectId !== 'lead' ? { projectUnavailable: true } : {}),
@@ -322,7 +329,9 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     const quota = (engine: string) => { const q = quotas.find(q => q.engine === engine); return fresh && q ? quotaOf2({ known: q.known === true, windows: list(q.windows).filter(w => finite(w.usedPercent)).map(w => ({ usedPercent: w.usedPercent as number, resetsAt: w.resetsAt, name: text(w.name) ?? undefined })) }) : UNKNOWN_QUOTA }
     const blocked = [...(!fresh ? [OFFLINE] : []), ...(pool.paused ? ['New work is paused on this machine.'] : [])]
     const tools = object(observed.tools)
-    const newReasons = [...blocked,
+    /** Work for a project its owner does not run here: a new agent runs under the contribution, a member under its own grant. */
+    const teammates = (contributorId: unknown) => typeof pool.teammatesRefused === 'string' && contributorId !== pool.projectOwnerId ? [pool.teammatesRefused] : []
+    const newReasons = [...blocked, ...teammates(pool.contributorId),
       ...(pool.projectUnavailable === true ? ['Its owner must add this machine to the swarm again to support other projects.'] : []),
       ...(pool.repositoryUnavailable === true ? ['Share a repository for this project before starting agents on this machine.'] : []),
       ...(pool.availableSlots === 0 ? ['This machine has no available agent slots.'] : []),
@@ -333,7 +342,8 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     return [...members.map(m => {
       const allowance = quota(String(object(m.configuration).engine))
       const running = Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.includes(m.harnessId) : null
-      return memberProbe(m, fresh ? memberRefusals(running, allowance, needs.tools, needs.devices, tools, object(observed.devices), object(observed.toolProbeErrors)) : [OFFLINE],
+      return memberProbe(m, fresh ? [...memberRefusals(running, allowance, needs.tools, needs.devices, tools, object(observed.devices), object(observed.toolProbeErrors)),
+        ...teammates(m.contributorId)] : [OFFLINE],
         allowance, null, fresh && running === null)
     }),
       ...models.map(m => newProbe(m, [...newReasons, ...(quota(m.engine).leftPercent === 0 ? ['Subscription exhausted.'] : [])], quota(m.engine), fresh && quota(m.engine).known,

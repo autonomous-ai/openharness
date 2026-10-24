@@ -1,4 +1,4 @@
-import { contributedEngines, expireRemovals, hostLocalGrid, machineContribution, machineObservationSchema, machineSlots, recordAgentPresence, removalPreview, swarmGridRow, type MachineObservation } from './machines.js'
+import { contributedEngines, expireRemovals, hostLocalGrid, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, observedPrivacy, recordAgentPresence, removalPreview, swarmGridRow, teamWorkRefusal, type MachineObservation } from './machines.js'
 import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient, SuperTab, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
@@ -101,6 +101,9 @@ async function transaction<T>(db: PrismaClient, body: (tx: Transaction) => Promi
 /** A Lead's start dispatches within seconds of being recorded; one still undispatched after this long was given up. */
 export const ABANDONED_START_MS = 15 * 60_000
 
+/** The commands that start, assign or route work, which read which of the tab's machines are Team machines. */
+const TEAM_WORK_COMMANDS = new Set<Command['type']>(['agent.start', 'agent.startDispatch', 'work.assign', 'conversation.agent', 'route.record', 'route.override'])
+
 /** Starts on a not-yet-contributed machine that never dispatched, dated by their own operation receipt (starts carry no
  *  time of their own). A dispatched start may have a native session coming, so it is never counted. */
 async function abandonedStarts(tx: Transaction, tabId: string, state: SuperTabState, machineId: string, now: number) {
@@ -184,6 +187,16 @@ export class SuperTabStore {
         return
       }
     }
+  }
+
+  /** The tab's contributed machines whose account row is signed in as a Harness Team account (`Machine.sessionKind`,
+   *  lib/teamSession.ts): one of the two signs routing reads that a machine is a Team machine (machines.ts teamWorkCheck). */
+  private async teamMachines(tx: Transaction, state: SuperTabState): Promise<string[]> {
+    const ids = (state.machines ?? []).map(m => m.machineId)
+    if (!ids.length) return []
+    const rows = await tx.machine.findMany({ where: { machineId: { in: ids }, autonomousEnv: state.environment, sessionKind: 'team', ...machineAlive },
+      select: { machineId: true } })
+    return rows.map(r => r.machineId)
   }
 
   private policyId(user: AuthUser) { return stableId('routing-policy', user.sub, user.autonomousEnv) }
@@ -412,11 +425,18 @@ export class SuperTabStore {
         // command with a newer revision owns the state; its write also reconstructs any missing link lists.
         await tx.superTab.updateMany({ where: { id: tabId, revision: row.revision }, data: { state: json(state) } })
       }
-      const visible = visibleState(state, actor, this.now())
-      const mentions = actor.kind === 'person' ? { mentionsWaiting: await mentionsWaiting(tx, tabId, state, actor, this.now()) } : {}
-      return { revision: row.revision, state: { ...visible, ...mentions, machines: visible.machines?.map(pool => ({
-        ...pool, availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, state.machines!.find(m => m.machineId === pool.machineId)!)),
-      })) } }
+      const now = this.now()
+      const visible = visibleState(state, actor, now)
+      const mentions = actor.kind === 'person' ? { mentionsWaiting: await mentionsWaiting(tx, tabId, state, actor, now) } : {}
+      const teamMachines = visible.machines?.length ? await this.teamMachines(tx, state) : []
+      return { revision: row.revision, state: { ...visible, ...mentions, machines: visible.machines?.map(pool => {
+        const stored = state.machines!.find(m => m.machineId === pool.machineId)!
+        // Whether it takes teammates' projects now, and if not why (machines.ts teamWorkRefusal): what routing leaves it
+        // out for, and what Desktop can show on the machine.
+        const refusal = teamWorkRefusal(stored, now, teamMachines.includes(pool.machineId))
+        return { ...pool, availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, stored)),
+          teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const } }
+      }) } }
     })
   }
 
@@ -442,6 +462,26 @@ export class SuperTabStore {
   }
 
   async execute(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string) {
+    try { return await this.executeOnce(user, tabId, input, asAgentId, hostMachineId) } catch (error) {
+      // A queued start its machine will not take for good — no Harness Team account, or one that is not private — fails
+      // with that reason instead of waiting there: its host would otherwise try to launch it on every pass, and it would
+      // hold a slot. A stale check or an offline machine may pass again by itself, so that start keeps waiting.
+      const command = input.command
+      if (command?.type === 'agent.startDispatch' && hostMachineId && error instanceof SuperTabError && LASTING_TEAM_REFUSALS.includes(error.code)) {
+        // Only one never launched: a repeated dispatch of a launched start is admitted again too, and its agent may be starting.
+        const row = await this.db.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv } })
+        const start = row ? stateOf(row).starts?.find(s => s.id === command.startId) : undefined
+        if (start && !start.dispatched && !start.harnessId && !start.error) {
+          await this.executeOnce(user, tabId, { operationId: `team-refused-${command.startId}`,
+            command: { type: 'agent.startFailed', startId: command.startId, error: error.message } }, asAgentId, hostMachineId)
+            .catch(() => { /* Settled by a concurrent pass: the dispatch is refused either way. */ })
+        }
+      }
+      throw error
+    }
+  }
+
+  private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string) {
     const { operationId, command } = operationSchema.parse(input)
     let ended: WorkHold[] = []
     const done = await transaction(this.db, async tx => {
@@ -557,6 +597,7 @@ export class SuperTabStore {
       if (command.type === 'mention.done') context.mention = await readMention(tx, tabId, command.mentionId)
       if (command.type === 'message.send' && command.attachmentIds?.length) context.attachments = await this.sendable(tx, tabId, actor, command)
       if (command.type === 'route.record') context.recentRoutes = await recentRoutes(tx, tabId, context.now)
+      if (TEAM_WORK_COMMANDS.has(command.type)) context.teamMachines = await this.teamMachines(tx, original)
       if (command.type === 'agent.screen' || command.type === 'agent.input') {
         // A machine that is gone or no longer shared refuses at once instead of leaving the request to time out.
         await this.agentGrant(tx, original, agent(original, command.agentId))
@@ -1186,9 +1227,13 @@ export class SuperTabStore {
         return { revision: row.revision + 1 }
       }
       recordAgentPresence(state, machineId, observation.runningHarnessIds, now)
-      pool.observation = { ...observation, quotas: observation.quotas.filter(q => contributedEngines(pool, observation).includes(q.engine)), receivedAt: now,
+      const team = isTeamSession(user)
+      // Its privacy check counts only from the Harness Team account's own session; an ordinary sign-in's claim is dropped.
+      const { privacy: reported, ...reading } = observation
+      const privacy = observedPrivacy(pool.observation?.privacy, reported, team, now)
+      pool.observation = { ...reading, quotas: observation.quotas.filter(q => contributedEngines(pool, observation).includes(q.engine)), receivedAt: now,
         // How the machine is signed in, from the session that reported and never from the report (lib/teamSession.ts).
-        sessionKind: isTeamSession(user) ? 'team' : 'computer' }
+        sessionKind: team ? 'team' : 'computer', ...(privacy ? { privacy } : {}) }
       // Current-generation physical stop proof also finishes a close whose membership was already withdrawn.
       for (const proof of observation.stoppedReservations ?? []) {
         if (!observation.stoppedHarnessIds.includes(proof.harnessId)) continue
