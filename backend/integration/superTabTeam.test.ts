@@ -437,6 +437,23 @@ describe('a teammate\'s work and the machines that take it', () => {
 // machine. Its team account joins where the Mac is added, through the Mac's own daemon, and takes the teammates' work
 // started on the Mac.
 describe('one machine: a Mac and its Harness Team account', () => {
+  it('with no GitHub App on the server, the team account is never asked to join', async () => {
+    await db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: 'personal-mac' } })
+    try {
+      const idle = new SuperTabStore(db, Date.now, null, { teamAccountsIdle: true })
+      const tab = (await idle.create(owner, randomUUID(), 'No app')).id
+      const invitation = await idle.execute(owner, tab, { operationId: randomUUID(), command: { type: 'invite.create', email: person.email, role: 'collaborator', conversationId: 'lead' } })
+      await idle.execute(person, tab, { operationId: randomUUID(), command: { type: 'invite.accept', inviteId: invitation.result.inviteId as string } })
+      await idle.execute(person, tab, { operationId: randomUUID(), command: { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work',
+        scope: 'swarm', engines: ['codex'], maxAgents: 3 } })
+      expect((await idle.hostTabs(person, 'personal-mac')).some(r => r.tabId === tab && 'joinTeam' in r)).toBe(false)
+      // The same Swarm on a server with the app asks the Mac's host to add it.
+      expect((await store.hostTabs(person, 'personal-mac')).some(r => r.tabId === tab && 'joinTeam' in r)).toBe(true)
+    } finally {
+      await db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: null } })
+    }
+  })
+
   it('the Mac\'s host adds its team account, which then takes the owner\'s project started on the Mac', async () => {
     await db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: 'personal-mac' } })
     try {

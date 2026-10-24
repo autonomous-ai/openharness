@@ -66,7 +66,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   const github = options.github !== undefined ? options.github : await githubTokensFromEnv(env)
   // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
   const store = options.store ?? new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
-    { workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) } })
+    { workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
+      // A team account has no git login of its own: without the app it takes no teammates' work.
+      teamAccountsIdle: !github })
   app.get('/api/super-tabs/grids', (req, reply) => respond(reply, () => store.hostGrids(req.user!)))
   // Each row says whether this server has the Harness GitHub App, so the host knows to ask for a start's token below.
   app.get<{ Params: z.infer<typeof hostParams> }>('/api/super-tabs/hosts/:machineId/pools', { preHandler: validateParams(hostParams) },

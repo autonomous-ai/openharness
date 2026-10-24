@@ -407,6 +407,14 @@ describe('one machine: a Mac and its Harness Team account', () => {
     expect(f.state.starts![0]!.request).toMatchObject({ machineId: 'mate-mac', cwd: `/swarm/${f.mine}` })
   })
 
+  it('with no GitHub App on the server, sends nothing to the team account: the Mac takes the start as before', () => {
+    // Until a team account is required everywhere: a team account with no git login of its own cannot fetch or push.
+    delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED
+    const f = oneMachine(), group = f.group()
+    f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, { ...f.pooled('mate-mac'), teamAccountsIdle: true })
+    expect(f.state.starts![0]!.request).toMatchObject({ machineId: 'mate-mac', cwd: '/swarm/lead' })
+  })
+
   it('still takes a start that names the team account\'s machine directly', () => {
     const f = oneMachine(), group = f.group()
     f.run({ type: 'agent.start', request: { ...f.request(group, 'mate-team'), cwd: '/team-swarm/lead' } }, owner, f.pooled('mate-team'))

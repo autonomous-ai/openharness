@@ -22,6 +22,8 @@ export type MachineKind = 'team' | 'computer'
 
 /** A list is read again before a round once it is this old. */
 export const MACHINE_KINDS_REFRESH_MS = 60_000
+/** How long a read of the list may take before a roster round goes on without it. */
+export const MACHINE_KINDS_READ_TIMEOUT_MS = 5_000
 /** Past this, a list says nothing: a machine converted to team work since must not still count as the person's own. */
 export const MACHINE_KINDS_MAX_AGE_MS = 15 * 60_000
 
