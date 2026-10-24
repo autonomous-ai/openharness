@@ -17,6 +17,7 @@ import type { JobState, TeamCommandDeps } from './command.js'
 import { readTeamConfig } from './config.js'
 import { realPrivacyDeps, readTeamStatus, runPrivacyCheck, writeTeamStatus } from './privacy.js'
 import { takeHandoffFile } from './handoff.js'
+import { checkTeamEngines, realEngineCheckDeps } from './engines.js'
 
 /** What `launchctl print system/<label>` says of a job; not loaded when launchd does not know it. Readable without root. */
 export function parseLaunchctlPrint(code: number | null, stdout: string): JobState {
@@ -81,6 +82,7 @@ export function teamCommandDeps(options: {
     },
     takeHandoff: (path) => takeHandoffFile(path),
     privacy: (config) => runPrivacyCheck(config, realPrivacyDeps),
+    engines: (config) => checkTeamEngines(realEngineCheckDeps(config.home)),
     stopDaemon: options.stopDaemon,
     startDaemon: options.startDaemon,
     ...(options.signIn ? { signIn: options.signIn } : {}),

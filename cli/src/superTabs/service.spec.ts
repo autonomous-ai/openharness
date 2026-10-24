@@ -680,12 +680,16 @@ describe('GitHub App tokens through the service', () => {
 
   it('keeps the tokens fresh while connected, and stops with the service', () => {
     const tokens = { start: vi.fn(), stop: vi.fn() }
-    const service = superTabService(fakeCore(), { githubTokens: () => tokens })
+    const engines = { start: vi.fn(), stop: vi.fn() }
+    const service = superTabService(fakeCore(), { githubTokens: () => tokens, teamEngines: () => engines })
     service.port.connected()
     expect(tokens.start).toHaveBeenCalledTimes(1)
+    // And, in a Harness Team account, reports its own engines to its owner (team/engines.ts).
+    expect(engines.start).toHaveBeenCalledTimes(1)
     service.port.disconnected()
     service.port.stop()
     expect(tokens.stop).toHaveBeenCalledTimes(2)
+    expect(engines.stop).toHaveBeenCalledTimes(2)
   })
 })
 

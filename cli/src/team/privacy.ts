@@ -12,6 +12,7 @@
 import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { TeamConfig } from './config.js'
+import type { TeamEngines } from './engines.js'
 
 export type PrivacyItem =
   | 'sentinel' | 'home-listing' | 'gitconfig' | 'ssh' | 'projects' | 'keychain' | 'chrome' | 'safari' | 'standard-user'
@@ -94,6 +95,22 @@ export interface TeamStatus {
   version: 1
   signIn?: { state: 'signed-in' | 'failed' | 'signed-out'; at: number; detail?: string }
   privacy?: PrivacyResult
+  /** Claude Code and Codex in the team account (./engines.ts). */
+  engines?: TeamEngines
+}
+
+/** The `engines` field of the status file, or undefined when it is not one. */
+export function enginesOf(value: unknown): TeamEngines | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const v = value as Record<string, unknown>
+  if (typeof v.checkedAt !== 'number' || !Number.isFinite(v.checkedAt)) return undefined
+  const result = { checkedAt: v.checkedAt } as TeamEngines
+  for (const engine of ['claude', 'codex'] as const) {
+    const e = v[engine] as Record<string, unknown> | undefined
+    if (!e || typeof e !== 'object' || typeof e.installed !== 'boolean' || (typeof e.signedIn !== 'boolean' && e.signedIn !== null)) return undefined
+    result[engine] = { installed: e.installed, signedIn: e.signedIn as boolean | null }
+  }
+  return result
 }
 
 const ITEMS = new Set<string>(['sentinel', 'home-listing', 'gitconfig', 'ssh', 'projects', 'keychain', 'chrome', 'safari', 'standard-user', 'unchecked'])
@@ -121,6 +138,8 @@ export function readTeamStatus(path: string, read: (path: string) => string = (p
   }
   const privacy = privacyOf(value.privacy)
   if (privacy) status.privacy = privacy
+  const engines = enginesOf(value.engines)
+  if (engines) status.engines = engines
   return status
 }
 

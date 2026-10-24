@@ -7,6 +7,7 @@ import type { AdminScript, RunAdmin } from './admin.js'
 import { teamCommand, type TeamCommandDeps } from './command.js'
 import type { TeamConfig } from './config.js'
 import type { PrivacyResult, TeamStatus } from './privacy.js'
+import type { TeamEngines } from './engines.js'
 import { parseLaunchctlPrint } from './deps.js'
 
 const OWNER_HOME = '/Users/owner-placeholder'
@@ -55,6 +56,7 @@ function fake(over: Partial<TeamCommandDeps> & { adminResult?: Awaited<ReturnTyp
     writeStatus: vi.fn((path: string, update: Partial<TeamStatus>) => { status.set(path, { ...(status.get(path) ?? { version: 1 }), ...update, version: 1 }) }),
     accountExists: vi.fn(async () => false), jobState: vi.fn(async () => ({ loaded: true, pid: 4242, state: 'running' })),
     takeHandoff: vi.fn(() => CODE), privacy: vi.fn((): PrivacyResult => ({ passed: true, checkedAt: now })),
+    engines: vi.fn(async (): Promise<TeamEngines> => ({ checkedAt: now, claude: { installed: true, signedIn: false }, codex: { installed: true, signedIn: true } })),
     stopDaemon: vi.fn(async () => true), startDaemon: vi.fn(async () => {}),
     ...over,
   }
@@ -92,6 +94,19 @@ describe('harness team setup', () => {
     expect(text).toContain('/Library/LaunchDaemons/ai.autonomous.harness.team.plist')
     expect(text).toContain('✓ The Harness Team account is signed in.')
     expect(text).toContain('✓ Private')
+    // The engines setup installed in the team account, and how to sign them in (none were reported in this run).
+    expect(text).toContain('engines     ? not reported yet')
+  })
+
+  it('shows the team account\'s engines as its daemon reported them in this run, and how to sign them in', async () => {
+    const f = fake({ statusAfter: (t) => ({ ...reported(t), engines: { checkedAt: t + 3_000, claude: { installed: true, signedIn: false }, codex: { installed: true, signedIn: false } } }) })
+    expect(await teamCommand(['setup'], f.deps)).toBe(0)
+    const text = f.out.join('\n')
+    expect(text).toContain('Claude Code ✓ installed · ✗ not signed in')
+    expect(text).toContain('    codex login --device-auth   Codex')
+    const json = fake({ statusAfter: (t) => ({ ...reported(t), engines: { checkedAt: t - 1, claude: { installed: true, signedIn: true }, codex: { installed: true, signedIn: true } } }) })
+    await teamCommand(['setup', '--json'], json.deps)
+    expect(JSON.parse(json.out.at(-1)!)).toMatchObject({ ok: true, engines: null })
   })
 
   it('reports a failed privacy check or sign-in, and returns failure', async () => {
@@ -159,6 +174,22 @@ describe('harness team status', () => {
       '/Library/Application Support/Harness/team.json', 'sudo dscl . -delete /Users/harnessteam', 'harness team remove']) {
       expect(text, needle).toContain(needle)
     }
+  })
+
+  it('says whether the team account\'s engines are installed and signed in, and exactly how to sign them in', async () => {
+    const f = fake({ readConfig: () => config, accountExists: vi.fn(async () => true) })
+    f.status.set(STATUS, { version: 1, engines: { checkedAt: 1_000_000 - 60_000, claude: { installed: true, signedIn: false }, codex: { installed: false, signedIn: null } } })
+    await teamCommand(['status'], f.deps)
+    const text = f.out.join('\n')
+    expect(text).toContain('engines     Claude Code ✓ installed · ✗ not signed in')
+    expect(text).toContain('Codex       ✗ not installed · harness team setup installs it')
+    expect(text).toContain('(checked 60s ago)')
+    expect(text).toContain('in Harness, open a terminal on this Mac\'s Harness Team machine')
+    expect(text).toContain('    claude                      Claude Code')
+    const json = fake({ readConfig: () => config, accountExists: vi.fn(async () => true) })
+    json.status.set(STATUS, { version: 1, engines: { checkedAt: 5, claude: { installed: true, signedIn: true }, codex: { installed: true, signedIn: true } } })
+    await teamCommand(['status', '--json'], json.deps)
+    expect(JSON.parse(json.out[0]!).engines).toEqual({ checkedAt: 5, claude: { installed: true, signedIn: true }, codex: { installed: true, signedIn: true } })
   })
 
   it('shows what is wrong: a failed check, an open home, a stopped daemon', async () => {
@@ -350,8 +381,14 @@ describe('internal verbs', () => {
     expect(f.deps.takeHandoff).toHaveBeenCalledWith('/Users/harnessteam/.harness/team-handoff')
     expect(f.post).toHaveBeenCalledWith('/api/auth/handoff/redeem', { code: CODE, label: 'Mac-placeholder · Team', computerId: 't'.repeat(32) })
     expect(f.session()).toMatchObject({ kind: 'team', computerId: 't'.repeat(32), refreshToken: 'hnr_team' })
-    expect(f.status.get(STATUS)).toMatchObject({ signIn: { state: 'signed-in' }, privacy: { passed: true } })
+    expect(f.status.get(STATUS)).toMatchObject({ signIn: { state: 'signed-in' }, privacy: { passed: true },
+      engines: { claude: { installed: true, signedIn: false }, codex: { installed: true, signedIn: true } } })
+    expect(f.deps.engines).toHaveBeenCalledWith(config)
     expect(f.out.join('\n')).toContain('[team] signed in for team work')
+    expect(f.out.join('\n')).toContain('[team] engines: claude installed, codex signed in')
+    const broken = inTeam({ engines: vi.fn(async () => { throw new Error('no home') }) })
+    expect(await teamCommand(['__start'], broken.deps)).toBe(0)
+    expect(broken.out.join('\n')).toContain('could not check the engines: no home')
   })
 
   it('__start stores nothing when the backend makes a session that is not a team one', async () => {

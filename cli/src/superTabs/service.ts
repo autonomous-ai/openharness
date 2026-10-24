@@ -11,6 +11,7 @@ import { ContributionPreparations, prepareContribution } from './contribution.js
 import { messageIdOf } from './attach.js'
 import { cardId, SwarmCards } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
+import { teamEngineReporter, type TeamEngineReporter } from '../team/engines.js'
 
 const POST_HELP = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID. --attach sends a file (a screenshot, a log; up to 10 files of 10 MB each), and TEXT may then be empty.'
 const HELP = {
@@ -135,6 +136,8 @@ export interface SuperTabServiceOptions {
   cards?: (core: CoreApi, machineId: string) => SwarmCards
   /** What keeps Swarm sessions' GitHub tokens fresh (superTabs/github.ts), for a spec. */
   githubTokens?: (core: CoreApi) => Pick<GitHubTokenRefresher, 'start' | 'stop'>
+  /** What reports the Harness Team account's own engines to its owner (team/engines.ts), for a spec. */
+  teamEngines?: () => Pick<TeamEngineReporter, 'start' | 'stop'>
 }
 export function superTabService(core: CoreApi, options: SuperTabServiceOptions = {}): { requests: ServiceRequests; port: SuperTabsPort } {
   const preparations = new ContributionPreparations(input => (options.prepareContribution ?? prepareContribution)(core, input))
@@ -168,10 +171,13 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   }
   // Sessions doing another person's project work keep a live GitHub App token while their task lasts, and none after.
   const tokens = (options.githubTokens ?? (api => new GitHubTokenRefresher(api)))(core)
-  const disconnect = () => { preparations.clear(); host?.stop(); host = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop() }
+  // In the Harness Team account only: whether its Claude Code and Codex are installed and signed in, for its owner to read.
+  const engines = (options.teamEngines ?? teamEngineReporter)()
+  const disconnect = () => { preparations.clear(); host?.stop(); host = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop(); engines.stop() }
   const port = {
     connected: () => {
       tokens.start()
+      engines.start()
       if (identifier(core.daemon.machineId()) && existsSync(hostJournalFile(core.dataDir, core.daemon.machineId()))) wake()
     },
     disconnected: disconnect,

@@ -12,6 +12,7 @@
  *   account copies them in itself (`as_team`). Likewise the sentinel in the owner's home is written as the owner.
  * - Every step checks what is there, so a second run repairs a first one that stopped part-way.
  */
+import { TEAM_ENGINES } from './engines.js'
 import {
   SENTINEL_NAME, TEAM_CONFIG_FILE, TEAM_LABEL, TEAM_PLIST, TEAM_SHARED_DIR, TEAM_STATUS_DIR,
   checkName, checkPath, checkPort, checkUser, teamPaths,
@@ -175,6 +176,27 @@ export const TEAM_COPY = [
   'chmod 755 "$bin/harness.next" && mv -f "$bin/harness.next" "$bin/harness"',
 ].join('\n')
 
+/**
+ * Claude Code and Codex for the team account (./engines.ts), installed by that account itself, never by root: the vendors'
+ * npm packages, with its own copy of Harness's Node and npm, under its own home (`~/.local`, whose bin folder is on its
+ * daemon's PATH). Positional: the home, the Node folder's name, then the packages. A package that fails is said and left,
+ * never failing setup: running setup again tries again, and `harness team status` shows what is missing.
+ */
+export const TEAM_ENGINES_INSTALL = [
+  'set -u',
+  'umask 022',
+  'home=$1; node_name=$2; shift 2',
+  'bin="$home/.harness/runtime/$node_name/bin"',
+  `[ -x "$bin/npm" ] || { printf 'harness: %s\\n' "the team account's Node has no npm; Claude Code and Codex were not installed" >&2; exit 0; }`,
+  'PATH="$bin:/usr/bin:/bin:/usr/sbin:/sbin"; export PATH',
+  'cd "$home" || exit 0',
+  'for pkg in "$@"; do',
+  '  if "$bin/npm" install --global --prefix "$home/.local" --no-fund --no-audit --loglevel=error "$pkg" >/dev/null 2>&1; then',
+  `    printf 'harness: installed %s for the team account\\n' "$pkg"`,
+  `  else printf 'harness: could not install %s for the team account; harness team setup tries again\\n' "$pkg" >&2; fi`,
+  'done',
+].join('\n')
+
 /** Stdin to a file, as whoever runs it: the next name first, then a rename, so a reader never sees half of it. */
 export const WRITE_PRIVATE = 'umask 077 && cat > "$1.next" && mv -f "$1.next" "$1"'
 export const WRITE_PUBLIC = 'umask 022 && cat > "$1.next" && chmod 644 "$1.next" && mv -f "$1.next" "$1"'
@@ -311,6 +333,10 @@ export function buildSetupScript(input: SetupScriptInput): string {
     'chmod -R a+rX,go-w "$RT"',
     'chmod 755 "$RT"',
     `as_team /bin/sh -c ${sh(TEAM_COPY)} sh "$RT" "$TEAM_HOME" "$NODE_NAME" "$TMUX_NAME"`,
+    '',
+    '# 5b. Claude Code and Codex, installed by the team account itself into its own home: the owner\'s copies are inside the',
+    '#     owner\'s private home. None of the owner\'s sign-ins is copied; the owner signs them in once (harness team status).',
+    `as_team /bin/sh -c ${sh(TEAM_ENGINES_INSTALL)} sh "$TEAM_HOME" "$NODE_NAME" ${TEAM_ENGINES.map((e) => sh(e.packageName)).join(' ')} || true`,
     '',
     '# 6. What setup made (root\'s), and the team account\'s status folder, which the owner can read.',
     'if [ ! -d "$SHARED" ]; then mkdir -p "$SHARED"; chown 0:0 "$SHARED"; chmod 755 "$SHARED"; fi',

@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  SENTINEL_TEXT, TEAM_COPY, TEAM_JOB_WRAPPER, WRITE_PRIVATE, WRITE_PUBLIC, buildRemoveScript, buildSetupScript, sh, teamLaunchdPlist,
+  SENTINEL_TEXT, TEAM_COPY, TEAM_ENGINES_INSTALL, TEAM_JOB_WRAPPER, WRITE_PRIVATE, WRITE_PUBLIC, buildRemoveScript, buildSetupScript, sh, teamLaunchdPlist,
   type SetupScriptInput,
 } from './script.js'
 
@@ -89,7 +89,7 @@ describe('setup script', () => {
     const order = [
       'owned_by_root "$dir"', 'dscl . -create "/Users/$TEAM"', 'chmod 700 "$TEAM_HOME"', 'chmod 700 "$OWNER_HOME"',
       'as_owner /bin/sh -c', 'launchctl bootout "system/$LABEL"', 'mktemp -d /private/var/tmp/harness-team.XXXXXX', 'as_team /bin/sh -c',
-      'install -o 0 -g 0 -m 0644 "$STAGE/team.json" "$CONFIG"', 'team __handoff', 'as_team /bin/sh -c \'umask 077',
+      'npm" install --global --prefix "$home/.local"', 'install -o 0 -g 0 -m 0644 "$STAGE/team.json" "$CONFIG"', 'team __handoff', 'as_team /bin/sh -c \'umask 077',
       'install -o 0 -g 0 -m 0644 "$STAGE/team.plist" "$PLIST"', 'launchctl bootstrap system "$PLIST"',
     ].map((needle) => at(script, needle))
     expect([...order].sort((a, b) => a - b)).toEqual(order)
@@ -128,6 +128,38 @@ describe('setup script', () => {
       { mintEnv: { 'BAD-NAME': 'x' } }, { mintEnv: { BACKEND_WS_URL: 'wss://x\n' } },
     ]
     for (const over of bad) expect(() => buildSetupScript(input(over)), JSON.stringify(over)).toThrow()
+  })
+})
+
+describe('the team account\'s own engines', () => {
+  it('are installed by the team account itself, never by root, from the vendors\' packages, and never fail setup', () => {
+    const script = buildSetupScript(input())
+    expect(script).toContain(`\nas_team /bin/sh -c ${sh(TEAM_ENGINES_INSTALL)} sh "$TEAM_HOME" "$NODE_NAME" '@anthropic-ai/claude-code' '@openai/codex' || true\n`)
+    parses(script)
+  })
+
+  it('installs each package with the team account\'s own Node and npm under its own home, and goes on past one that fails', () => {
+    const root = temp()
+    const home = join(root, 'home'), bin = join(home, '.harness', 'runtime', 'node-v1', 'bin')
+    mkdirSync(bin, { recursive: true })
+    const log = join(root, 'npm.log')
+    // A stand-in npm: it records how it was run and with which PATH, and refuses one package.
+    writeFileSync(join(bin, 'npm'), `#!/bin/sh\nprintf '%s|%s|%s\\n' "$PATH" "$PWD" "$*" >> '${log}'\ncase "$*" in *@openai/codex*) exit 1 ;; esac\n`, { mode: 0o755 })
+    const run = spawnSync('/bin/sh', ['-c', TEAM_ENGINES_INSTALL, 'sh', home, 'node-v1', '@anthropic-ai/claude-code', '@openai/codex'], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } })
+    expect(run.status).toBe(0)
+    expect(run.stdout).toContain('harness: installed @anthropic-ai/claude-code for the team account')
+    expect(run.stderr).toContain('harness: could not install @openai/codex for the team account; harness team setup tries again')
+    const calls = readFileSync(log, 'utf8').trim().split('\n').map((l) => l.split('|'))
+    expect(calls).toHaveLength(2)
+    for (const [path, cwd, args] of calls) {
+      expect(path!.split(':')[0]).toBe(bin)
+      expect(cwd).toBe(home)
+      expect(args).toContain(`install --global --prefix ${home}/.local --no-fund --no-audit --loglevel=error`)
+    }
+    // No npm in the copied Node: said, and setup goes on.
+    const bare = spawnSync('/bin/sh', ['-c', TEAM_ENGINES_INSTALL, 'sh', join(root, 'nobody'), 'node-v1', '@openai/codex'], { encoding: 'utf8' })
+    expect(bare.status).toBe(0)
+    expect(bare.stderr).toContain('has no npm')
   })
 })
 
