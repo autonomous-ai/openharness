@@ -585,6 +585,20 @@ void main() {
     expect(find.text('MacBook Pro · Team'), findsNothing);
   });
 
+  testWidgets('a Mac\'s row counts the harnesses in its Harness Team account', (
+    tester,
+  ) async {
+    app.add('mac', 'MacBook Pro', linked: true);
+    app.add('mac-team', 'MacBook Pro · Team', linked: true, host: 'mac');
+    app.stateOf('mac')!.agents = [const Agent(id: 'own', name: 'Own')];
+    app.stateOf('mac-team')!.agents = [
+      const Agent(id: 'mate-1', name: 'Teammate 1'),
+      const Agent(id: 'mate-2', name: 'Teammate 2'),
+    ];
+    await mount(tester);
+    expect(find.text('3 harnesses'), findsOneWidget);
+  });
+
   testWidgets('another arrival never replaces the password being typed', (
     tester,
   ) async {

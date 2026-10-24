@@ -25,7 +25,9 @@ export type Delete = <T>(path: string, headers?: Record<string, string>) => Prom
 type SignedIn = { session: AuthSession; headers: Record<string, string> }
 
 export class TeamSignInError extends Error {
-  constructor(message: string, readonly code: 'NOT_SIGNED_IN' | 'TEAM_SESSION' | 'EXPIRED' | 'BACKEND' | 'NOT_TEAM' | 'UNSAFE_FILE' | 'NO_PROOF') {
+  constructor(message: string, readonly code: 'NOT_SIGNED_IN' | 'TEAM_SESSION' | 'EXPIRED' | 'BACKEND' | 'NOT_TEAM' | 'UNSAFE_FILE' | 'NO_PROOF',
+    /** The backend's HTTP status, when it answered with one. */
+    readonly status?: number) {
     super(message)
     this.name = 'TeamSignInError'
   }
@@ -66,7 +68,16 @@ async function signedIn(auth: () => Promise<SignedIn>): Promise<SignedIn> {
  *  machine records, so every list shows this Mac once (docs/plans/2026-10-24-swarm-team-account.md, "One machine"). */
 export async function mintTeamHandoff(auth: () => Promise<SignedIn>, post: Post): Promise<{ code: string; expiresIn: number }> {
   const { session, headers } = await signedIn(auth)
-  return requestCode(post, { kind: 'team', ...(session.machineId ? { hostMachineId: session.machineId } : {}) }, headers)
+  if (session.machineId) {
+    try {
+      return await requestCode(post, { kind: 'team', hostMachineId: session.machineId }, headers)
+    } catch (error) {
+      // A machine id the backend no longer takes as this computer's (deleted, stale): the team account still signs in,
+      // listed as a machine of its own until a setup names its Mac again.
+      if ((error as TeamSignInError).status !== 403) throw error
+    }
+  }
+  return requestCode(post, { kind: 'team' }, headers)
 }
 
 export interface ConversionDeps {
@@ -117,7 +128,7 @@ async function requestCode(post: Post, body: Record<string, unknown>, headers: R
   try {
     minted = await post('/api/auth/handoff', body, headers)
   } catch (error) {
-    throw new TeamSignInError(`Harness would not give a team sign-in code: ${(error as Error).message}`, 'BACKEND')
+    throw new TeamSignInError(`Harness would not give a team sign-in code: ${(error as Error).message}`, 'BACKEND', (error as { status?: number }).status)
   }
   if (typeof minted?.code !== 'string' || !HANDOFF_CODE.test(minted.code)) {
     throw new TeamSignInError('Harness answered without a team sign-in code.', 'BACKEND')

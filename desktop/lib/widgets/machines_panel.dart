@@ -709,7 +709,11 @@ class _MachinesPanelState extends State<_MachinesPanel>
           : canConnect
           ? connect
           : null,
-      subtitle: _machineDetails(machine, _resources[id]),
+      subtitle: _machineDetails(
+        machine,
+        _resources[id],
+        folded: app.foldedHarnesses(id),
+      ),
       hint: offline ? 'Open Harness on $name to bring it online.' : status,
       action: canConnect
           ? _button(
@@ -1152,7 +1156,12 @@ class _MachineStatus extends StatelessWidget {
   );
 }
 
-Widget? _machineDetails(MachineState machine, MachineResources? resources) {
+/// [folded]: the harnesses in the Harness Team accounts folded into this Mac's row (AppNotifier.foldedInto).
+Widget? _machineDetails(
+  MachineState machine,
+  MachineResources? resources, {
+  int folded = 0,
+}) {
   String gb(double bytes) {
     final gb = bytes / (1024 * 1024 * 1024);
     return gb
@@ -1171,7 +1180,7 @@ Widget? _machineDetails(MachineState machine, MachineResources? resources) {
     final count =
         machine.agentLoadStatus == AgentLoadStatus.loaded ||
             machine.agents.isNotEmpty
-        ? machine.agents.length
+        ? machine.agents.length + folded
         : null;
     final cpu = resources?.cpuPercent?.round();
     final used = resources?.memoryUsedBytes,
@@ -1427,7 +1436,11 @@ class _MachinePasswordState extends State<_MachinePassword> {
     if (_local && !_editing) {
       final available = _status!.hasPassword;
       return _row(
-        subtitle: _machineDetails(widget.machine, widget.resources),
+        subtitle: _machineDetails(
+          widget.machine,
+          widget.resources,
+          folded: widget.app.foldedHarnesses(widget.machine.machine.machineId),
+        ),
         onTap: widget.onOpen,
         action: available
             ? null

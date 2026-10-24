@@ -4661,6 +4661,19 @@ class AppNotifier extends ChangeNotifier {
   String? shownMachineName(String machineId) =>
       machineStates[shownMachineId(machineId)]?.machine.displayName;
 
+  /// The Harness Team accounts folded into [machineId]'s row ([foldedIntoHost]): a list shows their harnesses under
+  /// the Mac, each still opened on the machine it runs on.
+  Iterable<MachineState> foldedInto(String machineId) =>
+      machineStates.values.where(
+        (m) =>
+            m.machine.hostMachineId == machineId &&
+            foldedIntoHost(m.machine.machineId),
+      );
+
+  /// How many harnesses run in the Harness Team accounts folded into [machineId]'s row, for its count.
+  int foldedHarnesses(String machineId) =>
+      foldedInto(machineId).fold(0, (sum, m) => sum + m.agents.length);
+
   // ── the grid ────────────────────────────────────────────────────────────────────────────────────
 
   /// Null means "remember nothing", which is what a test gets by default.
@@ -4865,9 +4878,16 @@ class AppNotifier extends ChangeNotifier {
     for (final machine in ordered) {
       rows.add(RailRow(machineId: machine.machineId));
       if (!expandedMachines.contains(machine.machineId)) continue;
-      for (final agent
-          in stateOf(machine.machineId)?.agents ?? const <Agent>[]) {
-        rows.add(RailRow(machineId: machine.machineId, agentId: agent.id));
+      // The Mac's harnesses, then its Harness Team account's, each on the machine it runs on.
+      for (final state in [
+        ?stateOf(machine.machineId),
+        ...foldedInto(machine.machineId),
+      ]) {
+        for (final agent in state.agents) {
+          rows.add(
+            RailRow(machineId: state.machine.machineId, agentId: agent.id),
+          );
+        }
       }
     }
     return rows;

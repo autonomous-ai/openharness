@@ -190,10 +190,17 @@ export function teamWorkCheck(state: SuperTabState, machineId: string, contribut
 // The team account is how a Mac runs teammates' work without its owner's files, not a machine of its own to anyone: a
 // Lead names the Mac, and the work for another person's project lands in the Mac's team account.
 
-/** The pool of the Harness Team account on the Mac [pool] is, under the same grant; undefined when it has none here. */
+/** Every pool of a Harness Team account on the Mac [pool] is, under the same grant: one, or more once the account was
+ *  removed and set up again (a new account and machine, the old one's pool still listed). They go with the Mac. */
+export function teamPoolsOf(state: SuperTabState, pool: ContributedMachine): ContributedMachine[] {
+  if (pool.hostMachineId) return []
+  return state.machines?.filter(m => m.hostMachineId === pool.machineId && m.contributorId === pool.contributorId) ?? []
+}
+
+/** The one of them that runs teammates' work on the Mac: not being removed, and the last to report. Undefined when none. */
 export function teamPoolOf(state: SuperTabState, pool: ContributedMachine): ContributedMachine | undefined {
-  if (pool.hostMachineId) return undefined
-  return state.machines?.find(m => m.hostMachineId === pool.machineId && m.contributorId === pool.contributorId)
+  return teamPoolsOf(state, pool).filter(m => !m.removal)
+    .reduce<ContributedMachine | undefined>((best, m) => !best || (m.observation?.receivedAt ?? -1) >= (best.observation?.receivedAt ?? -1) ? m : best, undefined)
 }
 
 /** Where a new agent for [project] runs when a start names [machineId]: the Mac's team account when the project is not
@@ -276,7 +283,10 @@ export function ownedMachine(state: SuperTabState, actor: Actor, machineId: stri
 
 /** What removing the machine would do, for its owner's confirmation. */
 export function removalPreview(state: SuperTabState, actor: Actor, machineId: string) {
-  const { members } = ownedMachine(state, actor, machineId)
+  const owned = ownedMachine(state, actor, machineId)
+  // A Mac leaves with its Harness Team account and the agents there (commands.ts machine.remove).
+  const teams = owned.pool ? teamPoolsOf(state, owned.pool).filter(m => !m.removal).map(m => m.machineId) : []
+  const members = [...owned.members, ...state.agents.filter(a => teams.includes(a.machineId))]
   const led = members.map(a => ledProject(state, a.id)).find(Boolean)
   return {
     blockedBy: led ? { projectId: led.id, projectName: led.name } : null,

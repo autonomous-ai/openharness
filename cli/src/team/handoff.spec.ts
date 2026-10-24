@@ -37,6 +37,19 @@ describe('mintTeamHandoff', () => {
     expect(post).toHaveBeenCalledWith('/api/auth/handoff', { kind: 'team', hostMachineId: 'machine-placeholder-1' }, headers)
   })
 
+  it('mints without naming its Mac when the backend refuses that machine, so setup still signs the team account in', async () => {
+    const post = vi.fn(async (_path: string, body: Record<string, unknown>) => {
+      if (body.hostMachineId) throw Object.assign(new Error('That machine is not one of this account\'s computers'), { status: 403 })
+      return { code: CODE, expiresIn: 90 }
+    })
+    await expect(mintTeamHandoff(async () => ({ session: { ...computer, machineId: 'stale-machine' }, headers }), post as never)).resolves.toEqual({ code: CODE, expiresIn: 90 })
+    expect(post.mock.calls.map(c => c[1])).toEqual([{ kind: 'team', hostMachineId: 'stale-machine' }, { kind: 'team' }])
+    // Any other failure is not asked again.
+    const down = vi.fn(async () => { throw Object.assign(new Error('Bad gateway'), { status: 502 }) })
+    await expect(mintTeamHandoff(async () => ({ session: { ...computer, machineId: 'm' }, headers }), down as never)).rejects.toMatchObject({ code: 'BACKEND' })
+    expect(down).toHaveBeenCalledTimes(1)
+  })
+
   it('refuses a team sign-in, a signed-out computer and an answer without a code', async () => {
     const post = vi.fn(async () => ({ code: CODE }))
     await expect(mintTeamHandoff(async () => ({ session: { ...computer, kind: 'team' }, headers }), post as never)).rejects.toMatchObject({ code: 'TEAM_SESSION' })

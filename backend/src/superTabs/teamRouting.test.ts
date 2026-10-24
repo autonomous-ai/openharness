@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { admitMachineStart, machineObservationSchema, machineSlots, observedPrivacy, PRIVACY_FRESH_MS, teamWorkRefusal, type ContributedMachine, type MachinePrivacy } from './machines.js'
+import { admitMachineStart, machineObservationSchema, machineSlots, observedPrivacy, PRIVACY_FRESH_MS, removalPreview, teamWorkRefusal, type ContributedMachine, type MachinePrivacy } from './machines.js'
 import { createSuperTab, SuperTabError, visibleState, type Actor, type AgentConfiguration, type AgentStart, type SuperTabState } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
 
@@ -502,5 +502,44 @@ describe('one machine: the Mac\'s agent slots', () => {
     expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac')))?.code).toBe('MACHINE_FULL')
     // A machine without a team account counts only its own.
     expect(machineSlots(f.state, f.machine('owner-mac'))).toBe(0)
+  })
+})
+
+describe('one machine: a Mac whose Harness Team account was made again', () => {
+  // `harness team remove`, then `harness team setup`: a new account, computer and machine, while the old team machine's
+  // pool is still in the Swarm, silent. The Mac joins with the new one too (store.ts hostTabs).
+  function remade() {
+    const f = swarm()
+    Object.assign(f.machine('mate-team'), { hostMachineId: 'mate-mac', name: 'MacBook Pro', cwd: '/old-team', observation: reading('team', PASSED, NOW - 3_600_000) })
+    f.state.machines!.push({ ...structuredClone(f.machine('mate-team')), machineId: 'mate-team-2', cwd: '/team-swarm', observation: reading('team', PASSED) })
+    return f
+  }
+
+  it('sends a teammate\'s start on the Mac to the account that runs, not the old one', () => {
+    const f = remade(), group = f.group()
+    f.member('old-agent', 'mate-team', 'mate')
+    f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac'))
+    expect(f.state.starts![0]!.request).toMatchObject({ machineId: 'mate-team-2', cwd: '/team-swarm/lead' })
+    // The old account's leftover agent holds none of the Mac's slots.
+    expect(machineSlots(f.state, f.machine('mate-mac'))).toBe(1)
+  })
+
+  it('pauses and removes both with the Mac, and its removal preview names every agent it takes', () => {
+    const f = remade()
+    const old = f.member('old-agent', 'mate-team', 'mate'), fresh = f.member('new-agent', 'mate-team-2', 'mate')
+    f.run({ type: 'machine.pause', machineId: 'mate-mac', paused: true }, mate)
+    expect([f.machine('mate-team').paused, f.machine('mate-team-2').paused]).toEqual([true, true])
+    expect(removalPreview(f.state, mate, 'mate-mac').agents.map(a => a.id).sort()).toEqual([fresh, old].sort())
+    f.run({ type: 'machine.remove', machineId: 'mate-mac' }, mate)
+    expect(f.machine('mate-team-2').removal?.state).toBe('cleaning')
+    // The silent old one leaves the list at once; its cleanup waits for its host, as for any offline machine.
+    expect(f.state.machines!.some(m => m.machineId === 'mate-team')).toBe(false)
+    expect(f.state.machineCleanups).toEqual(expect.arrayContaining([expect.objectContaining({ machineId: 'mate-team' })]))
+  })
+
+  it('never sends work to an account that is being removed', () => {
+    const f = swarm(), group = f.group()
+    Object.assign(f.machine('mate-team'), { hostMachineId: 'mate-mac', name: 'MacBook Pro', removal: { id: 'r', state: 'cleaning', requestedAt: new Date(NOW).toISOString() } })
+    expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac')))?.code).toBe('TEAM_ACCOUNT_REQUIRED')
   })
 })

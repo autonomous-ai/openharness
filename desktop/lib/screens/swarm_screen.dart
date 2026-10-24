@@ -2301,6 +2301,21 @@ class _SwarmScreenState extends State<SwarmScreen> {
         for (final pane in tab.panes) (pane.machineId, pane.agentId),
     };
     final machines = app.listedMachines.take(128);
+    // A Mac's harnesses, then its Harness Team account's, under the one row;
+    // each keeps the machine it runs on.
+    List<(String, Agent)> harnesses(MachineState machine) => [
+      for (final state in [
+        machine,
+        ...app.foldedInto(machine.machine.machineId),
+      ])
+        for (final agent in state.agents) (state.machine.machineId, agent),
+    ];
+    int? count(MachineState machine) =>
+        machine.agents.isNotEmpty ||
+            machine.agentLoadStatus == AgentLoadStatus.loaded
+        ? machine.agents.length +
+              app.foldedHarnesses(machine.machine.machineId)
+        : null;
     // Compare only visible values before building/encoding a potentially large
     // inventory. Tab focus, palette and attention changes use the small update
     // message; they never resend or decode every agent on the native thread.
@@ -2314,18 +2329,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
           machine.isLocalMachine,
           machine.nodeOnline,
           machine.needsLink,
-          machine.agents.isNotEmpty ||
-                  machine.agentLoadStatus == AgentLoadStatus.loaded
-              ? machine.agents.length
-              : null,
+          count(machine),
         ),
-        for (final agent in machine.agents.take(512))
+        for (final (where, agent) in harnesses(machine).take(512))
           (
             agent.id,
             agent.displayName,
             agent.engine,
-            agent.terminalAvailable ||
-                openAgents.contains((machine.machine.machineId, agent.id)),
+            agent.terminalAvailable || openAgents.contains((where, agent.id)),
             // Part of the row now (" · stopped", and whether it opens), so a
             // harness stopping or resuming redraws the menu like a rename does.
             agent.isStopped,
@@ -2344,13 +2355,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
               'local': machine.isLocalMachine,
               'shared': machine.machine.isShared,
               'ownerName': machine.machine.ownerName,
-              'agentCount':
-                  machine.agents.isNotEmpty ||
-                      machine.agentLoadStatus == AgentLoadStatus.loaded
-                  ? machine.agents.length
-                  : null,
+              'agentCount': count(machine),
               'agents': [
-                for (final agent in machine.agents.take(512))
+                for (final (where, agent) in harnesses(machine).take(512))
                   {
                     'id': agent.id,
                     'title': agent.displayName,
@@ -2365,10 +2372,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                     'canOpen':
                         agent.terminalAvailable ||
                         agent.isStopped ||
-                        openAgents.contains((
-                          machine.machine.machineId,
-                          agent.id,
-                        )),
+                        openAgents.contains((where, agent.id)),
                     'stopped': agent.isStopped,
                   },
               ],
@@ -2746,14 +2750,19 @@ class _SwarmScreenState extends State<SwarmScreen> {
           );
         }
       case 'machineAgent':
-        final machineId = args['machineId'], agentId = args['agentId'];
-        if (machineId is String &&
-            agentId is String &&
-            app
-                    .stateOf(machineId)
-                    ?.agents
-                    .any((agent) => agent.id == agentId) ==
-                true) {
+        final row = args['machineId'], agentId = args['agentId'];
+        // The menu lists a Mac's Harness Team account's harnesses under the
+        // Mac (_syncMachines): each opens on the machine it runs on.
+        bool runs(String id) =>
+            app.stateOf(id)?.agents.any((agent) => agent.id == agentId) ==
+            true;
+        final machineId = row is! String
+            ? null
+            : [
+                row,
+                for (final team in app.foldedInto(row)) team.machine.machineId,
+              ].where(runs).firstOrNull;
+        if (machineId != null && agentId is String) {
           final entry = swarmDestinations(app)
               .where(
                 (entry) => entry.id == agentDestinationId(machineId, agentId),

@@ -636,6 +636,14 @@ describe('team sessions — the Mac a team account lives on', () => {
     }
   })
 
+  it('a computer session may name any of its own computer\'s machines', async () => {
+    fakes.machines.push({ userId: USER.id, computerId: LAPTOP, machineId: 'laptop-second', autonomousEnv: 'prod', sessionKind: 'computer' })
+    const minted = await mint(`Bearer ${computerSession('laptop-session', LAPTOP)}`, { kind: 'team', hostMachineId: 'laptop-second' })
+    expect(minted.statusCode, minted.body).toBe(200)
+    expect((await redeem(minted.json().data.code)).statusCode).toBe(200)
+    expect(fakes.sessions.at(-1)).toMatchObject({ kind: 'team', hostMachineId: 'laptop-second' })
+  })
+
   it('a computer session may not name another machine as its Mac', async () => {
     const res = await mint(`Bearer ${computerSession('laptop-session', LAPTOP)}`, { kind: 'team', hostMachineId: 'other-machine' })
     expect(res.statusCode).toBe(403)

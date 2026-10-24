@@ -1,4 +1,4 @@
-import { admitMachineStart, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, ownedMachine, requireTeamWork, teamMachineFor, teamPoolOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
+import { admitMachineStart, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, ownedMachine, requireTeamWork, teamMachineFor, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
@@ -825,8 +825,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         contributorId: actor.userId, membershipGeneration: contributor.generation, generation: operationId, paused: mac?.paused ?? false,
         ...(host ? { hostMachineId: host } : {}) })
       // A Mac given other slots or a new name gives its team account the same; its own folder, engines and grant stay.
-      const added = state.machines.at(-1)!, team = teamPoolOf(state, added)
-      if (team && !team.removal) Object.assign(team, { name: added.name, maxAgents: added.maxAgents, paused: false })
+      const added = state.machines.at(-1)!
+      for (const team of teamPoolsOf(state, added)) if (!team.removal) Object.assign(team, { name: added.name, maxAgents: added.maxAgents, paused: false })
       break
     }
     case 'machine.pause': {
@@ -835,8 +835,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (pool.removal) fail('MACHINE_REMOVED', 'This machine is being removed from the Swarm.')
       pool.paused = command.paused
       // Its Harness Team account is the same Mac.
-      const team = teamPoolOf(state, pool)
-      if (team && !team.removal) team.paused = command.paused
+      for (const team of teamPoolsOf(state, pool)) if (!team.removal) team.paused = command.paused
       break
     }
     case 'machine.remove': {
@@ -848,11 +847,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (pool?.removal) fail('MACHINE_REMOVED', 'This machine is already being removed from the Swarm.')
       // The Mac leaves with its Harness Team account and the agents there, told once as the Mac; that account's host cleans
       // its own folders.
-      const team = pool && teamPoolOf(state, pool)
-      const moving = team && !team.removal ? team : undefined
-      const removed = removeMachine(command.machineId, pool, [...members, ...moving ? state.agents.filter(a => a.machineId === moving.machineId) : []],
+      const moving = pool ? teamPoolsOf(state, pool).filter(m => !m.removal) : []
+      const removed = removeMachine(command.machineId, pool, [...members, ...state.agents.filter(a => moving.some(m => m.machineId === a.machineId))],
         machine => `${who} removed ${machine} from the Swarm`)
-      if (moving) removeMachine(moving.machineId, moving, [], machine => `${who} removed ${machine} from the Swarm`)
+      for (const team of moving) removeMachine(team.machineId, team, [], machine => `${who} removed ${machine} from the Swarm`)
       if (pool) result.removalId = operationId
       result.removedAgents = [...removed]
       break

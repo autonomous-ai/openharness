@@ -83,4 +83,21 @@ void main() {
     expect(app.shownMachineId('unknown'), 'unknown');
     expect(app.stateOf('team'), isNotNull);
   });
+
+  test('the Mac carries its team account\'s harnesses, each opening on the machine it runs on', () {
+    final app = _app([
+      _machine('mac', 'MacBook Pro'),
+      _machine('team', 'MacBook Pro · Team', host: 'mac'),
+    ]);
+    app.stateOf('mac')!.agents = [const Agent(id: 'own', name: 'Own')];
+    app.stateOf('team')!.agents = [const Agent(id: 'mate', name: 'Teammate')];
+    expect(app.foldedInto('mac').map((m) => m.machine.machineId), ['team']);
+    expect(app.foldedInto('team'), isEmpty);
+    // The rail, expanded: the Mac's row, then both sides' harnesses, the team account's on its own machine.
+    app.expandedMachines.add('mac');
+    expect(
+      app.railRows().map((r) => (r.machineId, r.agentId)).toList(),
+      [('mac', null), ('mac', 'own'), ('team', 'mate')],
+    );
+  });
 }

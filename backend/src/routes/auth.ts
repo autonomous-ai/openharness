@@ -71,9 +71,9 @@ async function teamHostMachine(user: AuthUser, named: string | undefined): Promi
   const ordinary = (row: { sessionKind: string | null } | null | undefined) => !!row && row.sessionKind !== 'team'
   if (user.harnessSessionKind === 'computer' && user.harnessComputerId) {
     const own = (await prisma.machine.findMany({ where: { userId: user.sub, computerId: user.harnessComputerId, autonomousEnv: user.autonomousEnv,
-      ...machineAlive } })).find(ordinary)
-    if (named !== undefined) return own?.machineId === named ? named : false
-    return own?.machineId ?? null
+      ...machineAlive } })).filter(ordinary)
+    if (named !== undefined) return own.some(row => row.machineId === named) ? named : false
+    return own[0]?.machineId ?? null
   }
   if (named === undefined) return null
   const machine = await prisma.machine.findFirst({ where: { machineId: named, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
