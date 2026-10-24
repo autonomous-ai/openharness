@@ -17,6 +17,7 @@ import { nextMachineShareGrants } from '../src/lib/machineSharePolicy.js'
 import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
 import { stableId, type SuperTabState } from '../src/superTabs/model.js'
 import { ensureTerminalExpiry, TERMINAL_EXPIRY_MS } from '../src/superTabs/terminal.js'
+import { ensureMentionExpiry, MENTION_EXPIRY_MS } from '../src/superTabs/mentions.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -2604,5 +2605,90 @@ describe('machine removal', () => {
     await later.execute(host, tab, { operationId: randomUUID(), command: { type: 'machine.cleaned', machineId: 'test-host', removalId } })
     expect(await cleanups(tab, later)).toEqual([])
     expect(((await db.superTab.findUniqueOrThrow({ where: { id: tab } })).state as unknown as SuperTabState).machineCleanups).toBeUndefined()
+  })
+})
+
+describe('Lead mentions', () => {
+  const DAY = 24 * 60 * 60_000
+  async function tagged() {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const group = (await run(tab, { type: 'conversation.create', title: 'Copy review', brief: '', checks: [] })).result.conversationId as string
+    await run(tab, { type: 'conversation.agent', conversationId: group, agentId: lead, present: true, lead: true })
+    const text = `Please confirm the welcome copy. ${'x'.repeat(300)}`
+    const messageId = (await run(tab, { type: 'message.send', conversationId: group, text, replyTo: null, recipientIds: [], mentions: [peer.sub] },
+      host, lead)).result.messageId as string
+    return { tab, lead, group, text, messageId }
+  }
+  const list = async (tab: string, user: AuthUser, state: 'waiting' | 'earlier') => {
+    const response = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/mentions?state=${state}`, headers: { authorization: `Bearer ${user.sub}` } })
+    expect(response.statusCode, response.body).toBe(200)
+    return response.json().data.mentions as Array<Record<string, unknown>>
+  }
+  const waiting = async (tab: string, user: AuthUser, reader = store) => (await reader.read(user, tab)).state as SuperTabState & { mentionsWaiting?: number }
+
+  it('lists a tag only for the tagged person, with the message, and counts it on their state alone', async () => {
+    const { tab, lead, group, text, messageId } = await tagged()
+    const [mention, ...rest] = await list(tab, peer, 'waiting')
+    expect(rest).toEqual([])
+    expect(mention).toEqual({ id: expect.any(String), projectId: 'lead', projectName: 'Pilot', conversationId: group, conversationTitle: 'Copy review',
+      messageId, leadName: expect.any(String), text: text.slice(0, 200), createdAt: expect.any(String), resolvedAt: null, resolvedBy: null })
+    expect(mention!.leadName).toBe((await waiting(tab, owner)).agents.find(a => a.id === lead)!.displayName)
+    expect(await list(tab, owner, 'waiting')).toEqual([])
+    expect(await list(tab, peer, 'earlier')).toEqual([])
+    expect((await waiting(tab, peer)).mentionsWaiting).toBe(1)
+    expect((await waiting(tab, owner)).mentionsWaiting).toBe(0)
+    expect((await store.read(host, tab, lead)).state).not.toHaveProperty('mentionsWaiting')
+    expect((await store.messages(owner, tab, group, {})).messages.find(m => m.id === messageId)!.mentions).toEqual([peer.sub])
+  })
+
+  it('resolves on the person’s later post in that conversation, not on anyone else’s', async () => {
+    const { tab, group } = await tagged()
+    await run(tab, { type: 'message.send', conversationId: group, text: 'Owner chimes in.', replyTo: null, recipientIds: [] })
+    await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Elsewhere.', replyTo: null, recipientIds: [] }, peer)
+    expect(await list(tab, peer, 'waiting')).toHaveLength(1)
+    await run(tab, { type: 'message.send', conversationId: group, text: 'Looks good.', replyTo: null, recipientIds: [] }, peer)
+    expect(await list(tab, peer, 'waiting')).toEqual([])
+    expect(await list(tab, peer, 'earlier')).toEqual([expect.objectContaining({ resolvedBy: 'reply', resolvedAt: expect.any(String) })])
+    expect((await waiting(tab, peer)).mentionsWaiting).toBe(0)
+  })
+
+  it('resolves when the person marks it done, and nobody else can', async () => {
+    const { tab } = await tagged()
+    const [mention] = await list(tab, peer, 'waiting')
+    const done: Command = { type: 'mention.done', mentionId: mention!.id as string }
+    await expect(run(tab, done)).rejects.toThrow('This mention is unavailable.')
+    const operationId = randomUUID()
+    await run(tab, done, peer, undefined, operationId)
+    await run(tab, done, peer, undefined, operationId)
+    expect(await list(tab, peer, 'waiting')).toEqual([])
+    expect(await list(tab, peer, 'earlier')).toEqual([expect.objectContaining({ id: mention!.id, resolvedBy: 'done' })])
+  })
+
+  it('drops a tag 30 days after it was made and from a conversation the person can no longer read', async () => {
+    const { tab } = await tagged()
+    const later = new SuperTabStore(db, () => Date.now() + 30 * DAY + 1000)
+    expect((await waiting(tab, peer, later)).mentionsWaiting).toBe(0)
+    expect((await waiting(tab, peer)).mentionsWaiting).toBe(1)
+    await run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
+    expect(await list(tab, peer, 'waiting')).toEqual([])
+    expect((await waiting(tab, peer)).mentionsWaiting).toBe(0)
+    await ensureMentionExpiry(db)
+    const indexes = await db.$runCommandRaw({ listIndexes: 'SuperTabMention' }) as { cursor: { firstBatch: Array<{ key: object; expireAfterSeconds?: number }> } }
+    expect(indexes.cursor.firstBatch).toContainEqual(expect.objectContaining({ key: { createdAt: 1 }, expireAfterSeconds: MENTION_EXPIRY_MS / 1000 }))
+  })
+
+  it('keeps the stored tab and older messages as the previous backend reads and writes them', async () => {
+    const { tab, group } = await tagged()
+    const stored = (await db.superTab.findUniqueOrThrow({ where: { id: tab } })).state
+    expect(JSON.stringify(stored)).not.toMatch(/mention/i)
+    // A message the previous backend wrote has no mentions field; its next post omits mentions too.
+    await db.$runCommandRaw({ insert: 'SuperTabMessage', documents: [{ _id: 'old-backend-row', tabId: tab, conversationId: group, sequence: 1,
+      author: { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: tab }, text: 'Written before mentions.',
+      replyTo: null, recipientIds: [], createdAt: { $date: new Date().toISOString() } }] })
+    await run(tab, { type: 'message.send', conversationId: group, text: 'Old shape.', replyTo: null, recipientIds: [] })
+    const rows = (await store.messages(owner, tab, group, {})).messages
+    expect(rows.find(m => m.id === 'old-backend-row')!.mentions).toEqual([])
+    expect(rows.at(-1)!.mentions).toEqual([])
   })
 })
