@@ -29,6 +29,27 @@ describe('mintTeamHandoff', () => {
     expect(post).toHaveBeenCalledWith('/api/auth/handoff', { kind: 'team' }, headers)
   })
 
+  // One machine (docs/plans/2026-10-24-swarm-team-account.md): the team machine records the Mac it lives on, so every
+  // list shows that Mac once. The backend checks the machine is one of the account's own.
+  it('names this computer\'s own machine as the Mac the team account lives on, once it has one', async () => {
+    const post = vi.fn(async () => ({ code: CODE, expiresIn: 90 }))
+    await mintTeamHandoff(async () => ({ session: { ...computer, machineId: 'machine-placeholder-1' }, headers }), post as never)
+    expect(post).toHaveBeenCalledWith('/api/auth/handoff', { kind: 'team', hostMachineId: 'machine-placeholder-1' }, headers)
+  })
+
+  it('mints without naming its Mac when the backend refuses that machine, so setup still signs the team account in', async () => {
+    const post = vi.fn(async (_path: string, body: Record<string, unknown>) => {
+      if (body.hostMachineId) throw Object.assign(new Error('That machine is not one of this account\'s computers'), { status: 403 })
+      return { code: CODE, expiresIn: 90 }
+    })
+    await expect(mintTeamHandoff(async () => ({ session: { ...computer, machineId: 'stale-machine' }, headers }), post as never)).resolves.toEqual({ code: CODE, expiresIn: 90 })
+    expect(post.mock.calls.map(c => c[1])).toEqual([{ kind: 'team', hostMachineId: 'stale-machine' }, { kind: 'team' }])
+    // Any other failure is not asked again.
+    const down = vi.fn(async () => { throw Object.assign(new Error('Bad gateway'), { status: 502 }) })
+    await expect(mintTeamHandoff(async () => ({ session: { ...computer, machineId: 'm' }, headers }), down as never)).rejects.toMatchObject({ code: 'BACKEND' })
+    expect(down).toHaveBeenCalledTimes(1)
+  })
+
   it('refuses a team sign-in, a signed-out computer and an answer without a code', async () => {
     const post = vi.fn(async () => ({ code: CODE }))
     await expect(mintTeamHandoff(async () => ({ session: { ...computer, kind: 'team' }, headers }), post as never)).rejects.toMatchObject({ code: 'TEAM_SESSION' })

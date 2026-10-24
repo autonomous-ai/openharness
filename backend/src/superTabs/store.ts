@@ -277,11 +277,13 @@ export class SuperTabStore {
     person(state, contributorId)
     const machine = await tx.machine.findFirst({ where: { machineId: command.machineId, autonomousEnv: state.environment, ...machineAlive } })
     if (!machine || !machineBillingAllowsDataPlane(machine)) fail('HOST_UNAVAILABLE', 'This machine is unavailable.', 403)
+    // A Mac's Harness Team account names its Mac from its own account row, which only its owner's sign-in set (machines.ts).
+    const host = machine.sessionKind === 'team' && machine.hostMachineId ? { hostMachineId: machine.hostMachineId } : {}
     if (pooled) {
       const pool = machineContribution(state, command.machineId)
       if (pool) {
         if (pool.contributorId !== machine.userId) fail('CONTRIBUTION_REVOKED', 'The machine owner changed.', 403)
-        return { machineOwnerId: machine.userId, contributorId: pool.contributorId, hostGrant: null }
+        return { machineOwnerId: machine.userId, contributorId: pool.contributorId, hostGrant: null, ...host }
       }
     }
     let hostGrant: string | null = null
@@ -295,7 +297,7 @@ export class SuperTabStore {
       }
       hostGrant = machineShareGrant(share, contributor.email)
     }
-    return { machineOwnerId: machine.userId, contributorId, hostGrant }
+    return { machineOwnerId: machine.userId, contributorId, hostGrant, ...host }
   }
 
   async create(user: AuthUser, operationId: string, name: string, projectVisibility?: ProjectVisibility) {
@@ -1287,9 +1289,19 @@ export class SuperTabStore {
       // A cleanup is never cut by that limit: a machine in more than 100 Swarms would otherwise keep a removed Swarm's folders.
       const cleaning = await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, cleanupMachineIds: { has: machineId },
         id: { notIn: rows.map(r => r.id) } } })
+      // This Mac's Harness Team account, which joins wherever this Mac is added (machines.ts): asked of the owner's own daemon only.
+      const teams = isTeamSession(user) ? [] : await tx.machine.findMany({ where: { userId: user.sub, hostMachineId: machineId, sessionKind: 'team',
+        autonomousEnv: user.autonomousEnv, ...machineAlive }, select: { machineId: true } })
       const result = []
       for (const row of rows) {
         const state = stateOf(row)
+        // Where its owner added this Mac and its team account is missing, this host adds that account, prepared by its own
+        // daemon (cli/src/superTabs/host.ts); the backend gives it the Mac's name, slots and pause (commands.ts).
+        const mac = state.machines?.find(m => m.machineId === machineId && m.contributorId === user.sub && m.scope === 'swarm' && !m.removal)
+        for (const team of mac ? teams : []) {
+          if (state.machines?.some(m => m.machineId === team.machineId) || state.machineCleanups?.some(c => c.machineId === team.machineId)) continue
+          result.push({ tabId: row.id, joinTeam: { machineId: team.machineId, name: mac!.name, maxAgents: mac!.maxAgents } })
+        }
         const people = await tx.user.findMany({ where: { id: { in: state.people.map(p => p.id) }, autonomousEnv: state.environment }, select: { id: true, email: true } })
         for (const target of state.agents.filter(a => a.machineId === machineId && a.machineOwnerId === user.sub)) {
           try { agent(state, target.id); await this.agentGrant(tx, state, target) }

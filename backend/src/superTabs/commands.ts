@@ -1,4 +1,4 @@
-import { admitMachineStart, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, ownedMachine, requireTeamWork, teamWorkCheck, type ContributedMachine } from './machines.js'
+import { admitMachineStart, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, ownedMachine, requireTeamWork, teamMachineFor, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
@@ -194,7 +194,9 @@ export interface CommandContext {
   operationId: string
   now: number
   /** Read from host ownership/access records by the store, never copied from the request. */
-  contribution?: { machineOwnerId: string; contributorId: string; hostGrant?: string | null }
+  contribution?: { machineOwnerId: string; contributorId: string; hostGrant?: string | null
+    /** A Harness Team account's machine: the Mac it lives on, from its account row (machines.ts ContributedMachine). */
+    hostMachineId?: string }
   /** Loaded from this tab and conversation by the store. */
   reply?: { id: string; conversationId: string; author: Author }
   /** The message a Lead quotes as the owner's request for a rule or skill mode change, loaded from this tab by the store. */
@@ -455,9 +457,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   /** A hard rule refuses an agent, unless it carries out what a person chose by hand. A person is not blocked: the
    * command goes through and the group is told. */
   const machineName = (id: string) => state.machines?.find(m => m.machineId === id)?.name ?? id
+  /** The Mac a Harness Team account's machine is, for a machines rule naming the Mac (machines.ts teamStartRequest). */
+  const macOf = (id: string) => state.machines?.find(m => m.machineId === id)?.hostMachineId
   const groupRules = (conversationId: string) => projectRules(state, groupProject(state, conversation(state, conversationId)).id)
   const ruled = (target: RunTarget, conversationId: string, done: string, personChose = false) => {
-    const why = broken(groupRules(conversationId), target, machineName)
+    const why = broken(groupRules(conversationId), target, machineName, macOf)
     if (!why) return
     if (actor.kind === 'agent' && !personChose) fail('RULE_BROKEN', `${why} Route again.`, 403)
     result.warnings = [why]
@@ -513,8 +517,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     const project = groupProject(state, conversation(state, conversationId))
     const member = candidate.kind === 'member' ? state.agents.find(a => a.id === candidate.agentId) : undefined
     if (candidate.kind === 'member' && !member) return null
-    const contributor = member?.contributorId ?? state.machines?.find(m => m.machineId === candidate.machineId)?.contributorId ?? starter
-    return teamWorkCheck(state, member?.machineId ?? candidate.machineId, contributor, project, context.now, context.teamMachines)
+    // A new agent on a Mac for a teammate's project runs in the Mac's Harness Team account (machines.ts teamStartRequest).
+    const machineId = member?.machineId ?? teamMachineFor(state, candidate.machineId, project)
+    const contributor = member?.contributorId ?? state.machines?.find(m => m.machineId === machineId)?.contributorId ?? starter
+    return teamWorkCheck(state, machineId, contributor, project, context.now, context.teamMachines)
   }
   /** Deleting its project is the only removal that takes a Lead. `close: false` when its host already closed the session. */
   const removeAgent = (target: Agent, { lead = false, close = true } = {}) => {
@@ -787,8 +793,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // A late cleanup would delete the new contribution's folders.
       const cleaning = state.machines.some(m => m.machineId === command.machineId && m.removal)
         || !!state.machineCleanups?.some(c => c.machineId === command.machineId)
+      // A Mac's Harness Team account joins by itself wherever its owner added the Mac, as that Mac (cli/src/superTabs/host.ts).
+      const mac = context.contribution?.hostMachineId
+        ? state.machines.find(m => m.machineId === context.contribution!.hostMachineId && m.contributorId === actor.userId && !m.removal) : undefined
       if (command.ifMissing) {
-        if (actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Swarm owner adds a machine automatically.', 403)
+        if (actor.userId !== state.ownerId && !mac) fail('OWNER_REQUIRED', 'Only the Swarm owner adds a machine automatically.', 403)
         if (cleaning || state.machines.some(m => m.machineId === command.machineId)) break
       }
       if (cleaning) fail('MACHINE_CLEANING', 'This machine is still cleaning up after its removal. Add it again once that finishes.')
@@ -810,9 +819,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       if (state.starts?.some(s => s.request.machineId === command.machineId && (!s.harnessId || (s.poolGeneration && !s.poolSettled)) && !s.error)) fail('STARTS_PENDING', 'Reconcile pending starts before changing this contribution.')
       state.machines = state.machines.filter(m => m.machineId !== command.machineId)
-      state.machines.push({ machineId: command.machineId, name: command.name, cwd: command.cwd, engines: [...new Set(command.engines)], maxAgents: command.maxAgents,
-        ...(command.scope ? { scope: command.scope } : {}),
-        contributorId: actor.userId, membershipGeneration: contributor.generation, generation: operationId, paused: false })
+      const host = context.contribution?.hostMachineId
+      state.machines.push({ machineId: command.machineId, name: mac?.name ?? command.name, cwd: command.cwd, engines: [...new Set(command.engines)],
+        maxAgents: mac?.maxAgents ?? command.maxAgents, ...(command.scope ? { scope: command.scope } : {}),
+        contributorId: actor.userId, membershipGeneration: contributor.generation, generation: operationId, paused: mac?.paused ?? false,
+        ...(host ? { hostMachineId: host } : {}) })
+      // A Mac given other slots or a new name gives its team account the same; its own folder, engines and grant stay.
+      const added = state.machines.at(-1)!
+      for (const team of teamPoolsOf(state, added)) if (!team.removal) Object.assign(team, { name: added.name, maxAgents: added.maxAgents, paused: false })
       break
     }
     case 'machine.pause': {
@@ -820,6 +834,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (actor.kind !== 'person' || actor.userId !== pool.contributorId) fail('OWNER_REQUIRED', 'Only its contributor can change this machine.', 403)
       if (pool.removal) fail('MACHINE_REMOVED', 'This machine is being removed from the Swarm.')
       pool.paused = command.paused
+      // Its Harness Team account is the same Mac.
+      for (const team of teamPoolsOf(state, pool)) if (!team.removal) team.paused = command.paused
       break
     }
     case 'machine.remove': {
@@ -829,7 +845,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person removes a machine from the Swarm.', 403)
       const { pool, members } = ownedMachine(state, actor, command.machineId)
       if (pool?.removal) fail('MACHINE_REMOVED', 'This machine is already being removed from the Swarm.')
-      const removed = removeMachine(command.machineId, pool, members, machine => `${who} removed ${machine} from the Swarm`)
+      // The Mac leaves with its Harness Team account and the agents there, told once as the Mac; that account's host cleans
+      // its own folders.
+      const moving = pool ? teamPoolsOf(state, pool).filter(m => !m.removal) : []
+      const removed = removeMachine(command.machineId, pool, [...members, ...state.agents.filter(a => moving.some(m => m.machineId === a.machineId))],
+        machine => `${who} removed ${machine} from the Swarm`)
+      for (const team of moving) removeMachine(team.machineId, team, [], machine => `${who} removed ${machine} from the Swarm`)
       if (pool) result.removalId = operationId
       result.removedAgents = [...removed]
       break
@@ -1010,15 +1031,18 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) {
         fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')
       }
-      const pool = admitMachineStart(state, command.request, context.now, undefined, context.teamMachines)
+      // A teammate's project started on a Mac runs in that Mac's Harness Team account, never as its owner (machines.ts).
+      const request = teamStartRequest(state, command.request, home)
+      const pool = admitMachineStart(state, request, context.now, undefined, context.teamMachines)
       // Off the Machines list, a teammate's project never runs: nothing there shows a privacy check (machines.ts).
-      if (!pool) requireTeamWork(state, command.request.machineId, grant.contributorId, home, context.now, context.teamMachines)
+      if (!pool) requireTeamWork(state, request.machineId, grant.contributorId, home, context.now, context.teamMachines)
       state.starts.push({ ...(pool ? { poolGeneration: pool.generation } : {}), ...(command.routeDecisionId ? { routeDecisionId: command.routeDecisionId } : {}), id: operationId, creationId: `super-${operationId}`, actorKey: actorKey(actor),
         contributorId: contributor.id, membershipGeneration: contributor.generation, machineOwnerId: grant.machineOwnerId,
-        hostGrant: grant.hostGrant ?? null, request: command.request, harnessId: null, dispatched: false, error: null })
+        hostGrant: grant.hostGrant ?? null, request, harnessId: null, dispatched: false, error: null })
       result.startId = operationId
       let personChose = false
       if (command.routeDecisionId) {
+        // The pick names the machine the Lead named: the Mac, when the start then went to its team account.
         const r = command.request
         const model = r.model ?? 'default', effort = r.effort ?? 'default'
         const { decision, expected, override } = linkDecision(r.conversationId,
@@ -1030,7 +1054,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           { kind: 'route-override', decisionId: decision.id, by: 'lead' })
         personChose = !override && decision.override?.by === 'person'
       }
-      ruled(startTarget(command.request), command.request.conversationId, `${who} started ${command.request.name}`, personChose)
+      ruled(startTarget(request), request.conversationId, `${who} started ${request.name}`, personChose)
       break
     }
     case 'agent.startDispatch':
@@ -1047,7 +1071,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           fail('SWARM_ENGINE', 'A Swarm agent runs only Claude Code or Codex.', 400)
         }
         // A start recorded before a rule was added is not launched past it, unless a person asked for it by hand.
-        const why = actor.kind === 'agent' && !(start.routeDecisionId && context.routeDecision?.override?.by === 'person') && broken(groupRules(start.request.conversationId), startTarget(start.request), machineName)
+        const why = actor.kind === 'agent' && !(start.routeDecisionId && context.routeDecision?.override?.by === 'person') && broken(groupRules(start.request.conversationId), startTarget(start.request), machineName, macOf)
         if (why) fail('RULE_BROKEN', `${why} This start was not launched. Route again.`, 403)
         requireWorkerDecisions(state, actor, open(state, start.request.conversationId))
         const grant = context.contribution ?? fail('HOST_REQUIRED', 'The original machine grant is unavailable.', 403)

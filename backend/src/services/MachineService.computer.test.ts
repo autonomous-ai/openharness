@@ -15,13 +15,14 @@ const consumeNewIdQuota = vi.hoisted(() => vi.fn())
 const findUnique = vi.hoisted(() => vi.fn())
 const update = vi.hoisted(() => vi.fn())
 const sessionUpdateMany = vi.hoisted(() => vi.fn())
+const sessionFindUnique = vi.hoisted(() => vi.fn())
 
 vi.mock('../lib/prisma.js', () => ({
   machineAlive: {},
   prisma: {
     machine: { findMany, count, create, findUnique, update },
     subscriptionPlan: { findFirst: planFindFirst },
-    harnessSession: { updateMany: sessionUpdateMany },
+    harnessSession: { updateMany: sessionUpdateMany, findUnique: sessionFindUnique },
   },
 }))
 vi.mock('../lib/bus.js', () => ({
@@ -52,6 +53,8 @@ beforeEach(() => {
   redisSet.mockResolvedValue('OK')
   consumeNewIdQuota.mockResolvedValue(true)
   create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ ...data }))
+  sessionFindUnique.mockResolvedValue({ hostMachineId: null })
+  update.mockImplementation(async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => ({ ...where, ...data }))
 })
 
 describe('resolveOrCreateForComputer', () => {
@@ -106,6 +109,34 @@ describe('resolveForTeamComputer', () => {
     const { harnessSessionKind: _kind, ...computer } = team
     await expect(machineService.resolveForTeamComputer(computer, TEAM, 'x')).rejects.toMatchObject({ statusCode: 403 })
     expect(findMany).not.toHaveBeenCalled()
+  })
+
+  // One machine: the team machine records the Mac its session was minted for, from the session and nothing it sends.
+  it('records its session\'s Mac on a machine it creates', async () => {
+    sessionFindUnique.mockResolvedValue({ hostMachineId: 'laptop' })
+    await machineService.resolveForTeamComputer(team, TEAM, 'MacBook Pro · Team')
+    expect(sessionFindUnique).toHaveBeenCalledWith({ where: { id: 'team-session' }, select: { hostMachineId: true } })
+    expect(create).toHaveBeenCalledWith({ data: expect.objectContaining({ sessionKind: 'team', hostMachineId: 'laptop' }) })
+  })
+
+  it('records its session\'s Mac on the machine it reuses when that differs, and leaves one it already names', async () => {
+    sessionFindUnique.mockResolvedValue({ hostMachineId: 'laptop' })
+    findMany.mockResolvedValue([{ machineId: 'm1', billingStatus: 'not_required', sessionKind: 'team', hostMachineId: null }])
+    expect(await machineService.resolveForTeamComputer(team, TEAM, 'x')).toMatchObject({ machine: { machineId: 'm1', hostMachineId: 'laptop' } })
+    expect(update).toHaveBeenCalledWith({ where: { machineId: 'm1' }, data: { hostMachineId: 'laptop' } })
+    update.mockClear()
+    findMany.mockResolvedValue([{ machineId: 'm1', billingStatus: 'not_required', sessionKind: 'team', hostMachineId: 'laptop' }])
+    await machineService.resolveForTeamComputer(team, TEAM, 'x')
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('a session that names no Mac (a dedicated machine) records none and clears nothing', async () => {
+    findMany.mockResolvedValue([{ machineId: 'm1', billingStatus: 'not_required', sessionKind: 'team', hostMachineId: 'laptop' }])
+    await machineService.resolveForTeamComputer(team, TEAM, 'x')
+    expect(update).not.toHaveBeenCalled()
+    findMany.mockResolvedValue([])
+    await machineService.resolveForTeamComputer(team, TEAM, 'x')
+    expect(create.mock.calls.at(-1)![0].data).not.toHaveProperty('hostMachineId')
   })
 
   it('refuses a computer the account runs under a normal sign-in, rows from before the kind was kept included', async () => {

@@ -60,6 +60,9 @@ export interface OwnerMachine {
   // How that computer signed in on its last connect: `team` for a Mac's team account (lib/teamSession.ts),
   // `computer` for any other sign-in, null before it was recorded.
   sessionKind: 'team' | 'computer' | null
+  // A team machine's Mac: the machineId of the account's own machine on the computer whose Harness Team account this
+  // is. A list shows that Mac once, this machine folded into it. Null for every other machine.
+  hostMachineId: string | null
 }
 
 interface PlanInfo {
@@ -96,6 +99,8 @@ function toOwner(b: Machine, status = 'unknown', agentCount = 0, plan?: PlanInfo
     name: b.name ?? null,
     hostname: b.hostname ?? null,
     sessionKind: b.sessionKind === 'team' || b.sessionKind === 'computer' ? b.sessionKind : null,
+    // Only while it is a team machine: one a normal sign-in took over is a machine of its own again.
+    hostMachineId: b.sessionKind === 'team' ? b.hostMachineId ?? null : null,
   }
 }
 
@@ -427,6 +432,8 @@ export const machineService = {
     claimedMachineId?: string,
     /** How the computer is signing in, recorded on a machine created now (`Machine.sessionKind`). */
     sessionKind?: 'team' | 'computer',
+    /** A team machine's Mac, recorded on a machine created now (`Machine.hostMachineId`). */
+    hostMachineId?: string,
   ): Promise<{ machine: Machine; created: boolean }> {
     // A caller that still holds a machine id we have DELETED must be told so, never quietly given a
     // new machine. Deletion is soft, so `machineAlive` below simply does not find the old row — and
@@ -500,6 +507,7 @@ export const machineService = {
           // a later connect only ever refreshes `hostname`, never this.
           name: label.trim().slice(0, 120) || null,
           ...(sessionKind ? { sessionKind } : {}),
+          ...(hostMachineId ? { hostMachineId } : {}),
         },
       })
       await publishDeviceMachineListChanged(userId, { reason: 'created' }).catch(() => { /* best effort */ })
@@ -523,9 +531,17 @@ export const machineService = {
     if (user.harnessSessionKind !== 'team' || !user.harnessComputerId || computerId !== user.harnessComputerId) throw refuse()
     const held = await prisma.machine.findMany({ where: { userId: user.sub, computerId, ...machineAlive }, select: { sessionKind: true } })
     if (held.some((row) => row.sessionKind !== 'team')) throw refuse()
-    const resolved = await machineService.resolveOrCreateForComputer(user.sub, user.autonomousEnv, computerId, label, claimedMachineId, 'team')
+    // The Mac this team account lives on, as its owner's computer said when the code was minted (routes/auth.ts): from the
+    // session, never from what the team daemon sends, so a team session cannot set or change it.
+    const hostMachineId = user.harnessSessionId
+      ? (await prisma.harnessSession.findUnique({ where: { id: user.harnessSessionId }, select: { hostMachineId: true } }))?.hostMachineId ?? undefined
+      : undefined
+    const resolved = await machineService.resolveOrCreateForComputer(user.sub, user.autonomousEnv, computerId, label, claimedMachineId, 'team', hostMachineId)
     // Another sign-in took the row between the check and here: still not this session's machine.
     if (resolved.machine.sessionKind !== 'team') throw refuse()
+    if (hostMachineId && resolved.machine.hostMachineId !== hostMachineId) {
+      return { ...resolved, machine: await prisma.machine.update({ where: { machineId: resolved.machine.machineId }, data: { hostMachineId } }) }
+    }
     return resolved
   },
 

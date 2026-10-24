@@ -19,6 +19,11 @@ export interface ContributedMachine {
    *  the report: `team` for a Mac's team account (lib/teamSession.ts), `computer` for any other. Absent on older readings.
    *  `privacy` is kept only from a team session's reading (observedPrivacy). */
   observation?: Omit<MachineObservation, 'privacy'> & { receivedAt: number; sessionKind?: 'team' | 'computer'; privacy?: StoredPrivacy }
+  /** A Mac's Harness Team account: the machine of the Mac it lives on, stamped by the store from its account row
+   *  (`Machine.hostMachineId`), never taken from the command. Such a pool is that Mac under the scenes ("One machine",
+   *  docs/plans/2026-10-24-swarm-team-account.md): it shows the Mac's name, joins where the Mac was added, follows the
+   *  Mac's pause, slots and removal, and runs teammates' projects started on the Mac (teamStartRequest). */
+  hostMachineId?: string
   /** Set by machine.remove: an online machine stays listed, paused, while its host deletes the Swarm's folders there, until
    *  the host says it cleaned up (machine.cleaned) or REMOVAL_FALLBACK_MS passes. An offline one leaves the list at once and
    *  its cleanup waits for its host (expireRemovals). */
@@ -181,6 +186,50 @@ export function teamWorkCheck(state: SuperTabState, machineId: string, contribut
   return teamWorkRefusal(pool, now, teamMachines.includes(machineId))
 }
 
+// ── One machine: a Mac and its Harness Team account ─────────────────────────────────────────────────────────────────
+// The team account is how a Mac runs teammates' work without its owner's files, not a machine of its own to anyone: a
+// Lead names the Mac, and the work for another person's project lands in the Mac's team account.
+
+/** Every pool of a Harness Team account on the Mac [pool] is, under the same grant: one, or more once the account was
+ *  removed and set up again (a new account and machine, the old one's pool still listed). They go with the Mac. */
+export function teamPoolsOf(state: SuperTabState, pool: ContributedMachine): ContributedMachine[] {
+  if (pool.hostMachineId) return []
+  return state.machines?.filter(m => m.hostMachineId === pool.machineId && m.contributorId === pool.contributorId) ?? []
+}
+
+/** The one of them that runs teammates' work on the Mac: not being removed, and the last to report. Undefined when none. */
+export function teamPoolOf(state: SuperTabState, pool: ContributedMachine): ContributedMachine | undefined {
+  return teamPoolsOf(state, pool).filter(m => !m.removal)
+    .reduce<ContributedMachine | undefined>((best, m) => !best || (m.observation?.receivedAt ?? -1) >= (best.observation?.receivedAt ?? -1) ? m : best, undefined)
+}
+
+/** Where a new agent for [project] runs when a start names [machineId]: the Mac's team account when the project is not
+ *  its contributor's own and the Mac has one in this Swarm, else the machine named. */
+export function teamMachineFor(state: SuperTabState, machineId: string, project: SwarmProject): string {
+  const pool = state.machines?.find(m => m.machineId === machineId)
+  if (!pool || project.ownerId === pool.contributorId) return machineId
+  return teamPoolOf(state, pool)?.machineId ?? machineId
+}
+
+/** The folder a start for [project] uses on [pool]: what admitMachineStart accepts there. */
+export function projectFolder(pool: ContributedMachine, project: SwarmProject): string {
+  return pool.scope === 'swarm'
+    ? project.repository?.machineId === pool.machineId ? project.repository.cwd : `${pool.cwd.replace(/\/+$/, '')}/${project.id}`
+    : pool.cwd
+}
+
+/**
+ * A start on a Mac for another person's project, moved to the Mac's Harness Team account: its machine, and its folder in
+ * place of the Mac's own for that project. Every other start is returned as it is, so the Mac's owner's own projects
+ * stay with the owner's daemon, and a Mac without a team account here refuses it as before (teamWorkCheck).
+ */
+export function teamStartRequest(state: SuperTabState, request: AgentStartRequest, project: SwarmProject): AgentStartRequest {
+  const machineId = teamMachineFor(state, request.machineId, project)
+  if (machineId === request.machineId) return request
+  const pool = state.machines!.find(m => m.machineId === request.machineId)!, team = state.machines!.find(m => m.machineId === machineId)!
+  return { ...request, machineId, cwd: request.cwd === projectFolder(pool, project) ? projectFolder(team, project) : request.cwd }
+}
+
 /** Refuses with the refusal's code and sentence: 403, or 409 like any start on an offline machine. */
 export function failTeamWork(refusal: TeamWorkRefusal, after = ''): never {
   fail(refusal.code, `${refusal.reason}${after}`, refusal.code === 'MACHINE_OFFLINE' ? 409 : 403)
@@ -234,7 +283,10 @@ export function ownedMachine(state: SuperTabState, actor: Actor, machineId: stri
 
 /** What removing the machine would do, for its owner's confirmation. */
 export function removalPreview(state: SuperTabState, actor: Actor, machineId: string) {
-  const { members } = ownedMachine(state, actor, machineId)
+  const owned = ownedMachine(state, actor, machineId)
+  // A Mac leaves with its Harness Team account and the agents there (commands.ts machine.remove).
+  const teams = owned.pool ? teamPoolsOf(state, owned.pool).filter(m => !m.removal).map(m => m.machineId) : []
+  const members = [...owned.members, ...state.agents.filter(a => teams.includes(a.machineId))]
   const led = members.map(a => ledProject(state, a.id)).find(Boolean)
   return {
     blockedBy: led ? { projectId: led.id, projectName: led.name } : null,
@@ -268,8 +320,15 @@ export function expireRemovals(state: SuperTabState, now: number): void {
   }
 }
 
-/** Pending intents reserve slots too. Only an explicit host stop frees a launched slot. */
+/** Pending intents reserve slots too. Only an explicit host stop frees a launched slot. A Mac and its Harness Team account
+ *  share the Mac's slots (One machine, teamStartRequest): each counts what runs on both. */
 export function machineSlots(state: SuperTabState, pool: ContributedMachine) {
+  const mac = pool.hostMachineId ? state.machines?.find(m => m.machineId === pool.hostMachineId && m.contributorId === pool.contributorId) : pool
+  const team = mac && teamPoolOf(state, mac)
+  return [...new Set([pool, mac, team])].reduce((sum, each) => sum + (each ? poolSlots(state, each) : 0), 0)
+}
+
+function poolSlots(state: SuperTabState, pool: ContributedMachine) {
   const reservations = (state.harnessReservations ?? []).filter(r => r.machineId === pool.machineId)
   const live = new Set(reservations.map(r => r.harnessId))
   const released = (state.releasedHarnesses ?? []).filter(r => r.machineId === pool.machineId && !live.has(r.harnessId)).map(r => r.harnessId)
@@ -335,9 +394,7 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   if (!pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
   // Before the request's own fields: a machine that takes none of this project's work says so first.
   requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines)
-  const cwd = pool.scope === 'swarm'
-    ? project.repository?.machineId === pool.machineId ? project.repository.cwd : `${pool.cwd.replace(/\/+$/, '')}/${project.id}`
-    : pool.cwd
+  const cwd = projectFolder(pool, project)
   // Every refused field is named, with what the machine does accept. Values the caller sent are not echoed: an account
   // setting can be a path or a name of the caller's own.
   const refused: string[] = []

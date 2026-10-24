@@ -97,23 +97,26 @@ export type QrSignInKind = 'viewer' | 'computer'
 export async function startHandoff(
   userId: string,
   kind: HandoffKind = 'viewer',
-  /** A team code for this computer turning itself into a team machine, already proven to be that computer. */
-  { convert }: { convert?: string } = {},
+  /** `convert`: a team code for this computer turning itself into a team machine, already proven to be that computer.
+   *  `host`: the machine of the Mac whose team account redeems this code, already checked to be one of the account's
+   *  own (routes/auth.ts); the team machine records it, so lists show that Mac once. */
+  { convert, host }: { convert?: string; host?: string } = {},
 ): Promise<{ code: string; expiresIn: number; kind: HandoffKind }> {
   const code = newHarnessToken(HARNESS_HANDOFF_PREFIX)
-  const held = kind === 'team' ? JSON.stringify({ userId, kind, ...(convert ? { convert } : {}) }) : userId
+  const held = kind === 'team' ? JSON.stringify({ userId, kind, ...(convert ? { convert } : {}), ...(host ? { host } : {}) }) : userId
   await pub.set(handoffKey(harnessTokenHash(code)), held, 'EX', HANDOFF_TTL_SEC)
   return { code, expiresIn: HANDOFF_TTL_SEC, kind }
 }
 
 /** Who a spent code was minted for, and as what; null for anything else. */
-function handoffOf(held: unknown): { userId: string; kind: HandoffKind; convert?: string } | null {
+function handoffOf(held: unknown): { userId: string; kind: HandoffKind; convert?: string; host?: string } | null {
   if (typeof held !== 'string' || !held) return null
   if (!held.startsWith('{')) return { userId: held, kind: 'viewer' }
   try {
-    const parsed = JSON.parse(held) as { userId?: unknown; kind?: unknown; convert?: unknown }
+    const parsed = JSON.parse(held) as { userId?: unknown; kind?: unknown; convert?: unknown; host?: unknown }
     if (typeof parsed.userId !== 'string' || !parsed.userId || parsed.kind !== 'team') return null
-    return { userId: parsed.userId, kind: 'team', ...(typeof parsed.convert === 'string' && parsed.convert ? { convert: parsed.convert } : {}) }
+    return { userId: parsed.userId, kind: 'team', ...(typeof parsed.convert === 'string' && parsed.convert ? { convert: parsed.convert } : {}),
+      ...(typeof parsed.host === 'string' && parsed.host ? { host: parsed.host } : {}) }
   } catch { return null }
 }
 
@@ -138,7 +141,13 @@ export async function redeemHandoff(code: string, label: string, computerId?: st
   // The computer that asked to become a team machine, and no other.
   if (handoff.convert) return handoff.convert === computer ? convertComputer(handoff.userId, label || 'Team', computer) : null
   if (await computerHeldByAnotherSignIn(handoff.userId, computer)) return null
-  return createSession(handoff.userId, label || 'Team', 'team', computer)
+  // A repair run signs the same team account in again: its machine already exists and records its Mac now. A new one
+  // records it when it registers (MachineService.resolveForTeamComputer), from the session made here.
+  if (handoff.host) {
+    await prisma.machine.updateMany({ where: { userId: handoff.userId, computerId: computer, sessionKind: 'team', ...machineAlive },
+      data: { hostMachineId: handoff.host } })
+  }
+  return createSession(handoff.userId, label || 'Team', 'team', computer, handoff.host)
 }
 
 // Not yet revoked. A session is created without `revokedAt`, and on MongoDB `revokedAt: null` alone
@@ -187,7 +196,7 @@ async function computerHeldByAnotherSignIn(userId: string, computerId: string): 
 }
 
 /** A new session for [userId]: a refresh token (stored hashed) and its first access token. */
-async function createSession(userId: string, label: string, kind: HarnessSessionKind, computerId?: string): Promise<HarnessTokens | null> {
+async function createSession(userId: string, label: string, kind: HarnessSessionKind, computerId?: string, hostMachineId?: string): Promise<HarnessTokens | null> {
   const user = await userService.get(userId)
   if (!user) return null
   const refreshToken = newHarnessToken(kind === 'team' ? HARNESS_TEAM_REFRESH_PREFIX : HARNESS_REFRESH_PREFIX)
@@ -199,6 +208,8 @@ async function createSession(userId: string, label: string, kind: HarnessSession
       kind,
       // A team session's bound computer; a computer's own, as its QR sign-in declared it (what lets it convert itself).
       ...(kind !== 'viewer' && computerId ? { computerId } : {}),
+      // A team session's Mac, which its machine records (MachineService.resolveForTeamComputer).
+      ...(kind === 'team' && hostMachineId ? { hostMachineId } : {}),
       expiresAt: sessionExpiry(),
     },
   })

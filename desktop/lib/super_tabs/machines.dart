@@ -375,6 +375,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       m['machineId'] as String,
   };
 
+  /// The rows: one per computer, a Mac's Harness Team account inside its Mac's ([SuperTabSnapshot.placeOf]).
+  Iterable<String> get _rowIds =>
+      _ids.where((id) => (c.snapshot?.placeOf(id) ?? id) == id);
+
   @override
   void initState() {
     super.initState();
@@ -482,9 +486,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         m['machineId'] as String,
     };
     // Unavailable computers stay inspectable in the picker, but another
-    // account's computers must never be offered for contribution.
+    // account's computers must never be offered for contribution. One choice
+    // per computer: a Mac's Harness Team account in this Swarm is part of its
+    // Mac's row, and joins and leaves with it (SuperTabSnapshot.placeOf).
+    bool ownRow(MachineState m) =>
+        (c.snapshot?.placeOf(m.machine.machineId) ?? m.machine.machineId) ==
+        m.machine.machineId;
     List<MachineState> ownedMachines() => app.machineStates.values
-        .where((m) => !m.belongsToOtherAccount)
+        .where((m) => !m.belongsToOtherAccount && ownRow(m))
         .toList();
     ({IconData icon, String message})? unavailable(MachineState m) {
       if (!isExisting(m) && contributed.contains(m.machine.machineId)) {
@@ -906,26 +915,35 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
   /// Everything a machine's row, its tooltip and its details say of it, read once per build.
   _MachineView _view(String id) {
-    final app = widget.app, state = app?.stateOf(id);
-    final shared = c.snapshot?.machines
-        .where((m) => m['machineId'] == id)
-        .firstOrNull;
-    final agents = c.snapshot!.agents.where((a) => a.machineId == id).toList();
+    final app = widget.app, snapshot = c.snapshot!;
+    final shared = snapshot.pool(id);
+    // The Mac's Harness Team account is part of its row: its agents are listed here, and everyone but the Mac's owner
+    // reads its availability, since it runs their agents, also while the owner is away from the Mac. The owner reads
+    // their own computer. Actions stay the Mac's; the backend changes its team account with it.
+    final team = snapshot.teamPoolOf(id);
+    final teamId = team?['machineId'] as String?;
+    final agents = snapshot.agents
+        .where((a) => snapshot.placeOf(a.machineId) == id)
+        .toList();
     final contributor =
         shared?['contributorId'] as String? ??
         agents.firstOrNull?.contributorId;
-    final person = c.snapshot!.people
+    final person = snapshot.people
         .where((p) => p.id == contributor)
         .firstOrNull;
+    final teammateView = team != null && contributor != c.accountId;
+    final reading = teammateView ? team : shared;
+    final readId = teammateView ? teamId! : id;
+    final state = app?.stateOf(readId);
     final observation = superTabMap(
-      shared?['observation'] ?? const <String, dynamic>{},
+      reading?['observation'] ?? const <String, dynamic>{},
     );
     final now = widget.now();
     final received = observation['receivedAt'];
     final observedAt = received is num
         ? DateTime.fromMillisecondsSinceEpoch(received.toInt())
         : null;
-    final sample = _samples[id];
+    final sample = _samples[readId];
     final connected =
         state?.connectionStatus == ConnectionStatus.connected &&
         state?.nodeOnline != false;
@@ -933,7 +951,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     // this very computer when it contributes and its own sample is the newer, which is why it stays live while
     // the Swarm cannot be read. Any other contributing machine is known by what it reports through the Swarm.
     final direct =
-        shared == null ||
+        reading == null ||
         (state?.isLocalMachine == true &&
             sample != null &&
             (observedAt == null || sample.$2.isAfter(observedAt)));
@@ -944,7 +962,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       // The Swarm cannot be read: a machine's silence is not known to be its own, so it is not offline.
       unreachable: !direct && c.backendUnreachable,
       refreshing: direct
-          ? _awaiting.contains(id)
+          ? _awaiting.contains(readId)
           : _swarmReadsAtReturn != null && c.stateReads <= _swarmReadsAtReturn!,
       connected: direct ? connected : null,
     );
@@ -972,9 +990,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     final value = direct ? sample?.$1 : observed;
     final name =
         shared?['name'] as String? ??
-        state?.machine.displayName ??
+        app?.stateOf(id)?.machine.displayName ??
         'Unavailable machine';
-    final configured = (shared?['engines'] as List?)
+    final configured = (reading?['engines'] as List?)
         ?.whereType<String>()
         .toList();
     final allowed =
@@ -1003,10 +1021,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         for (final raw in observation['quotas'] as List? ?? [])
           // Routing reads quota for these two only; other engines drew "—".
           if (const {'claude', 'codex'}.contains(superTabMap(raw)['engine']))
-            _quotaRow(superTabMap(raw), id),
+            _quotaRow(superTabMap(raw), readId),
       ];
     }
-    final paused = shared?['paused'] == true;
+    final paused = reading?['paused'] == true;
     final removal = shared?['removal'];
     final cleaning =
         removal is Map && superTabMap(removal)['state'] == 'cleaning';
@@ -1108,6 +1126,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       localModels: localModels,
       id: id,
       name: name,
+      problem: _teammatesLine(shared, team, contributor),
       owner: person,
       contributor: contributor,
       shared: shared,
@@ -1140,11 +1159,34 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     );
   }
 
-  /// Every agent of the Swarm on [machineId]: removing the machine takes them all with it.
-  List<SuperTabAgent> _agentsOn(String machineId) => [
-    for (final a in c.snapshot?.agents ?? const <SuperTabAgent>[])
-      if (a.machineId == machineId) a,
-  ];
+  /// Why teammates' agents cannot run on this row's computer, in its one line; null when they can, when nobody
+  /// else starts work in this Swarm, or when the row already reads offline: the computer's own silence, or, for
+  /// anyone but the Mac's owner, its Harness Team account's. A Mac with a team account answers for that account.
+  String? _teammatesLine(
+    Map<String, dynamic>? shared,
+    Map<String, dynamic>? team,
+    String? contributor,
+  ) {
+    if (c.snapshot?.hasTeammates != true) return null;
+    final work = (team ?? shared)?['teamWork'];
+    if (work is! Map || work['allowed'] != false) return null;
+    final code = work['code'];
+    if (code == 'MACHINE_OFFLINE' &&
+        (team == null || contributor != c.accountId)) {
+      return null;
+    }
+    return superTabTeammatesPaused(code);
+  }
+
+  /// Every agent of the Swarm on [machineId]'s row, its Mac's Harness Team account's included: removing the machine
+  /// takes them all with it.
+  List<SuperTabAgent> _agentsOn(String machineId) {
+    final snapshot = c.snapshot;
+    return [
+      for (final a in snapshot?.agents ?? const <SuperTabAgent>[])
+        if (snapshot!.placeOf(a.machineId) == machineId) a,
+    ];
+  }
 
   String? _removeReason(String machineId) {
     final snapshot = c.snapshot;
@@ -1535,6 +1577,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               view.cleaning
                   ? 'Cleaning up'
                   : superTabMachineStateLabel(view.status),
+              ?view.problem,
               if (view.tip.isNotEmpty) view.tip,
             ].join(', '),
             child: Tooltip(
@@ -1729,7 +1772,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
   /// Keep offline machines in the same list and on the same columns.
   List<Widget> _machines() {
-    final views = [for (final id in _ids) _view(id)];
+    final views = [for (final id in _rowIds) _view(id)];
     String key(_MachineView view) =>
         superTabMachineName(view.name).toLowerCase();
     int rank(_MachineView view) => switch (view.status) {
@@ -1879,11 +1922,15 @@ class _MachineView {
     required this.engines,
     required this.allowances,
     required this.tip,
+    this.problem,
     this.apiModels = const [],
     this.localModels = const [],
   });
 
   final String id, name, details, tip;
+
+  /// Its one line when teammates' agents cannot run there ([superTabTeammatesPaused]); null otherwise.
+  final String? problem;
   final SuperTabPerson? owner;
   final String? contributor;
   final Map<String, dynamic>? shared;
@@ -1936,6 +1983,20 @@ String? superMachineAllowanceNote(Iterable<String> lines) {
     if (line != null && line.contains(resets))
       line.substring(line.indexOf(resets) + 3),
   ].join(' · ');
+}
+
+/// A machine row's line when teammates' agents cannot run there, from the Swarm's refusal code (backend
+/// superTabs/machines.ts `teamWorkRefusal`); null for a code this build does not know.
+String? superTabTeammatesPaused(Object? code) {
+  final why = switch (code) {
+    'MACHINE_OFFLINE' => 'Harness Team account offline',
+    'TEAM_ACCOUNT_REQUIRED' => 'not set up',
+    'PRIVACY_UNCHECKED' => 'privacy not checked yet',
+    'PRIVACY_CHECK_FAILED' => 'privacy check failed',
+    'PRIVACY_CHECK_STALE' => 'privacy check out of date',
+    _ => null,
+  };
+  return why == null ? null : "Teammates' agents paused: $why";
 }
 
 /// One engine's allowance on a machine: its mark and remaining share on the row, its windows on hover.
@@ -2025,7 +2086,7 @@ class _MachineLine extends StatelessWidget {
                   )..layout(maxWidth: constraints.maxWidth);
                   final truncated = painter.didExceedMaxLines;
                   painter.dispose();
-                  return truncated
+                  final title = truncated
                       ? Tooltip(
                           message: [
                             name,
@@ -2035,6 +2096,22 @@ class _MachineLine extends StatelessWidget {
                           child: text,
                         )
                       : text;
+                  final problem = view.problem;
+                  if (problem == null) return title;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      title,
+                      Text(
+                        problem,
+                        key: ValueKey('super-machine-problem-${view.id}'),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: DesktopChrome.metadata(),
+                      ),
+                    ],
+                  );
                 },
               ),
             ),
