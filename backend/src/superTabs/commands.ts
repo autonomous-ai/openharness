@@ -1,17 +1,19 @@
 import { createHash } from 'node:crypto'
-import { admitMachineStart, expireRemovals, machineContribution, ownedMachine, type ContributedMachine } from './machines.js'
+import { admitMachineStart, expireRemoval, expireRemovals, machineContribution, machineOffline, ownedMachine, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
   activeWork, actorKey, agent, agentRole, author, conversation, crossProjectActive, fail, isLeads, person, stableId, syncLeads, numberConversations, nextConversationNumber, renderWorkTask,
-  finishWorker, requireWorkerDecisions, reviewing,
+  finishWorker, requireWorkerDecisions, reviewing, AGENT_ONLY,
   type Actor, type Agent, type Author, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSchema } from './routingPolicy.js'
 import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
+import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, type TerminalRequest } from './terminal.js'
+import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { agentKind, agentProjectId, agentSetRole, deleteProject, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
@@ -112,7 +114,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('member.remove'), userId: id }).strict(),
   // Text may be empty when the message carries files; applyCommand checks that one of them is there.
   z.object({ type: z.literal('message.send'), conversationId: id, text: z.string().trim().max(32_000), replyTo: id.nullable(), recipientIds: z.array(id).max(16),
-    attachmentIds: z.array(id).max(MAX_ATTACHMENTS).optional() }).strict(),
+    attachmentIds: z.array(id).max(MAX_ATTACHMENTS).optional(), mentions: z.array(id).max(MAX_MENTIONS).optional(), agentOnly: z.literal(true).optional() }).strict(),
+  z.object({ type: z.literal('mention.done'), mentionId: id }).strict(),
   z.object({ type: z.literal('delivery.resolve'), deliveryId: id, resolution: z.enum(['received', 'resend', 'cancel']) }).strict(),
   z.object({ type: z.literal('work.define'), conversationId: id, brief: text.optional(), task: task.optional(), checks: z.array(check).min(1).max(40) }).strict()
     .refine(c => c.task !== undefined || c.brief !== undefined, 'Provide a task or brief.')
@@ -136,6 +139,57 @@ export const commandSchema = z.discriminatedUnion('type', [
 ])
 export type Command = z.infer<typeof commandSchema>
 export const operationSchema = z.object({ operationId: id, command: commandSchema }).strict()
+
+/** The words in each command that people and agents read in the Swarm: messages, briefs and tasks, results, evidence,
+ *  reasons, errors and names. `[]` is each item of a list. Not `agent.input`: its host types the exact text, and only its
+ *  chat row is redacted (terminal.ts). Not a role's skill text, which only its project's owner, Lead and hosts read. */
+const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
+  'message.send': ['text'],
+  'agent.add': ['name', 'initialMessage'],
+  'agent.start': ['request.name', 'overrideReason'],
+  'agent.startFailed': ['error'],
+  'agent.startSettled': ['warning'],
+  'conversation.create': ['title', 'brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'checks[].description'],
+  'conversation.rename': ['title'],
+  'work.define': ['brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'checks[].description'],
+  'work.assign': ['overrideReason'],
+  'work.status': ['result'],
+  'work.cancel': ['reason'],
+  'work.check': ['evidence'],
+  'project.create': ['name', 'brief'],
+  'project.rename': ['name'],
+  'project.report': ['text'],
+  'rule.set': ['text'],
+  'route.record': ['decision.assessment.why', 'decision.why', 'decision.excluded[].title', 'decision.excluded[].reason',
+    'decision.candidates[].title', 'decision.candidates[].label'],
+  'route.override': ['reason'],
+  'tab.rename': ['name'],
+  'machine.contribute': ['name'],
+  'localModels.status': ['error'],
+}
+
+/** The command with every credential in its words replaced (credentials.ts), adding what went to `removed`. */
+export function withoutCredentials(command: Command, removed: CredentialKind[]): Command {
+  const paths = WORDS[command.type]
+  if (!paths) return command
+  const copy = structuredClone(command)
+  const visit = (holder: Record<string, unknown>, [head, ...rest]: string[]) => {
+    const many = head!.endsWith('[]'), key = many ? head!.slice(0, -2) : head!
+    const redact = (value: unknown, put: (text: string) => void) => {
+      if (rest.length) {
+        if (value && typeof value === 'object') visit(value as Record<string, unknown>, rest)
+      } else if (typeof value === 'string') {
+        const clean = redactCredentials(value)
+        if (clean.removed.length) { put(clean.text); removed.push(...clean.removed) }
+      }
+    }
+    const value = holder[key]
+    if (many && Array.isArray(value)) value.forEach((item, i) => redact(item, text => { value[i] = text }))
+    else if (!many) redact(value, text => { holder[key] = text })
+  }
+  for (const path of paths) visit(copy as Record<string, unknown>, path.split('.'))
+  return copy
+}
 
 export interface CommandContext {
   operationId: string
@@ -163,6 +217,8 @@ export interface CommandContext {
   abandonedStartIds?: string[]
   /** The request an `agent.screenResult` / `agent.inputResult` answers, read from SuperTabTerminalRequest by the store. */
   terminalRequest?: TerminalRequest
+  /** The mention `mention.done` names, read from SuperTabMention by the store. */
+  mention?: MentionTarget
 }
 
 /** Messages in a row between the Lead and its worker after which the Lead's message is no longer delivered automatically. */
@@ -269,6 +325,8 @@ function dropClosing(state: SuperTabState, keep: (request: NonNullable<SuperTabS
  * access after the person has been removed from a private project. */
 export function authorizeCommandAccess(state: SuperTabState, actor: Actor, command: Command, context: Partial<CommandContext> = {}) {
   if (command.type === 'invite.accept' || command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned') return
+  // Marking one's own tag done changes only one's own list, so a viewer may do it too.
+  if (command.type === 'mention.done') return void author(state, actor)
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   author(state, actor, !leaving)
   // An invitation's group is only where the person lands, and invite.create replaces a deleted one (inviteLanding).
@@ -311,7 +369,10 @@ function open(state: SuperTabState, conversationId: string) {
 
 /** Pure policy/state transition. The store commits its state, messages and delivery records in one transaction. */
 export function applyCommand(original: SuperTabState, actor: Actor, input: Command, context: CommandContext): CommandEffects {
-  const command = commandSchema.parse(input)
+  // A credential someone pasted, or an agent echoed from its terminal, is gone before anything is stored or delivered
+  // (Oct 2026: a Harness access token in a shared Lead chat). The sender's result says what went.
+  const removed: CredentialKind[] = []
+  const command = withoutCredentials(commandSchema.parse(input), removed)
   const state = structuredClone(original)
   syncLeads(state)
   numberConversations(state)
@@ -357,6 +418,15 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     return effects
   }
 
+  if (command.type === 'mention.done') {
+    author(state, actor)
+    if (actor.kind !== 'person' || context.mention?.id !== command.mentionId || context.mention.personId !== actor.userId) {
+      fail('NOT_FOUND', 'This mention is unavailable.', 404)
+    }
+    result.mentionId = command.mentionId
+    return effects
+  }
+
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   const sender = author(state, actor, !leaving)
   authorizeCommandAccess(state, actor, command, context)
@@ -365,9 +435,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       brief: group.brief, checks: group.checks, assignment: group.assignment }))
   }
   const message = (conversationId: string, body: string, recipients: string[] = [], replyTo: string | null = null, source?: Record<string, unknown>,
-    attachments?: Attachment[]) => {
+    attachments?: Attachment[], mentions?: string[]) => {
     effects.messages.push({ id: operationId, conversationId, author: sender, text: body, replyTo, recipients, ...(source ? { source } : {}),
-      ...(attachments?.length ? { attachments } : {}) })
+      ...(attachments?.length ? { attachments } : {}), ...(mentions?.length ? { mentions } : {}) })
     result.messageId = operationId
   }
   /** An agent starts or assigns only what the route chose; a person may still do either by hand. */
@@ -451,7 +521,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
 
   /** Takes a machine out of the Swarm with every agent on it (machine.remove, or its owner leaving): each agent is removed
    *  like one agent, its pending starts fail, routing rules lose it, and a contributed machine stays paused and cleaning
-   *  until its host deletes the Swarm's folders there (spec 2026-10-23-remove-machine.md). */
+   *  until its host deletes the Swarm's folders there — or leaves at once when that host is offline
+   *  (spec 2026-10-23-remove-machine.md). */
   const removeMachine = (machineId: string, pool: ContributedMachine | undefined, members: Agent[], how: (machine: string) => string) => {
     const pending = state.starts?.filter(s => s.request.machineId === machineId && !s.harnessId && !s.error) ?? []
     // A launch already under way would arrive with nowhere to go; it finishes in moments.
@@ -495,6 +566,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         text: `${how(machine)}, and ${join} with it.${task ? ` Its task "${group.title}" needs to be assigned again or closed.` : ''}`,
         replyTo: null, recipients: lead ? [lead] : [], source: SYSTEM_ROW })
     }
+    // Its host is offline and cannot acknowledge, so the day-long fallback applies at once: the machine leaves the list
+    // now and its cleanup waits for its next connection (spec 2026-10-23-remove-machine.md).
+    if (pool?.removal && machineOffline(pool, context.now)) expireRemoval(state, pool)
     return removed
   }
 
@@ -532,10 +606,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   switch (command.type) {
     case 'agent.screen':
     case 'agent.input': {
-      const { effect, message } = terminalRequest(state, actor, sender, operationId, context.now, command)
+      const { effect, message, removed: typed } = terminalRequest(state, actor, sender, operationId, context.now, command)
       effects.terminal = effect
       result.requestId = operationId
       if (message) effects.messages.push(message)
+      removed.push(...typed)
       break
     }
     case 'agent.screenResult':
@@ -1176,6 +1251,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const ids = [...new Set(command.attachmentIds ?? [])]
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
+      const mentions = checkMentions(state, actor, group, command.mentions ?? [])
       if (command.replyTo && (!context.reply || context.reply.id !== command.replyTo || context.reply.conversationId !== group.id)) {
         fail('INVALID_REPLY', 'Reply to a message in this conversation.', 400)
       }
@@ -1200,8 +1276,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         agent(state, id)
         if (!group.agentIds.includes(id)) fail('INVALID_RECIPIENT', 'Choose an agent in this conversation.', 400)
       }
+      // A tag would tell a person about a notice they cannot see.
+      if (command.agentOnly && (actor.kind !== 'agent' || recipients.length !== 1 || recipients[0] !== actor.agentId || mentions.length)) {
+        fail('INVALID_RECIPIENT', 'An agent sends an agent-only notice to itself alone.', 400)
+      }
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
-      message(group.id, command.text, recipients, command.replyTo, undefined, attachments)
+      message(group.id, command.text, recipients, command.replyTo, command.agentOnly ? AGENT_ONLY : undefined, attachments, mentions)
       break
     }
     case 'delivery.resolve': {
@@ -1415,6 +1495,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   // MongoDB limits a document to 16 MiB. Leave room for indexes and metadata, and refuse before losing state.
   assignAgentDisplayNames(state.agents)
   if (Buffer.byteLength(JSON.stringify(state)) > 8 * 1024 * 1024) fail('TAB_TOO_LARGE', 'This Super Tab has reached its metadata limit.', 413)
+  // Every row this command writes, whatever its words came from: an older message resent, a rule written before this check.
+  for (const draft of effects.messages) {
+    const clean = redactCredentials(draft.text)
+    if (clean.removed.length) { draft.text = clean.text; removed.push(...clean.removed) }
+  }
+  if (removed.length) Object.assign(result, credentialResult(removed))
   return effects
 }
 

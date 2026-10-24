@@ -16,8 +16,9 @@ export interface ContributedMachine {
   maxAgents: number
   paused: boolean
   observation?: MachineObservation & { receivedAt: number }
-  /** Set by machine.remove: the machine stays listed, paused, while its host deletes the Swarm's folders there, until the
-   *  host says it cleaned up (machine.cleaned) or REMOVAL_FALLBACK_MS passes (expireRemovals). */
+  /** Set by machine.remove: an online machine stays listed, paused, while its host deletes the Swarm's folders there, until
+   *  the host says it cleaned up (machine.cleaned) or REMOVAL_FALLBACK_MS passes. An offline one leaves the list at once and
+   *  its cleanup waits for its host (expireRemovals). */
   removal?: { id: string; state: 'cleaning'; requestedAt: string }
 }
 /** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll. */
@@ -124,11 +125,23 @@ export function removalPreview(state: SuperTabState, actor: Actor, machineId: st
   }
 }
 
-/** A removal its host has not acknowledged in a day: the machine's records go, and the cleanup waits for its host. */
+/** No reading yet, or one older than three missed beats: the machine Desktop shows as offline, and the one a start
+ *  is refused on. Nothing is written while a machine is silent, so this is read from the last reading itself. */
+export function machineOffline(pool: ContributedMachine, now: number): boolean {
+  return !pool.observation || now - pool.observation.receivedAt > MACHINE_FRESH_MS
+}
+
+/** A removal its host cannot acknowledge (offline) or has not acknowledged in a day: the machine's records go, and the
+ *  cleanup waits for its host on its next connection. */
+export function expireRemoval(state: SuperTabState, pool: ContributedMachine): void {
+  (state.machineCleanups ??= []).push({ machineId: pool.machineId, removalId: pool.removal!.id, machineOwnerId: pool.contributorId })
+  state.machines = state.machines!.filter(m => m !== pool)
+}
+
 export function expireRemovals(state: SuperTabState, now: number): void {
-  for (const pool of state.machines?.filter(m => m.removal && now - Date.parse(m.removal.requestedAt) >= REMOVAL_FALLBACK_MS) ?? []) {
-    (state.machineCleanups ??= []).push({ machineId: pool.machineId, removalId: pool.removal!.id, machineOwnerId: pool.contributorId })
-    state.machines = state.machines!.filter(m => m !== pool)
+  for (const pool of state.machines?.filter(m => m.removal
+    && (machineOffline(m, now) || now - Date.parse(m.removal.requestedAt) >= REMOVAL_FALLBACK_MS)) ?? []) {
+    expireRemoval(state, pool)
   }
 }
 
@@ -215,9 +228,7 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   if (refused.length) {
     fail('OUTSIDE_CONTRIBUTION', `${pool.name} accepts only its contributed project folder, engines and default account settings, with full permissions for Swarm agents. Refused: ${refused.join('; ')}.`, 403)
   }
-  if (!pool.observation || now - pool.observation.receivedAt > MACHINE_FRESH_MS) {
-    fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')
-  }
+  if (machineOffline(pool, now)) fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')
   if (!start && machineSlots(state, pool) >= pool.maxAgents) fail('MACHINE_FULL', 'This machine has reached its contributed agent limit.')
   return pool
 }

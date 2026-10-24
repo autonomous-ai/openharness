@@ -48,6 +48,8 @@ describe('built-in Swarm skills', () => {
   // The Local models line (owner, 2026-10-23: the Lead considers Builders on local models; docs/plans/2026-10-23-swarm-local-models.md).
   const local = '- Local models: when the Swarm serves one (a member\'s model, a shared API, a model shared with a member), the route may pick it for low-difficulty, well-specified work; it costs no subscription. Set "local":true in the route only when a person asks for a local model. When a person names a model, set "model" to their words ("deepseek 4.1 flash"): the route then offers that model alone. Start the pick with the gridModel and gridName the route gives, never a model or effort.\n'
   const localDefault = '- Local models: the route may pick one for low-difficulty, well-specified work; set "local":true only when a person asks for one, set "model" to a model a person names, and start it with the route\'s gridModel and gridName.\n'
+  // The approved mention line (spec/2026-10-24-lead-mentions.md, call 5), the Lead's alone, in both modes.
+  const mention = '- When you need a person to act or decide, tag them in the message.\n'
   const twoHours = '- A Builder or Reviewer that has been down for 2 hours (machine offline, session gone or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).\n'
   it.each([
     ['lead', '5fc83d8c43b66b44cdab27b48235dbc86b7ab11a57153edc1ae7e92831642a8e'],
@@ -64,7 +66,8 @@ describe('built-in Swarm skills', () => {
       expect(text.split(terminal)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(overlap)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(local)).toHaveLength(role === 'lead' ? 2 : 1)
-      expect(sha(text.replace(twoHours, '').replace(terminal, '').replace(overlap, '').replace(local, ''))).toBe(sha256)
+      expect(text.split(mention)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(sha(text.replace(twoHours, '').replace(terminal, '').replace(overlap, '').replace(local, '').replace(mention, ''))).toBe(sha256)
     }
   })
   it('adds the 2-hour line to section 7 right after the 6-hour rule', () => {
@@ -83,6 +86,12 @@ describe('built-in Swarm skills', () => {
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
     expect(plain).toContain(`- The brief is all a Builder gets; never rely on chat history.\n${overlap}\n## 4. Keep work moving`)
   })
+  it('adds the mention line right after each Lead skill\'s needs-a-person rule', () => {
+    const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
+    expect(orchestration).toContain(`- Needs-human: get the person's decision now.\n${mention}- Blocked: change something.`)
+    const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
+    expect(plain).toContain(`- Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.\n${mention}- Settle ambiguities`)
+  })
   // The owner's approved Default texts (attached to the spec, 2026-10-23), byte for byte.
   it.each([
     ['lead', 'a7b8aed240f38edda8a461d87ce83499696588b2da41ed261821985caa63e415'],
@@ -95,7 +104,8 @@ describe('built-in Swarm skills', () => {
     expect(text.split(terminal)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(overlap)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(localDefault)).toHaveLength(role === 'lead' ? 2 : 1)
-    expect(sha(text.replace(terminal, '').replace(overlap, '').replace(localDefault, ''))).toBe(sha256)
+    expect(text.split(mention)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(sha(text.replace(terminal, '').replace(overlap, '').replace(localDefault, '').replace(mention, ''))).toBe(sha256)
     expect(prepared.instructions).toBe(`Use the swarm-${role} skill for this session: the team process; otherwise work your usual way. Before working, read ${JSON.stringify(prepared.file)} with your file or shell tool.`)
   })
 

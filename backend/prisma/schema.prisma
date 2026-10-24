@@ -1032,9 +1032,30 @@ model SuperTabMessage {
   attachments     Json?
   replyTo         String?
   recipientIds    String[]
+  /// People a Lead tagged (superTabs/mentions.ts); absent on older rows.
+  mentions        String[]
   createdAt       DateTime @default(now())
 
   @@index([tabId, conversationId, sequence])
+}
+
+/// A Lead's tag of a person, waiting until they reply in that conversation or mark it done (superTabs/mentions.ts).
+/// Kept out of the tab state so an older backend still reads it; removed 30 days after createdAt by a TTL index.
+model SuperTabMention {
+  id             String    @id @map("_id")
+  tabId          String
+  personId       String
+  projectId      String
+  conversationId String
+  messageId      String
+  authorAgentId  String
+  createdAt      DateTime
+  resolvedAt     DateTime?
+  /// reply | done
+  resolvedBy     String?
+
+  @@index([tabId, personId, createdAt])
+  @@index([tabId, conversationId, personId])
 }
 
 /// One uploaded file, which one message of the actor that uploaded it can send once.

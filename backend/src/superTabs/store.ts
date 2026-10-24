@@ -1,11 +1,12 @@
-import { contributedEngines, hostLocalGrid, machineContribution, machineObservationSchema, machineSlots, recordAgentPresence, removalPreview, swarmGridRow, type MachineObservation } from './machines.js'
+import { contributedEngines, expireRemovals, hostLocalGrid, machineContribution, machineObservationSchema, machineSlots, recordAgentPresence, removalPreview, swarmGridRow, type MachineObservation } from './machines.js'
 import { createHash } from 'node:crypto'
-import type { Prisma, PrismaClient, SuperTab, SuperTabDelivery } from '@prisma/client'
+import type { Prisma, PrismaClient, SuperTab, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { machineAlive } from '../lib/prisma.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { applyCommand, authorizeCommandAccess, operationSchema, PAIR_CHAIN_LIMIT, postable, type Command, type CommandContext } from './commands.js'
+import { redactCredentials } from './credentials.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, MAX_ATTACHMENT_BYTES, objectKeyFor, publicUrl, type Attachment, type Attachments } from './attachments.js'
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
@@ -15,7 +16,7 @@ import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import {
-  activeWork, actorKey, agent, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
+  activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
   SuperTabError, isLeads, parkLaterConversations, syncLeads, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
 } from './model.js'
 import { holdNoticeText, type HoldReason } from './holdNotice.js'
@@ -23,6 +24,7 @@ import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, type WorkHold } from '../github/holds.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, type TerminalEffect } from './terminal.js'
 import { closeAssignment, closeUnassignedStart, readDecision, recentRoutes, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
+import { listMentions, markDone, mentionsWaiting, readMention, resolveByReply, writeMentions } from './mentions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
@@ -339,7 +341,8 @@ export class SuperTabStore {
         await tx.superTab.updateMany({ where: { id: tabId, revision: row.revision }, data: { state: json(state) } })
       }
       const visible = visibleState(state, actor, this.now())
-      return { revision: row.revision, state: { ...visible, machines: visible.machines?.map(pool => ({
+      const mentions = actor.kind === 'person' ? { mentionsWaiting: await mentionsWaiting(tx, tabId, state, actor, this.now()) } : {}
+      return { revision: row.revision, state: { ...visible, ...mentions, machines: visible.machines?.map(pool => ({
         ...pool, availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, state.machines!.find(m => m.machineId === pool.machineId)!)),
       })) } }
     })
@@ -475,6 +478,7 @@ export class SuperTabStore {
         context.confirmedStopped = !!proof && !!execution && proof.machineId === execution.machineId &&
           proof.harnessId === execution.harnessId && proof.machineOwnerId === execution.machineOwnerId
       }
+      if (command.type === 'mention.done') context.mention = await readMention(tx, tabId, command.mentionId)
       if (command.type === 'message.send' && command.attachmentIds?.length) context.attachments = await this.sendable(tx, tabId, actor, command)
       if (command.type === 'route.record') context.recentRoutes = await recentRoutes(tx, tabId, context.now)
       if (command.type === 'agent.screen' || command.type === 'agent.input') {
@@ -497,9 +501,11 @@ export class SuperTabStore {
       if (dispatched) context.routeDecision = await readDecision(tx, tabId, dispatched) ?? undefined
       await restorePullRequestUrls(tx, tabId, original)
       const effects = applyCommand(original, actor, command, context)
+      // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
+      const shown = effects.messages.filter(message => !agentOnly(message.source))
       for (const group of effects.state.conversations) {
         appendPullRequestUrls(group, [
-          ...effects.messages.filter(message => message.conversationId === group.id).map(message => message.text),
+          ...shown.filter(message => message.conversationId === group.id).map(message => message.text),
           ...group.checks.map(check => check.evidence), group.assignment?.result,
         ])
       }
@@ -558,8 +564,8 @@ export class SuperTabStore {
           } })
         }
       }
-      for (const message of effects.messages) conversation(effects.state, message.conversationId).lastMessageSequence = revision
-      noteProjectReports(effects.state, effects.messages, revision, context.now)
+      for (const message of shown) conversation(effects.state, message.conversationId).lastMessageSequence = revision
+      noteProjectReports(effects.state, shown, revision, context.now)
       if (command.type === 'agent.release' && command.decision === 'stop') {
         const target = agent(effects.state, command.agentId)
         const assignmentId = `release-${target.releaseId}`
@@ -641,6 +647,9 @@ export class SuperTabStore {
         await closeAssignment(tx, tabId, command.assignmentId, command.status, context.now)
       }
       await this.writeMessages(tx, tabId, effects.state, effects.messages, revision)
+      if (command.type === 'message.send' && actor.kind === 'person') await resolveByReply(tx, tabId, command.conversationId, actor.userId, context.now)
+      await writeMentions(tx, tabId, effects.state, effects.messages, context.now)
+      if (command.type === 'mention.done') await markDone(tx, tabId, command.mentionId, context.mention!.personId, context.now)
       if (context.attachments?.length) {
         // Conflicts with a concurrent send of the same file: only one message can take it.
         const taken = await tx.superTabAttachment.updateMany({ where: { tabId, id: { in: context.attachments.map(a => a.id) }, ...unused },
@@ -723,7 +732,8 @@ export class SuperTabStore {
    * checked before a byte is stored; the row that makes it sendable is written only once the whole file is. */
   async upload(user: AuthUser, tabId: string, conversationId: string, file: { name: string; mime: string; body: Readable }, asAgentId?: string) {
     const attachments = this.attachments ?? fail('ATTACHMENTS_UNAVAILABLE', 'File attachments are not available on this server.', 503)
-    const name = attachmentName.safeParse(file.name), mime = attachmentMime.safeParse(file.mime)
+    // A file's name is shown in the chat like its message, so it never keeps a credential either.
+    const name = attachmentName.transform(value => redactCredentials(value).text).safeParse(file.name), mime = attachmentMime.safeParse(file.mime)
     if (!name.success || !mime.success) fail('INVALID_ATTACHMENT', 'Attach a file with a printable name and a content type.', 400)
     const key = await transaction(this.db, async tx => {
       const { actor } = await this.poster(tx, user, tabId, conversationId, asAgentId)
@@ -916,7 +926,7 @@ export class SuperTabStore {
       await tx.superTabMessage.create({ data: { id: message.id, tabId, conversationId: message.conversationId,
         sequence: revision, author: json(message.author), ...(message.source ? { source: json(message.source) } : {}),
         ...(message.attachments ? { attachments: json(message.attachments) } : {}),
-        text: message.text, replyTo: message.replyTo, recipientIds: message.recipients } })
+        text: message.text, replyTo: message.replyTo, recipientIds: message.recipients, mentions: message.mentions ?? [] } })
       for (const recipient of message.recipients) {
         const target = agent(state, recipient)
         const group = conversation(state, message.conversationId)
@@ -934,19 +944,35 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       const row = await this.row(tx, user, tabId)
       const state = stateOf(row)
-      readConversation(state, await this.actor(tx, user, state, asAgentId), conversationId)
+      const actor = await this.actor(tx, user, state, asAgentId)
+      readConversation(state, actor, conversationId)
       const forward = cursor.after !== undefined
-      const rows = await tx.superTabMessage.findMany({ where: { tabId, conversationId,
+      const where = { tabId, conversationId,
         ...(cursor.messageId ? { id: cursor.messageId } : {}),
-        ...(forward ? { sequence: { gt: cursor.after } } : cursor.before !== undefined ? { sequence: { lt: cursor.before } } : {}) },
-        orderBy: { sequence: forward ? 'asc' : 'desc' }, take: 101 })
+        ...(forward ? { sequence: { gt: cursor.after } } : cursor.before !== undefined ? { sequence: { lt: cursor.before } } : {}) }
+      // An agent-only notice is listed for its own recipient alone. Hidden rows never shorten a page: Desktop reads on from the
+      // last row it shows, so the page reads past them until it has 101 rows this reader may see, or reaches the end.
+      const rows: SuperTabMessage[] = []
+      for (let skip = 0; rows.length <= 100; skip += 101) {
+        const batch = await tx.superTabMessage.findMany({ where, orderBy: { sequence: forward ? 'asc' : 'desc' }, skip, take: 101 })
+        rows.push(...batch.filter(m => !agentOnly(m.source) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId))))
+        if (batch.length < 101) break
+      }
       const page = rows.slice(0, 100)
       const next = rows.length > 100 ? page.at(-1)!.sequence : null
       if (!forward) page.reverse()
       const deliveries = page.length ? await tx.superTabDelivery.findMany({ where: { tabId, messageId: { in: page.map(m => m.id) } },
         select: { id: true, messageId: true, agentId: true, status: true, receipt: true,
           holdReason: true, holdSince: true, deliveredAt: true, answeredAt: true, createdAt: true, updatedAt: true } }) : []
-      return { messages: page.map(m => ({ ...m, deliveries: deliveries.filter(d => d.messageId === m.id) })), next, revision: row.revision }
+      return { messages: page.map(m => ({ ...m, mentions: m.mentions ?? [], deliveries: deliveries.filter(d => d.messageId === m.id) })), next, revision: row.revision }
+    })
+  }
+
+  /** The caller's own tags in this Swarm, newest first: still waiting, or answered and marked done. */
+  async mentions(user: AuthUser, tabId: string, state: 'waiting' | 'earlier') {
+    return transaction(this.db, async tx => {
+      const row = await this.row(tx, user, tabId)
+      return { mentions: await listMentions(tx, tabId, stateOf(row), { kind: 'person', userId: user.sub, email: user.email }, this.now(), state === 'waiting') }
     })
   }
 
@@ -1061,8 +1087,18 @@ export class SuperTabStore {
       if (!pool || pool.contributorId !== user.sub || pool.generation !== observation.generation) fail('CONTRIBUTION_REVOKED', 'Read the current machine contribution.', 403)
       const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
       if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
-      recordAgentPresence(state, machineId, observation.runningHarnessIds, this.now())
-      pool.observation = { ...observation, quotas: observation.quotas.filter(q => contributedEngines(pool, observation).includes(q.engine)), receivedAt: this.now() }
+      const now = this.now()
+      // A machine that went silent while cleaning takes the fallback before this fresh reading can bring it back: its records
+      // go, its cleanup waits for this host, as the next sweep would have done (machines.ts expireRemovals).
+      expireRemovals(state, now)
+      if (!state.machines?.includes(pool)) {
+        await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: {
+          state: json(state), revision: row.revision + 1, ...indexes(state),
+        } })
+        return { revision: row.revision + 1 }
+      }
+      recordAgentPresence(state, machineId, observation.runningHarnessIds, now)
+      pool.observation = { ...observation, quotas: observation.quotas.filter(q => contributedEngines(pool, observation).includes(q.engine)), receivedAt: now }
       // Current-generation physical stop proof also finishes a close whose membership was already withdrawn.
       for (const proof of observation.stoppedReservations ?? []) {
         if (!observation.stoppedHarnessIds.includes(proof.harnessId)) continue
@@ -1279,6 +1315,8 @@ export class SuperTabStore {
   private async holdNotice(tx: Transaction, row: SuperTab, state: SuperTabState, delivery: SuperTabDelivery, reason: HoldReason) {
     const id = stableId('hold-notice', delivery.tabId, delivery.id)
     if (delivery.status !== 'claimed') return { noticed: false }
+    // Nobody can see an agent-only notice, so nobody is told it waits; the host keeps holding it.
+    if (agentOnly((await tx.superTabMessage.findUnique({ where: { id: delivery.messageId }, select: { source: true } }))?.source)) return { noticed: false }
     const notice = await tx.superTabMessage.findUnique({ where: { id } })
     if (notice && delivery.holdReason === reason && delivery.holdSince) return { noticed: false }
     // The notice is only sent once for older Desktops; the inline receipt keeps the current reason.

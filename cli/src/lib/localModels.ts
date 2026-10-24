@@ -26,6 +26,24 @@ const rows = (v: unknown): Record<string, any>[] => Array.isArray(v) ? v.map(obj
 const str = (v: unknown): string => typeof v === 'string' ? v : ''
 const num = (v: unknown): number | undefined => typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined
 const key = (v: string): string => createHash('sha256').update(v).digest('hex').slice(0, 24)
+
+/** The models a grid's known-models file names, each checked: a malformed row is left out, never forwarded as argv. */
+async function readKnown(path: string): Promise<Candidate[]> {
+  try {
+    return rows(JSON.parse(await readFile(path, 'utf8'))).filter(c =>
+      c.id === `local:${c.file}` && basename(str(c.file)) === c.file && validArg(c.file) &&
+      c.pull === '' && typeof c.name === 'string' && c.name.length < 256 && num(c.size) &&
+      Array.isArray(c.files) && c.files.length === 1 && c.files[0] === c.file).map(({ context: _pinned, ...c }) => ({
+        // A saved `context` is dropped, not carried: older receipts pinned 16K, and a model
+        // restarted from one would come back too small for a coding agent. The engine sizes it.
+        ...c,
+        // Older receipts kept only the displayed alias. Preserve that name
+        // when upgrading, and never forward malformed saved argv values.
+        aliases: (Array.isArray(c.aliases) ? c.aliases : [c.name])
+          .filter((alias: unknown): alias is string => typeof alias === 'string' && validArg(alias)),
+      })) as Candidate[]
+  } catch { return [] }
+}
 const cleanName = (v: string): string => basename(v).replace(/\.gguf$/i, '').replace(/-GGUF$/i, '')
 // Grid advertises a GGUF filename as a lowercase model name without its extension.
 const modelKey = (v: string): string => v.toLowerCase().replace(/\.gguf$/, '')
@@ -572,20 +590,15 @@ export class LocalModels {
     const path = join(this.options.stateDir, `${key(grid)}.known.json`)
     let known = this.knownByGrid.get(grid)
     if (!known) {
-      try {
-        known = rows(JSON.parse(await readFile(path, 'utf8'))).filter(c =>
-          c.id === `local:${c.file}` && basename(str(c.file)) === c.file && validArg(c.file) &&
-          c.pull === '' && typeof c.name === 'string' && c.name.length < 256 && num(c.size) &&
-          Array.isArray(c.files) && c.files.length === 1 && c.files[0] === c.file).map(({ context: _pinned, ...c }) => ({
-            // A saved `context` is dropped, not carried: older receipts pinned 16K, and a model
-            // restarted from one would come back too small for a coding agent. The engine sizes it.
-            ...c,
-            // Older receipts kept only the displayed alias. Preserve that name
-            // when upgrading, and never forward malformed saved argv values.
-            aliases: (Array.isArray(c.aliases) ? c.aliases : [c.name])
-              .filter((alias: unknown): alias is string => typeof alias === 'string' && validArg(alias)),
-          })) as Candidate[]
-      } catch { known = [] }
+      known = await readKnown(path)
+      // A file this computer served on another grid is as restartable here: each Swarm has a grid of its own, and a
+      // model run for one was missing from the next one's list, offered again as a download (2026-10-24).
+      const others = await readdir(this.options.stateDir).catch(() => [] as string[])
+      for (const name of others.filter(n => n.endsWith('.known.json') && join(this.options.stateDir, n) !== path).sort()) {
+        for (const candidate of await readKnown(join(this.options.stateDir, name))) {
+          if (!known.some(c => c.file === candidate.file)) known.push(candidate)
+        }
+      }
       this.knownByGrid.set(grid, known)
     }
     let changed = false

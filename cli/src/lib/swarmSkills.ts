@@ -118,6 +118,7 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 ## 7. Run the work
 - When a restart interrupts active work, read the recovery notice and its last recorded checkpoint, then check the agent’s actual session and saved work. Ask it to continue from that checkpoint and report working; either you or the assigned agent can clear the recovery block. Never replay old input or commands: they may already have taken effect. A delayed recording gap after fresh progress is not a new interruption. Keep work already in review in review while you inspect the session. Ordinary typed input, an expired recording view, a missing recorded prompt, or an unclassified gap from an older recorder does not establish that work was interrupted.
 - Needs-human: get the person's decision now.
+- When you need a person to act or decide, tag them in the message.
 - Blocked: change something. Give more context, re-route to a stronger model, cut the work smaller, or fix the plan. Never resend the same thing to the same model.
 - Rulings, not stalls: when a Builder hits an ambiguity you can settle, settle it and record "Ruling: what — why — cost if wrong". Ask the person only what changes what gets built.
 - Each time you are woken, look at active work. Ask a worker with active work that has said nothing for 20 minutes; reassign work that has not moved for 6 hours; report on-screen trust, sign-in or permission questions in chat, naming the machine owner who can answer.
@@ -397,6 +398,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 - A Builder or Reviewer that has been down for 2 hours (its machine offline, its session gone, or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).
 - Work with no progress for 6 hours goes back to you: reassign it or cut it smaller.
 - Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.
+- When you need a person to act or decide, tag them in the message.
 - Settle ambiguities you can and record "Ruling: what — why — cost if wrong".
 - When a worker finishes: reuse, keep or stop. Prefer stop.
 

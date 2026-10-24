@@ -20,6 +20,7 @@ import 'dialog_scope.dart';
 import 'model.dart';
 import 'message_row.dart';
 import 'message_receipt.dart';
+import 'notifications.dart';
 import 'route_row.dart';
 import 'terminal_row.dart';
 import 'work_details.dart';
@@ -79,6 +80,10 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _sidebarOpen = false;
   bool _rosterOpen = false;
   bool _showPullRequests = false;
+  bool _showNotifications = false;
+  // The message a tag opened, scrolled to once it is laid out.
+  String? _target;
+  final _targetKey = GlobalKey();
   bool _viewEnabled = true;
   bool _chatCovered = false;
   final _loadingOlder = <String>{};
@@ -238,7 +243,8 @@ class _SuperTabViewState extends State<SuperTabView>
         c.accessRevoked ||
         _devicesVisible ||
         _terminalsVisible ||
-        _showPullRequests) {
+        _showPullRequests ||
+        _showNotifications) {
       return false;
     }
     final lifecycle = WidgetsBinding.instance.lifecycleState;
@@ -700,23 +706,105 @@ class _SuperTabViewState extends State<SuperTabView>
     onAddAgent: widget.onAddAgent,
     onNewProject: widget.onNewProject,
     devicesSelected: _devicesVisible,
+    notificationsSelected: _notificationsVisible,
+    onNotifications: () {
+      _closeSidebar();
+      setState(() {
+        _showNotifications = true;
+        _showPullRequests = false;
+      });
+      widget.onCloseTerminal?.call();
+    },
     onOpenAgent: (agent) {
       _closeSidebar();
-      setState(() => _showPullRequests = false);
+      setState(() {
+        _showPullRequests = false;
+        _showNotifications = false;
+      });
       (widget.onChooseAgentTerminal ?? widget.onOpenTerminal)(agent);
     },
     onYourDevices: widget.app?.devicesEnabled != true
         ? null
         : () {
             _closeSidebar();
+            setState(() => _showNotifications = false);
             widget.app!.openDevices();
           },
     needsHuman: (group) => _needsHuman(group).length,
     onSelect: (id) {
+      setState(() => _showNotifications = false);
       c.select(id);
       _closeSidebar();
     },
   );
+
+  bool get _notificationsVisible =>
+      _showNotifications && !_devicesVisible && !c.accessRevoked;
+
+  /// Opens the conversation a tag is in, at its message, replying to it. Older
+  /// pages are read first, until the message is among them; one that is not
+  /// found says so, and the list stays.
+  Future<void> _openMention(SuperTabMention mention) async {
+    final id = mention.conversationId;
+    if (c.snapshot?.conversation(id) == null) return;
+    SuperTabMessage? message;
+    // Up to 50 pages (5,000 messages) back.
+    for (var page = 0; page < 50; page++) {
+      await c.loadMessages(id, older: c.messages(id).isNotEmpty);
+      if (!mounted) return;
+      message = c
+          .messages(id)
+          .where((m) => m.id == mention.messageId)
+          .firstOrNull;
+      if (message != null || !c.hasOlder(id)) break;
+    }
+    if (message == null) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: Text(
+            c.hasOlder(id)
+                ? 'This message is too far back to open.'
+                : 'This message is no longer in the conversation.',
+          ),
+        ),
+      );
+      return;
+    }
+    if (!_showNotifications) return;
+    _showNotifications = false;
+    c.select(id);
+    setState(() {
+      if (c.canWrite && c.selected?.archived == false) _replies[id] = message!;
+      _target = message!.id;
+      // Stop following the end: the tagged message is what to see.
+      _scrollRequest++;
+      _jumpingToEnd = false;
+      _following[id] = false;
+    });
+    _revealTarget(id, 0);
+    _focus.requestFocus();
+  }
+
+  /// The list is lazy: jump near the target until its row is built, then
+  /// bring it into view.
+  void _revealTarget(String id, int attempt) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || c.selectedId != id || _target == null) return;
+      if (_targetKey.currentContext case final target?) {
+        unawaited(Scrollable.ensureVisible(target, alignment: .3));
+        return;
+      }
+      final scroll = _scroll[id];
+      final messages = c.messages(id);
+      final index = messages.indexWhere((m) => m.id == _target);
+      if (scroll == null || !scroll.hasClients || index < 0 || attempt > 20) {
+        return;
+      }
+      scroll.jumpTo(scroll.position.maxScrollExtent * index / messages.length);
+      _revealTarget(id, attempt + 1);
+    });
+    WidgetsBinding.instance.scheduleFrame();
+  }
 
   List<SuperTabAgent> _needsHuman(SuperTabConversation group) =>
       c.snapshot?.agents
@@ -779,6 +867,8 @@ class _SuperTabViewState extends State<SuperTabView>
                     Text(
                       _devicesVisible
                           ? 'Your devices'
+                          : _notificationsVisible
+                          ? 'Notifications'
                           : group == null
                           ? c.snapshot?.projects.isEmpty == true
                                 ? c.snapshot!.name
@@ -792,7 +882,7 @@ class _SuperTabViewState extends State<SuperTabView>
                       overflow: TextOverflow.ellipsis,
                       style: DesktopChrome.text(medium: true),
                     ),
-                    if (!_devicesVisible)
+                    if (!_devicesVisible && !_notificationsVisible)
                       if (c.reviewLine(group) case final line?)
                         Text(
                           line,
@@ -805,7 +895,9 @@ class _SuperTabViewState extends State<SuperTabView>
                 ),
               ),
             ),
-            if (group != null && !_devicesVisible) ...[
+            if (group != null &&
+                !_devicesVisible &&
+                !_notificationsVisible) ...[
               AppIconButton(
                 key: const ValueKey('super-chat'),
                 icon: AppIcons.messageSquare,
@@ -989,6 +1081,13 @@ class _SuperTabViewState extends State<SuperTabView>
       key: ValueKey('super-message-${message.id}'),
       message: message,
       author: _shownAuthor(c, message),
+      // A person is named by their address's first part, as people say it.
+      mentions: [
+        for (final id in message.mentions)
+          if (c.snapshot?.people.where((p) => p.id == id).firstOrNull
+              case final person?)
+            person.email.split('@').first,
+      ],
       references: {
         for (final g in c.snapshot?.conversations ?? <SuperTabConversation>[])
           if (g.number != null) g.number!: g.id,
@@ -1216,11 +1315,16 @@ class _SuperTabViewState extends State<SuperTabView>
                                         : () => _openAgent(agent),
                                   )
                                 else
-                                  _message(
-                                    message,
-                                    grouped.contains(message.id),
-                                    byId,
-                                    showReceipt: message.id == latestOwn?.id,
+                                  KeyedSubtree(
+                                    key: message.id == _target
+                                        ? _targetKey
+                                        : null,
+                                    child: _message(
+                                      message,
+                                      grouped.contains(message.id),
+                                      byId,
+                                      showReceipt: message.id == latestOwn?.id,
+                                    ),
                                   ),
                               ],
                             );
@@ -1264,6 +1368,15 @@ class _SuperTabViewState extends State<SuperTabView>
                     child: const Text('Retry'),
                   ),
               ],
+            ),
+          )
+        else if (c.operationNotice != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Text(
+              c.operationNotice!,
+              key: const ValueKey('super-operation-notice'),
+              style: DesktopChrome.control(),
             ),
           ),
         if (reply != null)
@@ -1636,6 +1749,8 @@ class _SuperTabViewState extends State<SuperTabView>
                     child: IndexedStack(
                       index: _devicesVisible
                           ? 1
+                          : _notificationsVisible
+                          ? 3
                           : c.snapshot?.projects.isEmpty == true
                           ? 0
                           : _terminalsVisible
@@ -1651,6 +1766,13 @@ class _SuperTabViewState extends State<SuperTabView>
                                 controller: c,
                                 app: widget.app,
                                 visible: !_terminalsVisible,
+                              )
+                            : const SizedBox.shrink(),
+                        _notificationsVisible
+                            ? SuperTabNotifications(
+                                mentions: SuperTabMentions.of(c),
+                                onOpen: (mention) =>
+                                    unawaited(_openMention(mention)),
                               )
                             : const SizedBox.shrink(),
                       ],

@@ -229,7 +229,12 @@ export interface MessageDraft {
   /** Structured row kind for clients; `native` is written by native.ts, `route`/`route-override` by commands. */
   source?: Record<string, unknown>
   attachments?: import('./attachments.js').Attachment[]
+  /** People a Lead tagged (mentions.ts). */
+  mentions?: string[]
 }
+/** A notice for one agent alone (a skill update): delivered to it like any message, never shown to people or other agents. */
+export const AGENT_ONLY = { kind: 'agent-only' }
+export const agentOnly = (source: unknown): boolean => (source as { kind?: unknown } | null | undefined)?.kind === AGENT_ONLY.kind
 export interface CommandEffects {
   state: SuperTabState
   messages: MessageDraft[]
@@ -398,8 +403,9 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   delete visible.overlapAlerts
   // Only that machine's host roster lists them (store.ts hostTabs); a removed private agent's session is not every member's.
   delete visible.closingSessions
-  delete visible.machineCleanups
   expireRemovals(visible, now)
+  // A read never hands out the cleanup records it just applied (store.ts hostTabs delivers them to the machine's host).
+  delete visible.machineCleanups
   delete visible.parkedConversations
   numberConversations(visible)
   delete visible.retiredConversationNumber
