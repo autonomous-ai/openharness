@@ -29,6 +29,14 @@ describe('mintTeamHandoff', () => {
     expect(post).toHaveBeenCalledWith('/api/auth/handoff', { kind: 'team' }, headers)
   })
 
+  // One machine (docs/plans/2026-10-24-swarm-team-account.md): the team machine records the Mac it lives on, so every
+  // list shows that Mac once. The backend checks the machine is one of the account's own.
+  it('names this computer\'s own machine as the Mac the team account lives on, once it has one', async () => {
+    const post = vi.fn(async () => ({ code: CODE, expiresIn: 90 }))
+    await mintTeamHandoff(async () => ({ session: { ...computer, machineId: 'machine-placeholder-1' }, headers }), post as never)
+    expect(post).toHaveBeenCalledWith('/api/auth/handoff', { kind: 'team', hostMachineId: 'machine-placeholder-1' }, headers)
+  })
+
   it('refuses a team sign-in, a signed-out computer and an answer without a code', async () => {
     const post = vi.fn(async () => ({ code: CODE }))
     await expect(mintTeamHandoff(async () => ({ session: { ...computer, kind: 'team' }, headers }), post as never)).rejects.toMatchObject({ code: 'TEAM_SESSION' })

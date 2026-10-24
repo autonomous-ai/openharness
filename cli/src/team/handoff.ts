@@ -61,10 +61,12 @@ async function signedIn(auth: () => Promise<SignedIn>): Promise<SignedIn> {
   return answer
 }
 
-/** A team handoff code from this computer's own sign-in. Refused for a team sign-in: it may not hand one out. */
+/** A team handoff code from this computer's own sign-in. Refused for a team sign-in: it may not hand one out. It names this
+ *  computer's machine as the Mac the team account lives on, which the backend checks is one of the account's own and the team
+ *  machine records, so every list shows this Mac once (docs/plans/2026-10-24-swarm-team-account.md, "One machine"). */
 export async function mintTeamHandoff(auth: () => Promise<SignedIn>, post: Post): Promise<{ code: string; expiresIn: number }> {
-  const { headers } = await signedIn(auth)
-  return requestCode(post, { kind: 'team' }, headers)
+  const { session, headers } = await signedIn(auth)
+  return requestCode(post, { kind: 'team', ...(session.machineId ? { hostMachineId: session.machineId } : {}) }, headers)
 }
 
 export interface ConversionDeps {

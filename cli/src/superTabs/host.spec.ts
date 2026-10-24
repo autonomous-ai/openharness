@@ -1121,6 +1121,64 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
   })
 })
 
+// One machine (docs/plans/2026-10-24-swarm-team-account.md): this Mac's Harness Team account is this Mac under the scenes.
+// Where its owner added this Mac, the roster names the team account still missing (backend store.ts hostTabs `joinTeam`);
+// the team account prepares its own workspace, asked through the relay, and this host adds it as the person.
+describe('adding this Mac\'s Harness Team account where this Mac was added', () => {
+  function joining() {
+    const dir = mkdtempSync(join(tmpdir(), 'super-tab-team-join-')); roots.push(dir)
+    const rows: Record<string, unknown>[] = [{ tabId: 'own', joinTeam: { machineId: 'team-1', name: 'MacBook Pro', maxAgents: 4 } }, { tabId: 'other', joinTeam: {} }]
+    const commands: unknown[] = [], refusals: string[] = []
+    let clock = 0
+    const call: CoreApi['account']['backend'] = vi.fn(async (method, path, body) => {
+      if (path.endsWith('/commands')) {
+        commands.push({ path, ...(body as object) })
+        const code = refusals.shift()
+        if (code) return { status: 409, body: { success: false, error: { code, message: `Refused: ${code}` } } }
+        return { status: 200, body: { success: true, data: {} } }
+      }
+      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? rows : [] } }
+    })
+    const core = fakeCore({ dataDir: dir, account: { backend: call, machineName: vi.fn(() => 'MacBook Pro') } })
+    const prepareTeam = vi.fn(async () => ({ ok: true, state: 'ready', cwd: '/Users/harnessteam/harnesses/swarms/own', engines: ['claude'], maxAgents: 8, scope: 'swarm' }))
+    const prepare = vi.fn()
+    const log = vi.fn()
+    const host = new SuperTabHost(core, 'machine-1', { log, now: () => clock, prepareContribution: prepare as never, prepareTeam }); hosts.push(host)
+    const pass = async (at: number) => {
+      clock = at
+      const tries = prepareTeam.mock.calls.length, heard = commands.length + log.mock.calls.length
+      await host.tick()
+      if (prepareTeam.mock.calls.length > tries) await vi.waitFor(() => expect(commands.length + log.mock.calls.length).toBeGreaterThan(heard))
+    }
+    return { core, rows, commands, refusals, prepareTeam, prepare, log, pass }
+  }
+
+  it('adds it once, prepared by its own daemon, with this Mac\'s name and slots', async () => {
+    const t = joining()
+    await t.pass(0)
+    expect(t.prepareTeam).toHaveBeenCalledExactlyOnceWith(t.core, { tabId: 'own', machineId: 'team-1' })
+    expect(t.prepare).not.toHaveBeenCalled()
+    expect(t.commands).toEqual([{ path: '/api/super-tabs/own/commands', operationId: expect.any(String), command: { type: 'machine.contribute',
+      machineId: 'team-1', name: 'MacBook Pro', cwd: '/Users/harnessteam/harnesses/swarms/own', scope: 'swarm', engines: ['claude'], maxAgents: 4, ifMissing: true } }])
+    t.rows.splice(0, 1)
+    await t.pass(120_000)
+    expect(t.prepareTeam).toHaveBeenCalledTimes(1)
+  })
+
+  it('backs off while the team account cannot prepare (offline, signed out), and says why', async () => {
+    const t = joining()
+    t.prepareTeam.mockRejectedValueOnce(new Error('That machine is not reachable now.'))
+    await t.pass(0)
+    expect(t.commands).toEqual([])
+    expect(t.log).toHaveBeenCalledWith('Could not add this Mac\'s Harness Team account to its Swarm: That machine is not reachable now.')
+    await t.pass(59_000)
+    expect(t.prepareTeam).toHaveBeenCalledTimes(1)
+    await t.pass(60_000)
+    expect(t.prepareTeam).toHaveBeenCalledTimes(2)
+    expect(t.commands).toHaveLength(1)
+  })
+})
+
 describe('built-in skill text after a CLI update', () => {
   const older = '---\nname: swarm-dev\n---\nAn older release of this skill.\n'
   function syncFixture(stale = true, mode?: 'default' | 'orchestration') {

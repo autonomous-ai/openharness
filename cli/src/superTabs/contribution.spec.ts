@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
-import { ContributionPreparations, prepareContribution } from './contribution.js'
+import { ContributionPreparations, prepareContribution, prepareTeamContribution } from './contribution.js'
 import { mkdtemp, rm, stat } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -38,6 +38,23 @@ describe('one-field machine preparation', () => {
       expect((await stat(cwd)).isDirectory()).toBe(true)
       expect(f.deps.prepare).not.toHaveBeenCalled()
       expect(f.deps.capacity).toHaveBeenCalledWith({ cwd, tools: ['git'], devices: [] })
+    } finally {
+      await rm(join(homedir(), 'harnesses', 'swarms', 'tab'), { recursive: true, force: true })
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+  // A Mac's Harness Team account reads no Swarm as the person (backend lib/teamSession.ts): its Mac's daemon adds it, and it
+  // prepares its own swarm workspace without that read ("One machine", docs/plans/2026-10-24-swarm-team-account.md).
+  it('prepares a Harness Team account\'s swarm workspace without reading the Swarm, and only that', async () => {
+    const f = fixture()
+    const dataDir = await mkdtemp(join(tmpdir(), 'harness-swarm-contribution-'))
+    try {
+      const core = fakeCore({ dataDir })
+      const team = { ...f.deps, team: () => true }
+      const result = await prepareContribution(core, { tabId: 'tab', scope: 'swarm' }, team as never)
+      expect(result).toMatchObject({ scope: 'swarm', cwd: join(homedir(), 'harnesses', 'swarms', 'tab'), engines: ['claude', 'codex'] })
+      expect(f.deps.backend).not.toHaveBeenCalled()
+      await expect(prepareContribution(core, { tabId: 'tab' }, team as never)).rejects.toThrow('swarm')
     } finally {
       await rm(join(homedir(), 'harnesses', 'swarms', 'tab'), { recursive: true, force: true })
       await rm(dataDir, { recursive: true, force: true })
@@ -127,5 +144,35 @@ describe('one-field machine preparation', () => {
     expect(jobs.read({ tabId: 'tab' })).toEqual({ error: 'INVALID_REQUEST' })
     for (let i = 0; i < 32; i++) jobs.read({ tabId: 'tab', operationId: `setup-${i}` })
     expect(jobs.read({ tabId: 'tab', operationId: 'extra' })).toMatchObject({ error: 'SETUP_BUSY' })
+  })
+})
+
+describe('this Mac\'s Harness Team account preparing through the relay', () => {
+  function relay(answers: Record<string, unknown>[]) {
+    const core = fakeCore()
+    const request = vi.fn(async () => answers.shift() ?? { ok: true, state: 'preparing' })
+    const close = vi.fn()
+    const open = vi.fn(async () => ({ machineId: 'team-1', request, close }))
+    let clock = 0
+    const deps = { open, sleep: vi.fn(async () => { clock += 1_000 }), deadlineMs: 3_000, now: () => clock }
+    return { core, request, close, open, deps }
+  }
+
+  it('asks the team account\'s own daemon, keeps one receipt while it prepares, and closes the line', async () => {
+    const r = relay([{ ok: true, state: 'preparing' }, { ok: true, state: 'ready', scope: 'swarm', cwd: '/Users/harnessteam/harnesses/swarms/tab', engines: ['codex'] }])
+    expect(await prepareTeamContribution(r.core, { tabId: 'tab', machineId: 'team-1' }, r.deps as never)).toMatchObject({ cwd: '/Users/harnessteam/harnesses/swarms/tab' })
+    expect(r.open).toHaveBeenCalledWith({ dataDir: r.core.dataDir, port: r.core.daemon.port, machineId: r.core.daemon.machineId() }, 'team-1')
+    const [first, second] = r.request.mock.calls as unknown as [string, Record<string, unknown>][]
+    expect(first![1]).toMatchObject({ action: 'prepareContribution', tabId: 'tab', scope: 'swarm' })
+    expect(second![1].operationId).toBe(first![1].operationId)
+    expect(r.close).toHaveBeenCalledOnce()
+  })
+
+  it('says why it could not, and gives up after its deadline', async () => {
+    const failed = relay([{ error: 'SETUP_FAILED', detail: 'Install Claude Code or Codex on this machine, then try again.' }])
+    await expect(prepareTeamContribution(failed.core, { tabId: 'tab', machineId: 'team-1' }, failed.deps as never)).rejects.toThrow('Install Claude Code or Codex')
+    const slow = relay([])
+    await expect(prepareTeamContribution(slow.core, { tabId: 'tab', machineId: 'team-1' }, slow.deps as never)).rejects.toThrow('still preparing')
+    expect(slow.close).toHaveBeenCalledOnce()
   })
 })
