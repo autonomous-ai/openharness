@@ -788,6 +788,11 @@ export function engineFallbackPrelude(engine: AgentEngine, shellPath: string, tm
  *    plain SIGCONT, only after a stop of its own, so one stopped from outside under bash comes back
  *    to a line-mode terminal until it sets its modes again: accepted, and the e2e shows it. Ctrl+Z is
  *    not affected: the engine gave the terminal back and takes it again itself.
+ *  - bash 5.3 holds back its report of a stopped foreground job ("[1]+  Stopped") for the next
+ *    prompt, which a pane never shows: the engine stopped and came back with nothing said, and Codex
+ *    prints nothing of its own (Ubuntu 26.04's bash 5.3.9; #1612). So under bash the resume reports a
+ *    stop bash has not reported yet (`jobs -n`): once, on 5.3, and nothing on 5.2 or 3.2, which have.
+ *    It comes before the check that the job is there, since that plain `jobs` counts as a report.
  *  - A stop of a process below the engine's own is seen by no shell, as one below a pane's process
  *    is seen by no tmux: npm's Codex is a Node wrapper with the native engine as its child, and a
  *    SIGSTOP of that child alone leaves it stopped. Its Ctrl+Z stops the whole group, wrapper too.
@@ -809,7 +814,9 @@ const STOP_PROOF_FUNCTIONS = [
   '  [ "$harness_status" -gt 128 ] 2>/dev/null || return 1',
   '  harness_signal=$(kill -l "$harness_status" 2>/dev/null) || return 1',
   '  case $harness_signal in',
-  '    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU) jobs %% >/dev/null 2>&1 ;;',
+  '    STOP|TSTP|TTIN|TTOU|SIGSTOP|SIGTSTP|SIGTTIN|SIGTTOU)',
+  '      if [ -n "${BASH_VERSION:-}" ]; then jobs -n %% 2>/dev/null || :; fi',
+  '      jobs %% >/dev/null 2>&1 ;;',
   '    *) return 1 ;;',
   '  esac',
   '}',
