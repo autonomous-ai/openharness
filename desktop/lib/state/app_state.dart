@@ -329,6 +329,8 @@ class AgentCreationAttempt {
 
   bool get awaitingConfirmation => _awaitingConfirmation;
   bool get canCancelPending => _awaitingConfirmation && _holdReason != null;
+  bool get canFollowPending =>
+      _awaitingConfirmation && (_starting || _holdReason != null);
 
   /// The machine's code for a request it refused before launching anything,
   /// such as `SESSION_BUSY_IN_TERMINAL`: what a caller can offer next.

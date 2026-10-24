@@ -174,13 +174,14 @@ class NewHarnessFormState extends State<NewHarnessForm> {
 
   Timer? _heldFollow;
 
-  /// A request the machine holds starts by itself (an agent it is installing,
-  /// a model waking). Asked after while this form is open, so the harness
+  /// A request the machine holds or is starting completes by itself (an agent
+  /// installing, a model waking, a worktree being made). Asked after while
+  /// this form is open, including after the initial startup wait, so the harness
   /// opens when it has started; before, it started with no pane and the form
   /// went on saying it would, until Check status was pressed
   /// ([NewHarnessController.followHeld]).
   void _followHeld() {
-    if (!box.canCancelPending) {
+    if (!box.canFollowPending) {
       _heldFollow?.cancel();
       _heldFollow = null;
       return;
