@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../core/viewer_mode.dart';
 import '../ws/ws_conn.dart';
 import '../measurement/product_measurement.dart';
 import 'shared_tabs_model.dart';
@@ -9,6 +10,15 @@ import 'shared_tabs_model.dart';
 typedef SharedTabsRequest = Future<Map<String, dynamic>> Function(
   Map<String, dynamic> payload,
 );
+
+/// The line for a computer that holds the shared tabs and did not answer. On Desktop that is this
+/// computer's daemon. A browser runs none: it asks one of the account's computers, so it names
+/// none as "this computer".
+String unreachableComputerFor({required bool viewer}) =>
+    'Harness could not reach ${viewer ? 'your' : 'this'} computer. Check that it is online, then try again.';
+
+/// [unreachableComputerFor] for this build.
+final String unreachableComputer = unreachableComputerFor(viewer: kViewerMode);
 
 /// A refused `share_*` action, with the daemon's code and a sentence to read.
 class SharedTabsFailure implements Exception {
@@ -366,10 +376,7 @@ class SharedTabsController extends ChangeNotifier {
       );
     } catch (_) {
       // A timeout, a closed socket or a session not ready: this computer's daemon was not reached.
-      throw const SharedTabsFailure(
-        'UNAVAILABLE',
-        'Harness could not reach this computer. Check that it is online, then try again.',
-      );
+      throw SharedTabsFailure('UNAVAILABLE', unreachableComputer);
     }
   }
 

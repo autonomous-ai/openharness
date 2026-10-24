@@ -68,6 +68,7 @@ class WorkspaceChrome {
     this.menuOnEveryTab = false,
     this.labelsPaneStatus = false,
     this.compactPaneHeader = false,
+    this.superTabRecovers = false,
   });
 
   /// What a workspace with no host chrome (Desktop) reads: every switch at
@@ -135,6 +136,12 @@ class WorkspaceChrome {
   /// True draws a denser pane header below [compactBelow]: the harness name
   /// first, agent and model behind one control. Audit finding S2.
   final bool compactPaneHeader;
+
+  /// True gives a Swarm tab's states a way forward: a first read that failed
+  /// is the error and Retry in place of the conversation (no "Loading" beside
+  /// it), and "Create a project to get started." carries New project. Audit
+  /// findings S12, P5.
+  final bool superTabRecovers;
 
   /// Whether a window [width] wide gets the compact pane header.
   bool compactPaneHeaderAt(double width) =>

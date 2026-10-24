@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/agent_messages/shared_tabs.dart' show SharedTabsFailure;
+import 'package:harness/agent_messages/shared_tabs.dart'
+    show SharedTabsFailure, unreachableComputerFor;
 import 'package:harness/agent_messages/tab_activity.dart';
 import 'package:harness/ws/ws_conn.dart' show WsRequestFailure;
 
@@ -84,6 +85,26 @@ void main() {
     await expectLater(
       down.read('t'),
       throwsA(isA<SharedTabsFailure>().having((e) => e.code, 'code', 'UNAVAILABLE')),
+    );
+    // On Desktop the daemon asked is this computer's, and the line says so, as it always has.
+    await expectLater(
+      down.read('t'),
+      throwsA(isA<SharedTabsFailure>().having(
+        (e) => e.message,
+        'message',
+        'Harness could not reach this computer. Check that it is online, then try again.',
+      )),
+    );
+  });
+
+  test('a browser is not a computer: it says your computer instead (P3)', () {
+    expect(
+      unreachableComputerFor(viewer: true),
+      'Harness could not reach your computer. Check that it is online, then try again.',
+    );
+    expect(
+      unreachableComputerFor(viewer: false),
+      'Harness could not reach this computer. Check that it is online, then try again.',
     );
   });
 }

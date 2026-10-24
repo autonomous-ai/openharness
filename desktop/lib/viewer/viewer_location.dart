@@ -60,6 +60,10 @@ class ViewerLocation {
     return uri.toString();
   }
 
+  /// The workspace a viewer link was opened from: the same origin and path,
+  /// without the link's query or fragment.
+  static Uri workspaceOf(Uri uri) => Uri.parse('${uri.origin}${uri.path}');
+
   /// OAuth restores its destination before signed-in bootstrap. Until that happens, no callback
   /// tab should restore or claim a terminal from the saved workspace.
   static bool workspaceAllowed(Uri uri) =>

@@ -37,39 +37,67 @@ class NewDeviceNotice extends StatelessWidget {
           ),
           child: Padding(
             padding: EdgeInsets.fromLTRB(14 + trafficLightClearance, 7, 10, 7),
-            child: Row(
-              children: [
-                Icon(AppIcons.shield, size: 16, color: grid.AppPalette.warn),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    '${notice.sentence}${more > 0 ? ' (+$more more)' : ''} Not yours? Remove it.',
-                    key: const Key('new-device-notice'),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: grid.AppType.body(color: grid.AppPalette.textPrimary),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final icon = Icon(AppIcons.shield, size: 16, color: grid.AppPalette.warn);
+                final phone = constraints.maxWidth < _phoneBelow;
+                final sentence = Text(
+                  '${notice.sentence}${more > 0 ? ' (+$more more)' : ''} Not yours? Remove it.',
+                  key: const Key('new-device-notice'),
+                  maxLines: phone ? null : 1,
+                  overflow: phone ? TextOverflow.clip : TextOverflow.ellipsis,
+                  style: grid.AppType.body(color: grid.AppPalette.textPrimary),
+                );
+                // A phone gets a thumb's target; Desktop keeps the theme's compact buttons.
+                final thumb = phone ? const ButtonStyle(tapTargetSize: MaterialTapTargetSize.padded) : null;
+                final buttons = [
+                  TextButton(
+                    key: const Key('new-device-dismiss'),
+                    style: thumb,
+                    // A fork's suspension is not the banner's to lift (it would be back on the next read):
+                    // that device's own page shows it, and lifts it there.
+                    onPressed: notice.suspended
+                        ? () => unawaited(showAccountDeviceDetail(context, notifier, pub: notice.pub, isNew: true))
+                        : () => notifier.dismissNewDevice(notice.pub),
+                    child: const Text('It’s mine'),
                   ),
-                ),
-                const SizedBox(width: 12),
-                TextButton(
-                  key: const Key('new-device-dismiss'),
-                  // A fork's suspension is not the banner's to lift (it would be back on the next read):
-                  // that device's own page shows it, and lifts it there.
-                  onPressed: notice.suspended
-                      ? () => unawaited(showAccountDeviceDetail(context, notifier, pub: notice.pub, isNew: true))
-                      : () => notifier.dismissNewDevice(notice.pub),
-                  child: const Text('It’s mine'),
-                ),
-                const SizedBox(width: 6),
-                OutlinedButton(
-                  key: const Key('new-device-review'),
-                  // One new device goes straight to its key code; several go to Machines, where each is a row.
-                  onPressed: () => more == 0
-                      ? unawaited(showAccountDeviceDetail(context, notifier, pub: notice.pub, isNew: true))
-                      : openMachines(context, notifier, devicePub: notice.pub),
-                  child: Text(more == 0 ? 'Review' : 'Review devices'),
-                ),
-              ],
+                  OutlinedButton(
+                    key: const Key('new-device-review'),
+                    style: thumb,
+                    // One new device goes straight to its key code; several go to Machines, where each is a row.
+                    onPressed: () => more == 0
+                        ? unawaited(showAccountDeviceDetail(context, notifier, pub: notice.pub, isNew: true))
+                        : openMachines(context, notifier, devicePub: notice.pub),
+                    child: Text(more == 0 ? 'Review' : 'Review devices'),
+                  ),
+                ];
+                // A phone has no room for the sentence beside its buttons, and the person must read
+                // all of it before saying the device is theirs: it wraps, and the buttons go under it.
+                if (phone) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [icon, const SizedBox(width: 10), Expanded(child: sentence)],
+                      ),
+                      const SizedBox(height: 6),
+                      Wrap(alignment: WrapAlignment.end, spacing: 6, runSpacing: 6, children: buttons),
+                    ],
+                  );
+                }
+                return Row(
+                  children: [
+                    icon,
+                    const SizedBox(width: 10),
+                    Expanded(child: sentence),
+                    const SizedBox(width: 12),
+                    buttons.first,
+                    const SizedBox(width: 6),
+                    buttons.last,
+                  ],
+                );
+              },
             ),
           ),
         ),
@@ -77,6 +105,10 @@ class NewDeviceNotice extends StatelessWidget {
     );
   }
 }
+
+/// Below this window width the band stacks its sentence above its buttons: the phone layout's
+/// width. A Desktop window is never this narrow (`desktop_window.dart` sets 880), so it keeps one line.
+const double _phoneBelow = 720;
 
 /// The same band, for the other things about the account's devices worth a line across the window
 /// (a removal, a departed key, a held computer id): [text], and one or two buttons. [red] is for what looks like someone else acting.
