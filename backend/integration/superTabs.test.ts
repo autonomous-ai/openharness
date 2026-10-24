@@ -2537,6 +2537,12 @@ describe('machine removal', () => {
     const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
     await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
     await run(tab, { type: 'machine.contribute', machineId: 'test-host', name: 'Host', cwd: '/fixture/repo', engines: ['codex'], maxAgents: 4 }, host)
+    // Its host is here and reporting, so removing it waits for that host to acknowledge.
+    const machine = (await store.hostPools(host, 'test-host')).find(pool => pool.tabId === tab)!.machine
+    await store.observeMachine(host, tab, 'test-host', { generation: machine.generation,
+      resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
+        projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+      quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
     return tab
   }
   const cleanups = async (tab: string, from = store) => (await from.hostTabs(host, 'test-host')).filter(r => r.tabId === tab && 'cleanup' in r)

@@ -1505,10 +1505,15 @@ describe('the owner\'s rules, after review', () => {
 })
 
 describe('machine.remove', () => {
-  const contribute = (f: ReturnType<typeof fixture>, contributorId = 'owner', machineId = 'host') => {
+  const observationAt = (receivedAt: number) => ({ generation: 'g1', receivedAt,
+    resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null,
+      projectDiskFreeBytes: null, deviceType: null, chip: null, os: null, gpuPercent: null },
+    tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] })
+  /** A contributed machine, online unless it is given no reading or an old one (the fixture's now is 1000). */
+  const contribute = (f: ReturnType<typeof fixture>, contributorId = 'owner', machineId = 'host', receivedAt: number | null = 1000) => {
     const generation = f.state.people.find(p => p.id === contributorId)!.generation
     f.state.machines = [...(f.state.machines ?? []), { machineId, name: 'Studio', contributorId, membershipGeneration: generation, generation: 'g1',
-      cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false } as never]
+      cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false, ...(receivedAt === null ? {} : { observation: observationAt(receivedAt) }) } as never]
   }
   const start = (f: ReturnType<typeof fixture>, group: string, dispatched = false) => {
     f.state.starts = [...(f.state.starts ?? []), { id: `start-${(f.state.starts ?? []).length}`, creationId: 'creation', actorKey: 'agent:lead', contributorId: 'owner',
@@ -1625,6 +1630,8 @@ describe('machine.remove', () => {
   it('drops the machine\'s records after 24 hours without an acknowledgement, and keeps the cleanup for its host', () => {
     const { f, removalId } = cleaning()
     const day = 24 * 3_600_000
+    // Its host keeps reporting, so only the day-long fallback can expire it.
+    f.state.machines![0]!.observation!.receivedAt = 1000 + day - 1
     f.run({ type: 'tab.rename', name: 'Still cleaning' }, owner, { now: 1000 + day - 1 })
     expect(f.state.machines!.map(m => m.removal?.id)).toEqual([removalId])
     expect(visibleState(f.state, owner, 1000 + day).machines).toEqual([])
@@ -1635,6 +1642,49 @@ describe('machine.remove', () => {
     expect(() => f.run(add, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, now: 1000 + day })).toThrow('still cleaning up')
     f.run(cleaned(removalId), owner, { now: 1000 + day })
     expect(f.state.machineCleanups).toBeUndefined()
+  })
+
+  it.each([['has no reading', null], ['was last read long ago', 1000 - 45_001]] as const)(
+    'drops a machine that is offline (%s) at once, and keeps its cleanup for its host', (_why, receivedAt) => {
+      const f = fixture()
+      contribute(f, 'owner', 'host', receivedAt)
+      // Listed, if offline, until its owner removes it.
+      expect(visibleState(f.state, owner).machines).toHaveLength(1)
+      const effects = f.run({ type: 'machine.remove', machineId: 'host' })
+      const removalId = effects.result.removalId as string
+      expect(f.state.machines).toEqual([])
+      expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner' }])
+      expect(visibleState(f.state, owner).machines).toEqual([])
+      // Its host still gets the cleanup on its next connection; its later acknowledgement closes it and changes nothing else.
+      f.run(cleaned(removalId))
+      expect(f.state.machineCleanups).toBeUndefined()
+      expect(f.state.machines).toEqual([])
+    })
+
+  it('drops a machine already cleaning once it is offline, on the next read and on the next change', () => {
+    const { f, removalId } = cleaning()
+    const later = 1000 + 45_001
+    // A read that finds it offline leaves it out without writing.
+    expect(visibleState(f.state, owner, later).machines).toEqual([])
+    expect(visibleState(f.state, owner, later).machineCleanups).toBeUndefined()
+    expect(f.state.machines).toEqual([expect.objectContaining({ machineId: 'host' })])
+    // The next change applies the same rule and keeps the cleanup for its host.
+    f.run({ type: 'tab.rename', name: 'Still cleaning' }, owner, { now: later })
+    expect(f.state.machines).toEqual([])
+    expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner' }])
+    f.run(cleaned(removalId))
+    expect(f.state.machineCleanups).toBeUndefined()
+  })
+
+  it('keeps a machine that is still online cleaning until its host acknowledges', () => {
+    const { f, removalId } = cleaning()
+    expect(visibleState(f.state, owner, 1000 + 45_000).machines).toEqual([
+      expect.objectContaining({ machineId: 'host', paused: true, removal: { id: removalId, state: 'cleaning', requestedAt: new Date(1000).toISOString() } })])
+    expect(f.state.machineCleanups).toBeUndefined()
+    f.run({ type: 'tab.rename', name: 'Still online' }, owner, { now: 1000 + 45_000 })
+    expect(f.state.machines!.map(m => m.removal?.id)).toEqual([removalId])
+    f.run(cleaned(removalId))
+    expect(f.state.machines).toEqual([])
   })
 
   it('takes the machine out of every project\'s machines rule, telling each project\'s chat, and removes a rule left empty', () => {

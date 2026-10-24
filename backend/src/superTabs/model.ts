@@ -400,8 +400,9 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   delete visible.overlapAlerts
   // Only that machine's host roster lists them (store.ts hostTabs); a removed private agent's session is not every member's.
   delete visible.closingSessions
-  delete visible.machineCleanups
   expireRemovals(visible, now)
+  // A read never hands out the cleanup records it just applied (store.ts hostTabs delivers them to the machine's host).
+  delete visible.machineCleanups
   delete visible.parkedConversations
   numberConversations(visible)
   delete visible.retiredConversationNumber

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { admitMachineStart, expireRemovals, machineContribution, ownedMachine, type ContributedMachine } from './machines.js'
+import { admitMachineStart, expireRemoval, expireRemovals, machineContribution, machineOffline, ownedMachine, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
@@ -466,7 +466,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
 
   /** Takes a machine out of the Swarm with every agent on it (machine.remove, or its owner leaving): each agent is removed
    *  like one agent, its pending starts fail, routing rules lose it, and a contributed machine stays paused and cleaning
-   *  until its host deletes the Swarm's folders there (spec 2026-10-23-remove-machine.md). */
+   *  until its host deletes the Swarm's folders there — or leaves at once when that host is offline
+   *  (spec 2026-10-23-remove-machine.md). */
   const removeMachine = (machineId: string, pool: ContributedMachine | undefined, members: Agent[], how: (machine: string) => string) => {
     const pending = state.starts?.filter(s => s.request.machineId === machineId && !s.harnessId && !s.error) ?? []
     // A launch already under way would arrive with nowhere to go; it finishes in moments.
@@ -510,6 +511,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         text: `${how(machine)}, and ${join} with it.${task ? ` Its task "${group.title}" needs to be assigned again or closed.` : ''}`,
         replyTo: null, recipients: lead ? [lead] : [], source: SYSTEM_ROW })
     }
+    // Its host is offline and cannot acknowledge, so the day-long fallback applies at once: the machine leaves the list
+    // now and its cleanup waits for its next connection (spec 2026-10-23-remove-machine.md).
+    if (pool?.removal && machineOffline(pool, context.now)) expireRemoval(state, pool)
     return removed
   }
 
