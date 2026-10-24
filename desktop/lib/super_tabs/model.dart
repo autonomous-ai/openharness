@@ -44,6 +44,7 @@ class SuperTabAgent {
       machineOwnerId =
           row['machineOwnerId'] as String? ?? _text(row, 'contributorId'),
       role = row['role'] as String?,
+      roleId = row['roleId'] as String?,
       limitedUntil = DateTime.tryParse(row['limitedUntil'] as String? ?? ''),
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
@@ -59,6 +60,7 @@ class SuperTabAgent {
   final String? displayName;
   // Absent until the backend sends one; an agent without a role is a Builder.
   final String? role;
+  final String? roleId;
   bool get isReviewer => role == 'reviewer';
   final Map<String, dynamic> configuration;
   String get engine => configuration['engine'] as String? ?? '';
@@ -118,6 +120,16 @@ class SuperTabConversation {
   final Map<String, dynamic>? assignment;
 }
 
+class SuperTabRole {
+  SuperTabRole.fromJson(Map<String, dynamic> row)
+    : id = _text(row, 'id'),
+      name = _text(row, 'name'),
+      kind = _text(row, 'kind'),
+      version = _text(row, 'version');
+
+  final String id, name, kind, version;
+}
+
 class SuperTabProject {
   SuperTabProject.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -125,6 +137,15 @@ class SuperTabProject {
       ownerId = _text(row, 'ownerId'),
       leadConversationId = _text(row, 'leadConversationId'),
       skillMode = row['skillMode'] == 'default' ? 'default' : 'orchestration',
+      skillSet =
+          const {'default', 'orchestration', 'custom'}.contains(row['skillSet'])
+          ? row['skillSet'] as String
+          : row['skillMode'] == 'default'
+          ? 'default'
+          : 'orchestration',
+      roles = row['roles'] is List
+          ? _list(row['roles'], SuperTabRole.fromJson)
+          : null,
       isPrivate = row['visibility'] == 'private',
       memberIds = [
         for (final member in row['members'] as List? ?? const [])
@@ -136,6 +157,8 @@ class SuperTabProject {
           : null;
   final String id, name, ownerId, leadConversationId;
   final String skillMode;
+  final String skillSet;
+  final List<SuperTabRole>? roles;
   final bool isPrivate;
   final List<String> memberIds;
   final int updateMinutes;
@@ -217,6 +240,24 @@ class SuperTabSnapshot {
       .firstOrNull;
 
   bool isLead(String agentId) => leadProjectForAgent(agentId) != null;
+
+  SuperTabRole? activeRoleForAgent(SuperTabAgent agent) {
+    final leadProject = leadProjectForAgent(agent.id);
+    final roleKind = leadProject != null
+        ? 'lead'
+        : agent.isReviewer
+        ? 'reviewer'
+        : 'builder';
+    final project =
+        leadProject ??
+        projects.where((entry) => entry.id == agent.projectId).firstOrNull;
+    if (project?.skillSet != 'custom') return null;
+    final roles = project?.roles ?? const <SuperTabRole>[];
+    return roles
+            .where((role) => role.id == agent.roleId && role.kind == roleKind)
+            .firstOrNull ??
+        roles.where((role) => role.kind == roleKind).firstOrNull;
+  }
 
   String? leadProtectionReason(String agentId) {
     final project = leadProjectForAgent(agentId);

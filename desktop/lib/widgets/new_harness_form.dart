@@ -88,7 +88,11 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       !box.busy &&
       !box.linkingProfile &&
       box.requiredChoice == null &&
-      !box.taskTooLong;
+      !box.taskTooLong &&
+      (box.integration?.roles == null ||
+          box.integration!.roles!.any(
+            (role) => role.id == box.integration!.roleId,
+          ));
   FocusNode get _desktopDefaultFocus => box.takesTask
       ? _taskFocus
       : _desktopStartEnabled
@@ -2258,6 +2262,44 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     children: [
       if (box.canCancelPending) _cancelPendingButton(),
       if (box.existingFolder != null) _useExistingFolderButton(),
+      if (box.integration?.roles case final roles?)
+        roles.isEmpty
+            ? const Text('This project has no Engineer or Reviewer roles.')
+            : SizedBox(
+                width: 180,
+                child: InputDecorator(
+                  decoration: const InputDecoration(labelText: 'Role'),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      key: const ValueKey('new-harness-role'),
+                      isExpanded: true,
+                      value:
+                          roles.any(
+                            (role) => role.id == box.integration!.roleId,
+                          )
+                          ? box.integration!.roleId
+                          : null,
+                      items: [
+                        for (final role in roles)
+                          DropdownMenuItem(
+                            value: role.id,
+                            child: Text(
+                              role.name,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                      onChanged: box.locked
+                          ? null
+                          : (value) => setState(() {
+                              if (value != null) {
+                                box.integration!.chooseRole(value);
+                              }
+                            }),
+                    ),
+                  ),
+                ),
+              ),
       if (includeProjectVisibility &&
           box.integration?.projectVisibility != null)
         FocusTraversalOrder(

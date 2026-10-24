@@ -1558,16 +1558,21 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     final name = c.snapshot!.agentName(agent.id);
     final activity = _activity(view, agent);
     final lead = c.snapshot!.isLead(agent.id);
-    final role = lead
-        ? 'Product Manager'
-        : agent.isReviewer
-        ? 'Reviewer'
-        : 'Engineer';
-    final badge = lead
-        ? 'PM'
-        : agent.isReviewer
-        ? 'Rev'
-        : 'Dev';
+    final customRole = c.snapshot!.activeRoleForAgent(agent);
+    final role =
+        customRole?.name ??
+        (lead
+            ? 'Product Manager'
+            : agent.isReviewer
+            ? 'Reviewer'
+            : 'Engineer');
+    final badge =
+        customRole?.name ??
+        (lead
+            ? 'PM'
+            : agent.isReviewer
+            ? 'Rev'
+            : 'Dev');
     final info = SuperTabAgentInfo(c, widget.app, agent, activity: activity);
     final theme = terminalThemeFor(
       grid.AppTheme.surfacePalette,

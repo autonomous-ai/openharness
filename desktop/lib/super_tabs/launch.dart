@@ -55,13 +55,38 @@ class SuperTabLaunch {
     final launch = SuperTabLaunch._(app, tab.id, account, key, saved);
     final recovering =
         saved['phase'] == 'starting' || saved['phase'] == 'joining';
+    List<HarnessLaunchRole>? roles;
+    if (saved['lead'] != true && tab.superTabId != null) {
+      final current = await app.superTabs.map(
+        'GET',
+        '/api/super-tabs/${tab.superTabId}',
+      );
+      final snapshot = SuperTabSnapshot.fromJson(superTabMap(current['state']));
+      final project = snapshot.projectFor(conversationId);
+      if (project?.skillSet == 'custom') {
+        roles = [
+          for (final role in project?.roles ?? const <SuperTabRole>[])
+            if (role.kind == 'builder' || role.kind == 'reviewer')
+              HarnessLaunchRole(id: role.id, name: role.name, kind: role.kind),
+        ];
+      }
+    }
+    final selectedRole =
+        roles?.where((role) => role.id == saved['roleId']).firstOrNull ??
+        roles?.where((role) => role.kind == 'builder').firstOrNull ??
+        roles?.firstOrNull;
     late final HarnessLaunchIntegration integration;
     integration = HarnessLaunchIntegration(
       forcedPermissionMode: 'full',
       creationId: saved['creationId'] as String? ?? superTabOperationId(),
       initialTask: saved['initialMessage'] as String?,
-      swarmRole: saved['lead'] == true ? 'lead' : 'dev',
+      swarmRole: saved['lead'] == true
+          ? 'lead'
+          : selectedRole?.swarmRole ??
+                (saved['roleKind'] == 'reviewer' ? 'review' : 'dev'),
       swarmSkillMode: saved['skillMode'] as String? ?? 'orchestration',
+      roles: roles,
+      roleId: recovering ? saved['roleId'] as String? : selectedRole?.id,
       actionLabel: saved['newProject'] == true
           ? 'New Project'
           : saved['lead'] == true
@@ -76,6 +101,19 @@ class SuperTabLaunch {
       projectVisibilityLocked:
           saved['projectPrepared'] == true || saved['creationRequest'] != null,
       prepare: (machine, task) async {
+        if (integration.roles != null) {
+          final chosen = integration.roles!
+              .where((role) => role.id == integration.roleId)
+              .firstOrNull;
+          if (chosen == null) {
+            throw const SuperTabFailure(
+              'ROLE_UNAVAILABLE',
+              'Choose a role before starting this agent.',
+            );
+          }
+          saved['roleId'] = chosen.id;
+          saved['roleKind'] = chosen.kind;
+        }
         if (saved['projectPrepared'] != true &&
             saved['creationRequest'] == null) {
           saved['visibility'] = integration.projectVisibility ?? 'public';
@@ -84,6 +122,11 @@ class SuperTabLaunch {
           final prompt = await launch.prepare(machine, task);
           integration.swarmSkillMode =
               saved['skillMode'] as String? ?? 'orchestration';
+          integration.swarmRole = saved['lead'] == true
+              ? 'lead'
+              : saved['roleKind'] == 'reviewer'
+              ? 'review'
+              : 'dev';
           return prompt;
         } on SuperTabFailure catch (failure) {
           // Validation rejects the request before applying it. A lost response
@@ -226,6 +269,21 @@ class SuperTabLaunch {
     }
     saved['skillMode'] =
         snapshot.projectFor(conversationId)?.skillMode ?? 'orchestration';
+    final project = snapshot.projectFor(conversationId);
+    if (project?.skillSet == 'custom') {
+      final chosen = project?.roles
+          ?.where((role) => role.id == saved['roleId'])
+          .firstOrNull;
+      if (chosen == null || chosen.kind != saved['roleKind']) {
+        throw const SuperTabFailure(
+          'ROLE_UNAVAILABLE',
+          'This role changed or is no longer available. Close this form and choose a role again.',
+        );
+      }
+    } else {
+      saved.remove('roleId');
+      saved.remove('roleKind');
+    }
     final prompt = superTabLaunchPrompt(
       tabId: saved['tabId'] as String,
       conversationId: saved['conversationId'] as String,
@@ -280,6 +338,7 @@ class SuperTabLaunch {
       'harnessId': harnessId,
       'name': saved['lead'] == true ? 'Lead' : native.displayName,
       'lead': saved['lead'],
+      if (saved['roleId'] case final String roleId) 'roleId': roleId,
       if (saved['lead'] == true && project != null)
         'project': {
           'cwd': project.root ?? project.cwd,
