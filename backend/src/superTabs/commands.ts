@@ -521,7 +521,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     const member = candidate.kind === 'member' ? state.agents.find(a => a.id === candidate.agentId) : undefined
     if (candidate.kind === 'member' && !member) return null
     // A new agent on a Mac for a teammate's project runs in the Mac's Harness Team account (machines.ts teamStartRequest).
-    const machineId = member?.machineId ?? teamMachineFor(state, candidate.machineId, project, context.teamAccountsIdle)
+    const machineId = member?.machineId ?? teamMachineFor(state, candidate.machineId, project, context.teamAccountsIdle, context.teamMachines)
     const contributor = member?.contributorId ?? state.machines?.find(m => m.machineId === machineId)?.contributorId ?? starter
     return teamWorkCheck(state, machineId, contributor, project, context.now, context.teamMachines)
   }
@@ -1035,7 +1035,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')
       }
       // A teammate's project started on a Mac runs in that Mac's Harness Team account, never as its owner (machines.ts).
-      const request = teamStartRequest(state, command.request, home, context.teamAccountsIdle)
+      const request = teamStartRequest(state, command.request, home, context.teamAccountsIdle, context.teamMachines)
       const pool = admitMachineStart(state, request, context.now, undefined, context.teamMachines)
       // Off the Machines list, a teammate's project never runs: nothing there shows a privacy check (machines.ts).
       if (!pool) requireTeamWork(state, request.machineId, grant.contributorId, home, context.now, context.teamMachines)

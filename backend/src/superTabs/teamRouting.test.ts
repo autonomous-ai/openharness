@@ -394,6 +394,21 @@ describe('one machine: a Mac and its Harness Team account', () => {
     expect(f.state.starts![1]!.request).toMatchObject({ machineId: 'mate-team', cwd: '/team-swarm/lead' })
   })
 
+  it('once the team account is removed, its pool left behind takes nothing: the Mac is a Mac without one again', () => {
+    // Its machine is deleted, so the store no longer lists it among the tab's team machines.
+    const f = oneMachine(), group = f.group()
+    f.machine('mate-team').observation = reading('team', PASSED, NOW - 60_000)
+    delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED
+    f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, { ...f.pooled('mate-mac'), teamMachines: [] })
+    expect(f.state.starts![0]!.request).toMatchObject({ machineId: 'mate-mac', cwd: '/swarm/lead' })
+    process.env.SWARM_TEAM_ACCOUNT_REQUIRED = '1'
+    expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, { ...f.pooled('mate-mac'), teamMachines: [] }))?.code)
+      .toBe('TEAM_ACCOUNT_REQUIRED')
+    // While it is still an account row, it is the account that runs teammates' work, offline or not.
+    expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, { ...f.pooled('mate-mac'), teamMachines: ['mate-team'] }))?.code)
+      .toBe('MACHINE_OFFLINE')
+  })
+
   it('is refused with the team account\'s own reason, and never falls back to the Mac\'s owner', () => {
     const f = oneMachine(), group = f.group()
     f.machine('mate-team').observation = reading('team', FAILED)
