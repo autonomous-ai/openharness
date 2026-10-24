@@ -89,10 +89,12 @@ class SuperTabMentions extends ChangeNotifier {
   /// and none answered (an idle Swarm, or a backend before tags) nothing is.
   void _changed() {
     final snapshot = controller.snapshot;
-    if (snapshot == null || controller.revision == _revision) return;
-    _revision = controller.revision;
+    if (snapshot == null) return;
+    // A tag that expires moves the count without changing the Swarm.
     final count = snapshot.mentionsWaiting;
     final moved = count != _count;
+    if (!moved && controller.revision == _revision) return;
+    _revision = controller.revision;
     _count = count;
     if (count == 0 && (!moved || _seen == null)) {
       _seen ??= {};

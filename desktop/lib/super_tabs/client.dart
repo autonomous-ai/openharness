@@ -44,7 +44,6 @@ class SuperTabClient {
   final void Function()? onTagCounts;
   final _tagCounts = <String, int>{};
   final _tagsSeen = <String, Set<String>>{};
-  bool _tagsMissing = false;
 
   /// The tags waiting for this account in a Swarm: its own state once open,
   /// else what discovery last read, so a tab not opened yet still shows them.
@@ -99,7 +98,6 @@ class SuperTabClient {
     _visibility.clear();
     _tagCounts.clear();
     _tagsSeen.clear();
-    _tagsMissing = false;
     discoveryError = null;
     for (final controller in _loaded.values) {
       controller.revokeAccess('The account changed. Open this Swarm again.');
@@ -310,11 +308,11 @@ class SuperTabClient {
   }
 
   /// One light read per Swarm tab that is not open: its waiting tags. A
-  /// backend from before tags is asked once. A failed read changes nothing.
+  /// failed read, a backend before tags included, changes nothing and is
+  /// tried again on the next round.
   Future<void> _readTags(List<String> ids, int generation) async {
     var changed = false;
     for (final id in ids) {
-      if (_tagsMissing) break;
       try {
         final answer = await map(
           'GET',
@@ -336,8 +334,6 @@ class SuperTabClient {
           _tagCounts[id] = waiting.length;
           changed = true;
         }
-      } on SuperTabFailure catch (failure) {
-        if (failure.statusCode == 404) _tagsMissing = true;
       } catch (_) {}
     }
     if (changed && generation == _generation) onTagCounts?.call();

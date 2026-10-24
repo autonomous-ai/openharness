@@ -270,6 +270,25 @@ void main() {
       },
     );
 
+    test(
+      'a tag that expires empties an open list with no new revision',
+      () async {
+        final server = ConversationServer()..tag('m1', text: 'Old');
+        final controller = server.controller();
+        final mentions = SuperTabMentions.of(controller);
+        await controller.refresh();
+        await pumpEventQueue();
+        expect(mentions.waiting, hasLength(1));
+        // 30 days on, the backend drops it; the tab itself did not change.
+        server.mentions.clear();
+        server.state['mentionsWaiting'] = 0;
+        await controller.refresh();
+        await pumpEventQueue();
+        expect(mentions.waiting, isEmpty);
+        controller.dispose();
+      },
+    );
+
     test('a backend without tags is never asked for them', () async {
       final server = ConversationServer();
       final controller = server.controller();
@@ -561,6 +580,52 @@ void main() {
       expect(client.waitingTags('tab'), 2);
       expect(arrived, ['New']);
     });
+
+    test(
+      'one Swarm without the list does not stop the others, and is asked again',
+      () async {
+        final server = ConversationServer()..tag('message-1', text: 'Here');
+        var goneMissing = true;
+        final client = SuperTabClient(
+          storage: MemoryStore(),
+          transport: (method, path, {body}) async {
+            if (path == '/api/super-tabs') {
+              return {
+                'tabs': [
+                  {'id': 'gone', 'name': 'Older'},
+                  {'id': 'tab', 'name': 'Pilot'},
+                ],
+                'next': null,
+              };
+            }
+            if (path.startsWith('/api/super-tabs/gone/')) {
+              if (goneMissing) {
+                throw const SuperTabFailure(
+                  'NOT_FOUND',
+                  'Not found.',
+                  statusCode: 404,
+                );
+              }
+              return {'mentions': server.mentions.reversed.toList()};
+            }
+            return server.request(method, path, body: body);
+          },
+          discoveryInterval: Duration.zero,
+          onTabs: (_, _) {},
+        );
+        addTearDown(client.dispose);
+        client.bind('owner');
+        await client.refreshTabs();
+        expect(client.waitingTags('tab'), 1);
+        expect(client.waitingTags('gone'), 0);
+        // Its backend is updated during the session.
+        goneMissing = false;
+        server.tag('message-2', text: 'There');
+        await client.refreshTabs();
+        expect(client.waitingTags('tab'), 2);
+        expect(client.waitingTags('gone'), 2);
+      },
+    );
 
     test('a Swarm tab with waiting tags asks for its person', () async {
       final f = SuperTabLaunchFixture(local: true);
