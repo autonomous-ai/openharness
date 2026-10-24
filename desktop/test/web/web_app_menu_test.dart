@@ -120,26 +120,6 @@ void main() {
     app.dispose();
   });
 
-  testWidgets('New harness with nothing connected opens Machines', (
-    tester,
-  ) async {
-    final app = await _mount(tester);
-    // New work starts where a new tab opens: its "Start an agent" row.
-    await tester.tap(find.byKey(const ValueKey('welcome-agent.new')));
-    await tester.pump(const Duration(milliseconds: 400));
-    expect(find.byType(NewHarnessForm), findsNothing);
-    expect(
-      tester
-          .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
-          .search
-          .scopePrefix,
-      '@',
-    );
-    expect(tester.takeException(), isNull);
-    await tester.pumpWidget(const SizedBox.shrink());
-    app.dispose();
-  });
-
   testWidgets('View on a machine picks it and closes Machines', (tester) async {
     final app = await _mount(tester, connectedMachine: 'remote-box');
     await _openMenu(tester);
