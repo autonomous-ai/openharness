@@ -11,6 +11,10 @@ export const FLOWS = [
   { name: 'opening', scenario: 'opening' },
   { name: 'taken-over', scenario: 'taken-over' },
   { name: 'terminal-error', scenario: 'terminal-error' },
-  { name: 'agent-picker', scenario: 'workspace', steps: [['click', 'Agent: ']] },
-  { name: 'model-picker', scenario: 'workspace', steps: [['click', 'Model: ']] },
+  // A computer's header names agent and model; a phone's puts both behind one menu.
+  { name: 'agent-picker', scenario: 'workspace', only: 'wide', steps: [['click', 'Agent: ']] },
+  { name: 'model-picker', scenario: 'workspace', only: 'wide', steps: [['click', 'Model: ']] },
+  // Group 3's own: three panes (two columns on a tablet), and the phone's Agent and model menu.
+  { name: 'pane-three', scenario: 'pane-three' },
+  { name: 'agent-model-menu', scenario: 'workspace-one', only: 'compact', steps: [['exact', 'Agent and model']] },
 ];

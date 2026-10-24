@@ -85,6 +85,7 @@ void main() {
     expect(chrome.labelsPaneStatus, isFalse);
     expect(chrome.compactPaneHeader, isFalse);
     expect(chrome.compactPaneHeaderAt(320), isFalse);
+    expect(chrome.maxPaneColumnsAt(768), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
@@ -117,6 +118,27 @@ void main() {
     expect(chrome.compactPaneHeaderAt(719), isTrue);
     expect(chrome.compactPaneHeaderAt(720), isFalse);
     expect(chrome.compactPaneHeaderAt(1440), isFalse);
+  });
+
+  test(
+    'the web grid is two columns at most below 1000 px, any number above',
+    () {
+      final app = createApp();
+      addTearDown(app.dispose);
+      final chrome = webWorkspaceChrome(app);
+
+      expect(chrome.maxPaneColumnsAt(768), 2);
+      expect(chrome.maxPaneColumnsAt(999), 2);
+      expect(chrome.maxPaneColumnsAt(1000), isNull);
+      expect(chrome.maxPaneColumnsAt(1440), isNull);
+    },
+  );
+
+  test('a host chrome that names no column rule keeps every column', () {
+    final chrome = _hostChrome(flags: true);
+
+    expect(chrome.maxPaneColumnsAt(320), isNull);
+    expect(chrome.maxPaneColumnsAt(768), isNull);
   });
 
   testWidgets('a new chrome reaches the workspace without remounting it', (
