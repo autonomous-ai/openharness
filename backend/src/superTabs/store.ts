@@ -15,7 +15,7 @@ import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import {
-  activeWork, actorKey, agent, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
+  activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
   SuperTabError, isLeads, parkLaterConversations, syncLeads, type Actor, type Agent, type Assignment, type Author, type MessageDraft, type SuperTabState,
 } from './model.js'
 import { holdNoticeText, type HoldReason } from './holdNotice.js'
@@ -489,9 +489,11 @@ export class SuperTabStore {
       if (dispatched) context.routeDecision = await readDecision(tx, tabId, dispatched) ?? undefined
       await restorePullRequestUrls(tx, tabId, original)
       const effects = applyCommand(original, actor, command, context)
+      // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
+      const shown = effects.messages.filter(message => !agentOnly(message.source))
       for (const group of effects.state.conversations) {
         appendPullRequestUrls(group, [
-          ...effects.messages.filter(message => message.conversationId === group.id).map(message => message.text),
+          ...shown.filter(message => message.conversationId === group.id).map(message => message.text),
           ...group.checks.map(check => check.evidence), group.assignment?.result,
         ])
       }
@@ -550,8 +552,8 @@ export class SuperTabStore {
           } })
         }
       }
-      for (const message of effects.messages) conversation(effects.state, message.conversationId).lastMessageSequence = revision
-      noteProjectReports(effects.state, effects.messages, revision, context.now)
+      for (const message of shown) conversation(effects.state, message.conversationId).lastMessageSequence = revision
+      noteProjectReports(effects.state, shown, revision, context.now)
       if (command.type === 'agent.release' && command.decision === 'stop') {
         const target = agent(effects.state, command.agentId)
         const assignmentId = `release-${target.releaseId}`
@@ -891,14 +893,16 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       const row = await this.row(tx, user, tabId)
       const state = stateOf(row)
-      readConversation(state, await this.actor(tx, user, state, asAgentId), conversationId)
+      const actor = await this.actor(tx, user, state, asAgentId)
+      readConversation(state, actor, conversationId)
       const forward = cursor.after !== undefined
       const rows = await tx.superTabMessage.findMany({ where: { tabId, conversationId,
         ...(cursor.messageId ? { id: cursor.messageId } : {}),
         ...(forward ? { sequence: { gt: cursor.after } } : cursor.before !== undefined ? { sequence: { lt: cursor.before } } : {}) },
         orderBy: { sequence: forward ? 'asc' : 'desc' }, take: 101 })
-      const page = rows.slice(0, 100)
-      const next = rows.length > 100 ? page.at(-1)!.sequence : null
+      const next = rows.length > 100 ? rows[99]!.sequence : null
+      // An agent-only notice is listed for its own recipient alone; the cursor still moves past it.
+      const page = rows.slice(0, 100).filter(m => !agentOnly(m.source) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId)))
       if (!forward) page.reverse()
       const deliveries = page.length ? await tx.superTabDelivery.findMany({ where: { tabId, messageId: { in: page.map(m => m.id) } },
         select: { id: true, messageId: true, agentId: true, status: true, receipt: true,
@@ -1254,6 +1258,8 @@ export class SuperTabStore {
   private async holdNotice(tx: Transaction, row: SuperTab, state: SuperTabState, delivery: SuperTabDelivery, reason: HoldReason) {
     const id = stableId('hold-notice', delivery.tabId, delivery.id)
     if (delivery.status !== 'claimed') return { noticed: false }
+    // Nobody can see an agent-only notice, so nobody is told it waits; the host keeps holding it.
+    if (agentOnly((await tx.superTabMessage.findUnique({ where: { id: delivery.messageId }, select: { source: true } }))?.source)) return { noticed: false }
     const notice = await tx.superTabMessage.findUnique({ where: { id } })
     if (notice && delivery.holdReason === reason && delivery.holdSince) return { noticed: false }
     // The notice is only sent once for older Desktops; the inline receipt keeps the current reason.
