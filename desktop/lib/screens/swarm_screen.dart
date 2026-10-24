@@ -2241,7 +2241,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                       p.agentId != null &&
                       app.questionFor(p.machineId, p.agentId!) != null,
                 )
-                .length,
+                .length +
+                tabMentionsWaiting(app, swarm),
             if (tabActivity(app, swarm) case final activity?)
               'activity': nativeActivityPayload(
                 activity,
